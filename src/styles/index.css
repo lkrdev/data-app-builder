@@ -434,3 +434,113 @@ body {
   font-weight: 600;
 }
 
+.dab-tile-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: #ffffff;
+  height: 100%;
+  overflow: auto;
+}
+
+.dab-tile-edit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dab-tile-select-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dab-tile-select-row select {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  flex: 1;
+}
+
+.dab-tile-view {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+  padding: 12px;
+  background: #ffffff;
+}
+
+.dab-tile-idle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.dab-tile-run-floating {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dab-py-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.dab-py-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #ffffff;
+  font-size: 12px;
+}
+
+.dab-py-table th,
+.dab-py-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: left;
+}
+
+.dab-py-table th {
+  background: #f8fafc;
+  color: #334155;
+  font-weight: 700;
+  border-top: 1px solid #e2e8f0;
+}
+
+.dab-py-markdown {
+  background: #ffffff;
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+  line-height: 1.5;
+}
+
+.dab-py-pre {
+  margin: 0;
+  padding: 10px 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+

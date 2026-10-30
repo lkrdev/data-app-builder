@@ -6,6 +6,7 @@ application: data_app_builder {
   # file: "bundle.js"
   mount_points: {
     standalone: yes
+    dashboard_tile: yes
   }
   entitlements: {
     local_storage: yes

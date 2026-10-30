@@ -7,6 +7,9 @@ import type { Looker40SDK } from '@looker/sdk';
 interface LookerExtensionContextState {
   extensionSDK: ExtensionContextData['extensionSDK'];
   core40SDK: Looker40SDK;
+  tileHostData?: ExtensionContextData['tileHostData'];
+  tileSDK?: ExtensionContextData['tileSDK'];
+  lookerHostData?: ExtensionContextData['lookerHostData'];
 }
 
 const LookerExtensionContext = createContext<LookerExtensionContextState | undefined>(undefined);
@@ -17,6 +20,10 @@ export const LookerExtensionProvider: React.FC<{ children: ReactNode }> = ({ chi
   const contextValue: LookerExtensionContextState = {
     extensionSDK: extensionContext.extensionSDK,
     core40SDK: extensionContext.core40SDK,
+    tileHostData: extensionContext.tileHostData,
+    tileSDK: extensionContext.tileSDK,
+    lookerHostData:
+      extensionContext.lookerHostData || extensionContext.extensionSDK?.lookerHostData,
   };
 
   return (
