@@ -34,6 +34,14 @@ import {
   runAntigravityTurn,
 } from '../antigravity'
 import { PythonTile, ScriptStudioView } from './PythonTile'
+import {
+  listUserLookmlSessions,
+  loadLookmlSessionArtifact,
+  LookmlBundle,
+  LookmlPreviewPane,
+  LookmlSessionIndex,
+  saveLookmlSessionArtifact,
+} from '../lookmlTool'
 import '../styles/index.css'
 
 interface ChatMessage {
@@ -90,12 +98,19 @@ const StudioMain: React.FC = () => {
   const [schemaMarkdown, setSchemaMarkdown] = useState('')
   const [loadingSchema, setLoadingSchema] = useState(false)
 
-  // App, Native Content & Agent session state
+  // App, Native Content, Agentic LookML & Agent session state
+  const isLookmlMode =
+    location.pathname === '/lookml' || location.pathname.startsWith('/lookml/')
   const builderMode: 'data_app' | 'dashboard' = /^\/dashboard(?:\/|$)/.test(
     location.pathname
   )
     ? 'dashboard'
     : 'data_app'
+  const [lookmlProjectId, setLookmlProjectId] = useState('')
+  const [lookmlBundle, setLookmlBundle] = useState<LookmlBundle | null>(null)
+  const [lookmlSessions, setLookmlSessions] = useState<LookmlSessionIndex[]>([])
+  const [loadLookmlInput, setLoadLookmlInput] = useState('')
+  const lastLookmlIdRef = useRef<string>('')
   const [publishedApp, setPublishedApp] = useState<PublishedAppState | null>(null)
   const [nativeContent, setNativeContent] = useState<NativeContentState | null>(null)
   const [myCreations, setMyCreations] = useState<
@@ -178,6 +193,9 @@ const StudioMain: React.FC = () => {
         if (!mounted) return
         const resolvedUserId = String(meta.user?.id || '1')
         setUserId(resolvedUserId)
+        listUserLookmlSessions(core40SDK, extensionSDK, resolvedUserId).then((sessions) => {
+          if (mounted) setLookmlSessions(sessions)
+        })
         const mappedModels = meta.models.map((m: any) => ({
           name: String(m.name),
           label: String(m.label || m.name),
@@ -487,7 +505,56 @@ const StudioMain: React.FC = () => {
     }
   }, [isTileMount, isConfigured, location.pathname, history])
 
-  // Auto-load content when opened via route (/dashboard/:id for Native Content, or /:dashboardId / /dashboards/:dashboardId for Data Apps)
+  const loadLookmlSessionById = useCallback(
+    async (rawId: string, pushRoute = true) => {
+      const id = rawId.trim()
+      if (!id) return
+      try {
+        setBusyStatus(`Loading LookML session "${id}"...`)
+        const loaded = await loadLookmlSessionArtifact(core40SDK, extensionSDK, id)
+        lastLookmlIdRef.current = loaded.id
+        setLookmlBundle(loaded.bundle)
+        setLoadLookmlInput(loaded.id)
+        if (loaded.bundle?.project_id) {
+          setLookmlProjectId(loaded.bundle.project_id)
+        }
+        const savedExplores = loaded.studio?.explores?.filter(Boolean) || []
+        setSelectedExplores(savedExplores)
+        setAgentSession(
+          loaded.studio?.lastInteractionId
+            ? {
+                lastInteractionId: loaded.studio.lastInteractionId,
+                environmentId: loaded.studio.environmentId,
+                explores: savedExplores,
+              }
+            : {}
+        )
+        if (loaded.studio?.messages && loaded.studio.messages.length > 0) {
+          setMessages(loaded.studio.messages)
+        } else {
+          setMessages([
+            {
+              role: 'assistant',
+              text: `Loaded LookML session "${loaded.title}" (${loaded.bundle?.files?.length || 0} modified .lkml files).`,
+            },
+          ])
+        }
+        if (pushRoute && location.pathname !== `/lookml/${loaded.id}`) {
+          history.replace(`/lookml/${encodeURIComponent(loaded.id)}`)
+        }
+        setBusyStatus(null)
+      } catch (err: any) {
+        setBusyStatus(null)
+        setMessages((prev) => [
+          ...prev,
+          { role: 'error', text: `Could not load LookML session "${id}": ${err.message || err}` },
+        ])
+      }
+    },
+    [core40SDK, extensionSDK, history, location.pathname]
+  )
+
+  // Auto-load content when opened via route (/lookml/:id, /dashboard/:id, or /:dashboardId / /dashboards/:dashboardId)
   useEffect(() => {
     if (
       isTileMount ||
@@ -497,6 +564,19 @@ const StudioMain: React.FC = () => {
     ) {
       return
     }
+    const lookmlMatch = location.pathname.match(/^\/lookml\/([^/]+)\/?$/)
+    if (lookmlMatch) {
+      const lookmlId = decodeURIComponent(lookmlMatch[1]).trim()
+      if (
+        lookmlId &&
+        lookmlId !== lookmlBundle?.id &&
+        lookmlId !== lastLookmlIdRef.current
+      ) {
+        loadLookmlSessionById(lookmlId, false)
+      }
+      return
+    }
+    if (location.pathname === '/lookml') return
     const nativeMatch = location.pathname.match(/^\/dashboard\/([^/]+)\/?$/)
     if (nativeMatch) {
       const routeId = decodeURIComponent(nativeMatch[1]).trim()
@@ -526,8 +606,10 @@ const StudioMain: React.FC = () => {
     location.pathname,
     publishedApp?.dashboardId,
     nativeContent?.id,
+    lookmlBundle?.id,
     loadDashboardById,
     loadNativeById,
+    loadLookmlSessionById,
   ])
 
   const handleLoadExistingDashboard = async () => {
@@ -541,15 +623,22 @@ const StudioMain: React.FC = () => {
   const handleResetNewApp = () => {
     lastPublishedIdRef.current = ''
     lastNativeIdRef.current = ''
+    lastLookmlIdRef.current = ''
     setPublishedApp(null)
     setNativeContent(null)
+    setLookmlBundle(null)
     setCurrentAppCode('')
     setLoadDashInput('')
+    setLoadLookmlInput('')
     setSelectedExplores([])
     setAgentSession({})
     setMessages([])
     setPastedImages([])
-    const baseRoute = builderMode === 'dashboard' ? '/dashboard' : '/'
+    const baseRoute = isLookmlMode
+      ? '/lookml'
+      : builderMode === 'dashboard'
+      ? '/dashboard'
+      : '/'
     if (location.pathname !== baseRoute) {
       history.push(baseRoute)
     }
@@ -613,6 +702,8 @@ const StudioMain: React.FC = () => {
         mode: builderMode,
         selectedExplores,
         folderId: selectedFolderId,
+        toolMode: isLookmlMode ? 'lookml' : 'data_app',
+        lookmlProjectId,
         schemaMarkdown,
         userPrompt: effectivePrompt,
         images: attachedImages,
@@ -621,6 +712,51 @@ const StudioMain: React.FC = () => {
         priorMessages: messages,
         onStatus: setBusyStatus,
       })
+
+      if (result.lookmlBundle) {
+        setBusyStatus('Saving LookML session artifacts (user_..._lookml_... & obj_lookml_...)...')
+        const prelimAssistantMsg: ChatMessage = {
+          role: 'assistant',
+          text: result.assistantText,
+          interactionId: result.session.lastInteractionId,
+        }
+        const nextMsgs = [...messagesWithUser, prelimAssistantMsg]
+        setLookmlBundle(result.lookmlBundle)
+        if (result.lookmlBundle.project_id) {
+          setLookmlProjectId(result.lookmlBundle.project_id)
+        }
+        try {
+          const saved = await saveLookmlSessionArtifact({
+            sdk: core40SDK,
+            extensionSDK,
+            userId,
+            bundle: result.lookmlBundle,
+            studio: {
+              explores: selectedExplores,
+              lastInteractionId: result.session.lastInteractionId,
+              environmentId: result.session.environmentId,
+              messages: nextMsgs,
+            },
+          })
+          lastLookmlIdRef.current = saved.id
+          setLoadLookmlInput(saved.id)
+          setLookmlSessions((prev) => [
+            saved.index,
+            ...prev.filter((s) => s.id !== saved.id),
+          ])
+          if (location.pathname !== `/lookml/${saved.id}`) {
+            history.replace(`/lookml/${encodeURIComponent(saved.id)}`)
+          }
+        } catch {
+          // Non-fatal if Looker Artifact store is unavailable in test/dev environment
+        }
+        setAgentSession({
+          ...result.session,
+          explores: selectedExplores,
+        })
+        setMessages(nextMsgs)
+        return
+      }
 
       // If user left explores empty ("let agent decide"), record the model_id::explore_id(s) chosen by the agent
       const bundleExplores = result.bundle
@@ -901,10 +1037,16 @@ const StudioMain: React.FC = () => {
           <label className="dab-field">
             <span>Mode</span>
             <select
-              value={builderMode}
+              value={isLookmlMode ? 'lookml' : builderMode}
               onChange={(e) => {
-                const nextMode = e.target.value as 'data_app' | 'dashboard'
-                if (nextMode === 'dashboard') {
+                const nextMode = e.target.value as 'data_app' | 'dashboard' | 'lookml'
+                if (nextMode === 'lookml') {
+                  history.push(
+                    lookmlBundle?.id
+                      ? `/lookml/${encodeURIComponent(lookmlBundle.id)}`
+                      : '/lookml'
+                  )
+                } else if (nextMode === 'dashboard') {
                   history.push(
                     nativeContent?.id
                       ? `/dashboard/${encodeURIComponent(nativeContent.id)}`
@@ -921,6 +1063,7 @@ const StudioMain: React.FC = () => {
             >
               <option value="data_app">Data App (Lit)</option>
               <option value="dashboard">Native Content (UDD / Look / Board)</option>
+              <option value="lookml">Agentic LookML (.lkml)</option>
             </select>
           </label>
 
@@ -1024,67 +1167,129 @@ const StudioMain: React.FC = () => {
             </div>
           </div>
 
-          <label className="dab-field">
-            <span>Folder</span>
-            <select
-              value={selectedFolderId}
-              onChange={(e) => setSelectedFolderId(e.target.value)}
-            >
-              {folders.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          {isLookmlMode ? (
+            <>
+              <label className="dab-field">
+                <span>Project</span>
+                <input
+                  type="text"
+                  placeholder="LookML project_id (opt)..."
+                  value={lookmlProjectId}
+                  onChange={(e) => setLookmlProjectId(e.target.value)}
+                  style={{ width: 150 }}
+                />
+              </label>
 
-          <div className="dab-divider" />
+              <div className="dab-divider" />
 
-          <div className="dab-load-box">
-            {builderMode === 'dashboard' && myCreations.length > 0 && (
-              <select
-                value={nativeContent?.id || ''}
-                onChange={(e) => {
-                  if (e.target.value) loadNativeById(e.target.value, true)
-                }}
-                title="My Creations (indexed under user_${userId}_dashboard_${id})"
-              >
-                <option value="">My Creations ({myCreations.length})...</option>
-                {myCreations.map((c) => (
-                  <option key={`${c.contentType}:${c.id}`} value={c.id}>
-                    [{c.contentType}] {c.title} (#{c.id})
-                  </option>
-                ))}
-              </select>
-            )}
-            <input
-              type="text"
-              placeholder={
-                builderMode === 'dashboard' ? 'ID or look:ID...' : 'Dashboard ID...'
-              }
-              value={loadDashInput}
-              onChange={(e) => setLoadDashInput(e.target.value)}
-              style={{ width: 105 }}
-            />
-            <button
-              type="button"
-              className="dab-btn-secondary"
-              onClick={handleLoadExistingDashboard}
-              disabled={!!busyStatus || !loadDashInput.trim()}
-            >
-              {builderMode === 'dashboard' ? 'Load Content' : 'Load App'}
-            </button>
-            {(publishedApp || nativeContent) && (
-              <button
-                type="button"
-                className="dab-btn-secondary"
-                onClick={handleResetNewApp}
-                disabled={!!busyStatus}
-              >
-                {builderMode === 'dashboard' ? 'New Content' : 'New App'}
-              </button>
-            )}
-          </div>
+              <div className="dab-load-box">
+                {lookmlSessions.length > 0 && (
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) loadLookmlSessionById(e.target.value, true)
+                    }}
+                  >
+                    <option value="">Saved LookML ({lookmlSessions.length})...</option>
+                    {lookmlSessions.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.title} ({s.id})
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <input
+                  type="text"
+                  placeholder="LookML Session ID..."
+                  value={loadLookmlInput}
+                  onChange={(e) => setLoadLookmlInput(e.target.value)}
+                  style={{ width: 120 }}
+                />
+                <button
+                  type="button"
+                  className="dab-btn-secondary"
+                  onClick={() => loadLookmlSessionById(loadLookmlInput, true)}
+                  disabled={!!busyStatus || !loadLookmlInput.trim()}
+                >
+                  Load LookML
+                </button>
+                {lookmlBundle && (
+                  <button
+                    type="button"
+                    className="dab-btn-secondary"
+                    onClick={handleResetNewApp}
+                    disabled={!!busyStatus}
+                  >
+                    New LookML
+                  </button>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <label className="dab-field">
+                <span>Folder</span>
+                <select
+                  value={selectedFolderId}
+                  onChange={(e) => setSelectedFolderId(e.target.value)}
+                >
+                  {folders.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="dab-divider" />
+
+              <div className="dab-load-box">
+                {builderMode === 'dashboard' && myCreations.length > 0 && (
+                  <select
+                    value={nativeContent?.id || ''}
+                    onChange={(e) => {
+                      if (e.target.value) loadNativeById(e.target.value, true)
+                    }}
+                    title="My Creations (indexed under user_${userId}_dashboard_${id})"
+                  >
+                    <option value="">My Creations ({myCreations.length})...</option>
+                    {myCreations.map((c) => (
+                      <option key={`${c.contentType}:${c.id}`} value={c.id}>
+                        [{c.contentType}] {c.title} (#{c.id})
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <input
+                  type="text"
+                  placeholder={
+                    builderMode === 'dashboard' ? 'ID or look:ID...' : 'Dashboard ID...'
+                  }
+                  value={loadDashInput}
+                  onChange={(e) => setLoadDashInput(e.target.value)}
+                  style={{ width: 105 }}
+                />
+                <button
+                  type="button"
+                  className="dab-btn-secondary"
+                  onClick={handleLoadExistingDashboard}
+                  disabled={!!busyStatus || !loadDashInput.trim()}
+                >
+                  {builderMode === 'dashboard' ? 'Load Content' : 'Load App'}
+                </button>
+                {(publishedApp || nativeContent) && (
+                  <button
+                    type="button"
+                    className="dab-btn-secondary"
+                    onClick={handleResetNewApp}
+                    disabled={!!busyStatus}
+                  >
+                    {builderMode === 'dashboard' ? 'New Content' : 'New App'}
+                  </button>
+                )}
+              </div>
+            </>
+          )}
 
           <div className="dab-divider" />
 
@@ -1280,11 +1485,13 @@ const StudioMain: React.FC = () => {
                             code: codeModeSnippet,
                             sdk: core40SDK,
                             extensionSDK,
+                            allowUpdateSession: isLookmlMode,
                             vars: {
                               target_explores: selectedExplores,
                               target_model: firstParsed?.modelName || '',
                               target_explore: firstParsed?.exploreName || '',
                               target_folder_id: selectedFolderId,
+                              target_project_id: lookmlProjectId,
                             },
                           })
                           setCodeModeOutput(out)
@@ -1321,7 +1528,11 @@ const StudioMain: React.FC = () => {
                 onClick={handleSendPrompt}
                 disabled={!!busyStatus || (!prompt.trim() && pastedImages.length === 0)}
               >
-                {builderMode === 'dashboard'
+                {isLookmlMode
+                  ? lookmlBundle
+                    ? 'Update LookML'
+                    : 'Run Agentic LookML'
+                  : builderMode === 'dashboard'
                   ? nativeContent
                     ? 'Update Content'
                     : 'Build Content'
@@ -1333,81 +1544,112 @@ const StudioMain: React.FC = () => {
           </div>
         </aside>
 
-        {/* Right Live Embedded Dashboard Pane */}
+        {/* Right Live Embedded Dashboard or Agentic LookML Pane */}
         <main className="dab-right-pane">
-          <div className="dab-preview-toolbar">
-            <div>
-              {builderMode === 'dashboard' ? (
-                nativeContent ? (
-                  <>
-                    <strong>{nativeContent.title}</strong>{' '}
+          {isLookmlMode ? (
+            <>
+              <div className="dab-preview-toolbar">
+                <div>
+                  {lookmlBundle ? (
+                    <>
+                      <strong>{lookmlBundle.title}</strong>{' '}
+                      <span className="dab-muted">
+                        (Session <code>obj_lookml_{lookmlBundle.id}</code> ·{' '}
+                        {lookmlBundle.files?.length || 0} .lkml files)
+                      </span>
+                    </>
+                  ) : (
                     <span className="dab-muted">
-                      ({nativeContent.contentType} #{nativeContent.id} ·{' '}
-                      <code>{nativeContent.embedPath}</code>)
+                      Agentic LookML preview (.lkml diffs, validator, run_lookml_test &amp; /sql/:slug + /x/:slug parity)
                     </span>
-                  </>
-                ) : (
-                  <span className="dab-muted">
-                    Live Looker UDD / Look / Board preview will appear here after the first turn
-                  </span>
-                )
-              ) : publishedApp ? (
-                <>
-                  <strong>{publishedApp.title}</strong>{' '}
-                  <span className="dab-muted">
-                    (Dashboard #{publishedApp.dashboardId} · Extension db::
-                    {publishedApp.extensionId.slice(0, 8)}…)
-                  </span>
-                </>
-              ) : (
-                <span className="dab-muted">
-                  Live Looker Data App preview will appear here after the first turn
-                </span>
-              )}
-            </div>
-            {activePreviewId && (
-              <div className="dab-preview-actions">
-                <button
-                  type="button"
-                  className="dab-btn-secondary"
-                  onClick={() => setIframeRev((r) => r + 1)}
-                >
-                  Reload Preview
-                </button>
-                <button
-                  type="button"
-                  className="dab-btn-secondary"
-                  onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}
-                >
-                  Open in Looker ↗
-                </button>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
+              <div className="dab-iframe-container">
+                <LookmlPreviewPane
+                  bundle={lookmlBundle}
+                  hostUrl={hostUrl}
+                  extensionSDK={extensionSDK}
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="dab-preview-toolbar">
+                <div>
+                  {builderMode === 'dashboard' ? (
+                    nativeContent ? (
+                      <>
+                        <strong>{nativeContent.title}</strong>{' '}
+                        <span className="dab-muted">
+                          ({nativeContent.contentType} #{nativeContent.id} ·{' '}
+                          <code>{nativeContent.embedPath}</code>)
+                        </span>
+                      </>
+                    ) : (
+                      <span className="dab-muted">
+                        Live Looker UDD / Look / Board preview will appear here after the first turn
+                      </span>
+                    )
+                  ) : publishedApp ? (
+                    <>
+                      <strong>{publishedApp.title}</strong>{' '}
+                      <span className="dab-muted">
+                        (Dashboard #{publishedApp.dashboardId} · Extension db::
+                        {publishedApp.extensionId.slice(0, 8)}…)
+                      </span>
+                    </>
+                  ) : (
+                    <span className="dab-muted">
+                      Live Looker Data App preview will appear here after the first turn
+                    </span>
+                  )}
+                </div>
+                {activePreviewId && (
+                  <div className="dab-preview-actions">
+                    <button
+                      type="button"
+                      className="dab-btn-secondary"
+                      onClick={() => setIframeRev((r) => r + 1)}
+                    >
+                      Reload Preview
+                    </button>
+                    <button
+                      type="button"
+                      className="dab-btn-secondary"
+                      onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}
+                    >
+                      Open in Looker ↗
+                    </button>
+                  </div>
+                )}
+              </div>
 
-          <div className="dab-iframe-container">
-            {activePreviewId && embedUrl ? (
-              <iframe
-                key={`${builderMode}-${activePreviewId}-${iframeRev}`}
-                src={embedUrl}
-                title="Looker Live Preview"
-                className="dab-iframe"
-              />
-            ) : (
-              <div className="dab-placeholder">
-                <p>
-                  {builderMode === 'dashboard'
-                    ? 'No active native Looker content yet.'
-                    : 'No active Data App yet.'}
-                </p>
-                <p className="dab-muted">
-                  {builderMode === 'dashboard'
-                    ? 'Ask on the left to build a native Looker UDD, Look, Board, or Schedule via CodeMode, or pick from My Creations.'
-                    : 'Enter a prompt on the left to create a new Data App, or load an existing Dashboard ID from the top bar.'}
-                </p>
+              <div className="dab-iframe-container">
+                {activePreviewId && embedUrl ? (
+                  <iframe
+                    key={`${builderMode}-${activePreviewId}-${iframeRev}`}
+                    src={embedUrl}
+                    title="Looker Live Preview"
+                    className="dab-iframe"
+                  />
+                ) : (
+                  <div className="dab-placeholder">
+                    <p>
+                      {builderMode === 'dashboard'
+                        ? 'No active native Looker content yet.'
+                        : 'No active Data App yet.'}
+                    </p>
+                    <p className="dab-muted">
+                      {builderMode === 'dashboard'
+                        ? 'Ask on the left to build a native Looker UDD, Look, Board, or Schedule via CodeMode, or pick from My Creations.'
+                        : 'Enter a prompt on the left to create a new Data App, or load an existing Dashboard ID from the top bar.'}
+                    </p>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </>
+          )}
         </main>
       </div>
     </div>

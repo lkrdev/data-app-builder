@@ -180,6 +180,84 @@ customElements.define('executive-app', ExecutiveApp);
     bundle.prod_code.includes('id="da-kpi-total-revenue"'),
     'Expected stamped widget ID on <app-kpi>'
   )
+
+  // Verify Agentic LookML tool (BOOTSTRAP_LOOKML_PY, allowUpdateSession, vars, and artifact keys)
+  const lookmlToolTsx = readFileSync(path.join(repoRoot, 'src/lookmlTool.tsx'), 'utf8')
+  assert(
+    lookmlToolTsx.includes('user_${cleanUser}_lookml_${cleanId}') &&
+      lookmlToolTsx.includes('obj_lookml_${cleanId}'),
+    'lookmlTool.tsx must persist user_${userId}_lookml_${id} and obj_lookml_${id}'
+  )
+  assert(
+    antigravityTs.includes("allowUpdateSession: toolMode === 'lookml'") &&
+      antigravityTs.includes('LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.properties.vars') &&
+      antigravityTs.includes('...customVars'),
+    'runAntigravityTurn must expose vars: { type: "object" } on RUN_LOOKER_CODEMODE_TOOL and pass allowUpdateSession: true + customVars in LookML mode'
+  )
+  const lookmlPyMatch = lookmlToolTsx.match(/export const BOOTSTRAP_LOOKML_PY = `([\s\S]*?)`\n/)
+  assert(lookmlPyMatch, 'Could not find BOOTSTRAP_LOOKML_PY in src/lookmlTool.tsx')
+  const bootstrapPyPath = path.join(workDir, 'bootstrap_lookml.py')
+  writeFileSync(bootstrapPyPath, lookmlPyMatch[1], 'utf8')
+
+  const baselineDir = path.join(workDir, 'lookml_baseline')
+  const lookmlDir = path.join(workDir, 'lookml')
+  execFileSync('mkdir', ['-p', `${baselineDir}/bronze`, `${lookmlDir}/bronze`, `${lookmlDir}/tests/bronze`])
+  writeFileSync(
+    `${baselineDir}/bronze/orders.refinement.lkml`,
+    'include: "orders.view.lkml"\nview: +orders {\n  dimension: id { primary_key: yes }\n}\n',
+    'utf8'
+  )
+  writeFileSync(
+    `${lookmlDir}/bronze/orders.refinement.lkml`,
+    'include: "orders.view.lkml"\nview: +orders {\n  dimension: id { primary_key: yes }\n  measure: total_revenue { type: sum sql: ${sale_price} ;; value_format_name: usd }\n}\n',
+    'utf8'
+  )
+  writeFileSync(
+    `${lookmlDir}/tests/bronze/orders.test.lkml`,
+    'test: orders_revenue_test {\n  explore_source: orders {\n    column: total_revenue { field: orders.total_revenue }\n  }\n  assert: non_negative { expression: ${orders.total_revenue} >= 0 ;; }\n}\n',
+    'utf8'
+  )
+  const resultSpecPath = path.join(workDir, 'lookml_result.json')
+  writeFileSync(
+    resultSpecPath,
+    JSON.stringify({
+      id: '20261030_dev_branch',
+      title: 'Add total_revenue measure to orders',
+      project_id: 'deploytobarerepo_temp',
+      model_name: 'thelook',
+      branch_name: '20261030_dev_branch',
+      validation: { passed: true, error_count: 0, errors: [] },
+      tests: [{ test_name: 'orders_revenue_test', file_id: 'tests/bronze/orders.test.lkml', success: true }],
+      queries: [
+        {
+          query_index: 0,
+          label: 'Orders Total Revenue',
+          sql_slug: 'abc123sql',
+          explore_slug: 'xyz789exp',
+          parity_status: 'matched',
+        },
+      ],
+    }),
+    'utf8'
+  )
+  const lookmlStdout = execFileSync('python3', [bootstrapPyPath, 'bundle', resultSpecPath], {
+    env: {
+      ...process.env,
+      WORKSPACE_DIR: workDir,
+      LOOKML_DIR: lookmlDir,
+      LOOKML_BASELINE_DIR: baselineDir,
+    },
+    encoding: 'utf8',
+  })
+  const lookmlTag = lookmlStdout.match(/<LOOKML_BUNDLE>([\s\S]*?)<\/LOOKML_BUNDLE>/)
+  assert(lookmlTag, 'Expected <LOOKML_BUNDLE> output from bootstrap_lookml.py')
+  const lookmlBundle = JSON.parse(lookmlTag[1])
+  assert.equal(lookmlBundle.project_id, 'deploytobarerepo_temp')
+  assert.equal(lookmlBundle.files.length, 2, 'Expected 2 modified/created .lkml files')
+  assert(
+    lookmlBundle.files.some((f) => f.path === 'bronze/orders.refinement.lkml' && f.diff.includes('+  measure: total_revenue')),
+    'Expected unified diff for bronze/orders.refinement.lkml'
+  )
   console.log('✓ test-bundle.mjs: all assertions passed!')
 } finally {
   rmSync(workDir, { recursive: true, force: true })

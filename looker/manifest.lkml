@@ -50,7 +50,11 @@ application: data_app_builder {
       "delete_artifact",
       "all_user_attributes",
       "create_user_attribute",
-      "update_user_attribute"
+      "update_user_attribute",
+      "artifact",
+      "search_artifacts",
+      "update_artifacts",
+      "delete_artifact"
     ]
     scoped_user_attributes: [
       "gemini_api_key"
