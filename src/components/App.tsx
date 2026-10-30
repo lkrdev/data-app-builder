@@ -8,23 +8,30 @@ import {
 import {
   buildAvailableExploresCatalog,
   buildDenseExploreSchema,
+  deleteUserArtifact,
   extractExploreIdsFromCode,
   fetchInitialLookerMetadata,
   formatExploreId,
+  listUserArtifacts,
   listUserDashboardArtifacts,
   loadExistingDashboardApp,
   loadNativeContentById,
+  loadObjectArtifact,
   NativeContentState,
   NativeContentType,
   parseExploreId,
   PublishedAppState,
   saveDashboardStudioMetadata,
   saveNativeContentArtifact,
+  saveUserArtifact,
   upsertPublishedDataApp,
+  UserArtifactIndex,
 } from '../lookerApi'
 import {
   AgentSession,
   AntigravityAuth,
+  CodeModePermissionDecision,
+  CodeModePermissionRequest,
   ensureGeminiApiKeyUserAttribute,
   ExtensionAuthContextConfig,
   getGeminiUserAttributeName,
@@ -51,6 +58,50 @@ import {
   THREE_PILLAR_CODEMODE_PY,
 } from '../healthCheck'
 import '../styles/index.css'
+
+export type StudioMode = 'app' | 'dashboard' | 'lookml' | 'health' | 'tile'
+
+export const STUDIO_MODES: Array<{
+  mode: StudioMode
+  label: string
+  prefix: string
+}> = [
+  { mode: 'app', label: 'Data App', prefix: '/app' },
+  { mode: 'dashboard', label: 'Dashboard', prefix: '/dashboard' },
+  { mode: 'lookml', label: 'LookML', prefix: '/lookml' },
+  { mode: 'health', label: 'Health Check', prefix: '/health-check' },
+  { mode: 'tile', label: 'Python Tile', prefix: '/tile' },
+]
+
+export function parseStudioRoute(pathname: string): {
+  mode: StudioMode
+  objectId: string
+} {
+  const clean = (pathname || '/').trim()
+  if (clean === '/' || clean === '/config') return { mode: 'app', objectId: '' }
+  if (clean.startsWith('/health')) {
+    const rest = clean.replace(/^\/health(?:-check)?\/?/, '')
+    return { mode: 'health', objectId: decodeURIComponent(rest) }
+  }
+  if (clean.startsWith('/script')) {
+    const rest = clean.replace(/^\/script\/?/, '')
+    return { mode: 'tile', objectId: decodeURIComponent(rest) }
+  }
+  for (const m of STUDIO_MODES) {
+    if (clean === m.prefix || clean.startsWith(`${m.prefix}/`)) {
+      return {
+        mode: m.mode,
+        objectId: decodeURIComponent(clean.slice(m.prefix.length).replace(/^\/+/, '')),
+      }
+    }
+  }
+  return {
+    mode: 'app',
+    objectId: decodeURIComponent(clean.replace(/^\/+/, '')),
+  }
+}
+
+const PythonTileMount: React.FC = () => <PythonTile />
 
 interface ChatMessage {
   role: 'user' | 'assistant' | 'error'
@@ -144,7 +195,60 @@ const StudioMain: React.FC = () => {
 
   const isHealthCheckMode =
     location.pathname === '/health-check' ||
-    location.pathname.startsWith('/health-check/')
+    location.pathname.startsWith('/health-check/') ||
+    location.pathname === '/health' ||
+    location.pathname.startsWith('/health/')
+  const parsedRoute = useMemo(() => parseStudioRoute(location.pathname), [location.pathname])
+  const activeMode = parsedRoute.mode
+
+  // Per-user searchable artifact catalog (My Creations)
+  const [catalogItems, setCatalogItems] = useState<UserArtifactIndex[]>([])
+  const [catalogSearch, setCatalogSearch] = useState('')
+  const [activeObjectId, setActiveObjectId] = useState('')
+
+  // Inline permission prompt state for mutating CodeMode SDK operations
+  const approvedOpsRef = useRef<Set<string>>(new Set())
+  const [pendingPerm, setPendingPerm] = useState<{
+    req: CodeModePermissionRequest
+    resolve: (decision: CodeModePermissionDecision) => void
+  } | null>(null)
+
+  const requestCodeModePermission = useCallback(
+    (req: CodeModePermissionRequest): Promise<CodeModePermissionDecision> =>
+      new Promise<CodeModePermissionDecision>((resolve) => {
+        setPendingPerm({ req, resolve })
+      }),
+    []
+  )
+
+  const resolvePermDecision = (decision: CodeModePermissionDecision) => {
+    if (!pendingPerm) return
+    const { resolve } = pendingPerm
+    setPendingPerm(null)
+    resolve(decision)
+  }
+
+  const refreshCatalog = useCallback(
+    async (uid = userId) => {
+      if (!uid) return
+      try {
+        const items = await listUserArtifacts(core40SDK, uid)
+        setCatalogItems(items)
+      } catch {
+        // Ignore if artifacts namespace is empty
+      }
+    },
+    [core40SDK, userId]
+  )
+
+  const filteredCatalog = useMemo(() => {
+    const q = catalogSearch.trim().toLowerCase()
+    return catalogItems.filter((item) => {
+      if (!q) return true
+      const hay = `${item.title} ${item.id} ${item.type} ${(item.explores || []).join(' ')}`.toLowerCase()
+      return hay.includes(q)
+    })
+  }, [catalogItems, catalogSearch])
 
   const handleSaveAuthSetup = async () => {
     try {
@@ -227,6 +331,7 @@ const StudioMain: React.FC = () => {
         listUserDashboardArtifacts(core40SDK, extensionSDK, resolvedUserId).then((items) => {
           if (mounted) setMyCreations(items)
         })
+        refreshCatalog(resolvedUserId)
       })
       .catch((err) => {
         setMessages((prev) => [
@@ -831,6 +936,42 @@ const StudioMain: React.FC = () => {
     }
   }
 
+  const handleSelectCatalogItem = async (item: UserArtifactIndex) => {
+    const modeInfo = STUDIO_MODES.find((m) => m.mode === item.type)
+    const targetPath = modeInfo
+      ? `${modeInfo.prefix}/${encodeURIComponent(item.id)}`
+      : `/app/${encodeURIComponent(item.id)}`
+    setActiveObjectId(item.id)
+    if (location.pathname !== targetPath) {
+      history.push(targetPath)
+    }
+    if (item.type === 'app') {
+      await loadDashboardById(item.id, false)
+    } else if (item.type === 'dashboard') {
+      await loadNativeById(item.id, false)
+    } else if (item.type === 'lookml') {
+      await loadLookmlSessionById(item.id, false)
+    } else if (item.type === 'health') {
+      await loadHealthCheckById(item.id, false)
+    } else {
+      const loaded = await loadObjectArtifact(core40SDK, item.type, item.id)
+      if (loaded?.messages) setMessages(loaded.messages)
+    }
+  }
+
+  const handleDeleteCatalogItem = async (
+    e: React.MouseEvent,
+    item: UserArtifactIndex
+  ) => {
+    e.stopPropagation()
+    try {
+      await deleteUserArtifact(core40SDK, userId, item.type, item.id, true)
+      await refreshCatalog()
+    } catch {
+      // Ignore delete error
+    }
+  }
+
   const handleSendPrompt = async () => {
     const text = prompt.trim()
     if ((!text && pastedImages.length === 0) || busyStatus) return
@@ -857,6 +998,7 @@ const StudioMain: React.FC = () => {
 
     if (isHealthCheckMode) {
       await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages)
+      await refreshCatalog()
       return
     }
 
@@ -879,6 +1021,8 @@ const StudioMain: React.FC = () => {
         existingAppCode: currentAppCode || undefined,
         existingNativeContent: nativeContent,
         priorMessages: messages,
+        approvedOperations: approvedOpsRef.current,
+        onPermissionRequest: requestCodeModePermission,
         onStatus: setBusyStatus,
       })
 
@@ -913,6 +1057,7 @@ const StudioMain: React.FC = () => {
             saved.index,
             ...prev.filter((s) => s.id !== saved.id),
           ])
+          await refreshCatalog()
           if (location.pathname !== `/lookml/${saved.id}`) {
             history.replace(`/lookml/${encodeURIComponent(saved.id)}`)
           }
@@ -980,6 +1125,7 @@ const StudioMain: React.FC = () => {
           history.replace(targetRoute)
         }
         listUserDashboardArtifacts(core40SDK, extensionSDK, userId).then(setMyCreations)
+        await refreshCatalog()
         setMessages([
           ...messagesWithUser,
           {
@@ -1009,9 +1155,45 @@ const StudioMain: React.FC = () => {
         )
         lastPublishedIdRef.current = upserted.dashboardId
         setPublishedApp(upserted)
+        setActiveObjectId(upserted.dashboardId)
         setCurrentAppCode(result.bundle.raw_code)
         setLoadDashInput(upserted.dashboardId)
         setIframeRev((r) => r + 1)
+        try {
+          await saveUserArtifact(
+            core40SDK,
+            userId,
+            {
+              id: upserted.dashboardId,
+              type: 'app',
+              title: upserted.title,
+              explores: effectiveExplores,
+              updatedAt: new Date().toISOString(),
+              createdBy: userId,
+            },
+            {
+              id: upserted.dashboardId,
+              type: 'app',
+              title: upserted.title,
+              explores: effectiveExplores,
+              updatedAt: new Date().toISOString(),
+              createdBy: userId,
+              dashboardId: upserted.dashboardId,
+              extensionId: upserted.extensionId,
+              rawCode: result.bundle.raw_code,
+              messages: [
+                ...messagesWithUser,
+                {
+                  ...prelimAssistantMsg,
+                  dashboardId: upserted.dashboardId,
+                },
+              ],
+            }
+          )
+          await refreshCatalog()
+        } catch {
+          // Non-fatal if artifacts API is unavailable
+        }
         if (location.pathname !== `/${upserted.dashboardId}`) {
           history.replace(`/${encodeURIComponent(upserted.dashboardId)}`)
         }
@@ -1046,6 +1228,7 @@ const StudioMain: React.FC = () => {
             }
           )
           setNativeContent(updatedNative)
+          await refreshCatalog()
         } else if (publishedApp) {
           const updatedApp = await saveDashboardStudioMetadata(core40SDK, publishedApp, {
             explores: effectiveExplores,
@@ -1062,6 +1245,7 @@ const StudioMain: React.FC = () => {
         { role: 'error', text: err?.message || String(err) },
       ])
     } finally {
+      setPendingPerm(null)
       setBusyStatus(null)
     }
   }
@@ -1085,10 +1269,15 @@ const StudioMain: React.FC = () => {
       : ''
 
   if (isTileMount) {
-    return <PythonTile />
+    return <PythonTileMount />
   }
 
-  if (location.pathname === '/script' || location.pathname.startsWith('/script/')) {
+  if (
+    location.pathname === '/script' ||
+    location.pathname.startsWith('/script/') ||
+    location.pathname === '/tile' ||
+    location.pathname.startsWith('/tile/')
+  ) {
     return (
       <ScriptStudioView
         auth={{
@@ -1193,6 +1382,20 @@ const StudioMain: React.FC = () => {
           <span className="dab-badge">
             {LkrCodeMode?.runPythonCode ? 'WASM CodeMode ✓' : 'WASM CodeMode (pending build)'}
           </span>
+          <div className="dab-mode-switcher" role="tablist" aria-label="Tool Mode">
+            {STUDIO_MODES.map((m) => (
+              <button
+                key={m.mode}
+                type="button"
+                role="tab"
+                aria-selected={activeMode === m.mode}
+                className={`dab-mode-tab ${activeMode === m.mode ? 'active' : ''}`}
+                onClick={() => history.push(m.prefix)}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             className="dab-btn-secondary"
@@ -1512,6 +1715,59 @@ const StudioMain: React.FC = () => {
       <div className="dab-workspace">
         {/* Left Chat & Inspector Pane */}
         <aside className="dab-left-pane">
+          <div className="dab-catalog-bar">
+            <div className="dab-catalog-search">
+              <strong style={{ fontSize: 12, color: '#334155', whiteSpace: 'nowrap' }}>
+                My Creations ({filteredCatalog.length})
+              </strong>
+              <input
+                type="text"
+                placeholder="Search by title, ID, type, or explore..."
+                value={catalogSearch}
+                onChange={(e) => setCatalogSearch(e.target.value)}
+                style={{
+                  flex: 1,
+                  padding: '3px 8px',
+                  fontSize: 12,
+                  border: '1px solid #cbd5e1',
+                  borderRadius: 4,
+                }}
+              />
+            </div>
+            {filteredCatalog.length > 0 && (
+              <div className="dab-catalog-list">
+                {filteredCatalog.map((item) => (
+                  <span
+                    key={`${item.type}:${item.id}`}
+                    className={`dab-catalog-chip ${
+                      activeObjectId === item.id ? 'active' : ''
+                    }`}
+                    onClick={() => handleSelectCatalogItem(item)}
+                    title={`${item.type.toUpperCase()} #${item.id} · ${(item.explores || []).join(', ')}`}
+                  >
+                    <span>
+                      [{item.type}] {item.title} (#{item.id})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => handleDeleteCatalogItem(e, item)}
+                      style={{
+                        border: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        padding: 0,
+                        fontSize: 11,
+                        color: '#94a3b8',
+                      }}
+                      title="Delete artifact"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="dab-chat-log">
             {messages.length === 0 && (
               <div className="dab-empty-chat">
@@ -1588,6 +1844,49 @@ const StudioMain: React.FC = () => {
               </div>
             )}
           </div>
+
+          {pendingPerm && (
+            <div className="dab-permission-bar">
+              <div>
+                <strong>Approve Looker State Mutation?</strong>{' '}
+                <code>{pendingPerm.req.operation}</code> (
+                <code>
+                  {pendingPerm.req.httpMethod} {pendingPerm.req.path}
+                </code>
+                )
+              </div>
+              <div className="dab-permission-actions">
+                <button
+                  type="button"
+                  className="dab-btn-primary"
+                  onClick={() => resolvePermDecision('allow_once')}
+                >
+                  Allow once
+                </button>
+                <button
+                  type="button"
+                  className="dab-btn-secondary"
+                  onClick={() => resolvePermDecision('allow_op')}
+                >
+                  Allow all &apos;{pendingPerm.req.operation}&apos; this turn
+                </button>
+                <button
+                  type="button"
+                  className="dab-btn-secondary"
+                  onClick={() => resolvePermDecision('allow_all')}
+                >
+                  Allow all mutations this turn
+                </button>
+                <button
+                  type="button"
+                  className="dab-btn-secondary"
+                  onClick={() => resolvePermDecision('deny')}
+                >
+                  Deny
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="dab-composer">
             {pastedImages.length > 0 && (
