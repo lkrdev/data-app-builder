@@ -290,29 +290,32 @@ async function callInteractionsApi(
 }
 
 function collectInteractionTextCandidates(interaction: any): string {
-  const candidates: string[] = []
-  if (typeof interaction?.output_text === 'string') {
-    candidates.push(interaction.output_text)
-  }
-  for (const out of interaction?.outputs || []) {
-    if (typeof out?.text === 'string') candidates.push(out.text)
-  }
-  for (const step of interaction?.steps || []) {
-    if (typeof step?.output === 'string') candidates.push(step.output)
-    if (typeof step?.result === 'string') candidates.push(step.result)
-    if (typeof step?.text === 'string') candidates.push(step.text)
-  }
-  return candidates.join('\n')
+  const out: any[] = [interaction?.output_text]
+  for (const o of interaction?.outputs || []) out.push(o?.text)
+  for (const s of interaction?.steps || []) out.push(s?.output, s?.result, s?.text)
+  return out.filter((x): x is string => typeof x === 'string').join('\n')
 }
 
 function extractBundleFromInteraction(interaction: any): DataAppBundle | null {
+  const matches = Array.from(
+    collectInteractionTextCandidates(interaction).matchAll(
+      /<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g
+    )
+  )
+  return matches.length > 0
+    ? (JSON.parse(matches[matches.length - 1][1].trim()) as DataAppBundle)
+    : null
+}
+
+function extractTddFromInteraction(interaction: any): string | null {
   const combined = collectInteractionTextCandidates(interaction)
   const matches = Array.from(
-    combined.matchAll(/<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g)
+    combined.matchAll(/<HEALTH_CHECK_TDD>([\s\S]*?)<\/HEALTH_CHECK_TDD>/g)
   )
-  if (matches.length === 0) return null
-  const lastJson = matches[matches.length - 1][1].trim()
-  return JSON.parse(lastJson) as DataAppBundle
+  if (matches.length > 0) return matches[matches.length - 1][1].trim()
+  return combined.includes('## 1. Executive Summary') && combined.includes('## 7.')
+    ? combined.trim()
+    : null
 }
 
 export function extractNativeContentFromInteraction(
@@ -381,12 +384,15 @@ export async function runAntigravityTurn(params: {
   images?: PastedImage[]
   existingAppCode?: string
   existingNativeContent?: NativeContentState | null
+  customSystemGuide?: string
+  extraSources?: Array<{ type: 'inline'; content: string; target: string }>
   priorMessages?: Array<{ role: string; text: string }>
   onStatus: (statusText: string) => void
 }): Promise<{
   bundle: DataAppBundle | null
   nativeBundle: NativeContentBundle | null
   lookmlBundle?: LookmlBundle | null
+  tddMarkdown: string | null
   assistantText: string
   session: AgentSession
 }> {
@@ -405,6 +411,8 @@ export async function runAntigravityTurn(params: {
     images,
     existingAppCode,
     existingNativeContent,
+    customSystemGuide,
+    extraSources,
     priorMessages,
     onStatus,
   } = params
@@ -465,14 +473,15 @@ export async function runAntigravityTurn(params: {
         ].join('\n')
 
   const systemGuide =
-    toolMode === 'lookml'
+    customSystemGuide ||
+    (toolMode === 'lookml'
       ? buildLookmlSystemGuide({
           selectedExplores,
           primaryModel,
           primaryExplore,
           projectId: lookmlProjectId,
         })
-      : dataAppOrNativeGuide
+      : dataAppOrNativeGuide)
 
   const sources: Array<{ type: 'inline'; content: string; target: string }> = [
     { type: 'inline', content: schemaMarkdown, target: '/workspace/schema.md' },
@@ -480,6 +489,7 @@ export async function runAntigravityTurn(params: {
       ? [{ type: 'inline' as const, content: BUNDLE_APP_PY, target: '/workspace/bundle_app.py' }]
       : []),
     { type: 'inline', content: BOOTSTRAP_LOOKML_PY, target: '/workspace/bootstrap_lookml.py' },
+    ...(extraSources || []),
   ]
   if (mode === 'data_app' && existingAppCode) {
     sources.push({
@@ -677,6 +687,7 @@ export async function runAntigravityTurn(params: {
       ? extractNativeContentFromInteraction(interaction)
       : null
   const lookmlBundle = extractLookmlBundleFromInteraction(interaction)
+  const tddMarkdown = extractTddFromInteraction(interaction)
   const rawText =
     interaction.output_text ||
     (interaction.outputs || []).map((o: any) => o.text || '').join('\n') ||
@@ -685,12 +696,14 @@ export async function runAntigravityTurn(params: {
     .replace(/<DATA_APP_BUNDLE>[\s\S]*?<\/DATA_APP_BUNDLE>/g, '')
     .replace(/<NATIVE_CONTENT_BUNDLE>[\s\S]*?<\/NATIVE_CONTENT_BUNDLE>/g, '')
     .replace(/<LOOKML_BUNDLE>[\s\S]*?<\/LOOKML_BUNDLE>/g, '')
+    .replace(/<HEALTH_CHECK_TDD>[\s\S]*?<\/HEALTH_CHECK_TDD>/g, '')
     .trim()
 
   return {
     bundle,
     nativeBundle,
     lookmlBundle,
+    tddMarkdown,
     assistantText:
       cleanAssistantText ||
       (bundle
@@ -699,6 +712,8 @@ export async function runAntigravityTurn(params: {
         ? `Built "${nativeBundle.title}".`
         : lookmlBundle
         ? `Updated LookML "${lookmlBundle.title}".`
+        : tddMarkdown
+        ? 'Synthesized 7-section Technical Design Document (TECHNICAL_DESIGN_DOCUMENT.md).'
         : 'Done.'),
     session: {
       environmentId: interaction.environment_id || trackedEnvId,

@@ -119,6 +119,40 @@ const tileTableOut = await LkrCodeMode.runPythonCode({
   vars: { dashboard_filters: { status: 'Complete' } },
 })
 assert.deepEqual(JSON.parse(tileTableOut), [{ filter_status: 'Complete', rows: 42 }])
+
+const healthCheckTs = readFileSync(path.join(repoRoot, 'src/healthCheck.ts'), 'utf8')
+assert(
+  healthCheckTs.includes('system__activity') &&
+    healthCheckTs.includes('query_metrics') &&
+    healthCheckTs.includes('scheduled_plan') &&
+    healthCheckTs.includes('all_project_files') &&
+    healthCheckTs.includes('get_file_content') &&
+    healthCheckTs.includes('validate_project') &&
+    healthCheckTs.includes('create_sql_query') &&
+    healthCheckTs.includes('run_sql_query') &&
+    healthCheckTs.includes('JOBS_TIMELINE_BY_PROJECT') &&
+    healthCheckTs.includes('TABLE_STORAGE'),
+  'THREE_PILLAR_CODEMODE_PY must execute Pillar 1 (system__activity), Pillar 2 (all_project_files/get_file_content/validate_project), and Pillar 3 (create_sql_query + run_sql_query on JOBS_TIMELINE_BY_PROJECT & TABLE_STORAGE)'
+)
+assert(
+  healthCheckTs.includes('user_${cleanUser}_health_check_${cleanId}') &&
+    healthCheckTs.includes('obj_health_check_${cleanId}') &&
+    appTsx.includes("location.pathname === '/health-check'") &&
+    appTsx.includes('TECHNICAL_DESIGN_DOCUMENT.md') &&
+    appTsx.includes('Copy Markdown') &&
+    appTsx.includes('Download Markdown'),
+  'Health Check mode (/health-check/:id?) must synthesize 7-section TECHNICAL_DESIGN_DOCUMENT.md with Copy/Download Markdown buttons and persist to user_${userId}_health_check_${id} + obj_health_check_${id}'
+)
+
+const hcPyMatch = healthCheckTs.match(/export const THREE_PILLAR_CODEMODE_PY = `([\s\S]*?)`;\n/)
+assert(hcPyMatch, 'Could not extract THREE_PILLAR_CODEMODE_PY from src/healthCheck.ts')
+const hcMockOut = await LkrCodeMode.runPythonCode({
+  code: hcPyMatch[1].replace(/\\`/g, '`').replace(/\\\$/g, '$'),
+  sdk: mockSdk,
+  vars: { target_project: 'thelook_event' },
+})
+const hcParsed = JSON.parse(hcMockOut)
+assert(hcParsed.pillar1 && hcParsed.pillar2 && hcParsed.pillar3, 'Expected 3-pillar telemetry object from Monty WASM')
 const match = antigravityTs.match(/export const BUNDLE_APP_PY = `([\s\S]*?)`\n/)
 assert(match, 'Could not find BUNDLE_APP_PY in src/antigravity.ts')
 
