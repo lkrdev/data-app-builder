@@ -42,6 +42,14 @@ import {
   LookmlSessionIndex,
   saveLookmlSessionArtifact,
 } from '../lookmlTool'
+import {
+  HEALTH_CHECK_SYSTEM_GUIDE,
+  HealthCheckReportPayload,
+  loadHealthCheckArtifact,
+  runThreePillarHealthCheckViaCodeMode,
+  saveHealthCheckArtifact,
+  THREE_PILLAR_CODEMODE_PY,
+} from '../healthCheck'
 import '../styles/index.css'
 
 interface ChatMessage {
@@ -98,7 +106,7 @@ const StudioMain: React.FC = () => {
   const [schemaMarkdown, setSchemaMarkdown] = useState('')
   const [loadingSchema, setLoadingSchema] = useState(false)
 
-  // App, Native Content, Agentic LookML & Agent session state
+  // App, Native Content, Agentic LookML, Health Check & Agent session state
   const isLookmlMode =
     location.pathname === '/lookml' || location.pathname.startsWith('/lookml/')
   const builderMode: 'data_app' | 'dashboard' = /^\/dashboard(?:\/|$)/.test(
@@ -118,6 +126,9 @@ const StudioMain: React.FC = () => {
   >([])
   const lastPublishedIdRef = useRef<string>('')
   const lastNativeIdRef = useRef<string>('')
+  const [healthReport, setHealthReport] = useState<HealthCheckReportPayload | null>(null)
+  const lastHealthIdRef = useRef<string>('')
+  const [copiedTdd, setCopiedTdd] = useState(false)
   const [currentAppCode, setCurrentAppCode] = useState('')
   const [loadDashInput, setLoadDashInput] = useState('')
   const [agentSession, setAgentSession] = useState<AgentSession>({})
@@ -130,6 +141,10 @@ const StudioMain: React.FC = () => {
     'return search_content(terms="order", types="lookml_explore")'
   )
   const [codeModeOutput, setCodeModeOutput] = useState('')
+
+  const isHealthCheckMode =
+    location.pathname === '/health-check' ||
+    location.pathname.startsWith('/health-check/')
 
   const handleSaveAuthSetup = async () => {
     try {
@@ -493,6 +508,133 @@ const StudioMain: React.FC = () => {
     [core40SDK, extensionSDK, history, location.pathname]
   )
 
+  const loadHealthCheckById = useCallback(
+    async (rawId: string, pushRoute = true) => {
+      const id = rawId.trim()
+      if (!id) return
+      try {
+        setBusyStatus(`Loading Health Check report "${id}"...`)
+        const loaded = await loadHealthCheckArtifact(core40SDK, extensionSDK, id)
+        lastHealthIdRef.current = loaded.id
+        setHealthReport(loaded)
+        setLoadDashInput(loaded.id)
+        if (loaded.messages && loaded.messages.length > 0) {
+          setMessages(loaded.messages)
+        } else {
+          setMessages([
+            {
+              role: 'assistant',
+              text: `Loaded "${loaded.title}" (Health Score: ${loaded.scores.overallScore}%, Transcriber: ${loaded.scores.transcriberScore}/4.00) from obj_health_check_${loaded.id}.`,
+            },
+          ])
+        }
+        if (pushRoute && location.pathname !== `/health-check/${loaded.id}`) {
+          history.replace(`/health-check/${encodeURIComponent(loaded.id)}`)
+        }
+        setBusyStatus(null)
+      } catch (err: any) {
+        setBusyStatus(null)
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'error',
+            text: `Could not load Health Check "${id}": ${err?.message || err}`,
+          },
+        ])
+      }
+    },
+    [core40SDK, extensionSDK, history, location.pathname]
+  )
+
+  const handleRunHealthCheck = async (
+    customFocus?: string,
+    baseMessages?: ChatMessage[],
+    images?: PastedImage[]
+  ) => {
+    const activeMsgs = baseMessages || messages
+    try {
+      const baseRes = await runThreePillarHealthCheckViaCodeMode({
+        sdk: core40SDK,
+        extensionSDK,
+        reportId: healthReport?.id || loadDashInput.trim() || undefined,
+        customFocus,
+        messages: activeMsgs,
+        onStatus: setBusyStatus,
+      })
+      let finalReport = baseRes.report
+      if (customFocus && (authMode === 'apikey' || oauthToken)) {
+        try {
+          const turnRes = await runAntigravityTurn({
+            sdk: core40SDK,
+            extensionSDK,
+            auth: { mode: authMode, oauthToken, clientId, projectId, apiKey },
+            session: agentSession,
+            selectedExplores,
+            folderId: selectedFolderId,
+            schemaMarkdown,
+            userPrompt: customFocus,
+            images,
+            customSystemGuide: HEALTH_CHECK_SYSTEM_GUIDE,
+            extraSources: [
+              { type: 'inline', content: THREE_PILLAR_CODEMODE_PY, target: '/workspace/three_pillar_audit.py' },
+              { type: 'inline', content: finalReport.tddMarkdown, target: '/workspace/TECHNICAL_DESIGN_DOCUMENT.md' },
+            ],
+            priorMessages: messages,
+            onStatus: setBusyStatus,
+          })
+          setAgentSession(turnRes.session)
+          if (turnRes.tddMarkdown) {
+            finalReport = {
+              ...finalReport,
+              tddMarkdown: turnRes.tddMarkdown,
+              lastInteractionId: turnRes.session.lastInteractionId,
+              environmentId: turnRes.session.environmentId,
+              updatedAt: new Date().toISOString(),
+            }
+            await saveHealthCheckArtifact(core40SDK, extensionSDK, userId, finalReport)
+          }
+        } catch {
+          // Keep deterministic 3-pillar LkrCodeMode TDD if Antigravity turn is unavailable
+        }
+      }
+      lastHealthIdRef.current = finalReport.id
+      setHealthReport(finalReport)
+      setLoadDashInput(finalReport.id)
+      if (location.pathname !== `/health-check/${finalReport.id}`) {
+        history.replace(`/health-check/${encodeURIComponent(finalReport.id)}`)
+      }
+      setMessages([
+        ...activeMsgs,
+        {
+          role: 'assistant',
+          text: `3-Pillar Health Check complete: **${finalReport.scores.overallScore}% (${finalReport.scores.grade})** | Pillar 1: ${finalReport.scores.pillar1Score}% · Pillar 2: ${finalReport.scores.pillar2Score}% (Transcriber ${finalReport.scores.transcriberScore}/4.00) · Pillar 3: ${finalReport.scores.pillar3Score}%.\nSaved to \`${baseRes.userKey}\` and \`${baseRes.objKey}\`.`,
+        },
+      ])
+    } catch (err: any) {
+      setMessages((prev) => [...prev, { role: 'error', text: err?.message || String(err) }])
+    } finally {
+      setBusyStatus(null)
+    }
+  }
+
+  const handleCopyTddMarkdown = () => {
+    if (!healthReport?.tddMarkdown) return
+    navigator.clipboard?.writeText(healthReport.tddMarkdown)
+    setCopiedTdd(true)
+    setTimeout(() => setCopiedTdd(false), 1800)
+  }
+
+  const handleDownloadTddMarkdown = () => {
+    if (!healthReport?.tddMarkdown) return
+    const url = URL.createObjectURL(
+      new Blob([healthReport.tddMarkdown], { type: 'text/markdown;charset=utf-8' })
+    )
+    Object.assign(document.createElement('a'), {
+      href: url,
+      download: 'TECHNICAL_DESIGN_DOCUMENT.md',
+    }).click()
+    URL.revokeObjectURL(url)
+  }
   // Redirect to /config if extension auth is not configured yet
   useEffect(() => {
     if (
@@ -554,7 +696,7 @@ const StudioMain: React.FC = () => {
     [core40SDK, extensionSDK, history, location.pathname]
   )
 
-  // Auto-load content when opened via route (/lookml/:id, /dashboard/:id, or /:dashboardId / /dashboards/:dashboardId)
+  // Auto-load content when opened via route (/lookml/:id, /health-check/:id, /dashboard/:id, or /:dashboardId / /dashboards/:dashboardId)
   useEffect(() => {
     if (
       isTileMount ||
@@ -577,6 +719,15 @@ const StudioMain: React.FC = () => {
       return
     }
     if (location.pathname === '/lookml') return
+    const hcMatch = location.pathname.match(/^\/health-check\/([^/]+)\/?$/)
+    if (hcMatch) {
+      const hcId = decodeURIComponent(hcMatch[1]).trim()
+      if (hcId && hcId !== healthReport?.id && hcId !== lastHealthIdRef.current) {
+        loadHealthCheckById(hcId, false)
+      }
+      return
+    }
+    if (location.pathname === '/health-check') return
     const nativeMatch = location.pathname.match(/^\/dashboard\/([^/]+)\/?$/)
     if (nativeMatch) {
       const routeId = decodeURIComponent(nativeMatch[1]).trim()
@@ -607,12 +758,18 @@ const StudioMain: React.FC = () => {
     publishedApp?.dashboardId,
     nativeContent?.id,
     lookmlBundle?.id,
+    healthReport?.id,
     loadDashboardById,
     loadNativeById,
     loadLookmlSessionById,
+    loadHealthCheckById,
   ])
 
   const handleLoadExistingDashboard = async () => {
+    if (isHealthCheckMode) {
+      await loadHealthCheckById(loadDashInput, true)
+      return
+    }
     if (builderMode === 'dashboard') {
       await loadNativeById(loadDashInput, true)
     } else {
@@ -624,9 +781,11 @@ const StudioMain: React.FC = () => {
     lastPublishedIdRef.current = ''
     lastNativeIdRef.current = ''
     lastLookmlIdRef.current = ''
+    lastHealthIdRef.current = ''
     setPublishedApp(null)
     setNativeContent(null)
     setLookmlBundle(null)
+    setHealthReport(null)
     setCurrentAppCode('')
     setLoadDashInput('')
     setLoadLookmlInput('')
@@ -634,6 +793,10 @@ const StudioMain: React.FC = () => {
     setAgentSession({})
     setMessages([])
     setPastedImages([])
+    if (isHealthCheckMode) {
+      history.push('/health-check')
+      return
+    }
     const baseRoute = isLookmlMode
       ? '/lookml'
       : builderMode === 'dashboard'
@@ -691,6 +854,12 @@ const StudioMain: React.FC = () => {
     setPrompt('')
     setPastedImages([])
     setMessages(messagesWithUser)
+
+    if (isHealthCheckMode) {
+      await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages)
+      return
+    }
+
     setBusyStatus('Connecting to Antigravity...')
 
     try {
@@ -1031,6 +1200,30 @@ const StudioMain: React.FC = () => {
           >
             Python Script (/script)
           </button>
+          <button
+            type="button"
+            className={!isHealthCheckMode ? 'dab-btn-primary' : 'dab-btn-secondary'}
+            onClick={() => history.push('/')}
+          >
+            Data App
+          </button>
+          <button
+            type="button"
+            className={isHealthCheckMode ? 'dab-btn-primary' : 'dab-btn-secondary'}
+            onClick={() => history.push('/health-check')}
+          >
+            3-Pillar Health Check
+          </button>
+          {isHealthCheckMode && (
+            <button
+              type="button"
+              className="dab-btn-primary"
+              onClick={() => handleRunHealthCheck()}
+              disabled={!!busyStatus}
+            >
+              ⚡ Run 3-Pillar Audit
+            </button>
+          )}
         </div>
 
         <div className="dab-controls">
@@ -1544,9 +1737,66 @@ const StudioMain: React.FC = () => {
           </div>
         </aside>
 
-        {/* Right Live Embedded Dashboard or Agentic LookML Pane */}
+        {/* Right Live Embedded Dashboard, Agentic LookML, or Health Check TDD Pane */}
         <main className="dab-right-pane">
-          {isLookmlMode ? (
+          {isHealthCheckMode ? (
+            <>
+              <div className="dab-preview-toolbar">
+                <div>
+                  {healthReport ? (
+                    <>
+                      <strong>{healthReport.title}</strong>{' '}
+                      <span className="dab-badge">
+                        Health Score: {healthReport.scores.overallScore}% ({healthReport.scores.grade})
+                      </span>{' '}
+                      <span className="dab-badge">
+                        Transcriber: {healthReport.scores.transcriberScore}/4.00
+                      </span>{' '}
+                      <span className="dab-muted">
+                        (user_{healthReport.createdBy}_health_check_{healthReport.id} · obj_health_check_{healthReport.id})
+                      </span>
+                    </>
+                  ) : (
+                    <span className="dab-muted">
+                      7-section TECHNICAL_DESIGN_DOCUMENT.md (0–100% health score) will render here
+                    </span>
+                  )}
+                </div>
+                {healthReport && (
+                  <div className="dab-preview-actions">
+                    <button
+                      type="button"
+                      className="dab-btn-secondary"
+                      onClick={handleCopyTddMarkdown}
+                    >
+                      {copiedTdd ? '✓ Copied Markdown' : 'Copy Markdown'}
+                    </button>
+                    <button
+                      type="button"
+                      className="dab-btn-primary"
+                      onClick={handleDownloadTddMarkdown}
+                    >
+                      Download Markdown (.md)
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="dab-iframe-container">
+                {healthReport ? (
+                  <div className="dab-tdd-viewer">
+                    <pre className="dab-tdd-markdown">{healthReport.tddMarkdown}</pre>
+                  </div>
+                ) : (
+                  <div className="dab-placeholder">
+                    <p>No 3-Pillar Health Check report loaded yet.</p>
+                    <p className="dab-muted">
+                      Click <strong>⚡ Run 3-Pillar Audit</strong> in the top bar or enter a prompt on the left to execute Pillar 1 (System Activity), Pillar 2 (LookML 0–4 Transcriber Rubric), and Pillar 3 (BigQuery INFORMATION_SCHEMA) in <code>LkrCodeMode</code>.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </>
+          ) : isLookmlMode ? (
             <>
               <div className="dab-preview-toolbar">
                 <div>
