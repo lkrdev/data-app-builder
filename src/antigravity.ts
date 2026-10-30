@@ -1,5 +1,10 @@
 import type { Looker40SDK } from '@looker/sdk'
-import { DataAppBundle, parseExploreId } from './lookerApi'
+import {
+  DataAppBundle,
+  NativeContentBundle,
+  NativeContentState,
+  parseExploreId,
+} from './lookerApi'
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 export const LkrCodeMode = require('./vendor/codemode.js')
 
@@ -268,7 +273,7 @@ async function callInteractionsApi(
   return parsed
 }
 
-function extractBundleFromInteraction(interaction: any): DataAppBundle | null {
+function collectInteractionTextCandidates(interaction: any): string {
   const candidates: string[] = []
   if (typeof interaction?.output_text === 'string') {
     candidates.push(interaction.output_text)
@@ -281,13 +286,55 @@ function extractBundleFromInteraction(interaction: any): DataAppBundle | null {
     if (typeof step?.result === 'string') candidates.push(step.result)
     if (typeof step?.text === 'string') candidates.push(step.text)
   }
-  const combined = candidates.join('\n')
+  return candidates.join('\n')
+}
+
+function extractBundleFromInteraction(interaction: any): DataAppBundle | null {
+  const combined = collectInteractionTextCandidates(interaction)
   const matches = Array.from(
     combined.matchAll(/<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g)
   )
   if (matches.length === 0) return null
   const lastJson = matches[matches.length - 1][1].trim()
   return JSON.parse(lastJson) as DataAppBundle
+}
+
+export function extractNativeContentFromInteraction(
+  interaction: any
+): NativeContentBundle | null {
+  const combined = collectInteractionTextCandidates(interaction)
+  const matches = Array.from(
+    combined.matchAll(/<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g)
+  )
+  if (matches.length > 0) {
+    return JSON.parse(matches[matches.length - 1][1].trim()) as NativeContentBundle
+  }
+  // ponytail: fallback to inspecting the last run_looker_codemode function_result if agent omitted the tag
+  for (const step of [...(interaction?.steps || [])].reverse()) {
+    if (step?.type === 'function_result' && step?.name === 'run_looker_codemode') {
+      try {
+        const r = typeof step.result === 'string' ? JSON.parse(step.result) : step.result
+        const id = r?.dashboard_id || r?.look_id || r?.board_id || r?.id
+        if (id) {
+          const cType = r?.look_id ? 'look' : r?.board_id ? 'board' : r?.content_type || 'dashboard'
+          return {
+            id: String(id),
+            content_type: cType,
+            title: String(r.title || `Native ${cType} #${id}`),
+            folder_id: r.folder_id ? String(r.folder_id) : undefined,
+            embed_path: r.embed_path,
+            tile_count: r.tile_count,
+            filter_count: r.filter_count,
+            schedule_id: r.schedule_id ? String(r.schedule_id) : undefined,
+            explores: Array.isArray(r.explores) ? r.explores : undefined,
+          }
+        }
+      } catch {
+        // Ignore non-JSON codemode outputs
+      }
+    }
+  }
+  return null
 }
 
 function summarizeProgress(interaction: any): string {
@@ -308,16 +355,19 @@ export async function runAntigravityTurn(params: {
   extensionSDK?: any
   auth: AntigravityAuth
   session: AgentSession
+  mode?: 'data_app' | 'dashboard'
   selectedExplores: string[]
   folderId?: string
   schemaMarkdown: string
   userPrompt: string
   images?: PastedImage[]
   existingAppCode?: string
+  existingNativeContent?: NativeContentState | null
   priorMessages?: Array<{ role: string; text: string }>
   onStatus: (statusText: string) => void
 }): Promise<{
   bundle: DataAppBundle | null
+  nativeBundle: NativeContentBundle | null
   assistantText: string
   session: AgentSession
 }> {
@@ -326,12 +376,14 @@ export async function runAntigravityTurn(params: {
     extensionSDK,
     auth,
     session,
+    mode = 'data_app',
     selectedExplores,
     folderId,
     schemaMarkdown,
     userPrompt,
     images,
     existingAppCode,
+    existingNativeContent,
     priorMessages,
     onStatus,
   } = params
@@ -362,22 +414,42 @@ export async function runAntigravityTurn(params: {
       ? `3. Write or update the Lit Data App in /workspace/apps/current/app.js importing from '/runtime/data-app.js'. Set this.lookerModel = '${primaryModel}' and this.explore = '${primaryExplore}' in the constructor (or looker-model="${primaryModel}" explore="${primaryExplore}" on widgets).`
       : `3. Write or update the Lit Data App in /workspace/apps/current/app.js importing from '/runtime/data-app.js'. Set this.lookerModel and this.explore in the constructor for your primary explore, and set looker-model="<model_id>" explore="<explore_id>" on any widget querying another explore.`
 
-  const systemGuide = [
-    `You are building a Looker Data App (Lit web component using Looker's data-app.js runtime) ${exploreDirective}`,
-    `Follow these exact steps inside your Linux sandbox:`,
-    `1. If /workspace/toolkit/skills does not exist yet, run: PYTHONPATH=/workspace python3 -c "import bundle_app; bundle_app.ensure_toolkit()" and read /workspace/toolkit/skills/data-app-creator/SKILL.md and /workspace/toolkit/skills/data-app-creator/reference/LIT_DATA_APPS.md.`,
-    step2Directive,
-    step3Directive,
-    `4. Run: python3 /workspace/bundle_app.py /workspace/apps/current/app.js "<App Title>"`,
-    `   - Fix any syntax or tile safety errors reported by bundle_app.py and re-run until it succeeds.`,
-    `5. CRITICAL: In your final text response, include the exact <DATA_APP_BUNDLE>...</DATA_APP_BUNDLE> line printed by bundle_app.py (or read it from /workspace/bundle.json) so the host Looker extension can publish and preview the app.`,
-  ].join('\n')
+  const existingNativeDirective = existingNativeContent
+    ? `Active native Looker ${existingNativeContent.contentType}: id="${existingNativeContent.id}", title="${existingNativeContent.title}", folder_id="${existingNativeContent.folderId}". Update it in place (e.g. update_dashboard, create_dashboard_element, create_dashboard_filter, update_look, create_scheduled_plan) unless the user asks for a brand-new item.`
+    : `Create the requested native Looker content in folder_id=\`target_folder_id\` ("${folderId || '1'}").`
+
+  const systemGuide =
+    mode === 'dashboard'
+      ? [
+          `You are operating in Native Looker Content Builder mode (/dashboard/:id?) ${exploreDirective}`,
+          existingNativeDirective,
+          `Follow these exact steps:`,
+          `1. ${step2Directive.replace(/^2\.\s*/, '')}`,
+          `2. Use \`run_looker_codemode\` (with \`target_folder_id\`="${folderId || '1'}", \`target_explores\`=${JSON.stringify(selectedExplores)}, \`target_model\`="${primaryModel}", \`target_explore\`="${primaryExplore}") to build or update standard Looker content:`,
+          `   - User-Defined Dashboards (UDDs): \`create_dashboard({"title": "...", "folder_id": target_folder_id})\` or \`update_dashboard(id, {...})\`, \`create_query({"model": ..., "view": ..., "fields": [...], "filters": {...}, "sorts": [...], "vis_config": {"type": "single_value"|"looker_column"|"looker_line"|"looker_grid", ...}})\`, \`create_dashboard_element({"dashboard_id": dash_id, "title": "...", "type": "vis", "query_id": q["id"]})\`, and \`create_dashboard_filter({"dashboard_id": dash_id, "name": "...", "title": "...", "type": "field_filter", "model": ..., "explore": ..., "dimension": ..., "allow_multiple_values": True})\`.`,
+          `   - Saved Looks: \`create_query(...)\` + \`create_look({"title": "...", "folder_id": target_folder_id, "query_id": q["id"]})\` or \`update_look(look_id, {...})\`.`,
+          `   - Boards: \`create_board({"title": "...", "description": "..."})\` + \`create_board_section({"board_id": b["id"], "title": "..."})\` + \`create_board_item({"board_section_id": s["id"], "dashboard_id": ...})\`.`,
+          `   - Schedules: \`create_scheduled_plan({"name": "...", "dashboard_id": dash_id, "crontab": "0 9 * * 1", "scheduled_plan_destination": [{"format": "wysiwyg_pdf", "address": "...", "type": "email"}]})\`.`,
+          `3. CRITICAL: In your final text response, include \`<NATIVE_CONTENT_BUNDLE>{"id":"<id>","content_type":"dashboard"|"look"|"board","title":"<Title>","folder_id":"<folder_id>","embed_path":"/embed/dashboards/<id>"|"/embed/looks/<id>"|"/boards/<id>","tile_count":<n>,"filter_count":<n>,"explores":["<model>::<explore>"]}</NATIVE_CONTENT_BUNDLE>\` so the host extension can preview and index the content.`,
+        ].join('\n')
+      : [
+          `You are building a Looker Data App (Lit web component using Looker's data-app.js runtime) ${exploreDirective}`,
+          `Follow these exact steps inside your Linux sandbox:`,
+          `1. If /workspace/toolkit/skills does not exist yet, run: PYTHONPATH=/workspace python3 -c "import bundle_app; bundle_app.ensure_toolkit()" and read /workspace/toolkit/skills/data-app-creator/SKILL.md and /workspace/toolkit/skills/data-app-creator/reference/LIT_DATA_APPS.md.`,
+          step2Directive,
+          step3Directive,
+          `4. Run: python3 /workspace/bundle_app.py /workspace/apps/current/app.js "<App Title>"`,
+          `   - Fix any syntax or tile safety errors reported by bundle_app.py and re-run until it succeeds.`,
+          `5. CRITICAL: In your final text response, include the exact <DATA_APP_BUNDLE>...</DATA_APP_BUNDLE> line printed by bundle_app.py (or read it from /workspace/bundle.json) so the host Looker extension can publish and preview the app.`,
+        ].join('\n')
 
   const sources: Array<{ type: 'inline'; content: string; target: string }> = [
     { type: 'inline', content: schemaMarkdown, target: '/workspace/schema.md' },
-    { type: 'inline', content: BUNDLE_APP_PY, target: '/workspace/bundle_app.py' },
+    ...(mode === 'data_app'
+      ? [{ type: 'inline' as const, content: BUNDLE_APP_PY, target: '/workspace/bundle_app.py' }]
+      : []),
   ]
-  if (existingAppCode) {
+  if (mode === 'data_app' && existingAppCode) {
     sources.push({
       type: 'inline',
       content: existingAppCode,
@@ -557,18 +629,28 @@ export async function runAntigravityTurn(params: {
     )
   }
 
-  const bundle = extractBundleFromInteraction(interaction)
+  const bundle = mode === 'data_app' ? extractBundleFromInteraction(interaction) : null
+  const nativeBundle =
+    mode === 'dashboard' ? extractNativeContentFromInteraction(interaction) : null
   const rawText =
     interaction.output_text ||
     (interaction.outputs || []).map((o: any) => o.text || '').join('\n') ||
     'Completed.'
   const cleanAssistantText = rawText
     .replace(/<DATA_APP_BUNDLE>[\s\S]*?<\/DATA_APP_BUNDLE>/g, '')
+    .replace(/<NATIVE_CONTENT_BUNDLE>[\s\S]*?<\/NATIVE_CONTENT_BUNDLE>/g, '')
     .trim()
 
   return {
     bundle,
-    assistantText: cleanAssistantText || (bundle ? `Built "${bundle.title}".` : 'Done.'),
+    nativeBundle,
+    assistantText:
+      cleanAssistantText ||
+      (bundle
+        ? `Built "${bundle.title}".`
+        : nativeBundle
+        ? `Built "${nativeBundle.title}".`
+        : 'Done.'),
     session: {
       environmentId: interaction.environment_id || trackedEnvId,
       lastInteractionId: interaction.id,

@@ -11,10 +11,15 @@ import {
   extractExploreIdsFromCode,
   fetchInitialLookerMetadata,
   formatExploreId,
+  listUserDashboardArtifacts,
   loadExistingDashboardApp,
+  loadNativeContentById,
+  NativeContentState,
+  NativeContentType,
   parseExploreId,
   PublishedAppState,
   saveDashboardStudioMetadata,
+  saveNativeContentArtifact,
   upsertPublishedDataApp,
 } from '../lookerApi'
 import {
@@ -64,6 +69,7 @@ const StudioMain: React.FC = () => {
   )
 
   // Looker metadata & multi-select explore state (empty = let agent decide)
+  const [userId, setUserId] = useState('1')
   const [models, setModels] = useState<Array<{ name: string; label: string; explores: any[] }>>([])
   const [folders, setFolders] = useState<Array<{ id: string; name: string }>>([])
   const [selectedExplores, setSelectedExplores] = useState<string[]>([])
@@ -74,9 +80,19 @@ const StudioMain: React.FC = () => {
   const [schemaMarkdown, setSchemaMarkdown] = useState('')
   const [loadingSchema, setLoadingSchema] = useState(false)
 
-  // App & Agent session state
+  // App, Native Content & Agent session state
+  const builderMode: 'data_app' | 'dashboard' = /^\/dashboard(?:\/|$)/.test(
+    location.pathname
+  )
+    ? 'dashboard'
+    : 'data_app'
   const [publishedApp, setPublishedApp] = useState<PublishedAppState | null>(null)
+  const [nativeContent, setNativeContent] = useState<NativeContentState | null>(null)
+  const [myCreations, setMyCreations] = useState<
+    Array<{ id: string; title: string; contentType: NativeContentType; embedPath: string }>
+  >([])
   const lastPublishedIdRef = useRef<string>('')
+  const lastNativeIdRef = useRef<string>('')
   const [currentAppCode, setCurrentAppCode] = useState('')
   const [loadDashInput, setLoadDashInput] = useState('')
   const [agentSession, setAgentSession] = useState<AgentSession>({})
@@ -144,12 +160,14 @@ const StudioMain: React.FC = () => {
     return () => document.removeEventListener('mousedown', onDocMouseDown)
   }, [])
 
-  // Load models & folders on mount
+  // Load models, folders & user's indexed native creations on mount
   useEffect(() => {
     let mounted = true
     fetchInitialLookerMetadata(core40SDK)
       .then((meta) => {
         if (!mounted) return
+        const resolvedUserId = String(meta.user?.id || '1')
+        setUserId(resolvedUserId)
         const mappedModels = meta.models.map((m: any) => ({
           name: String(m.name),
           label: String(m.label || m.name),
@@ -163,6 +181,9 @@ const StudioMain: React.FC = () => {
           }))
         )
         setSelectedFolderId((prev) => (prev === '1' ? meta.defaultFolderId : prev))
+        listUserDashboardArtifacts(core40SDK, extensionSDK, resolvedUserId).then((items) => {
+          if (mounted) setMyCreations(items)
+        })
       })
       .catch((err) => {
         setMessages((prev) => [
@@ -173,7 +194,7 @@ const StudioMain: React.FC = () => {
     return () => {
       mounted = false
     }
-  }, [core40SDK])
+  }, [core40SDK, extensionSDK])
 
   // Grouped explore options matching lkrdev/explore-blending (grouped by model.label, sorted alphabetically)
   const groupedExplores = useMemo(() => {
@@ -387,6 +408,63 @@ const StudioMain: React.FC = () => {
     [core40SDK, history, location.pathname]
   )
 
+  const loadNativeById = useCallback(
+    async (rawId: string, pushRoute = true) => {
+      const id = rawId.trim()
+      if (!id) return
+      try {
+        setBusyStatus(`Loading native Looker content #${id}...`)
+        const loaded = await loadNativeContentById(core40SDK, extensionSDK, id)
+        lastNativeIdRef.current = loaded.id
+        setNativeContent(loaded)
+        setLoadDashInput(loaded.id)
+        setSelectedFolderId(loaded.folderId)
+        const studioExplores = loaded.studio?.explores?.filter(Boolean) || []
+        if (studioExplores.length > 0) setSelectedExplores(studioExplores)
+        const savedInteractionId =
+          loaded.studio?.lastInteractionId ||
+          loaded.studio?.lastSession?.lastInteractionId
+        const savedEnvironmentId =
+          loaded.studio?.environmentId ||
+          loaded.studio?.lastSession?.environmentId
+        setAgentSession(
+          savedInteractionId
+            ? {
+                lastInteractionId: savedInteractionId,
+                environmentId: savedEnvironmentId,
+                explores: studioExplores,
+              }
+            : {}
+        )
+        setIframeRev((r) => r + 1)
+        const targetRoute = `/dashboard/${encodeURIComponent(loaded.id)}`
+        if (pushRoute && location.pathname !== targetRoute) {
+          history.replace(targetRoute)
+        }
+        if (loaded.studio?.messages && loaded.studio.messages.length > 0) {
+          setMessages(loaded.studio.messages)
+        } else {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: 'assistant',
+              text: `Loaded native Looker ${loaded.contentType} "${loaded.title}" (#${loaded.id}). Ask for tiles, filters, looks, boards, or schedules to update it via CodeMode.`,
+              dashboardId: loaded.id,
+            },
+          ])
+        }
+        setBusyStatus(null)
+      } catch (err: any) {
+        setBusyStatus(null)
+        setMessages((prev) => [
+          ...prev,
+          { role: 'error', text: `Could not load native content #${id}: ${err.message || err}` },
+        ])
+      }
+    },
+    [core40SDK, extensionSDK, history, location.pathname]
+  )
+
   // Redirect to /config if extension auth is not configured yet
   useEffect(() => {
     if (!isConfigured && location.pathname !== '/config') {
@@ -394,9 +472,24 @@ const StudioMain: React.FC = () => {
     }
   }, [isConfigured, location.pathname, history])
 
-  // Auto-load dashboard when opened via route (/extensions/<ext>/:dashboardId or /dashboards/:dashboardId)
+  // Auto-load content when opened via route (/dashboard/:id for Native Content, or /:dashboardId / /dashboards/:dashboardId for Data Apps)
   useEffect(() => {
     if (location.pathname === '/config') return
+    const nativeMatch = location.pathname.match(/^\/dashboard\/([^/]+)\/?$/)
+    if (nativeMatch) {
+      const routeId = decodeURIComponent(nativeMatch[1]).trim()
+      if (
+        routeId &&
+        routeId !== nativeContent?.id &&
+        routeId !== lastNativeIdRef.current
+      ) {
+        loadNativeById(routeId, false)
+      }
+      return
+    }
+    if (location.pathname === '/dashboard' || location.pathname === '/dashboard/') {
+      return
+    }
     const m = location.pathname.match(/^\/(?:dashboards\/)?([^/]+)\/?$/)
     const routeId = m ? decodeURIComponent(m[1]).trim() : ''
     if (
@@ -406,23 +499,36 @@ const StudioMain: React.FC = () => {
     ) {
       loadDashboardById(routeId, false)
     }
-  }, [location.pathname, publishedApp?.dashboardId, loadDashboardById])
+  }, [
+    location.pathname,
+    publishedApp?.dashboardId,
+    nativeContent?.id,
+    loadDashboardById,
+    loadNativeById,
+  ])
 
   const handleLoadExistingDashboard = async () => {
-    await loadDashboardById(loadDashInput, true)
+    if (builderMode === 'dashboard') {
+      await loadNativeById(loadDashInput, true)
+    } else {
+      await loadDashboardById(loadDashInput, true)
+    }
   }
 
   const handleResetNewApp = () => {
     lastPublishedIdRef.current = ''
+    lastNativeIdRef.current = ''
     setPublishedApp(null)
+    setNativeContent(null)
     setCurrentAppCode('')
     setLoadDashInput('')
     setSelectedExplores([])
     setAgentSession({})
     setMessages([])
     setPastedImages([])
-    if (location.pathname !== '/') {
-      history.push('/')
+    const baseRoute = builderMode === 'dashboard' ? '/dashboard' : '/'
+    if (location.pathname !== baseRoute) {
+      history.push(baseRoute)
     }
   }
 
@@ -481,12 +587,14 @@ const StudioMain: React.FC = () => {
         extensionSDK,
         auth,
         session: agentSession,
+        mode: builderMode,
         selectedExplores,
         folderId: selectedFolderId,
         schemaMarkdown,
         userPrompt: effectivePrompt,
         images: attachedImages,
         existingAppCode: currentAppCode || undefined,
+        existingNativeContent: nativeContent,
         priorMessages: messages,
         onStatus: setBusyStatus,
       })
@@ -501,7 +609,7 @@ const StudioMain: React.FC = () => {
               ...extractExploreIdsFromCode(result.bundle.raw_code || ''),
             ])
           )
-        : []
+        : result.nativeBundle?.explores || []
       const effectiveExplores =
         selectedExplores.length > 0 ? selectedExplores : bundleExplores
       if (selectedExplores.length === 0 && bundleExplores.length > 0) {
@@ -513,7 +621,45 @@ const StudioMain: React.FC = () => {
         explores: effectiveExplores,
       })
 
-      if (result.bundle) {
+      if (builderMode === 'dashboard' && result.nativeBundle) {
+        setBusyStatus('Indexing native Looker content in user catalog...')
+        const prelimAssistantMsg: ChatMessage = {
+          role: 'assistant',
+          text: result.assistantText,
+          interactionId: result.session.lastInteractionId,
+          widgetCount: result.nativeBundle.tile_count,
+        }
+        const savedNative = await saveNativeContentArtifact(
+          core40SDK,
+          extensionSDK,
+          userId,
+          result.nativeBundle,
+          selectedFolderId,
+          nativeContent,
+          {
+            explores: effectiveExplores,
+            lastInteractionId: result.session.lastInteractionId,
+            environmentId: result.session.environmentId,
+            messages: [...messagesWithUser, prelimAssistantMsg],
+          }
+        )
+        lastNativeIdRef.current = savedNative.id
+        setNativeContent(savedNative)
+        setLoadDashInput(savedNative.id)
+        setIframeRev((r) => r + 1)
+        const targetRoute = `/dashboard/${encodeURIComponent(savedNative.id)}`
+        if (location.pathname !== targetRoute) {
+          history.replace(targetRoute)
+        }
+        listUserDashboardArtifacts(core40SDK, extensionSDK, userId).then(setMyCreations)
+        setMessages([
+          ...messagesWithUser,
+          {
+            ...prelimAssistantMsg,
+            dashboardId: savedNative.id,
+          },
+        ])
+      } else if (result.bundle) {
         setBusyStatus('Publishing inline extension & updating Looker dashboard...')
         const prelimAssistantMsg: ChatMessage = {
           role: 'assistant',
@@ -556,7 +702,23 @@ const StudioMain: React.FC = () => {
         }
         const nextMsgs = [...messagesWithUser, assistantMsg]
         setMessages(nextMsgs)
-        if (publishedApp) {
+        if (builderMode === 'dashboard' && nativeContent) {
+          const updatedNative = await saveNativeContentArtifact(
+            core40SDK,
+            extensionSDK,
+            userId,
+            { id: nativeContent.id, title: nativeContent.title, explores: effectiveExplores },
+            selectedFolderId,
+            nativeContent,
+            {
+              explores: effectiveExplores,
+              lastInteractionId: result.session.lastInteractionId,
+              environmentId: result.session.environmentId,
+              messages: nextMsgs,
+            }
+          )
+          setNativeContent(updatedNative)
+        } else if (publishedApp) {
           const updatedApp = await saveDashboardStudioMetadata(core40SDK, publishedApp, {
             explores: effectiveExplores,
             lastInteractionId: result.session.lastInteractionId,
@@ -577,9 +739,22 @@ const StudioMain: React.FC = () => {
   }
 
   const hostUrl = (extensionSDK as any)?.lookerHostData?.hostUrl || window.location.origin
-  const embedUrl = publishedApp
-    ? `${hostUrl.replace(/\/$/, '')}/embed/dashboards/${encodeURIComponent(publishedApp.dashboardId)}`
-    : ''
+  const activePreviewId =
+    builderMode === 'dashboard' ? nativeContent?.id : publishedApp?.dashboardId
+  const embedUrl =
+    builderMode === 'dashboard'
+      ? nativeContent
+        ? `${hostUrl.replace(/\/$/, '')}${nativeContent.embedPath}`
+        : ''
+      : publishedApp
+      ? `${hostUrl.replace(/\/$/, '')}/embed/dashboards/${encodeURIComponent(publishedApp.dashboardId)}`
+      : ''
+  const openInLookerPath =
+    builderMode === 'dashboard' && nativeContent
+      ? nativeContent.embedPath.replace(/^\/embed/, '')
+      : publishedApp
+      ? `/dashboards/${encodeURIComponent(publishedApp.dashboardId)}`
+      : ''
 
   if (location.pathname === '/config') {
     return (
@@ -670,6 +845,32 @@ const StudioMain: React.FC = () => {
         </div>
 
         <div className="dab-controls">
+          <label className="dab-field">
+            <span>Mode</span>
+            <select
+              value={builderMode}
+              onChange={(e) => {
+                const nextMode = e.target.value as 'data_app' | 'dashboard'
+                if (nextMode === 'dashboard') {
+                  history.push(
+                    nativeContent?.id
+                      ? `/dashboard/${encodeURIComponent(nativeContent.id)}`
+                      : '/dashboard'
+                  )
+                } else {
+                  history.push(
+                    publishedApp?.dashboardId
+                      ? `/${encodeURIComponent(publishedApp.dashboardId)}`
+                      : '/'
+                  )
+                }
+              }}
+            >
+              <option value="data_app">Data App (Lit)</option>
+              <option value="dashboard">Native Content (UDD / Look / Board)</option>
+            </select>
+          </label>
+
           <div className="dab-field" ref={comboRef}>
             <span>Explores</span>
             <div className="dab-combobox" onClick={() => setComboOpen(true)}>
@@ -787,9 +988,27 @@ const StudioMain: React.FC = () => {
           <div className="dab-divider" />
 
           <div className="dab-load-box">
+            {builderMode === 'dashboard' && myCreations.length > 0 && (
+              <select
+                value={nativeContent?.id || ''}
+                onChange={(e) => {
+                  if (e.target.value) loadNativeById(e.target.value, true)
+                }}
+                title="My Creations (indexed under user_${userId}_dashboard_${id})"
+              >
+                <option value="">My Creations ({myCreations.length})...</option>
+                {myCreations.map((c) => (
+                  <option key={`${c.contentType}:${c.id}`} value={c.id}>
+                    [{c.contentType}] {c.title} (#{c.id})
+                  </option>
+                ))}
+              </select>
+            )}
             <input
               type="text"
-              placeholder="Dashboard ID..."
+              placeholder={
+                builderMode === 'dashboard' ? 'ID or look:ID...' : 'Dashboard ID...'
+              }
               value={loadDashInput}
               onChange={(e) => setLoadDashInput(e.target.value)}
               style={{ width: 105 }}
@@ -800,16 +1019,16 @@ const StudioMain: React.FC = () => {
               onClick={handleLoadExistingDashboard}
               disabled={!!busyStatus || !loadDashInput.trim()}
             >
-              Load App
+              {builderMode === 'dashboard' ? 'Load Content' : 'Load App'}
             </button>
-            {publishedApp && (
+            {(publishedApp || nativeContent) && (
               <button
                 type="button"
                 className="dab-btn-secondary"
                 onClick={handleResetNewApp}
                 disabled={!!busyStatus}
               >
-                New App
+                {builderMode === 'dashboard' ? 'New Content' : 'New App'}
               </button>
             )}
           </div>
@@ -846,7 +1065,11 @@ const StudioMain: React.FC = () => {
             {messages.length === 0 && (
               <div className="dab-empty-chat">
                 <p>
-                  <strong>Build a Looker Data App with Antigravity</strong>
+                  <strong>
+                    {builderMode === 'dashboard'
+                      ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)'
+                      : 'Build a Looker Data App with Antigravity'}
+                  </strong>
                 </p>
                 <p>
                   {selectedExplores.length === 0 ? (
@@ -867,9 +1090,9 @@ const StudioMain: React.FC = () => {
                   )}
                 </p>
                 <p>
-                  Every turn validates your app in Antigravity&apos;s Linux sandbox,
-                  registers widget queries, and auto-publishes the live Looker
-                  dashboard on the right.
+                  {builderMode === 'dashboard'
+                    ? 'Creates or updates native Looker UDDs, Looks, Boards, and Schedules via CodeMode, indexes them in your My Creations catalog, and previews them on the right.'
+                    : "Every turn validates your app in Antigravity's Linux sandbox, registers widget queries, and auto-publishes the live Looker dashboard on the right."}
                 </p>
               </div>
             )}
@@ -1045,7 +1268,13 @@ const StudioMain: React.FC = () => {
                 onClick={handleSendPrompt}
                 disabled={!!busyStatus || (!prompt.trim() && pastedImages.length === 0)}
               >
-                {publishedApp ? 'Update App' : 'Build App'}
+                {builderMode === 'dashboard'
+                  ? nativeContent
+                    ? 'Update Content'
+                    : 'Build Content'
+                  : publishedApp
+                  ? 'Update App'
+                  : 'Build App'}
               </button>
             </div>
           </div>
@@ -1055,7 +1284,21 @@ const StudioMain: React.FC = () => {
         <main className="dab-right-pane">
           <div className="dab-preview-toolbar">
             <div>
-              {publishedApp ? (
+              {builderMode === 'dashboard' ? (
+                nativeContent ? (
+                  <>
+                    <strong>{nativeContent.title}</strong>{' '}
+                    <span className="dab-muted">
+                      ({nativeContent.contentType} #{nativeContent.id} ·{' '}
+                      <code>{nativeContent.embedPath}</code>)
+                    </span>
+                  </>
+                ) : (
+                  <span className="dab-muted">
+                    Live Looker UDD / Look / Board preview will appear here after the first turn
+                  </span>
+                )
+              ) : publishedApp ? (
                 <>
                   <strong>{publishedApp.title}</strong>{' '}
                   <span className="dab-muted">
@@ -1069,7 +1312,7 @@ const StudioMain: React.FC = () => {
                 </span>
               )}
             </div>
-            {publishedApp && (
+            {activePreviewId && (
               <div className="dab-preview-actions">
                 <button
                   type="button"
@@ -1081,33 +1324,33 @@ const StudioMain: React.FC = () => {
                 <button
                   type="button"
                   className="dab-btn-secondary"
-                  onClick={() =>
-                    extensionSDK.openBrowserWindow(
-                      `/dashboards/${encodeURIComponent(publishedApp.dashboardId)}`,
-                      '_blank'
-                    )
-                  }
+                  onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}
                 >
-                  Open Dashboard ↗
+                  Open in Looker ↗
                 </button>
               </div>
             )}
           </div>
 
           <div className="dab-iframe-container">
-            {publishedApp ? (
+            {activePreviewId && embedUrl ? (
               <iframe
-                key={`${publishedApp.dashboardId}-${iframeRev}`}
+                key={`${builderMode}-${activePreviewId}-${iframeRev}`}
                 src={embedUrl}
-                title="Looker Data App Live Preview"
+                title="Looker Live Preview"
                 className="dab-iframe"
               />
             ) : (
               <div className="dab-placeholder">
-                <p>No active Data App yet.</p>
+                <p>
+                  {builderMode === 'dashboard'
+                    ? 'No active native Looker content yet.'
+                    : 'No active Data App yet.'}
+                </p>
                 <p className="dab-muted">
-                  Enter a prompt on the left to create a new Data App, or load an
-                  existing Dashboard ID from the top bar.
+                  {builderMode === 'dashboard'
+                    ? 'Ask on the left to build a native Looker UDD, Look, Board, or Schedule via CodeMode, or pick from My Creations.'
+                    : 'Enter a prompt on the left to create a new Data App, or load an existing Dashboard ID from the top bar.'}
                 </p>
               </div>
             )}

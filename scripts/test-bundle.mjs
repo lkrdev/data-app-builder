@@ -74,6 +74,26 @@ assert(
     antigravityTs.includes('Resumed sandbox expired; provisioning fresh sandbox with app state...'),
   'runAntigravityTurn must instruct agent to use Solr search_content + lookml_model_explore when no explore is selected and fall back cleanly on expired sandboxes'
 )
+assert(
+  antigravityTs.includes('<NATIVE_CONTENT_BUNDLE>') &&
+    antigravityTs.includes('create_dashboard_filter') &&
+    antigravityTs.includes('create_scheduled_plan') &&
+    lookerApiTs.includes('user_${safeUserId}_dashboard_${id}') &&
+    lookerApiTs.includes('obj_dashboard_${id}') &&
+    lookerApiTs.includes('/embed/looks/') &&
+    lookerApiTs.includes('/boards/') &&
+    appTsx.includes("builderMode === 'dashboard'"),
+  'Native Content Builder (/dashboard/:id?) must support UDDs/Looks/Boards/Schedules via CodeMode and index user_${userId}_dashboard_${id} + obj_dashboard_${id}'
+)
+const manifestLkml = readFileSync(path.join(repoRoot, 'manifest.lkml'), 'utf8')
+assert(
+  manifestLkml.includes('"create_look"') &&
+    manifestLkml.includes('"create_board"') &&
+    manifestLkml.includes('"create_dashboard_filter"') &&
+    manifestLkml.includes('"create_scheduled_plan"') &&
+    manifestLkml.includes('"update_artifacts"'),
+  'manifest.lkml must declare native content and artifact core_api_methods'
+)
 const match = antigravityTs.match(/export const BUNDLE_APP_PY = `([\s\S]*?)`\n/)
 assert(match, 'Could not find BUNDLE_APP_PY in src/antigravity.ts')
 
