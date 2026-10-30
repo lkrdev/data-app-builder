@@ -707,17 +707,7 @@ const StudioMain: React.FC = () => {
             core40SDK,
             extensionSDK,
             userId,
-            {
-              id: nativeContent.id,
-              content_type: nativeContent.contentType,
-              title: nativeContent.title,
-              folder_id: nativeContent.folderId,
-              embed_path: nativeContent.embedPath,
-              tile_count: nativeContent.tileCount,
-              filter_count: nativeContent.filterCount,
-              schedule_id: nativeContent.scheduleId,
-              explores: effectiveExplores,
-            },
+            { id: nativeContent.id, title: nativeContent.title, explores: effectiveExplores },
             selectedFolderId,
             nativeContent,
             {
@@ -761,11 +751,7 @@ const StudioMain: React.FC = () => {
       : ''
   const openInLookerPath =
     builderMode === 'dashboard' && nativeContent
-      ? nativeContent.contentType === 'look'
-        ? `/looks/${encodeURIComponent(nativeContent.id)}`
-        : nativeContent.contentType === 'board'
-        ? `/boards/${encodeURIComponent(nativeContent.id)}`
-        : `/dashboards/${encodeURIComponent(nativeContent.id)}`
+      ? nativeContent.embedPath.replace(/^\/embed/, '')
       : publishedApp
       ? `/dashboards/${encodeURIComponent(publishedApp.dashboardId)}`
       : ''

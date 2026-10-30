@@ -307,31 +307,26 @@ export function extractNativeContentFromInteraction(
     combined.matchAll(/<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g)
   )
   if (matches.length > 0) {
-    const lastJson = matches[matches.length - 1][1].trim()
-    return JSON.parse(lastJson) as NativeContentBundle
+    return JSON.parse(matches[matches.length - 1][1].trim()) as NativeContentBundle
   }
   // ponytail: fallback to inspecting the last run_looker_codemode function_result if agent omitted the tag
   for (const step of [...(interaction?.steps || [])].reverse()) {
     if (step?.type === 'function_result' && step?.name === 'run_looker_codemode') {
       try {
-        const res = typeof step.result === 'string' ? JSON.parse(step.result) : step.result
-        const id = res?.dashboard_id || res?.look_id || res?.board_id || res?.id
+        const r = typeof step.result === 'string' ? JSON.parse(step.result) : step.result
+        const id = r?.dashboard_id || r?.look_id || r?.board_id || r?.id
         if (id) {
-          const contentType = res?.look_id
-            ? 'look'
-            : res?.board_id
-            ? 'board'
-            : res?.content_type || 'dashboard'
+          const cType = r?.look_id ? 'look' : r?.board_id ? 'board' : r?.content_type || 'dashboard'
           return {
             id: String(id),
-            content_type: contentType,
-            title: String(res.title || `Native ${contentType} #${id}`),
-            folder_id: res.folder_id ? String(res.folder_id) : undefined,
-            embed_path: res.embed_path,
-            tile_count: res.tile_count,
-            filter_count: res.filter_count,
-            schedule_id: res.schedule_id ? String(res.schedule_id) : undefined,
-            explores: Array.isArray(res.explores) ? res.explores : undefined,
+            content_type: cType,
+            title: String(r.title || `Native ${cType} #${id}`),
+            folder_id: r.folder_id ? String(r.folder_id) : undefined,
+            embed_path: r.embed_path,
+            tile_count: r.tile_count,
+            filter_count: r.filter_count,
+            schedule_id: r.schedule_id ? String(r.schedule_id) : undefined,
+            explores: Array.isArray(r.explores) ? r.explores : undefined,
           }
         }
       } catch {

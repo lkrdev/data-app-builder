@@ -612,39 +612,33 @@ export function resolveNativeEmbedPath(
   return `/embed/dashboards/${cleanId}`
 }
 
+async function searchArtifactsRaw(
+  sdk: Looker40SDK,
+  namespace: string,
+  key: string
+): Promise<any[]> {
+  const items =
+    typeof (sdk as any).search_artifacts === 'function'
+      ? await sdk.ok(sdk.search_artifacts({ namespace, key }))
+      : await rawLookerRequest<any[]>(
+          sdk,
+          'GET',
+          `/artifacts/${encodeURIComponent(namespace)}/search`,
+          { key }
+        )
+  return Array.isArray(items) ? items : []
+}
+
 async function readArtifactJson<T = any>(
   sdk: Looker40SDK,
   namespace: string,
   key: string
 ): Promise<{ version?: number; data?: T } | null> {
   try {
-    const items =
-      typeof (sdk as any).search_artifacts === 'function'
-        ? await sdk.ok(sdk.search_artifacts({ namespace, key }))
-        : await rawLookerRequest<any[]>(sdk, 'GET', `/artifacts/${encodeURIComponent(namespace)}/search`, {
-            key,
-          })
-    const hit = Array.isArray(items) ? items.find((a) => a.key === key) : null
+    const hit = (await searchArtifactsRaw(sdk, namespace, key)).find((a) => a.key === key)
     if (!hit) return null
-    let rawVal = hit.value
-    if (rawVal === undefined) {
-      const full =
-        typeof (sdk as any).artifact === 'function'
-          ? await sdk.ok(sdk.artifact({ namespace, key }))
-          : await rawLookerRequest<any>(
-              sdk,
-              'GET',
-              `/artifacts/${encodeURIComponent(namespace)}/${encodeURIComponent(key)}`
-            )
-      const fullObj = Array.isArray(full) ? full[0] : full
-      rawVal = fullObj?.value ?? fullObj
-    }
-    const parsed =
-      typeof rawVal === 'string' ? JSON.parse(rawVal) : (rawVal as T | undefined)
-    return {
-      version: typeof hit.version === 'number' ? hit.version : undefined,
-      data: parsed,
-    }
+    const data = typeof hit.value === 'string' ? JSON.parse(hit.value) : (hit.value as T)
+    return { version: typeof hit.version === 'number' ? hit.version : undefined, data }
   } catch {
     return null
   }
@@ -710,7 +704,7 @@ export async function saveNativeContentArtifact(
     studio: nextStudio,
   }
 
-  const updates: Array<Record<string, any>> = [
+  const updates = [
     {
       key: userKey,
       value: JSON.stringify(userIndexPayload),
@@ -729,16 +723,10 @@ export async function saveNativeContentArtifact(
     if (typeof (sdk as any).update_artifacts === 'function') {
       await sdk.ok(sdk.update_artifacts(namespace, updates as any))
     } else {
-      await rawLookerRequest(
-        sdk,
-        'PUT',
-        `/artifacts/${encodeURIComponent(namespace)}`,
-        undefined,
-        updates
-      )
+      await rawLookerRequest(sdk, 'PUT', `/artifacts/${encodeURIComponent(namespace)}`, undefined, updates)
     }
   } catch {
-    // Non-fatal when running outside an extension host or before artifact namespace is initialized
+    // Non-fatal outside an extension host
   }
 
   return {
@@ -759,15 +747,15 @@ export async function loadNativeContentById(
   extensionSDK: any,
   rawId: string
 ): Promise<NativeContentState> {
-  const trimmed = rawId.trim()
-  const prefixMatch = trimmed.match(/^(dashboard|look|board):(.+)$/i)
-  const explicitType = prefixMatch
-    ? (prefixMatch[1].toLowerCase() as NativeContentType)
-    : undefined
-  const cleanId = (prefixMatch ? prefixMatch[2] : trimmed).trim()
-  const namespace = getArtifactNamespace(extensionSDK)
-  const stored = await readArtifactJson<any>(sdk, namespace, `obj_dashboard_${cleanId}`)
-  if (stored?.data && stored.data.id) {
+  const prefixMatch = rawId.trim().match(/^(dashboard|look|board):(.+)$/i)
+  const explicitType = prefixMatch ? (prefixMatch[1].toLowerCase() as NativeContentType) : undefined
+  const cleanId = (prefixMatch ? prefixMatch[2] : rawId).trim()
+  const stored = await readArtifactJson<any>(
+    sdk,
+    getArtifactNamespace(extensionSDK),
+    `obj_dashboard_${cleanId}`
+  )
+  if (stored?.data?.id) {
     const d = stored.data
     const cType: NativeContentType = explicitType || d.contentType || 'dashboard'
     return {
@@ -784,36 +772,21 @@ export async function loadNativeContentById(
   }
 
   const cType: NativeContentType = explicitType || 'dashboard'
-  if (cType === 'look') {
-    const lk = await rawLookerRequest<any>(sdk, 'GET', `/looks/${encodeURIComponent(cleanId)}`)
-    return {
-      id: String(lk.id || cleanId),
-      contentType: 'look',
-      title: lk.title || `Look #${cleanId}`,
-      folderId: String(lk.folder?.id || lk.folder_id || '1'),
-      embedPath: resolveNativeEmbedPath('look', String(lk.id || cleanId)),
-    }
-  }
-  if (cType === 'board') {
-    const bd = await rawLookerRequest<any>(sdk, 'GET', `/boards/${encodeURIComponent(cleanId)}`)
-    return {
-      id: String(bd.id || cleanId),
-      contentType: 'board',
-      title: bd.title || `Board #${cleanId}`,
-      folderId: '1',
-      embedPath: resolveNativeEmbedPath('board', String(bd.id || cleanId)),
-    }
-  }
-
-  const dash = await sdk.ok(sdk.dashboard(cleanId))
+  const item =
+    cType === 'look'
+      ? await rawLookerRequest<any>(sdk, 'GET', `/looks/${encodeURIComponent(cleanId)}`)
+      : cType === 'board'
+      ? await rawLookerRequest<any>(sdk, 'GET', `/boards/${encodeURIComponent(cleanId)}`)
+      : await sdk.ok(sdk.dashboard(cleanId))
+  const id = String(item.id || cleanId)
   return {
-    id: String(dash.id || cleanId),
-    contentType: 'dashboard',
-    title: dash.title || `Dashboard #${cleanId}`,
-    folderId: String(dash.folder?.id || '1'),
-    embedPath: resolveNativeEmbedPath('dashboard', String(dash.id || cleanId)),
-    tileCount: (dash.dashboard_elements || []).length,
-    filterCount: (dash.dashboard_filters || []).length,
+    id,
+    contentType: cType,
+    title: item.title || `${cType} #${id}`,
+    folderId: String(item.folder?.id || item.folder_id || '1'),
+    embedPath: resolveNativeEmbedPath(cType, id),
+    tileCount: item.dashboard_elements?.length,
+    filterCount: item.dashboard_filters?.length,
   }
 }
 
@@ -822,42 +795,29 @@ export async function listUserDashboardArtifacts(
   extensionSDK: any,
   userId: string
 ): Promise<Array<{ id: string; title: string; contentType: NativeContentType; embedPath: string }>> {
-  const namespace = getArtifactNamespace(extensionSDK)
-  const key = `user_${String(userId || '1').trim()}_dashboard_%`
   try {
-    const items =
-      typeof (sdk as any).search_artifacts === 'function'
-        ? await sdk.ok(sdk.search_artifacts({ namespace, key }))
-        : await rawLookerRequest<any[]>(
-            sdk,
-            'GET',
-            `/artifacts/${encodeURIComponent(namespace)}/search`,
-            { key }
-          )
-    const out: Array<{
-      id: string
-      title: string
-      contentType: NativeContentType
-      embedPath: string
-    }> = []
-    for (const item of items || []) {
+    const items = await searchArtifactsRaw(
+      sdk,
+      getArtifactNamespace(extensionSDK),
+      `user_${String(userId || '1').trim()}_dashboard_%`
+    )
+    return items.flatMap((item) => {
       try {
-        const parsed =
-          typeof item.value === 'string' ? JSON.parse(item.value) : item.value || {}
-        if (parsed?.id) {
-          const cType: NativeContentType = parsed.contentType || 'dashboard'
-          out.push({
-            id: String(parsed.id),
-            title: String(parsed.title || `#${parsed.id}`),
+        const p = typeof item.value === 'string' ? JSON.parse(item.value) : item.value
+        if (!p?.id) return []
+        const cType: NativeContentType = p.contentType || 'dashboard'
+        return [
+          {
+            id: String(p.id),
+            title: String(p.title || `#${p.id}`),
             contentType: cType,
-            embedPath: resolveNativeEmbedPath(cType, String(parsed.id), parsed.embedPath),
-          })
-        }
+            embedPath: resolveNativeEmbedPath(cType, String(p.id), p.embedPath),
+          },
+        ]
       } catch {
-        // Ignore unparseable entries
+        return []
       }
-    }
-    return out
+    })
   } catch {
     return []
   }
