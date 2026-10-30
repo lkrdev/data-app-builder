@@ -64,64 +64,31 @@ export function renderMarkdownOrHtmlString(input: string): string {
         '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
       )
 
-  const lines = trimmed.split(/\r?\n/)
-  const html: string[] = []
-  let inList = false
-  for (const rawLine of lines) {
-    const line = rawLine.trimEnd()
-    if (line.startsWith('### ')) {
-      if (inList) {
-        html.push('</ul>')
-        inList = false
-      }
-      html.push(`<h3>${formatInline(line.slice(4))}</h3>`)
-    } else if (line.startsWith('## ')) {
-      if (inList) {
-        html.push('</ul>')
-        inList = false
-      }
-      html.push(`<h2>${formatInline(line.slice(3))}</h2>`)
-    } else if (line.startsWith('# ')) {
-      if (inList) {
-        html.push('</ul>')
-        inList = false
-      }
-      html.push(`<h1>${formatInline(line.slice(2))}</h1>`)
-    } else if (/^[-*]\s+/.test(line)) {
-      if (!inList) {
-        html.push('<ul>')
-        inList = true
-      }
-      html.push(`<li>${formatInline(line.replace(/^[-*]\s+/, ''))}</li>`)
-    } else if (!line.trim()) {
-      if (inList) {
-        html.push('</ul>')
-        inList = false
-      }
-    } else {
-      if (inList) {
-        html.push('</ul>')
-        inList = false
-      }
-      html.push(`<p>${formatInline(line)}</p>`)
-    }
-  }
-  if (inList) html.push('</ul>')
-  return html.join('\n')
-}
-
-export function parseScriptOutput(rawOutput: string): any {
-  const trimmed = String(rawOutput ?? '').trim()
-  if (!trimmed) return ''
-  try {
-    return JSON.parse(trimmed)
-  } catch {
-    return rawOutput
-  }
+  return trimmed
+    .split(/\r?\n/)
+    .filter((l) => l.trim())
+    .map((raw) => {
+      const l = raw.trimEnd()
+      if (l.startsWith('### ')) return `<h3>${formatInline(l.slice(4))}</h3>`
+      if (l.startsWith('## ')) return `<h2>${formatInline(l.slice(3))}</h2>`
+      if (l.startsWith('# ')) return `<h1>${formatInline(l.slice(2))}</h1>`
+      if (/^[-*]\s+/.test(l)) return `<li>${formatInline(l.replace(/^[-*]\s+/, ''))}</li>`
+      return `<p>${formatInline(l)}</p>`
+    })
+    .join('\n')
+    .replace(/(?:<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
 }
 
 export const ScriptOutputRenderer: React.FC<{ output: string }> = ({ output }) => {
-  const parsed = parseScriptOutput(output)
+  const parsed = (() => {
+    const trimmed = String(output ?? '').trim()
+    if (!trimmed) return ''
+    try {
+      return JSON.parse(trimmed)
+    } catch {
+      return output
+    }
+  })()
 
   if (
     Array.isArray(parsed) &&
@@ -199,11 +166,7 @@ export const PythonTile: React.FC = () => {
   const lastRunStateRef = useRef<string | undefined>(undefined)
 
   useEffect(() => {
-    try {
-      extensionSDK?.updateTitle?.('')
-    } catch {
-      // Ignore if host does not support updateTitle
-    }
+    extensionSDK?.updateTitle?.('')
   }, [extensionSDK])
 
   // Load tile binding and (when in edit mode) available scripts
@@ -245,11 +208,7 @@ export const PythonTile: React.FC = () => {
       setOutput(JSON.stringify({ error: err?.message || String(err) }))
     } finally {
       setRunning(false)
-      try {
-        extensionSDK?.rendered?.()
-      } catch {
-        // Ignore
-      }
+      extensionSDK?.rendered?.()
     }
   }, [binding?.code, core40SDK, dashboardFilters, extensionSDK, running])
 
