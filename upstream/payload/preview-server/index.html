@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data Apps Gallery</title>
+<link rel="icon" type="image/svg+xml" href="/preview-server/favicon.svg">
+<link rel="stylesheet" href="../runtime/data-app.css?v=2">
+
+
+<!-- AG Grid Community (vendored, no third-party CDN) -->
+<link rel="stylesheet" href="../vendor/ag-grid/31.3.4/ag-grid.css">
+<link rel="stylesheet" href="../vendor/ag-grid/31.3.4/ag-theme-quartz.css">
+<script src="../vendor/ag-grid/31.3.4/ag-grid-community.min.js"></script>
+
+<!-- Highcharts (vendored) -->
+<script src="../vendor/highcharts/11.4.8/highcharts.js"></script>
+<script src="../vendor/highcharts/11.4.8/highcharts-more.js"></script>
+<script src="../vendor/highcharts/11.4.8/highcharts-solid-gauge.js"></script>
+<script src="../vendor/highcharts/11.4.8/highcharts-funnel.js"></script>
+<script src="../vendor/highcharts/11.4.8/highcharts-treemap.js"></script>
+</head>
+<body>
+
+<preview-host></preview-host>
+
+<script type="module">
+  import './preview-host.js';
+
+  // Install local dev server queryRunner for standalone preview environment
+  window.DataApps = window.DataApps || {};
+  window.DataApps.queryRunner = async (rawQuery, signal) => {
+    const query = {
+      ...rawQuery,
+      view: rawQuery.view || rawQuery.explore,
+    };
+    const r = await fetch('/api/query', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Looker-Preview-Client': '1',
+      },
+      body: JSON.stringify(query),
+      signal,
+    });
+    if (!r.ok) {
+      let body = {};
+      try { body = await r.json(); } catch {}
+      const rawText = body.message || body.detail || body.error || r.statusText || 'Query failed';
+      const err = new Error(rawText);
+      err.status = r.status;
+      err.error_type = body.error_type || (r.status === 400 ? 'model_or_field_not_found' : 'looker_error');
+      err.hint = body.hint || (rawText.toLowerCase().includes('model not found')
+        ? `Model "${query.model}" is not deployed in your Looker instance. Check data-apps-config.json or use a model available on your server.`
+        : 'Check your explore and field names in the LookML model.');
+      err.suggested_action = body.suggested_action || 'Verify Looker model permissions or switch to demo data.';
+      err.raw = body;
+      throw err;
+    }
+    return r.json();
+  };
+</script>
+</body>
+</html>

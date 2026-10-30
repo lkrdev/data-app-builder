@@ -1,0 +1,1721 @@
+/* data-app.css — Styles for Lit-based Data Apps */
+
+:root {
+  --app-bg: #ffffff;
+  --app-card-bg: #ffffff;
+  --app-border: #dadce0;
+  --app-text: #262d33;
+  /* Heading colour (card/section/app titles). Defaults to body text, so titles
+     follow --app-text unless an app overrides --app-title. */
+  --app-title: var(--app-text);
+  --app-muted: #5f6368;
+  --app-primary: #4285f4;
+  --app-primary-hover: #1a73e8;
+  --app-success: #10b981;
+  --app-danger: #ef4444;
+  /* Default categorical chart palette, declared as tokens so an app can
+     override each series colour. Values match the first 7 colors
+     of Looker's modern categorical palette (looker_2026_categorical_1). See
+     resolveColor() / AppChart in data-app.js. */
+  --app-chart-1: #4285f4;
+  --app-chart-2: #ed984d;
+  --app-chart-3: #ad7fe6;
+  --app-chart-4: #b5c665;
+  --app-chart-5: #2bb8ca;
+  --app-chart-6: #eac43b;
+  --app-chart-7: #e574b1;
+  --app-chart-8: #6666ba;
+  --app-chart-9: #ddba83;
+  --app-chart-10: #99d8f4;
+  --app-chart-11: #1c7781;
+  --app-chart-12: #e3aef2;
+  --app-chart-13: #803e8f;
+  --app-chart-14: #70783a;
+  --app-chart-15: #b95b41;
+  --app-chart-16: #56bbe5;
+  --app-chart-17: #3364a7;
+  --app-chart-18: #966b54;
+  --app-chart-19: #cc9434;
+  --app-chart-20: #c4cce1;
+  --app-chart-up: #4285f4;
+  --app-chart-down: #ed984d;
+  --app-chart-total: #ad7fe6;
+  --app-chart-unselected: #dadce0;
+  --app-radius: 16px;
+  --app-gap: 12px;
+  --app-tabs-bg: #e2e8f0;
+  --app-tabs-btn-active: #ffffff;
+  --app-input-bg: #ffffff;
+  --app-shadow: none;
+  color-scheme: light;
+}
+
+:root:has(.da-container.dark-theme),
+:root:has(> body.dark-theme),
+.dark-theme {
+  --app-bg: #0b0f19;
+  --app-card-bg: #111827;
+  --app-border: #1f2937;
+  --app-text: #f9fafb;
+  --app-muted: #9ca3af;
+  --app-tabs-bg: #1f2937;
+  --app-tabs-btn-active: #374151;
+  --app-input-bg: #1f2937;
+  --app-shadow: none;
+  --app-chart-unselected: #374151;
+  color-scheme: dark;
+  scrollbar-color: var(--app-muted, #9ca3af) var(--app-bg, #0b0f19);
+}
+
+:root:has(.da-container.dark-theme)::-webkit-scrollbar,
+:root:has(> body.dark-theme)::-webkit-scrollbar,
+.dark-theme::-webkit-scrollbar,
+body.dark-theme::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+:root:has(.da-container.dark-theme)::-webkit-scrollbar-track,
+:root:has(> body.dark-theme)::-webkit-scrollbar-track,
+.dark-theme::-webkit-scrollbar-track,
+body.dark-theme::-webkit-scrollbar-track {
+  background: var(--app-bg, #0b0f19);
+}
+
+:root:has(.da-container.dark-theme)::-webkit-scrollbar-thumb,
+:root:has(> body.dark-theme)::-webkit-scrollbar-thumb,
+.dark-theme::-webkit-scrollbar-thumb,
+body.dark-theme::-webkit-scrollbar-thumb {
+  background: var(--app-border, #374151);
+  border-radius: 4px;
+}
+
+:root:has(.da-container.dark-theme)::-webkit-scrollbar-thumb:hover,
+:root:has(> body.dark-theme)::-webkit-scrollbar-thumb:hover,
+.dark-theme::-webkit-scrollbar-thumb:hover,
+body.dark-theme::-webkit-scrollbar-thumb:hover {
+  background: var(--app-muted, #9ca3af);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Google Sans Text', 'Noto Sans', 'Noto Sans JP', 'Noto Sans CJK KR', 'Noto Sans Arabic UI', 'Noto Sans Devanagari UI', 'Noto Sans Hebrew', 'Noto Sans Thai UI', Helvetica, Arial, sans-serif;
+  background: var(--app-bg);
+  color: var(--app-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Layout container */
+.da-container {
+  max-width: 1600px;
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 20px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-gap);
+  container-type: inline-size;
+  background: var(--app-bg);
+  color: var(--app-text);
+}
+
+.dark-theme {
+  background-color: var(--app-bg, #0b0f19);
+  color: var(--app-text, #f9fafb);
+}
+
+.dark-theme h1,
+.dark-theme h2,
+.dark-theme h3,
+.dark-theme h4,
+.dark-theme h5,
+.dark-theme h6 {
+  color: var(--app-text, #f9fafb);
+}
+
+/* Stable tab content container */
+.da-tab-content {
+  min-height: auto;
+  box-sizing: border-box;
+  flex: 1;
+  animation: daTabFadeSlide 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Header */
+.da-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--app-gap);
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--app-border);
+}
+
+.da-header h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 400;
+  color: var(--app-title, var(--app-text));
+}
+
+.da-header p {
+  margin: 4px 0 0 0;
+  font-size: 14px;
+  color: var(--app-muted);
+}
+
+/* Interactive Tabs */
+.da-tabs {
+  display: flex;
+  gap: 8px;
+  background: var(--app-tabs-bg, #e2e8f0);
+  padding: 4px;
+  border-radius: 10px;
+}
+
+.da-tab-btn {
+  border: none;
+  background: transparent;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-muted);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+}
+
+.da-tab-btn:hover {
+  color: var(--app-text);
+}
+
+.da-tab-btn.active {
+  background: var(--app-card-bg);
+  color: var(--app-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+:where(:not(.da-tabs)) > .da-tab-btn {
+  border: 1px solid var(--app-border, #dadce0);
+  background: var(--app-card-bg, #ffffff);
+  color: var(--app-text, #262d33);
+}
+
+:where(:not(.da-tabs)) > .da-tab-btn:hover {
+  border-color: var(--app-primary, #4285f4);
+}
+
+/* Filter bar */
+.da-filter-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  background: transparent;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  flex-wrap: wrap;
+}
+
+.da-filter-item,
+.da-select-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.da-filter-label,
+.da-select-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--app-muted, #5f6368);
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.da-select {
+  height: 36px;
+  padding: 0 32px 0 12px;
+  border-radius: 4px;
+  border: 1px solid var(--app-border, #c1c6cc);
+  background-color: var(--app-input-bg, #ffffff);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath fill='%235f6368' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 16px 16px;
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--app-muted, #5f6368);
+  cursor: pointer;
+  outline: none;
+  color-scheme: inherit;
+  box-sizing: border-box;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.da-select:hover {
+  border-color: var(--app-primary, #4285f4);
+}
+
+.da-select:focus {
+  border-color: var(--app-primary, #4285f4);
+  box-shadow: inset 0 0 0 1px var(--app-primary, #4285f4);
+}
+
+.da-select[data-active="true"] {
+  background-color: color-mix(in srgb, var(--app-primary, #4285f4) 15%, var(--app-card-bg, #ffffff));
+  border-color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath fill='%23262d33' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  color: var(--app-text, #262d33);
+}
+
+.da-select[data-active="true"]:hover,
+.da-select[data-active="true"]:focus {
+  border-color: var(--app-primary, #4285f4);
+}
+
+.dark-theme .da-select {
+  border-color: var(--app-border, #374151);
+  background-color: var(--app-input-bg, #1f2937);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath fill='%239ca3af' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  color: var(--app-muted, #9ca3af);
+}
+
+.dark-theme .da-select[data-active="true"] {
+  background-color: color-mix(in srgb, var(--app-primary, #4285f4) 24%, var(--app-card-bg, #111827));
+  border-color: color-mix(in srgb, var(--app-primary, #4285f4) 45%, transparent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath fill='%23f9fafb' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  color: var(--app-text, #f9fafb);
+}
+
+.dark-theme .da-select:hover,
+.dark-theme .da-select:focus {
+  border-color: var(--app-primary, #4285f4);
+}
+
+.da-select option {
+  background-color: var(--app-card-bg, #ffffff);
+  color: var(--app-text, #262d33);
+}
+
+/* Custom element host is a layout box only; the skin lives on the inner select */
+app-select {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Grid Badges (Theme-Aware & High-Contrast) */
+.da-grid-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+}
+
+/* Light Theme Badges (Saturated text on soft tinted background) */
+.da-grid-badge.badge-green {
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+}
+
+.da-grid-badge.badge-amber {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+}
+
+.da-grid-badge.badge-red {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+}
+
+.da-grid-badge.badge-blue {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+
+.da-grid-badge.badge-indigo {
+  background: rgba(99, 102, 241, 0.12);
+  color: #4f46e5;
+}
+
+.da-grid-badge.badge-neutral {
+  background: rgba(100, 116, 139, 0.12);
+  color: #475569;
+}
+
+/* Dark Theme Badges (Luminous pastel text on rich dark-tint background) */
+.dark-theme .da-grid-badge.badge-green {
+  background: rgba(16, 185, 129, 0.22);
+  color: #34d399;
+}
+
+.dark-theme .da-grid-badge.badge-amber {
+  background: rgba(245, 158, 11, 0.22);
+  color: #fbbf24;
+}
+
+.dark-theme .da-grid-badge.badge-red {
+  background: rgba(239, 68, 68, 0.22);
+  color: #f87171;
+}
+
+.dark-theme .da-grid-badge.badge-blue {
+  background: rgba(59, 130, 246, 0.22);
+  color: #60a5fa;
+}
+
+.dark-theme .da-grid-badge.badge-indigo {
+  background: rgba(99, 102, 241, 0.22);
+  color: #a5b4fc;
+}
+
+.dark-theme .da-grid-badge.badge-neutral {
+  background: rgba(148, 163, 184, 0.18);
+  color: #cbd5e1;
+}
+
+/* Form controls, options, and labels inherit --app-input-bg, --app-text,
+   --app-border, and --app-card-bg directly when .dark-theme cascades. */
+
+.dark-theme .da-tabs {
+  background: var(--app-tabs-bg, #1f2937);
+  border: 1px solid var(--app-border, #374151);
+}
+
+.dark-theme .da-tab-btn.active {
+  background: var(--app-tabs-btn-active, #374151);
+  color: #818cf8;
+}
+
+/* KPI Strip Grid */
+app-kpi {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  box-sizing: border-box;
+  container-type: inline-size;
+  background: var(--app-card-bg, #ffffff);
+  border: 1px solid var(--app-border, #dadce0);
+  border-radius: var(--app-radius, 16px);
+  padding: 10px 14px;
+  box-shadow: var(--app-shadow, none);
+  color: var(--app-text, #262d33);
+}
+
+.da-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr));
+  gap: var(--app-gap);
+}
+
+.da-kpi-grid > app-kpi:hover {
+  position: relative;
+  z-index: 40;
+}
+
+/* KPI Content Wrap */
+.da-kpi-wrap {
+  display: flex;
+  flex: 1;
+  align-items: inherit;
+  justify-content: inherit;
+  text-align: inherit;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  background: transparent;
+  border: none;
+  padding: 0;
+  box-shadow: none;
+}
+
+.kpi-icon {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--app-primary, #4285f4) 12%, transparent);
+  color: var(--app-primary, #4285f4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+
+.kpi-body {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: inherit;
+  justify-content: inherit;
+  text-align: inherit;
+  gap: 2px;
+}
+
+.kpi-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--app-muted, #5f6368);
+  line-height: 1.25;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: inherit;
+  width: 100%;
+}
+
+.kpi-value {
+  font-size: 36px;
+  font-weight: 400;
+  color: var(--app-text, inherit);
+  line-height: 1.15;
+  transition: opacity 0.2s ease;
+  display: flex;
+  align-items: baseline;
+  justify-content: inherit;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+/* A large currency figure easily outruns a KPI tile in an auto-fit grid.
+   Truncate rather than clip mid-digit ("$508,512,54" reads as a real number
+   and is wrong); the full value stays available via the title tooltip the
+   component sets. This is the last-resort fallback — the compact layout below
+   usually buys enough room that it never engages. */
+.kpi-value-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+}
+
+/* Mini sparkline trendline inside a KPI card */
+.kpi-sparkline {
+  position: relative;
+  width: 100%;
+  height: 26px;
+  margin-top: 6px;
+  cursor: crosshair;
+  transition: opacity 0.2s ease;
+}
+
+.kpi-sparkline svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.kpi-sparkline-line {
+  fill: none;
+  stroke: var(--app-chart-1, #4285f4);
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.kpi-sparkline-area {
+  pointer-events: none;
+}
+
+.kpi-sparkline-crosshair {
+  pointer-events: none;
+}
+
+.kpi-sparkline-dot {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--app-card-bg, #ffffff);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 30;
+}
+
+.kpi-sparkline-tooltip {
+  position: absolute;
+  top: calc(100% + 6px);
+  background: #ffffff;
+  color: #3c4043;
+  font-size: 12px;
+  line-height: 1.35;
+  border-radius: 6px;
+  padding: 6px 10px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 40;
+}
+
+.dark-theme .kpi-sparkline-tooltip {
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #f8fafc;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.kpi-sparkline-tooltip-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.kpi-sparkline-tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kpi-sparkline-tooltip-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Compact KPI: in a narrow tile the 36px icon column steals width from every
+   line, including the value — which is the one thing that must stay readable.
+   Below ~200px the icon shrinks and moves up beside the label, so the value
+   gets the full width of the card to itself. */
+@container (max-width: 200px) {
+  .da-kpi-wrap {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 2px 0;
+    align-items: center;
+  }
+
+  /* Promotes label / value to grid items so the icon can share a row
+     with the label without restructuring the DOM. */
+  .kpi-body {
+    display: contents;
+  }
+
+  .kpi-icon {
+    grid-area: 1 / 1;
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    font-size: 12px;
+    border-radius: 6px;
+    margin-top: 0;
+    /* Gap lives on the icon, not the grid, so a KPI with no icon has no
+       phantom indent. */
+    margin-right: 7px;
+  }
+
+  .kpi-label {
+    grid-area: 1 / 2;
+    text-align: inherit;
+  }
+
+  .kpi-value {
+    grid-area: 2 / 1 / 3 / -1;
+    font-size: 28px;
+    justify-content: inherit;
+    text-align: inherit;
+  }
+  .kpi-subtitle {
+    grid-column: 1 / -1;
+    text-align: inherit;
+  }
+  .kpi-sparkline {
+    grid-column: 1 / -1;
+    height: 24px;
+    margin-top: 4px;
+  }
+}
+
+/* Very narrow (a 5-up strip on a laptop): trade a little more type size to
+   keep whole numbers visible rather than truncating them. */
+@container (max-width: 150px) {
+  .kpi-value {
+    font-size: 22px;
+  }
+}
+
+.kpi-value.loading,
+.kpi-sparkline.loading,
+.da-kpi-wrap.loading .kpi-sparkline {
+  opacity: 0.45;
+}
+
+.da-kpi-spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  min-width: 13px;
+  border: 2px solid rgba(100, 116, 139, 0.25);
+  border-top-color: var(--app-primary, #3b82f6);
+  border-radius: 50%;
+  animation: da-spin 0.7s linear infinite;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.da-kpi-spinner.large {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  border-width: 2.5px;
+}
+
+@keyframes da-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+
+.kpi-change {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1.5px 6.5px;
+  border-radius: 9999px;
+  line-height: 1.2;
+  white-space: nowrap;
+  letter-spacing: 0;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.kpi-change.positive {
+  background: color-mix(in srgb, var(--app-success, #10b981) 14%, transparent);
+  color: var(--app-success, #059669);
+}
+
+.kpi-change.negative {
+  background: color-mix(in srgb, var(--app-danger, #ef4444) 14%, transparent);
+  color: var(--app-danger, #dc2626);
+}
+
+.kpi-subtitle {
+  display: block;
+  font-size: 11px;
+  margin-top: 2px;
+  color: var(--app-muted, #5f6368);
+  font-weight: 400;
+  opacity: 0.72;
+  text-align: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+app-kpi:has(.da-kpi-wrap.error) {
+  background: #fff5f3;
+  border-color: #f3c0b6;
+}
+
+.dark-theme app-kpi:has(.da-kpi-wrap.error) {
+  background: rgb(117 25 6 / 50%);
+  border-color: rgb(82 14 0);
+}
+
+.kpi-value.error {
+  color: #8a3a2c;
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dark-theme .kpi-value.error {
+  color: rgb(218 83 79);
+}
+
+/* Visualizations & Grid Layout Utilities */
+.da-grid-1 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--app-gap);
+}
+
+.da-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
+  gap: var(--app-gap);
+}
+
+.da-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  gap: var(--app-gap);
+}
+
+.da-grid-2-1 {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: var(--app-gap);
+}
+
+.da-grid-1-2 {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: var(--app-gap);
+}
+
+@container (max-width: 860px) {
+  .da-grid-2-1, .da-grid-1-2 {
+    grid-template-columns: 1fr;
+  }
+}
+@supports not (container-type: inline-size) {
+  @media (max-width: 860px) {
+    .da-grid-2-1, .da-grid-1-2 {
+      grid-template-columns: 1fr;
+    }
+  }
+}
+
+.da-kpi-grid > *,
+.da-grid-1 > *,
+.da-grid-2 > *,
+.da-grid-3 > *,
+.da-grid-2-1 > *,
+.da-grid-1-2 > *,
+:where(.da-section-card, .card, [class$="-card"]) {
+  min-width: 0;
+}
+
+/* Compound Section Cards: Bundling multiple related charts under a shared header */
+.da-section-card {
+  background: var(--app-card-bg, #ffffff);
+  border: 1px solid var(--app-border, #dadce0);
+  border-radius: var(--app-radius, 16px);
+  padding: 20px 22px;
+  box-shadow: var(--app-shadow, none);
+}
+
+/* Inset by the widget card padding so the section title lines up with the
+   widget titles below it. No bottom margin: the widgets' own padding is the gap. */
+.da-section-header {
+  padding: 0 16px 12px;
+  border-bottom: 1px solid var(--app-border, #dadce0);
+}
+
+.da-section-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--app-title, var(--app-text, #262d33));
+}
+
+.da-section-header p {
+  margin: 4px 0 0 0;
+  font-size: 14px;
+  color: var(--app-muted, #5f6368);
+}
+
+app-chart,
+app-grid {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  position: relative;
+  width: 100%;
+}
+
+.da-chart-card, .da-grid-card {
+  position: relative;
+  background: var(--app-card-bg, #ffffff);
+  border: 1px solid var(--app-border, #dadce0);
+  border-radius: var(--app-radius, 16px);
+  padding: 16px;
+  box-shadow: var(--app-shadow, none);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.da-chart-card {
+  height: 100%;
+  flex: 1;
+  overflow: hidden;
+}
+
+.da-grid-card {
+  min-height: var(--app-grid-min-height, 0);
+  overflow: hidden;
+}
+
+.chart-container {
+  width: 100%;
+  height: 100%;
+  flex: 1;
+  min-height: var(--app-chart-min-height, 0);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.chart-container .highcharts-container {
+  max-width: 100%;
+}
+
+.highcharts-tooltip,
+.highcharts-tooltip-container {
+  z-index: 50 !important;
+}
+
+.grid-container {
+  width: 100%;
+  min-height: 360px;
+  min-width: 0;
+  max-width: 100%;
+  position: relative;
+}
+
+/* ==========================================================================
+   Grid-native layout — a Data App's main layout is a real, fine CSS grid.
+
+   `.da-grid` is a genuine `display:grid`. Each direct child is a tile
+   that declares its COORDINATE with `cell="x y w h"` (0-based start column/row +
+   column/row spans), which the runtime turns into grid-column / grid-row (see
+   applyCellTo in data-app.js). Because every tile owns a fixed cell, moving or
+   resizing one tile never reflows another — the BI-dashboard behaviour. There is
+   no coordinate applier and no flatten: the browser lays the grid out natively.
+
+   Fluid by construction: columns are fractional, so a tile's placement is a
+   PROPORTION that scales with width instead of a pixel that overflows. Below a
+   narrow container width the grid collapses to a single column so tiles stack
+   full-width rather than getting crushed — a container query on the grid's
+   parent, so it reacts to the app's own width (correct for an embedded tile),
+   not the viewport.
+
+   Grid fineness is one knob: override `--da-grid-cols` on the grid (or an
+   ancestor) to make it finer or coarser — it drives both the column count and the
+   square row height. Default is 96. (`--da-grid-template` / `--da-grid-row` are
+   still overridable directly for non-square or custom templates.)
+   ========================================================================== */
+.da-grid {
+  /* Standard 96-column fluid width with deterministic 8px fixed vertical row pitch.
+     Horizontal placement scales fluidly with viewport width, while vertical heights
+     remain pixel-perfect and non-fragile across all screen sizes. */
+  --da-grid-cols: 96;
+  --da-grid-row: 8px;
+  --da-grid-gutter: 6px;
+  margin: calc(-1 * var(--da-grid-gutter, 0px));
+  display: grid;
+  grid-template-columns: var(--da-grid-template, repeat(var(--da-grid-cols, 96), minmax(0, 1fr)));
+  grid-auto-rows: var(--da-grid-row, 8px);
+  grid-auto-flow: row;
+  /* Enforced with !important: the gutter is a per-tile margin (below), so a real
+     `gap` on this fine grid is always wrong (it offsets every track, balloons
+     multi-track tiles, and double-gutters). Authors reach for `gap` out of
+     normal-grid habit; neutralise it here so the coordinate model stays exact.
+     The gutter is on by default (12px between adjacent tiles via 6px margin).
+     Override `--da-grid-gutter` to change it, or set 0px for flush tiles. */
+  gap: 0 !important;
+  align-items: stretch;
+}
+
+/* Fixed 8px row unit — standard deterministic pitch for all grid layouts. */
+.da-grid.da-grid-square {
+  --da-grid-row: 8px;
+}
+
+/* The grid's parent becomes a query container so the collapse below tracks the
+   app's width, not the viewport. `:has` keeps this automatic — no wrapper or
+   class needed on the author's shell. */
+*:has(> .da-grid) {
+  container-type: inline-size;
+}
+/* Base tile rules. Keep them above the narrow-width blocks below so the breakpoint min-heights win by source order. */
+/* Tiles gutter themselves with a margin so the grid can keep `gap:0` (a real
+   `gap` on a FINE grid is wrong, because it inserts a gap between every one of
+   the many tracks, so a tile spanning N tracks accumulates (N-1) gaps and
+   balloons). A per-tile margin is a single constant inset regardless of span, and
+   keeping `gap:0` also means a track stays exactly (width / N) horizontally and
+   the row unit vertically, with no offset math.
+   Gutter is on by default via `--da-grid-gutter: 6px` on `.da-grid` (12px gap
+   between adjacent tiles). Override `--da-grid-gutter` to change it, or set 0px
+   for flush tiles.
+
+   Critically, the tile must fill its cell MINUS that margin by STRETCHING, not
+   by `width/height:100%`: a 100% box is the full cell, and the margin then sits
+   OUTSIDE it, overflowing into, and visually erasing, the gutter, so tiles
+   butt together (this was the "no padding" bug). `width/height:auto` lets the
+   grid stretch the margin-box to the cell, leaving the margin visible as a clean,
+   uniform gutter on every side. Never impose a min size, so a tile still shrinks
+   with its cell. */
+.da-grid > * {
+  margin: var(--da-grid-gutter, 0px);
+  width: auto;
+  height: auto;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* overflow stays visible so the sparkline tooltip can open below the card. */
+.da-grid > app-kpi {
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+}
+/* The KPI is a container (`container-type: inline-size`) and so a stacking context at
+   z-index auto; neighbouring tiles (chart headers use z-index 30) paint over a tooltip
+   that extends past the card. Lift the hovered KPI above them. */
+.da-grid > app-kpi:hover {
+  z-index: 40;
+}
+
+/* A chart or grid that is itself a tile fills its cell (minus the gutter) via the
+   same stretch; the visualization sizes to the cell rather than to a fixed px.
+   `height:auto` here overrides the base `height:100%` so it does not overflow. */
+.da-grid > app-chart,
+.da-grid > app-grid {
+  height: auto;
+  min-height: 0;
+}
+/* A titled wrapper tile opts in with `.da-tile`: it becomes a flex column so
+   the chart/grid inside grows to fill the remaining cell height under its
+   heading. A composed tile that manages its own internal layout (e.g. a hero
+   with a background) simply does not add the class and keeps its own display. */
+.da-grid > .da-tile {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.da-grid > .da-tile > app-chart,
+.da-grid > .da-tile > app-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+.da-grid > .da-tile .da-chart-card,
+.da-grid > .da-tile .da-grid-card,
+.da-grid > .da-tile .chart-container,
+.da-grid > .da-tile .grid-container {
+  min-height: 0;
+}
+/* Tablet / Intermediate reflow (601px - 900px):
+   Switches to a clean 2-column grid with natural row heights and 16px gap.
+   Quarter-width tiles (e.g. 4-up KPIs) take 1 column (forming a 2x2 grid),
+   while half/third/full tiles expand to full width (1 per row). */
+@container (max-width: 900px) and (min-width: 601px) {
+  .da-grid {
+    margin: 0 !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    grid-auto-rows: auto !important;
+    gap: 16px !important;
+  }
+  .da-grid > * {
+    margin: 0 !important;
+    grid-row: auto !important;
+  }
+  .da-grid > [data-grid-span="quarter"] {
+    grid-column: span 1 !important;
+  }
+  .da-grid > [data-grid-span="third"],
+  .da-grid > [data-grid-span="half"],
+  .da-grid > [data-grid-span="full"] {
+    grid-column: 1 / -1 !important;
+  }
+  .da-grid > .da-tile {
+    min-height: 300px;
+  }
+  .da-grid > app-chart {
+    min-height: 280px;
+  }
+  .da-grid > app-grid {
+    min-height: 360px;
+  }
+}
+
+/* Mobile Collapse (<= 600px):
+   Switches to a single 1-column stack with natural row heights and 16px gap. */
+@container (max-width: 600px) {
+  .da-grid {
+    margin: 0 !important;
+    grid-template-columns: 1fr !important;
+    grid-auto-rows: auto !important;
+    gap: 16px !important;
+  }
+  .da-grid > * {
+    margin: 0 !important;
+    grid-column: 1 / -1 !important;
+    grid-row: auto !important;
+  }
+  .da-grid > .da-tile {
+    min-height: 280px;
+  }
+  .da-grid > app-chart {
+    min-height: 260px;
+  }
+  .da-grid > app-grid {
+    min-height: 340px;
+  }
+}
+/* Engines without container queries still stack on a small viewport. */
+@supports not (container-type: inline-size) {
+  @media (max-width: 900px) and (min-width: 601px) {
+    .da-grid {
+      margin: 0 !important;
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+      grid-auto-rows: auto !important;
+      gap: 16px !important;
+    }
+    .da-grid > * {
+      margin: 0 !important;
+      grid-row: auto !important;
+    }
+    .da-grid > [data-grid-span="quarter"] {
+      grid-column: span 1 !important;
+    }
+    .da-grid > [data-grid-span="third"],
+    .da-grid > [data-grid-span="half"],
+    .da-grid > [data-grid-span="full"] {
+      grid-column: 1 / -1 !important;
+    }
+    .da-grid > .da-tile {
+      min-height: 300px;
+    }
+    .da-grid > app-chart {
+      min-height: 280px;
+    }
+    .da-grid > app-grid {
+      min-height: 360px;
+    }
+  }
+  @media (max-width: 600px) {
+    .da-grid {
+      margin: 0 !important;
+      grid-template-columns: 1fr !important;
+      grid-auto-rows: auto !important;
+      gap: 16px !important;
+    }
+    .da-grid > * {
+      margin: 0 !important;
+      grid-column: 1 / -1 !important;
+      grid-row: auto !important;
+    }
+    .da-grid > .da-tile {
+      min-height: 280px;
+    }
+    .da-grid > app-chart {
+      min-height: 260px;
+    }
+    .da-grid > app-grid {
+      min-height: 340px;
+    }
+  }
+}
+
+
+/* Universal Card Neutralization:
+   When components sit inside a custom card wrapper (.card, *-card),
+   automatically neutralize inner card borders, padding, and backgrounds so developers
+   never get double borders or conflicting styles. Use bare for explicit chrome opt-out.
+   .da-section-card is excluded: see the section card rule below. */
+.card .da-chart-card,
+.card .da-grid-card,
+.card .da-kpi-wrap,
+[class$="-card"]:not(.da-section-card) .da-chart-card,
+[class$="-card"]:not(.da-section-card) .da-grid-card,
+[class$="-card"]:not(.da-section-card) .da-kpi-wrap {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+
+/* If a custom card has its own padding, app-kpi inside it inherits transparently */
+.card app-kpi,
+[class$="-card"]:not(.da-section-card) app-kpi {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+
+/* Section card: grouped widgets keep their own titles, so they keep their
+   padding and drop only the border and shadow. Titles and plots then stay clear
+   of the section header and of any column divider. `bare` still removes all. */
+.da-section-card .da-chart-card,
+.da-section-card .da-grid-card,
+.da-section-card app-kpi {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+/* Explicit chrome opt-out: `<app-chart bare>` renders the visualization
+   with no card around it. The `-card` suffix rule above does the same thing
+   implicitly for widgets nested in an author's own card; `bare` is the explicit
+   form, needs no wrapper element, and reads in the markup rather than in the
+   class name. Use it for full-bleed tiles, custom glass/gradient panels, and
+   any design where the runtime's default card is in the way. */
+app-kpi[bare] {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
+}
+
+app-chart[bare] .da-chart-card,
+app-grid[bare] .da-grid-card {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
+}
+
+.chart-header {
+  font-size: 18px;
+  font-weight: 400;
+  color: var(--app-title, var(--app-text, #262d33));
+  margin-bottom: 12px;
+  position: relative;
+  z-index: 30;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+
+/* --------------------------------------------------------------------
+   Viewer polish: loading skeleton & error card matching non-lit app
+   -------------------------------------------------------------------- */
+
+.da-state-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  box-sizing: border-box;
+  pointer-events: auto;
+  z-index: 20;
+}
+
+/* While chart/grid is refreshing, fade existing data smoothly */
+.da-chart-card.loading .chart-container,
+.da-grid-card.loading .grid-container {
+  opacity: 0.55;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+
+/* Skeleton loading: soft neutral backdrop with clean gray shimmer bars. */
+.da-loading-skeleton {
+  background: rgba(255, 255, 255, 0.50);
+  border-radius: inherit;
+}
+.da-loading-skeleton .da-skeleton-bar {
+  width: 72%;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg,
+    rgba(100, 116, 139, 0.08) 0%,
+    rgba(100, 116, 139, 0.24) 50%,
+    rgba(100, 116, 139, 0.08) 100%);
+  background-size: 200% 100%;
+  animation: da-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+.da-loading-skeleton .da-skeleton-bar:nth-child(2) { width: 52%; }
+.da-loading-skeleton .da-skeleton-bar:nth-child(3) { width: 62%; }
+
+/* Dark mode skeleton */
+.dark-theme .da-loading-skeleton,
+[class*="dark"] .da-loading-skeleton,
+[class*="cyber"] .da-loading-skeleton {
+  background: rgba(0, 0, 0, 0.35);
+}
+.dark-theme .da-loading-skeleton .da-skeleton-bar,
+[class*="dark"] .da-loading-skeleton .da-skeleton-bar,
+[class*="cyber"] .da-loading-skeleton .da-skeleton-bar {
+  background: linear-gradient(90deg,
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.14) 50%,
+    rgba(255, 255, 255, 0.04) 100%);
+  background-size: 200% 100%;
+}
+
+/* Grid Table Skeleton */
+.da-grid-skeleton {
+  padding: 16px;
+  justify-content: flex-start;
+  align-items: stretch;
+  gap: 10px;
+}
+.da-grid-skeleton .da-skeleton-row {
+  width: 100%;
+  border-radius: 6px;
+  background: linear-gradient(90deg,
+    rgba(100, 116, 139, 0.08) 0%,
+    rgba(100, 116, 139, 0.20) 50%,
+    rgba(100, 116, 139, 0.08) 100%);
+  background-size: 200% 100%;
+  animation: da-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+.da-grid-skeleton .da-skeleton-row.header {
+  height: 26px;
+  background: linear-gradient(90deg,
+    rgba(100, 116, 139, 0.12) 0%,
+    rgba(100, 116, 139, 0.28) 50%,
+    rgba(100, 116, 139, 0.12) 100%);
+  background-size: 200% 100%;
+}
+.da-grid-skeleton .da-skeleton-row.row-item {
+  height: 26px;
+}
+
+@keyframes da-skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Error card: red-tinted, includes Retry button and optional documentation link. */
+.da-error-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  flex: 1;
+  width: 100%;
+  box-sizing: border-box;
+  background: #fff5f3;
+  border: 1px solid #f3c0b6;
+  border-radius: 8px;
+  color: #8a3a2c;
+  text-align: center;
+}
+
+.dark-theme .da-error-card {
+  color: rgb(218 83 79);
+  text-align: center;
+  background: rgb(117 25 6 / 50%);
+  border-width: 1px;
+  border-style: solid;
+  border-color: rgb(82 14 0);
+  border-image: none;
+  border-radius: 8px;
+}
+
+.da-error-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #d9534f;
+  color: #fff;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+.da-error-message {
+  font-size: 11.5px;
+  line-height: 1.35;
+  max-width: 90%;
+  word-break: break-word;
+  white-space: pre-line;
+  max-height: 6em;
+  overflow-y: auto;
+}
+.da-error-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.da-error-btn {
+  background: #ffffff;
+  border: 1px solid #e3b3a8;
+  color: #8a3a2c;
+  border-radius: 5px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.da-error-btn:hover {
+  background: #fdeae5;
+}
+
+.dark-theme .da-error-btn {
+  background: rgba(82, 14, 0, 0.4);
+  border: 1px solid rgb(117 25 6);
+  color: rgb(218 83 79);
+}
+
+.dark-theme .da-error-btn:hover {
+  background: rgba(117, 25, 6, 0.7);
+  color: #ffffff;
+}
+
+/* Empty card: neutral grey "no data" state. */
+.da-empty-card {
+  color: #64748b;
+  text-align: center;
+}
+.da-empty-icon {
+  font-size: 24px;
+  color: #94a3b8;
+  line-height: 1;
+  margin-bottom: 6px;
+}
+.da-empty-message {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: #64748b;
+}
+
+/* Tab panel enter transition, used by .da-tab-content */
+
+@keyframes daTabFadeSlide {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* AG Grid Quartz Theme Variables mapped to Lit theme */
+/* app-grid is in the selector because the vendored theme CSS loads after this file in every host. */
+app-grid .ag-theme-quartz,
+app-grid .ag-theme-quartz-dark {
+  --ag-font-family: inherit;
+  --ag-font-size: 12px;
+  --ag-grid-size: 6px;
+  --ag-row-height: 26px;
+  --ag-header-height: 26px;
+  /* AG Grid subtracts 1px for the cell border, so cells compute to Looker's 10px. */
+  --ag-cell-horizontal-padding: 11px;
+  --ag-wrapper-border-radius: 0;
+  --ag-border-radius: 4px;
+  --ag-cell-horizontal-border: solid var(--da-grid-divider-color);
+  --ag-header-column-separator-display: block;
+  --ag-header-column-separator-height: 100%;
+  --ag-header-column-separator-width: 1px;
+  --ag-header-column-resize-handle-display: none;
+}
+
+app-grid .ag-theme-quartz {
+  --ag-background-color: var(--app-card-bg, #ffffff);
+  --ag-foreground-color: var(--app-text, #262d33);
+  --ag-header-background-color: var(--app-header-bg, color-mix(in srgb, var(--app-primary, #4285f4) 16%, var(--app-card-bg, #ffffff)));
+  --ag-header-foreground-color: var(--app-text, #262d33);
+  --ag-border-color: var(--app-border, #dadce0);
+  --ag-row-border-color: color-mix(in srgb, var(--app-primary, #4285f4) 12%, var(--app-card-bg, #ffffff));
+  --ag-odd-row-background-color: transparent;
+  --ag-row-hover-color: color-mix(in srgb, var(--ag-header-background-color) 50%, transparent);
+  --ag-selected-row-background-color: color-mix(in srgb, var(--app-primary, #4285f4) 14%, transparent);
+  --ag-header-column-separator-color: rgba(189, 195, 199, 0.5);
+  --da-grid-divider-color: color-mix(in srgb, var(--app-primary, #4285f4) 19%, var(--app-card-bg, #ffffff));
+}
+
+/* When in dark theme, auto-adapt AG Grid colors */
+.dark-theme .ag-theme-quartz,
+.dark-theme .ag-theme-quartz-dark,
+:root:has(.dark-theme) .ag-theme-quartz,
+:root:has(.dark-theme) .ag-theme-quartz-dark,
+.ag-theme-quartz-dark {
+  --ag-background-color: var(--app-card-bg, #111827);
+  --ag-foreground-color: var(--app-text, #f8fafc);
+  --ag-header-background-color: var(--app-header-bg, rgba(255, 255, 255, 0.04));
+  --ag-header-foreground-color: var(--app-muted, #94a3b8);
+  --ag-border-color: var(--app-border, rgba(255, 255, 255, 0.12));
+  --ag-row-border-color: var(--app-border, rgba(255, 255, 255, 0.08));
+  --ag-odd-row-background-color: transparent;
+  --ag-control-panel-background-color: var(--app-card-bg, #111827);
+  --ag-subheader-background-color: rgba(255, 255, 255, 0.04);
+  --ag-header-column-separator-color: var(--da-grid-divider-color);
+  --da-grid-divider-color: var(--app-border, rgba(255, 255, 255, 0.08));
+  color-scheme: dark;
+}
+
+app-grid .ag-theme-quartz .ag-cell-focus {
+  background-color: #d9e7fd !important;
+  border: 1px solid #4285f4 !important;
+  outline: none !important;
+}
+
+.dark-theme app-grid .ag-theme-quartz .ag-cell-focus,
+.dark-theme app-grid .ag-theme-quartz-dark .ag-cell-focus,
+app-grid .ag-theme-quartz-dark .ag-cell-focus {
+  background-color: rgba(66, 133, 244, 0.22) !important;
+  border: 1px solid #60a5fa !important;
+  outline: none !important;
+}
+
+.da-grid-card .ag-root-wrapper {
+  border: none;
+}
+
+.da-grid-card .ag-cell.ag-column-last {
+  border-right-color: transparent;
+}
+
+.da-grid-card .ag-header-cell.ag-column-last::before {
+  display: none;
+}
+
+/* Suppress the stray vertical separator painted against the card edge by the
+   trailing column's resize handle. Only the ::after separator is hidden; the
+   handle itself stays interactive so the last column remains resizable. */
+.ag-column-last .ag-header-cell-resize::after {
+  display: none !important;
+}
+
+/* Row-count footer beneath <app-grid> */
+.da-grid-footer {
+  font-size: 12px;
+  color: var(--app-muted, #5f6368);
+  padding: 6px 4px 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  line-height: 1.3;
+}
+
+/* Theme switch: `Light [ (o) ] Dark`. Both positions are named peer modes, so the
+   track colour stays primary while the knob position and emphasised word show the
+   active state. min-height: 36px matches `.da-select` so the switch centres on the
+   select row inside `.da-filter-bar` (align-items: flex-end) and inside `.da-header`. */
+.da-theme-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--app-muted, #5f6368);
+  box-sizing: border-box;
+}
+.da-theme-toggle input[type="checkbox"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.da-theme-toggle-label {
+  color: var(--app-muted, #5f6368);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  transition: color 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.da-theme-toggle input:not(:checked) ~ .da-theme-toggle-label[data-mode="light"],
+.da-theme-toggle input:checked ~ .da-theme-toggle-label[data-mode="dark"],
+.da-theme-toggle--bare .da-theme-toggle-label {
+  color: var(--app-text, #262d33);
+}
+.da-theme-toggle input:not(:checked) ~ .da-theme-toggle-label[data-mode="light"],
+.da-theme-toggle input:checked ~ .da-theme-toggle-label[data-mode="dark"] {
+  cursor: default;
+}
+.da-theme-toggle-slider {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  width: 36px;
+  height: 20px;
+  border-radius: 20px;
+  background-color: var(--app-primary, #4285f4);
+  transition: background-color 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.da-theme-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background-color: #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.da-theme-toggle input:checked ~ .da-theme-toggle-slider .da-theme-toggle-knob {
+  transform: translateX(16px);
+}
+.da-theme-toggle input:focus-visible ~ .da-theme-toggle-slider {
+  outline: 2px solid var(--app-primary, #4285f4);
+  outline-offset: 2px;
+}
+/* Bare (`showLabel: false`) or single custom label (`options.label`):
+   fall back to off/on switch track colours (muted when light, primary when dark). */
+.da-theme-toggle--bare .da-theme-toggle-slider {
+  background-color: var(--app-muted, #5f6368);
+}
+.da-theme-toggle--bare input:checked ~ .da-theme-toggle-slider {
+  background-color: var(--app-primary, #4285f4);
+}
+
+/* Subtle Data App watermark stamp */
+.da-stamp {
+  position: fixed;
+  bottom: 0;
+  right: 0;
+  z-index: 9999;
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  color: var(--app-muted);
+  background: transparent;
+  opacity: 0.5;
+  user-select: none;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.da-stamp:hover {
+  opacity: 1;
+  background: var(--app-card-bg);
+}
+
+/* Host-offered widget action affordances */
+.da-widget-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+app-kpi:hover .da-widget-actions,
+app-kpi:focus-within .da-widget-actions,
+.da-kpi-wrap:hover .da-widget-actions,
+.da-kpi-wrap:focus-within .da-widget-actions,
+app-chart:hover .da-widget-actions,
+app-chart:focus-within .da-widget-actions,
+.da-chart-card:hover .da-widget-actions,
+.da-chart-card:focus-within .da-widget-actions,
+app-grid:hover .da-widget-actions,
+app-grid:focus-within .da-widget-actions,
+.da-grid-card:hover .da-widget-actions,
+.da-grid-card:focus-within .da-widget-actions,
+.da-widget-actions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.da-widget-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--app-border, #dadce0);
+  background: var(--app-card-bg, #ffffff);
+  color: var(--app-muted, #5f6368);
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.da-widget-action-btn:hover {
+  color: var(--app-primary, #4285f4);
+  border-color: var(--app-primary, #4285f4);
+  background: color-mix(in srgb, var(--app-primary, #4285f4) 8%, var(--app-card-bg, #ffffff));
+}
+
+.da-widget-action-btn:focus-visible {
+  outline: 2px solid var(--app-primary, #4285f4);
+  outline-offset: 1px;
+  color: var(--app-primary, #4285f4);
+  border-color: var(--app-primary, #4285f4);
+}
+
+.dark-theme .da-widget-action-btn {
+  background: var(--app-card-bg, #1f2937);
+  border-color: var(--app-border, rgba(255, 255, 255, 0.14));
+  color: var(--app-muted, #94a3b8);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+.dark-theme .da-widget-action-btn:hover,
+.dark-theme .da-widget-action-btn:focus-visible {
+  color: var(--app-primary, #60a5fa);
+  border-color: var(--app-primary, #60a5fa);
+  background: color-mix(in srgb, var(--app-primary, #60a5fa) 14%, var(--app-card-bg, #1f2937));
+}
+
+/* Render mode: Looker is rendering this tile to a PDF or image, and the runtime
+   has set body[data-rendering] (see _setRendering in data-app.js). The renderer
+   captures shortly after the tile reports rendered, so finish every animation
+   and transition at once, including the app's own. Durations are 0.01ms rather
+   than 0 so animationend and transitionend still fire for code waiting on them. */
+body[data-rendering],
+body[data-rendering] *,
+body[data-rendering] *::before,
+body[data-rendering] *::after {
+  animation-duration: 0.01ms !important;
+  animation-delay: 0s !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  transition-delay: 0s !important;
+  scroll-behavior: auto !important;
+}

@@ -1,0 +1,12 @@
+{
+  "base_url": "https://YOUR-LOOKER-INSTANCE.looker.app",
+  "client_id": "your_client_id",
+  "client_secret": "your_secret",
+  "publish_folder_id": "1",
+  "default_model": "your_lookml_model",
+  "default_explores": ["your_main_explore"],
+  "size_limit_fallback": {
+    "max_def_bytes": 900000,
+    "comment": "def size cap for publish-data-app.py's def_too_large guard; see SKILL.md for the rationale and the manual def_url escape hatch."
+  }
+}
