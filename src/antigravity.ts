@@ -5,8 +5,24 @@ import {
   NativeContentState,
   parseExploreId,
 } from './lookerApi'
+import {
+  BOOTSTRAP_LOOKML_PY,
+  buildLookmlSystemGuide,
+  extractLookmlBundleFromInteraction,
+  LookmlBundle,
+} from './lookmlTool'
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 export const LkrCodeMode = require('./vendor/codemode.js')
+
+// Expose optional `vars: { type: "object" }` on RUN_LOOKER_CODEMODE_TOOL so Antigravity can pass
+// script variables (project_id, ts_utc, raw_sql, inline_queries_json, test_queries_json, commit_message, etc.)
+if (LkrCodeMode?.RUN_LOOKER_CODEMODE_TOOL?.parameters?.properties) {
+  LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.properties.vars = {
+    type: 'object',
+    description:
+      'Optional dictionary of top-level variables to inject into the Monty Python sandbox (e.g. project_id, ts_utc, raw_sql, inline_queries_json, test_queries_json, file_ids, test_names, commit_message).',
+  }
+}
 
 export interface ExtensionAuthContextConfig {
   authMode: 'oauth' | 'apikey'
@@ -358,6 +374,8 @@ export async function runAntigravityTurn(params: {
   mode?: 'data_app' | 'dashboard'
   selectedExplores: string[]
   folderId?: string
+  toolMode?: 'data_app' | 'lookml'
+  lookmlProjectId?: string
   schemaMarkdown: string
   userPrompt: string
   images?: PastedImage[]
@@ -368,6 +386,7 @@ export async function runAntigravityTurn(params: {
 }): Promise<{
   bundle: DataAppBundle | null
   nativeBundle: NativeContentBundle | null
+  lookmlBundle?: LookmlBundle | null
   assistantText: string
   session: AgentSession
 }> {
@@ -379,6 +398,8 @@ export async function runAntigravityTurn(params: {
     mode = 'data_app',
     selectedExplores,
     folderId,
+    toolMode = 'data_app',
+    lookmlProjectId,
     schemaMarkdown,
     userPrompt,
     images,
@@ -418,7 +439,7 @@ export async function runAntigravityTurn(params: {
     ? `Active native Looker ${existingNativeContent.contentType}: id="${existingNativeContent.id}", title="${existingNativeContent.title}", folder_id="${existingNativeContent.folderId}". Update it in place (e.g. update_dashboard, create_dashboard_element, create_dashboard_filter, update_look, create_scheduled_plan) unless the user asks for a brand-new item.`
     : `Create the requested native Looker content in folder_id=\`target_folder_id\` ("${folderId || '1'}").`
 
-  const systemGuide =
+  const dataAppOrNativeGuide =
     mode === 'dashboard'
       ? [
           `You are operating in Native Looker Content Builder mode (/dashboard/:id?) ${exploreDirective}`,
@@ -443,11 +464,22 @@ export async function runAntigravityTurn(params: {
           `5. CRITICAL: In your final text response, include the exact <DATA_APP_BUNDLE>...</DATA_APP_BUNDLE> line printed by bundle_app.py (or read it from /workspace/bundle.json) so the host Looker extension can publish and preview the app.`,
         ].join('\n')
 
+  const systemGuide =
+    toolMode === 'lookml'
+      ? buildLookmlSystemGuide({
+          selectedExplores,
+          primaryModel,
+          primaryExplore,
+          projectId: lookmlProjectId,
+        })
+      : dataAppOrNativeGuide
+
   const sources: Array<{ type: 'inline'; content: string; target: string }> = [
     { type: 'inline', content: schemaMarkdown, target: '/workspace/schema.md' },
     ...(mode === 'data_app'
       ? [{ type: 'inline' as const, content: BUNDLE_APP_PY, target: '/workspace/bundle_app.py' }]
       : []),
+    { type: 'inline', content: BOOTSTRAP_LOOKML_PY, target: '/workspace/bootstrap_lookml.py' },
   ]
   if (mode === 'data_app' && existingAppCode) {
     sources.push({
@@ -562,15 +594,22 @@ export async function runAntigravityTurn(params: {
           onStatus('Running Looker Code Mode (WASM Monty sandbox) in extension...')
           let codeModeOutput: string
           try {
+            const customVars =
+              args.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
+                ? args.vars
+                : {}
             codeModeOutput = await LkrCodeMode.runPythonCode({
               code: String(args.code || ''),
               sdk,
               extensionSDK,
+              allowUpdateSession: toolMode === 'lookml',
               vars: {
                 target_explores: selectedExplores,
                 target_model: primaryModel,
                 target_explore: primaryExplore,
                 target_folder_id: folderId || '1',
+                target_project_id: lookmlProjectId || '',
+                ...customVars,
               },
             })
           } catch (err: any) {
@@ -629,9 +668,15 @@ export async function runAntigravityTurn(params: {
     )
   }
 
-  const bundle = mode === 'data_app' ? extractBundleFromInteraction(interaction) : null
+  const bundle =
+    mode === 'data_app' && toolMode !== 'lookml'
+      ? extractBundleFromInteraction(interaction)
+      : null
   const nativeBundle =
-    mode === 'dashboard' ? extractNativeContentFromInteraction(interaction) : null
+    mode === 'dashboard' && toolMode !== 'lookml'
+      ? extractNativeContentFromInteraction(interaction)
+      : null
+  const lookmlBundle = extractLookmlBundleFromInteraction(interaction)
   const rawText =
     interaction.output_text ||
     (interaction.outputs || []).map((o: any) => o.text || '').join('\n') ||
@@ -639,17 +684,21 @@ export async function runAntigravityTurn(params: {
   const cleanAssistantText = rawText
     .replace(/<DATA_APP_BUNDLE>[\s\S]*?<\/DATA_APP_BUNDLE>/g, '')
     .replace(/<NATIVE_CONTENT_BUNDLE>[\s\S]*?<\/NATIVE_CONTENT_BUNDLE>/g, '')
+    .replace(/<LOOKML_BUNDLE>[\s\S]*?<\/LOOKML_BUNDLE>/g, '')
     .trim()
 
   return {
     bundle,
     nativeBundle,
+    lookmlBundle,
     assistantText:
       cleanAssistantText ||
       (bundle
         ? `Built "${bundle.title}".`
         : nativeBundle
         ? `Built "${nativeBundle.title}".`
+        : lookmlBundle
+        ? `Updated LookML "${lookmlBundle.title}".`
         : 'Done.'),
     session: {
       environmentId: interaction.environment_id || trackedEnvId,
