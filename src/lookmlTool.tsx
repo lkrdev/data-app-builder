@@ -9,27 +9,11 @@ export interface LookmlFileChange {
   diff?: string
 }
 
-export interface LookmlValidationError {
-  message: string
-  file_path?: string
-  line_number?: number
-  severity?: string
-}
-
-export interface LookmlValidationResult {
-  passed: boolean
-  error_count?: number
-  errors?: LookmlValidationError[]
-}
-
 export interface LookmlTestResult {
   test_name: string
   model_name?: string
   file_id?: string
-  explore_name?: string
   success: boolean
-  assertions_count?: number
-  assertions_failed?: number
   errors?: Array<{ message?: string }>
 }
 
@@ -51,7 +35,11 @@ export interface LookmlBundle {
   model_name?: string
   branch_name?: string
   files: LookmlFileChange[]
-  validation?: LookmlValidationResult
+  validation?: {
+    passed: boolean
+    error_count?: number
+    errors?: Array<{ message: string; file_path?: string; line_number?: number; severity?: string }>
+  }
   tests?: LookmlTestResult[]
   queries?: LookmlParityQuery[]
   summary_markdown?: string
@@ -87,9 +75,9 @@ export interface LookmlArtifactPayload {
 
 export const BOOTSTRAP_LOOKML_PY = `#!/usr/bin/env python3
 """Sandbox helper for Agentic LookML:
-1. Bootstraps lkr-dev-cli[parse] (offline lkr parse & lkr schema) and lkrdev/cli/skills/ (agentic-lookml-workflow, agentic-lookml, generate-view-from-table, lookml-field-curation, lookml) into /workspace.
-2. Computes unified diffs between baseline LookML files (/workspace/lookml_baseline) and modified files (/workspace/data/$RUN_ID/lookml or /workspace/lookml).
-3. Emits <LOOKML_BUNDLE>{...}</LOOKML_BUNDLE> for the host Looker extension to render diffs, validator/test status, summary.md, and /sql/:slug + /x/:slug parity links.
+1. Bootstraps lkr-dev-cli[parse] (offline lkr parse & lkr schema) and lkrdev/cli/skills/ into /workspace.
+2. Computes unified diffs between /workspace/lookml_baseline and /workspace/data/$RUN_ID/lookml (or /workspace/lookml).
+3. Emits <LOOKML_BUNDLE>{...}</LOOKML_BUNDLE> for the host Looker extension.
 """
 import difflib
 import json
@@ -121,14 +109,12 @@ REQUIRED_SKILLS = (
 )
 
 def ensure_skills() -> list[str]:
-    marker = SKILLS_ROOT / "agentic-lookml/SKILL.md"
-    if not marker.is_file():
+    if not (SKILLS_ROOT / "agentic-lookml/SKILL.md").is_file():
         SKILLS_ROOT.mkdir(parents=True, exist_ok=True)
         local_skills = os.environ.get("LKR_CLI_SKILLS_DIR")
         if local_skills and Path(local_skills).is_dir():
-            src_root = Path(local_skills)
             for s in REQUIRED_SKILLS:
-                src = src_root / s
+                src = Path(local_skills) / s
                 if src.is_dir():
                     shutil.copytree(src, SKILLS_ROOT / s, dirs_exist_ok=True)
         else:
@@ -155,22 +141,17 @@ def ensure_skills() -> list[str]:
 
 def ensure_lkr_cli() -> str:
     lkr_bin = shutil.which("lkr") or shutil.which("lkr-dev-cli")
-    if lkr_bin:
-        return lkr_bin
-    if shutil.which("uv"):
-        subprocess.run(
-            ["uv", "pip", "install", "--system", "--quiet", "lkr-dev-cli[parse]"],
-            check=False,
+    if not lkr_bin:
+        cmd = (
+            ["uv", "pip", "install", "--system", "--quiet", "lkr-dev-cli[parse]"]
+            if shutil.which("uv")
+            else [sys.executable, "-m", "pip", "install", "--quiet", "lkr-dev-cli[parse]"]
         )
-    else:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--quiet", "lkr-dev-cli[parse]"],
-            check=False,
-        )
+        subprocess.run(cmd, check=False)
     return shutil.which("lkr") or shutil.which("lkr-dev-cli") or "lkr"
 
 def compute_diff(old_text: str, new_text: str, rel_path: str) -> str:
-    lines = list(
+    return "".join(
         difflib.unified_diff(
             old_text.splitlines(keepends=True),
             new_text.splitlines(keepends=True),
@@ -179,59 +160,25 @@ def compute_diff(old_text: str, new_text: str, rel_path: str) -> str:
             n=3,
         )
     )
-    return "".join(lines)
 
 def collect_dir_diffs(lookml_dir: Path, baseline_dir: Path) -> list[dict]:
-    changes = []
-    if not lookml_dir.is_dir():
-        return changes
-    current_files = {
-        str(p.relative_to(lookml_dir)): p
-        for p in sorted(lookml_dir.rglob("*.lkml"))
-        if p.is_file()
-    }
-    baseline_files = (
-        {
-            str(p.relative_to(baseline_dir)): p
-            for p in sorted(baseline_dir.rglob("*.lkml"))
-            if p.is_file()
-        }
+    cur = (
+        {str(p.relative_to(lookml_dir)): p.read_text("utf-8") for p in lookml_dir.rglob("*.lkml") if p.is_file()}
+        if lookml_dir.is_dir()
+        else {}
+    )
+    base = (
+        {str(p.relative_to(baseline_dir)): p.read_text("utf-8") for p in baseline_dir.rglob("*.lkml") if p.is_file()}
         if baseline_dir.is_dir()
         else {}
     )
-    for rel_path, cur_path in current_files.items():
-        new_text = cur_path.read_text(encoding="utf-8")
-        if rel_path not in baseline_files:
-            changes.append(
-                {
-                    "path": rel_path,
-                    "action": "created",
-                    "content": new_text,
-                    "diff": compute_diff("", new_text, rel_path),
-                }
-            )
-        else:
-            old_text = baseline_files[rel_path].read_text(encoding="utf-8")
-            if old_text != new_text:
-                changes.append(
-                    {
-                        "path": rel_path,
-                        "action": "updated",
-                        "content": new_text,
-                        "diff": compute_diff(old_text, new_text, rel_path),
-                    }
-                )
-    for rel_path, old_path in baseline_files.items():
-        if rel_path not in current_files:
-            old_text = old_path.read_text(encoding="utf-8")
-            changes.append(
-                {
-                    "path": rel_path,
-                    "action": "deleted",
-                    "content": "",
-                    "diff": compute_diff(old_text, "", rel_path),
-                }
-            )
+    changes = []
+    for rel in sorted(set(cur) | set(base)):
+        old_t, new_t = base.get(rel, ""), cur.get(rel, "")
+        if old_t == new_t and (rel in cur) == (rel in base):
+            continue
+        action = "created" if rel not in base else ("deleted" if rel not in cur else "updated")
+        changes.append({"path": rel, "action": action, "content": new_t, "diff": compute_diff(old_t, new_t, rel)})
     return changes
 
 def normalize_queries(raw_queries: list[dict]) -> list[dict]:
@@ -239,24 +186,21 @@ def normalize_queries(raw_queries: list[dict]) -> list[dict]:
     for i, q in enumerate(raw_queries or []):
         if not isinstance(q, dict):
             continue
-        sql_slug = q.get("sql_slug") or q.get("sql_query_id") or ""
-        exp_slug = q.get("explore_slug") or q.get("query_slug") or q.get("query_id") or ""
+        sql_slug = str(q.get("sql_slug") or q.get("sql_query_id") or "")
+        exp_slug = str(q.get("explore_slug") or q.get("query_slug") or q.get("query_id") or "")
         out.append(
             {
                 "query_index": q.get("query_index", i),
                 "label": q.get("label") or f"Query #{q.get('query_index', i) + 1}",
-                "sql_slug": str(sql_slug) if sql_slug else undefined_or_none(sql_slug),
+                "sql_slug": sql_slug,
                 "sql_runner_url": q.get("sql_runner_url") or (f"/sql/{sql_slug}" if sql_slug else ""),
-                "explore_slug": str(exp_slug) if exp_slug else "",
+                "explore_slug": exp_slug,
                 "explore_url": q.get("explore_url") or (f"/x/{exp_slug}" if exp_slug else ""),
                 "parity_status": q.get("parity_status") or ("matched" if q.get("passed") else "checked"),
                 "mismatches": q.get("mismatches") or [],
             }
         )
     return out
-
-def undefined_or_none(_v):
-    return ""
 
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "setup"
@@ -269,41 +213,33 @@ def main():
         return
 
     if cmd == "bundle":
-        spec_arg = sys.argv[2] if len(sys.argv) > 2 else str(WORKSPACE_DIR / "lookml_result.json")
-        spec_path = Path(spec_arg)
-        active_lookml_dir = LOOKML_DIR
-        summary_md = ""
-        if spec_path.is_dir():
-            data_json_path = spec_path / "data.json"
-            raw = json.loads(data_json_path.read_text(encoding="utf-8")) if data_json_path.is_file() else {}
-            if (spec_path / "lookml").is_dir():
-                active_lookml_dir = spec_path / "lookml"
-            if (spec_path / "summary.md").is_file():
-                summary_md = (spec_path / "summary.md").read_text(encoding="utf-8")
-        else:
-            raw = json.loads(spec_path.read_text(encoding="utf-8")) if spec_path.is_file() else {}
-            run_id = raw.get("run_id") or raw.get("id")
-            if run_id and (WORKSPACE_DIR / "data" / str(run_id) / "lookml").is_dir():
-                active_lookml_dir = WORKSPACE_DIR / "data" / str(run_id) / "lookml"
-            if run_id and (WORKSPACE_DIR / "data" / str(run_id) / "summary.md").is_file():
-                summary_md = (WORKSPACE_DIR / "data" / str(run_id) / "summary.md").read_text(encoding="utf-8")
-
-        files = raw.get("files")
-        if not files:
-            files = collect_dir_diffs(active_lookml_dir, BASELINE_DIR)
-        else:
-            for f in files:
-                if not f.get("diff") and f.get("content"):
-                    old_file = BASELINE_DIR / f["path"]
-                    old_txt = old_file.read_text(encoding="utf-8") if old_file.is_file() else ""
-                    f["diff"] = compute_diff(old_txt, f["content"], f["path"])
+        spec_path = Path(sys.argv[2] if len(sys.argv) > 2 else str(WORKSPACE_DIR / "lookml_result.json"))
+        run_dir = spec_path if spec_path.is_dir() else None
+        raw = (
+            json.loads((run_dir / "data.json").read_text("utf-8"))
+            if run_dir and (run_dir / "data.json").is_file()
+            else json.loads(spec_path.read_text("utf-8"))
+            if spec_path.is_file()
+            else {}
+        )
+        if not run_dir and (raw.get("run_id") or raw.get("id")):
+            cand = WORKSPACE_DIR / "data" / str(raw.get("run_id") or raw.get("id"))
+            if cand.is_dir():
+                run_dir = cand
+        active_lookml_dir = (run_dir / "lookml") if run_dir and (run_dir / "lookml").is_dir() else LOOKML_DIR
+        summary_md = (
+            (run_dir / "summary.md").read_text("utf-8")
+            if run_dir and (run_dir / "summary.md").is_file()
+            else ""
+        )
+        files = raw.get("files") or collect_dir_diffs(active_lookml_dir, BASELINE_DIR)
+        for f in files:
+            if not f.get("diff") and f.get("content"):
+                old_file = BASELINE_DIR / f["path"]
+                old_txt = old_file.read_text("utf-8") if old_file.is_file() else ""
+                f["diff"] = compute_diff(old_txt, f["content"], f["path"])
 
         val_errors = raw.get("validation_errors") or (raw.get("validation") or {}).get("errors") or []
-        val_obj = raw.get("validation") or {
-            "passed": len(val_errors) == 0 and raw.get("passed", True) is not False,
-            "error_count": len(val_errors),
-            "errors": val_errors,
-        }
         bundle = {
             "id": str(raw.get("id") or raw.get("run_id") or raw.get("branch_name") or "lookml-session"),
             "title": str(raw.get("title") or f"LookML: {raw.get('project_id', 'Project')}"),
@@ -311,13 +247,17 @@ def main():
             "model_name": raw.get("model_name") or "",
             "branch_name": raw.get("branch_name") or "",
             "files": files,
-            "validation": val_obj,
+            "validation": raw.get("validation")
+            or {
+                "passed": len(val_errors) == 0 and raw.get("passed", True) is not False,
+                "error_count": len(val_errors),
+                "errors": val_errors,
+            },
             "tests": raw.get("tests") or [],
             "queries": normalize_queries(raw.get("queries") or []),
             "summary_markdown": raw.get("summary_markdown") or summary_md,
         }
-        out_path = WORKSPACE_DIR / "lookml_bundle.json"
-        out_path.write_text(json.dumps(bundle), encoding="utf-8")
+        (WORKSPACE_DIR / "lookml_bundle.json").write_text(json.dumps(bundle), encoding="utf-8")
         print("<LOOKML_BUNDLE>" + json.dumps(bundle) + "</LOOKML_BUNDLE>")
         return
 
@@ -328,25 +268,13 @@ if __name__ == "__main__":
 `
 
 export function extractLookmlBundleFromInteraction(interaction: any): LookmlBundle | null {
-  const candidates: string[] = []
-  if (typeof interaction?.output_text === 'string') {
-    candidates.push(interaction.output_text)
-  }
-  for (const out of interaction?.outputs || []) {
-    if (typeof out?.text === 'string') candidates.push(out.text)
-  }
-  for (const step of interaction?.steps || []) {
-    if (typeof step?.output === 'string') candidates.push(step.output)
-    if (typeof step?.result === 'string') candidates.push(step.result)
-    if (typeof step?.text === 'string') candidates.push(step.text)
-  }
-  const combined = candidates.join('\n')
-  const matches = Array.from(
-    combined.matchAll(/<LOOKML_BUNDLE>([\s\S]*?)<\/LOOKML_BUNDLE>/g)
-  )
-  if (matches.length === 0) return null
-  const lastJson = matches[matches.length - 1][1].trim()
-  return JSON.parse(lastJson) as LookmlBundle
+  const texts = [
+    interaction?.output_text,
+    ...(interaction?.outputs || []).map((o: any) => o?.text),
+    ...(interaction?.steps || []).flatMap((s: any) => [s?.output, s?.result, s?.text]),
+  ].filter((x): x is string => typeof x === 'string')
+  const matches = Array.from(texts.join('\n').matchAll(/<LOOKML_BUNDLE>([\s\S]*?)<\/LOOKML_BUNDLE>/g))
+  return matches.length ? (JSON.parse(matches[matches.length - 1][1].trim()) as LookmlBundle) : null
 }
 
 export function buildLookmlSystemGuide(params: {
@@ -385,19 +313,12 @@ export function buildLookmlSystemGuide(params: {
   ].join('\n')
 }
 
-export function getArtifactNamespace(extensionSDK: any): string {
-  const extId = extensionSDK?.lookerHostData?.extensionId
-  if (typeof extId === 'string' && extId.trim()) {
-    return extId.trim()
-  }
-  return 'data_app_builder'
-}
+export const getArtifactNamespace = (extensionSDK: any): string =>
+  extensionSDK?.lookerHostData?.extensionId?.trim() || 'data_app_builder'
 
 export function getLookmlArtifactKeys(userId: string, id: string) {
   const cleanUser = String(userId || 'anon').trim()
-  const cleanId = String(id || 'default')
-    .trim()
-    .replace(/[^a-zA-Z0-9_-]/g, '_')
+  const cleanId = String(id || 'default').trim().replace(/[^a-zA-Z0-9_-]/g, '_')
   return {
     id: cleanId,
     userKey: `user_${cleanUser}_lookml_${cleanId}`,
@@ -419,11 +340,8 @@ async function fetchArtifactVersions(
         `/artifacts/${encodeURIComponent(namespace)}`,
         { key, fields: 'key,version' }
       )
-      const list = Array.isArray(res) ? res : res ? [res] : []
-      for (const item of list) {
-        if (item?.key && typeof item?.version === 'number') {
-          map[item.key] = item.version
-        }
+      for (const item of Array.isArray(res) ? res : res ? [res] : []) {
+        if (item?.key && typeof item?.version === 'number') map[item.key] = item.version
       }
     } catch {
       // Key does not exist yet
@@ -445,13 +363,7 @@ export async function saveLookmlSessionArtifact(params: {
     environmentId?: string
     messages?: PersistedChatTurn[]
   }
-}): Promise<{
-  id: string
-  userKey: string
-  objKey: string
-  index: LookmlSessionIndex
-  payload: LookmlArtifactPayload
-}> {
+}) {
   const { sdk, extensionSDK, userId, bundle, studio } = params
   const namespace = getArtifactNamespace(extensionSDK)
   const rawId =
@@ -474,10 +386,6 @@ export async function saveLookmlSessionArtifact(params: {
     environmentId: studio.environmentId,
   }
 
-  const compactMessages = (studio.messages || [])
-    .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .slice(-200)
-
   const payload: LookmlArtifactPayload = {
     id,
     type: 'lookml',
@@ -489,12 +397,14 @@ export async function saveLookmlSessionArtifact(params: {
       explores: studio.explores || [],
       lastInteractionId: studio.lastInteractionId,
       environmentId: studio.environmentId,
-      messages: compactMessages,
+      messages: (studio.messages || [])
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .slice(-200),
     },
   }
 
   const versions = await fetchArtifactVersions(sdk, namespace, [userKey, objKey])
-  const artifactsBody = [
+  await rawLookerRequest(sdk, 'PUT', `/artifacts/${encodeURIComponent(namespace)}`, undefined, [
     {
       key: userKey,
       value: JSON.stringify(index),
@@ -507,16 +417,7 @@ export async function saveLookmlSessionArtifact(params: {
       content_type: 'application/json',
       ...(versions[objKey] !== undefined ? { version: versions[objKey] } : {}),
     },
-  ]
-
-  await rawLookerRequest(
-    sdk,
-    'PUT',
-    `/artifacts/${encodeURIComponent(namespace)}`,
-    undefined,
-    artifactsBody
-  )
-
+  ])
   return { id, userKey, objKey, index, payload }
 }
 
@@ -526,8 +427,7 @@ export async function loadLookmlSessionArtifact(
   rawId: string
 ): Promise<LookmlArtifactPayload> {
   const namespace = getArtifactNamespace(extensionSDK)
-  const cleanId = rawId.trim().replace(/^obj_lookml_/, '')
-  const objKey = `obj_lookml_${cleanId}`
+  const objKey = `obj_lookml_${rawId.trim().replace(/^obj_lookml_/, '')}`
   const res = await rawLookerRequest<any[]>(
     sdk,
     'GET',
@@ -535,9 +435,7 @@ export async function loadLookmlSessionArtifact(
     { key: objKey }
   )
   const item = Array.isArray(res) ? res[0] : res
-  if (!item?.value) {
-    throw new Error(`LookML session artifact "${objKey}" not found.`)
-  }
+  if (!item?.value) throw new Error(`LookML session artifact "${objKey}" not found.`)
   return typeof item.value === 'string' ? JSON.parse(item.value) : item.value
 }
 
@@ -547,16 +445,14 @@ export async function listUserLookmlSessions(
   userId: string
 ): Promise<LookmlSessionIndex[]> {
   const namespace = getArtifactNamespace(extensionSDK)
-  const pattern = `user_${String(userId || 'anon').trim()}_lookml_%`
   try {
     const res = await rawLookerRequest<any[]>(
       sdk,
       'GET',
       `/artifacts/${encodeURIComponent(namespace)}/search`,
-      { key: pattern, limit: 50 }
+      { key: `user_${String(userId || 'anon').trim()}_lookml_%`, limit: 50 }
     )
-    const items = Array.isArray(res) ? res : []
-    return items
+    return (Array.isArray(res) ? res : [])
       .map((item) => {
         try {
           return typeof item?.value === 'string' ? JSON.parse(item.value) : item?.value
@@ -605,42 +501,24 @@ export const LookmlPreviewPane: React.FC<{
   const passedTests = tests.filter((t) => t.success).length
   const queries = bundle.queries || []
   const cleanHost = hostUrl.replace(/\/$/, '')
+  const cardStyle: React.CSSProperties = {
+    background: '#fff',
+    padding: 12,
+    borderRadius: 8,
+    border: '1px solid #e2e8f0',
+  }
 
   const openLink = (pathOrUrl: string) => {
     const target = pathOrUrl.startsWith('http')
       ? pathOrUrl
       : `${cleanHost}${pathOrUrl.startsWith('/') ? '' : '/'}${pathOrUrl}`
-    if (extensionSDK?.openBrowserWindow) {
-      extensionSDK.openBrowserWindow(target, '_blank')
-    } else {
-      window.open(target, '_blank', 'noopener,noreferrer')
-    }
+    if (extensionSDK?.openBrowserWindow) extensionSDK.openBrowserWindow(target, '_blank')
+    else window.open(target, '_blank', 'noopener,noreferrer')
   }
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100%',
-        overflow: 'auto',
-        padding: 16,
-        gap: 14,
-      }}
-    >
-      {/* Status Summary Cards */}
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 10,
-          alignItems: 'center',
-          background: '#ffffff',
-          padding: '10px 14px',
-          borderRadius: 8,
-          border: '1px solid #e2e8f0',
-        }}
-      >
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'auto', padding: 16, gap: 12 }}>
+      <div className="dab-controls" style={cardStyle}>
         <div>
           <strong>Project:</strong> <code>{bundle.project_id || 'default'}</code>
         </div>
@@ -654,209 +532,81 @@ export const LookmlPreviewPane: React.FC<{
             ⎇ {bundle.branch_name}
           </span>
         )}
-        <span
-          style={{
-            padding: '2px 8px',
-            borderRadius: 999,
-            fontSize: 11,
-            fontWeight: 600,
-            background: valPassed ? '#dcfce7' : '#fee2e2',
-            color: valPassed ? '#166534' : '#991b1b',
-            border: `1px solid ${valPassed ? '#bbf7d0' : '#fecaca'}`,
-          }}
-        >
+        <span className="dab-msg-pill" style={valPassed ? undefined : { background: '#fee2e2', color: '#991b1b' }}>
           {valPassed
             ? '✓ LookML Validator Passed'
             : `✗ LookML Validator (${valErrors.length} error${valErrors.length === 1 ? '' : 's'})`}
         </span>
         {tests.length > 0 && (
           <span
-            style={{
-              padding: '2px 8px',
-              borderRadius: 999,
-              fontSize: 11,
-              fontWeight: 600,
-              background: passedTests === tests.length ? '#dcfce7' : '#fee2e2',
-              color: passedTests === tests.length ? '#166534' : '#991b1b',
-              border: `1px solid ${passedTests === tests.length ? '#bbf7d0' : '#fecaca'}`,
-            }}
+            className="dab-msg-pill"
+            style={passedTests === tests.length ? undefined : { background: '#fee2e2', color: '#991b1b' }}
           >
-            {passedTests === tests.length
-              ? `✓ run_lookml_test (${passedTests}/${tests.length} passed)`
-              : `✗ run_lookml_test (${passedTests}/${tests.length} passed)`}
+            {passedTests === tests.length ? '✓' : '✗'} run_lookml_test ({passedTests}/{tests.length} passed)
           </span>
         )}
       </div>
 
-      {/* Clickable /sql/:slug and /x/:slug Parity Links */}
       {queries.length > 0 && (
-        <div
-          style={{
-            background: '#ffffff',
-            padding: 12,
-            borderRadius: 8,
-            border: '1px solid #e2e8f0',
-          }}
-        >
-          <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 12 }}>
+        <div style={cardStyle}>
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>
             SQL-to-LookML Parity Queries (<code>/sql/:slug</code> &amp; <code>/x/:slug</code>)
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {queries.map((q, i) => {
-              const sqlPath =
-                q.sql_runner_url || (q.sql_slug ? `/sql/${q.sql_slug}` : undefined)
-              const explorePath =
-                q.explore_url || (q.explore_slug ? `/x/${q.explore_slug}` : undefined)
-              return (
-                <div
-                  key={i}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 8,
-                    padding: '6px 10px',
-                    background: '#f8fafc',
-                    borderRadius: 6,
-                    border: '1px solid #e2e8f0',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <strong>{q.label || `Query #${(q.query_index ?? i) + 1}`}</strong>
-                    {q.parity_status && (
-                      <span
-                        className="dab-msg-pill"
-                        style={{
-                          background:
-                            q.parity_status === 'matched' || q.parity_status === 'passed'
-                              ? '#dcfce7'
-                              : '#fef3c7',
-                          color:
-                            q.parity_status === 'matched' || q.parity_status === 'passed'
-                              ? '#166534'
-                              : '#92400e',
-                        }}
-                      >
-                        {q.parity_status}
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    {sqlPath && (
-                      <button
-                        type="button"
-                        className="dab-btn-secondary"
-                        onClick={() => openLink(sqlPath)}
-                      >
-                        <code>{q.sql_slug ? `/sql/${q.sql_slug}` : 'SQL Runner'}</code> ↗
-                      </button>
-                    )}
-                    {explorePath && (
-                      <button
-                        type="button"
-                        className="dab-btn-secondary"
-                        onClick={() => openLink(explorePath)}
-                      >
-                        <code>{q.explore_slug ? `/x/${q.explore_slug}` : 'Explore'}</code> ↗
-                      </button>
-                    )}
-                  </div>
+          {queries.map((q, i) => {
+            const sqlPath = q.sql_runner_url || (q.sql_slug ? `/sql/${q.sql_slug}` : '')
+            const explorePath = q.explore_url || (q.explore_slug ? `/x/${q.explore_slug}` : '')
+            return (
+              <div key={i} className="dab-inspector-bar" style={{ padding: '4px 0' }}>
+                <div className="dab-controls">
+                  <strong>{q.label || `Query #${(q.query_index ?? i) + 1}`}</strong>
+                  {q.parity_status && <span className="dab-msg-pill">{q.parity_status}</span>}
                 </div>
-              )
-            })}
-          </div>
+                <div className="dab-controls">
+                  {sqlPath && (
+                    <button type="button" className="dab-btn-secondary" onClick={() => openLink(sqlPath)}>
+                      <code>{q.sql_slug ? `/sql/${q.sql_slug}` : 'SQL Runner'}</code> ↗
+                    </button>
+                  )}
+                  {explorePath && (
+                    <button type="button" className="dab-btn-secondary" onClick={() => openLink(explorePath)}>
+                      <code>{q.explore_slug ? `/x/${q.explore_slug}` : 'Explore'}</code> ↗
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
 
-      {/* Validator Errors & Test Results Details */}
       {(valErrors.length > 0 || tests.length > 0) && (
-        <div
-          style={{
-            background: '#ffffff',
-            padding: 12,
-            borderRadius: 8,
-            border: '1px solid #e2e8f0',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 8,
-          }}
-        >
-          {valErrors.length > 0 && (
-            <div>
-              <div style={{ fontWeight: 700, color: '#991b1b', marginBottom: 4 }}>
-                LookML Validator Findings
-              </div>
-              {valErrors.map((e, i) => (
-                <div
+        <div style={cardStyle}>
+          {valErrors.map((e, i) => (
+            <div key={i} style={{ fontFamily: 'monospace', fontSize: 11, color: '#991b1b' }}>
+              {e.file_path ? `${e.file_path}${e.line_number ? `:${e.line_number}` : ''} — ` : ''}
+              {e.message}
+            </div>
+          ))}
+          {tests.length > 0 && (
+            <div className="dab-controls" style={{ marginTop: valErrors.length ? 6 : 0 }}>
+              {tests.map((t, i) => (
+                <span
                   key={i}
-                  style={{
-                    fontFamily: 'monospace',
-                    fontSize: 11,
-                    color: '#991b1b',
-                    padding: '3px 0',
-                  }}
+                  className="dab-msg-pill"
+                  style={t.success ? undefined : { background: '#fee2e2', color: '#991b1b' }}
                 >
-                  {e.file_path ? `${e.file_path}${e.line_number ? `:${e.line_number}` : ''} — ` : ''}
-                  {e.message}
-                </div>
+                  {t.success ? '✓' : '✗'} {t.test_name}
+                  {t.file_id ? ` (${t.file_id})` : ''}
+                </span>
               ))}
             </div>
           )}
-          {tests.length > 0 && (
-            <div>
-              <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 12 }}>
-                LookML Data Tests (<code>run_lookml_test</code>)
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {tests.map((t, i) => (
-                  <span
-                    key={i}
-                    style={{
-                      padding: '3px 8px',
-                      borderRadius: 6,
-                      fontSize: 11,
-                      fontFamily: 'monospace',
-                      background: t.success ? '#f0fdf4' : '#fef2f2',
-                      color: t.success ? '#166534' : '#991b1b',
-                      border: `1px solid ${t.success ? '#bbf7d0' : '#fecaca'}`,
-                    }}
-                  >
-                    {t.success ? '✓' : '✗'} {t.test_name}
-                    {t.file_id ? ` (${t.file_id})` : ''}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       )}
 
-      {/* Modified .lkml File Diffs / Contents */}
-      <div
-        style={{
-          background: '#ffffff',
-          borderRadius: 8,
-          border: '1px solid #e2e8f0',
-          display: 'flex',
-          flexDirection: 'column',
-          flex: 1,
-          minHeight: 260,
-          overflow: 'hidden',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '8px 12px',
-            borderBottom: '1px solid #e2e8f0',
-            background: '#f8fafc',
-            flexWrap: 'wrap',
-            gap: 8,
-          }}
-        >
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+      <div style={{ ...cardStyle, padding: 0, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 240, overflow: 'hidden' }}>
+        <div className="dab-inspector-bar" style={{ padding: '8px 12px', borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+          <div className="dab-controls">
             {files.length === 0 ? (
               <span className="dab-muted">No modified .lkml files recorded</span>
             ) : (
@@ -865,127 +615,62 @@ export const LookmlPreviewPane: React.FC<{
                   key={f.path}
                   type="button"
                   onClick={() => setSelectedFileIdx(idx)}
-                  className={
-                    idx === selectedFileIdx ? 'dab-btn-primary' : 'dab-btn-secondary'
-                  }
+                  className={idx === selectedFileIdx ? 'dab-btn-primary' : 'dab-btn-secondary'}
                   style={{ fontFamily: 'monospace', fontSize: 11 }}
                 >
-                  {f.action === 'created'
-                    ? '+ '
-                    : f.action === 'deleted'
-                    ? '- '
-                    : 'Δ '}
+                  {f.action === 'created' ? '+ ' : f.action === 'deleted' ? '- ' : 'Δ '}
                   {f.path}
                 </button>
               ))
             )}
           </div>
           {activeFile && (
-            <div style={{ display: 'flex', gap: 6 }}>
+            <div className="dab-controls">
               <button
                 type="button"
                 className="dab-btn-secondary"
-                onClick={() =>
-                  setViewMode((m) => (m === 'diff' ? 'content' : 'diff'))
-                }
+                onClick={() => setViewMode((m) => (m === 'diff' ? 'content' : 'diff'))}
               >
                 {viewMode === 'diff' ? 'Show Full .lkml' : 'Show Unified Diff'}
               </button>
               <button
                 type="button"
                 className="dab-btn-secondary"
-                onClick={() =>
-                  navigator.clipboard?.writeText(
-                    activeFile.content || activeFile.diff || ''
-                  )
-                }
+                onClick={() => navigator.clipboard?.writeText(activeFile.content || activeFile.diff || '')}
               >
                 Copy .lkml
               </button>
             </div>
           )}
         </div>
-
-        <pre
-          style={{
-            margin: 0,
-            padding: 12,
-            flex: 1,
-            overflow: 'auto',
-            background: '#0f172a',
-            color: '#e2e8f0',
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-            fontSize: 12,
-            lineHeight: 1.5,
-          }}
-        >
-          {activeFile ? (
-            (viewMode === 'diff' && activeFile.diff
-              ? activeFile.diff
-              : activeFile.content || activeFile.diff || ''
-            )
-              .split('\n')
-              .map((line, i) => {
-                const isAdd =
-                  viewMode === 'diff' &&
-                  line.startsWith('+') &&
-                  !line.startsWith('+++')
-                const isDel =
-                  viewMode === 'diff' &&
-                  line.startsWith('-') &&
-                  !line.startsWith('---')
-                const isHdr = viewMode === 'diff' && line.startsWith('@@')
-                return (
-                  <div
-                    key={i}
-                    style={{
-                      color: isAdd
-                        ? '#4ade80'
-                        : isDel
-                        ? '#f87171'
-                        : isHdr
-                        ? '#38bdf8'
-                        : '#e2e8f0',
-                      background: isAdd
-                        ? 'rgba(34, 197, 94, 0.12)'
-                        : isDel
-                        ? 'rgba(248, 113, 113, 0.12)'
-                        : 'transparent',
-                    }}
-                  >
-                    {line}
-                  </div>
-                )
-              })
-          ) : (
-            <span style={{ color: '#94a3b8' }}>No .lkml file selected.</span>
-          )}
+        <pre style={{ margin: 0, padding: 12, flex: 1, overflow: 'auto', background: '#0f172a', color: '#e2e8f0', fontSize: 12 }}>
+          {activeFile
+            ? (viewMode === 'diff' && activeFile.diff ? activeFile.diff : activeFile.content || activeFile.diff || '')
+                .split('\n')
+                .map((line, i) => {
+                  const isAdd = viewMode === 'diff' && line.startsWith('+') && !line.startsWith('+++')
+                  const isDel = viewMode === 'diff' && line.startsWith('-') && !line.startsWith('---')
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        color: isAdd ? '#4ade80' : isDel ? '#f87171' : line.startsWith('@@') ? '#38bdf8' : '#e2e8f0',
+                      }}
+                    >
+                      {line}
+                    </div>
+                  )
+                })
+            : 'No .lkml file selected.'}
         </pre>
       </div>
 
-      {/* Diagnostic Summary Markdown */}
       {bundle.summary_markdown && (
-        <details
-          open
-          style={{
-            background: '#ffffff',
-            padding: 12,
-            borderRadius: 8,
-            border: '1px solid #e2e8f0',
-          }}
-        >
-          <summary style={{ fontWeight: 700, cursor: 'pointer', fontSize: 12 }}>
+        <details open style={cardStyle}>
+          <summary style={{ fontWeight: 700, cursor: 'pointer' }}>
             Agentic LookML Diagnostic Summary (<code>summary.md</code>)
           </summary>
-          <pre
-            style={{
-              whiteSpace: 'pre-wrap',
-              fontFamily: 'inherit',
-              fontSize: 12,
-              margin: '8px 0 0',
-              color: '#334155',
-            }}
-          >
+          <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: '8px 0 0' }}>
             {bundle.summary_markdown}
           </pre>
         </details>
