@@ -567,3 +567,298 @@ export async function upsertPublishedDataApp(
     manifestQueries,
   }
 }
+
+export type NativeContentType = 'dashboard' | 'look' | 'board'
+
+export interface NativeContentBundle {
+  id: string
+  content_type?: NativeContentType
+  title: string
+  folder_id?: string
+  embed_path?: string
+  tile_count?: number
+  filter_count?: number
+  schedule_id?: string
+  explores?: string[]
+}
+
+export interface NativeContentState {
+  id: string
+  contentType: NativeContentType
+  title: string
+  folderId: string
+  embedPath: string
+  tileCount?: number
+  filterCount?: number
+  scheduleId?: string
+  studio?: DashboardStudioMetadata
+}
+
+export function getArtifactNamespace(extensionSDK?: any): string {
+  return String(extensionSDK?.lookerHostData?.extensionId || 'data_app_builder')
+}
+
+export function resolveNativeEmbedPath(
+  contentType: NativeContentType,
+  id: string,
+  explicitPath?: string
+): string {
+  const cleanId = encodeURIComponent(String(id).trim())
+  if (explicitPath && /^\/(?:embed\/(?:dashboards|looks)|boards)\//.test(explicitPath)) {
+    return explicitPath
+  }
+  if (contentType === 'look') return `/embed/looks/${cleanId}`
+  if (contentType === 'board') return `/boards/${cleanId}`
+  return `/embed/dashboards/${cleanId}`
+}
+
+async function readArtifactJson<T = any>(
+  sdk: Looker40SDK,
+  namespace: string,
+  key: string
+): Promise<{ version?: number; data?: T } | null> {
+  try {
+    const items =
+      typeof (sdk as any).search_artifacts === 'function'
+        ? await sdk.ok(sdk.search_artifacts({ namespace, key }))
+        : await rawLookerRequest<any[]>(sdk, 'GET', `/artifacts/${encodeURIComponent(namespace)}/search`, {
+            key,
+          })
+    const hit = Array.isArray(items) ? items.find((a) => a.key === key) : null
+    if (!hit) return null
+    let rawVal = hit.value
+    if (rawVal === undefined) {
+      const full =
+        typeof (sdk as any).artifact === 'function'
+          ? await sdk.ok(sdk.artifact({ namespace, key }))
+          : await rawLookerRequest<any>(
+              sdk,
+              'GET',
+              `/artifacts/${encodeURIComponent(namespace)}/${encodeURIComponent(key)}`
+            )
+      const fullObj = Array.isArray(full) ? full[0] : full
+      rawVal = fullObj?.value ?? fullObj
+    }
+    const parsed =
+      typeof rawVal === 'string' ? JSON.parse(rawVal) : (rawVal as T | undefined)
+    return {
+      version: typeof hit.version === 'number' ? hit.version : undefined,
+      data: parsed,
+    }
+  } catch {
+    return null
+  }
+}
+
+// ponytail: batch both user_${userId}_dashboard_${id} and obj_dashboard_${id} into one update_artifacts call
+export async function saveNativeContentArtifact(
+  sdk: Looker40SDK,
+  extensionSDK: any,
+  userId: string,
+  bundle: NativeContentBundle,
+  folderId: string,
+  existing?: NativeContentState | null,
+  studioUpdate?: StudioMetadataUpdate
+): Promise<NativeContentState> {
+  const id = String(bundle.id || existing?.id || '').trim()
+  if (!id) throw new Error('Native content bundle is missing a target ID.')
+  const contentType: NativeContentType =
+    bundle.content_type || existing?.contentType || 'dashboard'
+  const title = bundle.title || existing?.title || `Native ${contentType} #${id}`
+  const effectiveFolderId = String(bundle.folder_id || existing?.folderId || folderId || '1')
+  const embedPath = resolveNativeEmbedPath(
+    contentType,
+    id,
+    bundle.embed_path || existing?.embedPath
+  )
+  const nextStudio = mergeStudioMetadata(existing?.studio, studioUpdate)
+  const updatedAt = nextStudio?.updatedAt || new Date().toISOString()
+  const namespace = getArtifactNamespace(extensionSDK)
+  const safeUserId = String(userId || '1').trim()
+  const userKey = `user_${safeUserId}_dashboard_${id}`
+  const objKey = `obj_dashboard_${id}`
+
+  const [prevUser, prevObj] = await Promise.all([
+    readArtifactJson(sdk, namespace, userKey),
+    readArtifactJson(sdk, namespace, objKey),
+  ])
+
+  const userIndexPayload = {
+    id,
+    type: 'dashboard',
+    contentType,
+    title,
+    updatedAt,
+    createdBy: safeUserId,
+    targetId: id,
+    embedPath,
+    folderId: effectiveFolderId,
+    explores: nextStudio?.explores || bundle.explores || [],
+    lastInteractionId: nextStudio?.lastInteractionId,
+    environmentId: nextStudio?.environmentId,
+  }
+  const objPayload = {
+    id,
+    type: 'dashboard',
+    contentType,
+    title,
+    folderId: effectiveFolderId,
+    embedPath,
+    tileCount: bundle.tile_count ?? existing?.tileCount,
+    filterCount: bundle.filter_count ?? existing?.filterCount,
+    scheduleId: bundle.schedule_id ?? existing?.scheduleId,
+    studio: nextStudio,
+  }
+
+  const updates: Array<Record<string, any>> = [
+    {
+      key: userKey,
+      value: JSON.stringify(userIndexPayload),
+      content_type: 'application/json',
+      ...(prevUser?.version !== undefined ? { version: prevUser.version } : {}),
+    },
+    {
+      key: objKey,
+      value: JSON.stringify(objPayload),
+      content_type: 'application/json',
+      ...(prevObj?.version !== undefined ? { version: prevObj.version } : {}),
+    },
+  ]
+
+  try {
+    if (typeof (sdk as any).update_artifacts === 'function') {
+      await sdk.ok(sdk.update_artifacts(namespace, updates as any))
+    } else {
+      await rawLookerRequest(
+        sdk,
+        'PUT',
+        `/artifacts/${encodeURIComponent(namespace)}`,
+        undefined,
+        updates
+      )
+    }
+  } catch {
+    // Non-fatal when running outside an extension host or before artifact namespace is initialized
+  }
+
+  return {
+    id,
+    contentType,
+    title,
+    folderId: effectiveFolderId,
+    embedPath,
+    tileCount: objPayload.tileCount,
+    filterCount: objPayload.filterCount,
+    scheduleId: objPayload.scheduleId,
+    studio: nextStudio,
+  }
+}
+
+export async function loadNativeContentById(
+  sdk: Looker40SDK,
+  extensionSDK: any,
+  rawId: string
+): Promise<NativeContentState> {
+  const trimmed = rawId.trim()
+  const prefixMatch = trimmed.match(/^(dashboard|look|board):(.+)$/i)
+  const explicitType = prefixMatch
+    ? (prefixMatch[1].toLowerCase() as NativeContentType)
+    : undefined
+  const cleanId = (prefixMatch ? prefixMatch[2] : trimmed).trim()
+  const namespace = getArtifactNamespace(extensionSDK)
+  const stored = await readArtifactJson<any>(sdk, namespace, `obj_dashboard_${cleanId}`)
+  if (stored?.data && stored.data.id) {
+    const d = stored.data
+    const cType: NativeContentType = explicitType || d.contentType || 'dashboard'
+    return {
+      id: String(d.id),
+      contentType: cType,
+      title: d.title || `Native ${cType} #${d.id}`,
+      folderId: String(d.folderId || '1'),
+      embedPath: resolveNativeEmbedPath(cType, String(d.id), d.embedPath),
+      tileCount: d.tileCount,
+      filterCount: d.filterCount,
+      scheduleId: d.scheduleId,
+      studio: d.studio,
+    }
+  }
+
+  const cType: NativeContentType = explicitType || 'dashboard'
+  if (cType === 'look') {
+    const lk = await rawLookerRequest<any>(sdk, 'GET', `/looks/${encodeURIComponent(cleanId)}`)
+    return {
+      id: String(lk.id || cleanId),
+      contentType: 'look',
+      title: lk.title || `Look #${cleanId}`,
+      folderId: String(lk.folder?.id || lk.folder_id || '1'),
+      embedPath: resolveNativeEmbedPath('look', String(lk.id || cleanId)),
+    }
+  }
+  if (cType === 'board') {
+    const bd = await rawLookerRequest<any>(sdk, 'GET', `/boards/${encodeURIComponent(cleanId)}`)
+    return {
+      id: String(bd.id || cleanId),
+      contentType: 'board',
+      title: bd.title || `Board #${cleanId}`,
+      folderId: '1',
+      embedPath: resolveNativeEmbedPath('board', String(bd.id || cleanId)),
+    }
+  }
+
+  const dash = await sdk.ok(sdk.dashboard(cleanId))
+  return {
+    id: String(dash.id || cleanId),
+    contentType: 'dashboard',
+    title: dash.title || `Dashboard #${cleanId}`,
+    folderId: String(dash.folder?.id || '1'),
+    embedPath: resolveNativeEmbedPath('dashboard', String(dash.id || cleanId)),
+    tileCount: (dash.dashboard_elements || []).length,
+    filterCount: (dash.dashboard_filters || []).length,
+  }
+}
+
+export async function listUserDashboardArtifacts(
+  sdk: Looker40SDK,
+  extensionSDK: any,
+  userId: string
+): Promise<Array<{ id: string; title: string; contentType: NativeContentType; embedPath: string }>> {
+  const namespace = getArtifactNamespace(extensionSDK)
+  const key = `user_${String(userId || '1').trim()}_dashboard_%`
+  try {
+    const items =
+      typeof (sdk as any).search_artifacts === 'function'
+        ? await sdk.ok(sdk.search_artifacts({ namespace, key }))
+        : await rawLookerRequest<any[]>(
+            sdk,
+            'GET',
+            `/artifacts/${encodeURIComponent(namespace)}/search`,
+            { key }
+          )
+    const out: Array<{
+      id: string
+      title: string
+      contentType: NativeContentType
+      embedPath: string
+    }> = []
+    for (const item of items || []) {
+      try {
+        const parsed =
+          typeof item.value === 'string' ? JSON.parse(item.value) : item.value || {}
+        if (parsed?.id) {
+          const cType: NativeContentType = parsed.contentType || 'dashboard'
+          out.push({
+            id: String(parsed.id),
+            title: String(parsed.title || `#${parsed.id}`),
+            contentType: cType,
+            embedPath: resolveNativeEmbedPath(cType, String(parsed.id), parsed.embedPath),
+          })
+        }
+      } catch {
+        // Ignore unparseable entries
+      }
+    }
+    return out
+  } catch {
+    return []
+  }
+}
