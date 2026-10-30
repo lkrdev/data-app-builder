@@ -94,6 +94,31 @@ assert(
     manifestLkml.includes('"update_artifacts"'),
   'manifest.lkml must declare native content and artifact core_api_methods'
 )
+const pythonTileTsx = readFileSync(path.join(repoRoot, 'src/components/PythonTile.tsx'), 'utf8')
+assert(
+  lookerApiTs.includes('user_${uid}_script_${payload.id}') &&
+    lookerApiTs.includes('obj_script_${payload.id}') &&
+    lookerApiTs.includes('tile_element_${String(elementId).trim()}') &&
+    lookerApiTs.includes("load_configuration: 'wait'") &&
+    lookerApiTs.includes('run_on_load: false') &&
+    lookerApiTs.includes('show_dashboard_header: true'),
+  'lookerApi.ts must persist user/obj/tile_element script artifacts and publish extension-layout dashboards with load_configuration="wait" and show_dashboard_header=true'
+)
+assert(
+  pythonTileTsx.includes('isDashboardEditing') &&
+    pythonTileTsx.includes('dashboardRunState') &&
+    pythonTileTsx.includes('dashboard_filters: dashboardFilters') &&
+    pythonTileTsx.includes('dab-py-table') &&
+    pythonTileTsx.includes('dab-py-markdown') &&
+    pythonTileTsx.includes('dab-py-pre'),
+  'PythonTile.tsx must handle Edit/View modes, dashboardRunState, vars.dashboard_filters, and list[dict]/string/dict return value rendering'
+)
+const tileTableOut = await LkrCodeMode.runPythonCode({
+  code: 'return [{"filter_status": dashboard_filters.get("status", "ALL"), "rows": 42}]',
+  sdk: mockSdk,
+  vars: { dashboard_filters: { status: 'Complete' } },
+})
+assert.deepEqual(JSON.parse(tileTableOut), [{ filter_status: 'Complete', rows: 42 }])
 const match = antigravityTs.match(/export const BUNDLE_APP_PY = `([\s\S]*?)`\n/)
 assert(match, 'Could not find BUNDLE_APP_PY in src/antigravity.ts')
 

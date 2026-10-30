@@ -33,6 +33,7 @@ import {
   PastedImage,
   runAntigravityTurn,
 } from '../antigravity'
+import { PythonTile, ScriptStudioView } from './PythonTile'
 import '../styles/index.css'
 
 interface ChatMessage {
@@ -45,9 +46,18 @@ interface ChatMessage {
 }
 
 const StudioMain: React.FC = () => {
-  const { extensionSDK, core40SDK } = useLookerExtension()
+  const { extensionSDK, core40SDK, tileHostData, lookerHostData } = useLookerExtension()
   const history = useHistory()
   const location = useLocation()
+  const mountType =
+    (lookerHostData as any)?.mountType ||
+    (extensionSDK as any)?.lookerHostData?.mountType ||
+    lookerHostData?.mountPoint ||
+    (extensionSDK as any)?.lookerHostData?.mountPoint
+  const isTileMount =
+    mountType === 'dashboard_tile' ||
+    mountType === 'dashboard-tile' ||
+    Boolean(tileHostData?.elementId || tileHostData?.dashboardId)
 
   // Extension-wide Auth Context state (stored once via extensionSDK.saveContextData)
   const initialCtx = (() => {
@@ -467,14 +477,26 @@ const StudioMain: React.FC = () => {
 
   // Redirect to /config if extension auth is not configured yet
   useEffect(() => {
-    if (!isConfigured && location.pathname !== '/config') {
+    if (
+      !isTileMount &&
+      !isConfigured &&
+      location.pathname !== '/config' &&
+      !location.pathname.startsWith('/script')
+    ) {
       history.replace('/config')
     }
-  }, [isConfigured, location.pathname, history])
+  }, [isTileMount, isConfigured, location.pathname, history])
 
   // Auto-load content when opened via route (/dashboard/:id for Native Content, or /:dashboardId / /dashboards/:dashboardId for Data Apps)
   useEffect(() => {
-    if (location.pathname === '/config') return
+    if (
+      isTileMount ||
+      location.pathname === '/config' ||
+      location.pathname === '/script' ||
+      location.pathname.startsWith('/script/')
+    ) {
+      return
+    }
     const nativeMatch = location.pathname.match(/^\/dashboard\/([^/]+)\/?$/)
     if (nativeMatch) {
       const routeId = decodeURIComponent(nativeMatch[1]).trim()
@@ -500,6 +522,7 @@ const StudioMain: React.FC = () => {
       loadDashboardById(routeId, false)
     }
   }, [
+    isTileMount,
     location.pathname,
     publishedApp?.dashboardId,
     nativeContent?.id,
@@ -756,6 +779,29 @@ const StudioMain: React.FC = () => {
       ? `/dashboards/${encodeURIComponent(publishedApp.dashboardId)}`
       : ''
 
+  if (isTileMount) {
+    return <PythonTile />
+  }
+
+  if (location.pathname === '/script' || location.pathname.startsWith('/script/')) {
+    return (
+      <ScriptStudioView
+        auth={{
+          mode: authMode,
+          oauthToken,
+          clientId,
+          projectId,
+          apiKey,
+        }}
+        schemaMarkdown={schemaMarkdown}
+        selectedExplores={selectedExplores}
+        selectedFolderId={selectedFolderId}
+        folders={folders}
+        onChangeFolder={setSelectedFolderId}
+      />
+    )
+  }
+
   if (location.pathname === '/config') {
     return (
       <div className="dab-shell">
@@ -842,6 +888,13 @@ const StudioMain: React.FC = () => {
           <span className="dab-badge">
             {LkrCodeMode?.runPythonCode ? 'WASM CodeMode ✓' : 'WASM CodeMode (pending build)'}
           </span>
+          <button
+            type="button"
+            className="dab-btn-secondary"
+            onClick={() => history.push('/script')}
+          >
+            Python Script (/script)
+          </button>
         </div>
 
         <div className="dab-controls">

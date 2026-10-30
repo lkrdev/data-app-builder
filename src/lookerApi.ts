@@ -822,3 +822,309 @@ export async function listUserDashboardArtifacts(
     return []
   }
 }
+
+export const ARTIFACT_NAMESPACE = 'data_app_builder'
+
+export interface SavedScript {
+  id: string
+  title: string
+  code: string
+  messages?: PersistedChatTurn[]
+  updatedAt: string
+  dashboardId?: string
+  elementId?: string
+}
+
+export interface TileScriptBinding {
+  scriptId: string
+  code: string
+  title?: string
+  updatedAt?: string
+}
+
+// ponytail: Looker update_artifacts requires the current `version` for existing keys;
+// batch-fetch versions in one `artifact` call and upsert with content_type: "application/json".
+export async function putArtifacts(
+  sdk: Looker40SDK,
+  items: Array<{ key: string; value: any }>,
+  namespace = ARTIFACT_NAMESPACE
+): Promise<void> {
+  if (items.length === 0) return
+  const versionByKey = new Map<string, number>()
+  try {
+    const existing = await sdk.ok(
+      sdk.artifact({
+        namespace,
+        key: items.map((i) => i.key).join(','),
+      })
+    )
+    for (const a of existing || []) {
+      if (a.key && typeof a.version === 'number') {
+        versionByKey.set(a.key, a.version)
+      }
+    }
+  } catch {
+    // Keys do not exist yet
+  }
+  await sdk.ok(
+    sdk.update_artifacts(
+      namespace,
+      items.map((item) => {
+        const version = versionByKey.get(item.key)
+        return {
+          key: item.key,
+          value:
+            typeof item.value === 'string' ? item.value : JSON.stringify(item.value),
+          content_type: 'application/json',
+          ...(version !== undefined ? { version } : {}),
+        }
+      })
+    )
+  )
+}
+
+export async function getArtifactJson<T = any>(
+  sdk: Looker40SDK,
+  key: string,
+  namespace = ARTIFACT_NAMESPACE
+): Promise<T | null> {
+  try {
+    const rows = await sdk.ok(sdk.artifact({ namespace, key }))
+    const found = (rows || []).find((r) => r.key === key) || rows?.[0]
+    if (!found || !found.value) return null
+    return JSON.parse(found.value) as T
+  } catch {
+    return null
+  }
+}
+
+export async function saveScriptArtifact(
+  sdk: Looker40SDK,
+  userId: string,
+  script: SavedScript,
+  namespace = ARTIFACT_NAMESPACE
+): Promise<SavedScript> {
+  const payload: SavedScript = {
+    ...script,
+    updatedAt: script.updatedAt || new Date().toISOString(),
+  }
+  const uid = String(userId || '1').trim()
+  await putArtifacts(
+    sdk,
+    [
+      {
+        key: `user_${uid}_script_${payload.id}`,
+        value: { ...payload, messages: undefined },
+      },
+      {
+        key: `obj_script_${payload.id}`,
+        value: payload,
+      },
+    ],
+    namespace
+  )
+  return payload
+}
+
+export async function loadScriptArtifact(
+  sdk: Looker40SDK,
+  scriptId: string,
+  namespace = ARTIFACT_NAMESPACE
+): Promise<SavedScript | null> {
+  const cleanId = scriptId.trim().replace(/^obj_script_/, '')
+  if (!cleanId) return null
+  return getArtifactJson<SavedScript>(sdk, `obj_script_${cleanId}`, namespace)
+}
+
+export async function listSavedScripts(
+  sdk: Looker40SDK,
+  userId?: string,
+  namespace = ARTIFACT_NAMESPACE
+): Promise<SavedScript[]> {
+  const patterns = userId
+    ? [`user_${String(userId).trim()}_script_%`, 'obj_script_%']
+    : ['obj_script_%']
+  const byId = new Map<string, SavedScript>()
+  for (const pattern of patterns) {
+    try {
+      const rows = await sdk.ok(sdk.search_artifacts({ namespace, key: pattern }))
+      for (const r of rows || []) {
+        if (!r.value) continue
+        try {
+          const parsed = JSON.parse(r.value) as SavedScript
+          if (parsed?.id && !byId.has(parsed.id)) {
+            byId.set(parsed.id, parsed)
+          }
+        } catch {
+          // Ignore non-JSON artifact
+        }
+      }
+    } catch {
+      // Ignore empty namespace
+    }
+    if (byId.size > 0 && userId) break
+  }
+  return Array.from(byId.values()).sort((a, b) =>
+    String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))
+  )
+}
+
+export async function bindTileScriptArtifact(
+  sdk: Looker40SDK,
+  elementId: string,
+  binding: TileScriptBinding,
+  namespace = ARTIFACT_NAMESPACE
+): Promise<TileScriptBinding> {
+  const saved: TileScriptBinding = {
+    scriptId: binding.scriptId,
+    code: binding.code,
+    ...(binding.title ? { title: binding.title } : {}),
+    updatedAt: new Date().toISOString(),
+  }
+  await putArtifacts(
+    sdk,
+    [{ key: `tile_element_${String(elementId).trim()}`, value: saved }],
+    namespace
+  )
+  return saved
+}
+
+export async function loadTileScriptArtifact(
+  sdk: Looker40SDK,
+  elementId: string,
+  namespace = ARTIFACT_NAMESPACE
+): Promise<TileScriptBinding | null> {
+  const cleanElId = String(elementId || '').trim()
+  if (!cleanElId) return null
+  const binding = await getArtifactJson<TileScriptBinding>(
+    sdk,
+    `tile_element_${cleanElId}`,
+    namespace
+  )
+  if (!binding) return null
+  if (!binding.code && binding.scriptId) {
+    const obj = await loadScriptArtifact(sdk, binding.scriptId, namespace)
+    if (obj?.code) {
+      return { ...binding, code: obj.code, title: binding.title || obj.title }
+    }
+  }
+  return binding
+}
+
+export async function publishScriptDashboard(
+  sdk: Looker40SDK,
+  params: {
+    script: SavedScript
+    folderId: string
+    extensionId: string
+    existingDashboardId?: string
+    namespace?: string
+  }
+): Promise<{ dashboardId: string; elementId: string; extensionId: string }> {
+  const {
+    script,
+    folderId,
+    extensionId,
+    existingDashboardId,
+    namespace = ARTIFACT_NAMESPACE,
+  } = params
+  const title = script.title || 'Python Runner Dashboard'
+  const extId = extensionId || 'data_app_builder::data_app_builder'
+
+  const dashBody = {
+    title,
+    load_configuration: 'wait',
+    run_on_load: false,
+    show_filters_bar: true,
+    appearance: {
+      show_dashboard_header: true,
+      page_side_margins: 0,
+      tile_space_between: 0,
+      tile_shadow: false,
+    },
+  }
+  let dashId = existingDashboardId?.trim() || ''
+  if (dashId) {
+    await rawLookerRequest(
+      sdk,
+      'PATCH',
+      `/dashboards/${encodeURIComponent(dashId)}`,
+      undefined,
+      dashBody
+    )
+  } else {
+    try {
+      const dash = await rawLookerRequest(sdk, 'POST', '/dashboards', undefined, {
+        ...dashBody,
+        folder_id: folderId,
+      })
+      dashId = String(dash.id)
+    } catch {
+      const dash = await sdk.ok(
+        sdk.create_dashboard({
+          title,
+          folder_id: folderId,
+          load_configuration: 'wait',
+          show_filters_bar: true,
+        } as any)
+      )
+      dashId = String(dash.id)
+    }
+  }
+
+  const fullDash = await sdk.ok(sdk.dashboard(dashId))
+  let elementId = String(
+    (fullDash.dashboard_elements || []).find((e) => e.type === 'extension')?.id || ''
+  )
+  if (!elementId) {
+    const createdEl = await rawLookerRequest<{ id?: string }>(
+      sdk,
+      'POST',
+      '/dashboard_elements',
+      undefined,
+      {
+        dashboard_id: dashId,
+        type: 'extension',
+        extension_id: extId,
+        title,
+        title_hidden: true,
+      }
+    )
+    elementId = String(createdEl?.id || '')
+  } else {
+    await sdk.ok(
+      sdk.update_dashboard_element(elementId, {
+        title,
+        title_hidden: true,
+        extension_id: extId,
+      } as any)
+    )
+  }
+
+  const layouts = fullDash.dashboard_layouts || []
+  const activeLayout = layouts.find((l) => l.active) || layouts[0]
+  if (activeLayout?.id) {
+    await rawLookerRequest(
+      sdk,
+      'PATCH',
+      `/dashboard_layouts/${encodeURIComponent(String(activeLayout.id))}`,
+      undefined,
+      { type: 'extension' }
+    )
+  }
+
+  if (elementId) {
+    await bindTileScriptArtifact(
+      sdk,
+      elementId,
+      { scriptId: script.id, code: script.code, title: script.title },
+      namespace
+    )
+  }
+
+  return {
+    dashboardId: dashId,
+    elementId,
+    extensionId: extId,
+  }
+}
