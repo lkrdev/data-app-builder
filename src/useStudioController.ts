@@ -4,7 +4,9 @@ import { useLookerExtension } from './contexts/LookerExtensionContext'
 import {
   buildAvailableExploresCatalog,
   buildDenseExploreSchema,
+  ConversationRecord,
   deleteUserArtifact,
+  deleteUserConversation,
   extractExploreIdsFromCode,
   fetchInitialLookerMetadata,
   formatExploreId,
@@ -297,6 +299,12 @@ export function useStudioController() {
   const [activeObjectId, setActiveObjectId] = useState('')
   const [conversations, setConversations] = useState<UserConversationEntry[]>([])
   const conversationLabelsRef = useRef<Record<string, string>>({})
+  const [activeConversationId, setActiveConversationId] = useState<string>(
+    () => `conv_${Date.now()}`
+  )
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() =>
+    Boolean(mockExt?.initialSidebarCollapsed)
+  )
 
   const [requirePermission, setRequirePermission] = useState(true)
   const approvedOpsRef = useRef<Set<string>>(new Set())
@@ -314,20 +322,6 @@ export function useStudioController() {
       }),
     []
   )
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      ;(window as any).__DAB_STUDIO__ = {
-        history,
-        requestCodeModePermission,
-        setRequirePermission,
-        setDisabledModes,
-        setSelectedModel,
-        setAuthMode,
-        setApiKey,
-      }
-    }
-  }, [history, requestCodeModePermission])
 
   const resolvePermDecision = (decision: CodeModePermissionDecision) => {
     if (!pendingPerm) return
@@ -357,9 +351,12 @@ export function useStudioController() {
   )
 
   const normalizeCatalogMode = (t?: string): StudioMode =>
-    ({ health_check: 'health', script: 'tile', data_app: 'app' } as Record<string, StudioMode>)[
-      t || ''
-    ] ||
+    ({
+      health_check: 'health',
+      'health-check': 'health',
+      script: 'tile',
+      data_app: 'app',
+    } as Record<string, StudioMode>)[t || ''] ||
     (t as StudioMode) ||
     'app'
 
@@ -373,6 +370,14 @@ export function useStudioController() {
         .includes(q)
     })
   }, [catalogItems, catalogSearch, disabledModes])
+
+  const filteredConversations = useMemo(
+    () =>
+      conversations.filter(
+        (conv) => !disabledModes.includes(normalizeCatalogMode(conv.type))
+      ),
+    [conversations, disabledModes]
+  )
 
   const handleSaveAuthSetup = async () => {
     const permErr = !capabilities.canConfigureExtension
@@ -455,14 +460,45 @@ export function useStudioController() {
         listUserDashboardArtifacts(core40SDK, extensionSDK, resolvedUserId).then((items) => {
           if (mounted) setMyCreations(items)
         })
+        refreshCatalog(resolvedUserId)
         loadUserConversations(
           core40SDK,
           resolvedUserId,
           getArtifactNamespace(extensionSDK)
-        ).then((convs) => {
-          if (mounted) setConversations(convs)
+        ).then(async (loadedConvs) => {
+          if (!mounted) return
+          if (loadedConvs.length > 0) {
+            setConversations(loadedConvs)
+          } else {
+            const legacyItems = await listUserArtifacts(core40SDK, resolvedUserId)
+            if (!mounted) return
+            setCatalogItems(legacyItems)
+            if (legacyItems.length > 0) {
+              setConversations(
+                legacyItems.map((item) => ({
+                  id: `conv_${item.type}_${item.id}`,
+                  type: item.type,
+                  interactionId: item.lastInteractionId,
+                  environmentId: item.environmentId,
+                  label: item.label || item.title,
+                  createdAt: item.updatedAt || new Date().toISOString(),
+                  updatedAt: item.updatedAt || new Date().toISOString(),
+                  explores: item.explores,
+                  content:
+                    item.type === 'app' || item.type === 'data_app'
+                      ? { dashboardId: item.id, appArtifactId: `obj_app_${item.id}` }
+                      : item.type === 'dashboard'
+                      ? { dashboardId: item.id }
+                      : item.type === 'lookml'
+                      ? { sessionId: item.id }
+                      : item.type === 'health' || item.type === 'health_check'
+                      ? { reportId: item.id }
+                      : { scriptId: item.id },
+                }))
+              )
+            }
+          }
         })
-        refreshCatalog(resolvedUserId)
       })
       .catch((err) => {
         setMessages((prev) => [
@@ -554,6 +590,15 @@ export function useStudioController() {
           const loaded = await loadExistingDashboardApp(core40SDK, id)
           lastPublishedIdRef.current = loaded.dashboardId
           setPublishedApp(loaded)
+          setActiveObjectId(loaded.dashboardId)
+          setActiveConversationId((prev) => {
+            const match = conversations.find(
+              (c) =>
+                String(c.content?.dashboardId || c.content?.id || '') === loaded.dashboardId &&
+                (c.type === 'app' || c.type === 'data_app')
+            )
+            return match ? match.id : prev.startsWith('conv_app_') ? prev : `conv_app_${loaded.dashboardId}`
+          })
           setCurrentAppCode(loaded.code)
           setLoadDashInput(loaded.dashboardId)
           setSelectedFolderId(loaded.folderId)
@@ -625,6 +670,20 @@ export function useStudioController() {
           const loaded = await loadNativeContentById(core40SDK, extensionSDK, id)
           lastNativeIdRef.current = loaded.id
           setNativeContent(loaded)
+          setActiveObjectId(loaded.id)
+          setActiveConversationId((prev) => {
+            const match = conversations.find(
+              (c) =>
+                String(
+                  c.content?.dashboardId ||
+                    c.content?.lookId ||
+                    c.content?.lookmlDashboardId ||
+                    c.content?.id ||
+                    ''
+                ) === loaded.id && c.type === 'dashboard'
+            )
+            return match ? match.id : prev.startsWith('conv_dashboard_') ? prev : `conv_dashboard_${loaded.id}`
+          })
           setLoadDashInput(loaded.id)
           setSelectedFolderId(loaded.folderId)
           const studioExplores = loaded.studio?.explores?.filter(Boolean) || []
@@ -675,6 +734,15 @@ export function useStudioController() {
           const loaded = await loadHealthCheckArtifact(core40SDK, extensionSDK, id)
           lastHealthIdRef.current = loaded.id
           setHealthReport(loaded)
+          setActiveObjectId(loaded.id)
+          setActiveConversationId((prev) => {
+            const match = conversations.find(
+              (c) =>
+                String(c.content?.reportId || c.content?.id || '') === loaded.id &&
+                (c.type === 'health' || c.type === 'health-check' || c.type === 'health_check')
+            )
+            return match ? match.id : prev.startsWith('conv_health_') ? prev : `conv_health_${loaded.id}`
+          })
           setLoadDashInput(loaded.id)
           setAgentSession(
             {
@@ -715,6 +783,15 @@ export function useStudioController() {
           const loaded = await loadLookmlSessionArtifact(core40SDK, extensionSDK, id)
           lastLookmlIdRef.current = loaded.id
           setLookmlBundle(loaded.bundle)
+          setActiveObjectId(loaded.id)
+          setActiveConversationId((prev) => {
+            const match = conversations.find(
+              (c) =>
+                String(c.content?.sessionId || c.content?.id || '') === loaded.id &&
+                c.type === 'lookml'
+            )
+            return match ? match.id : prev.startsWith('conv_lookml_') ? prev : `conv_lookml_${loaded.id}`
+          })
           setLoadLookmlInput(loaded.id)
           if (loaded.bundle?.project_id) setLookmlProjectId(loaded.bundle.project_id)
           const savedExplores = loaded.studio?.explores?.filter(Boolean) || []
@@ -812,17 +889,45 @@ export function useStudioController() {
       }
       lastHealthIdRef.current = finalReport.id
       setHealthReport(finalReport)
+      setActiveObjectId(finalReport.id)
       setLoadDashInput(finalReport.id)
       if (location.pathname !== `/health-check/${finalReport.id}`) {
         history.replace(`/health-check/${encodeURIComponent(finalReport.id)}`)
       }
-      setMessages([
+      const nextHealthMsgs: ChatMessage[] = [
         ...activeMsgs,
         {
           role: 'assistant',
           text: `3-Pillar Health Check complete: **${finalReport.scores.overallScore}% (${finalReport.scores.grade})** | Pillar 1: ${finalReport.scores.pillar1Score}% · Pillar 2: ${finalReport.scores.pillar2Score}% (Transcriber ${finalReport.scores.transcriberScore}/4.00) · Pillar 3: ${finalReport.scores.pillar3Score}%.\nSaved to \`${baseRes.userKey}\` and \`${baseRes.objKey}\`.`,
         },
-      ])
+      ]
+      setMessages(nextHealthMsgs)
+      const convId = activeConversationId.startsWith('conv_health_')
+        ? activeConversationId
+        : `conv_health_${finalReport.id}`
+      setActiveConversationId(convId)
+      void saveUserConversation(
+        core40SDK,
+        userId,
+        {
+          id: convId,
+          type: 'health-check',
+          interactionId: finalReport.lastInteractionId || agentSession.lastInteractionId,
+          environmentId: finalReport.environmentId || agentSession.environmentId,
+          label: finalReport.title,
+          content: {
+            reportId: finalReport.id,
+            projectId: finalReport.projectId,
+            overallScore: finalReport.scores.overallScore,
+            grade: finalReport.scores.grade,
+          },
+          messages: nextHealthMsgs,
+          explores: selectedExplores,
+        },
+        getArtifactNamespace(extensionSDK)
+      )
+        .then(setConversations)
+        .catch(() => {})
     } catch (err: any) {
       setMessages((prev) => [...prev, { role: 'error', text: err?.message || String(err) }])
     } finally {
@@ -894,6 +999,8 @@ export function useStudioController() {
     lastNativeIdRef.current = ''
     lastLookmlIdRef.current = ''
     lastHealthIdRef.current = ''
+    setActiveObjectId('')
+    setActiveConversationId(`conv_${Date.now()}`)
     setPublishedApp(null)
     setNativeContent(null)
     setLookmlBundle(null)
@@ -905,14 +1012,82 @@ export function useStudioController() {
     setAgentSession({})
     setMessages([])
     setPastedImages([])
+    setPrompt('')
     const baseRoute = isHealthCheckMode
       ? '/health-check'
       : isLookmlMode
       ? '/lookml'
       : builderMode === 'dashboard'
       ? '/dashboard'
-      : '/'
+      : '/app'
     if (location.pathname !== baseRoute) history.push(baseRoute)
+  }
+
+  const handleSelectConversation = async (conv: ConversationRecord) => {
+    const mode = normalizeCatalogMode(conv.type)
+    setActiveConversationId(conv.id)
+    if (conv.explores?.length) setSelectedExplores(conv.explores)
+    const c = conv.content || {}
+    if (mode === 'app' && (c.dashboardId || c.id)) {
+      const targetId = String(c.dashboardId || c.id)
+      setActiveObjectId(targetId)
+      await loadDashboardById(targetId, true)
+    } else if (
+      mode === 'dashboard' &&
+      (c.dashboardId || c.lookId || c.lookmlDashboardId || c.id)
+    ) {
+      const targetId = String(c.dashboardId || c.lookId || c.lookmlDashboardId || c.id)
+      setActiveObjectId(targetId)
+      await loadNativeById(targetId, true)
+    } else if (mode === 'lookml' && (c.sessionId || c.id)) {
+      const targetId = String(c.sessionId || c.id)
+      setActiveObjectId(targetId)
+      await loadLookmlSessionById(targetId, true)
+    } else if (mode === 'health' && (c.reportId || c.id)) {
+      const targetId = String(c.reportId || c.id)
+      setActiveObjectId(targetId)
+      await loadHealthCheckById(targetId, true)
+    } else if (mode === 'tile' && (c.scriptId || c.id)) {
+      const targetId = String(c.scriptId || c.id)
+      setActiveObjectId(targetId)
+      history.push(`/tile/${encodeURIComponent(targetId)}`)
+    } else {
+      const modeInfo = STUDIO_MODES.find((m) => m.mode === mode)
+      const targetPath = modeInfo ? modeInfo.prefix : '/app'
+      if (location.pathname !== targetPath) history.push(targetPath)
+    }
+    setActiveConversationId(conv.id)
+    if (conv.messages?.length) {
+      setMessages(conv.messages as ChatMessage[], mode)
+    }
+    if (conv.interactionId || conv.environmentId) {
+      setAgentSession(
+        {
+          lastInteractionId: conv.interactionId,
+          environmentId: conv.environmentId || `env_${mode}_isolated`,
+          explores: conv.explores,
+          toolType: mode,
+        },
+        mode
+      )
+    }
+  }
+
+  const handleDeleteConversation = async (e: React.MouseEvent, conversationId: string) => {
+    e.stopPropagation()
+    setConversations((prev) => prev.filter((c) => c.id !== conversationId))
+    try {
+      const next = await deleteUserConversation(
+        core40SDK,
+        userId,
+        conversationId,
+        getArtifactNamespace(extensionSDK)
+      )
+      setConversations(next)
+    } catch {}
+    if (activeConversationId === conversationId) {
+      handleResetNewApp()
+    }
   }
 
   const handleSelectCatalogItem = async (item: UserArtifactIndex) => {
@@ -992,10 +1167,11 @@ export function useStudioController() {
         onStatus: setBusyStatus,
       })
 
-      let convId = activeObjectId || result.session.lastInteractionId || 'conv_1'
+      let convId = activeObjectId || activeConversationId || result.session.lastInteractionId || 'conv_1'
       let convMode: StudioMode = activeMode
       let convTitle = ''
       let convExplores = selectedExplores
+      let convContent: Record<string, any> | undefined
       let finalMsgs: ChatMessage[] = []
 
       if (result.lookmlBundle) {
@@ -1027,7 +1203,14 @@ export function useStudioController() {
             },
           })
           convId = saved.id
+          convContent = {
+            sessionId: saved.id,
+            projectId: result.lookmlBundle.project_id,
+            model: result.lookmlBundle.model_name,
+            branch: result.lookmlBundle.branch_name,
+          }
           lastLookmlIdRef.current = saved.id
+          setActiveObjectId(saved.id)
           setLoadLookmlInput(saved.id)
           setLookmlSessions((prev) => [
             saved.index,
@@ -1083,6 +1266,7 @@ export function useStudioController() {
           )
           lastNativeIdRef.current = savedNative.id
           setNativeContent(savedNative)
+          setActiveObjectId(savedNative.id)
           setLoadDashInput(savedNative.id)
           const targetRoute = `/dashboard/${encodeURIComponent(savedNative.id)}`
           if (location.pathname !== targetRoute) history.replace(targetRoute)
@@ -1096,6 +1280,13 @@ export function useStudioController() {
           convId = savedNative.id
           convMode = 'dashboard'
           convTitle = savedNative.title
+          convContent = {
+            dashboardId: savedNative.id,
+            contentType: savedNative.contentType,
+            embedPath: savedNative.embedPath,
+            lookId: savedNative.lookId,
+            lookmlDashboardId: savedNative.lookmlDashboardId,
+          }
         } else if (result.bundle) {
           setBusyStatus('Publishing inline extension & updating Looker dashboard...')
           const prelimAssistantMsg: ChatMessage = {
@@ -1160,6 +1351,11 @@ export function useStudioController() {
           convId = upserted.dashboardId
           convMode = 'app'
           convTitle = upserted.title
+          convContent = {
+            dashboardId: upserted.dashboardId,
+            appArtifactId: `obj_app_${upserted.dashboardId}`,
+            extensionId: upserted.extensionId,
+          }
         } else {
           finalMsgs = [
             ...messagesWithUser,
@@ -1187,6 +1383,13 @@ export function useStudioController() {
             )
             setNativeContent(updatedNative)
             await refreshCatalog()
+            convId = updatedNative.id
+            convTitle = updatedNative.title
+            convContent = {
+              dashboardId: updatedNative.id,
+              contentType: updatedNative.contentType,
+              embedPath: updatedNative.embedPath,
+            }
           } else if (publishedApp) {
             setPublishedApp(
               await saveDashboardStudioMetadata(core40SDK, publishedApp, {
@@ -1196,33 +1399,43 @@ export function useStudioController() {
                 messages: finalMsgs,
               })
             )
+            convId = publishedApp.dashboardId
+            convTitle = publishedApp.title
+            convContent = {
+              dashboardId: publishedApp.dashboardId,
+              appArtifactId: `obj_app_${publishedApp.dashboardId}`,
+            }
           }
         }
       }
 
-      if (isFirstTurn) {
-        const namespace = getArtifactNamespace(extensionSDK)
-        const baseConv = {
-          id: convId,
-          type: convMode,
-          interactionId: result.session.lastInteractionId,
-          environmentId: result.session.environmentId,
-          explores: convExplores,
-          messages: finalMsgs,
-        }
-        void saveUserConversation(
-          core40SDK,
-          userId,
-          {
-            ...baseConv,
-            label: convTitle || sanitizeConversationLabel('', effectivePrompt),
-            updatedAt: new Date().toISOString(),
-          },
-          namespace
-        )
-          .then(setConversations)
-          .catch(() => {})
+      setActiveConversationId(convId)
+      const namespace = getArtifactNamespace(extensionSDK)
+      const baseConv = {
+        id: convId,
+        type: convMode,
+        interactionId: result.session.lastInteractionId,
+        environmentId: result.session.environmentId,
+        explores: convExplores,
+        ...(convContent ? { content: convContent } : {}),
+        messages: finalMsgs,
+      }
+      void saveUserConversation(
+        core40SDK,
+        userId,
+        {
+          ...baseConv,
+          ...(isFirstTurn
+            ? { label: convTitle || sanitizeConversationLabel('', effectivePrompt) }
+            : {}),
+          updatedAt: new Date().toISOString(),
+        },
+        namespace
+      )
+        .then(setConversations)
+        .catch(() => {})
 
+      if (isFirstTurn) {
         void generateConversationLabel({
           extensionSDK,
           auth,
@@ -1279,6 +1492,35 @@ export function useStudioController() {
       setBusyStatus(null)
     }
   }
+
+  const isEmptyConversation =
+    !isTileMount &&
+    location.pathname !== '/config' &&
+    activeMode !== 'tile' &&
+    !parsedRoute.objectId &&
+    messages.length === 0 &&
+    !publishedApp &&
+    !nativeContent &&
+    !lookmlBundle &&
+    !healthReport &&
+    !busyStatus
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      ;(window as any).__DAB_STUDIO__ = {
+        history,
+        requestCodeModePermission,
+        setRequirePermission,
+        setDisabledModes,
+        setSelectedModel,
+        setAuthMode,
+        setApiKey,
+        setSidebarCollapsed,
+        handleNewConversation: handleResetNewApp,
+        handleSelectConversation,
+      }
+    }
+  }, [history, requestCodeModePermission, handleResetNewApp, handleSelectConversation])
 
   return {
     extensionSDK,
@@ -1345,7 +1587,11 @@ export function useStudioController() {
     catalogSearch,
     setCatalogSearch,
     activeObjectId,
-    conversations,
+    conversations: filteredConversations,
+    activeConversationId,
+    sidebarCollapsed,
+    setSidebarCollapsed,
+    isEmptyConversation,
     requirePermission,
     setRequirePermission,
     pendingPerm,
@@ -1357,6 +1603,9 @@ export function useStudioController() {
     handleRunHealthCheck,
     handleLoadExistingDashboard,
     handleResetNewApp,
+    handleNewConversation: handleResetNewApp,
+    handleSelectConversation,
+    handleDeleteConversation,
     handleSelectCatalogItem,
     handleDeleteCatalogItem,
     handleSendPrompt,

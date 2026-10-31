@@ -726,7 +726,7 @@ export async function deleteUserArtifact(
 
 export interface UserConversationEntry {
   id: string
-  type: StudioToolMode | 'conversational-analytics' | 'auto'
+  type: string
   label: string
   interactionId?: string
   environmentId?: string
@@ -737,10 +737,15 @@ export interface UserConversationEntry {
   updatedAt: string
 }
 
+export type ConversationRecord = UserConversationEntry
+
 export function formatUserConversationsKey(userId: string): string {
   return `user_conversations:${String(userId || '1').trim()}`
 }
 
+export const formatUserConversationsArtifactKey = formatUserConversationsKey
+
+// ponytail: single per-user JSON array artifact `user_conversations:${me.id}` sorted by updatedAt desc.
 export async function loadUserConversations(
   sdk: Looker40SDK,
   userId: string,
@@ -776,6 +781,9 @@ export async function saveUserConversation(
   const merged: UserConversationEntry = {
     ...prev,
     ...entry,
+    ...(prev?.content || entry.content
+      ? { content: { ...prev?.content, ...entry.content } }
+      : {}),
     id: cleanId,
     type: entry.type || prev?.type || 'app',
     label: String(entry.label || prev?.label || (entry as any).title || cleanId),
@@ -789,3 +797,18 @@ export async function saveUserConversation(
   return nextList
 }
 
+export async function deleteUserConversation(
+  sdk: Looker40SDK,
+  userId: string,
+  conversationId: string,
+  namespace = ARTIFACT_NAMESPACE
+): Promise<UserConversationEntry[]> {
+  const existing = await loadUserConversations(sdk, userId, namespace)
+  const next = existing.filter((c) => c.id !== conversationId)
+  await putArtifacts(
+    sdk,
+    [{ key: formatUserConversationsKey(userId), value: next }],
+    namespace
+  )
+  return next
+}
