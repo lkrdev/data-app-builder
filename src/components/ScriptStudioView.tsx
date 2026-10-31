@@ -3,12 +3,16 @@ import { useHistory, useLocation } from 'react-router-dom'
 import { useLookerExtension } from '../contexts/LookerExtensionContext'
 import {
   fetchInitialLookerMetadata,
+  getAllowedUseCases,
+  getUseCaseLabel,
   listSavedScripts,
   loadScriptArtifact,
   PersistedChatTurn,
   publishScriptDashboard,
   SavedScript,
   saveScriptArtifact,
+  STUDIO_USE_CASE_OPTIONS,
+  useCaseToStudioMode,
   UserCapabilities,
 } from '../lookerApi'
 import {
@@ -531,7 +535,40 @@ export const ScriptStudioView: React.FC<{
             )}
           </div>
 
-          <div className="dab-composer">
+          <div className="dab-composer dab-chatbar">
+            <div className="dab-use-case-bar" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, marginBottom: 4 }}>
+              <strong style={{ color: '#475569' }}>Use Case:</strong>
+              {messages.length === 0 && !publishedDash ? (
+                <select
+                  data-testid="use-case-selector"
+                  value="tile"
+                  onChange={(e) => {
+                    const next = e.target.value as any
+                    if (next && next !== 'tile' && next !== 'auto') {
+                      const m = useCaseToStudioMode(next)
+                      history.push(m === 'health' ? '/health-check' : `/${m}`)
+                    } else if (next === 'auto') {
+                      history.push('/app')
+                    }
+                  }}
+                  disabled={!!busyStatus}
+                >
+                  {STUDIO_USE_CASE_OPTIONS.map((opt) => {
+                    const allowed = getAllowedUseCases(capabilities, disabledModes as any)
+                    const isAllowed = opt.value === 'auto' || allowed.includes(opt.value as any)
+                    return (
+                      <option key={opt.value} value={opt.value} disabled={!isAllowed}>
+                        {opt.label}{!isAllowed ? ' (Locked)' : ''}
+                      </option>
+                    )
+                  })}
+                </select>
+              ) : (
+                <span data-testid="locked-use-case-badge" className="dab-badge dab-locked-use-case-badge">
+                  🔒 {getUseCaseLabel('tile')}
+                </span>
+              )}
+            </div>
             <div className="dab-inspector-bar">
               <strong>Python Script (`LkrCodeMode.runPythonCode`)</strong>
               <button

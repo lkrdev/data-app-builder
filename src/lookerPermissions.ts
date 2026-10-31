@@ -52,6 +52,142 @@ export function classifyLooker404Error(
 
 export type StudioCapabilityMode = 'app' | 'dashboard' | 'lookml' | 'health' | 'tile'
 
+export type ResolvedStudioUseCase =
+  | 'app'
+  | 'dashboard'
+  | 'lookml'
+  | 'health-check'
+  | 'tile'
+  | 'conversational-analytics'
+
+export type StudioUseCase = 'auto' | ResolvedStudioUseCase
+
+export const STUDIO_USE_CASE_OPTIONS: Array<{
+  value: StudioUseCase
+  label: string
+  capabilityMode: StudioCapabilityMode | null
+}> = [
+  { value: 'auto', label: 'Auto (Agent Decides)', capabilityMode: null },
+  { value: 'app', label: 'Data App', capabilityMode: 'app' },
+  { value: 'dashboard', label: 'Content Studio', capabilityMode: 'dashboard' },
+  { value: 'lookml', label: 'LookML', capabilityMode: 'lookml' },
+  { value: 'health-check', label: 'Health Check', capabilityMode: 'health' },
+  { value: 'tile', label: 'Python Tile', capabilityMode: 'tile' },
+  { value: 'conversational-analytics', label: 'Conversational Analytics', capabilityMode: 'app' },
+]
+
+export function getUseCaseLabel(useCase: StudioUseCase): string {
+  return STUDIO_USE_CASE_OPTIONS.find((o) => o.value === useCase)?.label || useCase
+}
+
+const USE_CASE_ALIAS_MAP: Record<string, ResolvedStudioUseCase> = {
+  app: 'app',
+  'data-app': 'app',
+  data_app: 'app',
+  dataapp: 'app',
+  dashboard: 'dashboard',
+  'content-studio': 'dashboard',
+  content_studio: 'dashboard',
+  udd: 'dashboard',
+  lookml: 'lookml',
+  'agentic-lookml': 'lookml',
+  agentic_lookml: 'lookml',
+  health: 'health-check',
+  'health-check': 'health-check',
+  health_check: 'health-check',
+  healthcheck: 'health-check',
+  tile: 'tile',
+  script: 'tile',
+  'python-tile': 'tile',
+  python_tile: 'tile',
+  'conversational-analytics': 'conversational-analytics',
+  conversational_analytics: 'conversational-analytics',
+  conversational: 'conversational-analytics',
+  ca: 'conversational-analytics',
+  qa: 'conversational-analytics',
+}
+
+export function useCaseToStudioMode(useCase: StudioUseCase): StudioCapabilityMode {
+  if (useCase === 'dashboard') return 'dashboard'
+  if (useCase === 'lookml') return 'lookml'
+  if (useCase === 'health-check') return 'health'
+  if (useCase === 'tile') return 'tile'
+  return 'app'
+}
+
+export function studioModeToUseCase(mode?: string): ResolvedStudioUseCase {
+  const token = String(mode || '').trim().toLowerCase().replace(/\s+/g, '-')
+  return USE_CASE_ALIAS_MAP[token] || 'app'
+}
+
+export function getAllowedUseCases(
+  capabilities?: UserCapabilities | null,
+  disabledModes: StudioCapabilityMode[] = []
+): ResolvedStudioUseCase[] {
+  const disabledSet = new Set<StudioCapabilityMode>(disabledModes || [])
+  const out: ResolvedStudioUseCase[] = []
+  for (const opt of STUDIO_USE_CASE_OPTIONS) {
+    if (opt.value === 'auto' || !opt.capabilityMode) continue
+    if (disabledSet.has(opt.capabilityMode)) continue
+    if (capabilities?.rolesLoaded) {
+      const tool = capabilities.tools?.[opt.capabilityMode]
+      if (tool && !tool.enabled) continue
+      if (opt.value === 'lookml' && tool?.readOnly) continue
+    }
+    out.push(opt.value)
+  }
+  return out.length > 0 ? out : ['app']
+}
+
+const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
+  ['health-check', /\b(3-pillar|three-pillar|health\s*check|transcriber\s*rubric|technical_design_document)\b/i],
+  ['lookml', /\b(lookml|\.lkml|dimension\s*:|measure\s*:|explore\s*:|refinement|data\s*test|model\.lkml|view\.lkml)\b/i],
+  ['tile', /\b(python\s*tile|python\s*script|codemode\s*script|obj_script|monty\s*python\s*tile)\b/i],
+  ['dashboard', /\b(udd|user[- ]defined\s*dashboard|native\s*dashboard|saved\s*look|lookml\s*dashboard|pin\s*to\s*board|schedule\s*dashboard|content\s*studio)\b/i],
+  ['app', /\b(data\s*app|lit\s*app|web\s*component|app-kpi|app-chart|app-grid|custom\s*app|interactive\s*app)\b/i],
+  ['conversational-analytics', /\b(conversational\s*analytics|what\s+is\s+the|how\s+many|why\s+did|summarize\s+the|explain\s+the|answer\s+this\s+question)\b/i],
+  ['lookml', /\b(add\s+a\s+measure|add\s+a\s+dimension|create\s+a\s+view|edit\s+view|sql_table_name|derived_table)\b/i],
+  ['dashboard', /\b(build\s+a\s+dashboard|create\s+a\s+dashboard|create\s+a\s+look|create\s+a\s+board)\b/i],
+]
+
+// ponytail: extract <USE_CASE>...</USE_CASE> emitted by AGENTS.md Turn 1 routing or infer from prompt keywords,
+// always intersecting with the user's allowed modes so restricted users never route to a locked capability.
+export function extractResolvedUseCase(
+  text?: string,
+  promptFallback?: string,
+  allowedModes?: string[]
+): ResolvedStudioUseCase {
+  const allowedList: ResolvedStudioUseCase[] =
+    Array.isArray(allowedModes) && allowedModes.length > 0
+      ? Array.from(
+          new Set(
+            allowedModes
+              .map((m) => USE_CASE_ALIAS_MAP[String(m || '').trim().toLowerCase().replace(/\s+/g, '-')])
+              .filter((m): m is ResolvedStudioUseCase => Boolean(m))
+          )
+        )
+      : ['app', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics']
+  const allowedSet = new Set<ResolvedStudioUseCase>(allowedList.length > 0 ? allowedList : ['app'])
+
+  const rawText = String(text || '')
+  const tagMatches = Array.from(rawText.matchAll(/<USE_CASE>\s*([^<]+?)\s*<\/USE_CASE>/gi))
+  if (tagMatches.length > 0) {
+    const token = String(tagMatches[tagMatches.length - 1][1] || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^["'`]+|["'`]+$/g, '')
+      .replace(/\s+/g, '-')
+    const tagged = USE_CASE_ALIAS_MAP[token]
+    if (tagged && allowedSet.has(tagged)) return tagged
+  }
+
+  const combined = `${String(promptFallback || '')}\n${rawText}`
+  for (const [candidate, re] of USE_CASE_RULES) {
+    if (allowedSet.has(candidate) && re.test(combined)) return candidate
+  }
+  return allowedSet.has('app') ? 'app' : allowedList[0] || 'app'
+}
+
 export interface ToolAvailability {
   enabled: boolean
   readOnly?: boolean

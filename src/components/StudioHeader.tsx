@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { getGeminiUserAttributeName, LkrCodeMode } from '../antigravity'
+import { getGeminiUserAttributeName, LkrCodeMode, studioModeToUseCase } from '../antigravity'
 import { formatExploreId } from '../lookerApi'
 import { StudioController } from '../useStudioController'
 import { STUDIO_MODES } from './App'
@@ -241,6 +241,8 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     isLookmlMode,
     isHealthCheckMode,
     builderMode,
+    isUseCaseLocked,
+    setSelectedUseCase,
     lookmlProjectId,
     setLookmlProjectId,
     lookmlSessions,
@@ -383,17 +385,25 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
               const tc = capabilities?.rolesLoaded ? capabilities.tools?.[m.mode] : undefined
               const locked = Boolean(tc && !tc.enabled)
               const ro = Boolean(tc?.readOnly)
+              const disabledByConversationLock = Boolean(isUseCaseLocked && activeMode !== m.mode)
               return (
                 <button
                   key={m.mode}
                   type="button"
                   role="tab"
                   aria-selected={activeMode === m.mode}
+                  disabled={disabledByConversationLock}
                   data-permission-locked={locked ? 'true' : undefined}
                   data-permission-readonly={ro ? 'true' : undefined}
-                  title={tc?.reason}
+                  title={
+                    disabledByConversationLock
+                      ? 'Use case is locked for this conversation — click + New Conversation to switch modes'
+                      : tc?.reason
+                  }
                   className={`dab-mode-tab ${activeMode === m.mode ? 'active' : ''}`}
                   onClick={() => {
+                    if (disabledByConversationLock) return
+                    setSelectedUseCase(studioModeToUseCase(m.mode))
                     const target =
                       m.mode === 'app' && publishedApp?.dashboardId
                         ? `/app/${encodeURIComponent(publishedApp.dashboardId)}`

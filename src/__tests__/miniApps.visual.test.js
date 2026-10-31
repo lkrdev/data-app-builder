@@ -1384,4 +1384,153 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       restoredPreview: true
     })
   }, 15000)
+
+  test('defaults use-case selector to Auto on new conversation, gates options by permissions, routes Turn 1 via AGENTS.md, locks to read-only badge, and resets to Auto on New Conversation', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    const url = `http://127.0.0.1:${port}/?scenario=chatbar_error_banner`
+    await chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="new-conversation-btn"]'))`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    const res = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        // 1. Click + New Conversation to enter clean new conversation state
+        const newBtn = document.querySelector('[data-testid="new-conversation-btn"]');
+        if (newBtn) newBtn.click();
+        await new Promise((r) => setTimeout(r, 100));
+
+        const sel = document.querySelector('[data-testid="use-case-selector"]');
+        const defaultUseCase = sel ? sel.value : null;
+        const optionValues = sel ? Array.from(sel.options).map((o) => o.value) : [];
+
+        // 2. Verify permission gating disables LookML when user lacks develop permission
+        window.__DAB_STUDIO__.setCapabilities({
+          isAdmin: false,
+          rolesLoaded: true,
+          globalPermissions: new Set(['access_data', 'explore', 'save_content', 'save_dashboards']),
+          modelsByPermission: { explore: new Set(['thelook']) },
+          explorableModels: new Set(['thelook']),
+          developableProjects: new Set(),
+          readableProjects: new Set(),
+          sqlRunnerConnections: new Set(),
+          editableFolderIds: new Set(['5']),
+          canConfigureExtension: false,
+          canManageUserAttributes: false,
+          tools: {
+            app: { enabled: true, readOnly: false, missingPermissions: [] },
+            dashboard: { enabled: true, readOnly: false, missingPermissions: [] },
+            lookml: { enabled: false, readOnly: false, missingPermissions: ['develop'], reason: 'Missing Looker permissions: develop' },
+            health: { enabled: false, readOnly: false, missingPermissions: ['see_system_activity', 'develop', 'use_sql_runner'] },
+            tile: { enabled: true, readOnly: false, missingPermissions: [] }
+          }
+        });
+        await new Promise((r) => setTimeout(r, 80));
+        const selRestricted = document.querySelector('[data-testid="use-case-selector"]');
+        const lookmlOptDisabledWhenRestricted = selRestricted
+          ? Boolean(Array.from(selRestricted.options).find((o) => o.value === 'lookml')?.disabled)
+          : false;
+
+        // Restore full admin capabilities so Auto can route to LookML on Turn 1
+        window.__DAB_STUDIO__.setCapabilities({
+          isAdmin: true,
+          rolesLoaded: true,
+          globalPermissions: new Set(['admin', 'develop', 'explore', 'save_content', 'save_dashboards']),
+          modelsByPermission: {},
+          explorableModels: new Set(['*']),
+          developableProjects: new Set(['*']),
+          readableProjects: new Set(['*']),
+          sqlRunnerConnections: new Set(['*']),
+          editableFolderIds: new Set(['5', '1']),
+          canConfigureExtension: true,
+          canManageUserAttributes: true,
+          tools: {
+            app: { enabled: true, readOnly: false, missingPermissions: [] },
+            dashboard: { enabled: true, readOnly: false, missingPermissions: [] },
+            lookml: { enabled: true, readOnly: false, missingPermissions: [] },
+            health: { enabled: true, readOnly: false, missingPermissions: [] },
+            tile: { enabled: true, readOnly: false, missingPermissions: [] }
+          }
+        });
+        await new Promise((r) => setTimeout(r, 80));
+
+        // 3. Submit Turn 1 LookML prompt with selector in 'auto'
+        const ta = document.querySelector('[data-testid="studio-prompt-input"]');
+        const taSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        taSetter.call(ta, 'Add a measure for gross_margin to order_items.view.lkml and run LookML data tests');
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        ta.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 60));
+
+        const sendBtn = document.querySelector('.dab-composer .dab-btn-gemini');
+        if (sendBtn) sendBtn.click();
+        await new Promise((r) => setTimeout(r, 200));
+
+        const selectorGoneAfterTurn1 = !document.querySelector('[data-testid="use-case-selector"]');
+        const lockedBadge = document.querySelector('[data-testid="locked-use-case-badge"]');
+        const lockedBadgeText = lockedBadge ? (lockedBadge.textContent || '').trim() : '';
+        const activeModeTab = (document.querySelector('.dab-mode-tab.active')?.textContent || '').trim();
+        const nonActiveTabsDisabled = Array.from(document.querySelectorAll('.dab-mode-tab:not(.active)')).every(
+          (b) => b.disabled
+        );
+
+        const convUpdates = (window.__ARTIFACT_UPDATES__ || []).filter(
+          (u) => u.key === 'user_conversations:1'
+        );
+        const latestConversations =
+          convUpdates.length > 0 ? JSON.parse(convUpdates[convUpdates.length - 1].value) : [];
+
+        // 4. Click + New Conversation -> resets back to editable Auto selector
+        const resetBtn = document.querySelector('[data-testid="new-conversation-btn"]');
+        if (resetBtn) resetBtn.click();
+        await new Promise((r) => setTimeout(r, 120));
+        const selAfterReset = document.querySelector('[data-testid="use-case-selector"]');
+        const badgeAfterReset = document.querySelector('[data-testid="locked-use-case-badge"]');
+
+        return {
+          defaultUseCase,
+          optionValues,
+          lookmlOptDisabledWhenRestricted,
+          selectorGoneAfterTurn1,
+          lockedBadgeText,
+          activeModeTab,
+          nonActiveTabsDisabled,
+          persistedType: latestConversations[0]?.type,
+          resetUseCase: selAfterReset ? selAfterReset.value : null,
+          badgeGoneAfterReset: !badgeAfterReset
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(res.result.value).toEqual({
+      defaultUseCase: 'auto',
+      optionValues: [
+        'auto',
+        'app',
+        'dashboard',
+        'lookml',
+        'health-check',
+        'tile',
+        'conversational-analytics'
+      ],
+      lookmlOptDisabledWhenRestricted: true,
+      selectorGoneAfterTurn1: true,
+      lockedBadgeText: '🔒 LookML',
+      activeModeTab: 'LookML',
+      nonActiveTabsDisabled: true,
+      persistedType: 'lookml',
+      resetUseCase: 'auto',
+      badgeGoneAfterReset: true
+    })
+  }, 15000)
 })

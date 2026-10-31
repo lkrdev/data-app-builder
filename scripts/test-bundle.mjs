@@ -468,14 +468,21 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
   assert(
     rootAgentsMd.includes('## Conversation Labeling (Stateless Side-Request)') &&
       rootAgentsMd.includes('[CONVERSATION_LABEL_REQUEST]') &&
+      rootAgentsMd.includes('## Use Case Auto-Classification (Turn 1 Routing)') &&
+      rootAgentsMd.includes('<USE_CASE>') &&
       upstreamAgentsMd.includes('## Conversation Labeling (Stateless Side-Request)') &&
+      upstreamAgentsMd.includes('## Use Case Auto-Classification (Turn 1 Routing)') &&
       antigravityTs.includes("target: '/workspace/AGENTS.md'") &&
       antigravityTs.includes('generateConversationLabel') &&
       antigravityTs.includes('sanitizeConversationLabel') &&
+      lookerApiTs.includes('extractResolvedUseCase') &&
+      lookerApiTs.includes('getAllowedUseCases') &&
       lookerApiTs.includes('user_conversations:') &&
       lookerApiTs.includes('loadUserConversations') &&
-      lookerApiTs.includes('saveUserConversation'),
-    'Issue #25: root AGENTS.md, /workspace/AGENTS.md seeding, stateless generateConversationLabel, and user_conversations:${me.id} persistence must be present'
+      lookerApiTs.includes('saveUserConversation') &&
+      appTsx.includes('data-testid="use-case-selector"') &&
+      appTsx.includes('data-testid="locked-use-case-badge"'),
+    'Issues #25 & #26: AGENTS.md routing + labeling, /workspace/AGENTS.md seeding, use-case-selector, locked-use-case-badge, and user_conversations:${me.id} persistence must be present'
   )
   console.log('✓ test-bundle.mjs: all assertions passed!')
 } finally {
