@@ -4,6 +4,12 @@ import {
   rawLookerRequest,
   resolveUserCapabilities,
 } from '../lookerApi'
+import {
+  ANTIGRAVITY_ALLOWED_MODELS,
+  DEFAULT_ANTIGRAVITY_MODEL,
+  listAvailableAntigravityModels,
+  runAntigravityTurn,
+} from '../antigravity'
 
 describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics', () => {
   test('1. evaluates Role = PermissionSet x ModelSet per role without cross-role model bleeding', () => {
@@ -220,5 +226,73 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(restrictedAnalyst.tools.health.missingPermissions).toEqual(['see_system_activity', 'develop', 'use_sql_runner'])
     expect(restrictedAnalyst.canConfigureExtension).toBe(false)
     expect(restrictedAnalyst.canManageUserAttributes).toBe(false)
+  })
+
+  test('6. discovers /v1beta/models, intersects with ANTIGRAVITY_ALLOWED_MODELS, and passes agent_config.model', async () => {
+    expect(DEFAULT_ANTIGRAVITY_MODEL).toBe('gemini-3.8-flash')
+    expect(ANTIGRAVITY_ALLOWED_MODELS.map((m) => m.id)).toEqual([
+      'gemini-3.8-flash',
+      'gemini-4-argon',
+      'gemini-3.7-flash',
+      'gemini-3.6-flash',
+      'gemini-3.5-flash-lite',
+    ])
+    expect(await listAvailableAntigravityModels({}, { mode: 'oauth' })).toEqual(
+      ANTIGRAVITY_ALLOWED_MODELS
+    )
+
+    const calls: Array<{ url: string; method: string; body?: any }> = []
+    const mockExtensionSDK = {
+      serverProxy: async (url: string, init: any) => {
+        calls.push({ url, method: init.method, body: init.body ? JSON.parse(init.body) : undefined })
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify(
+            url.endsWith('/v1beta/models')
+              ? {
+                  models: [
+                    { name: 'models/gemini-3.8-flash', displayName: 'Gemini 3.8 Flash', description: 'Live 3.8 Flash' },
+                    { name: 'models/gemini-4-argon', displayName: 'Gemini 4 Argon', description: 'Live 4 Argon' },
+                    { name: 'models/gemini-3.5-flash-lite', displayName: 'Gemini 3.5 Flash-Lite' },
+                    { name: 'models/unrelated-embedding-001', displayName: 'Ignore Me' },
+                  ],
+                }
+              : {
+                  id: 'int_argon_1',
+                  environment_id: 'env_argon_1',
+                  status: 'completed',
+                  output_text: 'Completed with Argon.',
+                }
+          ),
+        }
+      },
+    }
+
+    const discovered = await listAvailableAntigravityModels(mockExtensionSDK, { mode: 'apikey' })
+    expect(discovered.map((m) => m.id)).toEqual([
+      'gemini-3.8-flash',
+      'gemini-4-argon',
+      'gemini-3.5-flash-lite',
+    ])
+    expect(discovered[1].description).toBe('Live 4 Argon')
+
+    const turnRes = await runAntigravityTurn({
+      sdk: {} as any,
+      extensionSDK: mockExtensionSDK,
+      auth: { mode: 'apikey' },
+      session: { toolType: 'app' },
+      model: 'gemini-4-argon',
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      userPrompt: 'Build KPI app',
+      onStatus: () => {},
+    })
+    expect(turnRes.assistantText).toBe('Completed with Argon.')
+    const postCall = calls.find((c) => c.method === 'POST' && c.url.endsWith('/v1beta/interactions'))
+    expect(postCall?.body?.agent_config).toEqual({
+      type: 'antigravity',
+      model: 'gemini-4-argon',
+    })
   })
 })

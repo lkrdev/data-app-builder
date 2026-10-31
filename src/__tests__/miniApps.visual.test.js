@@ -1018,4 +1018,79 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       switcherHiddenWhenSingleMode: true
     })
   }, 15000)
+
+  test('switches Antigravity models via config-default-model-select and topbar-model-select and persists defaultModel', async () => {
+    const url = `http://127.0.0.1:${port}/?scenario=config_page`
+    await chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(document.querySelector('[data-testid="config-default-model-select"]'))`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    const res = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const configSelect = document.querySelector('[data-testid="config-default-model-select"]');
+        const initialDefault = configSelect ? configSelect.value : '';
+        const optionIds = configSelect ? Array.from(configSelect.options).map((o) => o.value) : [];
+
+        const setReactSelect = (sel, val) => {
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+          setter.call(sel, val);
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+
+        setReactSelect(configSelect, 'gemini-4-argon');
+        await new Promise((r) => setTimeout(r, 50));
+
+        const saveBtn = Array.from(document.querySelectorAll('button')).find((b) =>
+          (b.textContent || '').includes('Save Setup')
+        );
+        if (saveBtn) saveBtn.click();
+        await new Promise((r) => setTimeout(r, 150));
+
+        const topbarSelect = document.querySelector('[data-testid="topbar-model-select"]');
+        const syncedTopbarModel = topbarSelect ? topbarSelect.value : '';
+
+        setReactSelect(topbarSelect, 'gemini-3.5-flash-lite');
+        await new Promise((r) => setTimeout(r, 50));
+        const afterLiteSwitch = topbarSelect ? topbarSelect.value : '';
+
+        setReactSelect(topbarSelect, 'gemini-3.8-flash');
+        await new Promise((r) => setTimeout(r, 50));
+        const afterFlashSwitch = topbarSelect ? topbarSelect.value : '';
+
+        return {
+          initialDefault,
+          optionIds,
+          savedDefaultModel: window.__LAST_SAVED_CONTEXT_DATA__?.defaultModel,
+          syncedTopbarModel,
+          afterLiteSwitch,
+          afterFlashSwitch
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(res.result.value).toEqual({
+      initialDefault: 'gemini-3.8-flash',
+      optionIds: [
+        'gemini-3.8-flash',
+        'gemini-4-argon',
+        'gemini-3.7-flash',
+        'gemini-3.6-flash',
+        'gemini-3.5-flash-lite'
+      ],
+      savedDefaultModel: 'gemini-4-argon',
+      syncedTopbarModel: 'gemini-4-argon',
+      afterLiteSwitch: 'gemini-3.5-flash-lite',
+      afterFlashSwitch: 'gemini-3.8-flash'
+    })
+  }, 15000)
 })

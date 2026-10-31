@@ -27,11 +27,15 @@ import {
 } from './lookerApi'
 import {
   AgentSession,
+  ANTIGRAVITY_ALLOWED_MODELS,
   AntigravityAuth,
+  AntigravityModelOption,
   CodeModePermissionDecision,
   CodeModePermissionRequest,
+  DEFAULT_ANTIGRAVITY_MODEL,
   ensureGeminiApiKeyUserAttribute,
   ExtensionAuthContextConfig,
+  listAvailableAntigravityModels,
   loginWithGoogleOAuth,
   PastedImage,
   prewarmOrWakeAntigravityEnvironment,
@@ -80,6 +84,12 @@ export function useStudioController() {
   const [projectId, setProjectId] = useState(initialCtx?.projectId || '')
   const [disabledModes, setDisabledModes] = useState<StudioMode[]>(() =>
     Array.isArray(initialCtx?.disabledModes) ? (initialCtx.disabledModes as StudioMode[]) : []
+  )
+  const [selectedModel, setSelectedModel] = useState<string>(
+    initialCtx?.defaultModel || DEFAULT_ANTIGRAVITY_MODEL
+  )
+  const [availableModels, setAvailableModels] = useState<AntigravityModelOption[]>(
+    ANTIGRAVITY_ALLOWED_MODELS
   )
   const enabledModes = useMemo(() => {
     const list = STUDIO_MODES.filter((m) => !disabledModes.includes(m.mode))
@@ -229,6 +239,7 @@ export function useStudioController() {
           extensionSDK,
           auth: { mode: authMode, oauthToken, clientId, projectId, apiKey },
           toolType: modeToWake,
+          model: selectedModel,
           existingSession: sessionsByMode[modeToWake],
           selectedExplores,
           schemaMarkdown,
@@ -245,12 +256,30 @@ export function useStudioController() {
       clientId,
       projectId,
       apiKey,
+      selectedModel,
       sessionsByMode,
       selectedExplores,
       schemaMarkdown,
       currentAppCode,
     ]
   )
+
+  useEffect(() => {
+    if (!isConfigured && !oauthToken && !apiKey) return
+    let mounted = true
+    listAvailableAntigravityModels(extensionSDK, {
+      mode: authMode,
+      oauthToken,
+      clientId,
+      projectId,
+      apiKey,
+    }).then((list) => {
+      if (mounted && list.length > 0) setAvailableModels(list)
+    })
+    return () => {
+      mounted = false
+    }
+  }, [extensionSDK, isConfigured, authMode, oauthToken, clientId, projectId, apiKey])
 
   useEffect(() => {
     if (disabledModes.includes(activeMode)) return
@@ -285,6 +314,7 @@ export function useStudioController() {
         requestCodeModePermission,
         setRequirePermission,
         setDisabledModes,
+        setSelectedModel,
       }
     }
   }, [history, requestCodeModePermission])
@@ -359,6 +389,7 @@ export function useStudioController() {
         clientId: clientId.trim(),
         projectId: projectId.trim(),
         disabledModes,
+        defaultModel: selectedModel,
       })
       setIsConfigured(true)
       setBusyStatus(null)
@@ -717,6 +748,7 @@ export function useStudioController() {
             extensionSDK,
             auth: { mode: authMode, oauthToken, clientId, projectId, apiKey },
             session: agentSession,
+            model: selectedModel,
             selectedExplores,
             folderId: selectedFolderId,
             schemaMarkdown,
@@ -911,6 +943,7 @@ export function useStudioController() {
         extensionSDK,
         auth,
         session: agentSession,
+        model: selectedModel,
         mode: builderMode,
         selectedExplores,
         folderId: selectedFolderId,
@@ -1141,6 +1174,9 @@ export function useStudioController() {
     setProjectId,
     disabledModes,
     setDisabledModes,
+    selectedModel,
+    setSelectedModel,
+    availableModels,
     enabledModes,
     oauthToken,
     apiKey,
