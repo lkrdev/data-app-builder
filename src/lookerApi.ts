@@ -1128,3 +1128,195 @@ export async function publishScriptDashboard(
     extensionId: extId,
   }
 }
+
+export type StudioToolMode =
+  | 'data_app'
+  | 'lookml'
+  | 'script'
+  | 'dashboard'
+  | 'health_check'
+
+export interface UserArtifactIndexEntry {
+  id: string
+  type: StudioToolMode
+  title: string
+  updatedAt: string
+  createdBy: string
+  targetId?: string
+  explores?: string[]
+  lastInteractionId?: string
+  environmentId?: string
+}
+
+export interface SharedArtifactPayload extends UserArtifactIndexEntry {
+  code?: string
+  content?: string
+  messages?: PersistedChatTurn[]
+  meta?: Record<string, any>
+}
+
+export function formatUserArtifactKey(
+  userId: string,
+  type: StudioToolMode,
+  id: string
+): string {
+  return `user_${userId}_${type}_${id}`
+}
+
+export function formatObjectArtifactKey(type: StudioToolMode, id: string): string {
+  return `obj_${type}_${id}`
+}
+
+// ponytail: two-tier artifact store — compact (<1 KB) per-user index key (user_${userId}_${type}_${id})
+// for fast search_artifacts listing + shared payload key (obj_${type}_${id}) reusing putArtifacts.
+export async function saveUserArtifact(
+  sdk: Looker40SDK,
+  params: {
+    namespace?: string
+    extensionSDK?: any
+    userId: string
+    id: string
+    type: StudioToolMode
+    title: string
+    targetId?: string
+    explores?: string[]
+    lastInteractionId?: string
+    environmentId?: string
+    code?: string
+    content?: string
+    messages?: PersistedChatTurn[]
+    payload?: Record<string, any> | null
+    skipObjectPayload?: boolean
+  }
+): Promise<SharedArtifactPayload> {
+  const namespace = params.namespace || getArtifactNamespace(params.extensionSDK)
+  const indexEntry: UserArtifactIndexEntry = {
+    id: String(params.id),
+    type: params.type,
+    title: String(params.title || params.id).slice(0, 140),
+    updatedAt: new Date().toISOString(),
+    createdBy: String(params.userId),
+    ...(params.targetId ? { targetId: String(params.targetId) } : {}),
+    ...(params.explores?.length ? { explores: params.explores.slice(0, 10) } : {}),
+    ...(params.lastInteractionId ? { lastInteractionId: params.lastInteractionId } : {}),
+    ...(params.environmentId ? { environmentId: params.environmentId } : {}),
+  }
+  const fullPayload: SharedArtifactPayload = {
+    ...indexEntry,
+    ...(params.code !== undefined ? { code: params.code } : {}),
+    ...(params.content !== undefined ? { content: params.content } : {}),
+    ...(params.messages?.length ? { messages: params.messages.slice(-200) } : {}),
+    ...(params.payload || {}),
+  }
+  const items: Array<{ key: string; value: any }> = [
+    {
+      key: formatUserArtifactKey(params.userId, params.type, params.id),
+      value: indexEntry,
+    },
+  ]
+  if (!params.skipObjectPayload) {
+    items.push({
+      key: formatObjectArtifactKey(params.type, params.id),
+      value: fullPayload,
+    })
+  }
+  await putArtifacts(sdk, items, namespace)
+  return fullPayload
+}
+
+export async function listUserArtifacts(
+  sdk: Looker40SDK,
+  params: {
+    namespace?: string
+    extensionSDK?: any
+    userId: string
+    type?: StudioToolMode
+  }
+): Promise<UserArtifactIndexEntry[]> {
+  const namespace = params.namespace || getArtifactNamespace(params.extensionSDK)
+  const keyPattern = params.type
+    ? `user_${params.userId}_${params.type}_%`
+    : `user_${params.userId}_%`
+  const rows = await searchArtifactsRaw(sdk, namespace, keyPattern)
+  const entries: UserArtifactIndexEntry[] = []
+  for (const row of rows || []) {
+    if (!row?.value) continue
+    try {
+      const parsed =
+        typeof row.value === 'string'
+          ? (JSON.parse(row.value) as Record<string, any>)
+          : (row.value as Record<string, any>)
+      const keyMatch = String(row.key || '').match(
+        /^user_[^_]+_(data_app|lookml|script|health_check|dashboard)_(.+)$/
+      )
+      const inferredType = (parsed.type ||
+        parsed.contentType ||
+        keyMatch?.[1]) as StudioToolMode | undefined
+      const inferredId = String(parsed.id || keyMatch?.[2] || '')
+      if (inferredId && inferredType) {
+        entries.push({
+          ...parsed,
+          id: inferredId,
+          type: inferredType,
+          title: String(parsed.title || inferredId),
+          updatedAt: String(parsed.updatedAt || ''),
+          createdBy: String(parsed.createdBy || params.userId),
+        } as UserArtifactIndexEntry)
+      }
+    } catch {
+      // Ignore malformed artifact value
+    }
+  }
+  return entries.sort((a, b) =>
+    String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))
+  )
+}
+
+export async function loadObjectArtifact<T = SharedArtifactPayload>(
+  sdk: Looker40SDK,
+  params: {
+    namespace?: string
+    extensionSDK?: any
+    type: StudioToolMode
+    id: string
+  }
+): Promise<T | null> {
+  const namespace = params.namespace || getArtifactNamespace(params.extensionSDK)
+  const direct = await getArtifactJson<T>(
+    sdk,
+    formatObjectArtifactKey(params.type, params.id),
+    namespace
+  )
+  if (direct) return direct
+  const fallbackRows = await searchArtifactsRaw(
+    sdk,
+    namespace,
+    `%_${params.type}_${params.id}`
+  )
+  const hit = fallbackRows[0]
+  if (!hit?.value) return null
+  try {
+    return (typeof hit.value === 'string' ? JSON.parse(hit.value) : hit.value) as T
+  } catch {
+    return null
+  }
+}
+
+export async function deleteUserArtifact(
+  sdk: Looker40SDK,
+  params: {
+    namespace?: string
+    extensionSDK?: any
+    userId: string
+    type: StudioToolMode
+    id: string
+    deleteSharedPayload?: boolean
+  }
+): Promise<void> {
+  const namespace = params.namespace || getArtifactNamespace(params.extensionSDK)
+  const keys = [formatUserArtifactKey(params.userId, params.type, params.id)]
+  if (params.deleteSharedPayload) {
+    keys.push(formatObjectArtifactKey(params.type, params.id))
+  }
+  await sdk.ok(sdk.delete_artifact(namespace, keys.join(',')))
+}

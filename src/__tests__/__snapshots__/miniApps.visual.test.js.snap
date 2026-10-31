@@ -1,0 +1,205 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders dashboard with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "modeTabs": [
+    {
+      "active": false,
+      "label": "Data App",
+    },
+    {
+      "active": true,
+      "label": "Dashboard",
+    },
+    {
+      "active": false,
+      "label": "LookML",
+    },
+    {
+      "active": false,
+      "label": "Health Check",
+    },
+    {
+      "active": false,
+      "label": "Python Tile",
+    },
+  ],
+  "scenario": "dashboard",
+  "verifiedVisibleText": [
+    "Executive Order Performance (Native UDD)",
+    "/embed/dashboards/7",
+    "Update Content",
+  ],
+}
+`;
+
+exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders data_app with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "modeTabs": [
+    {
+      "active": true,
+      "label": "Data App",
+    },
+    {
+      "active": false,
+      "label": "Dashboard",
+    },
+    {
+      "active": false,
+      "label": "LookML",
+    },
+    {
+      "active": false,
+      "label": "Health Check",
+    },
+    {
+      "active": false,
+      "label": "Python Tile",
+    },
+  ],
+  "scenario": "data_app",
+  "verifiedVisibleText": [
+    "Data App Studio",
+    "Data App",
+    "Dashboard",
+    "LookML",
+    "Health Check",
+    "Python Tile",
+    "Safe Mode (Ask)",
+    "My Creations (5)",
+    "Approve Looker State Mutation?",
+    "create_dashboard",
+    "Executive Revenue App",
+  ],
+}
+`;
+
+exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders health_check with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "modeTabs": [
+    {
+      "active": false,
+      "label": "Data App",
+    },
+    {
+      "active": false,
+      "label": "Dashboard",
+    },
+    {
+      "active": false,
+      "label": "LookML",
+    },
+    {
+      "active": true,
+      "label": "Health Check",
+    },
+    {
+      "active": false,
+      "label": "Python Tile",
+    },
+  ],
+  "scenario": "health_check",
+  "verifiedVisibleText": [
+    "Run 3-Pillar Audit",
+    "Health Score: 70% (B- (Optimization Recommended))",
+    "Transcriber: 2.86/4.00",
+    "Technical Design Document (TDD): Looker & BigQuery 3-Pillar Health Check",
+    "Copy Markdown",
+    "Download Markdown (.md)",
+  ],
+}
+`;
+
+exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders lookml with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "modeTabs": [
+    {
+      "active": false,
+      "label": "Data App",
+    },
+    {
+      "active": false,
+      "label": "Dashboard",
+    },
+    {
+      "active": true,
+      "label": "LookML",
+    },
+    {
+      "active": false,
+      "label": "Health Check",
+    },
+    {
+      "active": false,
+      "label": "Python Tile",
+    },
+  ],
+  "scenario": "lookml",
+  "verifiedVisibleText": [
+    "Add total_revenue & gross_margin to order_items",
+    "✓ LookML Validator Passed",
+    "run_lookml_test (1/1 passed)",
+    "bronze/orders.refinement.lkml",
+    "Update LookML",
+  ],
+}
+`;
+
+exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders python_tile_studio with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "modeTabs": [
+    {
+      "active": false,
+      "label": "Data App",
+    },
+    {
+      "active": false,
+      "label": "Dashboard",
+    },
+    {
+      "active": false,
+      "label": "LookML",
+    },
+    {
+      "active": false,
+      "label": "Health Check",
+    },
+    {
+      "active": true,
+      "label": "Python Tile",
+    },
+  ],
+  "scenario": "python_tile_studio",
+  "verifiedVisibleText": [
+    "Looker Explore & Filter Summary",
+    "Publish Dashboard",
+    "Save Script",
+    "agentic_thelook",
+  ],
+}
+`;
+
+exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders tile_mount_edit with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "modeTabs": [],
+  "scenario": "tile_mount_edit",
+  "verifiedVisibleText": [
+    "CodeMode Python Tile Configuration",
+    "Tile #57",
+    "Looker Explore & Filter Summary (demo1)",
+  ],
+}
+`;
+
+exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders tile_mount_view with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "modeTabs": [],
+  "scenario": "tile_mount_view",
+  "verifiedVisibleText": [
+    "thelook",
+    "eCommerce",
+    "agentic_thelook",
+    "Complete",
+  ],
+}
+`;

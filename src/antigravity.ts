@@ -44,6 +44,19 @@ export interface AgentSession {
   explores?: string[]
 }
 
+export type CodeModePermissionDecision =
+  | 'allow_once'
+  | 'allow_op'
+  | 'allow_all'
+  | 'deny'
+
+export interface CodeModePermissionRequest {
+  operation: string
+  httpMethod: string
+  path: string
+  args: { params?: any; body?: any }
+}
+
 export interface PastedImage {
   mimeType: string
   data: string // base64 without data: prefix
@@ -387,6 +400,11 @@ export async function runAntigravityTurn(params: {
   customSystemGuide?: string
   extraSources?: Array<{ type: 'inline'; content: string; target: string }>
   priorMessages?: Array<{ role: string; text: string }>
+  requirePermission?: boolean
+  approvedOperations?: Set<string>
+  onPermissionRequest?: (
+    req: CodeModePermissionRequest
+  ) => Promise<CodeModePermissionDecision>
   onStatus: (statusText: string) => void
 }): Promise<{
   bundle: DataAppBundle | null
@@ -414,6 +432,9 @@ export async function runAntigravityTurn(params: {
     customSystemGuide,
     extraSources,
     priorMessages,
+    requirePermission = true,
+    approvedOperations,
+    onPermissionRequest,
     onStatus,
   } = params
 
@@ -613,6 +634,9 @@ export async function runAntigravityTurn(params: {
               sdk,
               extensionSDK,
               allowUpdateSession: toolMode === 'lookml',
+              requirePermission,
+              approvedOperations,
+              onPermissionRequest,
               vars: {
                 target_explores: selectedExplores,
                 target_model: primaryModel,

@@ -153,6 +153,59 @@ const hcMockOut = await LkrCodeMode.runPythonCode({
 })
 const hcParsed = JSON.parse(hcMockOut)
 assert(hcParsed.pillar1 && hcParsed.pillar2 && hcParsed.pillar3, 'Expected 3-pillar telemetry object from Monty WASM')
+
+// Verify Issue #1: LkrCodeMode mutation permission gate (read-only bypass, deny, and loop-safe allow_op)
+const readOnlyPostOut = await LkrCodeMode.runPythonCode({
+  code: 'return run_inline_query("json", {"model": "thelook", "view": "order_items", "fields": ["order_items.count"]})',
+  sdk: mockSdk,
+  requirePermission: true,
+})
+assert.equal(JSON.parse(readOnlyPostOut).method, 'POST')
+
+const deniedOut = await LkrCodeMode.runPythonCode({
+  code: 'return create_dashboard({"title": "Blocked"})',
+  sdk: mockSdk,
+  requirePermission: true,
+})
+assert(
+  deniedOut.includes('PermissionError') && deniedOut.includes('create_dashboard'),
+  'Unapproved mutating SDK call must fail with PermissionError'
+)
+
+let promptCount = 0
+const approvedSet = new Set()
+const loopOut = await LkrCodeMode.runPythonCode({
+  code: 'return [create_dashboard({"title": f"D{i}"})["method"] for i in range(3)]',
+  sdk: mockSdk,
+  requirePermission: true,
+  approvedOperations: approvedSet,
+  async onPermissionRequest(req) {
+    promptCount += 1
+    assert.equal(req.operation, 'create_dashboard')
+    assert.equal(req.httpMethod, 'POST')
+    return 'allow_op'
+  },
+})
+assert.equal(promptCount, 1, 'allow_op must only prompt once across a Python loop')
+assert.deepEqual(JSON.parse(loopOut), ['POST', 'POST', 'POST'])
+
+assert(
+  lookerApiTs.includes('saveUserArtifact') &&
+    lookerApiTs.includes('listUserArtifacts') &&
+    lookerApiTs.includes('loadObjectArtifact') &&
+    lookerApiTs.includes('deleteUserArtifact') &&
+    lookerApiTs.includes('user_${') &&
+    lookerApiTs.includes('obj_${'),
+  'lookerApi.ts must implement dual-key user_${uid}_${type}_${id} + obj_${type}_${id} catalog helpers'
+)
+assert(
+  appTsx.includes('STUDIO_MODES') &&
+    appTsx.includes('parseStudioRoute') &&
+    appTsx.includes('PythonTileMount') &&
+    appTsx.includes('dab-permission-bar') &&
+    appTsx.includes('dab-mode-switcher'),
+  'App.tsx must include STUDIO_MODES switcher, parseStudioRoute, PythonTileMount, and dab-permission-bar'
+)
 const match = antigravityTs.match(/export const BUNDLE_APP_PY = `([\s\S]*?)`\n/)
 assert(match, 'Could not find BUNDLE_APP_PY in src/antigravity.ts')
 

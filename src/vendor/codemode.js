@@ -705,6 +705,28 @@ let wasm_bindgen = (function(exports) {
     wb.setHostData(hd || null, orig ? String(orig) : undefined);
   }
 
+  function classifyOperation(httpMethod, path, code) {
+    const verb = String(httpMethod || "GET").toUpperCase();
+    const p = String(path || "");
+    const readOnlyPost =
+      verb === "POST" &&
+      (/^\/(queries|sql_queries|merge_queries|content_validation)(\/|$)/.test(p) ||
+        /\/(validate|lookml_tests\/run|git_connection_tests)(\/|$)/.test(p));
+    if (verb === "GET" || verb === "HEAD" || verb === "OPTIONS" || readOnlyPost) {
+      return { operation: "read_" + p.replace(/^\/+|\/+$/g, "").replace(/[^a-zA-Z0-9]+/g, "_"), requiresPermission: false };
+    }
+    const callMatches = String(code || "").match(/\b([a-z_][a-z0-9_]*)\s*\(/g) || [];
+    for (let i = 0; i < callMatches.length; i++) {
+      const fn = callMatches[i].replace(/\s*\($/, "");
+      if (/^(create|update|delete|deploy|commit|publish|unpublish|repair)_/.test(fn) || fn === "commit") {
+        return { operation: fn, requiresPermission: true };
+      }
+    }
+    const prefix = verb === "POST" ? "create" : verb === "DELETE" ? "delete" : "update";
+    const seg = p.split("/").filter(Boolean)[0] || "resource";
+    return { operation: prefix + "_" + seg.replace(/s$/, ""), requiresPermission: true };
+  }
+
   function normalizeRunArgs(codeOrParams, options) {
     let code = codeOrParams;
     let opts = options || {};
@@ -717,13 +739,13 @@ let wasm_bindgen = (function(exports) {
     const extSdk = resolveExtSdk(opts);
     const core = opts.sdk || opts.core40SDK;
     const transport = core && core.authSession && core.authSession.transport;
-    let handler = typeof opts.requestHandler === "function" ? opts.requestHandler : undefined;
-    if (!handler && extSdk && typeof extSdk.invokeCoreSdk === "function") {
-      handler = function (m, p, q, b, o) {
+    let baseHandler = typeof opts.requestHandler === "function" ? opts.requestHandler : undefined;
+    if (!baseHandler && extSdk && typeof extSdk.invokeCoreSdk === "function") {
+      baseHandler = function (m, p, q, b, o) {
         return extSdk.invokeCoreSdk(m, p, q, b, undefined, o, "4.0");
       };
-    } else if (!handler && transport && typeof transport.rawRequest === "function") {
-      handler = function (m, p, q, b) {
+    } else if (!baseHandler && transport && typeof transport.rawRequest === "function") {
+      baseHandler = function (m, p, q, b) {
         return Promise.resolve(
           transport.rawRequest(
             String(m || "GET").toUpperCase(),
@@ -746,6 +768,57 @@ let wasm_bindgen = (function(exports) {
         });
       };
     }
+
+    const requirePermission =
+      opts.requirePermission !== undefined
+        ? Boolean(opts.requirePermission)
+        : typeof opts.onPermissionRequest === "function";
+    const onPermissionRequest =
+      typeof opts.onPermissionRequest === "function" ? opts.onPermissionRequest : null;
+    const approvedOps = new Set(opts.approvedOperations || []);
+    let allowAll = false;
+
+    const handler = baseHandler
+      ? function (m, p, q, b, o) {
+          const verb = String(m || "GET").toUpperCase();
+          const info = classifyOperation(verb, p, code);
+          if (requirePermission && info.requiresPermission && !allowAll && !approvedOps.has(info.operation)) {
+            const denyMsg =
+              "PermissionError: Operation '" +
+              info.operation +
+              "' (" +
+              verb +
+              " " +
+              p +
+              ") mutates Looker state and was not approved.";
+            if (!onPermissionRequest) {
+              return Promise.reject(denyMsg);
+            }
+            return Promise.resolve(
+              onPermissionRequest({
+                operation: info.operation,
+                httpMethod: verb,
+                path: p,
+                args: { params: q, body: b }
+              })
+            ).then(function (decision) {
+              if (decision === "allow_op") {
+                approvedOps.add(info.operation);
+                if (opts.approvedOperations && typeof opts.approvedOperations.add === "function") {
+                  opts.approvedOperations.add(info.operation);
+                }
+              } else if (decision === "allow_all") {
+                allowAll = true;
+              } else if (decision !== "allow_once" && decision !== true) {
+                return Promise.reject(denyMsg);
+              }
+              return baseHandler(m, p, q, b, o);
+            });
+          }
+          return baseHandler(m, p, q, b, o);
+        }
+      : undefined;
+
     return {
       code: String(code || ""),
       varsJson: opts.vars ? JSON.stringify(opts.vars) : undefined,
@@ -789,6 +862,7 @@ let wasm_bindgen = (function(exports) {
       return initAsync().then(function () { return LkrCodeMode; });
     },
     getCodeModeRuntime: function () { return LkrCodeMode; },
+    classifyOperation: classifyOperation,
     getToolDefinition: getToolDefinition,
     RUN_LOOKER_CODEMODE_TOOL: getToolDefinition("run_looker_codemode"),
     connect: function (options) {

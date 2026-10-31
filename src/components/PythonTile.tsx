@@ -368,9 +368,9 @@ export const ScriptStudioView: React.FC<{
     }
   }, [core40SDK, refreshScriptsList])
 
-  // Load script when route matches /script/:scriptId
+  // Load script when route matches /script/:scriptId or /tile/:scriptId
   useEffect(() => {
-    const m = location.pathname.match(/^\/script\/([^/]+)\/?$/)
+    const m = location.pathname.match(/^\/(?:script|tile)\/([^/]+)\/?$/)
     const routeScriptId = m ? decodeURIComponent(m[1]).trim() : ''
     if (!routeScriptId) return
     let mounted = true
@@ -385,6 +385,9 @@ export const ScriptStudioView: React.FC<{
           dashboardId: loaded.dashboardId,
           elementId: loaded.elementId || '',
         })
+      }
+      if (loaded.code) {
+        handleRunPython(loaded.code)
       }
     })
     return () => {
@@ -542,14 +545,28 @@ export const ScriptStudioView: React.FC<{
       <header className="dab-topbar">
         <div className="dab-brand">
           <strong>Data App Studio</strong>
-          <span className="dab-badge">Python Script Runner</span>
-          <button
-            type="button"
-            className="dab-btn-secondary"
-            onClick={() => history.push('/')}
-          >
-            ← Data App Builder
-          </button>
+          <span className="dab-badge">Antigravity</span>
+          <span className="dab-badge">WASM CodeMode ✓</span>
+          <div className="dab-mode-switcher" role="tablist" aria-label="Tool Mode">
+            {[
+              { mode: 'app', label: 'Data App', prefix: '/app' },
+              { mode: 'dashboard', label: 'Dashboard', prefix: '/dashboard' },
+              { mode: 'lookml', label: 'LookML', prefix: '/lookml' },
+              { mode: 'health', label: 'Health Check', prefix: '/health-check' },
+              { mode: 'tile', label: 'Python Tile', prefix: '/tile' },
+            ].map((m) => (
+              <button
+                key={m.mode}
+                type="button"
+                role="tab"
+                aria-selected={m.mode === 'tile'}
+                className={`dab-mode-tab ${m.mode === 'tile' ? 'active' : ''}`}
+                onClick={() => history.push(m.prefix)}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="dab-controls">

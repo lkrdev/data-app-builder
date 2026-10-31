@@ -4,7 +4,7 @@ import React, { createContext, useContext, ReactNode } from 'react';
 import { ExtensionContext, ExtensionContextData } from '@looker/extension-sdk-react';
 import type { Looker40SDK } from '@looker/sdk';
 
-interface LookerExtensionContextState {
+export interface LookerExtensionContextState {
   extensionSDK: ExtensionContextData['extensionSDK'];
   core40SDK: Looker40SDK;
   tileHostData?: ExtensionContextData['tileHostData'];
@@ -12,10 +12,28 @@ interface LookerExtensionContextState {
   lookerHostData?: ExtensionContextData['lookerHostData'];
 }
 
-const LookerExtensionContext = createContext<LookerExtensionContextState | undefined>(undefined);
+export const LookerExtensionContext = createContext<LookerExtensionContextState | undefined>(undefined);
+
+export const MockLookerExtensionProvider: React.FC<{
+  value: LookerExtensionContextState;
+  children: ReactNode;
+}> = ({ value, children }) => (
+  <LookerExtensionContext.Provider value={value}>
+    {children}
+  </LookerExtensionContext.Provider>
+);
 
 export const LookerExtensionProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const extensionContext = useContext(ExtensionContext) as ExtensionContextData;
+  const mockOverride =
+    typeof window !== 'undefined' ? (window as any).__MOCK_LOOKER_EXTENSION__ : undefined;
+  if (mockOverride) {
+    return (
+      <LookerExtensionContext.Provider value={mockOverride}>
+        {children}
+      </LookerExtensionContext.Provider>
+    );
+  }
 
   const contextValue: LookerExtensionContextState = {
     extensionSDK: extensionContext.extensionSDK,
