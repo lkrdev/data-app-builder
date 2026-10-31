@@ -12,6 +12,7 @@ import {
   SavedScript,
   saveScriptArtifact,
   TileScriptBinding,
+  UserCapabilities,
 } from '../lookerApi'
 import {
   AgentSession,
@@ -334,6 +335,7 @@ export const ScriptStudioView: React.FC<{
   folders: Array<{ id: string; name: string }>
   onChangeFolder: (folderId: string) => void
   disabledModes?: string[]
+  capabilities?: UserCapabilities
 }> = ({
   auth,
   schemaMarkdown,
@@ -342,6 +344,7 @@ export const ScriptStudioView: React.FC<{
   folders,
   onChangeFolder,
   disabledModes = [],
+  capabilities,
 }) => {
   const { extensionSDK, core40SDK } = useLookerExtension()
   const history = useHistory()
@@ -630,27 +633,43 @@ export const ScriptStudioView: React.FC<{
             🟢 Env [tile]: {agentSession.environmentId || 'env_tile_isolated'}
           </span>
           {(() => {
-            const enabledModes = [
-              { mode: 'app', label: 'Data App', prefix: '/app' },
-              { mode: 'dashboard', label: 'Content Studio', prefix: '/dashboard' },
-              { mode: 'lookml', label: 'LookML', prefix: '/lookml' },
-              { mode: 'health', label: 'Health Check', prefix: '/health-check' },
-              { mode: 'tile', label: 'Python Tile', prefix: '/tile' },
-            ].filter((m) => !disabledModes.includes(m.mode))
+            const enabledModes = (
+              [
+                { mode: 'app', label: 'Data App', prefix: '/app' },
+                { mode: 'dashboard', label: 'Content Studio', prefix: '/dashboard' },
+                { mode: 'lookml', label: 'LookML', prefix: '/lookml' },
+                { mode: 'health', label: 'Health Check', prefix: '/health-check' },
+                { mode: 'tile', label: 'Python Tile', prefix: '/tile' },
+              ] as const
+            ).filter((m) => !disabledModes.includes(m.mode))
             return enabledModes.length > 1 ? (
               <div className="dab-mode-switcher" role="tablist" aria-label="Tool Mode">
-                {enabledModes.map((m) => (
-                  <button
-                    key={m.mode}
-                    type="button"
-                    role="tab"
-                    aria-selected={m.mode === 'tile'}
-                    className={`dab-mode-tab ${m.mode === 'tile' ? 'active' : ''}`}
-                    onClick={() => history.push(m.prefix)}
-                  >
-                    {m.label}
-                  </button>
-                ))}
+                {enabledModes.map((m) => {
+                  const toolCap = capabilities?.tools?.[m.mode]
+                  const isLocked = Boolean(
+                    capabilities?.rolesLoaded && toolCap && !toolCap.enabled
+                  )
+                  const isReadOnly = Boolean(capabilities?.rolesLoaded && toolCap?.readOnly)
+                  const missingPerms = toolCap?.missingPermissions || []
+                  const tabTooltip =
+                    toolCap?.reason ||
+                    (missingPerms.length > 0
+                      ? `Missing Looker permissions: ${missingPerms.join(', ')}`
+                      : undefined)
+                  return (
+                    <button
+                      key={m.mode}
+                      type="button"
+                      role="tab"
+                      aria-selected={m.mode === 'tile'}
+                      title={tabTooltip}
+                      className={`dab-mode-tab ${m.mode === 'tile' ? 'active' : ''}`}
+                      onClick={() => history.push(m.prefix)}
+                    >
+                      {isLocked ? `🔒 ${m.label}` : isReadOnly ? `${m.label} 🔒` : m.label}
+                    </button>
+                  )
+                })}
               </div>
             ) : null
           })()}

@@ -445,6 +445,8 @@ export async function runAntigravityTurn(params: {
   toolMode?: 'data_app' | 'lookml'
   lookmlProjectId?: string
   activatedLookmlSkills?: string[]
+  developableProjects?: string[]
+  canDeploy?: boolean
   schemaMarkdown: string
   userPrompt: string
   images?: PastedImage[]
@@ -487,6 +489,8 @@ export async function runAntigravityTurn(params: {
     toolMode = 'data_app',
     lookmlProjectId,
     activatedLookmlSkills,
+    developableProjects,
+    canDeploy,
     schemaMarkdown,
     userPrompt,
     images,
@@ -585,6 +589,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           primaryExplore,
           projectId: lookmlProjectId,
           activatedSkills: activatedLookmlSkills,
+          developableProjects,
+          canDeploy,
         })
       : dataAppOrNativeGuide)
 

@@ -17,12 +17,17 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     enabledModes,
     apiKey,
     setApiKey,
+    capabilities,
     extensionSDK,
     busyStatus,
     messages,
     handleSaveAuthSetup,
   } = ctl
   const errorText = messages.filter((m) => m.role === 'error').slice(-1)[0]?.text
+  const canSaveContext = capabilities?.canConfigureExtension !== false
+  const canManageAttrs = capabilities?.canManageUserAttributes !== false
+  const saveDisabled =
+    !!busyStatus || !canSaveContext || (authMode === 'apikey' && !canManageAttrs)
 
   return (
     <div className="dab-shell">
@@ -86,16 +91,28 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 style={{ width: 220 }}
-                title={`Creates/updates hidden user attribute ${getGeminiUserAttributeName(
-                  extensionSDK
-                )}`}
+                disabled={!canManageAttrs}
+                title={
+                  !canManageAttrs
+                    ? 'Requires Looker "manage_user_attributes" or "admin" permission'
+                    : `Creates/updates hidden user attribute ${getGeminiUserAttributeName(
+                        extensionSDK
+                      )}`
+                }
               />
             )}
             <button
               type="button"
               className="dab-btn-gemini"
               onClick={handleSaveAuthSetup}
-              disabled={!!busyStatus}
+              disabled={saveDisabled}
+              title={
+                !canSaveContext
+                  ? 'Requires Looker "develop" or "admin" permission to save shared extension context'
+                  : authMode === 'apikey' && !canManageAttrs
+                  ? 'Requires Looker "manage_user_attributes" or "admin" permission'
+                  : undefined
+              }
             >
               ✨ Save Setup
             </button>
@@ -147,6 +164,18 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               )
             })}
           </div>
+          {!canSaveContext && (
+            <div className="dab-muted" style={{ fontSize: 11, color: '#b45309' }}>
+              🔒 Read-only: saving shared extension context requires Looker <code>develop</code> or{' '}
+              <code>admin</code> permission.
+            </div>
+          )}
+          {authMode === 'apikey' && !canManageAttrs && (
+            <div className="dab-muted" style={{ fontSize: 11, color: '#b45309' }}>
+              🔒 Creating or updating hidden Looker User Attributes requires{' '}
+              <code>manage_user_attributes</code> or <code>admin</code> permission.
+            </div>
+          )}
         </div>
         {busyStatus && (
           <div className="dab-status-banner" style={{ marginTop: 12 }}>
@@ -173,6 +202,10 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     history,
     requirePermission,
     setRequirePermission,
+    disabledModes,
+    capabilities,
+    availableLookmlProjects,
+    canDeployLookml,
     models,
     selectedExplores,
     setSelectedExplores,
@@ -317,30 +350,44 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
         </span>
         {enabledModes.length > 1 && (
           <div className="dab-mode-switcher" role="tablist" aria-label="Tool Mode">
-            {enabledModes.map((m) => (
-              <button
-                key={m.mode}
-                type="button"
-                role="tab"
-                aria-selected={activeMode === m.mode}
-                className={`dab-mode-tab ${activeMode === m.mode ? 'active' : ''}`}
-                onClick={() => {
-                  const target =
-                    m.mode === 'app' && publishedApp?.dashboardId
-                      ? `/app/${encodeURIComponent(publishedApp.dashboardId)}`
-                      : m.mode === 'dashboard' && nativeContent?.id
-                      ? `/dashboard/${encodeURIComponent(nativeContent.id)}`
-                      : m.mode === 'lookml' && lookmlBundle?.id
-                      ? `/lookml/${encodeURIComponent(lookmlBundle.id)}`
-                      : m.mode === 'health' && healthReport?.id
-                      ? `/health-check/${encodeURIComponent(healthReport.id)}`
-                      : m.prefix
-                  history.push(target)
-                }}
-              >
-                {m.label}
-              </button>
-            ))}
+            {enabledModes.map((m) => {
+              const toolCap = capabilities?.tools?.[m.mode]
+              const isLocked = Boolean(capabilities?.rolesLoaded && toolCap && !toolCap.enabled)
+              const isReadOnly = Boolean(capabilities?.rolesLoaded && toolCap?.readOnly)
+              const missingPerms = toolCap?.missingPermissions || []
+              const tabTooltip =
+                toolCap?.reason ||
+                (missingPerms.length > 0
+                  ? `Missing Looker permissions: ${missingPerms.join(', ')}`
+                  : undefined)
+              return (
+                <button
+                  key={m.mode}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeMode === m.mode}
+                  data-permission-locked={isLocked ? 'true' : undefined}
+                  data-permission-readonly={isReadOnly ? 'true' : undefined}
+                  title={tabTooltip}
+                  className={`dab-mode-tab ${activeMode === m.mode ? 'active' : ''}`}
+                  onClick={() => {
+                    const target =
+                      m.mode === 'app' && publishedApp?.dashboardId
+                        ? `/app/${encodeURIComponent(publishedApp.dashboardId)}`
+                        : m.mode === 'dashboard' && nativeContent?.id
+                        ? `/dashboard/${encodeURIComponent(nativeContent.id)}`
+                        : m.mode === 'lookml' && lookmlBundle?.id
+                        ? `/lookml/${encodeURIComponent(lookmlBundle.id)}`
+                        : m.mode === 'health' && healthReport?.id
+                        ? `/health-check/${encodeURIComponent(healthReport.id)}`
+                        : m.prefix
+                    history.push(target)
+                  }}
+                >
+                  {isLocked ? `🔒 ${m.label}` : isReadOnly ? `${m.label} 🔒` : m.label}
+                </button>
+              )
+            })}
           </div>
         )}
       </div>
@@ -456,12 +503,34 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
               <span>Project</span>
               <input
                 type="text"
+                list="dab-lookml-projects"
                 placeholder="LookML project_id (opt)..."
                 value={lookmlProjectId}
                 onChange={(e) => setLookmlProjectId(e.target.value)}
                 style={{ width: 150 }}
+                title={
+                  availableLookmlProjects.length > 0
+                    ? `Developable projects: ${availableLookmlProjects.join(', ')}`
+                    : undefined
+                }
               />
+              {availableLookmlProjects.length > 0 && (
+                <datalist id="dab-lookml-projects">
+                  {availableLookmlProjects.map((proj) => (
+                    <option key={proj} value={proj} />
+                  ))}
+                </datalist>
+              )}
             </label>
+            {capabilities?.rolesLoaded && !canDeployLookml && (
+              <span
+                className="dab-badge"
+                style={{ background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }}
+                title="Deploy to production requires Looker 'deploy' or 'admin' permission"
+              >
+                🔒 No deploy
+              </span>
+            )}
             <div className="dab-divider" />
             <div className="dab-load-box">
               {lookmlSessions.length > 0 && (
@@ -589,14 +658,47 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
           )}
           {isHealthCheckMode && (
             <>
+              {capabilities?.rolesLoaded &&
+                (capabilities.tools.health.missingPermissions.length > 0 ||
+                  capabilities.sqlRunnerConnections.size === 0) && (
+                  <span
+                    className="dab-badge"
+                    style={{ background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }}
+                    title={`Missing pillar permissions: ${capabilities.tools.health.missingPermissions.join(
+                      ', '
+                    )}`}
+                  >
+                    ⚠️ Missing: {capabilities.tools.health.missingPermissions.join(', ')}
+                  </span>
+                )}
               <select
                 value={healthScope}
                 onChange={(e) => setHealthScope(e.target.value as any)}
                 title="Select Looker Health Check, BigQuery Health Check, or Combined 3-Pillar Audit"
               >
-                <option value="all">All 3 Pillars (Looker + BQ)</option>
+                <option
+                  value="all"
+                  disabled={
+                    Boolean(
+                      capabilities?.rolesLoaded &&
+                        capabilities.sqlRunnerConnections.size === 0
+                    )
+                  }
+                >
+                  All 3 Pillars (Looker + BQ)
+                </option>
                 <option value="looker">Looker Only (Pillars 1 &amp; 2)</option>
-                <option value="bq">BigQuery Only (Pillar 3)</option>
+                <option
+                  value="bq"
+                  disabled={
+                    Boolean(
+                      capabilities?.rolesLoaded &&
+                        capabilities.sqlRunnerConnections.size === 0
+                    )
+                  }
+                >
+                  BigQuery Only (Pillar 3)
+                </option>
               </select>
               <button
                 type="button"

@@ -17,11 +17,13 @@ import {
   NativeContentType,
   parseExploreId,
   PublishedAppState,
+  resolveUserCapabilities,
   saveDashboardStudioMetadata,
   saveNativeContentArtifact,
   saveUserArtifact,
   upsertPublishedDataApp,
   UserArtifactIndex,
+  UserCapabilities,
 } from './lookerApi'
 import {
   AgentSession,
@@ -92,7 +94,12 @@ export function useStudioController() {
   const mockExt =
     typeof window !== 'undefined' ? (window as any).__MOCK_LOOKER_EXTENSION__ : undefined
   const [userId, setUserId] = useState('1')
-  const [models, setModels] = useState<Array<{ name: string; label: string; explores: any[] }>>([])
+  const [capabilities, setCapabilities] = useState<UserCapabilities>(() =>
+    resolveUserCapabilities()
+  )
+  const [allModels, setAllModels] = useState<
+    Array<{ name: string; label: string; project_name?: string; explores: any[] }>
+  >([])
   const [folders, setFolders] = useState<Array<{ id: string; name: string }>>([])
   const [selectedExplores, setSelectedExplores] = useState<string[]>([])
   const [selectedFolderId, setSelectedFolderId] = useState('1')
@@ -106,6 +113,35 @@ export function useStudioController() {
     location.pathname === '/health-check' || activeMode === 'health'
   const builderMode: 'data_app' | 'dashboard' =
     activeMode === 'dashboard' ? 'dashboard' : 'data_app'
+
+  const models = useMemo(() => {
+    const isAuthoringMode =
+      activeMode === 'app' || activeMode === 'dashboard' || activeMode === 'tile'
+    if (
+      isAuthoringMode &&
+      capabilities.rolesLoaded &&
+      !capabilities.explorableModels.has('*')
+    ) {
+      return allModels.filter((m) => capabilities.explorableModels.has(m.name))
+    }
+    return allModels
+  }, [allModels, activeMode, capabilities.rolesLoaded, capabilities.explorableModels])
+
+  const availableLookmlProjects = useMemo(
+    () =>
+      Array.from(capabilities.developableProjects)
+        .filter((p) => p && p !== '*')
+        .sort(),
+    [capabilities.developableProjects]
+  )
+  const canDeployLookml = useMemo(
+    () =>
+      !capabilities.rolesLoaded ||
+      capabilities.isAdmin ||
+      capabilities.globalPermissions.has('deploy') ||
+      capabilities.globalPermissions.has('admin'),
+    [capabilities]
+  )
 
   const [lookmlProjectId, setLookmlProjectId] = useState('')
   const [activatedLookmlSkills, setActivatedLookmlSkills] = useState<string[]>([
@@ -289,6 +325,26 @@ export function useStudioController() {
   }, [catalogItems, catalogSearch, disabledModes])
 
   const handleSaveAuthSetup = async () => {
+    if (!capabilities.canConfigureExtension) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'error',
+          text: 'Saving shared extension configuration requires Looker "develop" or "admin" permission.',
+        },
+      ])
+      return
+    }
+    if (authMode === 'apikey' && !capabilities.canManageUserAttributes) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'error',
+          text: 'Creating or updating hidden Looker User Attributes requires Looker "manage_user_attributes" or "admin" permission.',
+        },
+      ])
+      return
+    }
     try {
       if (authMode === 'apikey') {
         setBusyStatus('Ensuring hidden Looker User Attribute for Gemini API Key...')
@@ -331,18 +387,33 @@ export function useStudioController() {
         if (!mounted) return
         const resolvedUserId = String(meta.user?.id || '1')
         setUserId(resolvedUserId)
+        setCapabilities(meta.capabilities)
+        if (meta.capabilities.rolesLoaded && meta.capabilities.sqlRunnerConnections.size === 0) {
+          setHealthScope((prev) => (prev === 'all' || prev === 'bq' ? 'looker' : prev))
+        }
         listUserLookmlSessions(core40SDK, extensionSDK, resolvedUserId).then((s) => {
           if (mounted) setLookmlSessions(s)
         })
-        setModels(
+        setAllModels(
           meta.models.map((m: any) => ({
             name: String(m.name),
             label: String(m.label || m.name),
+            project_name: m.project_name ? String(m.project_name) : undefined,
             explores: (m.explores || []).filter((e: any) => !e.hidden),
           }))
         )
+        const editableIds = meta.capabilities.editableFolderIds
+        const rawFolders = meta.folders || []
+        const editableFolders =
+          editableIds.size > 0
+            ? rawFolders.filter((f: any) => editableIds.has(String(f.id)))
+            : rawFolders
+        const effectiveFolders = editableFolders.length > 0 ? editableFolders : rawFolders
         setFolders(
-          meta.folders.map((f: any) => ({ id: String(f.id), name: `${f.name} (#${f.id})` }))
+          effectiveFolders.map((f: any) => ({
+            id: String(f.id),
+            name: `${f.name} (#${f.id})`,
+          }))
         )
         setSelectedFolderId((prev) => (prev === '1' ? meta.defaultFolderId : prev))
         listUserDashboardArtifacts(core40SDK, extensionSDK, resolvedUserId).then((items) => {
@@ -647,6 +718,8 @@ export function useStudioController() {
         sdk: core40SDK,
         extensionSDK,
         reportId: healthReport?.id || loadDashInput.trim() || undefined,
+        targetProject: lookmlProjectId || availableLookmlProjects[0],
+        healthScope,
         customFocus,
         messages: activeMsgs,
         onStatus: setBusyStatus,
@@ -859,6 +932,8 @@ export function useStudioController() {
         toolMode: isLookmlMode ? 'lookml' : 'data_app',
         lookmlProjectId,
         activatedLookmlSkills,
+        developableProjects: availableLookmlProjects,
+        canDeploy: canDeployLookml,
         schemaMarkdown,
         userPrompt: effectivePrompt,
         images: attachedImages,
@@ -1085,6 +1160,9 @@ export function useStudioController() {
     oauthToken,
     apiKey,
     setApiKey,
+    capabilities,
+    availableLookmlProjects,
+    canDeployLookml,
     models,
     folders,
     selectedExplores,

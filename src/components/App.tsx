@@ -85,6 +85,7 @@ const StudioMain: React.FC = () => {
         folders={ctl.folders}
         onChangeFolder={ctl.setSelectedFolderId}
         disabledModes={ctl.disabledModes}
+        capabilities={ctl.capabilities}
       />
     )
   }

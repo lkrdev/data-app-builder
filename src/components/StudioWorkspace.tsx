@@ -433,6 +433,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     builderMode,
     healthReport,
     lookmlBundle,
+    canDeployLookml,
     nativeContent,
     publishedApp,
     extensionSDK,
@@ -587,6 +588,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               bundle={lookmlBundle}
               hostUrl={hostUrl}
               extensionSDK={extensionSDK}
+              canDeploy={canDeployLookml}
             />
           </div>
         </>
