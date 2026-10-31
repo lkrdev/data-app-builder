@@ -76,6 +76,13 @@ export function useStudioController() {
   const [authMode, setAuthMode] = useState<'oauth' | 'apikey'>(initialCtx?.authMode || 'oauth')
   const [clientId, setClientId] = useState(initialCtx?.clientId || '')
   const [projectId, setProjectId] = useState(initialCtx?.projectId || '')
+  const [disabledModes, setDisabledModes] = useState<StudioMode[]>(() =>
+    Array.isArray(initialCtx?.disabledModes) ? (initialCtx.disabledModes as StudioMode[]) : []
+  )
+  const enabledModes = useMemo(() => {
+    const list = STUDIO_MODES.filter((m) => !disabledModes.includes(m.mode))
+    return list.length > 0 ? list : [STUDIO_MODES[0]]
+  }, [disabledModes])
   const [oauthToken, setOauthToken] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [isConfigured, setIsConfigured] = useState(() =>
@@ -210,8 +217,9 @@ export function useStudioController() {
   )
 
   useEffect(() => {
+    if (disabledModes.includes(activeMode)) return
     handleWakeModeEnv(activeMode)
-  }, [activeMode])
+  }, [activeMode, disabledModes])
 
   const [catalogItems, setCatalogItems] = useState<UserArtifactIndex[]>([])
   const [catalogSearch, setCatalogSearch] = useState('')
@@ -240,6 +248,7 @@ export function useStudioController() {
         history,
         requestCodeModePermission,
         setRequirePermission,
+        setDisabledModes,
       }
     }
   }, [history, requestCodeModePermission])
@@ -261,15 +270,23 @@ export function useStudioController() {
     [core40SDK, userId]
   )
 
+  const normalizeCatalogMode = (t?: string): StudioMode =>
+    ({ health_check: 'health', script: 'tile', data_app: 'app' } as Record<string, StudioMode>)[
+      t || ''
+    ] ||
+    (t as StudioMode) ||
+    'app'
+
   const filteredCatalog = useMemo(() => {
     const q = catalogSearch.trim().toLowerCase()
     return catalogItems.filter((item) => {
+      if (disabledModes.includes(normalizeCatalogMode(item.type))) return false
       if (!q) return true
       return `${item.title} ${item.id} ${item.type} ${(item.explores || []).join(' ')}`
         .toLowerCase()
         .includes(q)
     })
-  }, [catalogItems, catalogSearch])
+  }, [catalogItems, catalogSearch, disabledModes])
 
   const handleSaveAuthSetup = async () => {
     try {
@@ -296,10 +313,11 @@ export function useStudioController() {
         authMode,
         clientId: clientId.trim(),
         projectId: projectId.trim(),
+        disabledModes,
       })
       setIsConfigured(true)
       setBusyStatus(null)
-      history.replace('/')
+      history.replace(enabledModes[0].prefix)
     } catch (err: any) {
       setBusyStatus(null)
       setMessages((prev) => [...prev, { role: 'error', text: err?.message || String(err) }])
@@ -696,18 +714,24 @@ export function useStudioController() {
   }
 
   useEffect(() => {
-    if (
-      !isTileMount &&
-      !isConfigured &&
-      location.pathname !== '/config' &&
-      activeMode !== 'tile'
-    ) {
+    if (isTileMount || location.pathname === '/config') return
+    if (disabledModes.includes(activeMode)) {
+      history.replace(enabledModes[0].prefix)
+      return
+    }
+    if (!isConfigured && activeMode !== 'tile') {
       history.replace('/config')
     }
-  }, [isTileMount, isConfigured, location.pathname, activeMode, history])
+  }, [isTileMount, isConfigured, location.pathname, activeMode, disabledModes, enabledModes, history])
 
   useEffect(() => {
-    if (isTileMount || location.pathname === '/config' || activeMode === 'tile') return
+    if (
+      isTileMount ||
+      location.pathname === '/config' ||
+      activeMode === 'tile' ||
+      disabledModes.includes(activeMode)
+    )
+      return
     const id = parsedRoute.objectId
     if (!id) return
     if (activeMode === 'lookml' && id !== lookmlBundle?.id && id !== lastLookmlIdRef.current) {
@@ -775,16 +799,17 @@ export function useStudioController() {
   }
 
   const handleSelectCatalogItem = async (item: UserArtifactIndex) => {
-    const modeInfo = STUDIO_MODES.find((m) => m.mode === item.type)
+    const mode = normalizeCatalogMode(item.type)
+    const modeInfo = STUDIO_MODES.find((m) => m.mode === mode)
     const targetPath = modeInfo
       ? `${modeInfo.prefix}/${encodeURIComponent(item.id)}`
       : `/app/${encodeURIComponent(item.id)}`
     setActiveObjectId(item.id)
     if (location.pathname !== targetPath) history.push(targetPath)
-    if (item.type === 'app') await loadDashboardById(item.id, false)
-    else if (item.type === 'dashboard') await loadNativeById(item.id, false)
-    else if (item.type === 'lookml') await loadLookmlSessionById(item.id, false)
-    else if (item.type === 'health') await loadHealthCheckById(item.id, false)
+    if (mode === 'app') await loadDashboardById(item.id, false)
+    else if (mode === 'dashboard') await loadNativeById(item.id, false)
+    else if (mode === 'lookml') await loadLookmlSessionById(item.id, false)
+    else if (mode === 'health') await loadHealthCheckById(item.id, false)
     else {
       const loaded = await loadObjectArtifact(core40SDK, item.type, item.id)
       if (loaded?.messages) setMessages(loaded.messages)
@@ -1054,6 +1079,9 @@ export function useStudioController() {
     setClientId,
     projectId,
     setProjectId,
+    disabledModes,
+    setDisabledModes,
+    enabledModes,
     oauthToken,
     apiKey,
     setApiKey,
