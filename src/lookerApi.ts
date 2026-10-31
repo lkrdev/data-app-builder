@@ -91,6 +91,7 @@ export interface PublishedAppState {
     model: string
     explore: string
     query_id: string
+    canonical_query?: string
   }>
 }
 
@@ -180,7 +181,7 @@ export function buildAvailableExploresCatalog(
 ): string {
   const lines: string[] = [
     '# Available Looker Explores Catalog (Let the Agent Decide)',
-    'No specific explore was pre-selected. Choose the best `model_id::explore_id` explore(s) below and use `run_looker_codemode` (`search_content(terms="...", types="lookml_explore,dashboard,look")` and `lookml_model_explore(model_id, explore_id, fields="name,label,description,fields(dimensions(name,label,description,type),measures(name,label,description,type))")`) to inspect fields and sample rows.',
+    'No specific explore was pre-selected. Pick the best `model_id::explore_id` explore below and run ONE `run_looker_codemode` call (`lookml_model_explore(m, e, fields="name,label,description,fields(dimensions(name,label,description,type),measures(name,label,description,type))")` + 5-row `run_inline_query("json", {"model": m, "view": e, "fields": [...], "limit": "5"})`) to inspect fields and sample rows.',
     '',
   ]
   const sortedModels = [...models].sort((a, b) =>
@@ -378,6 +379,21 @@ export async function saveDashboardStudioMetadata(
   }
 }
 
+export function canonicalQueryJson(query: WidgetQueryEntry['query']): string {
+  const norm: Record<string, any> = {
+    model: query.model,
+    view: query.view,
+    fields: query.fields || [],
+  }
+  if (query.filters && Object.keys(query.filters).length > 0) norm.filters = query.filters
+  if (query.sorts && query.sorts.length > 0) norm.sorts = query.sorts
+  if (query.limit !== undefined && query.limit !== null) norm.limit = String(query.limit)
+  if (query.pivots && query.pivots.length > 0) norm.pivots = query.pivots
+  return JSON.stringify(norm, Object.keys(norm).sort())
+}
+
+// ponytail: seed savedByCanonical from existing.manifestQueries and parallelize create_query +
+// Looker REST calls via Promise.all so warm turns only register new/changed queries and finish in 1 RTT.
 export async function upsertPublishedDataApp(
   sdk: Looker40SDK,
   bundle: DataAppBundle,
@@ -385,39 +401,50 @@ export async function upsertPublishedDataApp(
   existing?: PublishedAppState | null,
   studioUpdate?: StudioMetadataUpdate
 ): Promise<PublishedAppState> {
-  // 1. Register widget queries for "Explore from Here" and tile query lineage
+  // 1. Seed existing canonical query slugs and register only new/changed widget queries concurrently
   const savedByCanonical = new Map<string, string>()
-  const manifestQueries: Array<{
-    widget_id: string
-    title: string
-    model: string
-    explore: string
-    query_id: string
-  }> = []
+  for (const mq of existing?.manifestQueries || []) {
+    if (mq.canonical_query && mq.query_id) {
+      savedByCanonical.set(mq.canonical_query, mq.query_id)
+    }
+  }
 
+  const validWidgets: Array<{ w: WidgetQueryEntry; canonical: string }> = []
+  const pendingSpecs = new Map<string, WidgetQueryEntry['query']>()
   for (const w of bundle.widgets || []) {
     if (!w.query?.model || !w.query?.view || !w.query?.fields?.length) continue
-    const canonical = JSON.stringify(w.query, Object.keys(w.query).sort())
-    let queryId = savedByCanonical.get(canonical)
-    if (!queryId) {
+    const canonical = canonicalQueryJson(w.query)
+    validWidgets.push({ w, canonical })
+    if (!savedByCanonical.has(canonical) && !pendingSpecs.has(canonical)) {
+      pendingSpecs.set(canonical, w.query)
+    }
+  }
+
+  await Promise.all(
+    Array.from(pendingSpecs.entries()).map(async ([canonical, q]) => {
       try {
         const created = await sdk.ok(
           sdk.create_query({
-            model: w.query.model,
-            view: w.query.view,
-            fields: w.query.fields,
-            filters: w.query.filters,
-            sorts: w.query.sorts,
-            limit: w.query.limit ? String(w.query.limit) : undefined,
-            pivots: w.query.pivots,
+            model: q.model,
+            view: q.view,
+            fields: q.fields,
+            filters: q.filters,
+            sorts: q.sorts,
+            limit: q.limit ? String(q.limit) : undefined,
+            pivots: q.pivots,
           })
         )
-        queryId = String(created.slug || created.id || '')
+        const queryId = String(created.slug || created.id || '')
         if (queryId) savedByCanonical.set(canonical, queryId)
       } catch {
         // Skip widget query registration if Looker rejects a query spec
       }
-    }
+    })
+  )
+
+  const manifestQueries: NonNullable<PublishedAppState['manifestQueries']> = []
+  for (const { w, canonical } of validWidgets) {
+    const queryId = savedByCanonical.get(canonical)
     if (queryId) {
       manifestQueries.push({
         widget_id: w.widget_id,
@@ -425,6 +452,7 @@ export async function upsertPublishedDataApp(
         model: w.query.model,
         explore: w.query.view,
         query_id: queryId,
+        canonical_query: canonical,
       })
     }
   }
@@ -444,42 +472,46 @@ export async function upsertPublishedDataApp(
       .replace(/^-|-$/g, '')
       .slice(0, 32) || 'app'
 
-  // 2. Update existing dashboard + inline extension if present
+  // 2. Update existing dashboard + inline extension concurrently if present
   if (existing?.dashboardId && existing?.extensionId) {
-    const extResp = await rawLookerRequest<{ id: string }>(
-      sdk,
-      'PATCH',
-      `/data_app_extension/${encodeURIComponent(existing.extensionId)}`,
-      { dashboard_id: existing.dashboardId },
-      {
-        label: title,
-        description: `Data App: ${title}`,
-        code: bundle.prod_code,
-      }
-    )
-    const bareId = String(extResp?.id || existing.extensionId).replace(/^db::/, '')
-
-    await sdk.ok(
-      sdk.update_dashboard(existing.dashboardId, {
-        title,
-      } as any)
-    )
     let elementId = existing.elementId
     if (!elementId) {
       const dash = await sdk.ok(sdk.dashboard(existing.dashboardId))
       const extEl = (dash.dashboard_elements || []).find((e) => e.type === 'extension')
       if (extEl?.id) elementId = String(extEl.id)
     }
-    if (elementId) {
-      await sdk.ok(
-        sdk.update_dashboard_element(elementId, {
+    const bareExistingId = String(existing.extensionId).replace(/^db::/, '')
+
+    const [extResp] = await Promise.all([
+      rawLookerRequest<{ id: string }>(
+        sdk,
+        'PATCH',
+        `/data_app_extension/${encodeURIComponent(bareExistingId)}`,
+        { dashboard_id: existing.dashboardId },
+        {
+          label: title,
+          description: `Data App: ${title}`,
+          code: bundle.prod_code,
+        }
+      ),
+      sdk.ok(
+        sdk.update_dashboard(existing.dashboardId, {
           title,
-          title_hidden: true,
-          extension_id: `db::${bareId}`,
-          rich_content_json: richContentJson,
         } as any)
-      )
-    }
+      ),
+      elementId
+        ? sdk.ok(
+            sdk.update_dashboard_element(elementId, {
+              title,
+              title_hidden: true,
+              extension_id: `db::${bareExistingId}`,
+              rich_content_json: richContentJson,
+            } as any)
+          )
+        : Promise.resolve(null),
+    ])
+    const bareId = String(extResp?.id || bareExistingId).replace(/^db::/, '')
+
     return {
       dashboardId: existing.dashboardId,
       extensionId: bareId,
@@ -491,25 +523,22 @@ export async function upsertPublishedDataApp(
     }
   }
 
-  // 3. Create new inline extension + full-bleed dashboard
+  // 3. Create new inline extension + full-bleed dashboard concurrently
   const randSuffix = Math.random().toString(16).slice(2, 10)
-  const extResp = await rawLookerRequest<{ id: string }>(
-    sdk,
-    'POST',
-    '/data_app_extension',
-    undefined,
-    {
-      name: `data-app-${slug}-${randSuffix}`,
-      label: title,
-      description: `Data App: ${title}`,
-      code: bundle.prod_code,
-    }
-  )
-  const bareId = String(extResp.id).replace(/^db::/, '')
-
-  let dash: any
-  try {
-    dash = await rawLookerRequest(sdk, 'POST', '/dashboards', undefined, {
+  const [extResp, dash] = await Promise.all([
+    rawLookerRequest<{ id: string }>(
+      sdk,
+      'POST',
+      '/data_app_extension',
+      undefined,
+      {
+        name: `data-app-${slug}-${randSuffix}`,
+        label: title,
+        description: `Data App: ${title}`,
+        code: bundle.prod_code,
+      }
+    ),
+    rawLookerRequest(sdk, 'POST', '/dashboards', undefined, {
       title,
       folder_id: folderId,
       appearance: {
@@ -518,33 +547,36 @@ export async function upsertPublishedDataApp(
         tile_space_between: 0,
         tile_shadow: false,
       },
-    })
-  } catch {
-    dash = await sdk.ok(
-      sdk.create_dashboard({
-        title,
-        folder_id: folderId,
-      })
-    )
-  }
-
+    }).catch(() =>
+      sdk.ok(
+        sdk.create_dashboard({
+          title,
+          folder_id: folderId,
+        })
+      )
+    ),
+  ])
+  const bareId = String(extResp.id).replace(/^db::/, '')
   const dashId = String(dash.id)
-  const createdEl = await rawLookerRequest<{ id?: string }>(
-    sdk,
-    'POST',
-    '/dashboard_elements',
-    undefined,
-    {
-      dashboard_id: dashId,
-      type: 'extension',
-      extension_id: `db::${bareId}`,
-      title,
-      title_hidden: true,
-      rich_content_json: richContentJson,
-    }
-  )
 
-  const fullDash = await sdk.ok(sdk.dashboard(dashId))
+  const [createdEl, fullDash] = await Promise.all([
+    rawLookerRequest<{ id?: string }>(
+      sdk,
+      'POST',
+      '/dashboard_elements',
+      undefined,
+      {
+        dashboard_id: dashId,
+        type: 'extension',
+        extension_id: `db::${bareId}`,
+        title,
+        title_hidden: true,
+        rich_content_json: richContentJson,
+      }
+    ),
+    sdk.ok(sdk.dashboard(dashId)),
+  ])
+
   const layouts = fullDash.dashboard_layouts || []
   const activeLayout = layouts.find((l) => l.active) || layouts[0]
   if (activeLayout?.id) {

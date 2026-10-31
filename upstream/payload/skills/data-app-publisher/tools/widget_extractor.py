@@ -539,6 +539,81 @@ def _eval_js_expr(expr: str, app_props: dict, module_consts: dict, allow_partial
                 note("state", key)
             out[key] = val
         return out, False, (filter_rs if allow_partial_query else any_rs)
+
+    # ponytail: support metric-switcher ternaries (cond ? a : b), fallbacks (a || b / a ?? b),
+    # equality (a === b), bracket indexing (map[this.selectedMetric].field), and static .find(...)
+    q_parts = _split_top_level(s, "?")
+    if len(q_parts) >= 2 and not q_parts[0].endswith("?") and not q_parts[1].startswith((".", "?")):
+        cond_s = q_parts[0].strip()
+        rest_s = "?".join(q_parts[1:])
+        colon_parts = _split_top_level(rest_s, ":")
+        if len(colon_parts) >= 2:
+            c_val, c_fail, c_rs = _eval_js_expr(cond_s, app_props, module_consts)
+            t_s, f_s = colon_parts[0].strip(), ":".join(colon_parts[1:]).strip()
+            branch_s = t_s if (not c_fail and bool(c_val)) else (t_s if c_fail else f_s)
+            b_val, b_fail, b_rs = _eval_js_expr(branch_s, app_props, module_consts)
+            if b_fail and c_fail:
+                b_val, b_fail, b_rs = _eval_js_expr(f_s, app_props, module_consts)
+            return b_val, b_fail, (reads_state or c_rs or b_rs)
+
+    for op in ("??", "||"):
+        if op in s:
+            parts = _split_top_level(s, op[0])
+            # Re-verify top-level double-char operator
+            idx_op = 0
+            while idx_op < len(s) - 1:
+                if s[idx_op : idx_op + 2] == op and len(_split_top_level(s[: idx_op + 1], op[0])) > 1:
+                    lhs, rhs = s[:idx_op].strip(), s[idx_op + 2 :].strip()
+                    if lhs and rhs:
+                        l_val, l_fail, l_rs = _eval_js_expr(lhs, app_props, module_consts)
+                        if not l_fail and (l_val is not None if op == "??" else bool(l_val)):
+                            return l_val, False, (reads_state or l_rs)
+                        r_val, r_fail, r_rs = _eval_js_expr(rhs, app_props, module_consts)
+                        return r_val, r_fail, (reads_state or l_rs or r_rs)
+                idx_op += 1
+
+    for eq_op in ("===", "!==", "==", "!="):
+        if eq_op in s:
+            m_eq = re.match(rf"^(.+?)\s*{re.escape(eq_op)}\s*(.+)$", s, re.S)
+            if m_eq:
+                lv, lf, lrs = _eval_js_expr(m_eq.group(1), app_props, module_consts)
+                rv, rf, rrs = _eval_js_expr(m_eq.group(2), app_props, module_consts)
+                if not lf and not rf:
+                    res_eq = (lv == rv) if eq_op.startswith("=") else (lv != rv)
+                    return res_eq, False, (reads_state or lrs or rrs)
+
+    if m_find := re.match(r"^([A-Za-z_$][\w$.]*)\.find\s*\(\s*(?:\(\s*([A-Za-z_$][\w$]*)\s*\)|([A-Za-z_$][\w$]*))\s*=>\s*(.+)\)$", s, re.S):
+        arr_val, arr_fail, arr_rs = _eval_js_expr(m_find.group(1), app_props, module_consts)
+        param = m_find.group(2) or m_find.group(3)
+        pred = m_find.group(4).strip()
+        if not arr_fail and isinstance(arr_val, list) and arr_val:
+            for item in arr_val:
+                pv, pf, _ = _eval_js_expr(pred, app_props, {**module_consts, param: item})
+                if not pf and pv:
+                    return item, False, True
+            return arr_val[0], False, (reads_state or arr_rs)
+
+    if m_idx := re.match(r"^([A-Za-z_$][\w$.]*)\[\s*([^\]]+)\s*\]((?:\??\.[A-Za-z_$][\w$]*)*)$", s):
+        base_val, base_fail, base_rs = _eval_js_expr(m_idx.group(1).replace("?.", "."), app_props, module_consts)
+        key_val, key_fail, key_rs = _eval_js_expr(m_idx.group(2), app_props, module_consts)
+        tail = m_idx.group(3) or ""
+        if not base_fail and isinstance(base_val, dict) and base_val:
+            cur = base_val.get(str(key_val)) if not key_fail and str(key_val) in base_val else next(iter(base_val.values()))
+            for prop in [p for p in re.split(r"\??\.", tail) if p]:
+                cur = cur.get(prop) if isinstance(cur, dict) else None
+            if cur is not None:
+                return cur, False, (reads_state or base_rs or key_rs)
+        elif not base_fail and isinstance(base_val, list) and base_val:
+            idx_num = int(key_val) if not key_fail and isinstance(key_val, (int, float)) else 0
+            cur = base_val[idx_num] if 0 <= idx_num < len(base_val) else base_val[0]
+            for prop in [p for p in re.split(r"\??\.", tail) if p]:
+                cur = cur.get(prop) if isinstance(cur, dict) else None
+            if cur is not None:
+                return cur, False, (reads_state or base_rs or key_rs)
+
+    if "?." in s and re.match(r"^[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)+$", s):
+        return _eval_js_expr(s.replace("?.", "."), app_props, module_consts)
+
     return None, True, reads_state
 
 
@@ -721,9 +796,15 @@ def _extract_from_source(raw_code: str) -> ExtractionResult:
                 local.pop(name, None)
                 continue
             pos = m.end()
+            while pos < len(region) and region[pos].isspace():
+                pos += 1
             end = _value_extent(region, pos)
+            if end == pos:
+                stmt = _split_top_level(region[pos:], ";")[0]
+                stmt_line = _split_top_level(stmt, "\n")[0]
+                end = pos + (len(stmt_line) if stmt_line.strip() else len(stmt))
             if end > pos:
-                val, failed, _ = _eval_js_expr(region[pos:end], app_props, render_consts)
+                val, failed, _ = _eval_js_expr(region[pos:end], app_props, {**render_consts, **local})
                 if not failed:
                     local[name] = val
         render_consts.update(local)

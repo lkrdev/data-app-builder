@@ -275,6 +275,84 @@ customElements.define('executive-app', ExecutiveApp);
     'Expected stamped widget ID on <app-kpi>'
   )
 
+  // Verify Issue #11: --stdin single-command bundling, dynamic metric switcher extraction,
+  // pre-seeded DATA_APP_GUIDE_MD, adaptive polling, and incremental query caching.
+  assert(
+    antigravityTs.includes('DATA_APP_GUIDE_MD') &&
+      antigravityTs.includes('DEFAULT_POLL_SCHEDULE_MS = [400, 700, 1000, 1500]') &&
+      antigravityTs.includes('AntigravityTurnTelemetry') &&
+      antigravityTs.includes('warmTurnDirective') &&
+      lookerApiTs.includes('canonicalQueryJson') &&
+      lookerApiTs.includes('savedByCanonical'),
+    'antigravity.ts and lookerApi.ts must include DATA_APP_GUIDE_MD, adaptive polling, telemetry, warmTurnDirective, and incremental canonicalQueryJson caching'
+  )
+
+  const stdinAppPath = path.join(workDir, 'stdin_app.js')
+  const dynamicMetricApp = `/**
+ * @title Dynamic Metric Switcher App
+ */
+import { DataApp, html, createCurrencyCol } from '/runtime/data-app.js';
+
+const METRIC_MAP = {
+  'order_items.total_sale_price': { label: 'Revenue', field: 'order_items.total_sale_price' },
+  'order_items.count': { label: 'Orders', field: 'order_items.count' },
+};
+
+export class DynamicMetricApp extends DataApp {
+  constructor() {
+    super();
+    this.lookerModel = 'thelook';
+    this.explore = 'order_items';
+    this.isDark = true;
+    this.selectedMetric = 'order_items.total_sale_price';
+    this.topLimit = '25';
+  }
+  render() {
+    const active = METRIC_MAP[this.selectedMetric] || METRIC_MAP['order_items.total_sale_price'];
+    return html\`
+      <div class="da-container \${this.isDark ? 'dark-theme' : ''}">
+        \${this.renderThemeToggle()}
+        <app-chart
+          title="Trend (\${active.label})"
+          type="areaspline"
+          .query=\${{ fields: ['order_items.created_month', active.field], sorts: ['order_items.created_month asc'], limit: '12' }}
+        ></app-chart>
+        <app-grid
+          title="Top Categories"
+          .query=\${{
+            fields: ['products.category', 'order_items.total_sale_price', 'order_items.count'],
+            sorts: [\`\${this.selectedMetric} desc\`],
+            limit: String(this.topLimit || '25'),
+          }}
+          .columnDefs=\${[
+            { field: 'products.category', headerName: 'Category' },
+            createCurrencyCol({ field: 'order_items.total_sale_price', headerName: 'Revenue' }),
+          ]}
+        ></app-grid>
+      </div>
+    \`;
+  }
+}
+customElements.define('dynamic-metric-app', DynamicMetricApp);
+`
+  const stdinOut = execFileSync(
+    'python3',
+    [bundlePyPath, '--stdin', 'Dynamic Metric Switcher App', stdinAppPath],
+    {
+      input: dynamicMetricApp,
+      encoding: 'utf8',
+    }
+  )
+  const stdinTag = stdinOut.match(/<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/)
+  assert(stdinTag, 'Expected <DATA_APP_BUNDLE> output from bundle_app.py --stdin')
+  const stdinBundle = JSON.parse(stdinTag[1])
+  assert.equal(stdinBundle.title, 'Dynamic Metric Switcher App')
+  assert.equal(stdinBundle.widgets.length, 2, 'Expected 2 widgets extracted from dynamic metric switcher app')
+  assert.deepEqual(stdinBundle.widgets[0].query.fields, [
+    'order_items.created_month',
+    'order_items.total_sale_price',
+  ])
+
   // Verify Agentic LookML tool (BOOTSTRAP_LOOKML_PY, allowUpdateSession, vars, and artifact keys)
   const lookmlToolTsx = readFileSync(path.join(repoRoot, 'src/lookmlTool.tsx'), 'utf8')
   assert(
