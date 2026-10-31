@@ -1,12 +1,29 @@
 import type { Looker40SDK } from '@looker/sdk'
 import {
   DataAppBundle,
+  extractResolvedUseCase,
+  getAllowedUseCases,
+  getUseCaseLabel,
   NativeContentBundle,
   NativeContentState,
   normalizeNativeContent,
   parseExploreId,
+  ResolvedStudioUseCase,
   resolveNativeEmbedPath,
+  STUDIO_USE_CASE_OPTIONS,
+  studioModeToUseCase,
+  StudioUseCase,
+  useCaseToStudioMode,
 } from './lookerApi'
+export {
+  extractResolvedUseCase,
+  getAllowedUseCases,
+  getUseCaseLabel,
+  STUDIO_USE_CASE_OPTIONS,
+  studioModeToUseCase,
+  useCaseToStudioMode,
+}
+export type { ResolvedStudioUseCase, StudioUseCase } from './lookerApi'
 import {
   BOOTSTRAP_LOOKML_PY,
   buildLookmlSystemGuide,
@@ -233,7 +250,26 @@ async function callInteractionsApi(
     'Content-Type': 'application/json',
   }
   if (auth.mode === 'oauth') {
-    if (!auth.oauthToken) throw new Error('Please sign in with Google OAuth first.')
+    if (!auth.oauthToken) {
+      if (typeof window !== 'undefined' && (window as any).__MOCK_LOOKER_EXTENSION__) {
+        const promptText = String(body?.input?.[0]?.text || '')
+        if (promptText.includes(CONVERSATION_LABEL_REQUEST_TAG)) {
+          return {
+            id: 'int_mock_label',
+            status: 'completed',
+            output_text: sanitizeConversationLabel('', promptText),
+          }
+        }
+        const inferred = extractResolvedUseCase(undefined, promptText)
+        return {
+          id: `int_mock_${Date.now().toString(36).slice(-5)}`,
+          environment_id: `env_${inferred}_mock`,
+          status: 'completed',
+          output_text: `<USE_CASE>${inferred}</USE_CASE>\nRouted Turn 1 via AGENTS.md to ${inferred}.`,
+        }
+      }
+      throw new Error('Please sign in with Google OAuth first.')
+    }
     headers['Authorization'] = `Bearer ${auth.oauthToken.trim()}`
     if (auth.projectId?.trim()) {
       headers['x-goog-user-project'] = auth.projectId.trim()
@@ -488,6 +524,8 @@ export async function runAntigravityTurn(params: {
   session: AgentSession
   model?: string
   mode?: 'data_app' | 'dashboard'
+  useCase?: StudioUseCase
+  allowedModes?: string[]
   selectedExplores: string[]
   folderId?: string
   toolMode?: 'data_app' | 'lookml'
@@ -516,6 +554,7 @@ export async function runAntigravityTurn(params: {
   lookmlBundle?: LookmlBundle | null
   tddMarkdown: string | null
   assistantText: string
+  resolvedUseCase: ResolvedStudioUseCase
   session: AgentSession
   telemetry: AntigravityTurnTelemetry
 }> {
@@ -535,6 +574,8 @@ export async function runAntigravityTurn(params: {
     session,
     model = DEFAULT_ANTIGRAVITY_MODEL,
     mode = 'data_app',
+    useCase = 'auto',
+    allowedModes,
     selectedExplores,
     folderId,
     toolMode = 'data_app',
@@ -694,11 +735,20 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       ? `[WARM CONTENT STUDIO FAST PATH: Active Looker ${normalizedExistingNative.contentType} id="${normalizedExistingNative.id}" ("${normalizedExistingNative.title}") and pre-hydrated active_content (element_ids=${JSON.stringify(normalizedExistingNative.elementIds || [])}, filter_names=${JSON.stringify(normalizedExistingNative.filterNames || [])}, lookml_dashboard_id="${normalizedExistingNative.lookmlDashboardId || ''}", project_id="${normalizedExistingNative.projectId || lookmlProjectId || ''}") are pre-injected in run_looker_codemode vars. Execute the update in ONE run_looker_codemode call using upsert_udd / upsert_lookml_dashboard / reflow_24col / pin_to_board / schedule_dashboard + return emit_native_bundle(...). NEVER echo <NATIVE_CONTENT_BUNDLE> in your text reply.]\n\n`
       : ''
 
+  const autoRoutingDirective =
+    useCase === 'auto' && isFreshEnvironment
+      ? `\n\n[AUTO USE-CASE ROUTING (Turn 1): Consult /workspace/AGENTS.md ("## Use Case Auto-Classification (Turn 1 Routing)"). Allowed use cases for this user: ${JSON.stringify(
+          allowedModes && allowedModes.length > 0
+            ? allowedModes
+            : ['app', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics']
+        )}. Start your response with <USE_CASE>...</USE_CASE> naming the single best allowed use case for this request, then execute that workflow.]`
+      : ''
+
   const buildInputItems = (fresh: boolean): Array<Record<string, any>> => [
     {
       type: 'text',
       text: fresh
-        ? `${systemGuide}${historyDigest}\n\nUser request:\n${userPrompt}`
+        ? `${systemGuide}${autoRoutingDirective}${historyDigest}\n\nUser request:\n${userPrompt}`
         : `${warmTurnDirective}${userPrompt}`,
     },
     ...(images || []).map((img) => ({
@@ -955,11 +1005,11 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   }
 
   const bundle =
-    mode === 'data_app' && toolMode !== 'lookml'
+    (mode === 'data_app' || useCase === 'auto') && toolMode !== 'lookml'
       ? extractBundleFromInteraction(interaction)
       : null
   const nativeBundle =
-    mode === 'dashboard' && toolMode !== 'lookml'
+    (mode === 'dashboard' || useCase === 'auto') && toolMode !== 'lookml'
       ? extractNativeContentFromInteraction(interaction)
       : null
   const lookmlBundle = extractLookmlBundleFromInteraction(interaction)
@@ -968,7 +1018,24 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     interaction.output_text ||
     (interaction.outputs || []).map((o: any) => o.text || '').join('\n') ||
     'Completed.'
+  const resolvedUseCase: ResolvedStudioUseCase =
+    useCase && useCase !== 'auto'
+      ? useCase
+      : lookmlBundle
+      ? 'lookml'
+      : nativeBundle
+      ? 'dashboard'
+      : tddMarkdown
+      ? 'health-check'
+      : bundle
+      ? 'app'
+      : extractResolvedUseCase(
+          `${rawText}\n${collectInteractionTextCandidates(interaction)}`,
+          userPrompt,
+          allowedModes
+        )
   const cleanAssistantText = rawText
+    .replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '')
     .replace(/<DATA_APP_BUNDLE>[\s\S]*?<\/DATA_APP_BUNDLE>/g, '')
     .replace(/<NATIVE_CONTENT_BUNDLE>[\s\S]*?<\/NATIVE_CONTENT_BUNDLE>/g, '')
     .replace(/<LOOKML_BUNDLE>[\s\S]*?<\/LOOKML_BUNDLE>/g, '')
@@ -991,6 +1058,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     nativeBundle,
     lookmlBundle,
     tddMarkdown,
+    resolvedUseCase,
     assistantText:
       cleanAssistantText ||
       (bundle

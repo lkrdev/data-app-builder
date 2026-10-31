@@ -8,9 +8,12 @@ import {
   deleteUserArtifact,
   deleteUserConversation,
   extractExploreIdsFromCode,
+  extractResolvedUseCase,
   fetchInitialLookerMetadata,
   formatExploreId,
+  getAllowedUseCases,
   getArtifactNamespace,
+  getUseCaseLabel,
   listUserArtifacts,
   listUserDashboardArtifacts,
   loadExistingDashboardApp,
@@ -21,12 +24,17 @@ import {
   NativeContentType,
   parseExploreId,
   PublishedAppState,
+  ResolvedStudioUseCase,
   resolveUserCapabilities,
   saveDashboardStudioMetadata,
   saveNativeContentArtifact,
   saveUserArtifact,
   saveUserConversation,
+  STUDIO_USE_CASE_OPTIONS,
+  studioModeToUseCase,
+  StudioUseCase,
   upsertPublishedDataApp,
+  useCaseToStudioMode,
   UserArtifactIndex,
   UserCapabilities,
   UserConversationEntry,
@@ -131,6 +139,18 @@ export function useStudioController() {
     location.pathname === '/health-check' || activeMode === 'health'
   const builderMode: 'data_app' | 'dashboard' =
     activeMode === 'dashboard' ? 'dashboard' : 'data_app'
+
+  const [selectedUseCase, setSelectedUseCase] = useState<StudioUseCase>(() =>
+    parsedRoute.objectId || parsedRoute.mode !== 'app'
+      ? studioModeToUseCase(parsedRoute.mode)
+      : 'auto'
+  )
+  const [lockedByTurn, setLockedByTurn] = useState<boolean>(false)
+
+  const allowedUseCases = useMemo(
+    () => getAllowedUseCases(capabilities, disabledModes),
+    [capabilities, disabledModes]
+  )
 
   const models = useMemo(() => {
     const isAuthoringMode =
@@ -238,6 +258,37 @@ export function useStudioController() {
   )
   const [busyStatus, setBusyStatus] = useState<string | null>(
     () => mockExt?.initialBusyStatus || null
+  )
+
+  const isUseCaseLocked = Boolean(
+    lockedByTurn ||
+      parsedRoute.objectId ||
+      messages.length > 0 ||
+      publishedApp ||
+      nativeContent ||
+      lookmlBundle ||
+      healthReport
+  )
+
+  useEffect(() => {
+    if (parsedRoute.objectId) {
+      setSelectedUseCase(studioModeToUseCase(activeMode))
+    }
+  }, [parsedRoute.objectId, activeMode])
+
+  const handleChangeUseCase = useCallback(
+    (nextUseCase: StudioUseCase) => {
+      if (isUseCaseLocked) return
+      setSelectedUseCase(nextUseCase)
+      if (nextUseCase !== 'auto') {
+        const targetMode = useCaseToStudioMode(nextUseCase)
+        const modeInfo = STUDIO_MODES.find((m) => m.mode === targetMode)
+        if (modeInfo && location.pathname !== modeInfo.prefix) {
+          history.push(modeInfo.prefix)
+        }
+      }
+    },
+    [isUseCaseLocked, location.pathname, history]
   )
 
   const handleWakeModeEnv = useCallback(
@@ -906,6 +957,8 @@ export function useStudioController() {
         ? activeConversationId
         : `conv_health_${finalReport.id}`
       setActiveConversationId(convId)
+      setSelectedUseCase('health-check')
+      setLockedByTurn(true)
       void saveUserConversation(
         core40SDK,
         userId,
@@ -994,7 +1047,8 @@ export function useStudioController() {
     else await loadDashboardById(loadDashInput, true)
   }
 
-  const handleResetNewApp = () => {
+  const handleResetNewApp = (resetToDefaultRoute?: boolean | React.MouseEvent) => {
+    const forceDefaultRoute = resetToDefaultRoute === true
     lastPublishedIdRef.current = ''
     lastNativeIdRef.current = ''
     lastLookmlIdRef.current = ''
@@ -1011,9 +1065,16 @@ export function useStudioController() {
     setSelectedExplores([])
     setAgentSession({})
     setMessages([])
+    if (forceDefaultRoute) {
+      setMessages([], 'app')
+    }
     setPastedImages([])
     setPrompt('')
-    const baseRoute = isHealthCheckMode
+    setLockedByTurn(false)
+    setSelectedUseCase('auto')
+    const baseRoute = forceDefaultRoute
+      ? enabledModes[0]?.prefix || '/app'
+      : isHealthCheckMode
       ? '/health-check'
       : isLookmlMode
       ? '/lookml'
@@ -1023,8 +1084,12 @@ export function useStudioController() {
     if (location.pathname !== baseRoute) history.push(baseRoute)
   }
 
+  const handleNewConversation = () => handleResetNewApp(true)
+
   const handleSelectConversation = async (conv: ConversationRecord) => {
     const mode = normalizeCatalogMode(conv.type)
+    setSelectedUseCase(studioModeToUseCase(conv.type))
+    setLockedByTurn(true)
     setActiveConversationId(conv.id)
     if (conv.explores?.length) setSelectedExplores(conv.explores)
     const c = conv.content || {}
@@ -1092,6 +1157,8 @@ export function useStudioController() {
 
   const handleSelectCatalogItem = async (item: UserArtifactIndex) => {
     const mode = normalizeCatalogMode(item.type)
+    setSelectedUseCase(studioModeToUseCase(item.type))
+    setLockedByTurn(true)
     const modeInfo = STUDIO_MODES.find((m) => m.mode === mode)
     const targetPath = modeInfo
       ? `${modeInfo.prefix}/${encodeURIComponent(item.id)}`
@@ -1132,8 +1199,10 @@ export function useStudioController() {
     setPrompt('')
     setPastedImages([])
     setMessages(messagesWithUser)
+    setLockedByTurn(true)
 
-    if (isHealthCheckMode) {
+    if (isHealthCheckMode || selectedUseCase === 'health-check') {
+      setSelectedUseCase('health-check')
       await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages)
       await refreshCatalog()
       return
@@ -1141,16 +1210,21 @@ export function useStudioController() {
 
     setBusyStatus('Connecting to Antigravity...')
     try {
+      const effectiveLookmlTurn = isLookmlMode || selectedUseCase === 'lookml'
+      const effectiveBuilderMode: 'data_app' | 'dashboard' =
+        selectedUseCase === 'dashboard' ? 'dashboard' : builderMode
       const result = await runAntigravityTurn({
         sdk: core40SDK,
         extensionSDK,
         auth,
         session: agentSession,
         model: selectedModel,
-        mode: builderMode,
+        mode: effectiveBuilderMode,
+        useCase: selectedUseCase,
+        allowedModes: allowedUseCases,
         selectedExplores,
         folderId: selectedFolderId,
-        toolMode: isLookmlMode ? 'lookml' : 'data_app',
+        toolMode: effectiveLookmlTurn ? 'lookml' : 'data_app',
         lookmlProjectId,
         activatedLookmlSkills,
         developableProjects: availableLookmlProjects,
@@ -1167,8 +1241,16 @@ export function useStudioController() {
         onStatus: setBusyStatus,
       })
 
+      const resolvedUseCase: ResolvedStudioUseCase =
+        selectedUseCase !== 'auto'
+          ? selectedUseCase
+          : result.resolvedUseCase ||
+            extractResolvedUseCase(result.assistantText, effectivePrompt, allowedUseCases)
+      setSelectedUseCase(resolvedUseCase)
+      const resolvedMode: StudioMode = useCaseToStudioMode(resolvedUseCase)
+
       let convId = activeObjectId || activeConversationId || result.session.lastInteractionId || 'conv_1'
-      let convMode: StudioMode = activeMode
+      let convType: string = resolvedUseCase
       let convTitle = ''
       let convExplores = selectedExplores
       let convContent: Record<string, any> | undefined
@@ -1187,7 +1269,7 @@ export function useStudioController() {
         setLookmlBundle(result.lookmlBundle)
         if (result.lookmlBundle.project_id) setLookmlProjectId(result.lookmlBundle.project_id)
         convId = result.lookmlBundle.id || 'lookml_1'
-        convMode = 'lookml'
+        convType = 'lookml'
         convTitle = result.lookmlBundle.title
         try {
           const saved = await saveLookmlSessionArtifact({
@@ -1221,8 +1303,8 @@ export function useStudioController() {
             history.replace(`/lookml/${encodeURIComponent(saved.id)}`)
           }
         } catch {}
-        setAgentSession({ ...result.session, explores: selectedExplores })
-        setMessages(finalMsgs)
+        setAgentSession({ ...result.session, explores: selectedExplores }, 'lookml')
+        setMessages(finalMsgs, 'lookml')
       } else {
         const bundleExplores = result.bundle
           ? Array.from(
@@ -1240,9 +1322,9 @@ export function useStudioController() {
         if (selectedExplores.length === 0 && bundleExplores.length > 0) {
           setSelectedExplores(bundleExplores)
         }
-        setAgentSession({ ...result.session, explores: effectiveExplores })
+        setAgentSession({ ...result.session, explores: effectiveExplores }, resolvedMode)
 
-        if (builderMode === 'dashboard' && result.nativeBundle) {
+        if ((effectiveBuilderMode === 'dashboard' || resolvedUseCase === 'dashboard') && result.nativeBundle) {
           setBusyStatus('Indexing native Looker content in user catalog...')
           const prelimAssistantMsg: ChatMessage = {
             role: 'assistant',
@@ -1276,9 +1358,9 @@ export function useStudioController() {
             ...messagesWithUser,
             { ...prelimAssistantMsg, dashboardId: savedNative.id },
           ]
-          setMessages(finalMsgs)
+          setMessages(finalMsgs, 'dashboard')
           convId = savedNative.id
-          convMode = 'dashboard'
+          convType = 'dashboard'
           convTitle = savedNative.title
           convContent = {
             dashboardId: savedNative.id,
@@ -1347,9 +1429,9 @@ export function useStudioController() {
           if (location.pathname !== `/${upserted.dashboardId}`) {
             history.replace(`/${encodeURIComponent(upserted.dashboardId)}`)
           }
-          setMessages(finalMsgs)
+          setMessages(finalMsgs, 'app')
           convId = upserted.dashboardId
-          convMode = 'app'
+          convType = 'app'
           convTitle = upserted.title
           convContent = {
             dashboardId: upserted.dashboardId,
@@ -1365,8 +1447,19 @@ export function useStudioController() {
               interactionId: result.session.lastInteractionId,
             },
           ]
-          setMessages(finalMsgs)
-          if (builderMode === 'dashboard' && nativeContent) {
+          setMessages(finalMsgs, resolvedMode)
+          if (selectedUseCase === 'auto' && resolvedMode !== activeMode) {
+            if (resolvedUseCase === 'health-check') {
+              await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages)
+              await refreshCatalog()
+              return
+            }
+            const targetModeInfo = STUDIO_MODES.find((m) => m.mode === resolvedMode)
+            if (targetModeInfo && location.pathname !== targetModeInfo.prefix) {
+              history.replace(targetModeInfo.prefix)
+            }
+          }
+          if (effectiveBuilderMode === 'dashboard' && nativeContent) {
             const updatedNative = await saveNativeContentArtifact(
               core40SDK,
               extensionSDK,
@@ -1384,6 +1477,7 @@ export function useStudioController() {
             setNativeContent(updatedNative)
             await refreshCatalog()
             convId = updatedNative.id
+            convType = 'dashboard'
             convTitle = updatedNative.title
             convContent = {
               dashboardId: updatedNative.id,
@@ -1400,6 +1494,7 @@ export function useStudioController() {
               })
             )
             convId = publishedApp.dashboardId
+            convType = 'app'
             convTitle = publishedApp.title
             convContent = {
               dashboardId: publishedApp.dashboardId,
@@ -1411,9 +1506,10 @@ export function useStudioController() {
 
       setActiveConversationId(convId)
       const namespace = getArtifactNamespace(extensionSDK)
+      const convModeForArtifact = useCaseToStudioMode(studioModeToUseCase(convType))
       const baseConv = {
         id: convId,
-        type: convMode,
+        type: convType,
         interactionId: result.session.lastInteractionId,
         environmentId: result.session.environmentId,
         explores: convExplores,
@@ -1470,7 +1566,7 @@ export function useStudioController() {
               userId,
               {
                 id: convId,
-                type: convMode,
+                type: convModeForArtifact,
                 title: label,
                 label,
                 explores: convExplores,
@@ -1516,11 +1612,21 @@ export function useStudioController() {
         setAuthMode,
         setApiKey,
         setSidebarCollapsed,
-        handleNewConversation: handleResetNewApp,
+        setSelectedUseCase: handleChangeUseCase,
+        setCapabilities,
+        handleResetNewApp,
+        handleNewConversation,
         handleSelectConversation,
       }
     }
-  }, [history, requestCodeModePermission, handleResetNewApp, handleSelectConversation])
+  }, [
+    history,
+    requestCodeModePermission,
+    handleChangeUseCase,
+    handleResetNewApp,
+    handleNewConversation,
+    handleSelectConversation,
+  ])
 
   return {
     extensionSDK,
@@ -1544,6 +1650,7 @@ export function useStudioController() {
     apiKey,
     setApiKey,
     capabilities,
+    setCapabilities,
     availableLookmlProjects,
     canDeployLookml,
     models,
@@ -1558,6 +1665,12 @@ export function useStudioController() {
     isLookmlMode,
     isHealthCheckMode,
     builderMode,
+    selectedUseCase,
+    setSelectedUseCase: handleChangeUseCase,
+    isUseCaseLocked,
+    allowedUseCases,
+    useCaseOptions: STUDIO_USE_CASE_OPTIONS,
+    getUseCaseLabel,
     lookmlProjectId,
     setLookmlProjectId,
     activatedLookmlSkills,
@@ -1603,7 +1716,7 @@ export function useStudioController() {
     handleRunHealthCheck,
     handleLoadExistingDashboard,
     handleResetNewApp,
-    handleNewConversation: handleResetNewApp,
+    handleNewConversation,
     handleSelectConversation,
     handleDeleteConversation,
     handleSelectCatalogItem,

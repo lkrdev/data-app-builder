@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { LkrCodeMode } from '../antigravity'
+import { LkrCodeMode, StudioUseCase } from '../antigravity'
 import { ConversationRecord, parseExploreId } from '../lookerApi'
 import { LOOKML_TURN_SKILLS, LookmlPreviewPane } from '../lookmlTool'
 import { renderTddMarkdownToHtml } from '../healthCheck'
@@ -175,6 +175,13 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     builderMode,
     isLookmlMode,
     isHealthCheckMode,
+    selectedUseCase,
+    setSelectedUseCase,
+    isUseCaseLocked,
+    allowedUseCases,
+    useCaseOptions,
+    getUseCaseLabel,
+    capabilities,
     selectedExplores,
     schemaMarkdown,
     busyStatus,
@@ -228,7 +235,75 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   }
 
   return (
-    <div className="dab-composer">
+    <div className="dab-composer dab-chatbar">
+      <div
+        className="dab-use-case-bar"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          marginBottom: 4,
+          flexWrap: 'wrap',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+          <strong style={{ color: '#475569' }}>Use Case:</strong>
+          {!isUseCaseLocked ? (
+            <select
+              data-testid="use-case-selector"
+              value={selectedUseCase}
+              onChange={(e) => setSelectedUseCase(e.target.value as StudioUseCase)}
+              disabled={!!busyStatus}
+              style={{
+                height: 26,
+                fontSize: 12,
+                padding: '0 8px',
+                borderRadius: 6,
+                border: '1px solid #cbd5e1',
+                background: '#f8fafc',
+                color: '#0f172a',
+                fontWeight: 500,
+              }}
+            >
+              {useCaseOptions.map((opt) => {
+                const isAllowed =
+                  opt.value === 'auto' || allowedUseCases.includes(opt.value as any)
+                const toolReason =
+                  opt.capabilityMode && capabilities?.rolesLoaded
+                    ? capabilities.tools?.[opt.capabilityMode]?.reason
+                    : undefined
+                return (
+                  <option
+                    key={opt.value}
+                    value={opt.value}
+                    disabled={!isAllowed}
+                    title={!isAllowed ? toolReason || 'Missing Looker permissions' : undefined}
+                  >
+                    {opt.label}
+                    {!isAllowed ? ' (Locked)' : ''}
+                  </option>
+                )
+              })}
+            </select>
+          ) : (
+            <span
+              data-testid="locked-use-case-badge"
+              className="dab-badge dab-locked-use-case-badge"
+              style={{
+                background: '#eff6ff',
+                color: '#1d4ed8',
+                borderColor: '#bfdbfe',
+                fontWeight: 600,
+              }}
+              title="Use case is locked after Turn 1 — start a new conversation to switch use cases"
+            >
+              🔒 {getUseCaseLabel(selectedUseCase)}
+            </span>
+          )}
+        </div>
+      </div>
+
       {isLookmlMode && (
         <div className="dab-skill-bar" aria-label="Activated Turn Skills">
           <span className="dab-skill-label">Turn Skills:</span>

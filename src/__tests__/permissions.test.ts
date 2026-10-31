@@ -4,9 +4,11 @@ import {
   classifyLooker404Error,
   ConversationRecord,
   deleteUserConversation,
+  extractResolvedUseCase,
   fetchInitialLookerMetadata,
   formatUserConversationsArtifactKey,
   formatUserConversationsKey,
+  getAllowedUseCases,
   loadUserConversations,
   rawLookerRequest,
   resolveUserCapabilities,
@@ -479,5 +481,93 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
 
     const afterDelete = await deleteUserConversation(mockSdk, '1', 'conv_1')
     expect(afterDelete.map((c) => c.id)).toEqual(['conv_2'])
+  })
+
+  test('9. routes Auto use-case via AGENTS.md <USE_CASE>, intersects with user permissions, and seeds /workspace/AGENTS.md', async () => {
+    expect(
+      extractResolvedUseCase(
+        '<USE_CASE>lookml</USE_CASE>\nUpdated view order_items.view.lkml.',
+        'Help me with my model',
+        ['app', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics']
+      )
+    ).toBe('lookml')
+
+    expect(
+      extractResolvedUseCase(
+        '<USE_CASE>lookml</USE_CASE>\nAttempting LookML edit.',
+        'Add a measure to order_items.view.lkml',
+        ['app', 'dashboard', 'conversational-analytics']
+      )
+    ).toBe('app')
+
+    expect(
+      extractResolvedUseCase(
+        'Completed 3-pillar audit.',
+        'Run a 3-pillar health check on thelook_event',
+        ['app', 'health-check']
+      )
+    ).toBe('health-check')
+
+    const explorerOnlyCaps = resolveUserCapabilities({
+      user: { id: '2' },
+      roles: [
+        {
+          id: '10',
+          name: 'Explorer',
+          permission_set: {
+            all_access: false,
+            permissions: ['access_data', 'explore', 'save_content', 'save_dashboards'],
+          },
+          model_set: { all_access: false, models: ['thelook'] },
+        },
+      ],
+      models: [{ name: 'thelook', project_name: 'thelook_proj', allowed_db_connection_names: [] }],
+      folders: [{ id: '5', can: { edit_content: true, save_content: true } }],
+    })
+    const allowedForExplorer = getAllowedUseCases(explorerOnlyCaps, [])
+    expect(allowedForExplorer).toContain('app')
+    expect(allowedForExplorer).toContain('dashboard')
+    expect(allowedForExplorer).not.toContain('lookml')
+    expect(allowedForExplorer).not.toContain('health-check')
+
+    const capturedCalls: any[] = []
+    const mockExt = {
+      serverProxy: async (url: string, init: any) => {
+        const body = init?.body ? JSON.parse(init.body) : undefined
+        capturedCalls.push({ url, body })
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            id: 'int_auto_1',
+            environment_id: 'env_auto_1',
+            status: 'completed',
+            output_text: '<USE_CASE>dashboard</USE_CASE>\nBuilt native Looker UDD.',
+          }),
+        }
+      },
+    }
+    const turnRes = await runAntigravityTurn({
+      sdk: {} as any,
+      extensionSDK: mockExt,
+      auth: { mode: 'apikey' },
+      session: {},
+      useCase: 'auto',
+      allowedModes: ['app', 'dashboard'],
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      userPrompt: 'Create a native Looker UDD dashboard for executive KPIs',
+      onStatus: () => {},
+    })
+    expect(turnRes.resolvedUseCase).toBe('dashboard')
+    expect(turnRes.assistantText).toBe('Built native Looker UDD.')
+    const sentSources = capturedCalls[0]?.body?.environment?.sources || []
+    expect(
+      sentSources.some(
+        (s: any) =>
+          s.target === '/workspace/AGENTS.md' &&
+          String(s.content).includes('## Use Case Auto-Classification (Turn 1 Routing)')
+      )
+    ).toBe(true)
   })
 })

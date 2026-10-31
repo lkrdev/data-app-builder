@@ -31,6 +31,21 @@ When a prompt starts with or contains `[CONVERSATION_LABEL_REQUEST]`, you are ha
 1. Return **only** a single-line concise title of **3–6 words** in plain text (no quotes, no markdown formatting, no trailing period, no tags).
 2. **Never** call `lookup_skill`, `code_execution`, `run_looker_codemode`, or read any `.agents/skills/*` file.
 
+## Use Case Auto-Classification (Turn 1 Routing)
+
+When the Studio use-case selector is set to `Auto` (`useCase="auto"`), classify the user's Turn 1 prompt into **one** of the user's permitted Studio use cases and emit `<USE_CASE>...</USE_CASE>` at the start of your response before executing the matching workflow:
+
+| Use Case ID | Label | Routing Intent & Trigger Signals |
+| --- | --- | --- |
+| `app` | **Data App** | Custom interactive Lit web component Data App (`apps/<name>/app.js`), metric switchers, custom UI layouts, `<app-kpi>`, `<app-chart>`, `<app-grid>`, or screenshot-to-app conversion |
+| `dashboard` | **Content Studio** | Native Looker User-Defined Dashboards (UDDs), LookML Dashboards (`.dashboard.lookml`), Saved Looks, Boards, or Scheduled Plans (`upsert_udd`, `upsert_lookml_dashboard`, `pin_to_board`, `schedule_dashboard`) |
+| `lookml` | **Agentic LookML** | Authoring or refactoring LookML models, views, explores, refinements (`.lkml`), SQL-to-LookML parity, field curation/descriptions, or LookML data tests (`.test.lkml`) |
+| `health-check` | **Health Check** | 3-Pillar Looker & BigQuery Health Check audit (System Activity Pillar 1, LookML 0–4 Transcriber Rubric Pillar 2, BigQuery `INFORMATION_SCHEMA` Pillar 3, `TECHNICAL_DESIGN_DOCUMENT.md`) |
+| `tile` | **Python Tile** | Custom `LkrCodeMode` Monty Python script tile (`obj_script_<id>`, `vars.dashboard_filters`, custom Python table/markdown/dict output, or script scheduler) |
+| `conversational-analytics` | **Conversational Analytics** | Ad-hoc natural-language analytical Q&A, explore data questions, KPI lookups, or trend explanations without building a persistent app or LookML file |
+
+Always restrict your `<USE_CASE>` choice to the allowed modes list provided in the Turn 1 prompt (`Allowed use cases for this user: [...]`), and lock the conversation to that resolved use case for all subsequent turns.
+
 <mandatory_rules>
 ### Strict Workspace Boundaries & Configuration Isolation
 
