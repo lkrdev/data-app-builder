@@ -1,6 +1,13 @@
 import React, { useState } from 'react'
 import type { Looker40SDK } from '@looker/sdk'
-import { PersistedChatTurn, rawLookerRequest } from './lookerApi'
+import {
+  getArtifactJson,
+  getArtifactNamespace,
+  PersistedChatTurn,
+  putArtifacts,
+  searchArtifactsRaw,
+} from './lookerApi'
+export { getArtifactNamespace } from './lookerApi'
 
 export interface LookmlFileChange {
   path: string
@@ -363,9 +370,6 @@ export function buildLookmlSystemGuide(params: {
   ].join('\n')
 }
 
-export const getArtifactNamespace = (extensionSDK: any): string =>
-  extensionSDK?.lookerHostData?.extensionId?.trim() || 'data_app_builder'
-
 export function getLookmlArtifactKeys(userId: string, id: string) {
   const cleanUser = String(userId || 'anon').trim()
   const cleanId = String(id || 'default').trim().replace(/[^a-zA-Z0-9_-]/g, '_')
@@ -376,32 +380,8 @@ export function getLookmlArtifactKeys(userId: string, id: string) {
   }
 }
 
-async function fetchArtifactVersions(
-  sdk: Looker40SDK,
-  namespace: string,
-  keys: string[]
-): Promise<Record<string, number>> {
-  const map: Record<string, number> = {}
-  for (const key of keys) {
-    try {
-      const res = await rawLookerRequest<any[]>(
-        sdk,
-        'GET',
-        `/artifacts/${encodeURIComponent(namespace)}`,
-        { key, fields: 'key,version' }
-      )
-      for (const item of Array.isArray(res) ? res : res ? [res] : []) {
-        if (item?.key && typeof item?.version === 'number') map[item.key] = item.version
-      }
-    } catch {
-      // Key does not exist yet
-    }
-  }
-  return map
-}
-
 // ponytail: persist two-tier Looker Artifacts (`user_${userId}_lookml_${id}` compact index + `obj_lookml_${id}` full payload)
-// via rawLookerRequest against /artifacts/:namespace so LookML sessions are searchable per user and shareable by URL.
+// via shared putArtifacts so LookML sessions are searchable per user and shareable by URL.
 export async function saveLookmlSessionArtifact(params: {
   sdk: Looker40SDK
   extensionSDK?: any
@@ -453,21 +433,14 @@ export async function saveLookmlSessionArtifact(params: {
     },
   }
 
-  const versions = await fetchArtifactVersions(sdk, namespace, [userKey, objKey])
-  await rawLookerRequest(sdk, 'PUT', `/artifacts/${encodeURIComponent(namespace)}`, undefined, [
-    {
-      key: userKey,
-      value: JSON.stringify(index),
-      content_type: 'application/json',
-      ...(versions[userKey] !== undefined ? { version: versions[userKey] } : {}),
-    },
-    {
-      key: objKey,
-      value: JSON.stringify(payload),
-      content_type: 'application/json',
-      ...(versions[objKey] !== undefined ? { version: versions[objKey] } : {}),
-    },
-  ])
+  await putArtifacts(
+    sdk,
+    [
+      { key: userKey, value: index },
+      { key: objKey, value: payload },
+    ],
+    namespace
+  )
   return { id, userKey, objKey, index, payload }
 }
 
@@ -478,15 +451,9 @@ export async function loadLookmlSessionArtifact(
 ): Promise<LookmlArtifactPayload> {
   const namespace = getArtifactNamespace(extensionSDK)
   const objKey = `obj_lookml_${rawId.trim().replace(/^obj_lookml_/, '')}`
-  const res = await rawLookerRequest<any[]>(
-    sdk,
-    'GET',
-    `/artifacts/${encodeURIComponent(namespace)}`,
-    { key: objKey }
-  )
-  const item = Array.isArray(res) ? res[0] : res
-  if (!item?.value) throw new Error(`LookML session artifact "${objKey}" not found.`)
-  return typeof item.value === 'string' ? JSON.parse(item.value) : item.value
+  const found = await getArtifactJson<LookmlArtifactPayload>(sdk, objKey, namespace)
+  if (!found) throw new Error(`LookML session artifact "${objKey}" not found.`)
+  return found
 }
 
 export async function listUserLookmlSessions(
@@ -494,15 +461,13 @@ export async function listUserLookmlSessions(
   extensionSDK: any,
   userId: string
 ): Promise<LookmlSessionIndex[]> {
-  const namespace = getArtifactNamespace(extensionSDK)
   try {
-    const res = await rawLookerRequest<any[]>(
+    const res = await searchArtifactsRaw(
       sdk,
-      'GET',
-      `/artifacts/${encodeURIComponent(namespace)}/search`,
-      { key: `user_${String(userId || 'anon').trim()}_lookml_%`, limit: 50 }
+      getArtifactNamespace(extensionSDK),
+      `user_${String(userId || 'anon').trim()}_lookml_%`
     )
-    return (Array.isArray(res) ? res : [])
+    return res
       .map((item) => {
         try {
           return typeof item?.value === 'string' ? JSON.parse(item.value) : item?.value
