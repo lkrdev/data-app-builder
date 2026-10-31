@@ -33,7 +33,9 @@ const cmParsed = JSON.parse(cmOut)
 assert.equal(cmParsed.method, 'GET')
 assert.equal(cmParsed.path, '/lookml_models/thelook/explores/order_items')
 
-const antigravityTs = readFileSync(path.join(repoRoot, 'src/antigravity.ts'), 'utf8')
+const antigravityTs = ['src/antigravity.ts', 'src/antigravityPrompts.ts']
+  .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
+  .join('\n')
 assert(
   antigravityTs.includes('https://www.googleapis.com/auth/generative-language.retriever'),
   'OAuth scope must use consent-page-allowed generative-language.retriever scope'
@@ -62,7 +64,14 @@ assert(
   appTsx.includes("location.pathname === '/config'") && !appTsx.includes('⚙ Setup'),
   'Auth setup must only be exposed on /config route without a setup button'
 )
-const lookerApiTs = readFileSync(path.join(repoRoot, 'src/lookerApi.ts'), 'utf8')
+const lookerApiTs = [
+  'src/lookerApi.ts',
+  'src/lookerPermissions.ts',
+  'src/lookerArtifacts.ts',
+  'src/dataAppPublisher.ts',
+]
+  .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
+  .join('\n')
 assert(
   lookerApiTs.includes('data_app_studio') &&
     lookerApiTs.includes('formatExploreId') &&
@@ -101,7 +110,12 @@ assert(
     manifestLkml.includes('"update_artifacts"'),
   'manifest.lkml must declare native content and artifact core_api_methods'
 )
-const pythonTileTsx = readFileSync(path.join(repoRoot, 'src/components/PythonTile.tsx'), 'utf8')
+const pythonTileTsx = [
+  'src/components/PythonTile.tsx',
+  'src/components/ScriptStudioView.tsx',
+]
+  .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
+  .join('\n')
 assert(
   lookerApiTs.includes('user_${uid}_script_${payload.id}') &&
     lookerApiTs.includes('obj_script_${payload.id}') &&
