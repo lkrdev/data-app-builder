@@ -25,6 +25,12 @@ Detailed component properties, methods, and styling variables live in
 > [!TIP]
 > Always load the respective `SKILL.md` before executing any commands. Tool scripts reside under `skills/<skill-name>/tools/` and are not located in the root directory.
 
+## Conversation Labeling (Stateless Side-Request)
+
+When a prompt starts with or contains `[CONVERSATION_LABEL_REQUEST]`, you are handling an out-of-band, stateless conversation labeling request:
+1. Return **only** a single-line concise title of **3–6 words** in plain text (no quotes, no markdown formatting, no trailing period, no tags).
+2. **Never** call `lookup_skill`, `code_execution`, `run_looker_codemode`, or read any `.agents/skills/*` file.
+
 <mandatory_rules>
 ### Strict Workspace Boundaries & Configuration Isolation
 

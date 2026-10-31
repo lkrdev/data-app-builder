@@ -1,14 +1,23 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import {
   classifyLooker404Error,
   fetchInitialLookerMetadata,
+  formatUserConversationsKey,
+  loadUserConversations,
   rawLookerRequest,
   resolveUserCapabilities,
+  saveUserConversation,
 } from '../lookerApi'
 import {
+  AGENTS_MD,
   ANTIGRAVITY_ALLOWED_MODELS,
+  CONVERSATION_LABEL_REQUEST_TAG,
   DEFAULT_ANTIGRAVITY_MODEL,
+  generateConversationLabel,
   listAvailableAntigravityModels,
   runAntigravityTurn,
+  sanitizeConversationLabel,
 } from '../antigravity'
 
 describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics', () => {
@@ -294,5 +303,118 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       type: 'antigravity',
       model: 'gemini-4-argon',
     })
+    expect(postCall?.body?.environment?.sources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ target: '/workspace/AGENTS.md', content: AGENTS_MD }),
+      ])
+    )
+  })
+
+  test('7. auto-labels conversations after Turn 1 via stateless side-request (tools=[], no previous_interaction_id) and persists to user_conversations:${me.id}', async () => {
+    const rootAgentsMd = readFileSync(path.resolve(__dirname, '../../AGENTS.md'), 'utf8')
+    expect(rootAgentsMd).toContain('## Conversation Labeling (Stateless Side-Request)')
+    expect(rootAgentsMd).toContain(CONVERSATION_LABEL_REQUEST_TAG)
+    expect(rootAgentsMd).toContain('3–6 words')
+    expect(rootAgentsMd).toContain('lookup_skill')
+    expect(AGENTS_MD).toContain('## Conversation Labeling (Stateless Side-Request)')
+    expect(AGENTS_MD).toContain(CONVERSATION_LABEL_REQUEST_TAG)
+
+    expect(
+      sanitizeConversationLabel('"**Executive Order Revenue & Margin Breakdown.**"')
+    ).toBe('Executive Order Revenue & Margin Breakdown')
+    expect(
+      sanitizeConversationLabel(
+        'Title: Monthly Cohort Retention Analysis Across All Global Store Regions Today'
+      )
+    ).toBe('Monthly Cohort Retention Analysis Across All')
+    expect(
+      sanitizeConversationLabel('', 'Build an executive revenue dashboard on order_items')
+    ).toBe('Build an executive revenue dashboard on')
+
+    const apiCalls: Array<{ url: string; method: string; body?: any }> = []
+    let pollCounter = 0
+    const mockExtSDK = {
+      serverProxy: async (url: string, init: any) => {
+        const parsedBody = init?.body ? JSON.parse(init.body) : undefined
+        apiCalls.push({ url, method: init?.method || 'GET', body: parsedBody })
+        if (init?.method === 'POST') {
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_label_stateless_1',
+              status: 'in_progress',
+            }),
+          }
+        }
+        pollCounter += 1
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            id: 'int_label_stateless_1',
+            status: 'completed',
+            output_text: '"Order Revenue & Margin Overview."',
+          }),
+        }
+      },
+    }
+
+    const label = await generateConversationLabel({
+      extensionSDK: mockExtSDK,
+      auth: { mode: 'apikey' },
+      environmentId: 'env_shared_1',
+      userPrompt: 'Build a revenue and margin dashboard on order_items',
+      assistantText: 'Created dashboard #42 with 3 KPI tiles and a trend chart.',
+      model: 'gemini-3.5-flash-lite',
+      pollScheduleMs: [1],
+    })
+    expect(label).toBe('Order Revenue & Margin Overview')
+    expect(pollCounter).toBe(1)
+
+    const postReq = apiCalls.find((c) => c.method === 'POST')
+    expect(postReq).toBeDefined()
+    expect(postReq?.body?.tools).toEqual([])
+    expect(postReq?.body?.previous_interaction_id).toBeUndefined()
+    expect('previous_interaction_id' in (postReq?.body || {})).toBe(false)
+    expect(postReq?.body?.environment).toBe('env_shared_1')
+    expect(postReq?.body?.input?.[0]?.text).toContain(CONVERSATION_LABEL_REQUEST_TAG)
+
+    const store = new Map<string, any>()
+    const mockArtifactSdk: any = {
+      ok: async (p: any) => p,
+      artifact: async ({ key }: { key: string }) => {
+        const val = store.get(key)
+        return val ? [{ key, version: 1, value: JSON.stringify(val) }] : []
+      },
+      update_artifacts: async (_ns: string, updates: Array<{ key: string; value: string }>) => {
+        for (const u of updates) {
+          store.set(u.key, JSON.parse(u.value))
+        }
+        return []
+      },
+    }
+
+    expect(formatUserConversationsKey('42')).toBe('user_conversations:42')
+    await saveUserConversation(mockArtifactSdk, '42', {
+      id: 'conv_abc',
+      type: 'app',
+      label: 'Initial Fallback Title',
+      interactionId: 'int_turn_1',
+      environmentId: 'env_shared_1',
+    })
+    await saveUserConversation(mockArtifactSdk, '42', {
+      id: 'conv_abc',
+      type: 'app',
+      label,
+      interactionId: 'int_turn_1',
+      environmentId: 'env_shared_1',
+    })
+
+    const savedConvs = await loadUserConversations(mockArtifactSdk, '42')
+    expect(savedConvs).toHaveLength(1)
+    expect(savedConvs[0].id).toBe('conv_abc')
+    expect(savedConvs[0].label).toBe('Order Revenue & Margin Overview')
+    expect(savedConvs[0].interactionId).toBe('int_turn_1')
   })
 })

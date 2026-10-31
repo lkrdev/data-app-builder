@@ -463,6 +463,21 @@ export function buildNativeContentGuide(params: {
   ].join('\n')
 }
 
+export const CONVERSATION_LABEL_REQUEST_TAG = '[CONVERSATION_LABEL_REQUEST]'
+
+export const AGENTS_MD = `# Looker Data Apps
+
+This directory is an installed Looker Data Apps environment. A **Data App** is a
+code-first application for Looker, authored as a single self-contained ES module
+in \`apps/<name>/app.js\` and published directly into Looker dashboard tiles.
+
+## Conversation Labeling (Stateless Side-Request)
+
+When a prompt starts with or contains \`[CONVERSATION_LABEL_REQUEST]\`, you are handling an out-of-band, stateless conversation labeling request:
+1. Return **only** a single-line concise title of **3–6 words** in plain text (no quotes, no markdown formatting, no trailing period, no tags).
+2. **Never** call \`lookup_skill\`, \`code_execution\`, \`run_looker_codemode\`, or read any \`.agents/skills/*\` file.
+`
+
 export const DATA_APP_GUIDE_MD = `# Looker Lit Data Apps — Compact Sandbox Guide
 
 ## 1. Zero-Build ES Module Contract
