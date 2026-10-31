@@ -85,19 +85,12 @@ export function useStudioController() {
   const [disabledModes, setDisabledModes] = useState<StudioMode[]>(() =>
     Array.isArray(initialCtx?.disabledModes) ? (initialCtx.disabledModes as StudioMode[]) : []
   )
-  const [defaultModel, setDefaultModelState] = useState<string>(
-    initialCtx?.defaultModel || DEFAULT_ANTIGRAVITY_MODEL
-  )
   const [selectedModel, setSelectedModel] = useState<string>(
     initialCtx?.defaultModel || DEFAULT_ANTIGRAVITY_MODEL
   )
   const [availableModels, setAvailableModels] = useState<AntigravityModelOption[]>(
     ANTIGRAVITY_ALLOWED_MODELS
   )
-  const setDefaultModel = useCallback((nextModel: string) => {
-    setDefaultModelState(nextModel)
-    setSelectedModel(nextModel)
-  }, [])
   const enabledModes = useMemo(() => {
     const list = STUDIO_MODES.filter((m) => !disabledModes.includes(m.mode))
     return list.length > 0 ? list : [STUDIO_MODES[0]]
@@ -322,10 +315,9 @@ export function useStudioController() {
         setRequirePermission,
         setDisabledModes,
         setSelectedModel,
-        setDefaultModel,
       }
     }
-  }, [history, requestCodeModePermission, setDefaultModel])
+  }, [history, requestCodeModePermission])
 
   const resolvePermDecision = (decision: CodeModePermissionDecision) => {
     if (!pendingPerm) return
@@ -397,9 +389,8 @@ export function useStudioController() {
         clientId: clientId.trim(),
         projectId: projectId.trim(),
         disabledModes,
-        defaultModel,
+        defaultModel: selectedModel,
       })
-      setSelectedModel(defaultModel)
       setIsConfigured(true)
       setBusyStatus(null)
       history.replace(enabledModes[0].prefix)
@@ -1183,8 +1174,6 @@ export function useStudioController() {
     setProjectId,
     disabledModes,
     setDisabledModes,
-    defaultModel,
-    setDefaultModel,
     selectedModel,
     setSelectedModel,
     availableModels,

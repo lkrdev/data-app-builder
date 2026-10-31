@@ -14,8 +14,8 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     setProjectId,
     disabledModes,
     setDisabledModes,
-    defaultModel,
-    setDefaultModel,
+    selectedModel,
+    setSelectedModel,
     availableModels,
     enabledModes,
     apiKey,
@@ -134,8 +134,8 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             <strong style={{ color: '#475569' }}>Default Model:</strong>
             <select
               data-testid="config-default-model-select"
-              value={defaultModel}
-              onChange={(e) => setDefaultModel(e.target.value)}
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
             >
               {availableModels.map((m) => (
                 <option key={m.id} value={m.id} title={m.description}>
@@ -418,16 +418,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
           value={selectedModel}
           onChange={(e) => setSelectedModel(e.target.value)}
           title="Select Antigravity model (/v1beta/models)"
-          style={{
-            height: 26,
-            fontSize: 11.5,
-            padding: '0 6px',
-            borderRadius: 6,
-            border: '1px solid #cbd5e1',
-            background: '#f8fafc',
-            color: '#0f172a',
-            fontWeight: 500,
-          }}
+          style={{ height: 26, fontSize: 11.5, padding: '0 6px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#f8fafc', color: '#0f172a', fontWeight: 500 }}
         >
           {availableModels.map((m) => (
             <option key={m.id} value={m.id} title={m.description}>

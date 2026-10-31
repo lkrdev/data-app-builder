@@ -237,43 +237,34 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       'gemini-3.6-flash',
       'gemini-3.5-flash-lite',
     ])
+    expect(await listAvailableAntigravityModels({}, { mode: 'oauth' })).toEqual(
+      ANTIGRAVITY_ALLOWED_MODELS
+    )
 
-    // Fallback before auth is configured
-    const unauthed = await listAvailableAntigravityModels({}, { mode: 'oauth' })
-    expect(unauthed).toEqual(ANTIGRAVITY_ALLOWED_MODELS)
-
-    // Intersect live /v1beta/models via serverProxy
     const calls: Array<{ url: string; method: string; body?: any }> = []
     const mockExtensionSDK = {
       serverProxy: async (url: string, init: any) => {
-        calls.push({
-          url,
-          method: init.method,
-          body: init.body ? JSON.parse(init.body) : undefined,
-        })
-        if (url.endsWith('/v1beta/models')) {
-          return {
-            ok: true,
-            status: 200,
-            body: JSON.stringify({
-              models: [
-                { name: 'models/gemini-3.8-flash', displayName: 'Gemini 3.8 Flash', description: 'Live 3.8 Flash' },
-                { name: 'models/gemini-4-argon', displayName: 'Gemini 4 Argon', description: 'Live 4 Argon' },
-                { name: 'models/gemini-3.5-flash-lite', displayName: 'Gemini 3.5 Flash-Lite' },
-                { name: 'models/unrelated-embedding-001', displayName: 'Ignore Me' },
-              ],
-            }),
-          }
-        }
+        calls.push({ url, method: init.method, body: init.body ? JSON.parse(init.body) : undefined })
         return {
           ok: true,
           status: 200,
-          body: JSON.stringify({
-            id: 'int_argon_1',
-            environment_id: 'env_argon_1',
-            status: 'completed',
-            output_text: 'Completed with Argon.',
-          }),
+          body: JSON.stringify(
+            url.endsWith('/v1beta/models')
+              ? {
+                  models: [
+                    { name: 'models/gemini-3.8-flash', displayName: 'Gemini 3.8 Flash', description: 'Live 3.8 Flash' },
+                    { name: 'models/gemini-4-argon', displayName: 'Gemini 4 Argon', description: 'Live 4 Argon' },
+                    { name: 'models/gemini-3.5-flash-lite', displayName: 'Gemini 3.5 Flash-Lite' },
+                    { name: 'models/unrelated-embedding-001', displayName: 'Ignore Me' },
+                  ],
+                }
+              : {
+                  id: 'int_argon_1',
+                  environment_id: 'env_argon_1',
+                  status: 'completed',
+                  output_text: 'Completed with Argon.',
+                }
+          ),
         }
       },
     }

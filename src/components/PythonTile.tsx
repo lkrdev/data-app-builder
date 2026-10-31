@@ -681,16 +681,7 @@ export const ScriptStudioView: React.FC<{
             value={selectedModel}
             onChange={(e) => onChangeModel?.(e.target.value)}
             title="Select Antigravity model (/v1beta/models)"
-            style={{
-              height: 26,
-              fontSize: 11.5,
-              padding: '0 6px',
-              borderRadius: 6,
-              border: '1px solid #cbd5e1',
-              background: '#f8fafc',
-              color: '#0f172a',
-              fontWeight: 500,
-            }}
+            style={{ height: 26, fontSize: 11.5, padding: '0 6px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#f8fafc', color: '#0f172a', fontWeight: 500 }}
           >
             {availableModels.map((m) => (
               <option key={m.id} value={m.id} title={m.description}>

@@ -33,31 +33,11 @@ export interface AntigravityModelOption {
 export const DEFAULT_ANTIGRAVITY_MODEL = 'gemini-3.8-flash'
 
 export const ANTIGRAVITY_ALLOWED_MODELS: AntigravityModelOption[] = [
-  {
-    id: 'gemini-3.8-flash',
-    label: 'Gemini 3.8 Flash',
-    description: 'Default — balanced reasoning, coding & tool use',
-  },
-  {
-    id: 'gemini-4-argon',
-    label: 'Gemini 4 Argon',
-    description: 'Frontier reasoning & complex multi-step engineering',
-  },
-  {
-    id: 'gemini-3.7-flash',
-    label: 'Gemini 3.7 Flash',
-    description: 'Fast multi-step reasoning & coding',
-  },
-  {
-    id: 'gemini-3.6-flash',
-    label: 'Gemini 3.6 Flash',
-    description: 'Stable reasoning & tool use',
-  },
-  {
-    id: 'gemini-3.5-flash-lite',
-    label: 'Gemini 3.5 Flash-Lite',
-    description: 'Lowest latency & cost',
-  },
+  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', description: 'Default — balanced reasoning, coding & tool use' },
+  { id: 'gemini-4-argon', label: 'Gemini 4 Argon', description: 'Frontier reasoning & complex multi-step engineering' },
+  { id: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash', description: 'Fast multi-step reasoning & coding' },
+  { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', description: 'Stable reasoning & tool use' },
+  { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite', description: 'Lowest latency & cost' },
 ]
 
 export interface ExtensionAuthContextConfig {
@@ -367,25 +347,21 @@ export async function listAvailableAntigravityModels(
   if (!canQuery) return ANTIGRAVITY_ALLOWED_MODELS
   try {
     const res = await callInteractionsApi(extensionSDK, auth, 'models', 'GET')
-    const rawModels: any[] = Array.isArray(res?.models) ? res.models : []
-    const byId = new Map<string, any>()
-    for (const m of rawModels) {
-      const id = String(m?.name || '')
-        .replace(/^models\//, '')
-        .trim()
-      if (id) byId.set(id, m)
-    }
-    const intersected = ANTIGRAVITY_ALLOWED_MODELS.filter((allowed) => byId.has(allowed.id)).map(
-      (allowed) => {
-        const apiModel = byId.get(allowed.id)
-        return {
-          id: allowed.id,
-          label: String(apiModel?.displayName || allowed.label),
-          description: String(apiModel?.description || allowed.description),
-        }
-      }
+    const byId = new Map<string, any>(
+      (Array.isArray(res?.models) ? res.models : []).map((m: any) => [
+        String(m?.name || '').replace(/^models\//, '').trim(),
+        m,
+      ])
     )
-    return intersected.length > 0 ? intersected : ANTIGRAVITY_ALLOWED_MODELS
+    const matched = ANTIGRAVITY_ALLOWED_MODELS.filter((a) => byId.has(a.id)).map((a) => {
+      const m = byId.get(a.id)
+      return {
+        id: a.id,
+        label: String(m?.displayName || a.label),
+        description: String(m?.description || a.description),
+      }
+    })
+    return matched.length > 0 ? matched : ANTIGRAVITY_ALLOWED_MODELS
   } catch {
     return ANTIGRAVITY_ALLOWED_MODELS
   }
