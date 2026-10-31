@@ -4,6 +4,7 @@ import {
   NativeContentBundle,
   NativeContentState,
   parseExploreId,
+  resolveNativeEmbedPath,
 } from './lookerApi'
 import {
   BOOTSTRAP_LOOKML_PY,
@@ -90,6 +91,7 @@ export interface AntigravityTurnTelemetry {
   poll_wait_ms: number
   poll_count: number
   codemode_exec_ms: number
+  looker_http_ms: number
   tool_calls: {
     bash: number
     codemode: number
@@ -101,9 +103,473 @@ export interface AntigravityTurnTelemetry {
     thought: number
   }
   verify_retries: number
+  api_retries: number
 }
 
 export const DEFAULT_POLL_SCHEDULE_MS = [400, 700, 1000, 1500]
+
+export const DASHBOARD_CODEMODE_PREAMBLE_PY = `# ponytail: pre-injected Monty Python macros for UDDs, LookML Dashboards (.dashboard.lookml), Looks, Boards & Schedules
+import json
+
+try: dashboard_layouts = dashboard_dashboard_layouts
+except Exception: pass
+try: _active = active_content or {}
+except Exception: _active = {}
+try: _t_model = target_model or ""
+except Exception: _t_model = ""
+try: _t_explore = target_explore or ""
+except Exception: _t_explore = ""
+try: _t_folder_id = target_folder_id or ""
+except Exception: _t_folder_id = ""
+try: _t_project_id = target_project_id or ""
+except Exception: _t_project_id = ""
+try: _t_explores = list(target_explores or [])
+except Exception: _t_explores = []
+_qcache = dict(_active.get("query_cache") or _active.get("queryCache") or {})
+_fcache = dict(_active.get("filter_cache") or _active.get("filterCache") or {})
+
+def _canonical_qkey(q):
+    return json.dumps({
+        "model": q.get("model"),
+        "view": q.get("view") or q.get("explore"),
+        "fields": list(q.get("fields") or []),
+        "filters": dict(q.get("filters") or {}),
+        "sorts": list(q.get("sorts") or []),
+        "pivots": list(q.get("pivots") or []),
+        "limit": str(q.get("limit") or "500"),
+        "vis_config": dict(q.get("vis_config") or {}),
+    }, sort_keys=True)
+
+def _norm_box(spec, idx=0):
+    default_boxes = [
+        (0, 0, 8, 4), (0, 8, 8, 4), (0, 16, 8, 4),
+        (4, 0, 12, 8), (4, 12, 12, 8),
+        (12, 0, 24, 8),
+    ]
+    dr, dc, dw, dh = default_boxes[idx] if idx < len(default_boxes) else (12 + ((idx - 6) // 2) * 8, ((idx - 6) % 2) * 12, 12, 8)
+    r = max(0, int(spec.get("row", dr)))
+    c = min(23, max(0, int(spec.get("col", spec.get("column", dc)))))
+    w = min(24 - c, max(1, int(spec.get("width", dw))))
+    h = max(2, int(spec.get("height", dh)))
+    return {"row": r, "col": c, "column": c, "width": w, "height": h}
+
+def reflow_24col(dashboard_id, boxes, layout_id=None, comp_map=None):
+    did = str(dashboard_id)
+    cmap = dict(comp_map or _active.get("layout_component_ids") or _active.get("layoutComponentIds") or {})
+    lid = str(layout_id or _active.get("layout_id") or _active.get("layoutId") or "")
+    if not cmap or not lid:
+        layouts = dashboard_dashboard_layouts(did)
+        lay = layouts[0] if isinstance(layouts, list) and len(layouts) > 0 else (layouts if isinstance(layouts, dict) else {})
+        lid = str(lay.get("id") or "")
+        for c in (lay.get("dashboard_layout_components") or []):
+            if c.get("dashboard_element_id") and c.get("id"):
+                cmap[str(c["dashboard_element_id"])] = str(c["id"])
+    for idx, b in enumerate(boxes or []):
+        eid = str(b.get("element_id") or b.get("dashboard_element_id") or "")
+        cid = str(b.get("component_id") or cmap.get(eid) or "")
+        if cid and lid:
+            nb = _norm_box(b, idx)
+            update_dashboard_layout_component(cid, {
+                "dashboard_layout_id": lid,
+                "dashboard_element_id": eid,
+                "row": nb["row"],
+                "column": nb["column"],
+                "width": nb["width"],
+                "height": nb["height"],
+            })
+    return {"layout_id": lid, "layout_component_ids": cmap}
+
+def upsert_udd(title, folder_id=None, filters=None, tiles=None, dashboard_id=None):
+    fid = str(folder_id or _t_folder_id or _active.get("folderId") or _active.get("folder_id") or "1")
+    did = str(dashboard_id or _active.get("id") or "")
+    if did and "::" not in did:
+        d = update_dashboard(did, {"title": title})
+    else:
+        d = create_dashboard({"title": title, "folder_id": fid, "show_filters_bar": True})
+        did = str(d.get("id"))
+    f_names = list(_active.get("filter_names") or _active.get("filterNames") or [])
+    for f in (filters or []):
+        fname = str(f.get("name") or f.get("title") or "Filter").replace(".", "_")
+        fbody = {
+            "dashboard_id": did,
+            "name": fname,
+            "title": str(f.get("title") or fname),
+            "type": str(f.get("type") or "field_filter"),
+            "model": f.get("model") or _t_model,
+            "explore": f.get("explore") or _t_explore,
+            "dimension": f.get("dimension") or f.get("field"),
+            "default_value": str(f.get("default_value") or ""),
+            "allow_multiple_values": bool(f.get("allow_multiple_values", True)),
+            "row": int(f.get("row", 0)),
+        }
+        if f.get("ui_config"):
+            fbody["ui_config"] = f["ui_config"]
+        if fname in _fcache:
+            update_dashboard_filter(str(_fcache[fname]), fbody)
+        elif fname not in f_names:
+            cf = create_dashboard_filter(fbody)
+            if cf and cf.get("id"):
+                _fcache[fname] = str(cf["id"])
+            f_names.append(fname)
+    el_ids = list(_active.get("element_ids") or _active.get("elementIds") or [])
+    elements_meta = []
+    boxes = []
+    for idx, t in enumerate(tiles or []):
+        q = t.get("query") or t
+        qbody = {
+            "model": q.get("model") or _t_model,
+            "view": q.get("view") or q.get("explore") or _t_explore,
+            "fields": list(q.get("fields") or []),
+            "filters": dict(q.get("filters") or {}),
+            "sorts": list(q.get("sorts") or []),
+            "limit": str(q.get("limit") or "500"),
+            "vis_config": dict(q.get("vis_config") or t.get("vis_config") or {"type": t.get("vis_type") or "looker_grid"}),
+        }
+        if q.get("pivots"):
+            qbody["pivots"] = list(q["pivots"])
+        qk = _canonical_qkey(qbody)
+        qid = _qcache.get(qk)
+        if not qid:
+            cq = create_query(qbody)
+            qid = str(cq["id"])
+            _qcache[qk] = qid
+        raw_listen = t.get("listen")
+        listen_arr = []
+        if isinstance(raw_listen, dict):
+            for k, v in raw_listen.items():
+                listen_arr.append({"dashboard_filter_name": str(k).replace(".", "_"), "field": str(v)})
+        elif isinstance(raw_listen, list):
+            for item in raw_listen:
+                if isinstance(item, dict) and item.get("dashboard_filter_name") and item.get("field"):
+                    listen_arr.append({"dashboard_filter_name": str(item["dashboard_filter_name"]).replace(".", "_"), "field": str(item["field"])})
+        ebody = {
+            "dashboard_id": did,
+            "title": str(t.get("title") or f"Tile {idx + 1}"),
+            "type": "vis",
+            "query_id": qid,
+        }
+        if listen_arr:
+            ebody["result_maker"] = {"filterables": [{"model": qbody["model"], "view": qbody["view"], "listen": listen_arr}]}
+        eid = str(t.get("element_id") or (el_ids[idx] if idx < len(el_ids) and t.get("in_place", True) else ""))
+        if eid:
+            el = update_dashboard_element(eid, ebody)
+            eid = str(el.get("id") or eid)
+        else:
+            el = create_dashboard_element(ebody)
+            eid = str(el.get("id"))
+            el_ids.append(eid)
+        nb = _norm_box(t, idx)
+        nb["element_id"] = eid
+        boxes.append(nb)
+        elements_meta.append({"id": eid, "title": ebody["title"], "type": qbody["vis_config"].get("type", "vis"), "model": qbody["model"], "explore": qbody["view"], **nb})
+    lay_res = reflow_24col(did, boxes)
+    return {
+        "dashboard_id": did,
+        "title": title,
+        "folder_id": fid,
+        "layout_id": lay_res["layout_id"],
+        "element_ids": el_ids,
+        "filter_names": f_names,
+        "layout_component_ids": lay_res["layout_component_ids"],
+        "query_cache": _qcache,
+        "filter_cache": _fcache,
+        "tile_count": len(el_ids),
+        "filter_count": len(f_names),
+        "elements": elements_meta,
+    }
+
+def upsert_lookml_dashboard(project_id="", model="", dashboard_name="executive_pulse", title="Executive Pulse", tiles=None, filters=None, yaml_content=None, folder_id=None, sync_udd_id=None, model_file_path=None):
+    try:
+        update_session({"workspace_id": "dev"})
+    except Exception:
+        pass
+    m = str(model or _t_model or _active.get("model") or "thelook")
+    proj = str(project_id or _t_project_id or _active.get("projectId") or _active.get("project_id") or "")
+    if not proj and m:
+        try:
+            proj = str(lookml_model(m).get("project_name") or "")
+        except Exception:
+            proj = ""
+    raw_slug = str(dashboard_name or "executive_pulse").replace(".dashboard.lookml", "").strip()
+    if "::" in raw_slug:
+        m, raw_slug = raw_slug.split("::", 1)
+    slug = raw_slug.replace(".", "_").replace(" ", "_").lower()
+    lookml_id = f"{m}::{slug}"
+    if yaml_content:
+        ytxt = str(yaml_content).strip()
+        if not ytxt.startswith("- dashboard:"):
+            ytxt = f"- dashboard: {slug}\\n  title: {json.dumps(str(title or slug))}\\n  layout: newspaper\\n  " + ytxt
+    else:
+        lines = [
+            f"- dashboard: {slug}",
+            f"  title: {json.dumps(str(title or slug))}",
+            "  layout: newspaper",
+            "  preferred_viewer: dashboards-next",
+            "  crossfilter_enabled: true",
+            "  query_timezone: user_timezone",
+        ]
+        if filters:
+            lines.append("  filters:")
+            for f in filters:
+                fn = str(f.get("name") or f.get("title") or "filter").replace(".", "_").replace(" ", "_").lower()
+                lines.extend([
+                    f"  - name: {fn}",
+                    f"    title: {json.dumps(str(f.get('title') or fn))}",
+                    f"    type: {str(f.get('type') or 'field_filter')}",
+                    f"    model: {str(f.get('model') or m)}",
+                    f"    explore: {str(f.get('explore') or _t_explore or 'order_items')}",
+                    f"    field: {str(f.get('dimension') or f.get('field') or '')}",
+                    f"    default_value: {json.dumps(str(f.get('default_value') or ''))}",
+                    "    allow_multiple_values: true",
+                ])
+        if tiles:
+            lines.append("  elements:")
+            for idx, t in enumerate(tiles):
+                q = t.get("query") or t
+                vc = dict(q.get("vis_config") or t.get("vis_config") or {})
+                vt = str(vc.get("type") or t.get("type") or "looker_grid")
+                en = str(t.get("name") or t.get("title") or f"tile_{idx + 1}").replace(".", "_").replace(" ", "_").lower()
+                tm = str(q.get("model") or t.get("model") or m)
+                te = str(q.get("view") or q.get("explore") or t.get("explore") or "order_items")
+                flds = list(q.get("fields") or t.get("fields") or [])
+                srts = list(q.get("sorts") or t.get("sorts") or [])
+                lim = str(q.get("limit") or t.get("limit") or "500")
+                nb = _norm_box(t, idx)
+                lines.extend([
+                    f"  - name: {en}",
+                    f"    title: {json.dumps(str(t.get('title') or en))}",
+                    f"    model: {tm}",
+                    f"    explore: {te}",
+                    f"    type: {vt}",
+                    f"    fields: [{', '.join(str(x) for x in flds)}]",
+                ])
+                if srts:
+                    lines.append(f"    sorts: [{', '.join(str(x) for x in srts)}]")
+                lines.append(f"    limit: {lim}")
+                for vk, vv in vc.items():
+                    if vk != "type" and isinstance(vv, (str, int, float, bool)):
+                        lines.append(f"    {vk}: {json.dumps(vv)}")
+                lsn = t.get("listen")
+                if isinstance(lsn, dict) and lsn:
+                    lines.append("    listen:")
+                    for fk, fv in lsn.items():
+                        lines.append(f"      {str(fk).replace('.', '_')}: {fv}")
+                elif isinstance(lsn, list) and lsn:
+                    lines.append("    listen:")
+                    for item in lsn:
+                        if isinstance(item, dict) and item.get("dashboard_filter_name") and item.get("field"):
+                            lines.append(f"      {str(item['dashboard_filter_name']).replace('.', '_')}: {item['field']}")
+                lines.extend([
+                    f"    row: {nb['row']}",
+                    f"    col: {nb['col']}",
+                    f"    width: {nb['width']}",
+                    f"    height: {nb['height']}",
+                ])
+        ytxt = "\\n".join(lines) + "\\n"
+    fpath = f"dashboards/{slug}.dashboard.lookml"
+    if proj:
+        try:
+            create_file(proj, {"path": fpath, "content": ytxt})
+        except Exception:
+            try:
+                update_file(proj, {"path": fpath, "content": ytxt})
+            except Exception:
+                fpath = f"{slug}.dashboard.lookml"
+                try:
+                    create_file(proj, {"path": fpath, "content": ytxt})
+                except Exception:
+                    update_file(proj, {"path": fpath, "content": ytxt})
+        mpath = model_file_path or f"models/{m}.model.lkml"
+        mc = ""
+        try:
+            mc = str(get_file_content(proj, mpath) or "")
+        except Exception:
+            mpath = f"{m}.model.lkml"
+            try:
+                mc = str(get_file_content(proj, mpath) or "")
+            except Exception:
+                mc = ""
+        if mc and ".dashboard.lookml" not in mc:
+            inc = 'include: "/dashboards/*.dashboard.lookml"\\n' if fpath.startswith("dashboards/") else 'include: "*.dashboard.lookml"\\n'
+            try:
+                update_file(proj, {"path": mpath, "content": inc + mc})
+            except Exception:
+                pass
+    synced_udd = str(sync_udd_id or "")
+    if synced_udd:
+        try:
+            sync_lookml_dashboard(lookml_id, dashboard_ids=[synced_udd])
+        except Exception:
+            pass
+    elif folder_id:
+        try:
+            imp = import_lookml_dashboard(lookml_id, str(folder_id))
+            if imp and imp.get("id"):
+                synced_udd = str(imp["id"])
+        except Exception:
+            pass
+    return {
+        "id": lookml_id,
+        "lookml_dashboard_id": lookml_id,
+        "dashboard_id": synced_udd or lookml_id,
+        "content_type": "lookml_dashboard",
+        "project_id": proj,
+        "model": m,
+        "file_path": fpath,
+        "title": title,
+        "embed_path": f"/embed/dashboards/{lookml_id}",
+        "tile_count": len(tiles or []),
+        "filter_count": len(filters or []),
+    }
+
+def pin_to_board(title, description="", section_title="Executive Overview", dashboard_id=None, lookml_dashboard_id=None, look_id=None, board_id=None):
+    bid = str(board_id or _active.get("boardId") or _active.get("board_id") or "")
+    if bid:
+        b = update_board(bid, {"title": title, "description": description})
+        bid = str(b.get("id") or bid)
+    else:
+        b = create_board({"title": title, "description": description})
+        bid = str(b.get("id"))
+    sec = create_board_section({"board_id": bid, "title": section_title})
+    sid = str(sec.get("id"))
+    items = []
+    if dashboard_id:
+        if "::" in str(dashboard_id) and not lookml_dashboard_id:
+            lookml_dashboard_id = str(dashboard_id)
+        else:
+            it = create_board_item({"board_section_id": sid, "dashboard_id": str(dashboard_id), "custom_description": "Primary UDD KPI & trend breakdown", "use_custom_description": True})
+            items.append(str(it.get("id")))
+    if lookml_dashboard_id:
+        it = create_board_item({"board_section_id": sid, "lookml_dashboard_id": str(lookml_dashboard_id), "custom_description": "Version-controlled LookML Dashboard", "use_custom_description": True})
+        items.append(str(it.get("id")))
+    if look_id:
+        it = create_board_item({"board_section_id": sid, "look_id": str(look_id), "custom_description": "Top-customer cohort retention Look", "use_custom_description": True})
+        items.append(str(it.get("id")))
+    return {"board_id": bid, "section_id": sid, "item_ids": items}
+
+def schedule_dashboard(dashboard_id, name="Weekly Executive Digest", crontab="0 9 * * 1", email="exec-team@example.com", fmt="wysiwyg_pdf", filters_string=""):
+    did = str(dashboard_id or _active.get("id") or "")
+    fstr = str(filters_string or "").strip()
+    if fstr and not fstr.startswith("?"):
+        fstr = "?" + fstr.replace(" ", "%20")
+    body = {
+        "name": name,
+        "crontab": crontab,
+        "datagroup": None,
+        "filters_string": fstr,
+        "require_results": False,
+        "require_no_results": False,
+        "require_change": False,
+        "send_all_results": False,
+        "scheduled_plan_destination": [{
+            "format": fmt or "wysiwyg_pdf",
+            "apply_formatting": True,
+            "apply_vis": True,
+            "address": email,
+            "type": "email",
+            "message": "Automated weekly KPI digest."
+        }],
+    }
+    if "::" in did:
+        body["lookml_dashboard_id"] = did
+    else:
+        body["dashboard_id"] = int(did) if did.isdigit() else did
+    sp = create_scheduled_plan(body)
+    return str(sp.get("id") or "")
+
+schedule_udd = schedule_dashboard
+
+def emit_native_bundle(state=None, **extra):
+    merged = {}
+    if isinstance(state, dict):
+        merged.update(state)
+    elif isinstance(state, str) and state:
+        merged["content_type"] = state
+    if isinstance(extra.get("state"), dict):
+        merged.update(extra.pop("state"))
+    merged.update(extra)
+    cid = str(merged.get("id") or merged.get("dashboard_id") or merged.get("lookml_dashboard_id") or merged.get("board_id") or merged.get("look_id") or _active.get("id") or "")
+    ctype = str(merged.get("content_type") or merged.get("contentType") or ("lookml_dashboard" if "::" in cid else "dashboard"))
+    fid = str(merged.get("folder_id") or merged.get("folderId") or _t_folder_id or _active.get("folderId") or "1")
+    title = str(merged.get("title") or _active.get("title") or f"Native {ctype} #{cid}")
+    epath = merged.get("embed_path") or (f"/embed/looks/{cid}" if ctype == "look" else (f"/boards/{cid}" if ctype == "board" else f"/embed/dashboards/{cid}"))
+    exps = list(merged.get("explores") or _t_explores or _active.get("explores") or [])
+    payload = dict(merged)
+    payload.update({
+        "id": cid,
+        "content_type": ctype,
+        "contentType": ctype,
+        "title": title,
+        "folder_id": fid,
+        "folderId": fid,
+        "embed_path": epath,
+        "url": epath,
+        "summary": str(merged.get("summary") or title),
+        "explores": exps,
+        "query_cache": _qcache,
+        "filter_cache": _fcache,
+    })
+    payload.pop("NATIVE_CONTENT_BUNDLE", None)
+    return {"NATIVE_CONTENT_BUNDLE": payload, **payload}
+`
+
+export function wrapDashboardCodeMode(code: string): string {
+  const trimmed = String(code || '').trim()
+  if (!trimmed || trimmed.includes('def upsert_udd(')) return trimmed
+  return `${DASHBOARD_CODEMODE_PREAMBLE_PY}\n${trimmed}`
+}
+
+export const NATIVE_CONTENT_GUIDE_MD = `# Native Looker Content Studio (/dashboard) — Compact Recipe Guide
+
+## 1. Pre-Injected Monty Python Helpers in \`run_looker_codemode\`
+- \`upsert_udd(title, folder_id, filters=[...], tiles=[...], dashboard_id=None)\`: Creates/updates a User-Defined Dashboard (UDD), deduplicates \`create_query\`, wires \`create_dashboard_filter\` + \`result_maker.filterables[].listen\`, and positions all tiles on Looker's 24-column grid via \`dashboard_dashboard_layouts\` + \`update_dashboard_layout_component\`.
+- \`upsert_lookml_dashboard(project_id, model, dashboard_name, title, tiles=[...], filters=[...], yaml_content=None, folder_id=None, sync_udd_id=None)\`: Switches to \`"dev"\` workspace (\`update_session({"workspace_id": "dev"})\`), writes \`dashboards/<name>.dashboard.lookml\` (\`create_file\` / \`update_file\`) with \`- dashboard:\`, \`layout: newspaper\`, \`filters:\`, \`elements:\`, \`listen:\`, and 24-col \`row\`/\`col\`/\`width\`/\`height\`, ensures \`include: "*.dashboard.lookml"\` in \`{model}.model.lkml\`, and optionally imports/syncs a linked UDD (\`import_lookml_dashboard\` / \`sync_lookml_dashboard\`).
+- \`reflow_24col(dashboard_id, boxes)\`: Reflows 24-column \`dashboard_layout_components\` in place without duplicating or orphaning existing tiles.
+- \`pin_to_board(title, description, section_title, dashboard_id=..., lookml_dashboard_id=..., look_id=...)\`: Creates a Board + Section (\`create_board\`, \`create_board_section\`, \`create_board_item\`) pinning UDDs, LookML Dashboards (\`lookml_dashboard_id\`), and Saved Looks (\`create_look\`).
+- \`schedule_dashboard(dashboard_id, name, crontab="0 9 * * 1", email="...", fmt="wysiwyg_pdf", filters_string="...")\`: Attaches a weekly Scheduled Plan (\`create_scheduled_plan\`) with normalized \`scheduled_plan_destination\` defaults.
+- \`emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", id=..., title=..., **extra)\`: Returns \`NATIVE_CONTENT_BUNDLE\` directly from \`run_looker_codemode\` so the host captures it with zero LLM echo tokens.
+
+## 2. 24-Column Grid & Visualization Standards
+- Row 0 (\`height: 4\`): 3 KPI scorecards at \`col: 0, 8, 16, width: 8\` (\`type: "single_value"\`, \`value_format: "$#,##0"\`, \`show_comparison: True\`, \`comparison_type: "change"\`).
+- Row 4 (\`height: 8\`): 2 side-by-side Cartesian charts at \`col: 0, width: 12\` and \`col: 12, width: 12\` (\`looker_line\` / \`looker_column\`, dual unpinned Y-axes \`y_axis_combined: False\`, \`reference_lines\`, \`advanced_vis_config\` JSON string with \`defaults_version: 1\`).
+- Row 12 (\`height: 8\`): Full-width \`looker_grid\` at \`col: 0, width: 24\` (or 2 cross-explore tiles at \`row: 12, col: 0/12, width: 12\` + full-width \`looker_grid\` reflowed to \`row: 20, col: 0, width: 24, height: 8\`).
+- Filter & element \`name\` identifiers must NEVER contain periods (\`.\`); use underscores (e.g. \`date_range\`, \`order_status\`, \`min_sale_price\`).
+`
+
+export function buildNativeContentGuide(params: {
+  selectedExplores: string[]
+  primaryModel: string
+  primaryExplore: string
+  folderId?: string
+  lookmlProjectId?: string
+  existingNativeContent?: NativeContentState | null
+}): string {
+  const {
+    selectedExplores,
+    primaryModel,
+    primaryExplore,
+    folderId = '1',
+    lookmlProjectId = '',
+    existingNativeContent,
+  } = params
+  const exploreDirective =
+    selectedExplores.length > 0
+      ? `for selected Looker explore(s): ${selectedExplores.map((id) => `"${id}"`).join(', ')}.`
+      : `where no explore was pre-selected — pick the best \`model_id::explore_id\` from /workspace/schema.md or \`search_content(terms="...", types="lookml_explore")\`.`
+  const existingNativeDirective = existingNativeContent
+    ? `Active native Looker ${existingNativeContent.contentType}: id="${existingNativeContent.id}", title="${existingNativeContent.title}", folder_id="${existingNativeContent.folderId}" (pre-injected in CodeMode as \`active_content\`). Update it in place without redundant read calls unless the user asks for a brand-new item.`
+    : `Create the requested native Looker content in folder_id=\`target_folder_id\` ("${folderId}").`
+
+  return [
+    `You are operating in Native Looker Content Studio mode (/dashboard/:id?) ${exploreDirective}`,
+    existingNativeDirective,
+    NATIVE_CONTENT_GUIDE_MD,
+    `Follow these exact steps in ONE \`run_looker_codemode\` call per turn (remote bash \`code_execution\` is disabled in /dashboard mode):`,
+    `1. On cold start, discover fields via \`lookml_model_explore(m, e, fields="name,label,fields(dimensions(name,label,type),measures(name,label,type))")\` (or \`search_content(terms="...")\`), then build/update the UDD (\`upsert_udd\` or \`create_dashboard\` + \`create_dashboard_filter\` + \`create_dashboard_element\` + \`update_dashboard_layout_component\`), LookML Dashboard (\`upsert_lookml_dashboard\` in \`"dev"\` workspace + \`import_lookml_dashboard\` / \`sync_lookml_dashboard\`), Saved Look (\`create_look\`), Board (\`pin_to_board\` / \`create_board_item\`), or Schedule (\`schedule_dashboard\` / \`create_scheduled_plan\`) in the SAME \`run_looker_codemode\` script.`,
+    `2. End your Python script with \`return emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", summary="...")\` (with \`target_folder_id\`="${folderId}", \`target_explores\`=${JSON.stringify(selectedExplores)}, \`target_model\`="${primaryModel}", \`target_explore\`="${primaryExplore}", \`target_project_id\`="${lookmlProjectId}").`,
+    `3. CRITICAL: The host extracts \`<NATIVE_CONTENT_BUNDLE>\` / \`NATIVE_CONTENT_BUNDLE\` directly from your \`run_looker_codemode\` return value. Do NOT echo or repeat \`<NATIVE_CONTENT_BUNDLE>...</NATIVE_CONTENT_BUNDLE>\` in your final text response — reply with a concise 1–2 sentence summary only.`,
+  ].join('\n')
+}
 
 export const DATA_APP_GUIDE_MD = `# Looker Lit Data Apps — Compact Sandbox Guide
 
@@ -404,40 +870,91 @@ function extractTddFromInteraction(interaction: any): string | null {
     : null
 }
 
+function normalizeNativeBundleCandidate(raw: any): NativeContentBundle | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw.NATIVE_CONTENT_BUNDLE && typeof raw.NATIVE_CONTENT_BUNDLE === 'object'
+    ? raw.NATIVE_CONTENT_BUNDLE
+    : raw
+  const id =
+    r.id ||
+    r.lookml_dashboard_id ||
+    r.dashboard_id ||
+    r.look_id ||
+    r.board_id
+  if (!id) return null
+  const strId = String(id).trim()
+  const cType =
+    r.content_type ||
+    r.contentType ||
+    (r.board_id ? 'board' : r.look_id && !r.dashboard_id ? 'look' : strId.includes('::') ? 'lookml_dashboard' : 'dashboard')
+  const folderId = r.folder_id || r.folderId ? String(r.folder_id || r.folderId) : undefined
+  const embedPath = resolveNativeEmbedPath(cType, strId, r.embed_path || r.url)
+  return {
+    id: strId,
+    content_type: cType,
+    contentType: cType,
+    title: String(r.title || `Native ${cType} #${strId}`),
+    folder_id: folderId,
+    folderId,
+    embed_path: embedPath,
+    url: embedPath,
+    tile_count: typeof r.tile_count === 'number' ? r.tile_count : Array.isArray(r.elements) ? r.elements.length : undefined,
+    filter_count: typeof r.filter_count === 'number' ? r.filter_count : Array.isArray(r.filter_names) ? r.filter_names.length : undefined,
+    schedule_id: r.schedule_id ? String(r.schedule_id) : undefined,
+    look_id: r.look_id ? String(r.look_id) : undefined,
+    board_id: r.board_id ? String(r.board_id) : undefined,
+    lookml_dashboard_id: r.lookml_dashboard_id ? String(r.lookml_dashboard_id) : cType === 'lookml_dashboard' ? strId : undefined,
+    project_id: r.project_id ? String(r.project_id) : undefined,
+    model: r.model ? String(r.model) : undefined,
+    file_path: r.file_path ? String(r.file_path) : undefined,
+    layout_id: r.layout_id ? String(r.layout_id) : undefined,
+    element_ids: Array.isArray(r.element_ids) ? r.element_ids.map(String) : undefined,
+    filter_names: Array.isArray(r.filter_names) ? r.filter_names.map(String) : undefined,
+    layout_component_ids: r.layout_component_ids && typeof r.layout_component_ids === 'object' ? r.layout_component_ids : undefined,
+    query_cache: r.query_cache && typeof r.query_cache === 'object' ? r.query_cache : undefined,
+    filter_cache: r.filter_cache && typeof r.filter_cache === 'object' ? r.filter_cache : undefined,
+    summary: r.summary ? String(r.summary) : undefined,
+    elements: Array.isArray(r.elements) ? r.elements : undefined,
+    explores: Array.isArray(r.explores) ? r.explores : undefined,
+  }
+}
+
+// ponytail: capture NATIVE_CONTENT_BUNDLE directly from run_looker_codemode return value first
+// so the model never has to echo <NATIVE_CONTENT_BUNDLE>{...}</NATIVE_CONTENT_BUNDLE> in output_text.
 export function extractNativeContentFromInteraction(
   interaction: any
 ): NativeContentBundle | null {
+  for (const step of [...(interaction?.steps || [])].reverse()) {
+    if (step?.type === 'function_result' && step?.name === 'run_looker_codemode') {
+      const rawStr = typeof step.result === 'string' ? step.result : JSON.stringify(step.result || '')
+      const tagMatches = Array.from(
+        rawStr.matchAll(/<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g)
+      )
+      if (tagMatches.length > 0) {
+        try {
+          const parsedTag = JSON.parse(tagMatches[tagMatches.length - 1][1].trim())
+          const norm = normalizeNativeBundleCandidate(parsedTag)
+          if (norm) return norm
+        } catch {}
+      }
+      try {
+        const parsed = typeof step.result === 'string' ? JSON.parse(step.result) : step.result
+        const norm = normalizeNativeBundleCandidate(parsed?.result ?? parsed)
+        if (norm) return norm
+      } catch {
+        // Ignore non-JSON codemode outputs
+      }
+    }
+  }
   const combined = collectInteractionTextCandidates(interaction)
   const matches = Array.from(
     combined.matchAll(/<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g)
   )
   if (matches.length > 0) {
-    return JSON.parse(matches[matches.length - 1][1].trim()) as NativeContentBundle
-  }
-  // ponytail: fallback to inspecting the last run_looker_codemode function_result if agent omitted the tag
-  for (const step of [...(interaction?.steps || [])].reverse()) {
-    if (step?.type === 'function_result' && step?.name === 'run_looker_codemode') {
-      try {
-        const r = typeof step.result === 'string' ? JSON.parse(step.result) : step.result
-        const id = r?.dashboard_id || r?.look_id || r?.board_id || r?.id
-        if (id) {
-          const cType = r?.look_id ? 'look' : r?.board_id ? 'board' : r?.content_type || 'dashboard'
-          return {
-            id: String(id),
-            content_type: cType,
-            title: String(r.title || `Native ${cType} #${id}`),
-            folder_id: r.folder_id ? String(r.folder_id) : undefined,
-            embed_path: r.embed_path,
-            tile_count: r.tile_count,
-            filter_count: r.filter_count,
-            schedule_id: r.schedule_id ? String(r.schedule_id) : undefined,
-            explores: Array.isArray(r.explores) ? r.explores : undefined,
-          }
-        }
-      } catch {
-        // Ignore non-JSON codemode outputs
-      }
-    }
+    try {
+      const parsed = JSON.parse(matches[matches.length - 1][1].trim())
+      return normalizeNativeBundleCandidate(parsed) || (parsed as NativeContentBundle)
+    } catch {}
   }
   return null
 }
@@ -457,14 +974,28 @@ function summarizeProgress(interaction: any): string {
 
 function extractInteractionTelemetry(
   interaction: any,
-  stats: { agentWallMs: number; pollWaitMs: number; pollCount: number; codemodeExecMs: number; codemodeCalls: number; lookerHttpCalls: number }
+  stats: {
+    agentWallMs: number
+    pollWaitMs: number
+    pollCount: number
+    codemodeExecMs: number
+    lookerHttpMs: number
+    codemodeCalls: number
+    lookerHttpCalls: number
+    apiRetries: number
+  }
 ): AntigravityTurnTelemetry {
   const steps: any[] = interaction?.steps || []
   const bashCalls = steps.filter(
-    (s) => s?.type === 'code_execution' || s?.type === 'executable_code' || (s?.type === 'function_call' && s?.name !== 'run_looker_codemode')
+    (s) =>
+      s?.type === 'code_execution' ||
+      s?.type === 'executable_code' ||
+      (s?.type === 'function_call' && s?.name !== 'run_looker_codemode')
   ).length
   const verifyRetries = steps.filter((s) =>
-    /"stage":\s*"(?:syntax|safety|widget_extraction)"/.test(String(s?.output || s?.stderr || s?.result || ''))
+    /"stage":\s*"(?:syntax|safety|widget_extraction)"/.test(
+      String(s?.output || s?.stderr || s?.result || '')
+    )
   ).length
   const usage = interaction?.usage || interaction?.usage_metadata || {}
   return {
@@ -472,13 +1003,19 @@ function extractInteractionTelemetry(
     poll_wait_ms: stats.pollWaitMs,
     poll_count: stats.pollCount,
     codemode_exec_ms: stats.codemodeExecMs,
-    tool_calls: { bash: bashCalls || Number(interaction?.bash_calls || 0), codemode: stats.codemodeCalls, looker_http: stats.lookerHttpCalls },
+    looker_http_ms: stats.lookerHttpMs,
+    tool_calls: {
+      bash: bashCalls || Number(interaction?.bash_calls || 0),
+      codemode: stats.codemodeCalls,
+      looker_http: stats.lookerHttpCalls,
+    },
     tokens: {
       input: Number(usage.input_tokens ?? usage.prompt_token_count ?? 0),
       output: Number(usage.output_tokens ?? usage.candidates_token_count ?? 0),
       thought: Number(usage.thought_tokens ?? usage.thoughts_token_count ?? 0),
     },
     verify_retries: verifyRetries,
+    api_retries: stats.apiRetries + verifyRetries,
   }
 }
 
@@ -500,7 +1037,7 @@ export async function runAntigravityTurn(params: {
   userPrompt: string
   images?: PastedImage[]
   existingAppCode?: string
-  existingNativeContent?: NativeContentState | null
+  existingNativeContent?: NativeContentState | NativeContentBundle | null
   customSystemGuide?: string
   extraSources?: Array<{ type: 'inline'; content: string; target: string }>
   priorMessages?: Array<{ role: string; text: string }>
@@ -524,8 +1061,10 @@ export async function runAntigravityTurn(params: {
   let pollWaitMs = 0
   let pollCount = 0
   let codemodeExecMs = 0
+  let lookerHttpMs = 0
   let codemodeCalls = 0
   let lookerHttpCalls = 0
+  let apiRetries = 0
 
   const {
     sdk,
@@ -571,6 +1110,8 @@ export async function runAntigravityTurn(params: {
       ? 'dashboard'
       : 'app'
 
+  const isDashboardMode = effectiveToolType === 'dashboard'
+
   // ponytail: enforce strict environment & conversation isolation per toolType so switching modes
   // (app vs dashboard vs lookml vs health vs tile) never reuses another mode's previous_interaction_id.
   const isFreshEnvironment =
@@ -602,24 +1143,42 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : `setting \`this.lookerModel\` and \`this.explore\` in \`constructor()\``
   const step3Directive = `3. Write and bundle the Lit Data App in ONE \`code_execution\` call importing from '/runtime/data-app.js' (${ctorHint}):\n   \`python3 /workspace/bundle_app.py --stdin "<App Title>" << 'EOF'\\n...\\nEOF\``
 
-  const existingNativeDirective = existingNativeContent
-    ? `Active native Looker ${existingNativeContent.contentType}: id="${existingNativeContent.id}", title="${existingNativeContent.title}", folder_id="${existingNativeContent.folderId}". Update it in place (e.g. update_dashboard, create_dashboard_element, create_dashboard_filter, update_look, create_scheduled_plan) unless the user asks for a brand-new item.`
-    : `Create the requested native Looker content in folder_id=\`target_folder_id\` ("${folderId || '1'}").`
+  const ex = existingNativeContent as any
+  const normalizedExistingNative: NativeContentState | null = ex
+    ? {
+        id: String(ex.id),
+        contentType: ex.contentType || ex.content_type || (String(ex.id).includes('::') ? 'lookml_dashboard' : 'dashboard'),
+        title: String(ex.title || ''),
+        folderId: String(ex.folderId || ex.folder_id || folderId || '1'),
+        embedPath: String(ex.embedPath || ex.embed_path || `/embed/dashboards/${ex.id}`),
+        tileCount: ex.tileCount ?? ex.tile_count,
+        filterCount: ex.filterCount ?? ex.filter_count,
+        scheduleId: ex.scheduleId ?? ex.schedule_id,
+        lookId: ex.lookId ?? ex.look_id,
+        boardId: ex.boardId ?? ex.board_id,
+        lookmlDashboardId: ex.lookmlDashboardId ?? ex.lookml_dashboard_id,
+        projectId: ex.projectId ?? ex.project_id,
+        model: ex.model,
+        filePath: ex.filePath ?? ex.file_path,
+        layoutId: ex.layoutId ?? ex.layout_id,
+        elementIds: ex.elementIds ?? ex.element_ids,
+        filterNames: ex.filterNames ?? ex.filter_names,
+        layoutComponentIds: ex.layoutComponentIds ?? ex.layout_component_ids,
+        queryCache: ex.queryCache ?? ex.query_cache,
+        filterCache: ex.filterCache ?? ex.filter_cache,
+      }
+    : null
 
   const dataAppOrNativeGuide =
     mode === 'dashboard'
-      ? [
-          `You are operating in Native Looker Content Builder mode (/dashboard/:id?) ${exploreDirective}`,
-          existingNativeDirective,
-          `Follow these exact steps:`,
-          `1. ${step2Directive.replace(/^2\.\s*/, '')}`,
-          `2. Use \`run_looker_codemode\` (with \`target_folder_id\`="${folderId || '1'}", \`target_explores\`=${JSON.stringify(selectedExplores)}, \`target_model\`="${primaryModel}", \`target_explore\`="${primaryExplore}") to build or update standard Looker content:`,
-          `   - User-Defined Dashboards (UDDs): \`create_dashboard({"title": "...", "folder_id": target_folder_id})\` or \`update_dashboard(id, {...})\`, \`create_query({"model": ..., "view": ..., "fields": [...], "filters": {...}, "sorts": [...], "vis_config": {"type": "single_value"|"looker_column"|"looker_line"|"looker_grid", ...}})\`, \`create_dashboard_element({"dashboard_id": dash_id, "title": "...", "type": "vis", "query_id": q["id"]})\`, and \`create_dashboard_filter({"dashboard_id": dash_id, "name": "...", "title": "...", "type": "field_filter", "model": ..., "explore": ..., "dimension": ..., "allow_multiple_values": True})\`.`,
-          `   - Saved Looks: \`create_query(...)\` + \`create_look({"title": "...", "folder_id": target_folder_id, "query_id": q["id"]})\` or \`update_look(look_id, {...})\`.`,
-          `   - Boards: \`create_board({"title": "...", "description": "..."})\` + \`create_board_section({"board_id": b["id"], "title": "..."})\` + \`create_board_item({"board_section_id": s["id"], "dashboard_id": ...})\`.`,
-          `   - Schedules: \`create_scheduled_plan({"name": "...", "dashboard_id": dash_id, "crontab": "0 9 * * 1", "scheduled_plan_destination": [{"format": "wysiwyg_pdf", "address": "...", "type": "email"}]})\`.`,
-          `3. CRITICAL: In your final text response, include \`<NATIVE_CONTENT_BUNDLE>{"id":"<id>","content_type":"dashboard"|"look"|"board","title":"<Title>","folder_id":"<folder_id>","embed_path":"/embed/dashboards/<id>"|"/embed/looks/<id>"|"/boards/<id>","tile_count":<n>,"filter_count":<n>,"explores":["<model>::<explore>"]}</NATIVE_CONTENT_BUNDLE>\` so the host extension can preview and index the content.`,
-        ].join('\n')
+      ? buildNativeContentGuide({
+          selectedExplores,
+          primaryModel,
+          primaryExplore,
+          folderId: folderId || '1',
+          lookmlProjectId: lookmlProjectId || '',
+          existingNativeContent: normalizedExistingNative,
+        })
       : [
           `You are building a Looker Data App (Lit web component using Looker's data-app.js runtime) ${exploreDirective}`,
           `Follow these exact steps inside your Linux sandbox:`,
@@ -665,10 +1224,11 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     })
   }
 
-  const activeTools = [
-    { type: 'code_execution' },
-    LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL,
-  ]
+  // ponytail: disable remote container code_execution in /dashboard mode so all UDD + .dashboard.lookml
+  // operations run directly in browser/extension WASM Monty CodeMode with zero bash container overhead.
+  const activeTools = isDashboardMode
+    ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
+    : [{ type: 'code_execution' }, LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
 
   const historyDigest =
     priorMessages && priorMessages.length > 0
@@ -682,6 +1242,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const warmTurnDirective =
     mode === 'data_app' && toolMode !== 'lookml'
       ? `[WARM SANDBOX FAST PATH: /workspace/apps/current/app.js and the discovered Looker schema are already in /workspace. Do NOT re-run run_looker_codemode discovery or re-read guides unless a brand-new explore is requested. Update /workspace/apps/current/app.js and bundle in ONE code_execution call via: python3 /workspace/bundle_app.py --stdin "<App Title>" << 'EOF'\n...\nEOF\nNEVER echo <DATA_APP_BUNDLE> in your text reply.]\n\n`
+      : isDashboardMode && normalizedExistingNative
+      ? `[WARM CONTENT STUDIO FAST PATH: Active Looker ${normalizedExistingNative.contentType} id="${normalizedExistingNative.id}" ("${normalizedExistingNative.title}") and pre-hydrated active_content (element_ids=${JSON.stringify(normalizedExistingNative.elementIds || [])}, filter_names=${JSON.stringify(normalizedExistingNative.filterNames || [])}, lookml_dashboard_id="${normalizedExistingNative.lookmlDashboardId || ''}", project_id="${normalizedExistingNative.projectId || lookmlProjectId || ''}") are pre-injected in run_looker_codemode vars. Execute the update in ONE run_looker_codemode call using upsert_udd / upsert_lookml_dashboard / reflow_24col / pin_to_board / schedule_dashboard + return emit_native_bundle(...). NEVER echo <NATIVE_CONTENT_BUNDLE> in your text reply.]\n\n`
       : ''
 
   const buildInputItems = (fresh: boolean): Array<Record<string, any>> => [
@@ -786,11 +1348,48 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         if (typeof origRawReq === 'function') {
           rawTransport.rawRequest = (...reqArgs: any[]) => {
             lookerHttpCalls += 1
-            return origRawReq.apply(rawTransport, reqArgs)
+            const reqStart = Date.now()
+            return Promise.resolve(origRawReq.apply(rawTransport, reqArgs)).then(
+              (res: any) => {
+                lookerHttpMs += Date.now() - reqStart
+                if (res && (res.ok === false || Number(res.statusCode) >= 400)) {
+                  apiRetries += 1
+                }
+                return res
+              },
+              (err: any) => {
+                lookerHttpMs += Date.now() - reqStart
+                apiRetries += 1
+                throw err
+              }
+            )
           }
         }
         let resultsInput: any[]
         try {
+          const n = normalizedExistingNative
+          const activeContentVars = n
+            ? {
+                ...n,
+                content_type: n.contentType,
+                folder_id: n.folderId,
+                lookml_dashboard_id: n.lookmlDashboardId,
+                projectId: n.projectId || lookmlProjectId || '',
+                project_id: n.projectId || lookmlProjectId || '',
+                model: n.model || primaryModel,
+                file_path: n.filePath,
+                look_id: n.lookId,
+                board_id: n.boardId,
+                schedule_id: n.scheduleId,
+                layout_id: n.layoutId,
+                element_ids: n.elementIds || [],
+                filter_names: n.filterNames || [],
+                layout_component_ids: n.layoutComponentIds || {},
+                query_cache: n.queryCache || {},
+                filter_cache: n.filterCache || {},
+                explores: selectedExplores,
+              }
+            : null
           resultsInput = await Promise.all(
             pendingLookerCalls.map(async (call: any) => {
               const args = call.arguments || call.args || {}
@@ -800,11 +1399,12 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                   args.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
                     ? args.vars
                     : {}
+                const rawCode = String(args.code || '')
                 codeModeOutput = await LkrCodeMode.runPythonCode({
-                  code: String(args.code || ''),
+                  code: isDashboardMode ? wrapDashboardCodeMode(rawCode) : rawCode,
                   sdk,
                   extensionSDK,
-                  allowUpdateSession: toolMode === 'lookml',
+                  allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard',
                   requirePermission,
                   approvedOperations,
                   onPermissionRequest,
@@ -813,11 +1413,19 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                     target_model: primaryModel,
                     target_explore: primaryExplore,
                     target_folder_id: folderId || '1',
-                    target_project_id: lookmlProjectId || '',
+                    target_project_id:
+                      lookmlProjectId || normalizedExistingNative?.projectId || '',
+                    ...(activeContentVars
+                      ? {
+                          active_content: activeContentVars,
+                          active_dashboard_state: activeContentVars,
+                        }
+                      : {}),
                     ...customVars,
                   },
                 })
               } catch (err: any) {
+                apiRetries += 1
                 codeModeOutput = JSON.stringify({
                   ok: false,
                   error: err?.message || String(err),
@@ -924,8 +1532,10 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     pollWaitMs,
     pollCount,
     codemodeExecMs,
+    lookerHttpMs,
     codemodeCalls,
     lookerHttpCalls,
+    apiRetries,
   })
 
   return {
@@ -1045,6 +1655,10 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
           target: '/workspace/apps/current/app.js',
         })
       }
+      const prewarmTools =
+        toolType === 'dashboard'
+          ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
+          : [{ type: 'code_execution' }, LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
       const pre = await callInteractionsApi(
         extensionSDK,
         auth,
@@ -1057,7 +1671,7 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
             model: model || DEFAULT_ANTIGRAVITY_MODEL,
           },
           background: true,
-          tools: [{ type: 'code_execution' }, LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL],
+          tools: prewarmTools,
           input: [
             {
               type: 'text',

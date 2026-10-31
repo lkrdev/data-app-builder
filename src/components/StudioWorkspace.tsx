@@ -365,7 +365,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                         code: codeModeSnippet,
                         sdk: core40SDK,
                         extensionSDK,
-                        allowUpdateSession: isLookmlMode,
+                        allowUpdateSession: isLookmlMode || builderMode === 'dashboard',
                         vars: {
                           target_explores: selectedExplores,
                           target_model: firstParsed?.modelName || '',
