@@ -748,3 +748,114 @@ export async function runThreePillarHealthCheckViaCodeMode(params: {
   const { userKey, objKey } = await saveHealthCheckArtifact(sdk, extensionSDK, userId, report);
   return { report, userKey, objKey };
 }
+
+// ponytail: zero-dependency GFM Markdown viewer supporting tables, fenced code blocks, blockquotes, headings, and lists
+export function renderTddMarkdownToHtml(markdown: string): string {
+  const esc = (s: string) =>
+    s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  const inline = (s: string) =>
+    esc(s)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+
+  const lines = String(markdown || '').split(/\r?\n/);
+  const out: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.trim().startsWith('```')) {
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) {
+        codeLines.push(esc(lines[i]));
+        i++;
+      }
+      i++;
+      out.push(`<pre><code>${codeLines.join('\n')}</code></pre>`);
+      continue;
+    }
+
+    if (line.trim().startsWith('|') && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      const parseRow = (r: string) =>
+        r
+          .trim()
+          .replace(/^\|/, '')
+          .replace(/\|$/, '')
+          .split('|')
+          .map((c) => inline(c.trim()));
+      const headers = parseRow(line);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].trim().startsWith('|')) {
+        rows.push(parseRow(lines[i]));
+        i++;
+      }
+      out.push(
+        `<div class="dab-py-table-wrap" style="margin:10px 0 14px;"><table class="dab-py-table"><thead><tr>${headers
+          .map((h) => `<th>${h}</th>`)
+          .join('')}</tr></thead><tbody>${rows
+          .map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`)
+          .join('')}</tbody></table></div>`
+      );
+      continue;
+    }
+
+    if (line.startsWith('>')) {
+      const bq: string[] = [];
+      while (i < lines.length && lines[i].startsWith('>')) {
+        bq.push(inline(lines[i].replace(/^>\s?/, '')));
+        i++;
+      }
+      out.push(`<blockquote>${bq.join('<br/>')}</blockquote>`);
+      continue;
+    }
+
+    if (/^---\s*$/.test(line.trim())) {
+      out.push('<hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0;" />');
+      i++;
+      continue;
+    }
+
+    if (line.startsWith('### ')) {
+      out.push(`<h3>${inline(line.slice(4))}</h3>`);
+      i++;
+      continue;
+    }
+    if (line.startsWith('## ')) {
+      out.push(`<h2>${inline(line.slice(3))}</h2>`);
+      i++;
+      continue;
+    }
+    if (line.startsWith('# ')) {
+      out.push(`<h1>${inline(line.slice(2))}</h1>`);
+      i++;
+      continue;
+    }
+
+    if (/^(\s*[-*]|\s*\d+\.)\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^(\s*[-*]|\s*\d+\.)\s+/.test(lines[i])) {
+        items.push(`<li>${inline(lines[i].replace(/^(\s*[-*]|\s*\d+\.)\s+/, ''))}</li>`);
+        i++;
+      }
+      out.push(`<ul style="margin:6px 0 12px;padding-left:20px;">${items.join('')}</ul>`);
+      continue;
+    }
+
+    if (!line.trim()) {
+      i++;
+      continue;
+    }
+
+    out.push(`<p style="margin:6px 0 10px;">${inline(line)}</p>`);
+    i++;
+  }
+
+  return out.join('\n');
+}

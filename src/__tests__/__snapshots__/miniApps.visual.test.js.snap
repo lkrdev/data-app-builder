@@ -1,7 +1,162 @@
 // Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
 
-exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders dashboard with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders chatbar_busy_running (13. Chat Bar State — Busy / Running Spinner Banner) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
+  "dropdownScrollTop": null,
+  "modeTabs": [
+    {
+      "active": true,
+      "label": "Data App",
+    },
+    {
+      "active": false,
+      "label": "Content Studio",
+    },
+    {
+      "active": false,
+      "label": "LookML",
+    },
+    {
+      "active": false,
+      "label": "Health Check",
+    },
+    {
+      "active": false,
+      "label": "Python Tile",
+    },
+  ],
+  "scenario": "chatbar_busy_running",
+  "verifiedVisibleText": [
+    "Executing LkrCodeMode Monty Python & validating Looker queries...",
+    "Executive Revenue App",
+  ],
+}
+`;
+
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders chatbar_error_banner (14. Chat Bar State — Error Diagnostic Banner) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "dropdownScrollTop": null,
+  "modeTabs": [
+    {
+      "active": true,
+      "label": "Data App",
+    },
+    {
+      "active": false,
+      "label": "Content Studio",
+    },
+    {
+      "active": false,
+      "label": "LookML",
+    },
+    {
+      "active": false,
+      "label": "Health Check",
+    },
+    {
+      "active": false,
+      "label": "Python Tile",
+    },
+  ],
+  "scenario": "chatbar_error_banner",
+  "verifiedVisibleText": [
+    "Error",
+    "Looker API Error (422): Field "order_items.unknown_metric" not found in explore "thelook::order_items".",
+  ],
+}
+`;
+
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders chatbar_lookml_skills (11. Chat Bar State — LookML Activated Turn Skills & Prompt) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "dropdownScrollTop": null,
+  "modeTabs": [
+    {
+      "active": false,
+      "label": "Data App",
+    },
+    {
+      "active": false,
+      "label": "Content Studio",
+    },
+    {
+      "active": true,
+      "label": "LookML",
+    },
+    {
+      "active": false,
+      "label": "Health Check",
+    },
+    {
+      "active": false,
+      "label": "Python Tile",
+    },
+  ],
+  "scenario": "chatbar_lookml_skills",
+  "verifiedVisibleText": [
+    "TURN SKILLS:",
+    "✓ 📝 Descriptions & Curation",
+    "✓ 🧪 Data Tests (.test.lkml)",
+    "✓ 📸 Snapshot & Parity",
+    "+ 🧱 Bronze View",
+    "✨ Run Agentic LookML",
+  ],
+}
+`;
+
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders chatbar_pasted_image_inspector (12. Chat Bar State — Pasted Screenshot Thumbnail & Code/Schema Inspector Open) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "dropdownScrollTop": null,
+  "modeTabs": [
+    {
+      "active": true,
+      "label": "Data App",
+    },
+    {
+      "active": false,
+      "label": "Content Studio",
+    },
+    {
+      "active": false,
+      "label": "LookML",
+    },
+    {
+      "active": false,
+      "label": "Health Check",
+    },
+    {
+      "active": false,
+      "label": "Python Tile",
+    },
+  ],
+  "scenario": "chatbar_pasted_image_inspector",
+  "verifiedVisibleText": [
+    "Inspect Code / Schema",
+    "Compiled Explore Schema (/workspace/schema.md)",
+    "Test WASM Code Mode (Monty)",
+    "✨ Update App",
+  ],
+}
+`;
+
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders config_page (8. Extension Auth & Vertex Setup Page (/config)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "dropdownScrollTop": null,
+  "modeTabs": [],
+  "scenario": "config_page",
+  "verifiedVisibleText": [
+    "Agent",
+    "Agentic LookML",
+    "Configuration",
+    "Agent & Vertex / Gemini Setup",
+    "Google OAuth",
+    "✨ Save Setup",
+  ],
+}
+`;
+
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders dashboard (2. Content Studio Mode (Create & Update UDDs, Looks, Boards, Schedules)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "dropdownScrollTop": null,
   "modeTabs": [
     {
       "active": false,
@@ -9,7 +164,7 @@ exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders das
     },
     {
       "active": true,
-      "label": "Dashboard",
+      "label": "Content Studio",
     },
     {
       "active": false,
@@ -26,15 +181,17 @@ exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders das
   ],
   "scenario": "dashboard",
   "verifiedVisibleText": [
+    "Content Studio",
     "Executive Order Performance (Native UDD)",
     "/embed/dashboards/7",
-    "Update Content",
+    "✨ Update Content",
   ],
 }
 `;
 
-exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders data_app with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders data_app (1. Data App Mode + Inline Mutation Permission Gate) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
+  "dropdownScrollTop": null,
   "modeTabs": [
     {
       "active": true,
@@ -42,7 +199,7 @@ exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders dat
     },
     {
       "active": false,
-      "label": "Dashboard",
+      "label": "Content Studio",
     },
     {
       "active": false,
@@ -59,9 +216,10 @@ exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders dat
   ],
   "scenario": "data_app",
   "verifiedVisibleText": [
-    "Data App Studio",
+    "Agent",
+    "Agentic LookML",
     "Data App",
-    "Dashboard",
+    "Content Studio",
     "LookML",
     "Health Check",
     "Python Tile",
@@ -70,12 +228,87 @@ exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders dat
     "Approve Looker State Mutation?",
     "create_dashboard",
     "Executive Revenue App",
+    "✨ Update App",
   ],
 }
 `;
 
-exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders health_check with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders explore_dropdown_open_top (9. Explore Combobox Dropdown — Open (Top Scroll State)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
+  "dropdownScrollTop": 0,
+  "modeTabs": [
+    {
+      "active": true,
+      "label": "Data App",
+    },
+    {
+      "active": false,
+      "label": "Content Studio",
+    },
+    {
+      "active": false,
+      "label": "LookML",
+    },
+    {
+      "active": false,
+      "label": "Health Check",
+    },
+    {
+      "active": false,
+      "label": "Python Tile",
+    },
+  ],
+  "scenario": "explore_dropdown_open_top",
+  "verifiedVisibleText": [
+    "Clear selection (let agent decide)",
+    "BIGQUERY INFORMATION SCHEMA (BLOCK)",
+    "Jobs Timeline by Project",
+    "Table Storage & Partitions",
+    "ECOMMERCE",
+    "Order Items",
+  ],
+}
+`;
+
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders explore_dropdown_scrolled (10. Explore Combobox Dropdown — Scrolled State (Retail Ops & System Activity)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "dropdownScrollTop": 127,
+  "modeTabs": [
+    {
+      "active": true,
+      "label": "Data App",
+    },
+    {
+      "active": false,
+      "label": "Content Studio",
+    },
+    {
+      "active": false,
+      "label": "LookML",
+    },
+    {
+      "active": false,
+      "label": "Health Check",
+    },
+    {
+      "active": false,
+      "label": "Python Tile",
+    },
+  ],
+  "scenario": "explore_dropdown_scrolled",
+  "verifiedVisibleText": [
+    "RETAIL OPERATIONS",
+    "Store Transactions",
+    "Supply Chain Shipments",
+    "SYSTEM ACTIVITY",
+    "Query Metrics",
+  ],
+}
+`;
+
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders health_check (4. 3-Pillar Health Check Mode (Rendered Markdown Viewer & Top-Right Gemini Button)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "dropdownScrollTop": null,
   "modeTabs": [
     {
       "active": false,
@@ -83,7 +316,7 @@ exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders hea
     },
     {
       "active": false,
-      "label": "Dashboard",
+      "label": "Content Studio",
     },
     {
       "active": false,
@@ -100,18 +333,21 @@ exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders hea
   ],
   "scenario": "health_check",
   "verifiedVisibleText": [
-    "Run 3-Pillar Audit",
+    "✨ Run 3-Pillar Audit",
+    "All 3 Pillars (Looker + BQ)",
     "Health Score: 70% (B- (Optimization Recommended))",
     "Transcriber: 2.86/4.00",
     "Technical Design Document (TDD): Looker & BigQuery 3-Pillar Health Check",
+    "{ } Raw Markdown",
     "Copy Markdown",
-    "Download Markdown (.md)",
+    "✨ Download Markdown (.md)",
   ],
 }
 `;
 
-exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders lookml with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders lookml (3. Agentic LookML Mode (Turn Skills, Active User Dev Mode & .lkml Diffs)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
+  "dropdownScrollTop": null,
   "modeTabs": [
     {
       "active": false,
@@ -119,7 +355,7 @@ exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders loo
     },
     {
       "active": false,
-      "label": "Dashboard",
+      "label": "Content Studio",
     },
     {
       "active": true,
@@ -137,16 +373,22 @@ exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders loo
   "scenario": "lookml",
   "verifiedVisibleText": [
     "Add total_revenue & gross_margin to order_items",
+    "⎇ user dev mode",
     "✓ LookML Validator Passed",
     "run_lookml_test (1/1 passed)",
+    "TURN SKILLS:",
+    "📝 Descriptions & Curation",
+    "🧪 Data Tests (.test.lkml)",
+    "📸 Snapshot & Parity",
     "bronze/orders.refinement.lkml",
-    "Update LookML",
+    "✨ Update LookML",
   ],
 }
 `;
 
-exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders python_tile_studio with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders python_tile_scheduler_modal (15. Custom CodeMode Script Scheduler Modal (Cron, vars.mode & Custom Controls)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
+  "dropdownScrollTop": null,
   "modeTabs": [
     {
       "active": false,
@@ -154,7 +396,44 @@ exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders pyt
     },
     {
       "active": false,
-      "label": "Dashboard",
+      "label": "Content Studio",
+    },
+    {
+      "active": false,
+      "label": "LookML",
+    },
+    {
+      "active": false,
+      "label": "Health Check",
+    },
+    {
+      "active": true,
+      "label": "Python Tile",
+    },
+  ],
+  "scenario": "python_tile_scheduler_modal",
+  "verifiedVisibleText": [
+    "⏰ Custom CodeMode Script Scheduler",
+    "obj_schedule_demo1",
+    "Daily at 8:00 AM (0 8 * * *)",
+    "Script Execution Mode (\`vars.mode\`)",
+    "Custom Controls / Non-Query Variables (\`vars.custom_controls\` JSON)",
+    "✨ Save Script Schedule",
+  ],
+}
+`;
+
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders python_tile_studio (5. Python Tile Studio Mode (Mode Selector, Schedule Script & Live Grid)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "dropdownScrollTop": null,
+  "modeTabs": [
+    {
+      "active": false,
+      "label": "Data App",
+    },
+    {
+      "active": false,
+      "label": "Content Studio",
     },
     {
       "active": false,
@@ -172,15 +451,19 @@ exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders pyt
   "scenario": "python_tile_studio",
   "verifiedVisibleText": [
     "Looker Explore & Filter Summary",
-    "Publish Dashboard",
-    "Save Script",
+    "⏰ Schedule Script",
+    "✨ Publish Dashboard",
+    "✨ Run Python",
+    "✨ Ask AI",
+    "⏰ Scheduled: 0 8 * * * · summary",
     "agentic_thelook",
   ],
 }
 `;
 
-exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders tile_mount_edit with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders tile_mount_edit (7. Dashboard Tile Mount — Edit Mode) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
+  "dropdownScrollTop": null,
   "modeTabs": [],
   "scenario": "tile_mount_edit",
   "verifiedVisibleText": [
@@ -191,8 +474,9 @@ exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders til
 }
 `;
 
-exports[`Looker Data App Studio — Mini-App Visual & Snapshot Suite renders tile_mount_view with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders tile_mount_view (6. Dashboard Tile Mount — View Mode) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
+  "dropdownScrollTop": null,
   "modeTabs": [],
   "scenario": "tile_mount_view",
   "verifiedVisibleText": [

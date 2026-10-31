@@ -277,13 +277,46 @@ export function extractLookmlBundleFromInteraction(interaction: any): LookmlBund
   return matches.length ? (JSON.parse(matches[matches.length - 1][1].trim()) as LookmlBundle) : null
 }
 
+export const LOOKML_TURN_SKILLS = [
+  {
+    id: 'lookml-field-curation',
+    label: '📝 Descriptions & Curation',
+    desc: 'Profile string fields, curate descriptions, group_label & hidden flags',
+  },
+  {
+    id: 'lookml-tests',
+    label: '🧪 Data Tests (.test.lkml)',
+    desc: 'Author & run assert-based LookML data tests via run_lookml_test',
+  },
+  {
+    id: 'lookml-snapshot',
+    label: '📸 Snapshot & Parity',
+    desc: 'Capture lkr parse lookml snapshot & verify SQL-to-Explore parity',
+  },
+  {
+    id: 'generate-view-from-table',
+    label: '🧱 Bronze View',
+    desc: 'Scaffold or refresh Bronze base views from table metadata',
+  },
+  {
+    id: 'agentic-lookml-workflow',
+    label: '🔄 SQL Workflow',
+    desc: 'Full SQL-to-LookML Bronze refinement + Silver/Gold layer workflow',
+  },
+] as const
+
 export function buildLookmlSystemGuide(params: {
   selectedExplores: string[]
   primaryModel: string
   primaryExplore: string
   projectId?: string
+  activatedSkills?: string[]
 }): string {
-  const { selectedExplores, primaryModel, primaryExplore, projectId } = params
+  const { selectedExplores, primaryModel, primaryExplore, projectId, activatedSkills } = params
+  const activeSkillList =
+    activatedSkills && activatedSkills.length > 0
+      ? activatedSkills
+      : ['lookml-field-curation', 'lookml-tests', 'lookml-snapshot']
   const projHint = projectId?.trim()
     ? `Target LookML project_id: "${projectId.trim()}".`
     : primaryModel
@@ -293,21 +326,21 @@ export function buildLookmlSystemGuide(params: {
   return [
     `You are the **Agentic LookML** engineer powered by \`lkrdev/cli\` and the \`agentic-lookml\` skill suite.`,
     projHint,
+    `Activated Turn Skills: ${activeSkillList.map((s) => `\`${s}\``).join(', ')}. Prioritize reading and executing the instructions for these activated skills on this turn.`,
     selectedExplores.length > 0
       ? `Selected Explore context: ${selectedExplores.join(', ')} (primary: ${primaryModel}::${primaryExplore}).`
       : `See /workspace/schema.md for available models and explores.`,
     `Follow these exact steps:`,
     `1. **Sandbox Bootstrap (\`/workspace\`)**:`,
-    `   Run \`python3 /workspace/bootstrap_lookml.py setup\` in your Linux sandbox to install \`lkr-dev-cli[parse]\` and unpack \`/workspace/.agents/skills/\` (\`agentic-lookml-workflow\`, \`agentic-lookml\`, \`generate-view-from-table\`, \`lookml-field-curation\`, \`lookml\`). Read \`/workspace/.agents/skills/agentic-lookml-workflow/SKILL.md\` and \`/workspace/.agents/skills/agentic-lookml/SKILL.md\`.`,
+    `   Run \`python3 /workspace/bootstrap_lookml.py setup\` in your Linux sandbox to install \`lkr-dev-cli[parse]\` and unpack \`/workspace/.agents/skills/\` (\`agentic-lookml-workflow\`, \`agentic-lookml\`, \`generate-view-from-table\`, \`lookml-field-curation\`, \`lookml\`). Read the SKILL.md files for your Activated Turn Skills (${activeSkillList.join(', ')}).`,
     `2. **Host-Bridged LookML Sync via Browser WASM \`run_looker_codemode(code, vars)\` (\`allowUpdateSession: true\`)**:`,
-    `   - Zero sandbox Looker credentials are needed: \`run_looker_codemode\` runs in the browser extension with \`allowUpdateSession: true\`, accepts \`vars: {...}\` (e.g. \`project_id\`, \`ts_utc\`, \`raw_sql\`, \`inline_queries_json\`, \`test_queries_json\`, \`file_ids\`, \`test_names\`, \`commit_message\`), and has all \`ExtendedLooker40SDK\` methods pre-bound (\`update_session\`, \`all_project_files\`, \`get_file_content\`, \`create_file\`, \`update_file\`, \`delete_file\`, \`create_project_directory\`, \`delete_project_directory\`, \`generate_lookml\`, \`generate_lookml_with_new_files\`, \`create_developer_copy\`, \`reset_project_to_production\`, \`create_git_branch\`, \`validate_project\`, \`run_lookml_test\`, \`commit\`, \`create_sql_query\`, \`run_sql_query\`, \`run_inline_query\`).`,
-    `   - Switch to dev mode (\`update_session({"workspace_id": "dev"})\`), run \`scripts/init_branch.py\` (workspace reset, dev branch creation, missing Bronze view generation) plus \`scripts/configure_model.py\` & \`scripts/generate_bronze_view.py\` as needed, and pull LookML files via \`all_project_files\` + \`get_file_content\` into \`/workspace/lookml_baseline/\` and \`/workspace/data/$RUN_ID/lookml/\`.`,
+    `   - Zero sandbox Looker credentials are needed: \`run_looker_codemode\` runs in the browser extension with \`allowUpdateSession: true\`, accepts \`vars: {...}\`, and has all \`ExtendedLooker40SDK\` methods pre-bound.`,
+    `   - Switch to the user's dev workspace (\`update_session({"workspace_id": "dev"})\`) and use whatever branch/state is already in the user's dev mode (inspect via \`git_branch(project_id)\` — do NOT reset to production or create a new git branch unless explicitly asked). Pull LookML files via \`all_project_files\` + \`get_file_content\` into \`/workspace/lookml_baseline/\` and \`/workspace/data/$RUN_ID/lookml/\`.`,
     `3. **100% Offline \`lkr-dev-cli[parse]\` CLI Commands in \`/workspace\`**:`,
     `   - Run offline CLI commands against \`/workspace/data/$RUN_ID/lookml\`: \`lkr parse sql --dialect bigquery --summary\`, \`lkr parse sql-lookml-compare --offline\`, \`lkr parse lookml-to-api --validate\`, \`lkr schema validate --explore-file\`, and \`lkr parse lookml snapshot\` & \`lkr parse curation-meta\`.`,
-    `   - Author Bronze refinements, Silver/Gold views & explores, opinionated \`.test.lkml\` tests, and \`/workspace/data/$RUN_ID/summary.md\` (using \`scripts/profile_string_fields.py\` & \`scripts/enrich_partition_clustering.py\` via \`run_looker_codemode\` when curating).`,
-    `4. **Push Modified \`.lkml\` Files, Pre-Gate Parity & Validate/Commit via \`run_looker_codemode\`**:`,
-    `   - Push changed/deleted \`.lkml\` files back using \`create_project_directory\`, \`create_file\`, \`update_file\`, \`delete_file\`.`,
-    `   - Run \`scripts/pre_gate.py\` (SQL Runner baseline queries, \`validate_project\`, Explore query registration, and row/cell parity verification) and \`scripts/validate_and_commit_branch.py\` (\`validate_project\`, \`run_lookml_test\`, \`commit\`, and \`push_branch\`) via \`run_looker_codemode(code=..., vars={...})\`.`,
+    `   - Author Bronze refinements, Silver/Gold views & explores, opinionated \`.test.lkml\` tests, and \`/workspace/data/$RUN_ID/summary.md\` according to the Activated Turn Skills (${activeSkillList.join(', ')}).`,
+    `4. **Push Modified \`.lkml\` Files, Pre-Gate Parity & Validate via \`run_looker_codemode\`**:`,
+    `   - Push changed/deleted \`.lkml\` files back to the user's current dev workspace using \`create_project_directory\`, \`create_file\`, \`update_file\`, \`delete_file\`, then run \`validate_project\` and \`run_lookml_test\`.`,
     `5. **Emit \`<LOOKML_BUNDLE>\`**:`,
     `   Run \`python3 /workspace/bootstrap_lookml.py bundle /workspace/data/$RUN_ID\` (or \`/workspace/lookml_result.json\`) and include the printed \`<LOOKML_BUNDLE>...</LOOKML_BUNDLE>\` tag in your final response.`,
   ].join('\n')
@@ -527,11 +560,9 @@ export const LookmlPreviewPane: React.FC<{
             <strong>Model:</strong> <code>{bundle.model_name}</code>
           </div>
         )}
-        {bundle.branch_name && (
-          <span className="dab-badge" title="Active Looker Git Branch">
-            ⎇ {bundle.branch_name}
-          </span>
-        )}
+        <span className="dab-badge" title="Uses whatever branch is active in the user's Looker Dev Mode">
+          ⎇ {bundle.branch_name || 'user dev mode'}
+        </span>
         <span className="dab-msg-pill" style={valPassed ? undefined : { background: '#fee2e2', color: '#991b1b' }}>
           {valPassed
             ? '✓ LookML Validator Passed'

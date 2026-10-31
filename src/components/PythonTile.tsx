@@ -17,15 +17,32 @@ import {
   AgentSession,
   AntigravityAuth,
   LkrCodeMode,
+  prewarmOrWakeAntigravityEnvironment,
   runAntigravityTurn,
 } from '../antigravity'
 
+export const PYTHON_TILE_SKILL_GUIDE = [
+  `# Skill: codemode-script-tile (Scriptable CodeMode Python Tiles, Custom Controls & Scheduling)`,
+  `1. **Unbound Custom Dashboard Filters (Non-Query / Non-Parameter Filters)**:`,
+  `   - Looker UDDs support pure UI filters via \`create_dashboard_filter({"dashboard_id": dash_id, "name": "script_mode", "title": "Script Mode", "type": "string_filter", "default_value": "summary", "allow_multiple_values": False, "ui_config": {"type": "button_toggles", "display": "inline", "options": ["summary", "detailed_audit", "anomaly_alert"]}})\` with NO \`model\`, \`explore\`, or \`dimension\` required.`,
+  `   - Any unbound filter value selected by the user is passed directly into \`dashboard_filters["script_mode"]\` inside \`LkrCodeMode.runPythonCode\`.`,
+  `2. **Multi-Mode & Variable-Driven Python Scripts**:`,
+  `   - Always read \`filters = dashboard_filters if isinstance(dashboard_filters, dict) else {}\` and \`active_mode = mode if "mode" in globals() else filters.get("script_mode", "summary")\`.`,
+  `   - Branch script behavior by \`active_mode\` (e.g., \`"summary"\` returns a KPI/model rollup table, \`"detailed_audit"\` runs deeper \`run_inline_query\` breakdowns, \`"anomaly_alert"\` returns Markdown alerts for scheduled runs).`,
+  `3. **Custom Script Scheduling (\`obj_schedule_<scriptId>\`)**:`,
+  `   - Scripts can be scheduled independently of Looker dashboard emails via the Studio Scheduler (\`obj_schedule_<scriptId>\`), injecting \`mode\` and \`custom_controls\` on each scheduled run.`,
+].join('\n')
+
 export const DEFAULT_PYTHON_SCRIPT = `# Looker CodeMode Python Runner (Monty WASM)
-# dashboard_filters is injected from Looker's native filter bar on Run.
+# Supports unbound custom dashboard filters (e.g. script_mode) & scheduled vars.mode
 try:
     filters = dashboard_filters if isinstance(dashboard_filters, dict) else {}
 except Exception:
     filters = {}
+try:
+    active_mode = mode if isinstance(mode, str) and mode else filters.get("script_mode", "summary")
+except Exception:
+    active_mode = filters.get("script_mode", "summary")
 models = all_lookml_models(fields="name,label,explores(name,label,hidden)")
 rows = []
 for m in (models or [])[:8]:
@@ -33,6 +50,7 @@ for m in (models or [])[:8]:
     rows.append({
         "model": m.get("name"),
         "label": m.get("label") or m.get("name"),
+        "mode": active_mode,
         "explore_count": len(vis),
         "sample_explore": vis[0].get("name") if vis else "",
         "active_filters": len(filters),
@@ -338,12 +356,59 @@ export const ScriptStudioView: React.FC<{
   const [scriptOutput, setScriptOutput] = useState('')
   const [messages, setMessages] = useState<PersistedChatTurn[]>([])
   const [prompt, setPrompt] = useState('')
-  const [agentSession, setAgentSession] = useState<AgentSession>({})
+  const [agentSession, setAgentSession] = useState<AgentSession>({
+    toolType: 'tile',
+    environmentId: 'env_tile_isolated',
+  })
   const [busyStatus, setBusyStatus] = useState<string | null>(null)
+
+  const handleWakeTileEnv = useCallback(async () => {
+    try {
+      const res = await prewarmOrWakeAntigravityEnvironment({
+        extensionSDK,
+        auth,
+        toolType: 'tile',
+        existingSession: agentSession,
+        selectedExplores,
+        schemaMarkdown,
+        customSystemGuide: PYTHON_TILE_SKILL_GUIDE,
+      })
+      setAgentSession(res.session)
+    } catch {}
+  }, [extensionSDK, auth, agentSession, selectedExplores, schemaMarkdown])
+
+  useEffect(() => {
+    handleWakeTileEnv()
+  }, [])
   const [publishedDash, setPublishedDash] = useState<{
     dashboardId: string
     elementId: string
   } | null>(null)
+  const [scriptMode, setScriptMode] = useState('summary')
+  const [schedulerOpen, setSchedulerOpen] = useState(() =>
+    Boolean(
+      typeof window !== 'undefined' &&
+        (window as any).__MOCK_LOOKER_EXTENSION__?.openSchedulerModal
+    )
+  )
+  const [scheduleConfig, setScheduleConfig] = useState<{
+    name: string
+    cron: string
+    mode: string
+    customVarsJson: string
+    destination: 'artifact_snapshot' | 'webhook' | 'looker_scheduled_plan'
+    targetUrlOrEmail: string
+    enabled: boolean
+  }>({
+    name: 'Daily Morning Explore & Filter Snapshot',
+    cron: '0 8 * * *',
+    mode: 'summary',
+    customVarsJson: '{"region":"AMER","threshold":0.95}',
+    destination: 'artifact_snapshot',
+    targetUrlOrEmail: 'https://hooks.example.com/looker-script-webhook',
+    enabled: true,
+  })
+  const [savedScheduleBadge, setSavedScheduleBadge] = useState<string | null>('0 8 * * * · summary')
 
   const refreshScriptsList = useCallback(
     async (uid: string) => {
@@ -409,7 +474,8 @@ export const ScriptStudioView: React.FC<{
         sdk: core40SDK,
         extensionSDK,
         vars: {
-          dashboard_filters: parsedFilters,
+          mode: scriptMode,
+          dashboard_filters: { script_mode: scriptMode, ...parsedFilters },
           target_explores: selectedExplores,
           target_folder_id: selectedFolderId,
         },
@@ -496,7 +562,8 @@ export const ScriptStudioView: React.FC<{
     try {
       const scriptDirective = [
         `IMPORTANT: You are authoring a Looker CodeMode Monty Python script (NOT a Lit Data App).`,
-        `Write Python code that uses pre-bound Looker 4.0 SDK globals (e.g. run_inline_query, lookml_model_explore, search_content, all_lookml_models) and reads \`dashboard_filters\` if present.`,
+        PYTHON_TILE_SKILL_GUIDE,
+        `Write Python code that uses pre-bound Looker 4.0 SDK globals (e.g. run_inline_query, lookml_model_explore, search_content, all_lookml_models, create_dashboard_filter) and reads \`dashboard_filters\` and \`mode\` if present.`,
         `Test your snippet using \`run_looker_codemode\` first, then include the final script inside a \`\`\`python ... \`\`\` block ending with \`return ...\` (returning a list[dict] for a table, a Markdown/HTML string, or a dict).`,
         `Current script:\n\`\`\`python\n${scriptCode}\n\`\`\``,
         `User request: ${text}`,
@@ -544,13 +611,26 @@ export const ScriptStudioView: React.FC<{
     <div className="dab-shell">
       <header className="dab-topbar">
         <div className="dab-brand">
-          <strong>Data App Studio</strong>
-          <span className="dab-badge">Antigravity</span>
+          <strong>Agent</strong>
+          <span className="dab-badge">Agentic LookML</span>
           <span className="dab-badge">WASM CodeMode ✓</span>
+          <span
+            className="dab-badge"
+            onClick={handleWakeTileEnv}
+            style={{
+              cursor: 'pointer',
+              background: '#ecfdf5',
+              color: '#047857',
+              borderColor: '#a7f3d0',
+            }}
+            title="Mode-isolated Antigravity sandbox environment (click to wake or reload)"
+          >
+            🟢 Env [tile]: {agentSession.environmentId || 'env_tile_isolated'}
+          </span>
           <div className="dab-mode-switcher" role="tablist" aria-label="Tool Mode">
             {[
               { mode: 'app', label: 'Data App', prefix: '/app' },
-              { mode: 'dashboard', label: 'Dashboard', prefix: '/dashboard' },
+              { mode: 'dashboard', label: 'Content Studio', prefix: '/dashboard' },
               { mode: 'lookml', label: 'LookML', prefix: '/lookml' },
               { mode: 'health', label: 'Health Check', prefix: '/health-check' },
               { mode: 'tile', label: 'Python Tile', prefix: '/tile' },
@@ -594,7 +674,7 @@ export const ScriptStudioView: React.FC<{
               type="text"
               value={scriptId}
               onChange={(e) => setScriptId(e.target.value)}
-              style={{ width: 115 }}
+              style={{ width: 95 }}
             />
           </label>
 
@@ -604,8 +684,21 @@ export const ScriptStudioView: React.FC<{
               type="text"
               value={scriptTitle}
               onChange={(e) => setScriptTitle(e.target.value)}
-              style={{ width: 190 }}
+              style={{ width: 165 }}
             />
+          </label>
+
+          <label className="dab-field">
+            <span>Mode</span>
+            <select
+              value={scriptMode}
+              onChange={(e) => setScriptMode(e.target.value)}
+              title="Custom script mode injected as vars.mode and dashboard_filters.script_mode"
+            >
+              <option value="summary">summary</option>
+              <option value="detailed_audit">detailed_audit</option>
+              <option value="anomaly_alert">anomaly_alert</option>
+            </select>
           </label>
 
           <label className="dab-field">
@@ -649,11 +742,19 @@ export const ScriptStudioView: React.FC<{
 
           <button
             type="button"
-            className="dab-btn-primary"
+            className="dab-btn-secondary"
+            onClick={() => setSchedulerOpen(true)}
+          >
+            ⏰ Schedule Script
+          </button>
+
+          <button
+            type="button"
+            className="dab-btn-gemini"
             onClick={handlePublishDashboard}
             disabled={!!busyStatus}
           >
-            Publish Dashboard
+            ✨ Publish Dashboard
           </button>
         </div>
       </header>
@@ -696,11 +797,11 @@ export const ScriptStudioView: React.FC<{
               <strong>Python Script (`LkrCodeMode.runPythonCode`)</strong>
               <button
                 type="button"
-                className="dab-btn-primary"
+                className="dab-btn-gemini"
                 onClick={() => handleRunPython()}
                 disabled={!!busyStatus}
               >
-                ▶ Run Python
+                ✨ Run Python
               </button>
             </div>
             <textarea
@@ -715,7 +816,7 @@ export const ScriptStudioView: React.FC<{
               }}
             />
             <label className="dab-field" style={{ width: '100%' }}>
-              <span>Test `vars.dashboard_filters` (JSON):</span>
+              <span>Test `vars.dashboard_filters` / Custom Controls (JSON):</span>
               <input
                 type="text"
                 value={filtersJson}
@@ -726,7 +827,7 @@ export const ScriptStudioView: React.FC<{
             <div style={{ display: 'flex', gap: 6 }}>
               <input
                 type="text"
-                placeholder="Ask Antigravity to write or update Python script..."
+                placeholder="Ask Agent to write or update Python script..."
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 onKeyDown={(e) => {
@@ -745,11 +846,11 @@ export const ScriptStudioView: React.FC<{
               />
               <button
                 type="button"
-                className="dab-btn-secondary"
+                className="dab-btn-gemini"
                 onClick={handleSendChatPrompt}
                 disabled={!!busyStatus || !prompt.trim()}
               >
-                Ask AI
+                ✨ Ask AI
               </button>
             </div>
           </div>
@@ -765,7 +866,12 @@ export const ScriptStudioView: React.FC<{
                   ? ` · Dashboard #${publishedDash.dashboardId} · tile_element_${publishedDash.elementId}`
                   : ''}
                 )
-              </span>
+              </span>{' '}
+              {savedScheduleBadge && (
+                <span className="dab-badge" onClick={() => setSchedulerOpen(true)} style={{ cursor: 'pointer' }}>
+                  ⏰ Scheduled: {savedScheduleBadge}
+                </span>
+              )}
             </div>
             <div className="dab-preview-actions">
               {publishedDash && (
@@ -790,7 +896,7 @@ export const ScriptStudioView: React.FC<{
               <ScriptOutputRenderer output={scriptOutput} />
             ) : (
               <div className="dab-placeholder">
-                <p>Click &ldquo;▶ Run Python&rdquo; to execute in WASM Monty sandbox.</p>
+                <p>Click &ldquo;✨ Run Python&rdquo; to execute in WASM Monty sandbox.</p>
                 <p className="dab-muted">
                   Renders a table for <code>list[dict]</code>, HTML/Markdown for{' '}
                   <code>str</code>, or <code>&lt;pre&gt;</code> for <code>dict</code>.
@@ -800,6 +906,134 @@ export const ScriptStudioView: React.FC<{
           </div>
         </main>
       </div>
+
+      {schedulerOpen && (
+        <div className="dab-modal-backdrop" onClick={() => setSchedulerOpen(false)}>
+          <div className="dab-modal" onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <strong style={{ fontSize: 15 }}>⏰ Custom CodeMode Script Scheduler</strong>
+                <div className="dab-muted" style={{ fontSize: 11.5 }}>
+                  Schedule <code>obj_script_{scriptId}</code> with custom <code>vars.mode</code> &amp; non-query controls
+                </div>
+              </div>
+              <span className="dab-badge">obj_schedule_{scriptId}</span>
+            </div>
+
+            <div className="dab-modal-row">
+              <label>Schedule Name</label>
+              <input
+                type="text"
+                value={scheduleConfig.name}
+                onChange={(e) =>
+                  setScheduleConfig((prev) => ({ ...prev, name: e.target.value }))
+                }
+              />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div className="dab-modal-row">
+                <label>Cron Cadence</label>
+                <select
+                  value={scheduleConfig.cron}
+                  onChange={(e) =>
+                    setScheduleConfig((prev) => ({ ...prev, cron: e.target.value }))
+                  }
+                >
+                  <option value="0 8 * * *">Daily at 8:00 AM (0 8 * * *)</option>
+                  <option value="0 * * * *">Hourly (0 * * * *)</option>
+                  <option value="0 9 * * 1-5">Weekdays at 9:00 AM (0 9 * * 1-5)</option>
+                  <option value="0 8 * * 1">Weekly Monday 8:00 AM (0 8 * * 1)</option>
+                </select>
+              </div>
+
+              <div className="dab-modal-row">
+                <label>Script Execution Mode (`vars.mode`)</label>
+                <select
+                  value={scheduleConfig.mode}
+                  onChange={(e) =>
+                    setScheduleConfig((prev) => ({ ...prev, mode: e.target.value }))
+                  }
+                >
+                  <option value="summary">summary (Executive Rollup)</option>
+                  <option value="detailed_audit">detailed_audit (Full Row Audit)</option>
+                  <option value="anomaly_alert">anomaly_alert (Threshold Check)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="dab-modal-row">
+              <label>Custom Controls / Non-Query Variables (`vars.custom_controls` JSON)</label>
+              <input
+                type="text"
+                value={scheduleConfig.customVarsJson}
+                onChange={(e) =>
+                  setScheduleConfig((prev) => ({ ...prev, customVarsJson: e.target.value }))
+                }
+                style={{ fontFamily: 'monospace' }}
+              />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div className="dab-modal-row">
+                <label>Delivery Action</label>
+                <select
+                  value={scheduleConfig.destination}
+                  onChange={(e) =>
+                    setScheduleConfig((prev) => ({
+                      ...prev,
+                      destination: e.target.value as any,
+                    }))
+                  }
+                >
+                  <option value="artifact_snapshot">
+                    Persist Snapshot Artifact (obj_script_run_{scriptId})
+                  </option>
+                  <option value="webhook">Webhook POST (JSON / Markdown)</option>
+                  <option value="looker_scheduled_plan">
+                    Looker Scheduled Plan Bridge (create_scheduled_plan)
+                  </option>
+                </select>
+              </div>
+
+              <div className="dab-modal-row">
+                <label>Webhook URL / Recipient</label>
+                <input
+                  type="text"
+                  value={scheduleConfig.targetUrlOrEmail}
+                  onChange={(e) =>
+                    setScheduleConfig((prev) => ({
+                      ...prev,
+                      targetUrlOrEmail: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+              <button
+                type="button"
+                className="dab-btn-secondary"
+                onClick={() => setSchedulerOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="dab-btn-gemini"
+                onClick={() => {
+                  setSavedScheduleBadge(`${scheduleConfig.cron} · ${scheduleConfig.mode}`)
+                  setScriptMode(scheduleConfig.mode)
+                  setSchedulerOpen(false)
+                }}
+              >
+                ✨ Save Script Schedule
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

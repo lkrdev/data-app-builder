@@ -42,7 +42,14 @@ assert(
   antigravityTs.includes('!session.lastInteractionId'),
   'Session continuation must key off session.lastInteractionId'
 )
-const appTsx = readFileSync(path.join(repoRoot, 'src/components/App.tsx'), 'utf8')
+const appTsx = [
+  'src/components/App.tsx',
+  'src/components/StudioHeader.tsx',
+  'src/components/StudioWorkspace.tsx',
+  'src/useStudioController.ts',
+]
+  .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
+  .join('\n')
 assert(
   appTsx.includes('onPaste={handlePaste}'),
   'Composer textarea must support pasting screenshots'

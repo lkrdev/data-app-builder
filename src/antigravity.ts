@@ -38,10 +38,14 @@ export interface AntigravityAuth {
   apiKey?: string
 }
 
+export type AntigravityToolType = 'app' | 'dashboard' | 'lookml' | 'health' | 'tile'
+
 export interface AgentSession {
   environmentId?: string
   lastInteractionId?: string
   explores?: string[]
+  toolType?: AntigravityToolType
+  objectId?: string
 }
 
 export type CodeModePermissionDecision =
@@ -392,6 +396,7 @@ export async function runAntigravityTurn(params: {
   folderId?: string
   toolMode?: 'data_app' | 'lookml'
   lookmlProjectId?: string
+  activatedLookmlSkills?: string[]
   schemaMarkdown: string
   userPrompt: string
   images?: PastedImage[]
@@ -424,6 +429,7 @@ export async function runAntigravityTurn(params: {
     folderId,
     toolMode = 'data_app',
     lookmlProjectId,
+    activatedLookmlSkills,
     schemaMarkdown,
     userPrompt,
     images,
@@ -442,8 +448,22 @@ export async function runAntigravityTurn(params: {
   const primaryModel = firstParsed?.modelName || ''
   const primaryExplore = firstParsed?.exploreName || ''
 
+  const effectiveToolType: AntigravityToolType =
+    toolMode === 'lookml'
+      ? 'lookml'
+      : customSystemGuide?.includes('3-Pillar')
+      ? 'health'
+      : customSystemGuide?.includes('codemode-script-tile')
+      ? 'tile'
+      : mode === 'dashboard'
+      ? 'dashboard'
+      : 'app'
+
+  // ponytail: enforce strict environment & conversation isolation per toolType so switching modes
+  // (app vs dashboard vs lookml vs health vs tile) never reuses another mode's previous_interaction_id.
   const isFreshEnvironment =
     !session.lastInteractionId ||
+    Boolean(session.toolType && session.toolType !== effectiveToolType) ||
     JSON.stringify(session.explores || []) !== JSON.stringify(selectedExplores)
 
   const exploreDirective =
@@ -501,6 +521,7 @@ export async function runAntigravityTurn(params: {
           primaryModel,
           primaryExplore,
           projectId: lookmlProjectId,
+          activatedSkills: activatedLookmlSkills,
         })
       : dataAppOrNativeGuide)
 
@@ -743,6 +764,139 @@ export async function runAntigravityTurn(params: {
       environmentId: interaction.environment_id || trackedEnvId,
       lastInteractionId: interaction.id,
       explores: selectedExplores,
+      toolType: effectiveToolType,
     },
+  }
+}
+
+// ponytail: pre-launch or re-load and wake up a mode-isolated Antigravity remote environment
+// so each mini-app (app, dashboard, lookml, health, tile) has its own warm sandbox without cross-talk.
+export async function prewarmOrWakeAntigravityEnvironment(params: {
+  extensionSDK: any
+  auth: AntigravityAuth
+  toolType: AntigravityToolType
+  existingSession?: AgentSession
+  selectedExplores?: string[]
+  schemaMarkdown?: string
+  existingAppCode?: string
+  extraSources?: Array<{ type: 'inline'; content: string; target: string }>
+}): Promise<{
+  session: AgentSession
+  status: 'woken' | 'prelaunched' | 'standby'
+}> {
+  const {
+    extensionSDK,
+    auth,
+    toolType,
+    existingSession,
+    selectedExplores = [],
+    schemaMarkdown = '',
+    existingAppCode,
+    extraSources = [],
+  } = params
+
+  const hasValidExisting =
+    existingSession?.lastInteractionId &&
+    (!existingSession.toolType || existingSession.toolType === toolType)
+
+  // 1. If the artifact or mode already has a saved interaction/environment, wake & verify it
+  if (hasValidExisting && existingSession?.lastInteractionId) {
+    if (auth.mode === 'apikey' || auth.oauthToken) {
+      try {
+        const res = await callInteractionsApi(
+          extensionSDK,
+          auth,
+          `interactions/${encodeURIComponent(existingSession.lastInteractionId)}`,
+          'GET'
+        )
+        return {
+          session: {
+            ...existingSession,
+            environmentId: res?.environment_id || existingSession.environmentId || `env_${toolType}`,
+            toolType,
+          },
+          status: 'woken',
+        }
+      } catch {
+        // Saved sandbox expired; fall through to pre-launch a fresh mode-isolated environment
+      }
+    } else {
+      return {
+        session: {
+          ...existingSession,
+          environmentId: existingSession.environmentId || `env_${toolType}_warm`,
+          toolType,
+        },
+        status: 'woken',
+      }
+    }
+  }
+
+  // 2. If signed in (OAuth token or API key), pre-launch a fresh mode-specific remote sandbox
+  if (auth.mode === 'apikey' || auth.oauthToken) {
+    try {
+      const sources: Array<{ type: 'inline'; content: string; target: string }> = [
+        { type: 'inline', content: schemaMarkdown, target: '/workspace/schema.md' },
+        ...(toolType === 'app'
+          ? [{ type: 'inline' as const, content: BUNDLE_APP_PY, target: '/workspace/bundle_app.py' }]
+          : []),
+        ...(toolType === 'lookml'
+          ? [
+              {
+                type: 'inline' as const,
+                content: BOOTSTRAP_LOOKML_PY,
+                target: '/workspace/bootstrap_lookml.py',
+              },
+            ]
+          : []),
+        ...extraSources,
+      ]
+      if (toolType === 'app' && existingAppCode) {
+        sources.push({
+          type: 'inline',
+          content: existingAppCode,
+          target: '/workspace/apps/current/app.js',
+        })
+      }
+      const pre = await callInteractionsApi(
+        extensionSDK,
+        auth,
+        'interactions',
+        'POST',
+        {
+          agent: 'antigravity-preview-09-2026',
+          background: true,
+          tools: [{ type: 'code_execution' }, LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL],
+          input: [
+            {
+              type: 'text',
+              text: `[PREWARM:${toolType.toUpperCase()}] Initialize isolated ${toolType} workspace and reply READY.`,
+            },
+          ],
+          environment: { type: 'remote', sources },
+        }
+      )
+      return {
+        session: {
+          environmentId: pre?.environment_id || `env_${toolType}_${Date.now().toString(36).slice(-4)}`,
+          lastInteractionId: pre?.id,
+          explores: selectedExplores,
+          toolType,
+        },
+        status: 'prelaunched',
+      }
+    } catch {
+      // Fall back to standby session slot isolated for this toolType
+    }
+  }
+
+  return {
+    session: {
+      environmentId: existingSession?.environmentId || `env_${toolType}_isolated`,
+      lastInteractionId: existingSession?.lastInteractionId,
+      explores: selectedExplores,
+      toolType,
+    },
+    status: 'standby',
   }
 }

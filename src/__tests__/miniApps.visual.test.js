@@ -1,6 +1,7 @@
-// Jest visual & DOM snapshot suite for all 5 Studio mini-apps + 2 Dashboard Tile modes
+// Jest visual & DOM snapshot suite for all 5 Studio mini-apps, Config page,
+// Explore combobox scroll states, Chat Bar states, and Custom Script Scheduler modal
 // using MockLookerExtensionProvider (window.__MOCK_LOOKER_EXTENSION__).
-const { spawn } = require('node:child_process')
+const { execFileSync, spawn } = require('node:child_process')
 const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs')
 const http = require('node:http')
 const path = require('node:path')
@@ -10,12 +11,16 @@ const bundlePath = path.join(repoRoot, 'dist/bundle.js')
 const imageSnapshotsDir = path.join(__dirname, '__image_snapshots__')
 mkdirSync(imageSnapshotsDir, { recursive: true })
 
+// Tiny 1x1 blue PNG data URL for testing pasted screenshot attachments in the chat bar
+const SAMPLE_PASTED_IMAGE_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
 function buildHtmlPage(scenario) {
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Looker Data App Studio — Visual Test (${scenario})</title>
+  <title>Agent — Visual Test (${scenario})</title>
   <style>html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }</style>
   <script>
     (function() {
@@ -56,7 +61,7 @@ function buildHtmlPage(scenario) {
             title: 'Add total_revenue & gross_margin to order_items',
             project_id: 'deploytobarerepo_temp',
             model_name: 'thelook',
-            branch_name: 'dev-super-admin-5khx',
+            branch_name: 'user dev mode',
             file_count: 2,
             validation_passed: true,
             tests_passed: true,
@@ -134,8 +139,8 @@ function buildHtmlPage(scenario) {
             title: 'Add total_revenue & gross_margin to order_items',
             project_id: 'deploytobarerepo_temp',
             model_name: 'thelook',
-            branch_name: 'dev-super-admin-5khx',
-            summary_markdown: '### Agentic LookML Summary\\n- **Target View**: \`bronze/orders.refinement.lkml\`\\n- **Added Measures**: \`total_revenue\` (\`sum\` of \`\${sale_price}\`), \`gross_margin\` (\`sum\` of \`\${sale_price} - \${cost}\`)\\n- **Validation**: \`validate_project("deploytobarerepo_temp")\` passed with **0 errors**\\n- **Parity Check**: SQL Runner vs Explore inline query matched 100% across 12 monthly rows.',
+            branch_name: 'user dev mode',
+            summary_markdown: '### Agentic LookML Summary\\n- **Target View**: \`bronze/orders.refinement.lkml\`\\n- **Activated Turn Skills**: \`lookml-field-curation\`, \`lookml-tests\`, \`lookml-snapshot\`\\n- **Added Measures**: \`total_revenue\` (\`sum\` of \`\${sale_price}\`), \`gross_margin\` (\`sum\` of \`\${sale_price} - \${cost}\`)\\n- **Validation**: \`validate_project("deploytobarerepo_temp")\` passed with **0 errors** in active user dev mode\\n- **Parity Check**: SQL Runner vs Explore inline query matched 100% across 12 monthly rows.',
             validation: { passed: true, error_count: 0, errors: [] },
             tests: [
               { test_name: 'orders_revenue_non_negative', model_name: 'thelook', file_id: 'tests/bronze/orders.test.lkml', assertions_count: 2, assertions_failed: 0, success: true }
@@ -162,8 +167,8 @@ function buildHtmlPage(scenario) {
             explores: ['thelook::order_items'],
             lastInteractionId: 'v1_lookml_1',
             messages: [
-              { role: 'user', text: 'Add total_revenue and gross_margin measures to orders refinement, add a LookML data test, and verify SQL vs Explore parity.' },
-              { role: 'assistant', text: 'Switched session to dev workspace (branch dev-super-admin-5khx), updated bronze/orders.refinement.lkml, added tests/bronze/orders.test.lkml, verified 0 LookML validation errors, and confirmed 12/12 row parity.' }
+              { role: 'user', text: 'Add total_revenue and gross_margin measures to orders refinement, curate field descriptions, add a LookML data test, and verify SQL vs Explore parity.' },
+              { role: 'assistant', text: 'Used active user dev mode workspace, updated bronze/orders.refinement.lkml, added tests/bronze/orders.test.lkml, verified 0 LookML validation errors, and confirmed 12/12 row parity.' }
             ]
           }
         },
@@ -208,7 +213,7 @@ function buildHtmlPage(scenario) {
         obj_script_demo1: {
           id: 'demo1',
           title: 'Looker Explore & Filter Summary',
-          code: 'return [\\n  {"model": "thelook", "label": "eCommerce", "visible_explores": 11, "first_explore": "order_items", "filter_status": dashboard_filters.get("status", "Complete")},\\n  {"model": "agentic_thelook", "label": "Agentic Thelook", "visible_explores": 24, "first_explore": "order_shards", "filter_status": dashboard_filters.get("status", "Complete")}\\n]',
+          code: 'return [\\n  {"model": "thelook", "label": "eCommerce", "mode": mode, "visible_explores": 11, "first_explore": "order_items", "filter_status": dashboard_filters.get("status", "Complete")},\\n  {"model": "agentic_thelook", "label": "Agentic Thelook", "mode": mode, "visible_explores": 24, "first_explore": "order_shards", "filter_status": dashboard_filters.get("status", "Complete")}\\n]',
           dashboardId: '8',
           elementId: '57',
           updatedAt: '2026-10-30T23:36:00Z',
@@ -232,7 +237,15 @@ function buildHtmlPage(scenario) {
         health_check: '/health-check/demo',
         python_tile_studio: '/tile/demo1',
         tile_mount_view: '/app',
-        tile_mount_edit: '/app'
+        tile_mount_edit: '/app',
+        config_page: '/config',
+        explore_dropdown_open_top: '/app/42',
+        explore_dropdown_scrolled: '/app/42',
+        chatbar_lookml_skills: '/lookml',
+        chatbar_pasted_image_inspector: '/app/42',
+        chatbar_busy_running: '/app/42',
+        chatbar_error_banner: '/app',
+        python_tile_scheduler_modal: '/tile/demo1'
       };
 
       const isTile = scenario === 'tile_mount_view' || scenario === 'tile_mount_edit';
@@ -242,12 +255,31 @@ function buildHtmlPage(scenario) {
         me: async () => ({ id: '1', display_name: 'Bryan Weber', personal_folder_id: '5' }),
         all_lookml_models: async () => [
           {
+            name: 'bigquery_information_schema',
+            label: 'BigQuery Information Schema (Block)',
+            explores: [
+              { name: 'jobs_timeline', label: 'Jobs Timeline by Project', hidden: false },
+              { name: 'table_storage', label: 'Table Storage & Partitions', hidden: false },
+              { name: 'streaming_timeline', label: 'Streaming Buffer Usage', hidden: false }
+            ]
+          },
+          {
             name: 'thelook',
             label: 'eCommerce',
             explores: [
               { name: 'order_items', label: 'Order Items', hidden: false },
               { name: 'users', label: 'Users', hidden: false },
-              { name: 'inventory_items', label: 'Inventory Items', hidden: false }
+              { name: 'inventory_items', label: 'Inventory Items', hidden: false },
+              { name: 'events', label: 'Web Events & Funnel', hidden: false }
+            ]
+          },
+          {
+            name: 'retail_ops',
+            label: 'Retail Operations',
+            explores: [
+              { name: 'store_transactions', label: 'Store Transactions', hidden: false },
+              { name: 'supply_chain_shipments', label: 'Supply Chain Shipments', hidden: false },
+              { name: 'warehouse_stock', label: 'Warehouse Stock Levels', hidden: false }
             ]
           },
           {
@@ -255,7 +287,9 @@ function buildHtmlPage(scenario) {
             label: 'System Activity',
             explores: [
               { name: 'history', label: 'History', hidden: false },
-              { name: 'query_metrics', label: 'Query Metrics', hidden: false }
+              { name: 'query_metrics', label: 'Query Metrics', hidden: false },
+              { name: 'scheduled_plan', label: 'Scheduled Plans', hidden: false },
+              { name: 'dashboard', label: 'Dashboards & Elements', hidden: false }
             ]
           }
         ],
@@ -397,6 +431,35 @@ function buildHtmlPage(scenario) {
           path: '/api/4.0/dashboards',
           args: { title: 'Executive Revenue App', folder_id: '5' }
         } : undefined,
+        initialComboOpen:
+          scenario === 'explore_dropdown_open_top' || scenario === 'explore_dropdown_scrolled',
+        initialExploreScrollTop: scenario === 'explore_dropdown_scrolled' ? 140 : 0,
+        initialPrompt:
+          scenario === 'chatbar_pasted_image_inspector'
+            ? 'Match the layout in this screenshot and add a gross margin breakdown.'
+            : scenario === 'chatbar_lookml_skills'
+            ? 'Curate descriptions on order_items, generate assert data tests, and capture a LookML parity snapshot.'
+            : '',
+        initialPastedImages:
+          scenario === 'chatbar_pasted_image_inspector'
+            ? [
+                {
+                  mimeType: 'image/png',
+                  data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+                  dataUrl: ${JSON.stringify(SAMPLE_PASTED_IMAGE_DATA_URL)}
+                }
+              ]
+            : [],
+        initialInspectorOpen: scenario === 'chatbar_pasted_image_inspector',
+        initialBusyStatus:
+          scenario === 'chatbar_busy_running'
+            ? 'Executing LkrCodeMode Monty Python & validating Looker queries...'
+            : null,
+        initialError:
+          scenario === 'chatbar_error_banner'
+            ? 'Looker API Error (422): Field "order_items.unknown_metric" not found in explore "thelook::order_items".'
+            : null,
+        openSchedulerModal: scenario === 'python_tile_scheduler_modal',
         extensionSDK: mockExtensionSDK,
         core40SDK: mockCore40SDK,
         lookerHostData: mockExtensionSDK.lookerHostData,
@@ -551,7 +614,7 @@ async function startHeadlessChrome() {
   }
 }
 
-describe('Looker Data App Studio — Mini-App Visual & Snapshot Suite', () => {
+describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite', () => {
   let server
   let port
   let chrome
@@ -578,16 +641,45 @@ describe('Looker Data App Studio — Mini-App Visual & Snapshot Suite', () => {
   afterAll(async () => {
     if (chrome) chrome.close()
     if (server) await new Promise((resolve) => server.close(resolve))
+
+    // Write manifest.json recording which image snapshots are modified/untracked in git vs committed
+    try {
+      const gitOut = execFileSync(
+        'git',
+        ['status', '--porcelain', 'src/__tests__/__image_snapshots__'],
+        { cwd: repoRoot, encoding: 'utf8' }
+      )
+      const changedFiles = new Set(
+        gitOut
+          .split(/\r?\n/)
+          .filter(Boolean)
+          .map((line) => path.basename(line.slice(3).trim()))
+      )
+      const manifest = scenarios.map((s) => ({
+        id: s.id,
+        category: s.category,
+        title: s.title,
+        snapshotName: s.snapshotName,
+        changedInGit: changedFiles.has(s.snapshotName)
+      }))
+      writeFileSync(
+        path.join(imageSnapshotsDir, 'manifest.json'),
+        JSON.stringify(manifest, null, 2)
+      )
+    } catch {}
   })
 
   const scenarios = [
     {
       id: 'data_app',
+      category: 'Mini-App Modes',
+      title: '1. Data App Mode + Inline Mutation Permission Gate',
       snapshotName: '01-mode-data-app-and-permission-gate-snap.png',
       expectText: [
-        'Data App Studio',
+        'Agent',
+        'Agentic LookML',
         'Data App',
-        'Dashboard',
+        'Content Studio',
         'LookML',
         'Health Check',
         'Python Tile',
@@ -595,70 +687,201 @@ describe('Looker Data App Studio — Mini-App Visual & Snapshot Suite', () => {
         'My Creations (5)',
         'Approve Looker State Mutation?',
         'create_dashboard',
-        'Executive Revenue App'
+        'Executive Revenue App',
+        '✨ Update App'
       ]
     },
     {
       id: 'dashboard',
+      category: 'Mini-App Modes',
+      title: '2. Content Studio Mode (Create & Update UDDs, Looks, Boards, Schedules)',
       snapshotName: '02-mode-native-dashboard-builder-snap.png',
       expectText: [
+        'Content Studio',
         'Executive Order Performance (Native UDD)',
         '/embed/dashboards/7',
-        'Update Content'
+        '✨ Update Content'
       ]
     },
     {
       id: 'lookml',
+      category: 'Mini-App Modes',
+      title: '3. Agentic LookML Mode (Turn Skills, Active User Dev Mode & .lkml Diffs)',
       snapshotName: '03-mode-agentic-lookml-snap.png',
       expectText: [
         'Add total_revenue & gross_margin to order_items',
+        '⎇ user dev mode',
         '✓ LookML Validator Passed',
         'run_lookml_test (1/1 passed)',
+        'TURN SKILLS:',
+        '📝 Descriptions & Curation',
+        '🧪 Data Tests (.test.lkml)',
+        '📸 Snapshot & Parity',
         'bronze/orders.refinement.lkml',
-        'Update LookML'
+        '✨ Update LookML'
       ]
     },
     {
       id: 'health_check',
+      category: 'Mini-App Modes',
+      title: '4. 3-Pillar Health Check Mode (Rendered Markdown Viewer & Top-Right Gemini Button)',
       snapshotName: '04-mode-3-pillar-health-check-snap.png',
       expectText: [
-        'Run 3-Pillar Audit',
+        '✨ Run 3-Pillar Audit',
+        'All 3 Pillars (Looker + BQ)',
         'Health Score: 70% (B- (Optimization Recommended))',
         'Transcriber: 2.86/4.00',
         'Technical Design Document (TDD): Looker & BigQuery 3-Pillar Health Check',
+        '{ } Raw Markdown',
         'Copy Markdown',
-        'Download Markdown (.md)'
+        '✨ Download Markdown (.md)'
       ]
     },
     {
       id: 'python_tile_studio',
+      category: 'Mini-App Modes',
+      title: '5. Python Tile Studio Mode (Mode Selector, Schedule Script & Live Grid)',
       snapshotName: '05-mode-python-tile-studio-snap.png',
       expectText: [
         'Looker Explore & Filter Summary',
-        'Publish Dashboard',
-        'Save Script',
+        '⏰ Schedule Script',
+        '✨ Publish Dashboard',
+        '✨ Run Python',
+        '✨ Ask AI',
+        '⏰ Scheduled: 0 8 * * * · summary',
         'agentic_thelook'
       ]
     },
     {
       id: 'tile_mount_view',
+      category: 'Tile & Scheduler Modal',
+      title: '6. Dashboard Tile Mount — View Mode',
       snapshotName: '06-dashboard-tile-mount-view-mode-snap.png',
       expectText: ['thelook', 'eCommerce', 'agentic_thelook', 'Complete']
     },
     {
       id: 'tile_mount_edit',
+      category: 'Tile & Scheduler Modal',
+      title: '7. Dashboard Tile Mount — Edit Mode',
       snapshotName: '07-dashboard-tile-mount-edit-mode-snap.png',
       expectText: [
         'CodeMode Python Tile Configuration',
         'Tile #57',
         'Looker Explore & Filter Summary (demo1)'
       ]
+    },
+    {
+      id: 'config_page',
+      category: 'Config & Explore Dropdown',
+      title: '8. Extension Auth & Vertex Setup Page (/config)',
+      snapshotName: '08-config-page-setup-snap.png',
+      expectText: [
+        'Agent',
+        'Agentic LookML',
+        'Configuration',
+        'Agent & Vertex / Gemini Setup',
+        'Google OAuth',
+        '✨ Save Setup'
+      ]
+    },
+    {
+      id: 'explore_dropdown_open_top',
+      category: 'Config & Explore Dropdown',
+      title: '9. Explore Combobox Dropdown — Open (Top Scroll State)',
+      snapshotName: '09-explore-dropdown-open-top-snap.png',
+      expectText: [
+        'Clear selection (let agent decide)',
+        'BIGQUERY INFORMATION SCHEMA (BLOCK)',
+        'Jobs Timeline by Project',
+        'Table Storage & Partitions',
+        'ECOMMERCE',
+        'Order Items'
+      ]
+    },
+    {
+      id: 'explore_dropdown_scrolled',
+      category: 'Config & Explore Dropdown',
+      title: '10. Explore Combobox Dropdown — Scrolled State (Retail Ops & System Activity)',
+      snapshotName: '10-explore-dropdown-scrolled-snap.png',
+      expectText: [
+        'RETAIL OPERATIONS',
+        'Store Transactions',
+        'Supply Chain Shipments',
+        'SYSTEM ACTIVITY',
+        'Query Metrics'
+      ]
+    },
+    {
+      id: 'chatbar_lookml_skills',
+      category: 'Chat Bar States',
+      title: '11. Chat Bar State — LookML Activated Turn Skills & Prompt',
+      snapshotName: '11-chatbar-state-lookml-activated-skills-snap.png',
+      expectText: [
+        'TURN SKILLS:',
+        '✓ 📝 Descriptions & Curation',
+        '✓ 🧪 Data Tests (.test.lkml)',
+        '✓ 📸 Snapshot & Parity',
+        '+ 🧱 Bronze View',
+        '✨ Run Agentic LookML'
+      ]
+    },
+    {
+      id: 'chatbar_pasted_image_inspector',
+      category: 'Chat Bar States',
+      title: '12. Chat Bar State — Pasted Screenshot Thumbnail & Code/Schema Inspector Open',
+      snapshotName: '12-chatbar-state-pasted-image-and-inspector-snap.png',
+      expectText: [
+        'Inspect Code / Schema',
+        'Compiled Explore Schema (/workspace/schema.md)',
+        'Test WASM Code Mode (Monty)',
+        '✨ Update App'
+      ]
+    },
+    {
+      id: 'chatbar_busy_running',
+      category: 'Chat Bar States',
+      title: '13. Chat Bar State — Busy / Running Spinner Banner',
+      snapshotName: '13-chatbar-state-busy-running-snap.png',
+      expectText: [
+        'Executing LkrCodeMode Monty Python & validating Looker queries...',
+        'Executive Revenue App'
+      ]
+    },
+    {
+      id: 'chatbar_error_banner',
+      category: 'Chat Bar States',
+      title: '14. Chat Bar State — Error Diagnostic Banner',
+      snapshotName: '14-chatbar-state-error-banner-snap.png',
+      expectText: [
+        'Error',
+        'Looker API Error (422): Field "order_items.unknown_metric" not found in explore "thelook::order_items".'
+      ]
+    },
+    {
+      id: 'python_tile_scheduler_modal',
+      category: 'Tile & Scheduler Modal',
+      title: '15. Custom CodeMode Script Scheduler Modal (Cron, vars.mode & Custom Controls)',
+      snapshotName: '15-python-tile-scheduler-modal-snap.png',
+      expectText: [
+        '⏰ Custom CodeMode Script Scheduler',
+        'obj_schedule_demo1',
+        'Daily at 8:00 AM (0 8 * * *)',
+        'Script Execution Mode (`vars.mode`)',
+        'Custom Controls / Non-Query Variables (`vars.custom_controls` JSON)',
+        '✨ Save Script Schedule'
+      ]
     }
   ]
 
+  let testCount = 0
   test.each(scenarios)(
-    'renders $id with MockLookerExtensionProvider and matches DOM & image snapshots',
+    'renders $id ($title) with MockLookerExtensionProvider and matches DOM & image snapshots',
     async ({ id, snapshotName, expectText }) => {
+      testCount += 1
+      if (testCount % 7 === 0) {
+        chrome.close()
+        chrome = await startHeadlessChrome()
+      }
       const url = `http://127.0.0.1:${port}/?scenario=${encodeURIComponent(id)}`
       await chrome.send('Page.navigate', { url })
 
@@ -673,18 +896,28 @@ describe('Looker Data App Studio — Mini-App Visual & Snapshot Suite', () => {
               label: (el.textContent || '').trim(),
               active: el.classList.contains('active')
             }));
-            return { href, text, tabs };
+            const dd = document.querySelector('.dab-dropdown');
+            if (dd && window.__MOCK_LOOKER_EXTENSION__ && typeof window.__MOCK_LOOKER_EXTENSION__.initialExploreScrollTop === 'number') {
+              dd.scrollTop = window.__MOCK_LOOKER_EXTENSION__.initialExploreScrollTop;
+            }
+            return {
+              href,
+              text,
+              tabs,
+              dropdownScrollTop: dd ? dd.scrollTop : null
+            };
           })()`,
           returnByValue: true
         })
         pageState = evalRes.result && evalRes.result.value
         if (
           pageState &&
-          (!String(pageState.href || '').startsWith('http://127.0.0.1') ||
-            String(pageState.text || '').includes('pmhkaepabdniocnppdkfgifgonahhpdi'))
+          String(pageState.text || '').includes('pmhkaepabdniocnppdkfgifgonahhpdi')
         ) {
+          chrome.close()
+          chrome = await startHeadlessChrome()
           await chrome.send('Page.navigate', { url })
-          await new Promise((r) => setTimeout(r, 150))
+          await new Promise((r) => setTimeout(r, 250))
           continue
         }
         if (pageState && expectText.every((t) => pageState.text.includes(t))) {
@@ -701,6 +934,7 @@ describe('Looker Data App Studio — Mini-App Visual & Snapshot Suite', () => {
       expect({
         scenario: id,
         modeTabs: pageState.tabs,
+        dropdownScrollTop: pageState.dropdownScrollTop,
         verifiedVisibleText: expectText
       }).toMatchSnapshot()
 
