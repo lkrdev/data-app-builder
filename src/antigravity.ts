@@ -400,6 +400,7 @@ export async function runAntigravityTurn(params: {
   customSystemGuide?: string
   extraSources?: Array<{ type: 'inline'; content: string; target: string }>
   priorMessages?: Array<{ role: string; text: string }>
+  requirePermission?: boolean
   approvedOperations?: Set<string>
   onPermissionRequest?: (
     req: CodeModePermissionRequest
@@ -431,6 +432,7 @@ export async function runAntigravityTurn(params: {
     customSystemGuide,
     extraSources,
     priorMessages,
+    requirePermission = true,
     approvedOperations,
     onPermissionRequest,
     onStatus,
@@ -632,7 +634,7 @@ export async function runAntigravityTurn(params: {
               sdk,
               extensionSDK,
               allowUpdateSession: toolMode === 'lookml',
-              requirePermission: true,
+              requirePermission,
               approvedOperations,
               onPermissionRequest,
               vars: {

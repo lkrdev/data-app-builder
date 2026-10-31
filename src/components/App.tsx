@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useHistory, useLocation } from 'react-router-dom'
+import { MemoryRouter, useHistory, useLocation } from 'react-router-dom'
 import { ExtensionProvider } from '@looker/extension-sdk-react'
 import {
   LookerExtensionProvider,
+  MockLookerExtensionProvider,
   useLookerExtension,
 } from '../contexts/LookerExtensionContext'
 import {
@@ -207,11 +208,18 @@ const StudioMain: React.FC = () => {
   const [activeObjectId, setActiveObjectId] = useState('')
 
   // Inline permission prompt state for mutating CodeMode SDK operations
+  const [requirePermission, setRequirePermission] = useState(true)
   const approvedOpsRef = useRef<Set<string>>(new Set())
   const [pendingPerm, setPendingPerm] = useState<{
     req: CodeModePermissionRequest
     resolve: (decision: CodeModePermissionDecision) => void
-  } | null>(null)
+  } | null>(() => {
+    const mockPerm =
+      typeof window !== 'undefined'
+        ? (window as any).__MOCK_LOOKER_EXTENSION__?.initialPendingPerm
+        : undefined
+    return mockPerm ? { req: mockPerm, resolve: () => {} } : null
+  })
 
   const requestCodeModePermission = useCallback(
     (req: CodeModePermissionRequest): Promise<CodeModePermissionDecision> =>
@@ -220,6 +228,16 @@ const StudioMain: React.FC = () => {
       }),
     []
   )
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      ;(window as any).__DAB_STUDIO__ = {
+        history,
+        requestCodeModePermission,
+        setRequirePermission,
+      }
+    }
+  }, [history, requestCodeModePermission])
 
   const resolvePermDecision = (decision: CodeModePermissionDecision) => {
     if (!pendingPerm) return
@@ -746,7 +764,8 @@ const StudioMain: React.FC = () => {
       !isTileMount &&
       !isConfigured &&
       location.pathname !== '/config' &&
-      !location.pathname.startsWith('/script')
+      !location.pathname.startsWith('/script') &&
+      !location.pathname.startsWith('/tile')
     ) {
       history.replace('/config')
     }
@@ -801,13 +820,15 @@ const StudioMain: React.FC = () => {
     [core40SDK, extensionSDK, history, location.pathname]
   )
 
-  // Auto-load content when opened via route (/lookml/:id, /health-check/:id, /dashboard/:id, or /:dashboardId / /dashboards/:dashboardId)
+  // Auto-load content when opened via route (/lookml/:id, /health-check/:id, /dashboard/:id, or /:dashboardId / /app/:dashboardId)
   useEffect(() => {
     if (
       isTileMount ||
       location.pathname === '/config' ||
       location.pathname === '/script' ||
-      location.pathname.startsWith('/script/')
+      location.pathname.startsWith('/script/') ||
+      location.pathname === '/tile' ||
+      location.pathname.startsWith('/tile/')
     ) {
       return
     }
@@ -824,7 +845,7 @@ const StudioMain: React.FC = () => {
       return
     }
     if (location.pathname === '/lookml') return
-    const hcMatch = location.pathname.match(/^\/health-check\/([^/]+)\/?$/)
+    const hcMatch = location.pathname.match(/^\/health(?:-check)?\/([^/]+)\/?$/)
     if (hcMatch) {
       const hcId = decodeURIComponent(hcMatch[1]).trim()
       if (hcId && hcId !== healthReport?.id && hcId !== lastHealthIdRef.current) {
@@ -832,7 +853,7 @@ const StudioMain: React.FC = () => {
       }
       return
     }
-    if (location.pathname === '/health-check') return
+    if (location.pathname === '/health-check' || location.pathname === '/health') return
     const nativeMatch = location.pathname.match(/^\/dashboard\/([^/]+)\/?$/)
     if (nativeMatch) {
       const routeId = decodeURIComponent(nativeMatch[1]).trim()
@@ -845,10 +866,15 @@ const StudioMain: React.FC = () => {
       }
       return
     }
-    if (location.pathname === '/dashboard' || location.pathname === '/dashboard/') {
+    if (
+      location.pathname === '/dashboard' ||
+      location.pathname === '/dashboard/' ||
+      location.pathname === '/app' ||
+      location.pathname === '/app/'
+    ) {
       return
     }
-    const m = location.pathname.match(/^\/(?:dashboards\/)?([^/]+)\/?$/)
+    const m = location.pathname.match(/^\/(?:(?:dashboards|app)\/)?([^/]+)\/?$/)
     const routeId = m ? decodeURIComponent(m[1]).trim() : ''
     if (
       routeId &&
@@ -1021,6 +1047,7 @@ const StudioMain: React.FC = () => {
         existingAppCode: currentAppCode || undefined,
         existingNativeContent: nativeContent,
         priorMessages: messages,
+        requirePermission,
         approvedOperations: approvedOpsRef.current,
         onPermissionRequest: requestCodeModePermission,
         onStatus: setBusyStatus,
@@ -1390,33 +1417,24 @@ const StudioMain: React.FC = () => {
                 role="tab"
                 aria-selected={activeMode === m.mode}
                 className={`dab-mode-tab ${activeMode === m.mode ? 'active' : ''}`}
-                onClick={() => history.push(m.prefix)}
+                onClick={() => {
+                  const target =
+                    m.mode === 'app' && publishedApp?.dashboardId
+                      ? `/app/${encodeURIComponent(publishedApp.dashboardId)}`
+                      : m.mode === 'dashboard' && nativeContent?.id
+                      ? `/dashboard/${encodeURIComponent(nativeContent.id)}`
+                      : m.mode === 'lookml' && lookmlBundle?.id
+                      ? `/lookml/${encodeURIComponent(lookmlBundle.id)}`
+                      : m.mode === 'health' && healthReport?.id
+                      ? `/health-check/${encodeURIComponent(healthReport.id)}`
+                      : m.prefix
+                  history.push(target)
+                }}
               >
                 {m.label}
               </button>
             ))}
           </div>
-          <button
-            type="button"
-            className="dab-btn-secondary"
-            onClick={() => history.push('/script')}
-          >
-            Python Script (/script)
-          </button>
-          <button
-            type="button"
-            className={!isHealthCheckMode ? 'dab-btn-primary' : 'dab-btn-secondary'}
-            onClick={() => history.push('/')}
-          >
-            Data App
-          </button>
-          <button
-            type="button"
-            className={isHealthCheckMode ? 'dab-btn-primary' : 'dab-btn-secondary'}
-            onClick={() => history.push('/health-check')}
-          >
-            3-Pillar Health Check
-          </button>
           {isHealthCheckMode && (
             <button
               type="button"
@@ -1430,38 +1448,15 @@ const StudioMain: React.FC = () => {
         </div>
 
         <div className="dab-controls">
-          <label className="dab-field">
-            <span>Mode</span>
-            <select
-              value={isLookmlMode ? 'lookml' : builderMode}
-              onChange={(e) => {
-                const nextMode = e.target.value as 'data_app' | 'dashboard' | 'lookml'
-                if (nextMode === 'lookml') {
-                  history.push(
-                    lookmlBundle?.id
-                      ? `/lookml/${encodeURIComponent(lookmlBundle.id)}`
-                      : '/lookml'
-                  )
-                } else if (nextMode === 'dashboard') {
-                  history.push(
-                    nativeContent?.id
-                      ? `/dashboard/${encodeURIComponent(nativeContent.id)}`
-                      : '/dashboard'
-                  )
-                } else {
-                  history.push(
-                    publishedApp?.dashboardId
-                      ? `/${encodeURIComponent(publishedApp.dashboardId)}`
-                      : '/'
-                  )
-                }
-              }}
-            >
-              <option value="data_app">Data App (Lit)</option>
-              <option value="dashboard">Native Content (UDD / Look / Board)</option>
-              <option value="lookml">Agentic LookML (.lkml)</option>
-            </select>
-          </label>
+          <button
+            type="button"
+            data-testid="permission-mode-toggle"
+            className={requirePermission ? 'dab-btn-secondary' : 'dab-btn-primary'}
+            onClick={() => setRequirePermission((prev) => !prev)}
+            title="Toggle whether mutating Looker SDK calls require interactive user approval or auto-approve"
+          >
+            {requirePermission ? '🛡️ Safe Mode (Ask)' : '⚡ Auto-Approve (YOLO)'}
+          </button>
 
           <div className="dab-field" ref={comboRef}>
             <span>Explores</span>
@@ -2179,6 +2174,14 @@ const StudioMain: React.FC = () => {
                   <iframe
                     key={`${builderMode}-${activePreviewId}-${iframeRev}`}
                     src={embedUrl}
+                    srcDoc={
+                      typeof window !== 'undefined'
+                        ? (window as any).__MOCK_LOOKER_EXTENSION__?.getMockPreviewHtml?.(
+                            builderMode,
+                            activePreviewId
+                          )
+                        : undefined
+                    }
                     title="Looker Live Preview"
                     className="dab-iframe"
                   />
@@ -2206,6 +2209,17 @@ const StudioMain: React.FC = () => {
 }
 
 export const App = () => {
+  const mockCtx =
+    typeof window !== 'undefined' ? (window as any).__MOCK_LOOKER_EXTENSION__ : undefined
+  if (mockCtx) {
+    return (
+      <MemoryRouter initialEntries={[mockCtx.initialRoute || '/app']}>
+        <MockLookerExtensionProvider value={mockCtx}>
+          <StudioMain />
+        </MockLookerExtensionProvider>
+      </MemoryRouter>
+    )
+  }
   return (
     <ExtensionProvider>
       <LookerExtensionProvider>
