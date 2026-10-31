@@ -1072,161 +1072,34 @@ print({
   return { elapsedMs, stdout: parsed.stdout.trim() }
 }
 
-/**
- * Define the 10 optimization iterations and their cumulative feature flags.
- */
-const ITERATION_CONFIGS = [
-  {
-    iteration: 1,
-    name: 'Baseline (Fixed 2.5s Poll, Remote Tarball, Sequential Publish, Duplicate Bundle Output)',
-    flags: {
-      preseedGuide: false,
-      stripLookmlBootstrap: false,
-      singleShotDiscovery: false,
-      stdinSingleStepBundle: false,
-      omitDuplicateBundleText: false,
-      adaptivePolling: false,
-      incrementalParallelPublish: false,
-      warmTurnFastPath: false,
-      enhancedDynamicExtractor: false,
-    },
-  },
-  {
-    iteration: 2,
-    name: 'Eliminate Remote Toolkit Download & Pre-Seed Compact DATA_APP_GUIDE.md',
-    flags: {
-      preseedGuide: true,
-      stripLookmlBootstrap: false,
-      singleShotDiscovery: false,
-      stdinSingleStepBundle: false,
-      omitDuplicateBundleText: false,
-      adaptivePolling: false,
-      incrementalParallelPublish: false,
-      warmTurnFastPath: false,
-      enhancedDynamicExtractor: false,
-    },
-  },
-  {
-    iteration: 3,
-    name: 'Strip Unneeded BOOTSTRAP_LOOKML_PY Source & Mode Prompt Bloat',
-    flags: {
-      preseedGuide: true,
-      stripLookmlBootstrap: true,
-      singleShotDiscovery: false,
-      stdinSingleStepBundle: false,
-      omitDuplicateBundleText: false,
-      adaptivePolling: false,
-      incrementalParallelPublish: false,
-      warmTurnFastPath: false,
-      enhancedDynamicExtractor: false,
-    },
-  },
-  {
-    iteration: 4,
-    name: 'Single-Script Looker Discovery + Schema + Sample Query in 1 CodeMode Call',
-    flags: {
-      preseedGuide: true,
-      stripLookmlBootstrap: true,
-      singleShotDiscovery: true,
-      stdinSingleStepBundle: false,
-      omitDuplicateBundleText: false,
-      adaptivePolling: false,
-      incrementalParallelPublish: false,
-      warmTurnFastPath: false,
-      enhancedDynamicExtractor: false,
-    },
-  },
-  {
-    iteration: 5,
-    name: 'Single-Step Write + Verify + Bundle via `bundle_app.py --stdin`',
-    flags: {
-      preseedGuide: true,
-      stripLookmlBootstrap: true,
-      singleShotDiscovery: true,
-      stdinSingleStepBundle: true,
-      omitDuplicateBundleText: false,
-      adaptivePolling: false,
-      incrementalParallelPublish: false,
-      warmTurnFastPath: false,
-      enhancedDynamicExtractor: false,
-    },
-  },
-  {
-    iteration: 6,
-    name: 'Stop Echoing <DATA_APP_BUNDLE> in Final Assistant output_text',
-    flags: {
-      preseedGuide: true,
-      stripLookmlBootstrap: true,
-      singleShotDiscovery: true,
-      stdinSingleStepBundle: true,
-      omitDuplicateBundleText: true,
-      adaptivePolling: false,
-      incrementalParallelPublish: false,
-      warmTurnFastPath: false,
-      enhancedDynamicExtractor: false,
-    },
-  },
-  {
-    iteration: 7,
-    name: 'Adaptive Polling Backoff ([400, 700, 1000, 1500]ms) & Parallel CodeMode Execution',
-    flags: {
-      preseedGuide: true,
-      stripLookmlBootstrap: true,
-      singleShotDiscovery: true,
-      stdinSingleStepBundle: true,
-      omitDuplicateBundleText: true,
-      adaptivePolling: true,
-      incrementalParallelPublish: false,
-      warmTurnFastPath: false,
-      enhancedDynamicExtractor: false,
-    },
-  },
-  {
-    iteration: 8,
-    name: 'Incremental & Parallel upsertPublishedDataApp() Query Caching',
-    flags: {
-      preseedGuide: true,
-      stripLookmlBootstrap: true,
-      singleShotDiscovery: true,
-      stdinSingleStepBundle: true,
-      omitDuplicateBundleText: true,
-      adaptivePolling: true,
-      incrementalParallelPublish: true,
-      warmTurnFastPath: false,
-      enhancedDynamicExtractor: false,
-    },
-  },
-  {
-    iteration: 9,
-    name: 'Warm-Turn Fast Path (Turns 2-4 Skip Re-Seeding & Re-Discovery)',
-    flags: {
-      preseedGuide: true,
-      stripLookmlBootstrap: true,
-      singleShotDiscovery: true,
-      stdinSingleStepBundle: true,
-      omitDuplicateBundleText: true,
-      adaptivePolling: true,
-      incrementalParallelPublish: true,
-      warmTurnFastPath: true,
-      enhancedDynamicExtractor: false,
-    },
-  },
-  {
-    iteration: 10,
-    name: 'Zero-Retry Static Widget Extraction for Dynamic Metric Switchers & Grid Fields',
-    flags: {
-      preseedGuide: true,
-      stripLookmlBootstrap: true,
-      singleShotDiscovery: true,
-      stdinSingleStepBundle: true,
-      omitDuplicateBundleText: true,
-      adaptivePolling: true,
-      incrementalParallelPublish: true,
-      warmTurnFastPath: true,
-      enhancedDynamicExtractor: true,
-    },
-  },
+const FLAG_ORDER = [
+  'preseedGuide',
+  'stripLookmlBootstrap',
+  'singleShotDiscovery',
+  'stdinSingleStepBundle',
+  'omitDuplicateBundleText',
+  'adaptivePolling',
+  'incrementalParallelPublish',
+  'warmTurnFastPath',
+  'enhancedDynamicExtractor',
 ]
+const ITERATION_NAMES = [
+  'Baseline (Fixed 2.5s Poll, Remote Tarball, Sequential Publish, Duplicate Bundle Output)',
+  'Eliminate Remote Toolkit Download & Pre-Seed Compact DATA_APP_GUIDE.md',
+  'Strip Unneeded BOOTSTRAP_LOOKML_PY Source & Mode Prompt Bloat',
+  'Single-Script Looker Discovery + Schema + Sample Query in 1 CodeMode Call',
+  'Single-Step Write + Verify + Bundle via `bundle_app.py --stdin`',
+  'Stop Echoing <DATA_APP_BUNDLE> in Final Assistant output_text',
+  'Adaptive Polling Backoff ([400, 700, 1000, 1500]ms) & Parallel CodeMode Execution',
+  'Incremental & Parallel upsertPublishedDataApp() Query Caching',
+  'Warm-Turn Fast Path (Turns 2-4 Skip Re-Seeding & Re-Discovery)',
+  'Zero-Retry Static Widget Extraction for Dynamic Metric Switchers & Grid Fields',
+]
+const ITERATION_CONFIGS = ITERATION_NAMES.map((name, idx) => ({
+  iteration: idx + 1,
+  name,
+  flags: Object.fromEntries(FLAG_ORDER.map((k, fIdx) => [k, idx >= fIdx + 1])),
+}))
 
 try {
   // 1. Run real BUNDLE_APP_PY on all 4 turns
@@ -1490,41 +1363,14 @@ return {"hits": hits, "exp": exp, "sample": sample}
       })
     }
 
-    const totals = turns.reduce(
-      (acc, t) => ({
-        wall_ms: acc.wall_ms + t.wall_ms,
-        agent_wall_ms: acc.agent_wall_ms + t.agent_wall_ms,
-        publish_wall_ms: acc.publish_wall_ms + t.publish_wall_ms,
-        poll_wait_ms: acc.poll_wait_ms + t.poll_wait_ms,
-        poll_count: acc.poll_count + t.poll_count,
-        sandbox_exec_ms: acc.sandbox_exec_ms + t.sandbox_exec_ms,
-        codemode_exec_ms: acc.codemode_exec_ms + t.codemode_exec_ms,
-        bash_calls: acc.bash_calls + t.bash_calls,
-        codemode_calls: acc.codemode_calls + t.codemode_calls,
-        looker_http_calls: acc.looker_http_calls + t.looker_http_calls,
-        input_tokens: acc.input_tokens + t.input_tokens,
-        output_tokens: acc.output_tokens + t.output_tokens,
-        thought_tokens: acc.thought_tokens + t.thought_tokens,
-        total_tokens: acc.total_tokens + t.total_tokens,
-        verify_retries: acc.verify_retries + t.verify_retries,
-      }),
-      {
-        wall_ms: 0,
-        agent_wall_ms: 0,
-        publish_wall_ms: 0,
-        poll_wait_ms: 0,
-        poll_count: 0,
-        sandbox_exec_ms: 0,
-        codemode_exec_ms: 0,
-        bash_calls: 0,
-        codemode_calls: 0,
-        looker_http_calls: 0,
-        input_tokens: 0,
-        output_tokens: 0,
-        thought_tokens: 0,
-        total_tokens: 0,
-        verify_retries: 0,
-      }
+    const metricKeys = [
+      'wall_ms', 'agent_wall_ms', 'publish_wall_ms', 'poll_wait_ms', 'poll_count',
+      'sandbox_exec_ms', 'codemode_exec_ms', 'bash_calls', 'codemode_calls',
+      'looker_http_calls', 'input_tokens', 'output_tokens', 'thought_tokens',
+      'total_tokens', 'verify_retries',
+    ]
+    const totals = Object.fromEntries(
+      metricKeys.map((k) => [k, turns.reduce((sum, t) => sum + t[k], 0)])
     )
 
     const iterPayload = {

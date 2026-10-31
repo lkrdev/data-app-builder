@@ -384,11 +384,11 @@ export function canonicalQueryJson(query: WidgetQueryEntry['query']): string {
     model: query.model,
     view: query.view,
     fields: query.fields || [],
+    ...(query.filters && Object.keys(query.filters).length ? { filters: query.filters } : {}),
+    ...(query.sorts?.length ? { sorts: query.sorts } : {}),
+    ...(query.limit != null ? { limit: String(query.limit) } : {}),
+    ...(query.pivots?.length ? { pivots: query.pivots } : {}),
   }
-  if (query.filters && Object.keys(query.filters).length > 0) norm.filters = query.filters
-  if (query.sorts && query.sorts.length > 0) norm.sorts = query.sorts
-  if (query.limit !== undefined && query.limit !== null) norm.limit = String(query.limit)
-  if (query.pivots && query.pivots.length > 0) norm.pivots = query.pivots
   return JSON.stringify(norm, Object.keys(norm).sort())
 }
 
@@ -402,22 +402,18 @@ export async function upsertPublishedDataApp(
   studioUpdate?: StudioMetadataUpdate
 ): Promise<PublishedAppState> {
   // 1. Seed existing canonical query slugs and register only new/changed widget queries concurrently
-  const savedByCanonical = new Map<string, string>()
-  for (const mq of existing?.manifestQueries || []) {
-    if (mq.canonical_query && mq.query_id) {
-      savedByCanonical.set(mq.canonical_query, mq.query_id)
-    }
-  }
+  const savedByCanonical = new Map<string, string>(
+    (existing?.manifestQueries || [])
+      .filter((mq): mq is typeof mq & { canonical_query: string } => Boolean(mq.canonical_query && mq.query_id))
+      .map((mq) => [mq.canonical_query, mq.query_id])
+  )
 
-  const validWidgets: Array<{ w: WidgetQueryEntry; canonical: string }> = []
+  const validWidgets = (bundle.widgets || [])
+    .filter((w) => w.query?.model && w.query?.view && w.query?.fields?.length)
+    .map((w) => ({ w, canonical: canonicalQueryJson(w.query) }))
   const pendingSpecs = new Map<string, WidgetQueryEntry['query']>()
-  for (const w of bundle.widgets || []) {
-    if (!w.query?.model || !w.query?.view || !w.query?.fields?.length) continue
-    const canonical = canonicalQueryJson(w.query)
-    validWidgets.push({ w, canonical })
-    if (!savedByCanonical.has(canonical) && !pendingSpecs.has(canonical)) {
-      pendingSpecs.set(canonical, w.query)
-    }
+  for (const { w, canonical } of validWidgets) {
+    if (!savedByCanonical.has(canonical)) pendingSpecs.set(canonical, w.query)
   }
 
   await Promise.all(
@@ -442,20 +438,12 @@ export async function upsertPublishedDataApp(
     })
   )
 
-  const manifestQueries: NonNullable<PublishedAppState['manifestQueries']> = []
-  for (const { w, canonical } of validWidgets) {
-    const queryId = savedByCanonical.get(canonical)
-    if (queryId) {
-      manifestQueries.push({
-        widget_id: w.widget_id,
-        title: w.title || w.widget_id,
-        model: w.query.model,
-        explore: w.query.view,
-        query_id: queryId,
-        canonical_query: canonical,
-      })
-    }
-  }
+  const manifestQueries = validWidgets.flatMap(({ w, canonical }) => {
+    const query_id = savedByCanonical.get(canonical)
+    return query_id
+      ? [{ widget_id: w.widget_id, title: w.title || w.widget_id, model: w.query.model, explore: w.query.view, query_id, canonical_query: canonical }]
+      : []
+  })
 
   const nextStudio = mergeStudioMetadata(existing?.studio, studioUpdate)
   const richContentJson = JSON.stringify({

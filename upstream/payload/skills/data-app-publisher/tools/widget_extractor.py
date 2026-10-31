@@ -558,8 +558,6 @@ def _eval_js_expr(expr: str, app_props: dict, module_consts: dict, allow_partial
 
     for op in ("??", "||"):
         if op in s:
-            parts = _split_top_level(s, op[0])
-            # Re-verify top-level double-char operator
             idx_op = 0
             while idx_op < len(s) - 1:
                 if s[idx_op : idx_op + 2] == op and len(_split_top_level(s[: idx_op + 1], op[0])) > 1:
@@ -579,8 +577,7 @@ def _eval_js_expr(expr: str, app_props: dict, module_consts: dict, allow_partial
                 lv, lf, lrs = _eval_js_expr(m_eq.group(1), app_props, module_consts)
                 rv, rf, rrs = _eval_js_expr(m_eq.group(2), app_props, module_consts)
                 if not lf and not rf:
-                    res_eq = (lv == rv) if eq_op.startswith("=") else (lv != rv)
-                    return res_eq, False, (reads_state or lrs or rrs)
+                    return ((lv == rv) if eq_op.startswith("=") else (lv != rv)), False, (reads_state or lrs or rrs)
 
     if m_find := re.match(r"^([A-Za-z_$][\w$.]*)\.find\s*\(\s*(?:\(\s*([A-Za-z_$][\w$]*)\s*\)|([A-Za-z_$][\w$]*))\s*=>\s*(.+)\)$", s, re.S):
         arr_val, arr_fail, arr_rs = _eval_js_expr(m_find.group(1), app_props, module_consts)
@@ -596,20 +593,16 @@ def _eval_js_expr(expr: str, app_props: dict, module_consts: dict, allow_partial
     if m_idx := re.match(r"^([A-Za-z_$][\w$.]*)\[\s*([^\]]+)\s*\]((?:\??\.[A-Za-z_$][\w$]*)*)$", s):
         base_val, base_fail, base_rs = _eval_js_expr(m_idx.group(1).replace("?.", "."), app_props, module_consts)
         key_val, key_fail, key_rs = _eval_js_expr(m_idx.group(2), app_props, module_consts)
-        tail = m_idx.group(3) or ""
+        cur = None
         if not base_fail and isinstance(base_val, dict) and base_val:
             cur = base_val.get(str(key_val)) if not key_fail and str(key_val) in base_val else next(iter(base_val.values()))
-            for prop in [p for p in re.split(r"\??\.", tail) if p]:
-                cur = cur.get(prop) if isinstance(cur, dict) else None
-            if cur is not None:
-                return cur, False, (reads_state or base_rs or key_rs)
         elif not base_fail and isinstance(base_val, list) and base_val:
             idx_num = int(key_val) if not key_fail and isinstance(key_val, (int, float)) else 0
             cur = base_val[idx_num] if 0 <= idx_num < len(base_val) else base_val[0]
-            for prop in [p for p in re.split(r"\??\.", tail) if p]:
-                cur = cur.get(prop) if isinstance(cur, dict) else None
-            if cur is not None:
-                return cur, False, (reads_state or base_rs or key_rs)
+        for prop in [p for p in re.split(r"\??\.", m_idx.group(3) or "") if p]:
+            cur = cur.get(prop) if isinstance(cur, dict) else None
+        if cur is not None:
+            return cur, False, (reads_state or base_rs or key_rs)
 
     if "?." in s and re.match(r"^[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)+$", s):
         return _eval_js_expr(s.replace("?.", "."), app_props, module_consts)
@@ -795,14 +788,11 @@ def _extract_from_source(raw_code: str) -> ExtractionResult:
             if m.group(1) != "const" or counts[name] > 1:
                 local.pop(name, None)
                 continue
-            pos = m.end()
-            while pos < len(region) and region[pos].isspace():
-                pos += 1
+            pos = m.end() + (len(region[m.end():]) - len(region[m.end():].lstrip()))
+            stmt = _split_top_level(region[pos:], ";")[0]
             end = _value_extent(region, pos)
             if end == pos:
-                stmt = _split_top_level(region[pos:], ";")[0]
-                stmt_line = _split_top_level(stmt, "\n")[0]
-                end = pos + (len(stmt_line) if stmt_line.strip() else len(stmt))
+                end = pos + len(_split_top_level(stmt, "\n")[0].strip() and _split_top_level(stmt, "\n")[0] or stmt)
             if end > pos:
                 val, failed, _ = _eval_js_expr(region[pos:end], app_props, {**render_consts, **local})
                 if not failed:
