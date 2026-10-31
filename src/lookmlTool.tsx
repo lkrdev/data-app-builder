@@ -80,9 +80,11 @@ export interface LookmlArtifactPayload {
   }
 }
 
+export const LKR_DEV_CLI_VERSION = '0.0.61'
+
 export const BOOTSTRAP_LOOKML_PY = `#!/usr/bin/env python3
 """Sandbox helper for Agentic LookML:
-1. Bootstraps lkr-dev-cli[parse] (offline lkr parse & lkr schema) and lkrdev/cli/skills/ into /workspace.
+1. Bootstraps uv + lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION} and .agents/skills/ into /workspace.
 2. Computes unified diffs between /workspace/lookml_baseline and /workspace/data/$RUN_ID/lookml (or /workspace/lookml).
 3. Emits <LOOKML_BUNDLE>{...}</LOOKML_BUNDLE> for the host Looker extension.
 """
@@ -101,9 +103,10 @@ SKILLS_ROOT = WORKSPACE_DIR / ".agents/skills"
 SKILLS_ALIAS = WORKSPACE_DIR / "skills"
 LOOKML_DIR = Path(os.environ.get("LOOKML_DIR", str(WORKSPACE_DIR / "lookml")))
 BASELINE_DIR = Path(os.environ.get("LOOKML_BASELINE_DIR", str(WORKSPACE_DIR / "lookml_baseline")))
+LKR_DEV_CLI_VERSION = os.environ.get("LKR_DEV_CLI_VERSION", "${LKR_DEV_CLI_VERSION}")
 CLI_TARBALL_URL = os.environ.get(
     "LKR_CLI_TARBALL_URL",
-    "https://codeload.github.com/lkrdev/cli/tar.gz/refs/heads/main",
+    f"https://codeload.github.com/lkrdev/cli/tar.gz/refs/tags/v{LKR_DEV_CLI_VERSION}",
 )
 REQUIRED_SKILLS = (
     "agentic-lookml-workflow",
@@ -149,12 +152,18 @@ def ensure_skills() -> list[str]:
 def ensure_lkr_cli() -> str:
     lkr_bin = shutil.which("lkr") or shutil.which("lkr-dev-cli")
     if not lkr_bin:
-        cmd = (
-            ["uv", "pip", "install", "--system", "--quiet", "lkr-dev-cli[parse]"]
-            if shutil.which("uv")
-            else [sys.executable, "-m", "pip", "install", "--quiet", "lkr-dev-cli[parse]"]
-        )
-        subprocess.run(cmd, check=False)
+        pkg_spec = f"lkr-dev-cli[tools,code-mode,parse]=={LKR_DEV_CLI_VERSION}"
+        if not shutil.which("uv"):
+            subprocess.run(
+                "curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh",
+                shell=True,
+                check=False,
+            )
+        if shutil.which("uv"):
+            env = {**os.environ, "UV_TOOL_BIN_DIR": "/usr/local/bin"}
+            subprocess.run(["uv", "tool", "install", "--quiet", pkg_spec], env=env, check=False)
+        else:
+            subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", pkg_spec], check=False)
     return shutil.which("lkr") or shutil.which("lkr-dev-cli") or "lkr"
 
 def compute_diff(old_text: str, new_text: str, rel_path: str) -> str:
