@@ -12,6 +12,9 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     setClientId,
     projectId,
     setProjectId,
+    disabledModes,
+    setDisabledModes,
+    enabledModes,
     apiKey,
     setApiKey,
     extensionSDK,
@@ -97,6 +100,53 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               ✨ Save Setup
             </button>
           </div>
+          <div
+            style={{
+              borderTop: '1px solid #e2e8f0',
+              paddingTop: 10,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              flexWrap: 'wrap',
+              fontSize: 12,
+            }}
+          >
+            <strong style={{ color: '#475569' }}>Enabled Studio Apps:</strong>
+            {STUDIO_MODES.map((m) => {
+              const enabled = !disabledModes.includes(m.mode)
+              return (
+                <label
+                  key={m.mode}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    cursor: 'pointer',
+                    padding: '4px 8px',
+                    borderRadius: 6,
+                    border: '1px solid #cbd5e1',
+                    background: enabled ? '#eff6ff' : '#f8fafc',
+                    color: enabled ? '#1d4ed8' : '#64748b',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    data-testid={`config-mode-toggle-${m.mode}`}
+                    checked={enabled}
+                    disabled={enabled && enabledModes.length <= 1}
+                    onChange={() =>
+                      setDisabledModes((prev) =>
+                        prev.includes(m.mode)
+                          ? prev.filter((x) => x !== m.mode)
+                          : [...prev, m.mode]
+                      )
+                    }
+                  />
+                  {m.label}
+                </label>
+              )
+            })}
+          </div>
         </div>
         {busyStatus && (
           <div className="dab-status-banner" style={{ marginTop: 12 }}>
@@ -117,6 +167,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
 export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
     activeMode,
+    enabledModes,
     agentSession,
     handleWakeModeEnv,
     history,
@@ -264,32 +315,34 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
         >
           🟢 Env [{activeMode}]: {agentSession.environmentId || `env_${activeMode}_isolated`}
         </span>
-        <div className="dab-mode-switcher" role="tablist" aria-label="Tool Mode">
-          {STUDIO_MODES.map((m) => (
-            <button
-              key={m.mode}
-              type="button"
-              role="tab"
-              aria-selected={activeMode === m.mode}
-              className={`dab-mode-tab ${activeMode === m.mode ? 'active' : ''}`}
-              onClick={() => {
-                const target =
-                  m.mode === 'app' && publishedApp?.dashboardId
-                    ? `/app/${encodeURIComponent(publishedApp.dashboardId)}`
-                    : m.mode === 'dashboard' && nativeContent?.id
-                    ? `/dashboard/${encodeURIComponent(nativeContent.id)}`
-                    : m.mode === 'lookml' && lookmlBundle?.id
-                    ? `/lookml/${encodeURIComponent(lookmlBundle.id)}`
-                    : m.mode === 'health' && healthReport?.id
-                    ? `/health-check/${encodeURIComponent(healthReport.id)}`
-                    : m.prefix
-                history.push(target)
-              }}
-            >
-              {m.label}
-            </button>
-          ))}
-        </div>
+        {enabledModes.length > 1 && (
+          <div className="dab-mode-switcher" role="tablist" aria-label="Tool Mode">
+            {enabledModes.map((m) => (
+              <button
+                key={m.mode}
+                type="button"
+                role="tab"
+                aria-selected={activeMode === m.mode}
+                className={`dab-mode-tab ${activeMode === m.mode ? 'active' : ''}`}
+                onClick={() => {
+                  const target =
+                    m.mode === 'app' && publishedApp?.dashboardId
+                      ? `/app/${encodeURIComponent(publishedApp.dashboardId)}`
+                      : m.mode === 'dashboard' && nativeContent?.id
+                      ? `/dashboard/${encodeURIComponent(nativeContent.id)}`
+                      : m.mode === 'lookml' && lookmlBundle?.id
+                      ? `/lookml/${encodeURIComponent(lookmlBundle.id)}`
+                      : m.mode === 'health' && healthReport?.id
+                      ? `/health-check/${encodeURIComponent(healthReport.id)}`
+                      : m.prefix
+                  history.push(target)
+                }}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="dab-controls">

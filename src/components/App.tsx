@@ -69,7 +69,7 @@ const StudioMain: React.FC = () => {
 
   if (ctl.isTileMount) return <PythonTileMount />
 
-  if (ctl.activeMode === 'tile') {
+  if (ctl.activeMode === 'tile' && !ctl.disabledModes.includes('tile')) {
     return (
       <ScriptStudioView
         auth={{
@@ -84,6 +84,7 @@ const StudioMain: React.FC = () => {
         selectedFolderId={ctl.selectedFolderId}
         folders={ctl.folders}
         onChangeFolder={ctl.setSelectedFolderId}
+        disabledModes={ctl.disabledModes}
       />
     )
   }

@@ -28,6 +28,7 @@ export interface ExtensionAuthContextConfig {
   authMode: 'oauth' | 'apikey'
   clientId?: string
   projectId?: string
+  disabledModes?: AntigravityToolType[]
 }
 
 export interface AntigravityAuth {

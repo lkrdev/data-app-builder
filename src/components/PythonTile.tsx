@@ -333,6 +333,7 @@ export const ScriptStudioView: React.FC<{
   selectedFolderId: string
   folders: Array<{ id: string; name: string }>
   onChangeFolder: (folderId: string) => void
+  disabledModes?: string[]
 }> = ({
   auth,
   schemaMarkdown,
@@ -340,6 +341,7 @@ export const ScriptStudioView: React.FC<{
   selectedFolderId,
   folders,
   onChangeFolder,
+  disabledModes = [],
 }) => {
   const { extensionSDK, core40SDK } = useLookerExtension()
   const history = useHistory()
@@ -627,26 +629,31 @@ export const ScriptStudioView: React.FC<{
           >
             🟢 Env [tile]: {agentSession.environmentId || 'env_tile_isolated'}
           </span>
-          <div className="dab-mode-switcher" role="tablist" aria-label="Tool Mode">
-            {[
+          {(() => {
+            const enabledModes = [
               { mode: 'app', label: 'Data App', prefix: '/app' },
               { mode: 'dashboard', label: 'Content Studio', prefix: '/dashboard' },
               { mode: 'lookml', label: 'LookML', prefix: '/lookml' },
               { mode: 'health', label: 'Health Check', prefix: '/health-check' },
               { mode: 'tile', label: 'Python Tile', prefix: '/tile' },
-            ].map((m) => (
-              <button
-                key={m.mode}
-                type="button"
-                role="tab"
-                aria-selected={m.mode === 'tile'}
-                className={`dab-mode-tab ${m.mode === 'tile' ? 'active' : ''}`}
-                onClick={() => history.push(m.prefix)}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
+            ].filter((m) => !disabledModes.includes(m.mode))
+            return enabledModes.length > 1 ? (
+              <div className="dab-mode-switcher" role="tablist" aria-label="Tool Mode">
+                {enabledModes.map((m) => (
+                  <button
+                    key={m.mode}
+                    type="button"
+                    role="tab"
+                    aria-selected={m.mode === 'tile'}
+                    className={`dab-mode-tab ${m.mode === 'tile' ? 'active' : ''}`}
+                    onClick={() => history.push(m.prefix)}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            ) : null
+          })()}
         </div>
 
         <div className="dab-controls">

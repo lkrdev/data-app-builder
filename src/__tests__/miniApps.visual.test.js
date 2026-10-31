@@ -406,18 +406,25 @@ function buildHtmlPage(scenario) {
         }
       };
 
+      let savedContextData = {
+        authMode: 'oauth',
+        clientId: 'looker-data-app-studio.apps.googleusercontent.com',
+        projectId: 'looker-private-demo',
+        disabledModes: []
+      };
+
       const mockExtensionSDK = {
         lookerHostData: {
           hostUrl: 'https://dev-argolis.looker.com',
           extensionId: 'data_app_builder::data_app_builder',
           mountType: isTile ? 'dashboard_tile' : 'standalone'
         },
-        getContextData: () => ({
-          authMode: 'oauth',
-          clientId: 'looker-data-app-studio.apps.googleusercontent.com',
-          projectId: 'looker-private-demo'
-        }),
-        saveContextData: async (ctx) => ctx,
+        getContextData: () => savedContextData,
+        saveContextData: async (ctx) => {
+          savedContextData = { ...savedContextData, ...ctx };
+          window.__LAST_SAVED_CONTEXT_DATA__ = savedContextData;
+          return savedContextData;
+        },
         openBrowserWindow: () => {},
         rendered: () => {},
         updateTitle: () => {}
@@ -949,4 +956,66 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     },
     15000
   )
+
+  test('enables/disables individual tool modes via /config and filters topbar tabs, catalog & routes', async () => {
+    const url = `http://127.0.0.1:${port}/?scenario=config_page`
+    await chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(document.querySelector('[data-testid="config-mode-toggle-lookml"]'))`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    // Disable LookML, Health Check, and Python Tile, then click Save Setup
+    const afterSave = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        for (const m of ['lookml', 'health', 'tile']) {
+          const cb = document.querySelector('[data-testid="config-mode-toggle-' + m + '"]');
+          if (cb) cb.click();
+        }
+        await new Promise((r) => setTimeout(r, 50));
+        const saveBtn = Array.from(document.querySelectorAll('button')).find((b) =>
+          (b.textContent || '').includes('Save Setup')
+        );
+        if (saveBtn) saveBtn.click();
+        await new Promise((r) => setTimeout(r, 150));
+        const tabs = Array.from(document.querySelectorAll('.dab-mode-tab')).map((el) =>
+          (el.textContent || '').trim()
+        );
+        const text = document.body ? document.body.innerText : '';
+        // Navigate to disabled route /lookml and verify redirect back to first enabled mode (/app)
+        window.__DAB_STUDIO__.history.push('/lookml/20261030_dev_branch');
+        await new Promise((r) => setTimeout(r, 100));
+        const activeAfterDisabledPush = (
+          document.querySelector('.dab-mode-tab.active')?.textContent || ''
+        ).trim();
+        // Disable 'dashboard' too so only 1 mode ('app') remains -> mode switcher hides
+        window.__DAB_STUDIO__.setDisabledModes(['dashboard', 'lookml', 'health', 'tile']);
+        await new Promise((r) => setTimeout(r, 100));
+        const switcherHiddenWhenSingleMode = !document.querySelector('.dab-mode-switcher');
+        return {
+          savedDisabledModes: window.__LAST_SAVED_CONTEXT_DATA__?.disabledModes || [],
+          tabs,
+          hasFilteredCatalogCount: text.includes('My Creations (2)'),
+          activeAfterDisabledPush,
+          switcherHiddenWhenSingleMode
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(afterSave.result.value).toEqual({
+      savedDisabledModes: ['lookml', 'health', 'tile'],
+      tabs: ['Data App', 'Content Studio'],
+      hasFilteredCatalogCount: true,
+      activeAfterDisabledPush: 'Data App',
+      switcherHiddenWhenSingleMode: true
+    })
+  }, 15000)
 })
