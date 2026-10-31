@@ -16,7 +16,10 @@ import {
 } from '../lookerApi'
 import {
   AgentSession,
+  ANTIGRAVITY_ALLOWED_MODELS,
   AntigravityAuth,
+  AntigravityModelOption,
+  DEFAULT_ANTIGRAVITY_MODEL,
   LkrCodeMode,
   prewarmOrWakeAntigravityEnvironment,
   runAntigravityTurn,
@@ -329,6 +332,9 @@ export const PythonTile: React.FC = () => {
 
 export const ScriptStudioView: React.FC<{
   auth: AntigravityAuth
+  selectedModel?: string
+  availableModels?: AntigravityModelOption[]
+  onChangeModel?: (model: string) => void
   schemaMarkdown: string
   selectedExplores: string[]
   selectedFolderId: string
@@ -338,6 +344,9 @@ export const ScriptStudioView: React.FC<{
   capabilities?: UserCapabilities
 }> = ({
   auth,
+  selectedModel = DEFAULT_ANTIGRAVITY_MODEL,
+  availableModels = ANTIGRAVITY_ALLOWED_MODELS,
+  onChangeModel,
   schemaMarkdown,
   selectedExplores,
   selectedFolderId,
@@ -373,14 +382,15 @@ export const ScriptStudioView: React.FC<{
         extensionSDK,
         auth,
         toolType: 'tile',
+        model: selectedModel,
         existingSession: agentSession,
         selectedExplores,
         schemaMarkdown,
         customSystemGuide: PYTHON_TILE_SKILL_GUIDE,
-      })
+      } as any)
       setAgentSession(res.session)
     } catch {}
-  }, [extensionSDK, auth, agentSession, selectedExplores, schemaMarkdown])
+  }, [extensionSDK, auth, selectedModel, agentSession, selectedExplores, schemaMarkdown])
 
   useEffect(() => {
     handleWakeTileEnv()
@@ -578,6 +588,7 @@ export const ScriptStudioView: React.FC<{
         extensionSDK,
         auth,
         session: agentSession,
+        model: selectedModel,
         selectedExplores,
         folderId: selectedFolderId,
         schemaMarkdown,
@@ -665,6 +676,28 @@ export const ScriptStudioView: React.FC<{
               </div>
             ) : null
           })()}
+          <select
+            data-testid="topbar-model-select"
+            value={selectedModel}
+            onChange={(e) => onChangeModel?.(e.target.value)}
+            title="Select Antigravity model (/v1beta/models)"
+            style={{
+              height: 26,
+              fontSize: 11.5,
+              padding: '0 6px',
+              borderRadius: 6,
+              border: '1px solid #cbd5e1',
+              background: '#f8fafc',
+              color: '#0f172a',
+              fontWeight: 500,
+            }}
+          >
+            {availableModels.map((m) => (
+              <option key={m.id} value={m.id} title={m.description}>
+                {m.label}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="dab-controls">

@@ -24,11 +24,48 @@ if (LkrCodeMode?.RUN_LOOKER_CODEMODE_TOOL?.parameters?.properties) {
   }
 }
 
+export interface AntigravityModelOption {
+  id: string
+  label: string
+  description: string
+}
+
+export const DEFAULT_ANTIGRAVITY_MODEL = 'gemini-3.8-flash'
+
+export const ANTIGRAVITY_ALLOWED_MODELS: AntigravityModelOption[] = [
+  {
+    id: 'gemini-3.8-flash',
+    label: 'Gemini 3.8 Flash',
+    description: 'Default — balanced reasoning, coding & tool use',
+  },
+  {
+    id: 'gemini-4-argon',
+    label: 'Gemini 4 Argon',
+    description: 'Frontier reasoning & complex multi-step engineering',
+  },
+  {
+    id: 'gemini-3.7-flash',
+    label: 'Gemini 3.7 Flash',
+    description: 'Fast multi-step reasoning & coding',
+  },
+  {
+    id: 'gemini-3.6-flash',
+    label: 'Gemini 3.6 Flash',
+    description: 'Stable reasoning & tool use',
+  },
+  {
+    id: 'gemini-3.5-flash-lite',
+    label: 'Gemini 3.5 Flash-Lite',
+    description: 'Lowest latency & cost',
+  },
+]
+
 export interface ExtensionAuthContextConfig {
   authMode: 'oauth' | 'apikey'
   clientId?: string
   projectId?: string
   disabledModes?: AntigravityToolType[]
+  defaultModel?: string
 }
 
 export interface AntigravityAuth {
@@ -319,6 +356,41 @@ async function callInteractionsApi(
   return parsed
 }
 
+export async function listAvailableAntigravityModels(
+  extensionSDK: any,
+  auth: AntigravityAuth
+): Promise<AntigravityModelOption[]> {
+  const canQuery =
+    auth.mode === 'oauth'
+      ? Boolean(auth.oauthToken?.trim())
+      : Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy)
+  if (!canQuery) return ANTIGRAVITY_ALLOWED_MODELS
+  try {
+    const res = await callInteractionsApi(extensionSDK, auth, 'models', 'GET')
+    const rawModels: any[] = Array.isArray(res?.models) ? res.models : []
+    const byId = new Map<string, any>()
+    for (const m of rawModels) {
+      const id = String(m?.name || '')
+        .replace(/^models\//, '')
+        .trim()
+      if (id) byId.set(id, m)
+    }
+    const intersected = ANTIGRAVITY_ALLOWED_MODELS.filter((allowed) => byId.has(allowed.id)).map(
+      (allowed) => {
+        const apiModel = byId.get(allowed.id)
+        return {
+          id: allowed.id,
+          label: String(apiModel?.displayName || allowed.label),
+          description: String(apiModel?.description || allowed.description),
+        }
+      }
+    )
+    return intersected.length > 0 ? intersected : ANTIGRAVITY_ALLOWED_MODELS
+  } catch {
+    return ANTIGRAVITY_ALLOWED_MODELS
+  }
+}
+
 function collectInteractionTextCandidates(interaction: any): string {
   const out: any[] = [interaction?.output_text]
   for (const o of interaction?.outputs || []) out.push(o?.text)
@@ -439,6 +511,7 @@ export async function runAntigravityTurn(params: {
   extensionSDK?: any
   auth: AntigravityAuth
   session: AgentSession
+  model?: string
   mode?: 'data_app' | 'dashboard'
   selectedExplores: string[]
   folderId?: string
@@ -483,6 +556,7 @@ export async function runAntigravityTurn(params: {
     extensionSDK,
     auth,
     session,
+    model = DEFAULT_ANTIGRAVITY_MODEL,
     mode = 'data_app',
     selectedExplores,
     folderId,
@@ -648,8 +722,12 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     })),
   ]
 
+  const activeModel = model || DEFAULT_ANTIGRAVITY_MODEL
+  const agentConfig = { type: 'antigravity', model: activeModel }
+
   const buildFreshPayload = (): Record<string, any> => ({
     agent: 'antigravity-preview-09-2026',
+    agent_config: agentConfig,
     background: true,
     tools: activeTools,
     input: buildInputItems(true),
@@ -667,6 +745,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         'POST',
         {
           agent: 'antigravity-preview-09-2026',
+          agent_config: agentConfig,
           background: true,
           tools: activeTools,
           input: buildInputItems(false),
@@ -790,6 +869,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           'POST',
           {
             agent: 'antigravity-preview-09-2026',
+            agent_config: agentConfig,
             background: true,
             environment: interaction.environment_id || trackedEnvId || 'remote',
             previous_interaction_id: interaction.id,
@@ -904,6 +984,7 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
   extensionSDK: any
   auth: AntigravityAuth
   toolType: AntigravityToolType
+  model?: string
   existingSession?: AgentSession
   selectedExplores?: string[]
   schemaMarkdown?: string
@@ -917,6 +998,7 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
     extensionSDK,
     auth,
     toolType,
+    model = DEFAULT_ANTIGRAVITY_MODEL,
     existingSession,
     selectedExplores = [],
     schemaMarkdown = '',
@@ -994,6 +1076,10 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
         'POST',
         {
           agent: 'antigravity-preview-09-2026',
+          agent_config: {
+            type: 'antigravity',
+            model: model || DEFAULT_ANTIGRAVITY_MODEL,
+          },
           background: true,
           tools: [{ type: 'code_execution' }, LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL],
           input: [
@@ -1029,3 +1115,5 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
     status: 'standby',
   }
 }
+
+export const wakeAntigravityEnvironment = prewarmOrWakeAntigravityEnvironment

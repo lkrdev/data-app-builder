@@ -79,6 +79,9 @@ const StudioMain: React.FC = () => {
           projectId: ctl.projectId,
           apiKey: ctl.apiKey,
         }}
+        selectedModel={ctl.selectedModel}
+        availableModels={ctl.availableModels}
+        onChangeModel={ctl.setSelectedModel}
         schemaMarkdown={ctl.schemaMarkdown}
         selectedExplores={ctl.selectedExplores}
         selectedFolderId={ctl.selectedFolderId}

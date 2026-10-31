@@ -14,6 +14,9 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     setProjectId,
     disabledModes,
     setDisabledModes,
+    defaultModel,
+    setDefaultModel,
+    availableModels,
     enabledModes,
     apiKey,
     setApiKey,
@@ -128,6 +131,30 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               fontSize: 12,
             }}
           >
+            <strong style={{ color: '#475569' }}>Default Model:</strong>
+            <select
+              data-testid="config-default-model-select"
+              value={defaultModel}
+              onChange={(e) => setDefaultModel(e.target.value)}
+            >
+              {availableModels.map((m) => (
+                <option key={m.id} value={m.id} title={m.description}>
+                  {m.label} ({m.id})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div
+            style={{
+              borderTop: '1px solid #e2e8f0',
+              paddingTop: 10,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              flexWrap: 'wrap',
+              fontSize: 12,
+            }}
+          >
             <strong style={{ color: '#475569' }}>Enabled Studio Apps:</strong>
             {STUDIO_MODES.map((m) => {
               const enabled = !disabledModes.includes(m.mode)
@@ -197,6 +224,9 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
     activeMode,
     enabledModes,
+    selectedModel,
+    setSelectedModel,
+    availableModels,
     agentSession,
     handleWakeModeEnv,
     history,
@@ -383,6 +413,28 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
             })}
           </div>
         )}
+        <select
+          data-testid="topbar-model-select"
+          value={selectedModel}
+          onChange={(e) => setSelectedModel(e.target.value)}
+          title="Select Antigravity model (/v1beta/models)"
+          style={{
+            height: 26,
+            fontSize: 11.5,
+            padding: '0 6px',
+            borderRadius: 6,
+            border: '1px solid #cbd5e1',
+            background: '#f8fafc',
+            color: '#0f172a',
+            fontWeight: 500,
+          }}
+        >
+          {availableModels.map((m) => (
+            <option key={m.id} value={m.id} title={m.description}>
+              {m.label}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="dab-controls">
