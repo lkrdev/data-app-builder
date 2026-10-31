@@ -22,7 +22,9 @@ const OUT_DIR = path.resolve('tmp/bench-dashboard')
 mkdirSync(OUT_DIR, { recursive: true })
 
 // Extract DASHBOARD_CODEMODE_PREAMBLE_PY from src/antigravity.ts so we test the exact source preamble
-const antigravitySrc = readFileSync(path.resolve('src/antigravity.ts'), 'utf8')
+const antigravitySrc = ['src/antigravity.ts', 'src/antigravityPrompts.ts']
+  .map((p) => readFileSync(path.resolve(p), 'utf8'))
+  .join('\n')
 const preambleMatch = antigravitySrc.match(
   /export const DASHBOARD_CODEMODE_PREAMBLE_PY = `([\s\S]*?)`\n\nexport function wrapDashboardCodeMode/
 )

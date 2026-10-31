@@ -1,7 +1,8 @@
 import type { Looker40SDK } from '@looker/sdk';
 
 import { LkrCodeMode } from './antigravity';
-import { PersistedChatTurn, rawLookerRequest } from './lookerApi';
+import { getArtifactJson, getArtifactNamespace, PersistedChatTurn, putArtifacts } from './lookerApi';
+export { getArtifactNamespace } from './lookerApi';
 
 export interface PillarBreakdown {
   pillar1Score: number;
@@ -603,43 +604,6 @@ export function synthesizeHealthCheckTdd(
   return { title, scores, markdown };
 }
 
-export function getArtifactNamespace(extensionSDK?: any): string {
-  return String(extensionSDK?.lookerHostData?.extensionId || 'data_app_builder');
-}
-
-async function upsertArtifactEntries(
-  sdk: Looker40SDK,
-  namespace: string,
-  entries: Array<{ key: string; value: string }>
-): Promise<void> {
-  const nsPath = `/artifacts/${encodeURIComponent(namespace)}/artifacts`;
-  const body = await Promise.all(
-    entries.map(async (entry) => {
-      let version: number | undefined;
-      try {
-        const existing = await rawLookerRequest<any[]>(
-          sdk,
-          'GET',
-          `${nsPath}/${encodeURIComponent(entry.key)}`
-        );
-        const match = Array.isArray(existing)
-          ? existing.find((item) => item?.key === entry.key)
-          : (existing as any);
-        if (typeof match?.version === 'number') version = match.version;
-      } catch {
-        // Key does not exist yet
-      }
-      return {
-        key: entry.key,
-        value: entry.value,
-        content_type: 'application/json',
-        ...(version !== undefined ? { version } : {}),
-      };
-    })
-  );
-  await rawLookerRequest(sdk, 'PUT', nsPath, undefined, body);
-}
-
 export async function saveHealthCheckArtifact(
   sdk: Looker40SDK,
   extensionSDK: any,
@@ -666,10 +630,14 @@ export async function saveHealthCheckArtifact(
     environmentId: report.environmentId,
   };
 
-  await upsertArtifactEntries(sdk, namespace, [
-    { key: userKey, value: JSON.stringify(indexEntry) },
-    { key: objKey, value: JSON.stringify({ ...report, id: cleanId }) },
-  ]);
+  await putArtifacts(
+    sdk,
+    [
+      { key: userKey, value: indexEntry },
+      { key: objKey, value: { ...report, id: cleanId } },
+    ],
+    namespace
+  );
 
   return { userKey, objKey, namespace };
 }
@@ -685,16 +653,11 @@ export async function loadHealthCheckArtifact(
     .replace(/^obj_health_check_/, '')
     .replace(/^user_[^_]+_health_check_/, '');
   const objKey = `obj_health_check_${cleanId}`;
-  const resp = await rawLookerRequest<any[]>(
-    sdk,
-    'GET',
-    `/artifacts/${encodeURIComponent(namespace)}/artifacts/${encodeURIComponent(objKey)}`
-  );
-  const item = Array.isArray(resp) ? resp[0] : resp;
-  if (!item || typeof item.value !== 'string') {
+  const found = await getArtifactJson<HealthCheckReportPayload>(sdk, objKey, namespace);
+  if (!found) {
     throw new Error(`Health Check artifact "${objKey}" not found in namespace "${namespace}".`);
   }
-  return JSON.parse(item.value) as HealthCheckReportPayload;
+  return found;
 }
 
 export async function runThreePillarHealthCheckViaCodeMode(params: {

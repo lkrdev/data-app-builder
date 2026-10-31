@@ -969,7 +969,9 @@ function canonicalQueryJson(query) {
 }
 
 // Extract real BUNDLE_APP_PY and DATA_APP_GUIDE_MD from src/antigravity.ts
-const antigravityTs = readFileSync(path.join(repoRoot, 'src/antigravity.ts'), 'utf8')
+const antigravityTs = ['src/antigravity.ts', 'src/antigravityPrompts.ts']
+  .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
+  .join('\n')
 const bundlePyMatch = antigravityTs.match(/export const BUNDLE_APP_PY = `([\s\S]*?)`\n/)
 assert(bundlePyMatch, 'Could not extract BUNDLE_APP_PY from src/antigravity.ts')
 const guideMatch = antigravityTs.match(/export const DATA_APP_GUIDE_MD = `([\s\S]*?)`\n/)
