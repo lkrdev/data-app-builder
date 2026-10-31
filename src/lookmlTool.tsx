@@ -311,17 +311,34 @@ export function buildLookmlSystemGuide(params: {
   primaryExplore: string
   projectId?: string
   activatedSkills?: string[]
+  developableProjects?: string[]
+  canDeploy?: boolean
 }): string {
-  const { selectedExplores, primaryModel, primaryExplore, projectId, activatedSkills } = params
+  const {
+    selectedExplores,
+    primaryModel,
+    primaryExplore,
+    projectId,
+    activatedSkills,
+    developableProjects,
+    canDeploy = true,
+  } = params
   const activeSkillList =
     activatedSkills && activatedSkills.length > 0
       ? activatedSkills
       : ['lookml-field-curation', 'lookml-tests', 'lookml-snapshot']
+  const devProjectsHint =
+    developableProjects && developableProjects.length > 0
+      ? `Developable LookML projects (via Model -> Project expansion): ${developableProjects.join(', ')}.`
+      : ''
+  const deployHint = canDeploy
+    ? 'User holds `deploy` permission (`deploy_to_production` allowed only when explicitly requested).'
+    : 'User does NOT hold `deploy` permission — do NOT call `deploy_to_production`.'
   const projHint = projectId?.trim()
-    ? `Target LookML project_id: "${projectId.trim()}".`
+    ? `Target LookML project_id: "${projectId.trim()}". ${devProjectsHint} ${deployHint}`.trim()
     : primaryModel
-    ? `Resolve the LookML project_id from model "${primaryModel}" via \`lookml_model("${primaryModel}")["project_name"]\` or \`all_projects()\`.`
-    : `Discover the target LookML project_id via \`all_projects(fields="id,name,git_remote_url")\` or \`lookml_model(model_name)\`.`
+    ? `Resolve the LookML project_id from model "${primaryModel}" via \`lookml_model("${primaryModel}")["project_name"]\` or \`all_projects()\`. ${devProjectsHint} ${deployHint}`.trim()
+    : `Discover the target LookML project_id via \`all_projects(fields="id,name,git_remote_url")\` or \`lookml_model(model_name)\`. ${devProjectsHint} ${deployHint}`.trim()
 
   return [
     `You are the **Agentic LookML** engineer powered by \`lkrdev/cli\` and the \`agentic-lookml\` skill suite.`,
@@ -504,7 +521,8 @@ export const LookmlPreviewPane: React.FC<{
   bundle: LookmlBundle | null
   hostUrl: string
   extensionSDK?: any
-}> = ({ bundle, hostUrl, extensionSDK }) => {
+  canDeploy?: boolean
+}> = ({ bundle, hostUrl, extensionSDK, canDeploy = true }) => {
   const [selectedFileIdx, setSelectedFileIdx] = useState(0)
   const [viewMode, setViewMode] = useState<'diff' | 'content'>('diff')
 
@@ -574,6 +592,15 @@ export const LookmlPreviewPane: React.FC<{
             style={passedTests === tests.length ? undefined : { background: '#fee2e2', color: '#991b1b' }}
           >
             {passedTests === tests.length ? '✓' : '✗'} run_lookml_test ({passedTests}/{tests.length} passed)
+          </span>
+        )}
+        {!canDeploy && (
+          <span
+            className="dab-badge"
+            style={{ background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }}
+            title="Requires Looker 'deploy' or 'admin' permission to run deploy_to_production"
+          >
+            🔒 deploy_to_production disabled (missing deploy)
           </span>
         )}
       </div>

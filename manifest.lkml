@@ -18,6 +18,9 @@ application: data_app_builder {
     raw_api_request: yes
     core_api_methods: [
       "me",
+      "user_roles",
+      "session",
+      "update_session",
       "all_lookml_models",
       "lookml_model_explore",
       "run_inline_query",

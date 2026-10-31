@@ -47,6 +47,7 @@ export interface HealthCheckReportPayload {
 // using zero local CLI binaries (system__activity inline queries + LookML project files/validation + BigQuery SQL).
 export const THREE_PILLAR_CODEMODE_PY = `
 me_info = me("id,display_name,email")
+active_scope = health_scope if "health_scope" in dir() and health_scope else "all"
 
 # --- PILLAR 1: Looker Performance & Governance (system__activity) ---
 p1 = {}
@@ -98,7 +99,7 @@ p1_queries = [
         "limit": "25"
     })
 ]
-for k, q in p1_queries:
+for k, q in (p1_queries if active_scope in ("all", "looker") else []):
     try:
         p1[k] = run_inline_query("json", q)
     except Exception as e:
@@ -171,7 +172,7 @@ p3 = {
     "dataset_partitions": None, "dataset_tables": None
 }
 try:
-    conns = all_connections(fields="name,dialect_name,database,host") or []
+    conns = (all_connections(fields="name,dialect_name,database,host") or []) if active_scope in ("all", "bq") else []
     bq_conn = None
     for c in conns:
         if "bigquery" in (c.get("dialect_name") or "").lower():
@@ -701,6 +702,7 @@ export async function runThreePillarHealthCheckViaCodeMode(params: {
   extensionSDK?: any;
   reportId?: string;
   targetProject?: string;
+  healthScope?: 'all' | 'looker' | 'bq';
   customFocus?: string;
   messages?: PersistedChatTurn[];
   onStatus?: (msg: string) => void;
@@ -709,7 +711,16 @@ export async function runThreePillarHealthCheckViaCodeMode(params: {
   userKey: string;
   objKey: string;
 }> {
-  const { sdk, extensionSDK, reportId, targetProject, customFocus, messages, onStatus } = params;
+  const {
+    sdk,
+    extensionSDK,
+    reportId,
+    targetProject,
+    healthScope = 'all',
+    customFocus,
+    messages,
+    onStatus,
+  } = params;
   onStatus?.(
     'Running 3-Pillar Health Check in LkrCodeMode (System Activity + LookML + BigQuery INFORMATION_SCHEMA)...'
   );
@@ -719,6 +730,7 @@ export async function runThreePillarHealthCheckViaCodeMode(params: {
     extensionSDK,
     vars: {
       target_project: targetProject || '',
+      health_scope: healthScope,
     },
   });
   const telemetry = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson || {};
