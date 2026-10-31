@@ -457,7 +457,7 @@ def check_tile_safety(path: Path) -> list[dict]:
                         if res_f is not None:
                             fields_body, _ = res_f
                             fields_no_str = _strip_string_literals(fields_body)
-                            if "..." not in fields_no_str and "${" not in fields_body:
+                            if "..." not in fields_no_str and "${" not in fields_body and not re.search(r"[A-Za-z_$]", fields_no_str):
                                 query_fields = re.findall(r"""['"`]([^'"`]+)['"`]""", fields_body)
         if not query_fields and not has_query_fields_key:
             f_attr = re.search(r"""\bfields\s*=\s*["']([^"']+)["']""", grid_text)
