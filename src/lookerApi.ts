@@ -1191,28 +1191,7 @@ export async function saveNativeContentArtifact(
   }
 
   return {
-    id,
-    contentType,
-    title,
-    folderId: effectiveFolderId,
-    embedPath,
-    tileCount: objPayload.tileCount,
-    filterCount: objPayload.filterCount,
-    scheduleId: objPayload.scheduleId,
-    lookId: objPayload.lookId,
-    boardId: objPayload.boardId,
-    lookmlDashboardId: objPayload.lookmlDashboardId,
-    projectId: objPayload.projectId,
-    model: objPayload.model,
-    filePath: objPayload.filePath,
-    layoutId: objPayload.layoutId,
-    elementIds: objPayload.elementIds,
-    filterNames: objPayload.filterNames,
-    layoutComponentIds: objPayload.layoutComponentIds,
-    queryCache: objPayload.queryCache,
-    filterCache: objPayload.filterCache,
-    summary: objPayload.summary,
-    elements: objPayload.elements,
+    ...objPayload,
     studio: nextStudio,
   }
 }
@@ -1237,29 +1216,12 @@ export async function loadNativeContentById(
       d.contentType ||
       (String(d.id).includes('::') ? 'lookml_dashboard' : 'dashboard')
     return {
+      ...d,
       id: String(d.id),
       contentType: cType,
       title: d.title || `Native ${cType} #${d.id}`,
       folderId: String(d.folderId || '1'),
       embedPath: resolveNativeEmbedPath(cType, String(d.id), d.embedPath),
-      tileCount: d.tileCount,
-      filterCount: d.filterCount,
-      scheduleId: d.scheduleId,
-      lookId: d.lookId,
-      boardId: d.boardId,
-      lookmlDashboardId: d.lookmlDashboardId,
-      projectId: d.projectId,
-      model: d.model,
-      filePath: d.filePath,
-      layoutId: d.layoutId,
-      elementIds: d.elementIds,
-      filterNames: d.filterNames,
-      layoutComponentIds: d.layoutComponentIds,
-      queryCache: d.queryCache,
-      filterCache: d.filterCache,
-      summary: d.summary,
-      elements: d.elements,
-      studio: d.studio,
     }
   }
 

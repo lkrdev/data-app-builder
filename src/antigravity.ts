@@ -4,6 +4,7 @@ import {
   NativeContentBundle,
   NativeContentState,
   parseExploreId,
+  resolveNativeEmbedPath,
 } from './lookerApi'
 import {
   BOOTSTRAP_LOOKML_PY,
@@ -110,35 +111,20 @@ export const DEFAULT_POLL_SCHEDULE_MS = [400, 700, 1000, 1500]
 export const DASHBOARD_CODEMODE_PREAMBLE_PY = `# ponytail: pre-injected Monty Python macros for UDDs, LookML Dashboards (.dashboard.lookml), Looks, Boards & Schedules
 import json
 
-try:
-    dashboard_layouts = dashboard_dashboard_layouts
-except Exception:
-    pass
-
-try:
-    _active = active_content or {}
-except Exception:
-    _active = {}
-try:
-    _t_model = target_model or ""
-except Exception:
-    _t_model = ""
-try:
-    _t_explore = target_explore or ""
-except Exception:
-    _t_explore = ""
-try:
-    _t_folder_id = target_folder_id or ""
-except Exception:
-    _t_folder_id = ""
-try:
-    _t_project_id = target_project_id or ""
-except Exception:
-    _t_project_id = ""
-try:
-    _t_explores = list(target_explores or [])
-except Exception:
-    _t_explores = []
+try: dashboard_layouts = dashboard_dashboard_layouts
+except Exception: pass
+try: _active = active_content or {}
+except Exception: _active = {}
+try: _t_model = target_model or ""
+except Exception: _t_model = ""
+try: _t_explore = target_explore or ""
+except Exception: _t_explore = ""
+try: _t_folder_id = target_folder_id or ""
+except Exception: _t_folder_id = ""
+try: _t_project_id = target_project_id or ""
+except Exception: _t_project_id = ""
+try: _t_explores = list(target_explores or [])
+except Exception: _t_explores = []
 _qcache = dict(_active.get("query_cache") or _active.get("queryCache") or {})
 _fcache = dict(_active.get("filter_cache") or _active.get("filterCache") or {})
 
@@ -902,14 +888,7 @@ function normalizeNativeBundleCandidate(raw: any): NativeContentBundle | null {
     r.contentType ||
     (r.board_id ? 'board' : r.look_id && !r.dashboard_id ? 'look' : strId.includes('::') ? 'lookml_dashboard' : 'dashboard')
   const folderId = r.folder_id || r.folderId ? String(r.folder_id || r.folderId) : undefined
-  const embedPath =
-    r.embed_path ||
-    r.url ||
-    (cType === 'look'
-      ? `/embed/looks/${strId}`
-      : cType === 'board'
-      ? `/boards/${strId}`
-      : `/embed/dashboards/${strId}`)
+  const embedPath = resolveNativeEmbedPath(cType, strId, r.embed_path || r.url)
   return {
     id: strId,
     content_type: cType,
@@ -924,22 +903,14 @@ function normalizeNativeBundleCandidate(raw: any): NativeContentBundle | null {
     schedule_id: r.schedule_id ? String(r.schedule_id) : undefined,
     look_id: r.look_id ? String(r.look_id) : undefined,
     board_id: r.board_id ? String(r.board_id) : undefined,
-    lookml_dashboard_id:
-      r.lookml_dashboard_id
-        ? String(r.lookml_dashboard_id)
-        : cType === 'lookml_dashboard'
-        ? strId
-        : undefined,
+    lookml_dashboard_id: r.lookml_dashboard_id ? String(r.lookml_dashboard_id) : cType === 'lookml_dashboard' ? strId : undefined,
     project_id: r.project_id ? String(r.project_id) : undefined,
     model: r.model ? String(r.model) : undefined,
     file_path: r.file_path ? String(r.file_path) : undefined,
     layout_id: r.layout_id ? String(r.layout_id) : undefined,
     element_ids: Array.isArray(r.element_ids) ? r.element_ids.map(String) : undefined,
     filter_names: Array.isArray(r.filter_names) ? r.filter_names.map(String) : undefined,
-    layout_component_ids:
-      r.layout_component_ids && typeof r.layout_component_ids === 'object'
-        ? r.layout_component_ids
-        : undefined,
+    layout_component_ids: r.layout_component_ids && typeof r.layout_component_ids === 'object' ? r.layout_component_ids : undefined,
     query_cache: r.query_cache && typeof r.query_cache === 'object' ? r.query_cache : undefined,
     filter_cache: r.filter_cache && typeof r.filter_cache === 'object' ? r.filter_cache : undefined,
     summary: r.summary ? String(r.summary) : undefined,
@@ -987,8 +958,6 @@ export function extractNativeContentFromInteraction(
   }
   return null
 }
-
-export const extractNativeContentBundleFromInteraction = extractNativeContentFromInteraction
 
 function summarizeProgress(interaction: any): string {
   const steps = interaction?.steps || []
@@ -1174,69 +1143,30 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : `setting \`this.lookerModel\` and \`this.explore\` in \`constructor()\``
   const step3Directive = `3. Write and bundle the Lit Data App in ONE \`code_execution\` call importing from '/runtime/data-app.js' (${ctorHint}):\n   \`python3 /workspace/bundle_app.py --stdin "<App Title>" << 'EOF'\\n...\\nEOF\``
 
-  const normalizedExistingNative: NativeContentState | null = existingNativeContent
-    ? ({
-        id: String(existingNativeContent.id),
-        contentType:
-          (existingNativeContent as NativeContentState).contentType ||
-          (existingNativeContent as NativeContentBundle).content_type ||
-          (String(existingNativeContent.id).includes('::') ? 'lookml_dashboard' : 'dashboard'),
-        title: String(existingNativeContent.title || ''),
-        folderId: String(
-          (existingNativeContent as NativeContentState).folderId ||
-            (existingNativeContent as NativeContentBundle).folder_id ||
-            folderId ||
-            '1'
-        ),
-        embedPath: String(
-          (existingNativeContent as NativeContentState).embedPath ||
-            (existingNativeContent as NativeContentBundle).embed_path ||
-            `/embed/dashboards/${existingNativeContent.id}`
-        ),
-        tileCount:
-          (existingNativeContent as NativeContentState).tileCount ??
-          (existingNativeContent as NativeContentBundle).tile_count,
-        filterCount:
-          (existingNativeContent as NativeContentState).filterCount ??
-          (existingNativeContent as NativeContentBundle).filter_count,
-        scheduleId:
-          (existingNativeContent as NativeContentState).scheduleId ??
-          (existingNativeContent as NativeContentBundle).schedule_id,
-        lookId:
-          (existingNativeContent as NativeContentState).lookId ??
-          (existingNativeContent as NativeContentBundle).look_id,
-        boardId:
-          (existingNativeContent as NativeContentState).boardId ??
-          (existingNativeContent as NativeContentBundle).board_id,
-        lookmlDashboardId:
-          (existingNativeContent as NativeContentState).lookmlDashboardId ??
-          (existingNativeContent as NativeContentBundle).lookml_dashboard_id,
-        projectId:
-          (existingNativeContent as NativeContentState).projectId ??
-          (existingNativeContent as NativeContentBundle).project_id,
-        model: (existingNativeContent as NativeContentState).model,
-        filePath:
-          (existingNativeContent as NativeContentState).filePath ??
-          (existingNativeContent as NativeContentBundle).file_path,
-        layoutId:
-          (existingNativeContent as NativeContentState).layoutId ??
-          (existingNativeContent as NativeContentBundle).layout_id,
-        elementIds:
-          (existingNativeContent as NativeContentState).elementIds ??
-          (existingNativeContent as NativeContentBundle).element_ids,
-        filterNames:
-          (existingNativeContent as NativeContentState).filterNames ??
-          (existingNativeContent as NativeContentBundle).filter_names,
-        layoutComponentIds:
-          (existingNativeContent as NativeContentState).layoutComponentIds ??
-          (existingNativeContent as NativeContentBundle).layout_component_ids,
-        queryCache:
-          (existingNativeContent as NativeContentState).queryCache ??
-          (existingNativeContent as NativeContentBundle).query_cache,
-        filterCache:
-          (existingNativeContent as NativeContentState).filterCache ??
-          (existingNativeContent as NativeContentBundle).filter_cache,
-      } as NativeContentState)
+  const ex = existingNativeContent as any
+  const normalizedExistingNative: NativeContentState | null = ex
+    ? {
+        id: String(ex.id),
+        contentType: ex.contentType || ex.content_type || (String(ex.id).includes('::') ? 'lookml_dashboard' : 'dashboard'),
+        title: String(ex.title || ''),
+        folderId: String(ex.folderId || ex.folder_id || folderId || '1'),
+        embedPath: String(ex.embedPath || ex.embed_path || `/embed/dashboards/${ex.id}`),
+        tileCount: ex.tileCount ?? ex.tile_count,
+        filterCount: ex.filterCount ?? ex.filter_count,
+        scheduleId: ex.scheduleId ?? ex.schedule_id,
+        lookId: ex.lookId ?? ex.look_id,
+        boardId: ex.boardId ?? ex.board_id,
+        lookmlDashboardId: ex.lookmlDashboardId ?? ex.lookml_dashboard_id,
+        projectId: ex.projectId ?? ex.project_id,
+        model: ex.model,
+        filePath: ex.filePath ?? ex.file_path,
+        layoutId: ex.layoutId ?? ex.layout_id,
+        elementIds: ex.elementIds ?? ex.element_ids,
+        filterNames: ex.filterNames ?? ex.filter_names,
+        layoutComponentIds: ex.layoutComponentIds ?? ex.layout_component_ids,
+        queryCache: ex.queryCache ?? ex.query_cache,
+        filterCache: ex.filterCache ?? ex.filter_cache,
+      }
     : null
 
   const dataAppOrNativeGuide =
@@ -1437,39 +1367,26 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         }
         let resultsInput: any[]
         try {
-          const activeContentVars = normalizedExistingNative
+          const n = normalizedExistingNative
+          const activeContentVars = n
             ? {
-                id: normalizedExistingNative.id,
-                contentType: normalizedExistingNative.contentType,
-                content_type: normalizedExistingNative.contentType,
-                title: normalizedExistingNative.title,
-                folderId: normalizedExistingNative.folderId,
-                folder_id: normalizedExistingNative.folderId,
-                lookmlDashboardId: normalizedExistingNative.lookmlDashboardId,
-                lookml_dashboard_id: normalizedExistingNative.lookmlDashboardId,
-                projectId: normalizedExistingNative.projectId || lookmlProjectId || '',
-                project_id: normalizedExistingNative.projectId || lookmlProjectId || '',
-                model: normalizedExistingNative.model || primaryModel,
-                filePath: normalizedExistingNative.filePath,
-                file_path: normalizedExistingNative.filePath,
-                lookId: normalizedExistingNative.lookId,
-                look_id: normalizedExistingNative.lookId,
-                boardId: normalizedExistingNative.boardId,
-                board_id: normalizedExistingNative.boardId,
-                scheduleId: normalizedExistingNative.scheduleId,
-                schedule_id: normalizedExistingNative.scheduleId,
-                layoutId: normalizedExistingNative.layoutId,
-                layout_id: normalizedExistingNative.layoutId,
-                elementIds: normalizedExistingNative.elementIds || [],
-                element_ids: normalizedExistingNative.elementIds || [],
-                filterNames: normalizedExistingNative.filterNames || [],
-                filter_names: normalizedExistingNative.filterNames || [],
-                layoutComponentIds: normalizedExistingNative.layoutComponentIds || {},
-                layout_component_ids: normalizedExistingNative.layoutComponentIds || {},
-                queryCache: normalizedExistingNative.queryCache || {},
-                query_cache: normalizedExistingNative.queryCache || {},
-                filterCache: normalizedExistingNative.filterCache || {},
-                filter_cache: normalizedExistingNative.filterCache || {},
+                ...n,
+                content_type: n.contentType,
+                folder_id: n.folderId,
+                lookml_dashboard_id: n.lookmlDashboardId,
+                projectId: n.projectId || lookmlProjectId || '',
+                project_id: n.projectId || lookmlProjectId || '',
+                model: n.model || primaryModel,
+                file_path: n.filePath,
+                look_id: n.lookId,
+                board_id: n.boardId,
+                schedule_id: n.scheduleId,
+                layout_id: n.layoutId,
+                element_ids: n.elementIds || [],
+                filter_names: n.filterNames || [],
+                layout_component_ids: n.layoutComponentIds || {},
+                query_cache: n.queryCache || {},
+                filter_cache: n.filterCache || {},
                 explores: selectedExplores,
               }
             : null
@@ -1538,7 +1455,6 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
             agent: 'antigravity-preview-09-2026',
             agent_config: agentConfig,
             background: true,
-            ...modelConfig,
             environment: interaction.environment_id || trackedEnvId || 'remote',
             previous_interaction_id: interaction.id,
             tools: activeTools,
