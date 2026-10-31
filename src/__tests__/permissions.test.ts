@@ -8,11 +8,14 @@ import {
   fetchInitialLookerMetadata,
   formatUserConversationsArtifactKey,
   formatUserConversationsKey,
+  formatUserEnvArtifactKey,
   getAllowedUseCases,
   loadUserConversations,
+  loadUserEnvironmentId,
   rawLookerRequest,
   resolveUserCapabilities,
   saveUserConversation,
+  saveUserEnvironmentId,
 } from '../lookerApi'
 import {
   AGENTS_MD,
@@ -20,7 +23,9 @@ import {
   CONVERSATION_LABEL_REQUEST_TAG,
   DEFAULT_ANTIGRAVITY_MODEL,
   generateConversationLabel,
+  isEnvironmentNotFoundError,
   listAvailableAntigravityModels,
+  prewarmOrWakeAntigravityEnvironment,
   runAntigravityTurn,
   sanitizeConversationLabel,
 } from '../antigravity'
@@ -569,5 +574,257 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
           String(s.content).includes('## Use Case Auto-Classification (Turn 1 Routing)')
       )
     ).toBe(true)
+  })
+
+  test('10. persists single per-user environment_id in Looker Artifacts (user_env:${me.id}), shares it across 2 concurrent conversations with isolated /workspace/apps/${conversationId}/app.js paths, and sends sources only once on creation', async () => {
+    expect(formatUserEnvArtifactKey('1')).toBe('user_env:1')
+    expect(formatUserEnvArtifactKey('42')).toBe('user_env:42')
+
+    const artifactStore = new Map<string, { key: string; version: number; value: string }>()
+    const mockSdk: any = {
+      ok: async (p: any) => p,
+      me: async () => ({ id: '1' }),
+      artifact: async ({ key }: { namespace: string; key: string }) => {
+        const hit = artifactStore.get(key)
+        return hit ? [hit] : []
+      },
+      update_artifacts: async (_ns: string, items: Array<{ key: string; value: string; version?: number }>) => {
+        for (const item of items) {
+          const prev = artifactStore.get(item.key)
+          artifactStore.set(item.key, {
+            key: item.key,
+            version: (prev?.version || 0) + 1,
+            value: item.value,
+          })
+        }
+        return items
+      },
+    }
+
+    expect(await loadUserEnvironmentId(mockSdk, '1')).toBeNull()
+
+    const apiCalls: Array<{ url: string; method: string; body?: any }> = []
+    let turnCounter = 0
+    const mockExtensionSDK = {
+      serverProxy: async (url: string, init: any) => {
+        const body = init.body ? JSON.parse(init.body) : undefined
+        apiCalls.push({ url, method: init.method, body })
+        turnCounter += 1
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            id: `int_turn_${turnCounter}`,
+            environment_id: 'env_user_1_shared',
+            status: 'completed',
+            output_text: `Completed turn ${turnCounter}.`,
+          }),
+        }
+      },
+    }
+
+    // Conversation A — Turn 1: no existing environmentId -> seeds environment: { type: 'remote', sources }
+    const turnA1 = await runAntigravityTurn({
+      sdk: mockSdk,
+      extensionSDK: mockExtensionSDK,
+      userId: '1',
+      conversationId: 'conv_alpha',
+      auth: { mode: 'apikey' },
+      session: { toolType: 'app', conversationId: 'conv_alpha' },
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      userPrompt: 'Build Alpha revenue app',
+      onStatus: () => {},
+    })
+
+    expect(turnA1.session.environmentId).toBe('env_user_1_shared')
+    expect(turnA1.session.lastInteractionId).toBe('int_turn_1')
+    expect(await loadUserEnvironmentId(mockSdk, '1')).toBe('env_user_1_shared')
+    expect(apiCalls[0].body.environment).toEqual(
+      expect.objectContaining({
+        type: 'remote',
+        sources: expect.arrayContaining([
+          expect.objectContaining({ target: '/workspace/schema.md' }),
+          expect.objectContaining({ target: '/workspace/bundle_app.py' }),
+        ]),
+      })
+    )
+    expect(apiCalls[0].body.previous_interaction_id).toBeUndefined()
+    expect(apiCalls[0].body.input[0].text).toContain('/workspace/apps/conv_alpha/app.js')
+    expect(apiCalls[0].body.input[0].text).toContain('--app-dir /workspace/apps/conv_alpha')
+
+    // Conversation B — Turn 1: reuses shared environment_id string WITHOUT sources and WITHOUT Conversation A's previous_interaction_id
+    const sharedEnvFromLooker = (await loadUserEnvironmentId(mockSdk, '1')) || undefined
+    const turnB1 = await runAntigravityTurn({
+      sdk: mockSdk,
+      extensionSDK: mockExtensionSDK,
+      userId: '1',
+      environmentId: sharedEnvFromLooker,
+      conversationId: 'conv_beta',
+      auth: { mode: 'apikey' },
+      session: { toolType: 'app', environmentId: sharedEnvFromLooker, conversationId: 'conv_beta' },
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      userPrompt: 'Build Beta inventory app',
+      onStatus: () => {},
+    })
+
+    expect(turnB1.session.environmentId).toBe('env_user_1_shared')
+    expect(turnB1.session.lastInteractionId).toBe('int_turn_2')
+    expect(apiCalls[1].body.environment).toBe('env_user_1_shared')
+    expect(apiCalls[1].body.previous_interaction_id).toBeUndefined()
+    expect(apiCalls[1].body.input[0].text).toContain('/workspace/apps/conv_beta/app.js')
+    expect(apiCalls[1].body.input[0].text).toContain('--app-dir /workspace/apps/conv_beta')
+    expect(apiCalls[1].body.input[0].text).not.toContain('conv_alpha')
+
+    // Conversation A — Turn 2: continues Conversation A's previous_interaction_id on the shared environment
+    const turnA2 = await runAntigravityTurn({
+      sdk: mockSdk,
+      extensionSDK: mockExtensionSDK,
+      userId: '1',
+      environmentId: sharedEnvFromLooker,
+      conversationId: 'conv_alpha',
+      auth: { mode: 'apikey' },
+      session: turnA1.session,
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      userPrompt: 'Add YoY KPI to Alpha',
+      onStatus: () => {},
+    })
+
+    expect(turnA2.session.lastInteractionId).toBe('int_turn_3')
+    expect(apiCalls[2].body.environment).toBe('env_user_1_shared')
+    expect(apiCalls[2].body.previous_interaction_id).toBe('int_turn_1')
+    expect(apiCalls[2].body.input[0].text).toContain('/workspace/apps/conv_alpha/app.js')
+
+    // Conversation B — Turn 2: continues Conversation B's previous_interaction_id on the shared environment
+    const turnB2 = await runAntigravityTurn({
+      sdk: mockSdk,
+      extensionSDK: mockExtensionSDK,
+      userId: '1',
+      environmentId: sharedEnvFromLooker,
+      conversationId: 'conv_beta',
+      auth: { mode: 'apikey' },
+      session: turnB1.session,
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      userPrompt: 'Add stockout chart to Beta',
+      onStatus: () => {},
+    })
+
+    expect(turnB2.session.lastInteractionId).toBe('int_turn_4')
+    expect(apiCalls[3].body.environment).toBe('env_user_1_shared')
+    expect(apiCalls[3].body.previous_interaction_id).toBe('int_turn_2')
+    expect(apiCalls[3].body.input[0].text).toContain('/workspace/apps/conv_beta/app.js')
+  })
+
+  test('11. auto-recovers on 404 (Environment not found) in runAntigravityTurn and prewarmOrWakeAntigravityEnvironment by creating { type: "remote", sources } and updating user_env:${me.id}', async () => {
+    expect(isEnvironmentNotFoundError(new Error("Antigravity API error (404): Environment 'env_stale' not found"))).toBe(true)
+    expect(isEnvironmentNotFoundError({ status: 404, message: 'Not Found' })).toBe(true)
+    expect(isEnvironmentNotFoundError(new Error('Antigravity API error (500): Internal error'))).toBe(false)
+
+    const artifactStore = new Map<string, { key: string; version: number; value: string }>()
+    const mockSdk: any = {
+      ok: async (p: any) => p,
+      me: async () => ({ id: '1' }),
+      artifact: async ({ key }: { namespace: string; key: string }) => {
+        const hit = artifactStore.get(key)
+        return hit ? [hit] : []
+      },
+      update_artifacts: async (_ns: string, items: Array<{ key: string; value: string; version?: number }>) => {
+        for (const item of items) {
+          const prev = artifactStore.get(item.key)
+          artifactStore.set(item.key, {
+            key: item.key,
+            version: (prev?.version || 0) + 1,
+            value: item.value,
+          })
+        }
+        return items
+      },
+    }
+
+    await saveUserEnvironmentId(mockSdk, '1', 'env_stale_404')
+    expect(await loadUserEnvironmentId(mockSdk, '1')).toBe('env_stale_404')
+
+    const postedPayloads: any[] = []
+    const mockExtensionSDK = {
+      serverProxy: async (_url: string, init: any) => {
+        const body = init.body ? JSON.parse(init.body) : undefined
+        postedPayloads.push(body)
+        if (typeof body?.environment === 'string' && body.environment.includes('stale')) {
+          return {
+            ok: false,
+            status: 404,
+            body: JSON.stringify({
+              error: { message: `Environment '${body.environment}' not found` },
+            }),
+          }
+        }
+        const nextEnv =
+          postedPayloads.length <= 2 ? 'env_recovered_999' : 'env_prewarm_recovered_777'
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            id: `int_recovered_${postedPayloads.length}`,
+            environment_id: nextEnv,
+            status: 'completed',
+            output_text: 'Recovered on fresh environment.',
+          }),
+        }
+      },
+    }
+
+    let callbackEnvId = ''
+    const recoveredTurn = await runAntigravityTurn({
+      sdk: mockSdk,
+      extensionSDK: mockExtensionSDK,
+      userId: '1',
+      environmentId: 'env_stale_404',
+      conversationId: 'conv_alpha',
+      onEnvironmentUpdated: (id) => {
+        callbackEnvId = id
+      },
+      auth: { mode: 'apikey' },
+      session: { toolType: 'app', environmentId: 'env_stale_404', conversationId: 'conv_alpha' },
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      existingAppCode: 'export class AlphaApp {}',
+      userPrompt: 'Update Alpha after 404 expiry',
+      onStatus: () => {},
+    })
+
+    expect(postedPayloads).toHaveLength(2)
+    expect(postedPayloads[0].environment).toBe('env_stale_404')
+    expect(postedPayloads[1].environment).toEqual(
+      expect.objectContaining({
+        type: 'remote',
+        sources: expect.arrayContaining([
+          expect.objectContaining({
+            target: '/workspace/apps/conv_alpha/app.js',
+            content: 'export class AlphaApp {}',
+          }),
+        ]),
+      })
+    )
+    expect(recoveredTurn.session.environmentId).toBe('env_recovered_999')
+    expect(callbackEnvId).toBe('env_recovered_999')
+    expect(await loadUserEnvironmentId(mockSdk, '1')).toBe('env_recovered_999')
+
+    const prewarmRecovered = await prewarmOrWakeAntigravityEnvironment({
+      sdk: mockSdk,
+      userId: '1',
+      extensionSDK: mockExtensionSDK,
+      auth: { mode: 'apikey' },
+      toolType: 'lookml',
+      environmentId: 'env_stale_prewarm_404',
+      existingSession: { toolType: 'lookml', environmentId: 'env_stale_prewarm_404' },
+      schemaMarkdown: '# Schema',
+    })
+
+    expect(prewarmRecovered.status).toBe('prelaunched')
+    expect(prewarmRecovered.session.environmentId).toBe('env_prewarm_recovered_777')
+    expect(await loadUserEnvironmentId(mockSdk, '1')).toBe('env_prewarm_recovered_777')
   })
 })
