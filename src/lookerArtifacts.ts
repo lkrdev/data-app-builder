@@ -600,6 +600,7 @@ export interface UserArtifactIndexEntry {
   id: string
   type: StudioToolMode
   title: string
+  label?: string
   updatedAt: string
   createdBy: string
   targetId?: string
@@ -722,3 +723,69 @@ export async function deleteUserArtifact(
   }
   await sdk.ok(sdk.delete_artifact(namespace, keys.join(',')))
 }
+
+export interface UserConversationEntry {
+  id: string
+  type: StudioToolMode | 'conversational-analytics' | 'auto'
+  label: string
+  interactionId?: string
+  environmentId?: string
+  content?: Record<string, any>
+  messages?: PersistedChatTurn[]
+  explores?: string[]
+  createdAt?: string
+  updatedAt: string
+}
+
+export function formatUserConversationsKey(userId: string): string {
+  return `user_conversations:${String(userId || '1').trim()}`
+}
+
+export async function loadUserConversations(
+  sdk: Looker40SDK,
+  userId: string,
+  namespace = ARTIFACT_NAMESPACE
+): Promise<UserConversationEntry[]> {
+  const raw = await getArtifactJson<
+    UserConversationEntry[] | { conversations?: UserConversationEntry[] }
+  >(sdk, formatUserConversationsKey(userId), namespace)
+  const list = Array.isArray(raw) ? raw : Array.isArray(raw?.conversations) ? raw.conversations : []
+  return list
+    .filter((c): c is UserConversationEntry => Boolean(c && c.id))
+    .map((c) => ({
+      ...c,
+      id: String(c.id),
+      type: c.type || 'app',
+      label: String(c.label || (c as any).title || c.id),
+      updatedAt: String(c.updatedAt || c.createdAt || ''),
+    }))
+    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+}
+
+export async function saveUserConversation(
+  sdk: Looker40SDK,
+  userId: string,
+  entry: Partial<UserConversationEntry> & { id: string },
+  namespace = ARTIFACT_NAMESPACE
+): Promise<UserConversationEntry[]> {
+  const cleanId = String(entry.id || '').trim()
+  if (!cleanId) return []
+  const now = new Date().toISOString()
+  const existing = await loadUserConversations(sdk, userId, namespace)
+  const prev = existing.find((c) => c.id === cleanId)
+  const merged: UserConversationEntry = {
+    ...prev,
+    ...entry,
+    id: cleanId,
+    type: entry.type || prev?.type || 'app',
+    label: String(entry.label || prev?.label || (entry as any).title || cleanId),
+    createdAt: prev?.createdAt || entry.createdAt || now,
+    updatedAt: entry.updatedAt || now,
+  }
+  const nextList = [merged, ...existing.filter((c) => c.id !== cleanId)].sort((a, b) =>
+    String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))
+  )
+  await putArtifacts(sdk, [{ key: formatUserConversationsKey(userId), value: nextList }], namespace)
+  return nextList
+}
+

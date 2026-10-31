@@ -14,8 +14,10 @@ import {
   LookmlBundle,
 } from './lookmlTool'
 import {
+  AGENTS_MD,
   buildNativeContentGuide,
   BUNDLE_APP_PY,
+  CONVERSATION_LABEL_REQUEST_TAG,
   DATA_APP_GUIDE_MD,
   wrapDashboardCodeMode,
 } from './antigravityPrompts'
@@ -649,6 +651,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : dataAppOrNativeGuide)
 
   const sources: Array<{ type: 'inline'; content: string; target: string }> = [
+    { type: 'inline', content: AGENTS_MD, target: '/workspace/AGENTS.md' },
     { type: 'inline', content: schemaMarkdown, target: '/workspace/schema.md' },
     ...(mode === 'data_app' && toolMode !== 'lookml'
       ? [
@@ -1078,6 +1081,7 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
   if (auth.mode === 'apikey' || auth.oauthToken) {
     try {
       const sources: Array<{ type: 'inline'; content: string; target: string }> = [
+        { type: 'inline', content: AGENTS_MD, target: '/workspace/AGENTS.md' },
         { type: 'inline', content: schemaMarkdown, target: '/workspace/schema.md' },
         ...(toolType === 'app'
           ? [{ type: 'inline' as const, content: BUNDLE_APP_PY, target: '/workspace/bundle_app.py' }]
@@ -1150,3 +1154,94 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
     status: 'standby',
   }
 }
+
+function extractCleanLabelWords(input?: string): string[] {
+  const firstLine =
+    String(input || '')
+      .replace(/\[CONVERSATION_LABEL_REQUEST\]/gi, '')
+      .replace(/<[^>]*>/g, ' ')
+      .split(/\r?\n/)
+      .map((l) =>
+        l
+          .replace(/^(?:label|title)\s*:\s*/i, '')
+          .replace(/^[#>*\-\s"'`“”‘’]+|[#*`"'“”‘’.\s:;!?-]+$/g, '')
+          .replace(/[*_`~"]/g, '')
+          .trim()
+      )
+      .find(Boolean) || ''
+  return firstLine
+    .split(/\s+/)
+    .map((w) => w.replace(/^[("'“‘]+|[)"'”’.,:;!?-]+$/g, ''))
+    .filter(Boolean)
+}
+
+export function sanitizeConversationLabel(raw: string, fallbackPrompt?: string): string {
+  const words = extractCleanLabelWords(raw)
+  if (words.length >= 3) return words.slice(0, 6).join(' ')
+  const combined = [...words, ...extractCleanLabelWords(fallbackPrompt).filter((w) => !words.includes(w))]
+  if (combined.length >= 3) return combined.slice(0, 6).join(' ')
+  return [...combined, 'Looker', 'Studio', 'Conversation'].slice(0, 3).join(' ')
+}
+
+// ponytail: stateless out-of-band labeling request — omits previous_interaction_id and passes tools: []
+// so it never enters the conversation chain or triggers skill/tool execution.
+export async function generateConversationLabel(params: {
+  extensionSDK: any
+  auth: AntigravityAuth
+  environmentId?: string
+  userPrompt: string
+  assistantText?: string
+  model?: string
+  pollScheduleMs?: number[]
+}): Promise<string> {
+  const {
+    extensionSDK,
+    auth,
+    environmentId,
+    userPrompt,
+    assistantText,
+    model = DEFAULT_ANTIGRAVITY_MODEL,
+    pollScheduleMs = DEFAULT_POLL_SCHEDULE_MS,
+  } = params
+  const cleanUser = String(userPrompt || '').replace(/\s+/g, ' ').trim().slice(0, 280)
+  const cleanAssistant = String(assistantText || '').replace(/\s+/g, ' ').trim().slice(0, 280)
+  const inputText = [
+    `${CONVERSATION_LABEL_REQUEST_TAG} Return only a single-line concise 3-6 word plain-text title for this conversation turn (no quotes, no markdown, no trailing period, no tools):`,
+    `User: ${cleanUser}`,
+    ...(cleanAssistant ? [`Assistant: ${cleanAssistant}`] : []),
+  ].join('\n')
+
+  try {
+    let interaction = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
+      agent: 'antigravity-preview-09-2026',
+      agent_config: { type: 'antigravity', model: model || DEFAULT_ANTIGRAVITY_MODEL },
+      background: true,
+      tools: [],
+      environment: environmentId || 'remote',
+      input: [{ type: 'text', text: inputText }],
+    })
+    const schedule = pollScheduleMs.length > 0 ? pollScheduleMs : DEFAULT_POLL_SCHEDULE_MS
+    for (
+      let i = 0;
+      interaction?.id && (interaction.status === 'in_progress' || interaction.status === 'queued');
+      i++
+    ) {
+      const sleepMs = schedule[Math.min(i, schedule.length - 1)]
+      if (sleepMs > 0) await new Promise((r) => setTimeout(r, sleepMs))
+      interaction = await callInteractionsApi(
+        extensionSDK,
+        auth,
+        `interactions/${encodeURIComponent(interaction.id)}`,
+        'GET'
+      )
+    }
+    const rawText =
+      interaction?.output_text ||
+      (interaction?.outputs || []).map((o: any) => o?.text || '').join('\n') ||
+      collectInteractionTextCandidates(interaction)
+    return sanitizeConversationLabel(rawText, userPrompt)
+  } catch {
+    return sanitizeConversationLabel('', userPrompt)
+  }
+}
+

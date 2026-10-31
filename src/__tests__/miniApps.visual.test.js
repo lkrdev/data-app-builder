@@ -334,14 +334,35 @@ function buildHtmlPage(scenario) {
           return catalogEntries;
         },
         artifact: async (params) => {
-          const k = String((params && params.key) || '');
-          if (artifactObjects[k]) {
-            return [{ key: k, version: 1, value: JSON.stringify(artifactObjects[k]) }];
+          const keys = String((params && params.key) || '').split(',').map((s) => s.trim()).filter(Boolean);
+          const out = [];
+          for (const k of keys) {
+            if (artifactObjects[k]) {
+              out.push({ key: k, version: 1, value: JSON.stringify(artifactObjects[k]) });
+            } else {
+              const found = catalogEntries.find((e) => e.key === k);
+              if (found) out.push(found);
+            }
           }
-          const found = catalogEntries.find((e) => e.key === k);
-          return found ? [found] : [];
+          return out;
         },
-        update_artifacts: async () => [],
+        update_artifacts: async (_ns, updates) => {
+          window.__ARTIFACT_UPDATES__ = window.__ARTIFACT_UPDATES__ || [];
+          for (const u of updates || []) {
+            window.__ARTIFACT_UPDATES__.push(u);
+            try {
+              const parsed = typeof u.value === 'string' ? JSON.parse(u.value) : u.value;
+              artifactObjects[u.key] = parsed;
+              if (u.key.startsWith('user_1_') && !u.key.startsWith('user_conversations:')) {
+                const idx = catalogEntries.findIndex((e) => e.key === u.key);
+                const entry = { key: u.key, version: 1, value: typeof u.value === 'string' ? u.value : JSON.stringify(u.value) };
+                if (idx >= 0) catalogEntries[idx] = entry;
+                else catalogEntries.unshift(entry);
+              }
+            } catch {}
+          }
+          return [];
+        },
         delete_artifact: async () => ({}),
         dashboard: async (id) => {
           if (String(id) === '7') {
@@ -427,7 +448,34 @@ function buildHtmlPage(scenario) {
         },
         openBrowserWindow: () => {},
         rendered: () => {},
-        updateTitle: () => {}
+        updateTitle: () => {},
+        serverProxy: async (url, init) => {
+          window.__INTERACTION_CALLS__ = window.__INTERACTION_CALLS__ || [];
+          const body = init && init.body ? JSON.parse(init.body) : undefined;
+          window.__INTERACTION_CALLS__.push({ url, method: (init && init.method) || 'GET', body });
+          const inputText = (body && body.input && body.input[0] && body.input[0].text) || '';
+          if (inputText.includes('[CONVERSATION_LABEL_REQUEST]')) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_label_99',
+                status: 'completed',
+                output_text: '"Quarterly Order Margin Analysis."'
+              })
+            };
+          }
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_turn1_main',
+              environment_id: 'env_dashboard_isolated',
+              status: 'completed',
+              output_text: 'Created native Looker Dashboard #99 with KPI and trend tiles.\\n<NATIVE_CONTENT_BUNDLE>{"id":"99","content_type":"dashboard","title":"Draft Dashboard 99","folder_id":"5","tile_count":2,"explores":["thelook::order_items"]}</NATIVE_CONTENT_BUNDLE>'
+            })
+          };
+        }
       };
 
       window.__MOCK_LOOKER_EXTENSION__ = {
@@ -647,7 +695,10 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
 
   afterAll(async () => {
     if (chrome) chrome.close()
-    if (server) await new Promise((resolve) => server.close(resolve))
+    if (server) {
+      if (typeof server.closeAllConnections === 'function') server.closeAllConnections()
+      await new Promise((resolve) => server.close(resolve))
+    }
 
     // Write manifest.json recording which image snapshots are modified/untracked in git vs committed
     try {
@@ -1091,6 +1142,76 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       syncedTopbarModel: 'gemini-4-argon',
       afterLiteSwitch: 'gemini-3.5-flash-lite',
       afterFlashSwitch: 'gemini-3.8-flash'
+    })
+  }, 15000)
+
+  test('auto-labels conversation after Turn 1 via stateless side-request (no previous_interaction_id, tools=[]) and updates user_conversations:1 + sidebar UI', async () => {
+    const url = `http://127.0.0.1:${port}/?scenario=dashboard`
+    await chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('textarea'))`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    const turn1Res = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        window.__INTERACTION_CALLS__ = [];
+        window.__ARTIFACT_UPDATES__ = [];
+        window.__DAB_STUDIO__.setAuthMode('apikey');
+        const newBtn = Array.from(document.querySelectorAll('button')).find((b) =>
+          (b.textContent || '').includes('New Content')
+        );
+        if (newBtn) newBtn.click();
+        await new Promise((r) => setTimeout(r, 80));
+
+        const ta = document.querySelector('.dab-composer textarea');
+        const taSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        taSetter.call(ta, 'Build a quarterly order margin dashboard on order_items');
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        ta.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 60));
+
+        const sendBtn = document.querySelector('.dab-composer .dab-btn-gemini');
+        if (sendBtn) sendBtn.click();
+
+        const waitUntil = Date.now() + 5000;
+        while (Date.now() < waitUntil) {
+          const bodyText = document.body ? document.body.innerText : '';
+          if (bodyText.includes('Quarterly Order Margin Analysis')) break;
+          await new Promise((r) => setTimeout(r, 80));
+        }
+
+        const labelCall = (window.__INTERACTION_CALLS__ || []).find((c) =>
+          ((c.body && c.body.input && c.body.input[0] && c.body.input[0].text) || '').includes('[CONVERSATION_LABEL_REQUEST]')
+        );
+        const convUpdates = (window.__ARTIFACT_UPDATES__ || []).filter((u) => u.key === 'user_conversations:1');
+        const latestConvList = convUpdates.length > 0 ? JSON.parse(convUpdates[convUpdates.length - 1].value) : [];
+        const bodyText = document.body ? document.body.innerText : '';
+
+        return {
+          hasLabelCall: Boolean(labelCall),
+          labelCallTools: labelCall ? labelCall.body.tools : null,
+          labelCallHasPrevId: labelCall ? ('previous_interaction_id' in labelCall.body) : null,
+          savedConvLabel: latestConvList[0] ? latestConvList[0].label : null,
+          sidebarShowsGeneratedLabel: bodyText.includes('[dashboard] Quarterly Order Margin Analysis (#99)')
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(turn1Res.result.value).toEqual({
+      hasLabelCall: true,
+      labelCallTools: [],
+      labelCallHasPrevId: false,
+      savedConvLabel: 'Quarterly Order Margin Analysis',
+      sidebarShowsGeneratedLabel: true
     })
   }, 15000)
 })

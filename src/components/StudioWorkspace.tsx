@@ -103,7 +103,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 title={`${item.type.toUpperCase()} #${item.id} · ${(item.explores || []).join(', ')}`}
               >
                 <span>
-                  [{item.type}] {item.title} (#{item.id})
+                  [{item.type}] {item.label || item.title} (#{item.id})
                 </span>
                 <button
                   type="button"

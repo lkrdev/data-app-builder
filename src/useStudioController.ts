@@ -8,11 +8,13 @@ import {
   extractExploreIdsFromCode,
   fetchInitialLookerMetadata,
   formatExploreId,
+  getArtifactNamespace,
   listUserArtifacts,
   listUserDashboardArtifacts,
   loadExistingDashboardApp,
   loadNativeContentById,
   loadObjectArtifact,
+  loadUserConversations,
   NativeContentState,
   NativeContentType,
   parseExploreId,
@@ -21,9 +23,11 @@ import {
   saveDashboardStudioMetadata,
   saveNativeContentArtifact,
   saveUserArtifact,
+  saveUserConversation,
   upsertPublishedDataApp,
   UserArtifactIndex,
   UserCapabilities,
+  UserConversationEntry,
 } from './lookerApi'
 import {
   AgentSession,
@@ -35,11 +39,13 @@ import {
   DEFAULT_ANTIGRAVITY_MODEL,
   ensureGeminiApiKeyUserAttribute,
   ExtensionAuthContextConfig,
+  generateConversationLabel,
   listAvailableAntigravityModels,
   loginWithGoogleOAuth,
   PastedImage,
   prewarmOrWakeAntigravityEnvironment,
   runAntigravityTurn,
+  sanitizeConversationLabel,
 } from './antigravity'
 import {
   listUserLookmlSessions,
@@ -289,6 +295,8 @@ export function useStudioController() {
   const [catalogItems, setCatalogItems] = useState<UserArtifactIndex[]>([])
   const [catalogSearch, setCatalogSearch] = useState('')
   const [activeObjectId, setActiveObjectId] = useState('')
+  const [conversations, setConversations] = useState<UserConversationEntry[]>([])
+  const conversationLabelsRef = useRef<Record<string, string>>({})
 
   const [requirePermission, setRequirePermission] = useState(true)
   const approvedOpsRef = useRef<Set<string>>(new Set())
@@ -315,6 +323,8 @@ export function useStudioController() {
         setRequirePermission,
         setDisabledModes,
         setSelectedModel,
+        setAuthMode,
+        setApiKey,
       }
     }
   }, [history, requestCodeModePermission])
@@ -330,10 +340,20 @@ export function useStudioController() {
     async (uid = userId) => {
       if (!uid) return
       try {
-        setCatalogItems(await listUserArtifacts(core40SDK, uid))
+        const items = await listUserArtifacts(core40SDK, uid, getArtifactNamespace(extensionSDK))
+        const labels = conversationLabelsRef.current
+        setCatalogItems(
+          items.map((item) =>
+            labels[item.id]
+              ? { ...item, label: labels[item.id], title: labels[item.id] }
+              : item.label
+              ? { ...item, title: item.label }
+              : item
+          )
+        )
       } catch {}
     },
-    [core40SDK, userId]
+    [core40SDK, extensionSDK, userId]
   )
 
   const normalizeCatalogMode = (t?: string): StudioMode =>
@@ -348,7 +368,7 @@ export function useStudioController() {
     return catalogItems.filter((item) => {
       if (disabledModes.includes(normalizeCatalogMode(item.type))) return false
       if (!q) return true
-      return `${item.title} ${item.id} ${item.type} ${(item.explores || []).join(' ')}`
+      return `${item.label || ''} ${item.title} ${item.id} ${item.type} ${(item.explores || []).join(' ')}`
         .toLowerCase()
         .includes(q)
     })
@@ -434,6 +454,13 @@ export function useStudioController() {
         setSelectedFolderId((prev) => (prev === '1' ? meta.defaultFolderId : prev))
         listUserDashboardArtifacts(core40SDK, extensionSDK, resolvedUserId).then((items) => {
           if (mounted) setMyCreations(items)
+        })
+        loadUserConversations(
+          core40SDK,
+          resolvedUserId,
+          getArtifactNamespace(extensionSDK)
+        ).then((convs) => {
+          if (mounted) setConversations(convs)
         })
         refreshCatalog(resolvedUserId)
       })
@@ -920,6 +947,7 @@ export function useStudioController() {
     const auth: AntigravityAuth = { mode: authMode, oauthToken, clientId, projectId, apiKey }
     const attachedImages = pastedImages
     const effectivePrompt = text || 'See the attached screenshot.'
+    const isFirstTurn = messages.filter((m) => m.role === 'user').length === 0
     const userMsg: ChatMessage = {
       role: 'user',
       text: effectivePrompt,
@@ -964,9 +992,15 @@ export function useStudioController() {
         onStatus: setBusyStatus,
       })
 
+      let convId = activeObjectId || result.session.lastInteractionId || 'conv_1'
+      let convMode: StudioMode = activeMode
+      let convTitle = ''
+      let convExplores = selectedExplores
+      let finalMsgs: ChatMessage[] = []
+
       if (result.lookmlBundle) {
         setBusyStatus('Saving LookML session artifacts (user_..._lookml_... & obj_lookml_...)...')
-        const nextMsgs: ChatMessage[] = [
+        finalMsgs = [
           ...messagesWithUser,
           {
             role: 'assistant',
@@ -976,6 +1010,9 @@ export function useStudioController() {
         ]
         setLookmlBundle(result.lookmlBundle)
         if (result.lookmlBundle.project_id) setLookmlProjectId(result.lookmlBundle.project_id)
+        convId = result.lookmlBundle.id || 'lookml_1'
+        convMode = 'lookml'
+        convTitle = result.lookmlBundle.title
         try {
           const saved = await saveLookmlSessionArtifact({
             sdk: core40SDK,
@@ -986,9 +1023,10 @@ export function useStudioController() {
               explores: selectedExplores,
               lastInteractionId: result.session.lastInteractionId,
               environmentId: result.session.environmentId,
-              messages: nextMsgs,
+              messages: finalMsgs,
             },
           })
+          convId = saved.id
           lastLookmlIdRef.current = saved.id
           setLoadLookmlInput(saved.id)
           setLookmlSessions((prev) => [
@@ -1001,156 +1039,238 @@ export function useStudioController() {
           }
         } catch {}
         setAgentSession({ ...result.session, explores: selectedExplores })
-        setMessages(nextMsgs)
-        return
-      }
-
-      const bundleExplores = result.bundle
-        ? Array.from(
-            new Set([
-              ...(result.bundle.widgets || [])
-                .filter((w) => w.query?.model && w.query?.view)
-                .map((w) => formatExploreId(w.query.model, w.query.view)),
-              ...extractExploreIdsFromCode(result.bundle.raw_code || ''),
-            ])
-          )
-        : result.nativeBundle?.explores || []
-      const effectiveExplores =
-        selectedExplores.length > 0 ? selectedExplores : bundleExplores
-      if (selectedExplores.length === 0 && bundleExplores.length > 0) {
-        setSelectedExplores(bundleExplores)
-      }
-      setAgentSession({ ...result.session, explores: effectiveExplores })
-
-      if (builderMode === 'dashboard' && result.nativeBundle) {
-        setBusyStatus('Indexing native Looker content in user catalog...')
-        const prelimAssistantMsg: ChatMessage = {
-          role: 'assistant',
-          text: result.assistantText,
-          interactionId: result.session.lastInteractionId,
-          widgetCount: result.nativeBundle.tile_count,
-        }
-        const savedNative = await saveNativeContentArtifact(
-          core40SDK,
-          extensionSDK,
-          userId,
-          result.nativeBundle,
-          selectedFolderId,
-          nativeContent,
-          {
-            explores: effectiveExplores,
-            lastInteractionId: result.session.lastInteractionId,
-            environmentId: result.session.environmentId,
-            messages: [...messagesWithUser, prelimAssistantMsg],
-          }
-        )
-        lastNativeIdRef.current = savedNative.id
-        setNativeContent(savedNative)
-        setLoadDashInput(savedNative.id)
-        const targetRoute = `/dashboard/${encodeURIComponent(savedNative.id)}`
-        if (location.pathname !== targetRoute) history.replace(targetRoute)
-        listUserDashboardArtifacts(core40SDK, extensionSDK, userId).then(setMyCreations)
-        await refreshCatalog()
-        setMessages([...messagesWithUser, { ...prelimAssistantMsg, dashboardId: savedNative.id }])
-      } else if (result.bundle) {
-        setBusyStatus('Publishing inline extension & updating Looker dashboard...')
-        const prelimAssistantMsg: ChatMessage = {
-          role: 'assistant',
-          text: result.assistantText,
-          interactionId: result.session.lastInteractionId,
-          widgetCount: result.bundle?.widgets?.length || 0,
-        }
-        const upserted = await upsertPublishedDataApp(
-          core40SDK,
-          result.bundle,
-          selectedFolderId,
-          publishedApp,
-          {
-            explores: effectiveExplores,
-            lastInteractionId: result.session.lastInteractionId,
-            environmentId: result.session.environmentId,
-            messages: [...messagesWithUser, prelimAssistantMsg],
-          }
-        )
-        lastPublishedIdRef.current = upserted.dashboardId
-        setPublishedApp(upserted)
-        setActiveObjectId(upserted.dashboardId)
-        setCurrentAppCode(result.bundle.raw_code)
-        setLoadDashInput(upserted.dashboardId)
-        try {
-          await saveUserArtifact(
-            core40SDK,
-            userId,
-            {
-              id: upserted.dashboardId,
-              type: 'app',
-              title: upserted.title,
-              explores: effectiveExplores,
-              updatedAt: new Date().toISOString(),
-              createdBy: userId,
-            },
-            {
-              id: upserted.dashboardId,
-              type: 'app',
-              title: upserted.title,
-              explores: effectiveExplores,
-              updatedAt: new Date().toISOString(),
-              createdBy: userId,
-              dashboardId: upserted.dashboardId,
-              extensionId: upserted.extensionId,
-              rawCode: result.bundle.raw_code,
-              messages: [
-                ...messagesWithUser,
-                { ...prelimAssistantMsg, dashboardId: upserted.dashboardId },
-              ],
-            }
-          )
-          await refreshCatalog()
-        } catch {}
-        if (location.pathname !== `/${upserted.dashboardId}`) {
-          history.replace(`/${encodeURIComponent(upserted.dashboardId)}`)
-        }
-        setMessages([
-          ...messagesWithUser,
-          { ...prelimAssistantMsg, dashboardId: upserted.dashboardId },
-        ])
+        setMessages(finalMsgs)
       } else {
-        const nextMsgs: ChatMessage[] = [
-          ...messagesWithUser,
-          {
+        const bundleExplores = result.bundle
+          ? Array.from(
+              new Set([
+                ...(result.bundle.widgets || [])
+                  .filter((w) => w.query?.model && w.query?.view)
+                  .map((w) => formatExploreId(w.query.model, w.query.view)),
+                ...extractExploreIdsFromCode(result.bundle.raw_code || ''),
+              ])
+            )
+          : result.nativeBundle?.explores || []
+        const effectiveExplores =
+          selectedExplores.length > 0 ? selectedExplores : bundleExplores
+        convExplores = effectiveExplores
+        if (selectedExplores.length === 0 && bundleExplores.length > 0) {
+          setSelectedExplores(bundleExplores)
+        }
+        setAgentSession({ ...result.session, explores: effectiveExplores })
+
+        if (builderMode === 'dashboard' && result.nativeBundle) {
+          setBusyStatus('Indexing native Looker content in user catalog...')
+          const prelimAssistantMsg: ChatMessage = {
             role: 'assistant',
             text: result.assistantText,
             interactionId: result.session.lastInteractionId,
-          },
-        ]
-        setMessages(nextMsgs)
-        if (builderMode === 'dashboard' && nativeContent) {
-          const updatedNative = await saveNativeContentArtifact(
+            widgetCount: result.nativeBundle.tile_count,
+          }
+          const savedNative = await saveNativeContentArtifact(
             core40SDK,
             extensionSDK,
             userId,
-            { id: nativeContent.id, title: nativeContent.title, explores: effectiveExplores },
+            result.nativeBundle,
             selectedFolderId,
             nativeContent,
             {
               explores: effectiveExplores,
               lastInteractionId: result.session.lastInteractionId,
               environmentId: result.session.environmentId,
-              messages: nextMsgs,
+              messages: [...messagesWithUser, prelimAssistantMsg],
             }
           )
-          setNativeContent(updatedNative)
+          lastNativeIdRef.current = savedNative.id
+          setNativeContent(savedNative)
+          setLoadDashInput(savedNative.id)
+          const targetRoute = `/dashboard/${encodeURIComponent(savedNative.id)}`
+          if (location.pathname !== targetRoute) history.replace(targetRoute)
+          listUserDashboardArtifacts(core40SDK, extensionSDK, userId).then(setMyCreations)
           await refreshCatalog()
-        } else if (publishedApp) {
-          setPublishedApp(
-            await saveDashboardStudioMetadata(core40SDK, publishedApp, {
+          finalMsgs = [
+            ...messagesWithUser,
+            { ...prelimAssistantMsg, dashboardId: savedNative.id },
+          ]
+          setMessages(finalMsgs)
+          convId = savedNative.id
+          convMode = 'dashboard'
+          convTitle = savedNative.title
+        } else if (result.bundle) {
+          setBusyStatus('Publishing inline extension & updating Looker dashboard...')
+          const prelimAssistantMsg: ChatMessage = {
+            role: 'assistant',
+            text: result.assistantText,
+            interactionId: result.session.lastInteractionId,
+            widgetCount: result.bundle?.widgets?.length || 0,
+          }
+          const upserted = await upsertPublishedDataApp(
+            core40SDK,
+            result.bundle,
+            selectedFolderId,
+            publishedApp,
+            {
               explores: effectiveExplores,
               lastInteractionId: result.session.lastInteractionId,
               environmentId: result.session.environmentId,
-              messages: nextMsgs,
-            })
+              messages: [...messagesWithUser, prelimAssistantMsg],
+            }
           )
+          lastPublishedIdRef.current = upserted.dashboardId
+          setPublishedApp(upserted)
+          setActiveObjectId(upserted.dashboardId)
+          setCurrentAppCode(result.bundle.raw_code)
+          setLoadDashInput(upserted.dashboardId)
+          finalMsgs = [
+            ...messagesWithUser,
+            { ...prelimAssistantMsg, dashboardId: upserted.dashboardId },
+          ]
+          try {
+            await saveUserArtifact(
+              core40SDK,
+              userId,
+              {
+                id: upserted.dashboardId,
+                type: 'app',
+                title: upserted.title,
+                explores: effectiveExplores,
+                updatedAt: new Date().toISOString(),
+                createdBy: userId,
+              },
+              {
+                id: upserted.dashboardId,
+                type: 'app',
+                title: upserted.title,
+                explores: effectiveExplores,
+                updatedAt: new Date().toISOString(),
+                createdBy: userId,
+                dashboardId: upserted.dashboardId,
+                extensionId: upserted.extensionId,
+                rawCode: result.bundle.raw_code,
+                messages: finalMsgs,
+              },
+              getArtifactNamespace(extensionSDK)
+            )
+            await refreshCatalog()
+          } catch {}
+          if (location.pathname !== `/${upserted.dashboardId}`) {
+            history.replace(`/${encodeURIComponent(upserted.dashboardId)}`)
+          }
+          setMessages(finalMsgs)
+          convId = upserted.dashboardId
+          convMode = 'app'
+          convTitle = upserted.title
+        } else {
+          finalMsgs = [
+            ...messagesWithUser,
+            {
+              role: 'assistant',
+              text: result.assistantText,
+              interactionId: result.session.lastInteractionId,
+            },
+          ]
+          setMessages(finalMsgs)
+          if (builderMode === 'dashboard' && nativeContent) {
+            const updatedNative = await saveNativeContentArtifact(
+              core40SDK,
+              extensionSDK,
+              userId,
+              { id: nativeContent.id, title: nativeContent.title, explores: effectiveExplores },
+              selectedFolderId,
+              nativeContent,
+              {
+                explores: effectiveExplores,
+                lastInteractionId: result.session.lastInteractionId,
+                environmentId: result.session.environmentId,
+                messages: finalMsgs,
+              }
+            )
+            setNativeContent(updatedNative)
+            await refreshCatalog()
+          } else if (publishedApp) {
+            setPublishedApp(
+              await saveDashboardStudioMetadata(core40SDK, publishedApp, {
+                explores: effectiveExplores,
+                lastInteractionId: result.session.lastInteractionId,
+                environmentId: result.session.environmentId,
+                messages: finalMsgs,
+              })
+            )
+          }
         }
+      }
+
+      if (isFirstTurn) {
+        const namespace = getArtifactNamespace(extensionSDK)
+        const baseConv = {
+          id: convId,
+          type: convMode,
+          interactionId: result.session.lastInteractionId,
+          environmentId: result.session.environmentId,
+          explores: convExplores,
+          messages: finalMsgs,
+        }
+        void saveUserConversation(
+          core40SDK,
+          userId,
+          {
+            ...baseConv,
+            label: convTitle || sanitizeConversationLabel('', effectivePrompt),
+            updatedAt: new Date().toISOString(),
+          },
+          namespace
+        )
+          .then(setConversations)
+          .catch(() => {})
+
+        void generateConversationLabel({
+          extensionSDK,
+          auth,
+          environmentId: result.session.environmentId,
+          userPrompt: effectivePrompt,
+          assistantText: result.assistantText,
+          model: selectedModel,
+        })
+          .then(async (label) => {
+            if (!label) return
+            conversationLabelsRef.current[convId] = label
+            setCatalogItems((prev) =>
+              prev.map((it) => (it.id === convId ? { ...it, label, title: label } : it))
+            )
+            setMyCreations((prev) =>
+              prev.map((c) => (c.id === convId ? { ...c, title: label } : c))
+            )
+            setLookmlSessions((prev) =>
+              prev.map((s) => (s.id === convId ? { ...s, title: label } : s))
+            )
+            const updatedAt = new Date().toISOString()
+            await saveUserConversation(
+              core40SDK,
+              userId,
+              { ...baseConv, label, updatedAt },
+              namespace
+            )
+              .then(setConversations)
+              .catch(() => {})
+            await saveUserArtifact(
+              core40SDK,
+              userId,
+              {
+                id: convId,
+                type: convMode,
+                title: label,
+                label,
+                explores: convExplores,
+                lastInteractionId: result.session.lastInteractionId,
+                environmentId: result.session.environmentId,
+                updatedAt,
+                createdBy: userId,
+              },
+              undefined,
+              namespace
+            ).catch(() => {})
+          })
+          .catch(() => {})
       }
     } catch (err: any) {
       setMessages((prev) => [...prev, { role: 'error', text: err?.message || String(err) }])
@@ -1225,6 +1345,7 @@ export function useStudioController() {
     catalogSearch,
     setCatalogSearch,
     activeObjectId,
+    conversations,
     requirePermission,
     setRequirePermission,
     pendingPerm,

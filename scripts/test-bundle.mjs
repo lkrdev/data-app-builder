@@ -462,6 +462,21 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
     lookmlBundle.files.some((f) => f.path === 'bronze/orders.refinement.lkml' && f.diff.includes('+  measure: total_revenue')),
     'Expected unified diff for bronze/orders.refinement.lkml'
   )
+
+  const rootAgentsMd = readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8')
+  const upstreamAgentsMd = readFileSync(path.join(repoRoot, 'upstream/payload/AGENTS.md'), 'utf8')
+  assert(
+    rootAgentsMd.includes('## Conversation Labeling (Stateless Side-Request)') &&
+      rootAgentsMd.includes('[CONVERSATION_LABEL_REQUEST]') &&
+      upstreamAgentsMd.includes('## Conversation Labeling (Stateless Side-Request)') &&
+      antigravityTs.includes("target: '/workspace/AGENTS.md'") &&
+      antigravityTs.includes('generateConversationLabel') &&
+      antigravityTs.includes('sanitizeConversationLabel') &&
+      lookerApiTs.includes('user_conversations:') &&
+      lookerApiTs.includes('loadUserConversations') &&
+      lookerApiTs.includes('saveUserConversation'),
+    'Issue #25: root AGENTS.md, /workspace/AGENTS.md seeding, stateless generateConversationLabel, and user_conversations:${me.id} persistence must be present'
+  )
   console.log('✓ test-bundle.mjs: all assertions passed!')
 } finally {
   rmSync(workDir, { recursive: true, force: true })
