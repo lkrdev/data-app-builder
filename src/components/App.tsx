@@ -94,6 +94,8 @@ const StudioMain: React.FC = () => {
         onChangeFolder={ctl.setSelectedFolderId}
         disabledModes={ctl.disabledModes}
         capabilities={ctl.capabilities}
+        sharedEnvironmentId={ctl.sharedEnvironmentId}
+        onEnvironmentUpdated={ctl.syncSharedEnvironmentId}
       />
     )
   }

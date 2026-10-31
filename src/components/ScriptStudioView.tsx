@@ -4,9 +4,11 @@ import { useLookerExtension } from '../contexts/LookerExtensionContext'
 import {
   fetchInitialLookerMetadata,
   getAllowedUseCases,
+  getArtifactNamespace,
   getUseCaseLabel,
   listSavedScripts,
   loadScriptArtifact,
+  loadUserEnvironmentId,
   PersistedChatTurn,
   publishScriptDashboard,
   SavedScript,
@@ -22,6 +24,7 @@ import {
   AntigravityModelOption,
   DEFAULT_ANTIGRAVITY_MODEL,
   LkrCodeMode,
+  normalizeEnvironmentId,
   prewarmOrWakeAntigravityEnvironment,
   runAntigravityTurn,
 } from '../antigravity'
@@ -43,6 +46,8 @@ export const ScriptStudioView: React.FC<{
   onChangeFolder: (folderId: string) => void
   disabledModes?: string[]
   capabilities?: UserCapabilities
+  sharedEnvironmentId?: string
+  onEnvironmentUpdated?: (environmentId: string) => void
 }> = ({
   auth,
   selectedModel = DEFAULT_ANTIGRAVITY_MODEL,
@@ -55,6 +60,8 @@ export const ScriptStudioView: React.FC<{
   onChangeFolder,
   disabledModes = [],
   capabilities,
+  sharedEnvironmentId,
+  onEnvironmentUpdated,
 }) => {
   const { extensionSDK, core40SDK } = useLookerExtension()
   const history = useHistory()
@@ -73,25 +80,47 @@ export const ScriptStudioView: React.FC<{
   const [prompt, setPrompt] = useState('')
   const [agentSession, setAgentSession] = useState<AgentSession>({
     toolType: 'tile',
-    environmentId: 'env_tile_isolated',
+    environmentId: sharedEnvironmentId || 'env_tile_isolated',
   })
   const [busyStatus, setBusyStatus] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (sharedEnvironmentId) {
+      setAgentSession((prev) => ({ ...prev, environmentId: sharedEnvironmentId }))
+    }
+  }, [sharedEnvironmentId])
 
   const handleWakeTileEnv = useCallback(async () => {
     try {
       const res = await prewarmOrWakeAntigravityEnvironment({
+        sdk: core40SDK,
+        userId,
         extensionSDK,
         auth,
         toolType: 'tile',
         model: selectedModel,
+        environmentId: sharedEnvironmentId || agentSession.environmentId,
+        conversationId: scriptId,
         existingSession: agentSession,
         selectedExplores,
         schemaMarkdown,
-        customSystemGuide: PYTHON_TILE_SKILL_GUIDE,
-      } as any)
+        onEnvironmentUpdated,
+      })
       setAgentSession(res.session)
     } catch {}
-  }, [extensionSDK, auth, selectedModel, agentSession, selectedExplores, schemaMarkdown])
+  }, [
+    core40SDK,
+    userId,
+    extensionSDK,
+    auth,
+    selectedModel,
+    sharedEnvironmentId,
+    scriptId,
+    agentSession,
+    selectedExplores,
+    schemaMarkdown,
+    onEnvironmentUpdated,
+  ])
 
   useEffect(() => {
     handleWakeTileEnv()
@@ -142,12 +171,22 @@ export const ScriptStudioView: React.FC<{
         const uid = String(meta.user?.id || '1')
         setUserId(uid)
         refreshScriptsList(uid)
+        if (!sharedEnvironmentId) {
+          loadUserEnvironmentId(core40SDK, uid, getArtifactNamespace(extensionSDK)).then(
+            (savedEnvId) => {
+              if (mounted && savedEnvId) {
+                setAgentSession((prev) => ({ ...prev, environmentId: savedEnvId }))
+                onEnvironmentUpdated?.(savedEnvId)
+              }
+            }
+          )
+        }
       })
       .catch(() => {})
     return () => {
       mounted = false
     }
-  }, [core40SDK, refreshScriptsList])
+  }, [core40SDK, extensionSDK, refreshScriptsList, sharedEnvironmentId, onEnvironmentUpdated])
 
   // Load script when route matches /script/:scriptId or /tile/:scriptId
   useEffect(() => {
@@ -287,6 +326,10 @@ export const ScriptStudioView: React.FC<{
       const res = await runAntigravityTurn({
         sdk: core40SDK,
         extensionSDK,
+        userId,
+        environmentId: sharedEnvironmentId || agentSession.environmentId,
+        conversationId: scriptId,
+        onEnvironmentUpdated,
         auth,
         session: agentSession,
         model: selectedModel,
@@ -297,6 +340,9 @@ export const ScriptStudioView: React.FC<{
         priorMessages: messages,
         onStatus: setBusyStatus,
       })
+      if (normalizeEnvironmentId(res.session.environmentId)) {
+        onEnvironmentUpdated?.(res.session.environmentId!)
+      }
       setAgentSession(res.session)
       const pyMatch = res.assistantText.match(/```python\s*([\s\S]*?)```/i)
       const extractedCode = pyMatch ? pyMatch[1].trim() : scriptCode

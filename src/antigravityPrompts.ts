@@ -515,8 +515,8 @@ export const DATA_APP_GUIDE_MD = `# Looker Lit Data Apps — Compact Sandbox Gui
 ## 4. Static Widget Extraction & Dynamic Metric Switchers
 - \`bundle_app.py\` statically extracts every \`<app-kpi>\`, \`<app-chart>\`, and \`<app-grid>\` query at publish time.
 - For dynamic metric switchers (\`this.selectedMetric\`), initialize \`this.selectedMetric = 'view.default_measure'\` in \`constructor()\`, and include ALL candidate metric fields in \`<app-grid>\` \`.query.fields\` so every \`.columnDefs\` \`field\` is present in \`.query.fields\`.
-- Write, verify, and bundle in a single sandbox call:
-  \`python3 /workspace/bundle_app.py --stdin "<App Title>" << 'EOF'\`
+- Write, verify, and bundle in a single sandbox call (isolated per conversation under \`/workspace/apps/$CONV_ID\`):
+  \`python3 /workspace/bundle_app.py --app-dir /workspace/apps/$CONV_ID --stdin "<App Title>" << 'EOF'\`
 `
 
 export const BUNDLE_APP_PY = `#!/usr/bin/env python3
@@ -534,16 +534,35 @@ def ensure_toolkit() -> str:
     return vf.read_text(encoding="utf-8").strip() if vf.is_file() and vf.read_text(encoding="utf-8").strip() else DEFAULT_VERSION
 
 def main():
-    args = sys.argv[1:]
+    raw_args = sys.argv[1:]
+    app_dir = os.environ.get("APP_DIR", "/workspace/apps/current")
+    args = []
+    i = 0
+    while i < len(raw_args):
+        if raw_args[i] == "--app-dir" and i + 1 < len(raw_args):
+            app_dir = raw_args[i + 1]
+            i += 2
+        elif raw_args[i].startswith("--app-dir="):
+            app_dir = raw_args[i].split("=", 1)[1]
+            i += 1
+        else:
+            args.append(raw_args[i])
+            i += 1
+    default_app_path = str(Path(app_dir) / "app.js")
     if not args:
-        sys.exit("Usage: python3 /workspace/bundle_app.py <path/to/app.js> [title] OR --stdin [title] [output_path]")
+        sys.exit("Usage: python3 /workspace/bundle_app.py [--app-dir <dir>] <path/to/app.js> [title] OR --stdin [title] [output_path]")
     if args[0] == "--stdin":
         title = args[1] if len(args) > 1 else "Data App"
-        app_path = Path(args[2] if len(args) > 2 else "/workspace/apps/current/app.js").resolve()
+        app_path = Path(args[2] if len(args) > 2 else default_app_path).resolve()
         app_path.parent.mkdir(parents=True, exist_ok=True)
         app_path.write_text(sys.stdin.read(), encoding="utf-8")
     else:
-        app_path, title = Path(args[0]).resolve(), (args[1] if len(args) > 1 else "Data App")
+        cand = Path(args[0]).resolve()
+        if cand.is_dir():
+            cand = cand / "app.js"
+        app_path, title = cand, (args[1] if len(args) > 1 else "Data App")
+        if not app_path.is_file() and Path(default_app_path).is_file():
+            app_path = Path(default_app_path).resolve()
         if not app_path.is_file():
             sys.exit(f"error: {app_path} does not exist")
 
@@ -569,10 +588,11 @@ def main():
         "widgets": extraction.widgets,
         "warnings": list(warnings) + list(extraction.warnings),
     }
-    try:
-        Path("/workspace/bundle.json").write_text(json.dumps(bundle), encoding="utf-8")
-    except Exception:
-        pass
+    for bpath in (app_path.parent / "bundle.json", Path("/workspace/bundle.json")):
+        try:
+            bpath.write_text(json.dumps(bundle), encoding="utf-8")
+        except Exception:
+            pass
     print("<DATA_APP_BUNDLE>" + json.dumps(bundle) + "</DATA_APP_BUNDLE>")
 
 if __name__ == "__main__":

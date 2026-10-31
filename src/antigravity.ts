@@ -3,6 +3,7 @@ import {
   DataAppBundle,
   extractResolvedUseCase,
   getAllowedUseCases,
+  getArtifactNamespace,
   getUseCaseLabel,
   NativeContentBundle,
   NativeContentState,
@@ -10,6 +11,7 @@ import {
   parseExploreId,
   ResolvedStudioUseCase,
   resolveNativeEmbedPath,
+  saveUserEnvironmentId,
   STUDIO_USE_CASE_OPTIONS,
   studioModeToUseCase,
   StudioUseCase,
@@ -90,9 +92,20 @@ export type AntigravityToolType = 'app' | 'dashboard' | 'lookml' | 'health' | 't
 export interface AgentSession {
   environmentId?: string
   lastInteractionId?: string
+  conversationId?: string
   explores?: string[]
   toolType?: AntigravityToolType
   objectId?: string
+}
+
+export function normalizeEnvironmentId(raw?: string | null): string | undefined {
+  const id = String(raw || '').trim()
+  return !id || id === 'remote' || /^env_(?:app|dashboard|lookml|health|tile)(?:_isolated|_warm)?$/.test(id) ? undefined : id
+}
+
+export function isEnvironmentNotFoundError(err: unknown): boolean {
+  const status = Number((err as any)?.status || (err as any)?.statusCode || 0)
+  return status === 404 || /\b404\b|environment.*not[\s_-]*found|requested entity was not found/i.test(String((err as any)?.message || err || ''))
 }
 
 export type CodeModePermissionDecision =
@@ -517,9 +530,54 @@ function extractInteractionTelemetry(
   }
 }
 
+function buildWorkspaceSources(params: {
+  schemaMarkdown: string
+  appFilePath?: string
+  existingAppCode?: string
+  extraSources?: Array<{ type: 'inline'; content: string; target: string }>
+}): Array<{ type: 'inline'; content: string; target: string }> {
+  const { schemaMarkdown, appFilePath = '/workspace/apps/current/app.js', existingAppCode, extraSources } = params
+  return [
+    { type: 'inline', content: AGENTS_MD, target: '/workspace/AGENTS.md' },
+    { type: 'inline', content: schemaMarkdown, target: '/workspace/schema.md' },
+    { type: 'inline', content: BUNDLE_APP_PY, target: '/workspace/bundle_app.py' },
+    { type: 'inline', content: DATA_APP_GUIDE_MD, target: '/workspace/DATA_APP_GUIDE.md' },
+    { type: 'inline', content: BOOTSTRAP_LOOKML_PY, target: '/workspace/bootstrap_lookml.py' },
+    ...(extraSources || []),
+    ...(existingAppCode ? [{ type: 'inline' as const, content: existingAppCode, target: appFilePath }] : []),
+  ]
+}
+
+async function persistUserEnvIfChanged(params: {
+  sdk?: Looker40SDK
+  extensionSDK?: any
+  userId?: string
+  previousEnvId?: string
+  nextEnvId?: string
+  onEnvironmentUpdated?: (environmentId: string) => void | Promise<void>
+}): Promise<void> {
+  const next = normalizeEnvironmentId(params.nextEnvId)
+  if (!next || next === normalizeEnvironmentId(params.previousEnvId)) return
+  await params.onEnvironmentUpdated?.(next)
+  if (params.sdk && typeof (params.sdk as any).update_artifacts === 'function') {
+    let uid = String(params.userId || '').trim()
+    if (!uid && typeof (params.sdk as any).me === 'function') {
+      try {
+        const me = await (params.sdk.ok ? params.sdk.ok(params.sdk.me('id')) : params.sdk.me('id'))
+        uid = String((me as any)?.id || '').trim()
+      } catch {}
+    }
+    if (uid) await saveUserEnvironmentId(params.sdk, uid, next, getArtifactNamespace(params.extensionSDK))
+  }
+}
+
 export async function runAntigravityTurn(params: {
   sdk: Looker40SDK
   extensionSDK?: any
+  userId?: string
+  environmentId?: string
+  conversationId?: string
+  onEnvironmentUpdated?: (environmentId: string) => void | Promise<void>
   auth: AntigravityAuth
   session: AgentSession
   model?: string
@@ -570,6 +628,10 @@ export async function runAntigravityTurn(params: {
   const {
     sdk,
     extensionSDK,
+    userId,
+    environmentId,
+    conversationId: rawConversationId,
+    onEnvironmentUpdated,
     auth,
     session,
     model = DEFAULT_ANTIGRAVITY_MODEL,
@@ -615,12 +677,25 @@ export async function runAntigravityTurn(params: {
 
   const isDashboardMode = effectiveToolType === 'dashboard'
 
-  // ponytail: enforce strict environment & conversation isolation per toolType so switching modes
-  // (app vs dashboard vs lookml vs health vs tile) never reuses another mode's previous_interaction_id.
-  const isFreshEnvironment =
+  const conversationId =
+    String(rawConversationId || session.conversationId || session.objectId || 'current')
+      .trim()
+      .replace(/[^a-zA-Z0-9_-]/g, '_') || 'current'
+  const appDir = `/workspace/apps/${conversationId}`
+  const appFilePath = `${appDir}/app.js`
+
+  const initialEnvId = normalizeEnvironmentId(environmentId || session.environmentId)
+  let activeEnvId = initialEnvId
+
+  // ponytail: decouple container state (environmentId) from conversation history (lastInteractionId).
+  // A single per-user environmentId is shared across conversations and tool modes, while
+  // previous_interaction_id stays strictly scoped to the active conversation.
+  const isFreshConversation =
     !session.lastInteractionId ||
     Boolean(session.toolType && session.toolType !== effectiveToolType) ||
-    JSON.stringify(session.explores || []) !== JSON.stringify(selectedExplores)
+    (Array.isArray(session.explores) &&
+      session.explores.length > 0 &&
+      JSON.stringify(session.explores) !== JSON.stringify(selectedExplores))
 
   const exploreDirective =
     selectedExplores.length > 0
@@ -644,7 +719,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     selectedExplores.length === 1
       ? `with \`this.lookerModel = '${primaryModel}'\` and \`this.explore = '${primaryExplore}'\` in \`constructor()\``
       : `setting \`this.lookerModel\` and \`this.explore\` in \`constructor()\``
-  const step3Directive = `3. Write and bundle the Lit Data App in ONE \`code_execution\` call importing from '/runtime/data-app.js' (${ctorHint}):\n   \`python3 /workspace/bundle_app.py --stdin "<App Title>" << 'EOF'\\n...\\nEOF\``
+  const step3Directive = `3. Write and bundle the Lit Data App in ONE \`code_execution\` call importing from '/runtime/data-app.js' (${ctorHint}) into \`${appFilePath}\`:\n   \`python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\\n...\\nEOF\``
 
   const normalizedExistingNative: NativeContentState | null = existingNativeContent
     ? normalizeNativeContent({
@@ -673,7 +748,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           `1. /workspace/DATA_APP_GUIDE.md is pre-loaded with component contracts (<app-kpi>, <app-chart>, <app-grid>, <app-select>), .da-* layout classes, dark mode (this.isDark), and static widget extraction rules. Do NOT download toolkits or read external skill directories.`,
           step2Directive,
           step3Directive,
-          `4. If bundle_app.py reports any syntax or tile safety violation, fix /workspace/apps/current/app.js and re-run \`python3 /workspace/bundle_app.py /workspace/apps/current/app.js "<App Title>"\` until it exits 0.`,
+          `4. If bundle_app.py reports any syntax or tile safety violation, fix ${appFilePath} and re-run \`python3 /workspace/bundle_app.py ${appFilePath} "<App Title>"\` until it exits 0.`,
           `5. CRITICAL: bundle_app.py prints \`<DATA_APP_BUNDLE>...</DATA_APP_BUNDLE>\` directly to stdout, which the host captures automatically from tool output. NEVER echo or repeat \`<DATA_APP_BUNDLE>\` or raw JavaScript code in your final text reply—respond with a concise 1–2 sentence summary only.`,
         ].join('\n')
 
@@ -691,27 +766,12 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         })
       : dataAppOrNativeGuide)
 
-  const sources: Array<{ type: 'inline'; content: string; target: string }> = [
-    { type: 'inline', content: AGENTS_MD, target: '/workspace/AGENTS.md' },
-    { type: 'inline', content: schemaMarkdown, target: '/workspace/schema.md' },
-    ...(mode === 'data_app' && toolMode !== 'lookml'
-      ? [
-          { type: 'inline' as const, content: BUNDLE_APP_PY, target: '/workspace/bundle_app.py' },
-          { type: 'inline' as const, content: DATA_APP_GUIDE_MD, target: '/workspace/DATA_APP_GUIDE.md' },
-        ]
-      : []),
-    ...(toolMode === 'lookml'
-      ? [{ type: 'inline' as const, content: BOOTSTRAP_LOOKML_PY, target: '/workspace/bootstrap_lookml.py' }]
-      : []),
-    ...(extraSources || []),
-  ]
-  if (mode === 'data_app' && existingAppCode) {
-    sources.push({
-      type: 'inline',
-      content: existingAppCode,
-      target: '/workspace/apps/current/app.js',
-    })
-  }
+  const sources = buildWorkspaceSources({
+    schemaMarkdown,
+    appFilePath,
+    existingAppCode: mode === 'data_app' ? existingAppCode : undefined,
+    extraSources,
+  })
 
   // ponytail: disable remote container code_execution in /dashboard mode so all UDD + .dashboard.lookml
   // operations run directly in browser/extension WASM Monty CodeMode with zero bash container overhead.
@@ -730,13 +790,13 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
   const warmTurnDirective =
     mode === 'data_app' && toolMode !== 'lookml'
-      ? `[WARM SANDBOX FAST PATH: /workspace/apps/current/app.js and the discovered Looker schema are already in /workspace. Do NOT re-run run_looker_codemode discovery or re-read guides unless a brand-new explore is requested. Update /workspace/apps/current/app.js and bundle in ONE code_execution call via: python3 /workspace/bundle_app.py --stdin "<App Title>" << 'EOF'\n...\nEOF\nNEVER echo <DATA_APP_BUNDLE> in your text reply.]\n\n`
+      ? `[WARM SANDBOX FAST PATH: ${appFilePath} and the discovered Looker schema are already in /workspace. Do NOT re-run run_looker_codemode discovery or re-read guides unless a brand-new explore is requested. Update ${appFilePath} and bundle in ONE code_execution call via: python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\n...\nEOF\nNEVER echo <DATA_APP_BUNDLE> in your text reply.]\n\n`
       : isDashboardMode && normalizedExistingNative
       ? `[WARM CONTENT STUDIO FAST PATH: Active Looker ${normalizedExistingNative.contentType} id="${normalizedExistingNative.id}" ("${normalizedExistingNative.title}") and pre-hydrated active_content (element_ids=${JSON.stringify(normalizedExistingNative.elementIds || [])}, filter_names=${JSON.stringify(normalizedExistingNative.filterNames || [])}, lookml_dashboard_id="${normalizedExistingNative.lookmlDashboardId || ''}", project_id="${normalizedExistingNative.projectId || lookmlProjectId || ''}") are pre-injected in run_looker_codemode vars. Execute the update in ONE run_looker_codemode call using upsert_udd / upsert_lookml_dashboard / reflow_24col / pin_to_board / schedule_dashboard + return emit_native_bundle(...). NEVER echo <NATIVE_CONTENT_BUNDLE> in your text reply.]\n\n`
       : ''
 
   const autoRoutingDirective =
-    useCase === 'auto' && isFreshEnvironment
+    useCase === 'auto' && isFreshConversation
       ? `\n\n[AUTO USE-CASE ROUTING (Turn 1): Consult /workspace/AGENTS.md ("## Use Case Auto-Classification (Turn 1 Routing)"). Allowed use cases for this user: ${JSON.stringify(
           allowedModes && allowedModes.length > 0
             ? allowedModes
@@ -772,26 +832,22 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
   onStatus('Starting Antigravity sandbox interaction...')
   let interaction: any
-  if (!isFreshEnvironment && session.lastInteractionId) {
+  if (activeEnvId || (!isFreshConversation && session.lastInteractionId)) {
     try {
-      interaction = await callInteractionsApi(
-        extensionSDK,
-        auth,
-        'interactions',
-        'POST',
-        {
-          agent: 'antigravity-preview-09-2026',
-          agent_config: agentConfig,
-          background: true,
-          tools: activeTools,
-          input: buildInputItems(false),
-          environment: session.environmentId || 'remote',
-          previous_interaction_id: session.lastInteractionId,
-        }
-      )
-    } catch {
-      // ponytail: if stored session/sandbox expired or belongs to another GCP project,
-      // transparently spin up a fresh sandbox seeded with existingAppCode + priorMessages.
+      interaction = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
+        agent: 'antigravity-preview-09-2026',
+        agent_config: agentConfig,
+        background: true,
+        tools: activeTools,
+        input: buildInputItems(isFreshConversation),
+        environment: activeEnvId || 'remote',
+        ...(isFreshConversation ? {} : { previous_interaction_id: session.lastInteractionId }),
+      })
+    } catch (err) {
+      if (activeEnvId && !isEnvironmentNotFoundError(err) && isFreshConversation) throw err
+      // ponytail: if stored environmentId returned 404 (Environment '<env_id>' not found) or
+      // resumed conversation expired, spin up a fresh remote environment seeded with sources.
+      apiRetries += 1
       onStatus('Resumed sandbox expired; provisioning fresh sandbox with app state...')
       interaction = await callInteractionsApi(
         extensionSDK,
@@ -811,7 +867,15 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     )
   }
   let trackedEnvId: string | undefined =
-    interaction.environment_id || session.environmentId
+    normalizeEnvironmentId(interaction.environment_id) || activeEnvId
+  await persistUserEnvIfChanged({
+    sdk,
+    extensionSDK,
+    userId,
+    previousEnvId: initialEnvId,
+    nextEnvId: trackedEnvId,
+    onEnvironmentUpdated,
+  })
 
   let pollIdx = 0
   let prevStepCount = (interaction.steps || []).length
@@ -1053,6 +1117,16 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     apiRetries,
   })
 
+  const finalEnvId = normalizeEnvironmentId(interaction.environment_id) || trackedEnvId
+  await persistUserEnvIfChanged({
+    sdk,
+    extensionSDK,
+    userId,
+    previousEnvId: trackedEnvId,
+    nextEnvId: finalEnvId,
+    onEnvironmentUpdated,
+  })
+
   return {
     bundle,
     nativeBundle,
@@ -1071,8 +1145,9 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         ? 'Synthesized 7-section Technical Design Document (TECHNICAL_DESIGN_DOCUMENT.md).'
         : 'Done.'),
     session: {
-      environmentId: interaction.environment_id || trackedEnvId,
+      environmentId: finalEnvId,
       lastInteractionId: interaction.id,
+      conversationId,
       explores: selectedExplores,
       toolType: effectiveToolType,
     },
@@ -1080,39 +1155,63 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   }
 }
 
-// ponytail: pre-launch or re-load and wake up a mode-isolated Antigravity remote environment
-// so each mini-app (app, dashboard, lookml, health, tile) has its own warm sandbox without cross-talk.
+// ponytail: pre-launch or wake a single per-user Antigravity remote environment shared across
+// tool modes (app, dashboard, lookml, health, tile), with automatic 404 environment recovery.
 export async function prewarmOrWakeAntigravityEnvironment(params: {
+  sdk?: Looker40SDK
+  userId?: string
   extensionSDK: any
   auth: AntigravityAuth
   toolType: AntigravityToolType
   model?: string
+  environmentId?: string
+  conversationId?: string
   existingSession?: AgentSession
   selectedExplores?: string[]
   schemaMarkdown?: string
   existingAppCode?: string
   extraSources?: Array<{ type: 'inline'; content: string; target: string }>
+  onEnvironmentUpdated?: (environmentId: string) => void | Promise<void>
 }): Promise<{
   session: AgentSession
   status: 'woken' | 'prelaunched' | 'standby'
 }> {
   const {
+    sdk,
+    userId,
     extensionSDK,
     auth,
     toolType,
     model = DEFAULT_ANTIGRAVITY_MODEL,
+    environmentId,
+    conversationId: rawConversationId,
     existingSession,
     selectedExplores = [],
     schemaMarkdown = '',
     existingAppCode,
     extraSources = [],
+    onEnvironmentUpdated,
   } = params
+
+  const conversationId =
+    String(
+      rawConversationId ||
+        existingSession?.conversationId ||
+        existingSession?.objectId ||
+        'current'
+    )
+      .trim()
+      .replace(/[^a-zA-Z0-9_-]/g, '_') || 'current'
+  const appFilePath = `/workspace/apps/${conversationId}/app.js`
+
+  const initialEnvId = normalizeEnvironmentId(environmentId || existingSession?.environmentId)
+  let activeEnvId = initialEnvId
 
   const hasValidExisting =
     existingSession?.lastInteractionId &&
     (!existingSession.toolType || existingSession.toolType === toolType)
 
-  // 1. If the artifact or mode already has a saved interaction/environment, wake & verify it
+  // 1. If the artifact or mode already has a saved interaction, wake & verify it
   if (hasValidExisting && existingSession?.lastInteractionId) {
     if (auth.mode === 'apikey' || auth.oauthToken) {
       try {
@@ -1122,22 +1221,36 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
           `interactions/${encodeURIComponent(existingSession.lastInteractionId)}`,
           'GET'
         )
+        const resolvedEnvId =
+          normalizeEnvironmentId(res?.environment_id) ||
+          activeEnvId ||
+          `env_${toolType}`
+        await persistUserEnvIfChanged({
+          sdk,
+          extensionSDK,
+          userId,
+          previousEnvId: initialEnvId,
+          nextEnvId: resolvedEnvId,
+          onEnvironmentUpdated,
+        })
         return {
           session: {
             ...existingSession,
-            environmentId: res?.environment_id || existingSession.environmentId || `env_${toolType}`,
+            environmentId: resolvedEnvId,
             toolType,
           },
           status: 'woken',
         }
-      } catch {
-        // Saved sandbox expired; fall through to pre-launch a fresh mode-isolated environment
+      } catch (err) {
+        if (isEnvironmentNotFoundError(err)) {
+          activeEnvId = undefined
+        }
       }
     } else {
       return {
         session: {
           ...existingSession,
-          environmentId: existingSession.environmentId || `env_${toolType}_warm`,
+          environmentId: activeEnvId || existingSession.environmentId || `env_${toolType}_warm`,
           toolType,
         },
         status: 'woken',
@@ -1145,76 +1258,97 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
     }
   }
 
-  // 2. If signed in (OAuth token or API key), pre-launch a fresh mode-specific remote sandbox
+  // 2. If signed in (OAuth token or API key), wake existing shared environmentId or pre-launch a new one
   if (auth.mode === 'apikey' || auth.oauthToken) {
-    try {
-      const sources: Array<{ type: 'inline'; content: string; target: string }> = [
-        { type: 'inline', content: AGENTS_MD, target: '/workspace/AGENTS.md' },
-        { type: 'inline', content: schemaMarkdown, target: '/workspace/schema.md' },
-        ...(toolType === 'app'
-          ? [{ type: 'inline' as const, content: BUNDLE_APP_PY, target: '/workspace/bundle_app.py' }]
-          : []),
-        ...(toolType === 'lookml'
-          ? [
-              {
-                type: 'inline' as const,
-                content: BOOTSTRAP_LOOKML_PY,
-                target: '/workspace/bootstrap_lookml.py',
-              },
-            ]
-          : []),
-        ...extraSources,
-      ]
-      if (toolType === 'app' && existingAppCode) {
-        sources.push({
-          type: 'inline',
-          content: existingAppCode,
-          target: '/workspace/apps/current/app.js',
-        })
-      }
-      const prewarmTools =
-        toolType === 'dashboard'
-          ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
-          : [{ type: 'code_execution' }, LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
-      const pre = await callInteractionsApi(
-        extensionSDK,
-        auth,
-        'interactions',
-        'POST',
+    const prewarmTools =
+      toolType === 'dashboard'
+        ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
+        : [{ type: 'code_execution' }, LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
+    const prewarmBase = {
+      agent: 'antigravity-preview-09-2026',
+      agent_config: { type: 'antigravity', model: model || DEFAULT_ANTIGRAVITY_MODEL },
+      background: true,
+      tools: prewarmTools,
+      input: [
         {
-          agent: 'antigravity-preview-09-2026',
-          agent_config: {
-            type: 'antigravity',
-            model: model || DEFAULT_ANTIGRAVITY_MODEL,
-          },
-          background: true,
-          tools: prewarmTools,
-          input: [
-            {
-              type: 'text',
-              text: `[PREWARM:${toolType.toUpperCase()}] Initialize isolated ${toolType} workspace and reply READY.`,
-            },
-          ],
-          environment: { type: 'remote', sources },
+          type: 'text',
+          text: `[PREWARM:${toolType.toUpperCase()}] Initialize ${toolType} workspace and reply READY.`,
+        },
+      ],
+    }
+
+    if (activeEnvId) {
+      try {
+        const woken = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
+          ...prewarmBase,
+          environment: activeEnvId,
+        })
+        const resolvedEnvId = normalizeEnvironmentId(woken?.environment_id) || activeEnvId
+        await persistUserEnvIfChanged({
+          sdk,
+          extensionSDK,
+          userId,
+          previousEnvId: initialEnvId,
+          nextEnvId: resolvedEnvId,
+          onEnvironmentUpdated,
+        })
+        return {
+          session: { ...existingSession, environmentId: resolvedEnvId, explores: selectedExplores, toolType },
+          status: 'woken',
         }
-      )
+      } catch (err) {
+        if (!isEnvironmentNotFoundError(err)) {
+          return {
+            session: { ...existingSession, environmentId: activeEnvId, explores: selectedExplores, toolType },
+            status: 'woken',
+          }
+        }
+        // 404 Environment '<env_id>' not found -> fall through to create fresh remote environment
+        activeEnvId = undefined
+      }
+    }
+
+    try {
+      const sources = buildWorkspaceSources({
+        schemaMarkdown,
+        appFilePath,
+        existingAppCode: toolType === 'app' ? existingAppCode : undefined,
+        extraSources,
+      })
+      const pre = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
+        ...prewarmBase,
+        environment: { type: 'remote', sources },
+      })
+      const newEnvId =
+        normalizeEnvironmentId(pre?.environment_id) ||
+        `env_${toolType}_${Date.now().toString(36).slice(-4)}`
+      await persistUserEnvIfChanged({
+        sdk,
+        extensionSDK,
+        userId,
+        previousEnvId: initialEnvId,
+        nextEnvId: newEnvId,
+        onEnvironmentUpdated,
+      })
       return {
         session: {
-          environmentId: pre?.environment_id || `env_${toolType}_${Date.now().toString(36).slice(-4)}`,
-          lastInteractionId: pre?.id,
+          ...existingSession,
+          environmentId: newEnvId,
+          lastInteractionId: existingSession?.lastInteractionId,
           explores: selectedExplores,
           toolType,
         },
         status: 'prelaunched',
       }
     } catch {
-      // Fall back to standby session slot isolated for this toolType
+      // Fall back to standby session slot
     }
   }
 
   return {
     session: {
-      environmentId: existingSession?.environmentId || `env_${toolType}_isolated`,
+      environmentId:
+        activeEnvId || existingSession?.environmentId || `env_${toolType}_isolated`,
       lastInteractionId: existingSession?.lastInteractionId,
       explores: selectedExplores,
       toolType,

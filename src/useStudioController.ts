@@ -20,6 +20,7 @@ import {
   loadNativeContentById,
   loadObjectArtifact,
   loadUserConversations,
+  loadUserEnvironmentId,
   NativeContentState,
   NativeContentType,
   parseExploreId,
@@ -52,6 +53,7 @@ import {
   generateConversationLabel,
   listAvailableAntigravityModels,
   loginWithGoogleOAuth,
+  normalizeEnvironmentId,
   PastedImage,
   prewarmOrWakeAntigravityEnvironment,
   runAntigravityTurn,
@@ -203,8 +205,11 @@ export function useStudioController() {
   const lastHealthIdRef = useRef<string>('')
   const [currentAppCode, setCurrentAppCode] = useState('')
   const [loadDashInput, setLoadDashInput] = useState('')
+  const [sharedEnvironmentId, setSharedEnvironmentId] = useState('')
+  const sharedEnvIdRef = useRef<string>('')
+  const userIdRef = useRef<string>('1')
 
-  // Per-mode isolated Antigravity sessions & chat histories
+  // Per-mode isolated Antigravity conversation histories sharing a single per-user environmentId
   const [sessionsByMode, setSessionsByMode] = useState<Record<StudioMode, AgentSession>>({
     app: { toolType: 'app', environmentId: 'env_app_isolated' },
     dashboard: { toolType: 'dashboard', environmentId: 'env_dashboard_isolated' },
@@ -219,15 +224,35 @@ export function useStudioController() {
     return { app: initialErr, dashboard: [], lookml: [], health: [], tile: [] }
   })
 
+  const syncSharedEnvironmentId = useCallback((envId?: string) => {
+    const clean = normalizeEnvironmentId(envId)
+    if (!clean) return
+    sharedEnvIdRef.current = clean
+    setSharedEnvironmentId(clean)
+    setSessionsByMode((prev) => ({
+      app: { ...prev.app, toolType: 'app', environmentId: clean },
+      dashboard: { ...prev.dashboard, toolType: 'dashboard', environmentId: clean },
+      lookml: { ...prev.lookml, toolType: 'lookml', environmentId: clean },
+      health: { ...prev.health, toolType: 'health', environmentId: clean },
+      tile: { ...prev.tile, toolType: 'tile', environmentId: clean },
+    }))
+  }, [])
+
   const agentSession = sessionsByMode[activeMode] || { toolType: activeMode }
   const setAgentSession = useCallback(
     (next: AgentSession, targetMode: StudioMode = activeMode) => {
+      const nextShared = normalizeEnvironmentId(next.environmentId)
+      if (nextShared && nextShared !== sharedEnvIdRef.current && next.lastInteractionId) {
+        sharedEnvIdRef.current = nextShared
+        setSharedEnvironmentId(nextShared)
+      }
       setSessionsByMode((prev) => ({
         ...prev,
         [targetMode]: {
           ...next,
           toolType: targetMode,
           environmentId:
+            sharedEnvIdRef.current ||
             next.environmentId ||
             prev[targetMode]?.environmentId ||
             `env_${targetMode}_isolated`,
@@ -295,20 +320,32 @@ export function useStudioController() {
     async (modeToWake: StudioMode = activeMode) => {
       try {
         const res = await prewarmOrWakeAntigravityEnvironment({
+          sdk: core40SDK,
+          userId: userIdRef.current || userId,
           extensionSDK,
           auth: { mode: authMode, oauthToken, clientId, projectId, apiKey },
           toolType: modeToWake,
           model: selectedModel,
+          environmentId: sharedEnvIdRef.current || sessionsByMode[modeToWake]?.environmentId,
           existingSession: sessionsByMode[modeToWake],
           selectedExplores,
           schemaMarkdown,
           existingAppCode: modeToWake === 'app' ? currentAppCode : undefined,
+          onEnvironmentUpdated: syncSharedEnvironmentId,
         })
-        setSessionsByMode((prev) => ({ ...prev, [modeToWake]: res.session }))
+        setSessionsByMode((prev) => ({
+          ...prev,
+          [modeToWake]: {
+            ...res.session,
+            environmentId: sharedEnvIdRef.current || res.session.environmentId,
+          },
+        }))
       } catch {}
     },
     [
       activeMode,
+      core40SDK,
+      userId,
       extensionSDK,
       authMode,
       oauthToken,
@@ -320,6 +357,7 @@ export function useStudioController() {
       selectedExplores,
       schemaMarkdown,
       currentAppCode,
+      syncSharedEnvironmentId,
     ]
   )
 
@@ -342,6 +380,7 @@ export function useStudioController() {
 
   useEffect(() => {
     if (disabledModes.includes(activeMode)) return
+    if (sharedEnvIdRef.current) return
     handleWakeModeEnv(activeMode)
   }, [activeMode, disabledModes])
 
@@ -482,11 +521,21 @@ export function useStudioController() {
       .then((meta) => {
         if (!mounted) return
         const resolvedUserId = String(meta.user?.id || '1')
+        userIdRef.current = resolvedUserId
         setUserId(resolvedUserId)
         setCapabilities(meta.capabilities)
         if (meta.capabilities.rolesLoaded && meta.capabilities.sqlRunnerConnections.size === 0) {
           setHealthScope((prev) => (prev === 'all' || prev === 'bq' ? 'looker' : prev))
         }
+        loadUserEnvironmentId(
+          core40SDK,
+          resolvedUserId,
+          getArtifactNamespace(extensionSDK)
+        ).then((savedEnvId) => {
+          if (mounted && savedEnvId) {
+            syncSharedEnvironmentId(savedEnvId)
+          }
+        })
         listUserLookmlSessions(core40SDK, extensionSDK, resolvedUserId).then((s) => {
           if (mounted) setLookmlSessions(s)
         })
@@ -560,7 +609,7 @@ export function useStudioController() {
     return () => {
       mounted = false
     }
-  }, [core40SDK, extensionSDK])
+  }, [core40SDK, extensionSDK, syncSharedEnvironmentId])
 
   useEffect(() => {
     let mounted = true
@@ -677,16 +726,17 @@ export function useStudioController() {
           const savedInteractionId =
             loaded.studio?.lastInteractionId || loaded.studio?.lastSession?.lastInteractionId
           const savedEnvironmentId =
-            loaded.studio?.environmentId || loaded.studio?.lastSession?.environmentId
+            sharedEnvIdRef.current ||
+            loaded.studio?.environmentId ||
+            loaded.studio?.lastSession?.environmentId
           setAgentSession(
-            savedInteractionId
-              ? {
-                  lastInteractionId: savedInteractionId,
-                  environmentId: savedEnvironmentId || 'env_app_42',
-                  explores: resolvedExplores,
-                  toolType: 'app',
-                }
-              : { toolType: 'app', environmentId: 'env_app_42' },
+            {
+              lastInteractionId: savedInteractionId,
+              environmentId: savedEnvironmentId || 'env_app_42',
+              conversationId: loaded.dashboardId,
+              explores: resolvedExplores,
+              toolType: 'app',
+            },
             'app'
           )
           if (pushRoute && location.pathname !== `/${loaded.dashboardId}`) {
@@ -742,16 +792,17 @@ export function useStudioController() {
           const savedInteractionId =
             loaded.studio?.lastInteractionId || loaded.studio?.lastSession?.lastInteractionId
           const savedEnvironmentId =
-            loaded.studio?.environmentId || loaded.studio?.lastSession?.environmentId
+            sharedEnvIdRef.current ||
+            loaded.studio?.environmentId ||
+            loaded.studio?.lastSession?.environmentId
           setAgentSession(
-            savedInteractionId
-              ? {
-                  lastInteractionId: savedInteractionId,
-                  environmentId: savedEnvironmentId || 'env_dashboard_7',
-                  explores: studioExplores,
-                  toolType: 'dashboard',
-                }
-              : { toolType: 'dashboard', environmentId: 'env_dashboard_7' },
+            {
+              lastInteractionId: savedInteractionId,
+              environmentId: savedEnvironmentId || 'env_dashboard_7',
+              conversationId: loaded.id,
+              explores: studioExplores,
+              toolType: 'dashboard',
+            },
             'dashboard'
           )
           const targetRoute = `/dashboard/${encodeURIComponent(loaded.id)}`
@@ -798,7 +849,9 @@ export function useStudioController() {
           setAgentSession(
             {
               lastInteractionId: loaded.lastInteractionId,
-              environmentId: loaded.environmentId || `env_health_${loaded.id}`,
+              environmentId:
+                sharedEnvIdRef.current || loaded.environmentId || `env_health_${loaded.id}`,
+              conversationId: loaded.id,
               toolType: 'health',
             },
             'health'
@@ -848,14 +901,16 @@ export function useStudioController() {
           const savedExplores = loaded.studio?.explores?.filter(Boolean) || []
           setSelectedExplores(savedExplores)
           setAgentSession(
-            loaded.studio?.lastInteractionId
-              ? {
-                  lastInteractionId: loaded.studio.lastInteractionId,
-                  environmentId: loaded.studio.environmentId || `env_lookml_${loaded.id}`,
-                  explores: savedExplores,
-                  toolType: 'lookml',
-                }
-              : { toolType: 'lookml', environmentId: `env_lookml_${loaded.id}` },
+            {
+              lastInteractionId: loaded.studio?.lastInteractionId,
+              environmentId:
+                sharedEnvIdRef.current ||
+                loaded.studio?.environmentId ||
+                `env_lookml_${loaded.id}`,
+              conversationId: loaded.id,
+              explores: savedExplores,
+              toolType: 'lookml',
+            },
             'lookml'
           )
           setMessages(
@@ -901,6 +956,10 @@ export function useStudioController() {
           const turnRes = await runAntigravityTurn({
             sdk: core40SDK,
             extensionSDK,
+            userId,
+            environmentId: sharedEnvIdRef.current || agentSession.environmentId,
+            conversationId: finalReport.id,
+            onEnvironmentUpdated: syncSharedEnvironmentId,
             auth: { mode: authMode, oauthToken, clientId, projectId, apiKey },
             session: agentSession,
             model: selectedModel,
@@ -1063,7 +1122,11 @@ export function useStudioController() {
     setLoadDashInput('')
     setLoadLookmlInput('')
     setSelectedExplores([])
-    setAgentSession({})
+    setAgentSession({
+      environmentId: sharedEnvIdRef.current || undefined,
+      lastInteractionId: undefined,
+      conversationId: `conv_${Date.now().toString(36)}`,
+    })
     setMessages([])
     if (forceDefaultRoute) {
       setMessages([], 'app')
@@ -1208,6 +1271,19 @@ export function useStudioController() {
       return
     }
 
+    const activeConvId =
+      parsedRoute.objectId ||
+      activeObjectId ||
+      agentSession.conversationId ||
+      (activeMode === 'app'
+        ? publishedApp?.dashboardId
+        : activeMode === 'dashboard'
+        ? nativeContent?.id
+        : activeMode === 'lookml'
+        ? lookmlBundle?.id
+        : healthReport?.id) ||
+      'current'
+
     setBusyStatus('Connecting to Antigravity...')
     try {
       const effectiveLookmlTurn = isLookmlMode || selectedUseCase === 'lookml'
@@ -1216,6 +1292,10 @@ export function useStudioController() {
       const result = await runAntigravityTurn({
         sdk: core40SDK,
         extensionSDK,
+        userId,
+        environmentId: sharedEnvIdRef.current || agentSession.environmentId,
+        conversationId: activeConvId,
+        onEnvironmentUpdated: syncSharedEnvironmentId,
         auth,
         session: agentSession,
         model: selectedModel,
@@ -1688,6 +1768,8 @@ export function useStudioController() {
     currentAppCode,
     loadDashInput,
     setLoadDashInput,
+    sharedEnvironmentId,
+    syncSharedEnvironmentId,
     agentSession,
     messages,
     prompt,

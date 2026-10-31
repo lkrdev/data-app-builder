@@ -97,6 +97,45 @@ export async function getArtifactJson<T = any>(
   }
 }
 
+export function formatUserEnvArtifactKey(userId: string): string {
+  return `user_env:${String(userId || '1').trim()}`
+}
+
+export async function loadUserEnvironmentId(
+  sdk: Looker40SDK,
+  userId: string,
+  namespace = ARTIFACT_NAMESPACE
+): Promise<string | null> {
+  const stored = await getArtifactJson<{ environmentId?: string; updatedAt?: string } | string>(
+    sdk,
+    formatUserEnvArtifactKey(userId),
+    namespace
+  )
+  const envId =
+    typeof stored === 'string' ? stored.trim() : String(stored?.environmentId || '').trim()
+  return envId || null
+}
+
+export async function saveUserEnvironmentId(
+  sdk: Looker40SDK,
+  userId: string,
+  environmentId: string,
+  namespace = ARTIFACT_NAMESPACE
+): Promise<void> {
+  const envId = String(environmentId || '').trim()
+  if (!envId) return
+  await putArtifacts(
+    sdk,
+    [
+      {
+        key: formatUserEnvArtifactKey(userId),
+        value: { environmentId: envId, updatedAt: new Date().toISOString() },
+      },
+    ],
+    namespace
+  )
+}
+
 export type NativeContentType = 'dashboard' | 'lookml_dashboard' | 'look' | 'board'
 
 export interface NativeContentBundle {
