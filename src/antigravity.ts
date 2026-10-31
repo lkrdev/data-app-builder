@@ -9,6 +9,7 @@ import {
 import {
   BOOTSTRAP_LOOKML_PY,
   buildLookmlSystemGuide,
+  BUNDLED_SKILLS_DEFLATE_B64,
   extractLookmlBundleFromInteraction,
   LookmlBundle,
 } from './lookmlTool'
@@ -1212,7 +1213,14 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         ]
       : []),
     ...(toolMode === 'lookml'
-      ? [{ type: 'inline' as const, content: BOOTSTRAP_LOOKML_PY, target: '/workspace/bootstrap_lookml.py' }]
+      ? [
+          { type: 'inline' as const, content: BOOTSTRAP_LOOKML_PY, target: '/workspace/bootstrap_lookml.py' },
+          {
+            type: 'inline' as const,
+            content: BUNDLED_SKILLS_DEFLATE_B64,
+            target: '/workspace/bundled_skills.deflate.b64',
+          },
+        ]
       : []),
     ...(extraSources || []),
   ]
@@ -1643,6 +1651,11 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
                 type: 'inline' as const,
                 content: BOOTSTRAP_LOOKML_PY,
                 target: '/workspace/bootstrap_lookml.py',
+              },
+              {
+                type: 'inline' as const,
+                content: BUNDLED_SKILLS_DEFLATE_B64,
+                target: '/workspace/bundled_skills.deflate.b64',
               },
             ]
           : []),
