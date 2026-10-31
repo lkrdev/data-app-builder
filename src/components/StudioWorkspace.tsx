@@ -1,11 +1,111 @@
 import React, { useState } from 'react'
 import { LkrCodeMode } from '../antigravity'
-import { parseExploreId } from '../lookerApi'
+import { ConversationRecord, parseExploreId } from '../lookerApi'
 import { LOOKML_TURN_SKILLS, LookmlPreviewPane } from '../lookmlTool'
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import { StudioController } from '../useStudioController'
 
-export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
+function formatConversationContentTag(conv: ConversationRecord): string {
+  const c = conv.content || {}
+  if (c.reportId) return `TDD #${c.reportId}${typeof c.overallScore === 'number' ? ` (${c.overallScore}%)` : ''}`
+  if (c.scriptId) return `Script ${c.scriptId}${c.dashboardId ? ` · #${c.dashboardId}` : ''}`
+  if (c.lookmlDashboardId || c.lookId || c.dashboardId) return `${c.lookmlDashboardId ? 'LookML' : c.lookId ? 'Look' : 'Dash'} #${c.lookmlDashboardId || c.lookId || c.dashboardId}`
+  if (c.sessionId || c.projectId || c.branch) return `${c.projectId || c.sessionId}${c.branch ? ` · ${c.branch}` : ''}`
+  return c.id ? `#${c.id}` : ''
+}
+
+export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
+  const {
+    conversations,
+    activeConversationId,
+    sidebarCollapsed,
+    setSidebarCollapsed,
+    handleSelectConversation,
+    handleDeleteConversation,
+    handleNewConversation,
+    busyStatus,
+  } = ctl
+
+  return (
+    <nav
+      className={`dab-conv-sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}
+      data-testid="conversations-sidebar"
+      aria-label="Previous Conversations"
+    >
+      <div className="dab-conv-sidebar-header">
+        <button
+          type="button"
+          className="dab-conv-collapse-btn"
+          data-testid="sidebar-collapse-toggle"
+          onClick={() => setSidebarCollapsed((prev) => !prev)}
+          title={sidebarCollapsed ? 'Expand conversations sidebar' : 'Collapse conversations sidebar'}
+          aria-expanded={!sidebarCollapsed}
+        >
+          {sidebarCollapsed ? '»' : '«'}
+        </button>
+        {!sidebarCollapsed && (
+          <strong className="dab-conv-sidebar-title">
+            Conversations ({conversations.length})
+          </strong>
+        )}
+      </div>
+
+      <div className="dab-conv-sidebar-actions">
+        <button
+          type="button"
+          className="dab-conv-new-btn"
+          data-testid="new-conversation-btn"
+          onClick={handleNewConversation}
+          disabled={!!busyStatus}
+          title="Start a new conversation"
+        >
+          {sidebarCollapsed ? '+' : '+ New Conversation'}
+        </button>
+      </div>
+
+      {!sidebarCollapsed && (
+        <div className="dab-conv-list">
+          {conversations.length === 0 ? (
+            <div className="dab-conv-empty">No previous conversations yet.</div>
+          ) : (
+            conversations.map((conv) => {
+              const contentBadge = formatConversationContentTag(conv)
+              const isActive = activeConversationId === conv.id
+              return (
+                <div
+                  key={conv.id}
+                  data-testid={`conversation-item-${conv.id}`}
+                  className={`dab-conv-item ${isActive ? 'active' : ''}`}
+                  onClick={() => handleSelectConversation(conv)}
+                  title={`${conv.label} (${conv.type}${conv.interactionId ? ` · ${conv.interactionId}` : ''})`}
+                >
+                  <div className="dab-conv-item-top">
+                    <span className="dab-conv-type-badge">{conv.type}</span>
+                    {contentBadge && (
+                      <span className="dab-conv-content-tag">{contentBadge}</span>
+                    )}
+                    <button
+                      type="button"
+                      className="dab-conv-delete-btn"
+                      data-testid={`delete-conversation-${conv.id}`}
+                      onClick={(e) => handleDeleteConversation(e, conv.id)}
+                      title="Delete conversation"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="dab-conv-item-label">{conv.label}</div>
+                </div>
+              )
+            })
+          )}
+        </div>
+      )}
+    </nav>
+  )
+}
+
+export const StudioCatalogBar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
     filteredCatalog,
     catalogSearch,
@@ -13,16 +113,71 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     activeObjectId,
     handleSelectCatalogItem,
     handleDeleteCatalogItem,
-    messages,
+  } = ctl
+
+  return (
+    <div className="dab-catalog-bar">
+      <div className="dab-catalog-search">
+        <strong style={{ fontSize: 12, color: '#334155', whiteSpace: 'nowrap' }}>
+          My Creations ({filteredCatalog.length})
+        </strong>
+        <input
+          type="text"
+          placeholder="Search by title, ID, type, or explore..."
+          value={catalogSearch}
+          onChange={(e) => setCatalogSearch(e.target.value)}
+          style={{
+            flex: 1,
+            padding: '3px 8px',
+            fontSize: 12,
+            border: '1px solid #cbd5e1',
+            borderRadius: 4,
+          }}
+        />
+      </div>
+      {filteredCatalog.length > 0 && (
+        <div className="dab-catalog-list">
+          {filteredCatalog.map((item) => (
+            <span
+              key={`${item.type}:${item.id}`}
+              className={`dab-catalog-chip ${activeObjectId === item.id ? 'active' : ''}`}
+              onClick={() => handleSelectCatalogItem(item)}
+              title={`${item.type.toUpperCase()} #${item.id} · ${(item.explores || []).join(', ')}`}
+            >
+              <span>
+                [{item.type}] {item.label || item.title} (#{item.id})
+              </span>
+              <button
+                type="button"
+                onClick={(e) => handleDeleteCatalogItem(e, item)}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  padding: 0,
+                  fontSize: 11,
+                  color: '#94a3b8',
+                }}
+                title="Delete artifact"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
+  const {
     builderMode,
     isLookmlMode,
-    models,
+    isHealthCheckMode,
     selectedExplores,
-    loadingSchema,
     schemaMarkdown,
     busyStatus,
-    pendingPerm,
-    resolvePermDecision,
     activatedLookmlSkills,
     setActivatedLookmlSkills,
     pastedImages,
@@ -73,58 +228,262 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   }
 
   return (
-    <aside className="dab-left-pane">
-      <div className="dab-catalog-bar">
-        <div className="dab-catalog-search">
-          <strong style={{ fontSize: 12, color: '#334155', whiteSpace: 'nowrap' }}>
-            My Creations ({filteredCatalog.length})
-          </strong>
-          <input
-            type="text"
-            placeholder="Search by title, ID, type, or explore..."
-            value={catalogSearch}
-            onChange={(e) => setCatalogSearch(e.target.value)}
-            style={{
-              flex: 1,
-              padding: '3px 8px',
-              fontSize: 12,
-              border: '1px solid #cbd5e1',
-              borderRadius: 4,
-            }}
-          />
-        </div>
-        {filteredCatalog.length > 0 && (
-          <div className="dab-catalog-list">
-            {filteredCatalog.map((item) => (
-              <span
-                key={`${item.type}:${item.id}`}
-                className={`dab-catalog-chip ${activeObjectId === item.id ? 'active' : ''}`}
-                onClick={() => handleSelectCatalogItem(item)}
-                title={`${item.type.toUpperCase()} #${item.id} · ${(item.explores || []).join(', ')}`}
+    <div className="dab-composer">
+      {isLookmlMode && (
+        <div className="dab-skill-bar" aria-label="Activated Turn Skills">
+          <span className="dab-skill-label">Turn Skills:</span>
+          {LOOKML_TURN_SKILLS.map((sk) => {
+            const isActive = activatedLookmlSkills.includes(sk.id)
+            return (
+              <button
+                key={sk.id}
+                type="button"
+                className={`dab-skill-chip ${isActive ? 'active' : ''}`}
+                title={sk.desc}
+                onClick={() =>
+                  setActivatedLookmlSkills((prev) =>
+                    prev.includes(sk.id)
+                      ? prev.filter((x) => x !== sk.id)
+                      : [...prev, sk.id]
+                  )
+                }
               >
-                <span>
-                  [{item.type}] {item.label || item.title} (#{item.id})
-                </span>
-                <button
-                  type="button"
-                  onClick={(e) => handleDeleteCatalogItem(e, item)}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    cursor: 'pointer',
-                    padding: 0,
-                    fontSize: 11,
-                    color: '#94a3b8',
-                  }}
-                  title="Delete artifact"
-                >
-                  ×
-                </button>
-              </span>
-            ))}
+                {isActive ? '✓ ' : '+ '}
+                {sk.label}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {pastedImages.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {pastedImages.map((img, i) => (
+            <div key={i} style={{ position: 'relative' }}>
+              <img
+                src={img.dataUrl}
+                alt="Pasted screenshot"
+                style={{ height: 52, borderRadius: 4, border: '1px solid #cbd5e1' }}
+              />
+              <button
+                type="button"
+                onClick={() => setPastedImages((prev) => prev.filter((_, idx) => idx !== i))}
+                style={{
+                  position: 'absolute',
+                  top: -5,
+                  right: -5,
+                  width: 18,
+                  height: 18,
+                  borderRadius: '50%',
+                  border: 'none',
+                  background: '#0f172a',
+                  color: '#fff',
+                  fontSize: 10,
+                  cursor: 'pointer',
+                  lineHeight: '18px',
+                  padding: 0,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <textarea
+        rows={3}
+        data-testid="studio-prompt-input"
+        placeholder={
+          isHealthCheckMode
+            ? 'Optional custom focus for 3-Pillar Looker & BigQuery Health Check...'
+            : isLookmlMode
+            ? 'Describe LookML changes, SQL query to model, or field descriptions/tests to run in your active dev mode...'
+            : builderMode === 'dashboard'
+            ? 'Describe a Looker UDD, Look, Board, or Schedule to create or update...'
+            : 'Describe the Data App to build or paste a screenshot (Cmd+Enter to send)...'
+        }
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        onPaste={handlePaste}
+        onKeyDown={(e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+            e.preventDefault()
+            handleSendPrompt()
+          }
+        }}
+        disabled={!!busyStatus}
+      />
+
+      <div className="dab-composer-actions">
+        <details
+          className="dab-inspector"
+          open={inspectorOpen}
+          onToggle={(e) => setInspectorOpen((e.currentTarget as HTMLDetailsElement).open)}
+        >
+          <summary>
+            Inspect Code / Schema {currentAppCode ? `(${currentAppCode.length} B)` : ''}
+          </summary>
+          <div className="dab-inspector-content">
+            {currentAppCode && (
+              <>
+                <div className="dab-inspector-bar">
+                  <strong>app.js</strong>
+                  <button
+                    type="button"
+                    className="dab-btn-secondary"
+                    onClick={() => navigator.clipboard?.writeText(currentAppCode)}
+                  >
+                    Copy app.js
+                  </button>
+                </div>
+                <pre>{currentAppCode}</pre>
+              </>
+            )}
+            <strong>Compiled Explore Schema (/workspace/schema.md)</strong>
+            <pre>{schemaMarkdown}</pre>
+            <div className="dab-inspector-bar">
+              <strong>Test WASM Code Mode (Monty)</strong>
+              <button
+                type="button"
+                className="dab-btn-secondary"
+                onClick={async () => {
+                  try {
+                    setCodeModeOutput('Running in WASM Monty sandbox...')
+                    const firstParsed = selectedExplores[0]
+                      ? parseExploreId(selectedExplores[0])
+                      : null
+                    const out = await LkrCodeMode.runPythonCode({
+                      code: codeModeSnippet,
+                      sdk: core40SDK,
+                      extensionSDK,
+                      allowUpdateSession: isLookmlMode || builderMode === 'dashboard',
+                      vars: {
+                        target_explores: selectedExplores,
+                        target_model: firstParsed?.modelName || '',
+                        target_explore: firstParsed?.exploreName || '',
+                        target_folder_id: selectedFolderId,
+                        target_project_id: lookmlProjectId,
+                      },
+                    })
+                    setCodeModeOutput(out)
+                  } catch (err: any) {
+                    setCodeModeOutput(`Error: ${err?.message || err}`)
+                  }
+                }}
+              >
+                Run Python
+              </button>
+            </div>
+            <textarea
+              rows={3}
+              value={codeModeSnippet}
+              onChange={(e) => setCodeModeSnippet(e.target.value)}
+              style={{
+                width: '100%',
+                fontFamily: 'monospace',
+                fontSize: 11,
+                background: '#1e293b',
+                color: '#f8fafc',
+                border: '1px solid #334155',
+                borderRadius: 4,
+                padding: 6,
+              }}
+            />
+            {codeModeOutput && <pre>{codeModeOutput}</pre>}
           </div>
-        )}
+        </details>
+
+        <button
+          type="button"
+          className="dab-btn-gemini"
+          onClick={handleSendPrompt}
+          disabled={!!busyStatus || (!prompt.trim() && pastedImages.length === 0)}
+        >
+          {isLookmlMode
+            ? lookmlBundle
+              ? '✨ Update LookML'
+              : '✨ Run Agentic LookML'
+            : builderMode === 'dashboard'
+            ? nativeContent
+              ? '✨ Update Content'
+              : '✨ Create / Update Content'
+            : publishedApp
+            ? '✨ Update App'
+            : '✨ Build App'}
+        </button>
       </div>
+    </div>
+  )
+}
+
+export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
+  const {
+    builderMode,
+    isLookmlMode,
+    isHealthCheckMode,
+    models,
+    selectedExplores,
+    loadingSchema,
+    schemaMarkdown,
+  } = ctl
+
+  return (
+    <main className="dab-empty-stage-centered" data-testid="centered-empty-prompt">
+      <div className="dab-empty-prompt-card">
+        <div className="dab-empty-hero">
+          <span className="dab-badge">New Conversation</span>
+          <h2>
+            {isHealthCheckMode
+              ? 'Run a 3-Pillar Looker & BigQuery Health Check'
+              : isLookmlMode
+              ? 'Author & Validate Agentic LookML'
+              : builderMode === 'dashboard'
+              ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)'
+              : 'Build a Looker Data App with Antigravity'}
+          </h2>
+          <p className="dab-muted">
+            {selectedExplores.length === 0 ? (
+              <>
+                <strong>Let Agent Decide:</strong> No explore pre-selected — Antigravity will
+                search across all {models.length} models using Looker&apos;s Solr{' '}
+                <code>search_content</code> &amp; <code>lookml_model_explore</code> in WASM
+                CodeMode.
+              </>
+            ) : (
+              <>
+                Compiled schema for <code>{selectedExplores.join(', ')}</code>{' '}
+                {loadingSchema
+                  ? 'is loading...'
+                  : `is ready (${schemaMarkdown.length.toLocaleString()} chars).`}
+              </>
+            )}
+          </p>
+        </div>
+
+        <StudioComposer ctl={ctl} />
+        <StudioCatalogBar ctl={ctl} />
+      </div>
+    </main>
+  )
+}
+
+export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
+  const {
+    messages,
+    builderMode,
+    models,
+    selectedExplores,
+    loadingSchema,
+    schemaMarkdown,
+    busyStatus,
+    pendingPerm,
+    resolvePermDecision,
+  } = ctl
+
+  return (
+    <aside className="dab-left-pane">
+      <StudioCatalogBar ctl={ctl} />
 
       <div className="dab-chat-log">
         {messages.length === 0 && (
@@ -239,189 +598,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
         </div>
       )}
 
-      <div className="dab-composer">
-        {isLookmlMode && (
-          <div className="dab-skill-bar" aria-label="Activated Turn Skills">
-            <span className="dab-skill-label">Turn Skills:</span>
-            {LOOKML_TURN_SKILLS.map((sk) => {
-              const isActive = activatedLookmlSkills.includes(sk.id)
-              return (
-                <button
-                  key={sk.id}
-                  type="button"
-                  className={`dab-skill-chip ${isActive ? 'active' : ''}`}
-                  title={sk.desc}
-                  onClick={() =>
-                    setActivatedLookmlSkills((prev) =>
-                      prev.includes(sk.id)
-                        ? prev.filter((x) => x !== sk.id)
-                        : [...prev, sk.id]
-                    )
-                  }
-                >
-                  {isActive ? '✓ ' : '+ '}
-                  {sk.label}
-                </button>
-              )
-            })}
-          </div>
-        )}
-
-        {pastedImages.length > 0 && (
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {pastedImages.map((img, i) => (
-              <div key={i} style={{ position: 'relative' }}>
-                <img
-                  src={img.dataUrl}
-                  alt="Pasted screenshot"
-                  style={{ height: 52, borderRadius: 4, border: '1px solid #cbd5e1' }}
-                />
-                <button
-                  type="button"
-                  onClick={() => setPastedImages((prev) => prev.filter((_, idx) => idx !== i))}
-                  style={{
-                    position: 'absolute',
-                    top: -5,
-                    right: -5,
-                    width: 18,
-                    height: 18,
-                    borderRadius: '50%',
-                    border: 'none',
-                    background: '#0f172a',
-                    color: '#fff',
-                    fontSize: 10,
-                    cursor: 'pointer',
-                    lineHeight: '18px',
-                    padding: 0,
-                  }}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <textarea
-          rows={3}
-          placeholder={
-            isLookmlMode
-              ? 'Describe LookML changes, SQL query to model, or field descriptions/tests to run in your active dev mode...'
-              : builderMode === 'dashboard'
-              ? 'Describe a Looker UDD, Look, Board, or Schedule to create or update...'
-              : 'Describe the Data App to build or paste a screenshot (Cmd+Enter to send)...'
-          }
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          onPaste={handlePaste}
-          onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-              e.preventDefault()
-              handleSendPrompt()
-            }
-          }}
-          disabled={!!busyStatus}
-        />
-
-        <div className="dab-composer-actions">
-          <details
-            className="dab-inspector"
-            open={inspectorOpen}
-            onToggle={(e) => setInspectorOpen((e.currentTarget as HTMLDetailsElement).open)}
-          >
-            <summary>
-              Inspect Code / Schema {currentAppCode ? `(${currentAppCode.length} B)` : ''}
-            </summary>
-            <div className="dab-inspector-content">
-              {currentAppCode && (
-                <>
-                  <div className="dab-inspector-bar">
-                    <strong>app.js</strong>
-                    <button
-                      type="button"
-                      className="dab-btn-secondary"
-                      onClick={() => navigator.clipboard?.writeText(currentAppCode)}
-                    >
-                      Copy app.js
-                    </button>
-                  </div>
-                  <pre>{currentAppCode}</pre>
-                </>
-              )}
-              <strong>Compiled Explore Schema (/workspace/schema.md)</strong>
-              <pre>{schemaMarkdown}</pre>
-              <div className="dab-inspector-bar">
-                <strong>Test WASM Code Mode (Monty)</strong>
-                <button
-                  type="button"
-                  className="dab-btn-secondary"
-                  onClick={async () => {
-                    try {
-                      setCodeModeOutput('Running in WASM Monty sandbox...')
-                      const firstParsed = selectedExplores[0]
-                        ? parseExploreId(selectedExplores[0])
-                        : null
-                      const out = await LkrCodeMode.runPythonCode({
-                        code: codeModeSnippet,
-                        sdk: core40SDK,
-                        extensionSDK,
-                        allowUpdateSession: isLookmlMode || builderMode === 'dashboard',
-                        vars: {
-                          target_explores: selectedExplores,
-                          target_model: firstParsed?.modelName || '',
-                          target_explore: firstParsed?.exploreName || '',
-                          target_folder_id: selectedFolderId,
-                          target_project_id: lookmlProjectId,
-                        },
-                      })
-                      setCodeModeOutput(out)
-                    } catch (err: any) {
-                      setCodeModeOutput(`Error: ${err?.message || err}`)
-                    }
-                  }}
-                >
-                  Run Python
-                </button>
-              </div>
-              <textarea
-                rows={3}
-                value={codeModeSnippet}
-                onChange={(e) => setCodeModeSnippet(e.target.value)}
-                style={{
-                  width: '100%',
-                  fontFamily: 'monospace',
-                  fontSize: 11,
-                  background: '#1e293b',
-                  color: '#f8fafc',
-                  border: '1px solid #334155',
-                  borderRadius: 4,
-                  padding: 6,
-                }}
-              />
-              {codeModeOutput && <pre>{codeModeOutput}</pre>}
-            </div>
-          </details>
-
-          <button
-            type="button"
-            className="dab-btn-gemini"
-            onClick={handleSendPrompt}
-            disabled={!!busyStatus || (!prompt.trim() && pastedImages.length === 0)}
-          >
-            {isLookmlMode
-              ? lookmlBundle
-                ? '✨ Update LookML'
-                : '✨ Run Agentic LookML'
-              : builderMode === 'dashboard'
-              ? nativeContent
-                ? '✨ Update Content'
-                : '✨ Create / Update Content'
-              : publishedApp
-              ? '✨ Update App'
-              : '✨ Build App'}
-          </button>
-        </div>
-      </div>
+      <StudioComposer ctl={ctl} />
     </aside>
   )
 }

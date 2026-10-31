@@ -8,7 +8,12 @@ import {
 import { useStudioController } from '../useStudioController'
 import { PythonTile, ScriptStudioView } from './PythonTile'
 import { ConfigSetupView, StudioTopbar } from './StudioHeader'
-import { StudioLeftPane, StudioRightPane } from './StudioWorkspace'
+import {
+  StudioCenteredEmptyStage,
+  StudioConversationsSidebar,
+  StudioLeftPane,
+  StudioRightPane,
+} from './StudioWorkspace'
 import '../styles/index.css'
 
 export type StudioMode = 'app' | 'dashboard' | 'lookml' | 'health' | 'tile'
@@ -100,9 +105,20 @@ const StudioMain: React.FC = () => {
   return (
     <div className="dab-shell">
       <StudioTopbar ctl={ctl} />
-      <div className="dab-workspace">
-        <StudioLeftPane ctl={ctl} />
-        <StudioRightPane ctl={ctl} />
+      <div
+        className={`dab-workspace dab-workspace-with-sidebar ${
+          ctl.sidebarCollapsed ? 'dab-workspace-sidebar-collapsed' : ''
+        } ${ctl.isEmptyConversation ? 'dab-workspace-empty' : ''}`}
+      >
+        <StudioConversationsSidebar ctl={ctl} />
+        {ctl.isEmptyConversation ? (
+          <StudioCenteredEmptyStage ctl={ctl} />
+        ) : (
+          <>
+            <StudioLeftPane ctl={ctl} />
+            <StudioRightPane ctl={ctl} />
+          </>
+        )}
       </div>
     </div>
   )

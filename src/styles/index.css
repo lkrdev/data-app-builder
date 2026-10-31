@@ -831,6 +831,221 @@ body {
   font-family: inherit;
 }
 
+/* Collapsible Left Conversations Sidebar & Centered Empty-State Stage */
+.dab-workspace-with-sidebar {
+  grid-template-columns: 230px 380px 1fr;
+}
+
+.dab-workspace-with-sidebar.dab-workspace-sidebar-collapsed {
+  grid-template-columns: 44px 380px 1fr;
+}
+
+.dab-workspace-with-sidebar.dab-workspace-empty {
+  grid-template-columns: 230px 1fr;
+}
+
+.dab-workspace-with-sidebar.dab-workspace-empty.dab-workspace-sidebar-collapsed {
+  grid-template-columns: 44px 1fr;
+}
+
+.dab-conv-sidebar {
+  display: flex;
+  flex-direction: column;
+  background: #f8fafc;
+  border-right: 1px solid #e2e8f0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dab-conv-sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #ffffff;
+}
+
+.dab-conv-sidebar.collapsed .dab-conv-sidebar-header {
+  justify-content: center;
+  padding: 8px 4px;
+}
+
+.dab-conv-collapse-btn {
+  width: 26px;
+  height: 26px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #334155;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.dab-conv-sidebar-title {
+  font-size: 12px;
+  color: #0f172a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dab-conv-sidebar-actions {
+  padding: 8px 10px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.dab-conv-sidebar.collapsed .dab-conv-sidebar-actions {
+  padding: 8px 6px;
+}
+
+.dab-conv-new-btn {
+  width: 100%;
+  height: 30px;
+  border: 1px dashed #93c5fd;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dab-conv-new-btn:hover {
+  background: #dbeafe;
+}
+
+.dab-conv-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dab-conv-empty {
+  padding: 12px 8px;
+  font-size: 11.5px;
+  color: #64748b;
+  text-align: center;
+}
+
+.dab-conv-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.dab-conv-item:hover {
+  border-color: #93c5fd;
+  background: #f8fafc;
+}
+
+.dab-conv-item.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.dab-conv-item-top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dab-conv-type-badge {
+  background: #e0e7ff;
+  color: #3730a3;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.dab-conv-content-tag {
+  font-size: 10px;
+  color: #475569;
+  background: #f1f5f9;
+  padding: 1px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dab-conv-delete-btn {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.dab-conv-item-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1e293b;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.dab-empty-stage-centered {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  width: 100%;
+  padding: 24px;
+  background: radial-gradient(circle at 50% 25%, #eff6ff 0%, #f8fafc 70%);
+  overflow-y: auto;
+}
+
+.dab-empty-prompt-card {
+  width: 100%;
+  max-width: 720px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.dab-empty-hero {
+  padding: 22px 24px 12px;
+  text-align: center;
+}
+
+.dab-empty-hero h2 {
+  margin: 10px 0 6px;
+  font-size: 20px;
+  color: #0f172a;
+}
+
+.dab-empty-hero p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+
 
 
 

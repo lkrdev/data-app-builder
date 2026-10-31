@@ -227,7 +227,70 @@ function buildHtmlPage(scenario) {
           title: 'Looker Explore & Filter Summary',
           code: 'return [\\n  {"model": "thelook", "label": "eCommerce", "visible_explores": 11, "first_explore": "order_items", "filter_status": dashboard_filters.get("status", "Complete")},\\n  {"model": "agentic_thelook", "label": "Agentic Thelook", "visible_explores": 24, "first_explore": "order_shards", "filter_status": dashboard_filters.get("status", "Complete")}\\n]',
           updatedAt: '2026-10-30T23:36:00Z'
-        }
+        },
+        'user_conversations:1': [
+          {
+            id: 'conv_app_42',
+            type: 'app',
+            interactionId: 'v1_app_42',
+            environmentId: 'env_42',
+            content: { dashboardId: '42', appArtifactId: 'obj_app_42' },
+            label: 'Executive Revenue App',
+            createdAt: '2026-10-30T23:00:00Z',
+            updatedAt: '2026-10-30T23:40:00Z',
+            explores: ['thelook::order_items'],
+            messages: [
+              { role: 'user', text: 'Build an Executive Revenue Data App on order_items with Total Revenue, Total Orders, Avg Order Value KPIs and a Monthly Revenue trend chart.' },
+              { role: 'assistant', text: 'Built and published Executive Revenue App (Dashboard #42) with 3 KPI cards and a Highcharts monthly trend chart.', dashboardId: '42', widgetCount: 4 }
+            ]
+          },
+          {
+            id: 'conv_dashboard_7',
+            type: 'dashboard',
+            interactionId: 'v1_native_7',
+            environmentId: 'env_dashboard_7',
+            content: { dashboardId: '7', contentType: 'dashboard', embedPath: '/embed/dashboards/7' },
+            label: 'Executive Order Performance (Native UDD)',
+            createdAt: '2026-10-30T22:50:00Z',
+            updatedAt: '2026-10-30T23:39:00Z',
+            explores: ['thelook::order_items'],
+            messages: [
+              { role: 'user', text: 'Create a native Looker UDD on order_items with a Total Revenue & Orders KPI, a Revenue by Status column chart, and an Order Status filter.' },
+              { role: 'assistant', text: 'Created native Looker Dashboard #7 ("Executive Order Performance") with KPI tile #55 ($14,011,848.92 across 303,454 orders), column chart #56, and Order Status filter #22.', dashboardId: '7', widgetCount: 2 }
+            ]
+          },
+          {
+            id: 'conv_lookml_20261030_dev_branch',
+            type: 'lookml',
+            interactionId: 'v1_lookml_1',
+            environmentId: 'env_lookml_20261030_dev_branch',
+            content: { sessionId: '20261030_dev_branch', projectId: 'deploytobarerepo_temp', branch: 'user dev mode' },
+            label: 'Add total_revenue & gross_margin to order_items',
+            createdAt: '2026-10-30T22:40:00Z',
+            updatedAt: '2026-10-30T23:38:00Z',
+            explores: ['thelook::order_items']
+          },
+          {
+            id: 'conv_health_demo',
+            type: 'health-check',
+            interactionId: 'v1_health_demo',
+            environmentId: 'env_health_demo',
+            content: { reportId: 'demo', projectId: 'thelook_event', overallScore: 70 },
+            label: '3-Pillar Health Check — thelook_event (70%)',
+            createdAt: '2026-10-30T22:30:00Z',
+            updatedAt: '2026-10-30T23:37:00Z'
+          },
+          {
+            id: 'conv_tile_demo1',
+            type: 'tile',
+            interactionId: 'v1_tile_demo1',
+            environmentId: 'env_tile_isolated',
+            content: { scriptId: 'demo1', dashboardId: '8', elementId: '57' },
+            label: 'Looker Explore & Filter Summary',
+            createdAt: '2026-10-30T22:20:00Z',
+            updatedAt: '2026-10-30T23:36:00Z'
+          }
+        ]
       };
 
       const routeMap = {
@@ -1193,13 +1256,16 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const convUpdates = (window.__ARTIFACT_UPDATES__ || []).filter((u) => u.key === 'user_conversations:1');
         const latestConvList = convUpdates.length > 0 ? JSON.parse(convUpdates[convUpdates.length - 1].value) : [];
         const bodyText = document.body ? document.body.innerText : '';
+        const sidebarEl = document.querySelector('[data-testid="conversations-sidebar"]');
 
         return {
           hasLabelCall: Boolean(labelCall),
           labelCallTools: labelCall ? labelCall.body.tools : null,
           labelCallHasPrevId: labelCall ? ('previous_interaction_id' in labelCall.body) : null,
           savedConvLabel: latestConvList[0] ? latestConvList[0].label : null,
-          sidebarShowsGeneratedLabel: bodyText.includes('[dashboard] Quarterly Order Margin Analysis (#99)')
+          sidebarShowsGeneratedLabel:
+            bodyText.includes('[dashboard] Quarterly Order Margin Analysis (#99)') &&
+            Boolean(sidebarEl && (sidebarEl.innerText || '').includes('Quarterly Order Margin Analysis'))
         };
       })()`,
       awaitPromise: true,
@@ -1212,6 +1278,110 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       labelCallHasPrevId: false,
       savedConvLabel: 'Quarterly Order Margin Analysis',
       sidebarShowsGeneratedLabel: true
+    })
+  }, 15000)
+
+  test('renders collapsible left conversations sidebar, switches to centered empty-state prompt on + New Conversation, and restores conversation state on click', async () => {
+    const url = `http://127.0.0.1:${port}/?scenario=data_app`
+    await chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(document.querySelector('[data-testid="conversation-item-conv_dashboard_7"]'))`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    const step1 = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const sidebar = document.querySelector('[data-testid="conversations-sidebar"]');
+        const toggleBtn = document.querySelector('[data-testid="sidebar-collapse-toggle"]');
+        const newBtn = document.querySelector('[data-testid="new-conversation-btn"]');
+        const initialItems = Array.from(document.querySelectorAll('.dab-conv-item-label')).map((el) =>
+          (el.textContent || '').trim()
+        );
+
+        // Collapse and expand sidebar
+        toggleBtn.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const collapsedState = sidebar.classList.contains('collapsed');
+        toggleBtn.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const expandedState = !sidebar.classList.contains('collapsed');
+
+        // Click + New Conversation -> should show centered empty-state prompt box
+        newBtn.click();
+        await new Promise((r) => setTimeout(r, 120));
+        const centeredStage = document.querySelector('[data-testid="centered-empty-prompt"]');
+        const promptCard = document.querySelector('.dab-empty-prompt-card');
+        const rect = promptCard ? promptCard.getBoundingClientRect() : null;
+        return {
+          initialItems,
+          collapsedState,
+          expandedState,
+          hasCenteredStage: Boolean(centeredStage),
+          centeredHeroText: centeredStage ? centeredStage.innerText : '',
+          cardCenteredHorizontally: rect ? rect.left > 240 && rect.right < 1400 : false,
+          cardCenteredVertically: rect ? rect.top > 80 && rect.bottom < 860 : false
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(step1.result.value.initialItems).toEqual([
+      'Executive Revenue App',
+      'Executive Order Performance (Native UDD)',
+      'Add total_revenue & gross_margin to order_items',
+      '3-Pillar Health Check — thelook_event (70%)',
+      'Looker Explore & Filter Summary'
+    ])
+    expect(step1.result.value.collapsedState).toBe(true)
+    expect(step1.result.value.expandedState).toBe(true)
+    expect(step1.result.value.hasCenteredStage).toBe(true)
+    expect(step1.result.value.centeredHeroText).toContain('New Conversation')
+    expect(step1.result.value.centeredHeroText).toContain('Build a Looker Data App with Antigravity')
+    expect(step1.result.value.cardCenteredHorizontally).toBe(true)
+    expect(step1.result.value.cardCenteredVertically).toBe(true)
+
+    // Save prototype screenshot of sidebar + centered empty-state prompt box
+    const { data } = await chrome.send('Page.captureScreenshot', { format: 'png' })
+    const pngBuffer = Buffer.from(data, 'base64')
+    const scratchDir =
+      '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
+    mkdirSync(scratchDir, { recursive: true })
+    const scratchScreenshot = path.join(scratchDir, 'issue-24-sidebar-and-centered-prompt.png')
+    writeFileSync(scratchScreenshot, pngBuffer)
+    expect(existsSync(scratchScreenshot)).toBe(true)
+
+    // Click previous conversation (conv_dashboard_7) -> switches to Content Studio, restores chat & preview
+    const step2 = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const item = document.querySelector('[data-testid="conversation-item-conv_dashboard_7"]');
+        if (item) item.click();
+        await new Promise((r) => setTimeout(r, 200));
+        const activeTab = (document.querySelector('.dab-mode-tab.active')?.textContent || '').trim();
+        const centeredGone = !document.querySelector('[data-testid="centered-empty-prompt"]');
+        const bodyText = document.body ? document.body.innerText : '';
+        return {
+          activeTab,
+          centeredGone,
+          restoredChatMsg: bodyText.includes('Created native Looker Dashboard #7'),
+          restoredPreview: bodyText.includes('/embed/dashboards/7')
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(step2.result.value).toEqual({
+      activeTab: 'Content Studio',
+      centeredGone: true,
+      restoredChatMsg: true,
+      restoredPreview: true
     })
   }, 15000)
 })

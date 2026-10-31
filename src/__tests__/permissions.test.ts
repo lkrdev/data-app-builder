@@ -2,7 +2,10 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import {
   classifyLooker404Error,
+  ConversationRecord,
+  deleteUserConversation,
   fetchInitialLookerMetadata,
+  formatUserConversationsArtifactKey,
   formatUserConversationsKey,
   loadUserConversations,
   rawLookerRequest,
@@ -416,5 +419,65 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(savedConvs[0].id).toBe('conv_abc')
     expect(savedConvs[0].label).toBe('Order Revenue & Margin Overview')
     expect(savedConvs[0].interactionId).toBe('int_turn_1')
+  })
+
+  test('8. persists, sorts, upserts, and deletes user_conversations:${me.id} in Looker Artifacts', async () => {
+    expect(formatUserConversationsArtifactKey('1')).toBe('user_conversations:1')
+    const store = new Map<string, { key: string; version: number; value: string }>()
+    const mockSdk: any = {
+      ok: async (p: any) => p,
+      artifact: async ({ key }: { key: string }) => {
+        const hit = store.get(key)
+        return hit ? [hit] : []
+      },
+      update_artifacts: async (_ns: string, updates: any[]) => {
+        for (const u of updates) {
+          store.set(u.key, {
+            key: u.key,
+            version: (u.version ?? 0) + 1,
+            value: u.value,
+          })
+        }
+        return updates
+      },
+    }
+
+    expect(await loadUserConversations(mockSdk, '1')).toEqual([])
+
+    const c1: ConversationRecord = {
+      id: 'conv_1',
+      type: 'app',
+      interactionId: 'int_1',
+      content: { dashboardId: '42', appArtifactId: 'obj_app_42' },
+      label: 'First App Conversation',
+      createdAt: '2026-10-31T20:00:00Z',
+      updatedAt: '2026-10-31T20:05:00Z',
+    }
+    const c2: ConversationRecord = {
+      id: 'conv_2',
+      type: 'dashboard',
+      interactionId: 'int_2',
+      content: { dashboardId: '7', lookId: '12' },
+      label: 'Second UDD Conversation',
+      createdAt: '2026-10-31T21:00:00Z',
+      updatedAt: '2026-10-31T21:10:00Z',
+    }
+
+    await saveUserConversation(mockSdk, '1', c1)
+    const afterTwo = await saveUserConversation(mockSdk, '1', c2)
+    expect(afterTwo.map((c) => c.id)).toEqual(['conv_2', 'conv_1'])
+
+    const afterUpsertC1 = await saveUserConversation(mockSdk, '1', {
+      ...c1,
+      interactionId: 'int_1_turn2',
+      label: 'First App Conversation (Updated)',
+      updatedAt: '2026-10-31T22:00:00Z',
+    })
+    expect(afterUpsertC1.map((c) => c.id)).toEqual(['conv_1', 'conv_2'])
+    expect(afterUpsertC1[0].interactionId).toBe('int_1_turn2')
+    expect(afterUpsertC1[0].createdAt).toBe('2026-10-31T20:00:00Z')
+
+    const afterDelete = await deleteUserConversation(mockSdk, '1', 'conv_1')
+    expect(afterDelete.map((c) => c.id)).toEqual(['conv_2'])
   })
 })
