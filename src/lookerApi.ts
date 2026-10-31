@@ -137,47 +137,39 @@ export function classifyLooker404Error(
 ): Looker404Diagnostic {
   const text = String(rawText || '').trim()
   let parsed: any = null
-  if (text.startsWith('{')) {
-    try {
-      parsed = JSON.parse(text)
-    } catch {
-      parsed = null
-    }
-  }
-  const msg = String(parsed?.message || text || 'Not found')
+  try {
+    if (text.startsWith('{')) parsed = JSON.parse(text)
+  } catch {}
+  const message = String(parsed?.message || text || 'Not found')
   const docUrl = String(parsed?.documentation_url || '')
-  const isInlineExtPath =
-    path.includes('/data_app_extension') || path.includes('/inline_extension')
-  const isSinatraNotFound = /Sinatra::NotFound/i.test(text)
-  const hasErrDocPath = docUrl.includes('/r/err/')
+  const isInlineExt = path.includes('/data_app_extension') || path.includes('/inline_extension')
+  const hasErrDoc = docUrl.includes('/r/err/')
 
-  if (status === 404 && (isSinatraNotFound || (isInlineExtPath && !hasErrDocPath))) {
+  if (status === 404 && (/Sinatra::NotFound/i.test(text) || (isInlineExt && !hasErrDoc))) {
     return {
       kind: 'feature_disabled',
       status,
       path,
-      message: msg,
-      remediation: isInlineExtPath
+      message,
+      remediation: isInlineExt
         ? 'The "inline_extensions" feature flag is disabled on this Looker instance. Enable "inline_extensions" in Looker Admin settings.'
         : `Endpoint "${path}" is unmounted or its feature flag is disabled on this Looker instance.`,
     }
   }
-
-  if (status === 404 && (hasErrDocPath || /^not found$/i.test(msg.trim()))) {
+  if (status === 404 && (hasErrDoc || /^not found$/i.test(message.trim()))) {
     return {
       kind: 'role_denied',
       status,
       path,
-      message: msg,
+      message,
       remediation: `Looker returned a Role-Denied 404 on "${path}". Verify the user's Looker Role permissions (e.g. access_data, explore, save_content, save_dashboards, develop) and Model Set in Admin > Roles, or folder edit access.`,
     }
   }
-
   return {
     kind: 'not_found',
     status,
     path,
-    message: msg,
+    message,
     remediation: `Resource at "${path}" was not found or the user lacks permission to access it.`,
   }
 }
@@ -207,56 +199,23 @@ export interface UserCapabilities {
 }
 
 const MODEL_SCOPED_PERMISSIONS = new Set([
-  'access_data',
-  'see_looks',
-  'see_user_dashboards',
-  'see_lookml_dashboards',
-  'explore',
-  'see_sql',
-  'clear_cache_refresh',
-  'see_lookml',
-  'develop',
-  'use_sql_runner',
-  'manage_project_models',
-  'use_global_connections',
-  'schedule_look_emails',
-  'schedule_external_look_emails',
-  'send_to_s3',
-  'send_to_sftp',
-  'send_outgoing_webhook',
-  'send_to_integration',
+  'access_data', 'see_looks', 'see_user_dashboards', 'see_lookml_dashboards', 'explore',
+  'see_sql', 'clear_cache_refresh', 'see_lookml', 'develop', 'use_sql_runner',
+  'manage_project_models', 'use_global_connections', 'schedule_look_emails',
+  'schedule_external_look_emails', 'send_to_s3', 'send_to_sftp', 'send_outgoing_webhook', 'send_to_integration',
 ])
 
 const ALL_CORE_PERMISSIONS = [
-  'admin',
-  'access_data',
-  'see_looks',
-  'see_user_dashboards',
-  'see_lookml_dashboards',
-  'explore',
-  'save_content',
-  'save_dashboards',
-  'save_looks',
-  'see_lookml',
-  'develop',
-  'deploy',
-  'manage_models',
-  'use_sql_runner',
-  'see_sql',
-  'see_system_activity',
-  'manage_user_attributes',
-  'schedule_look_emails',
+  'admin', 'access_data', 'see_looks', 'see_user_dashboards', 'see_lookml_dashboards',
+  'explore', 'save_content', 'save_dashboards', 'save_looks', 'see_lookml', 'develop',
+  'deploy', 'manage_models', 'use_sql_runner', 'see_sql', 'see_system_activity',
+  'manage_user_attributes', 'schedule_look_emails',
 ]
 
 // ponytail: evaluate Role = PermissionSet × ModelSet per role first so model sets never bleed across roles,
 // then apply Looker's Model -> Project and Model -> Connection expansion rules.
 export function resolveUserCapabilities(
-  params: {
-    user?: any
-    roles?: any[] | null
-    models?: any[]
-    folders?: any[]
-  } = {}
+  params: { user?: any; roles?: any[] | null; models?: any[]; folders?: any[] } = {}
 ): UserCapabilities {
   const user = params.user || {}
   const models = Array.isArray(params.models) ? params.models : []
@@ -281,8 +240,7 @@ export function resolveUserCapabilities(
   const globalPermissions = new Set<string>()
   const modelsByPermission: Record<string, Set<string>> = {}
   const addModelPerm = (perm: string, modelName: string) => {
-    if (!modelsByPermission[perm]) modelsByPermission[perm] = new Set<string>()
-    modelsByPermission[perm].add(modelName)
+    ;(modelsByPermission[perm] ||= new Set<string>()).add(modelName)
   }
 
   if (rolesLoaded) {
@@ -290,39 +248,22 @@ export function resolveUserCapabilities(
       const rawPerms: string[] = Array.isArray(role?.permission_set?.permissions)
         ? role.permission_set.permissions
         : []
-      const roleAllPerms =
-        Boolean(role?.permission_set?.all_access) || rawPerms.includes('admin')
+      const roleAllPerms = Boolean(role?.permission_set?.all_access) || rawPerms.includes('admin')
       const roleModels: string[] = Array.isArray(role?.model_set?.models)
         ? role.model_set.models.filter(Boolean).map(String)
         : []
       const roleAllModels = Boolean(role?.model_set?.all_access) || roleAllPerms
-      const effectivePerms = roleAllPerms ? ALL_CORE_PERMISSIONS : rawPerms
-
-      const impliesAccessData = effectivePerms.some((p) =>
-        [
-          'explore',
-          'develop',
-          'see_lookml',
-          'use_sql_runner',
-          'see_user_dashboards',
-          'see_looks',
-        ].includes(p)
+      const basePerms = roleAllPerms ? ALL_CORE_PERMISSIONS : rawPerms
+      const impliesAccess = basePerms.some((p) =>
+        ['explore', 'develop', 'see_lookml', 'use_sql_runner', 'see_user_dashboards', 'see_looks'].includes(p)
       )
-      const permsWithImplied =
-        impliesAccessData && !effectivePerms.includes('access_data')
-          ? [...effectivePerms, 'access_data']
-          : effectivePerms
+      const effectivePerms =
+        impliesAccess && !basePerms.includes('access_data') ? [...basePerms, 'access_data'] : basePerms
 
-      for (const perm of permsWithImplied) {
+      for (const perm of effectivePerms) {
         globalPermissions.add(perm)
         if (MODEL_SCOPED_PERMISSIONS.has(perm)) {
-          if (roleAllModels) {
-            addModelPerm(perm, '*')
-          } else {
-            for (const mName of roleModels) {
-              addModelPerm(perm, mName)
-            }
-          }
+          for (const mName of roleAllModels ? ['*'] : roleModels) addModelPerm(perm, mName)
         }
       }
     }
@@ -334,18 +275,12 @@ export function resolveUserCapabilities(
       if (MODEL_SCOPED_PERMISSIONS.has(perm)) addModelPerm(perm, '*')
     }
   }
-
   if (globalPermissions.has('manage_models')) {
-    addModelPerm('develop', '*')
-    addModelPerm('see_lookml', '*')
-    addModelPerm('manage_project_models', '*')
+    for (const p of ['develop', 'see_lookml', 'manage_project_models']) addModelPerm(p, '*')
   }
 
-  const hasModelPerm = (perm: string, modelName: string): boolean => {
-    if (isAdmin) return true
-    const set = modelsByPermission[perm]
-    return Boolean(set && (set.has('*') || set.has(modelName)))
-  }
+  const hasModelPerm = (perm: string, modelName: string): boolean =>
+    isAdmin || Boolean(modelsByPermission[perm]?.has('*') || modelsByPermission[perm]?.has(modelName))
 
   const explorableModels = new Set<string>()
   const developableProjects = new Set<string>()
@@ -357,24 +292,19 @@ export function resolveUserCapabilities(
     const exploreSet = modelsByPermission['explore']
     if (exploreSet?.has('*')) {
       explorableModels.add('*')
-      for (const m of models) {
-        if (m?.name) explorableModels.add(String(m.name))
-      }
+      for (const m of models) if (m?.name) explorableModels.add(String(m.name))
     } else if (exploreSet) {
       for (const mName of exploreSet) {
-        if (hasModelPerm('access_data', mName)) {
-          if (models.length === 0 || models.some((m) => String(m?.name) === mName)) {
-            explorableModels.add(mName)
-          }
+        if (
+          hasModelPerm('access_data', mName) &&
+          (models.length === 0 || models.some((m) => String(m?.name) === mName))
+        ) {
+          explorableModels.add(mName)
         }
       }
     }
 
-    if (
-      isAdmin ||
-      globalPermissions.has('manage_models') ||
-      modelsByPermission['develop']?.has('*')
-    ) {
+    if (isAdmin || globalPermissions.has('manage_models') || modelsByPermission['develop']?.has('*')) {
       developableProjects.add('*')
       readableProjects.add('*')
     } else if (modelsByPermission['see_lookml']?.has('*')) {
@@ -417,45 +347,31 @@ export function resolveUserCapabilities(
     for (const f of folders) {
       const fid = String(f?.id || '').trim()
       if (!fid) continue
-      if (isAdmin) {
-        editableFolderIds.add(fid)
-      } else if (f?.can) {
-        if ((f.can.edit_content === true || f.can.save_content === true) && canSaveAny) {
-          editableFolderIds.add(fid)
-        }
-      } else if (canSaveAny) {
+      if (
+        isAdmin ||
+        (f?.can ? (f.can.edit_content === true || f.can.save_content === true) && canSaveAny : canSaveAny)
+      ) {
         editableFolderIds.add(fid)
       }
     }
-    if (user?.personal_folder_id && canSaveAny) {
-      editableFolderIds.add(String(user.personal_folder_id))
-    }
+    if (user?.personal_folder_id && canSaveAny) editableFolderIds.add(String(user.personal_folder_id))
   } else {
-    // Fallback when user_roles is restricted (404/403)
     for (const m of models) {
       const mName = String(m?.name || '').trim()
       const proj = String(m?.project_name || '').trim()
-      if (mName && m?.can?.show !== false) {
-        explorableModels.add(mName)
-      }
+      const canDev = m?.can?.develop === true || m?.can?.update === true || m?.can === undefined
+      if (mName && m?.can?.show !== false) explorableModels.add(mName)
       if (proj) {
-        if (
-          m?.can?.develop === true ||
-          m?.can?.update === true ||
-          m?.can === undefined
-        ) {
+        if (canDev) {
           developableProjects.add(proj)
           readableProjects.add(proj)
         } else if (m?.can?.show !== false) {
           readableProjects.add(proj)
         }
       }
-      for (const conn of m?.allowed_db_connection_names || []) {
-        if (
-          conn &&
-          (m?.can?.develop === true || m?.can?.update === true || m?.can === undefined)
-        ) {
-          sqlRunnerConnections.add(String(conn))
+      if (canDev) {
+        for (const conn of m?.allowed_db_connection_names || []) {
+          if (conn) sqlRunnerConnections.add(String(conn))
         }
       }
     }
@@ -465,56 +381,27 @@ export function resolveUserCapabilities(
         editableFolderIds.add(fid)
       }
     }
-    if (user?.personal_folder_id) {
-      editableFolderIds.add(String(user.personal_folder_id))
-    }
+    if (user?.personal_folder_id) editableFolderIds.add(String(user.personal_folder_id))
   }
 
   const canConfigureExtension = Boolean(
-    !rolesLoaded ||
-      isAdmin ||
-      globalPermissions.has('admin') ||
-      globalPermissions.has('develop') ||
-      developableProjects.size > 0
+    !rolesLoaded || isAdmin || globalPermissions.has('admin') || globalPermissions.has('develop') || developableProjects.size > 0
   )
   const canManageUserAttributes = Boolean(
-    !rolesLoaded ||
-      isAdmin ||
-      globalPermissions.has('admin') ||
-      globalPermissions.has('manage_user_attributes')
+    !rolesLoaded || isAdmin || globalPermissions.has('admin') || globalPermissions.has('manage_user_attributes')
   )
 
-  if (!rolesLoaded) {
-    return {
-      isAdmin,
-      rolesLoaded: false,
-      globalPermissions,
-      modelsByPermission,
-      explorableModels,
-      developableProjects,
-      readableProjects,
-      sqlRunnerConnections,
-      editableFolderIds,
-      canConfigureExtension,
-      canManageUserAttributes,
-      tools: {
-        app: { enabled: true, readOnly: false, missingPermissions: [] },
-        dashboard: { enabled: true, readOnly: false, missingPermissions: [] },
-        lookml: { enabled: true, readOnly: false, missingPermissions: [] },
-        health: { enabled: true, readOnly: false, missingPermissions: [] },
-        tile: { enabled: true, readOnly: false, missingPermissions: [] },
-      },
-    }
-  }
-
   const hasExplore = isAdmin || explorableModels.size > 0
-  const hasSaveDash =
-    isAdmin ||
-    (globalPermissions.has('save_content') && globalPermissions.has('save_dashboards'))
+  const hasSaveDash = isAdmin || (globalPermissions.has('save_content') && globalPermissions.has('save_dashboards'))
   const hasSaveContent =
     isAdmin ||
     (globalPermissions.has('save_content') &&
       (globalPermissions.has('save_dashboards') || globalPermissions.has('save_looks')))
+  const hasDevelop = isAdmin || developableProjects.size > 0 || globalPermissions.has('develop')
+  const hasSeeLookml = hasDevelop || readableProjects.size > 0 || globalPermissions.has('see_lookml')
+  const hasPillar1 =
+    isAdmin || globalPermissions.has('see_system_activity') || hasModelPerm('explore', 'system__activity')
+  const hasPillar3 = isAdmin || sqlRunnerConnections.size > 0 || globalPermissions.has('use_sql_runner')
 
   const appMissing = [
     ...(!hasExplore ? ['explore'] : []),
@@ -524,37 +411,38 @@ export function resolveUserCapabilities(
   const dashMissing = [
     ...(!hasExplore ? ['explore'] : []),
     ...(!isAdmin && !globalPermissions.has('save_content') ? ['save_content'] : []),
-    ...(!isAdmin &&
-    !globalPermissions.has('save_dashboards') &&
-    !globalPermissions.has('save_looks')
+    ...(!isAdmin && !globalPermissions.has('save_dashboards') && !globalPermissions.has('save_looks')
       ? ['save_dashboards']
       : []),
   ]
-
-  const hasDevelop = isAdmin || developableProjects.size > 0 || globalPermissions.has('develop')
-  const hasSeeLookml = hasDevelop || readableProjects.size > 0 || globalPermissions.has('see_lookml')
-
-  const hasPillar1 =
-    isAdmin ||
-    globalPermissions.has('see_system_activity') ||
-    hasModelPerm('explore', 'system__activity')
-  const hasPillar2 = hasSeeLookml
-  const hasPillar3 = isAdmin || sqlRunnerConnections.size > 0 || globalPermissions.has('use_sql_runner')
   const healthMissing = [
     ...(!hasPillar1 ? ['see_system_activity'] : []),
     ...(!hasDevelop ? ['develop'] : []),
     ...(!hasPillar3 ? ['use_sql_runner'] : []),
   ]
 
-  const tileMissing = [
-    ...(!hasExplore ? ['explore'] : []),
-    ...(!isAdmin && !globalPermissions.has('save_content') ? ['save_content'] : []),
-    ...(!isAdmin && !globalPermissions.has('save_dashboards') ? ['save_dashboards'] : []),
-  ]
+  const mkTool = (
+    enabled: boolean,
+    readOnly: boolean,
+    missingPermissions: string[],
+    reason?: string
+  ): ToolAvailability =>
+    !rolesLoaded
+      ? { enabled: true, readOnly: false, missingPermissions: [] }
+      : {
+          enabled,
+          readOnly,
+          missingPermissions,
+          reason:
+            reason ??
+            (missingPermissions.length > 0
+              ? `Missing Looker permissions: ${missingPermissions.join(', ')}`
+              : undefined),
+        }
 
   return {
     isAdmin,
-    rolesLoaded: true,
+    rolesLoaded,
     globalPermissions,
     modelsByPermission,
     explorableModels,
@@ -565,52 +453,25 @@ export function resolveUserCapabilities(
     canConfigureExtension,
     canManageUserAttributes,
     tools: {
-      app: {
-        enabled: hasExplore,
-        readOnly: hasExplore && !hasSaveDash,
-        missingPermissions: appMissing,
-        reason:
-          appMissing.length > 0
-            ? `Missing Looker permissions: ${appMissing.join(', ')}`
-            : undefined,
-      },
-      dashboard: {
-        enabled: hasExplore,
-        readOnly: hasExplore && !hasSaveContent,
-        missingPermissions: dashMissing,
-        reason:
-          dashMissing.length > 0
-            ? `Missing Looker permissions: ${dashMissing.join(', ')}`
-            : undefined,
-      },
-      lookml: {
-        enabled: hasSeeLookml,
-        readOnly: !hasDevelop && hasSeeLookml,
-        missingPermissions: hasDevelop ? [] : ['develop'],
-        reason: !hasDevelop
+      app: mkTool(hasExplore, hasExplore && !hasSaveDash, appMissing),
+      dashboard: mkTool(hasExplore, hasExplore && !hasSaveContent, dashMissing),
+      lookml: mkTool(
+        hasSeeLookml,
+        !hasDevelop && hasSeeLookml,
+        hasDevelop ? [] : ['develop'],
+        !hasDevelop
           ? hasSeeLookml
             ? 'Read-only LookML access (missing develop permission)'
             : 'Missing Looker permissions: develop'
-          : undefined,
-      },
-      health: {
-        enabled: hasPillar1 || hasPillar2 || hasPillar3,
-        readOnly: false,
-        missingPermissions: healthMissing,
-        reason:
-          healthMissing.length > 0
-            ? `Partial 3-Pillar access (missing: ${healthMissing.join(', ')})`
-            : undefined,
-      },
-      tile: {
-        enabled: hasExplore,
-        readOnly: hasExplore && !hasSaveDash,
-        missingPermissions: tileMissing,
-        reason:
-          tileMissing.length > 0
-            ? `Missing Looker permissions: ${tileMissing.join(', ')}`
-            : undefined,
-      },
+          : undefined
+      ),
+      health: mkTool(
+        hasPillar1 || hasSeeLookml || hasPillar3,
+        false,
+        healthMissing,
+        healthMissing.length > 0 ? `Partial 3-Pillar access (missing: ${healthMissing.join(', ')})` : undefined
+      ),
+      tile: mkTool(hasExplore, hasExplore && !hasSaveDash, appMissing),
     },
   }
 }
@@ -1676,14 +1537,7 @@ export async function publishScriptDashboard(
 }
 
 export type StudioToolMode =
-  | 'app'
-  | 'data_app'
-  | 'lookml'
-  | 'tile'
-  | 'script'
-  | 'dashboard'
-  | 'health'
-  | 'health_check'
+  | 'app' | 'data_app' | 'lookml' | 'tile' | 'script' | 'dashboard' | 'health' | 'health_check'
 
 export interface UserArtifactIndexEntry {
   id: string
@@ -1722,45 +1576,19 @@ export function formatObjectArtifactKey(type: StudioToolMode, id: string): strin
 // for fast search_artifacts listing + shared payload key (obj_${type}_${id}) reusing putArtifacts.
 export async function saveUserArtifact(
   sdk: Looker40SDK,
-  paramsOrUserId:
-    | string
-    | {
-        namespace?: string
-        extensionSDK?: any
-        userId: string
-        id: string
-        type: StudioToolMode
-        title: string
-        targetId?: string
-        explores?: string[]
-        lastInteractionId?: string
-        environmentId?: string
-        code?: string
-        content?: string
-        messages?: PersistedChatTurn[]
-        payload?: Record<string, any> | null
-        skipObjectPayload?: boolean
-      },
+  paramsOrUserId: any,
   indexArg?: UserArtifactIndexEntry,
   objectPayloadArg?: Record<string, any>
 ): Promise<SharedArtifactPayload> {
   if (typeof paramsOrUserId === 'string' && indexArg) {
-    const items: Array<{ key: string; value: any }> = [
-      {
-        key: formatUserArtifactKey(paramsOrUserId, indexArg.type, indexArg.id),
-        value: indexArg,
-      },
+    const items = [
+      { key: formatUserArtifactKey(paramsOrUserId, indexArg.type, indexArg.id), value: indexArg },
+      ...(objectPayloadArg ? [{ key: formatObjectArtifactKey(indexArg.type, indexArg.id), value: objectPayloadArg }] : []),
     ]
-    if (objectPayloadArg) {
-      items.push({
-        key: formatObjectArtifactKey(indexArg.type, indexArg.id),
-        value: objectPayloadArg,
-      })
-    }
     await putArtifacts(sdk, items, ARTIFACT_NAMESPACE)
     return (objectPayloadArg || indexArg) as SharedArtifactPayload
   }
-  const params = paramsOrUserId as Exclude<typeof paramsOrUserId, string>
+  const params = paramsOrUserId
   const namespace = params.namespace || getArtifactNamespace(params.extensionSDK)
   const indexEntry: UserArtifactIndexEntry = {
     id: String(params.id),
@@ -1798,14 +1626,7 @@ export async function saveUserArtifact(
 
 export async function listUserArtifacts(
   sdk: Looker40SDK,
-  paramsOrUserId:
-    | string
-    | {
-        namespace?: string
-        extensionSDK?: any
-        userId: string
-        type?: StudioToolMode
-      },
+  paramsOrUserId: any,
   namespaceArg = ARTIFACT_NAMESPACE
 ): Promise<UserArtifactIndexEntry[]> {
   const params =
@@ -1853,20 +1674,13 @@ export async function listUserArtifacts(
 
 export async function loadObjectArtifact<T = SharedArtifactPayload>(
   sdk: Looker40SDK,
-  paramsOrType:
-    | StudioToolMode
-    | {
-        namespace?: string
-        extensionSDK?: any
-        type: StudioToolMode
-        id: string
-      },
+  paramsOrType: any,
   idArg?: string,
   namespaceArg = ARTIFACT_NAMESPACE
 ): Promise<T | null> {
   const params =
     typeof paramsOrType === 'string'
-      ? { type: paramsOrType, id: String(idArg || ''), namespace: namespaceArg }
+      ? { type: paramsOrType as StudioToolMode, id: String(idArg || ''), namespace: namespaceArg }
       : paramsOrType
   const namespace = params.namespace || getArtifactNamespace(params.extensionSDK)
   const direct = await getArtifactJson<T>(
@@ -1891,16 +1705,7 @@ export async function loadObjectArtifact<T = SharedArtifactPayload>(
 
 export async function deleteUserArtifact(
   sdk: Looker40SDK,
-  paramsOrUserId:
-    | string
-    | {
-        namespace?: string
-        extensionSDK?: any
-        userId: string
-        type: StudioToolMode
-        id: string
-        deleteSharedPayload?: boolean
-      },
+  paramsOrUserId: any,
   typeArg?: StudioToolMode,
   idArg?: string,
   deleteSharedArg = false,
@@ -1908,13 +1713,7 @@ export async function deleteUserArtifact(
 ): Promise<void> {
   const params =
     typeof paramsOrUserId === 'string'
-      ? {
-          userId: paramsOrUserId,
-          type: typeArg as StudioToolMode,
-          id: String(idArg || ''),
-          deleteSharedPayload: deleteSharedArg,
-          namespace: namespaceArg,
-        }
+      ? { userId: paramsOrUserId, type: typeArg as StudioToolMode, id: String(idArg || ''), deleteSharedPayload: deleteSharedArg, namespace: namespaceArg }
       : paramsOrUserId
   const namespace = params.namespace || getArtifactNamespace(params.extensionSDK)
   const keys = [formatUserArtifactKey(params.userId, params.type, params.id)]

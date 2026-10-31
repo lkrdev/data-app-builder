@@ -99,12 +99,11 @@ p1_queries = [
         "limit": "25"
     })
 ]
-if active_scope in ("all", "looker"):
-    for k, q in p1_queries:
-        try:
-            p1[k] = run_inline_query("json", q)
-        except Exception as e:
-            p1[k + "_error"] = str(e)
+for k, q in (p1_queries if active_scope in ("all", "looker") else []):
+    try:
+        p1[k] = run_inline_query("json", q)
+    except Exception as e:
+        p1[k + "_error"] = str(e)
 
 # --- PILLAR 2: LookML Quality & 0-4 Transcriber Rubric ---
 p2 = {
@@ -172,35 +171,34 @@ p3 = {
     "jobs_timeline_by_project": None, "table_storage": None,
     "dataset_partitions": None, "dataset_tables": None
 }
-if active_scope in ("all", "bq"):
-    try:
-        conns = all_connections(fields="name,dialect_name,database,host") or []
-        bq_conn = None
-        for c in conns:
-            if "bigquery" in (c.get("dialect_name") or "").lower():
-                bq_conn = c
-                break
-        if not bq_conn and conns:
-            bq_conn = conns[0]
-        if bq_conn:
-            cname = bq_conn.get("name") or ""
-            p3["connection_name"] = cname
-            p3["host_project"] = bq_conn.get("host") or ""
-            target_ds = p2["detected_datasets"][0] if p2["detected_datasets"] else "looker-private-demo.thelook"
-            p3_queries = [
-                ("jobs_timeline_by_project", "jobs_timeline_error", "SELECT COUNT(*) AS slices, ROUND(MAX(period_slot_ms)/1000.0, 2) AS peak_slots, ROUND(AVG(period_slot_ms)/1000.0, 2) AS avg_slots, MAX(IFNULL(period_estimated_runnable_units, 0)) AS max_queued_units, MAX(IFNULL(period_shuffle_ram_usage_ratio, 0.0)) AS max_spill_ratio FROM \`region-us\`.INFORMATION_SCHEMA.JOBS_TIMELINE_BY_PROJECT WHERE period_start >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)"),
-                ("table_storage", "table_storage_error", "SELECT table_schema, table_name, total_rows, ROUND(total_logical_bytes/(1024*1024), 2) AS logical_mb, total_partitions FROM \`region-us\`.INFORMATION_SCHEMA.TABLE_STORAGE ORDER BY total_logical_bytes DESC LIMIT 10"),
-                ("dataset_partitions", "dataset_partitions_error", "SELECT table_name, COUNT(*) AS partition_count, SUM(total_rows) AS total_rows, ROUND(SUM(total_logical_bytes)/(1024*1024), 2) AS logical_mb FROM \`" + target_ds + "\`.INFORMATION_SCHEMA.PARTITIONS GROUP BY table_name ORDER BY logical_mb DESC LIMIT 10"),
-                ("dataset_tables", "dataset_tables_error", "SELECT table_name, table_type, ddl FROM \`" + target_ds + "\`.INFORMATION_SCHEMA.TABLES WHERE table_type = 'BASE TABLE' LIMIT 8")
-            ]
-            for k, err_k, sql in p3_queries:
-                try:
-                    q_res = create_sql_query({"connection_name": cname, "sql": sql})
-                    p3[k] = run_sql_query(q_res["slug"], "json")
-                except Exception as ex:
-                    p3[err_k] = str(ex)[:240]
-    except Exception as e:
-        p3["error"] = str(e)[:300]
+try:
+    conns = (all_connections(fields="name,dialect_name,database,host") or []) if active_scope in ("all", "bq") else []
+    bq_conn = None
+    for c in conns:
+        if "bigquery" in (c.get("dialect_name") or "").lower():
+            bq_conn = c
+            break
+    if not bq_conn and conns:
+        bq_conn = conns[0]
+    if bq_conn:
+        cname = bq_conn.get("name") or ""
+        p3["connection_name"] = cname
+        p3["host_project"] = bq_conn.get("host") or ""
+        target_ds = p2["detected_datasets"][0] if p2["detected_datasets"] else "looker-private-demo.thelook"
+        p3_queries = [
+            ("jobs_timeline_by_project", "jobs_timeline_error", "SELECT COUNT(*) AS slices, ROUND(MAX(period_slot_ms)/1000.0, 2) AS peak_slots, ROUND(AVG(period_slot_ms)/1000.0, 2) AS avg_slots, MAX(IFNULL(period_estimated_runnable_units, 0)) AS max_queued_units, MAX(IFNULL(period_shuffle_ram_usage_ratio, 0.0)) AS max_spill_ratio FROM \`region-us\`.INFORMATION_SCHEMA.JOBS_TIMELINE_BY_PROJECT WHERE period_start >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)"),
+            ("table_storage", "table_storage_error", "SELECT table_schema, table_name, total_rows, ROUND(total_logical_bytes/(1024*1024), 2) AS logical_mb, total_partitions FROM \`region-us\`.INFORMATION_SCHEMA.TABLE_STORAGE ORDER BY total_logical_bytes DESC LIMIT 10"),
+            ("dataset_partitions", "dataset_partitions_error", "SELECT table_name, COUNT(*) AS partition_count, SUM(total_rows) AS total_rows, ROUND(SUM(total_logical_bytes)/(1024*1024), 2) AS logical_mb FROM \`" + target_ds + "\`.INFORMATION_SCHEMA.PARTITIONS GROUP BY table_name ORDER BY logical_mb DESC LIMIT 10"),
+            ("dataset_tables", "dataset_tables_error", "SELECT table_name, table_type, ddl FROM \`" + target_ds + "\`.INFORMATION_SCHEMA.TABLES WHERE table_type = 'BASE TABLE' LIMIT 8")
+        ]
+        for k, err_k, sql in p3_queries:
+            try:
+                q_res = create_sql_query({"connection_name": cname, "sql": sql})
+                p3[k] = run_sql_query(q_res["slug"], "json")
+            except Exception as ex:
+                p3[err_k] = str(ex)[:240]
+except Exception as e:
+    p3["error"] = str(e)[:300]
 
 return {"user": me_info, "pillar1": p1, "pillar2": p2, "pillar3": p3}
 `;

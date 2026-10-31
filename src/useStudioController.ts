@@ -325,24 +325,13 @@ export function useStudioController() {
   }, [catalogItems, catalogSearch, disabledModes])
 
   const handleSaveAuthSetup = async () => {
-    if (!capabilities.canConfigureExtension) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'error',
-          text: 'Saving shared extension configuration requires Looker "develop" or "admin" permission.',
-        },
-      ])
-      return
-    }
-    if (authMode === 'apikey' && !capabilities.canManageUserAttributes) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'error',
-          text: 'Creating or updating hidden Looker User Attributes requires Looker "manage_user_attributes" or "admin" permission.',
-        },
-      ])
+    const permErr = !capabilities.canConfigureExtension
+      ? 'Saving shared extension configuration requires Looker "develop" or "admin" permission.'
+      : authMode === 'apikey' && !capabilities.canManageUserAttributes
+      ? 'Creating or updating hidden Looker User Attributes requires Looker "manage_user_attributes" or "admin" permission.'
+      : ''
+    if (permErr) {
+      setMessages((prev) => [...prev, { role: 'error', text: permErr }])
       return
     }
     try {
@@ -404,13 +393,9 @@ export function useStudioController() {
         )
         const editableIds = meta.capabilities.editableFolderIds
         const rawFolders = meta.folders || []
-        const editableFolders =
-          editableIds.size > 0
-            ? rawFolders.filter((f: any) => editableIds.has(String(f.id)))
-            : rawFolders
-        const effectiveFolders = editableFolders.length > 0 ? editableFolders : rawFolders
+        const filteredFolders = rawFolders.filter((f: any) => editableIds.has(String(f.id)))
         setFolders(
-          effectiveFolders.map((f: any) => ({
+          (filteredFolders.length > 0 ? filteredFolders : rawFolders).map((f: any) => ({
             id: String(f.id),
             name: `${f.name} (#${f.id})`,
           }))

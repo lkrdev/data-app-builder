@@ -645,28 +645,20 @@ export const ScriptStudioView: React.FC<{
             return enabledModes.length > 1 ? (
               <div className="dab-mode-switcher" role="tablist" aria-label="Tool Mode">
                 {enabledModes.map((m) => {
-                  const toolCap = capabilities?.tools?.[m.mode]
-                  const isLocked = Boolean(
-                    capabilities?.rolesLoaded && toolCap && !toolCap.enabled
-                  )
-                  const isReadOnly = Boolean(capabilities?.rolesLoaded && toolCap?.readOnly)
-                  const missingPerms = toolCap?.missingPermissions || []
-                  const tabTooltip =
-                    toolCap?.reason ||
-                    (missingPerms.length > 0
-                      ? `Missing Looker permissions: ${missingPerms.join(', ')}`
-                      : undefined)
+                  const tc = capabilities?.rolesLoaded ? capabilities.tools?.[m.mode] : undefined
+                  const locked = Boolean(tc && !tc.enabled)
+                  const ro = Boolean(tc?.readOnly)
                   return (
                     <button
                       key={m.mode}
                       type="button"
                       role="tab"
                       aria-selected={m.mode === 'tile'}
-                      title={tabTooltip}
+                      title={tc?.reason}
                       className={`dab-mode-tab ${m.mode === 'tile' ? 'active' : ''}`}
                       onClick={() => history.push(m.prefix)}
                     >
-                      {isLocked ? `🔒 ${m.label}` : isReadOnly ? `${m.label} 🔒` : m.label}
+                      {locked ? `🔒 ${m.label}` : ro ? `${m.label} 🔒` : m.label}
                     </button>
                   )
                 })}

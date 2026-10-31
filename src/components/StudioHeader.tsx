@@ -202,7 +202,6 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     history,
     requirePermission,
     setRequirePermission,
-    disabledModes,
     capabilities,
     availableLookmlProjects,
     canDeployLookml,
@@ -351,24 +350,18 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
         {enabledModes.length > 1 && (
           <div className="dab-mode-switcher" role="tablist" aria-label="Tool Mode">
             {enabledModes.map((m) => {
-              const toolCap = capabilities?.tools?.[m.mode]
-              const isLocked = Boolean(capabilities?.rolesLoaded && toolCap && !toolCap.enabled)
-              const isReadOnly = Boolean(capabilities?.rolesLoaded && toolCap?.readOnly)
-              const missingPerms = toolCap?.missingPermissions || []
-              const tabTooltip =
-                toolCap?.reason ||
-                (missingPerms.length > 0
-                  ? `Missing Looker permissions: ${missingPerms.join(', ')}`
-                  : undefined)
+              const tc = capabilities?.rolesLoaded ? capabilities.tools?.[m.mode] : undefined
+              const locked = Boolean(tc && !tc.enabled)
+              const ro = Boolean(tc?.readOnly)
               return (
                 <button
                   key={m.mode}
                   type="button"
                   role="tab"
                   aria-selected={activeMode === m.mode}
-                  data-permission-locked={isLocked ? 'true' : undefined}
-                  data-permission-readonly={isReadOnly ? 'true' : undefined}
-                  title={tabTooltip}
+                  data-permission-locked={locked ? 'true' : undefined}
+                  data-permission-readonly={ro ? 'true' : undefined}
+                  title={tc?.reason}
                   className={`dab-mode-tab ${activeMode === m.mode ? 'active' : ''}`}
                   onClick={() => {
                     const target =
@@ -384,7 +377,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                     history.push(target)
                   }}
                 >
-                  {isLocked ? `🔒 ${m.label}` : isReadOnly ? `${m.label} 🔒` : m.label}
+                  {locked ? `🔒 ${m.label}` : ro ? `${m.label} 🔒` : m.label}
                 </button>
               )
             })}
@@ -658,19 +651,15 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
           )}
           {isHealthCheckMode && (
             <>
-              {capabilities?.rolesLoaded &&
-                (capabilities.tools.health.missingPermissions.length > 0 ||
-                  capabilities.sqlRunnerConnections.size === 0) && (
-                  <span
-                    className="dab-badge"
-                    style={{ background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }}
-                    title={`Missing pillar permissions: ${capabilities.tools.health.missingPermissions.join(
-                      ', '
-                    )}`}
-                  >
-                    ⚠️ Missing: {capabilities.tools.health.missingPermissions.join(', ')}
-                  </span>
-                )}
+              {capabilities?.rolesLoaded && capabilities.tools.health.missingPermissions.length > 0 && (
+                <span
+                  className="dab-badge"
+                  style={{ background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }}
+                  title={capabilities.tools.health.reason}
+                >
+                  ⚠️ Missing: {capabilities.tools.health.missingPermissions.join(', ')}
+                </span>
+              )}
               <select
                 value={healthScope}
                 onChange={(e) => setHealthScope(e.target.value as any)}
@@ -678,24 +667,14 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
               >
                 <option
                   value="all"
-                  disabled={
-                    Boolean(
-                      capabilities?.rolesLoaded &&
-                        capabilities.sqlRunnerConnections.size === 0
-                    )
-                  }
+                  disabled={Boolean(capabilities?.rolesLoaded && capabilities.sqlRunnerConnections.size === 0)}
                 >
                   All 3 Pillars (Looker + BQ)
                 </option>
                 <option value="looker">Looker Only (Pillars 1 &amp; 2)</option>
                 <option
                   value="bq"
-                  disabled={
-                    Boolean(
-                      capabilities?.rolesLoaded &&
-                        capabilities.sqlRunnerConnections.size === 0
-                    )
-                  }
+                  disabled={Boolean(capabilities?.rolesLoaded && capabilities.sqlRunnerConnections.size === 0)}
                 >
                   BigQuery Only (Pillar 3)
                 </option>

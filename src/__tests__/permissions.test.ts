@@ -15,72 +15,35 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
           all_access: false,
           permissions: ['access_data', 'see_looks', 'see_user_dashboards', 'explore', 'save_content', 'save_dashboards'],
         },
-        model_set: {
-          all_access: false,
-          models: ['model_a'],
-        },
+        model_set: { all_access: false, models: ['model_a'] },
       },
       {
         id: '11',
         name: 'HR LookML Developer',
-        permission_set: {
-          all_access: false,
-          permissions: ['access_data', 'see_lookml', 'develop'],
-        },
-        model_set: {
-          all_access: false,
-          models: ['model_b'],
-        },
+        permission_set: { all_access: false, permissions: ['access_data', 'see_lookml', 'develop'] },
+        model_set: { all_access: false, models: ['model_b'] },
       },
     ]
-
     const models = [
-      {
-        name: 'model_a',
-        label: 'Model A',
-        project_name: 'project_a',
-        allowed_db_connection_names: ['conn_a'],
-        explores: [{ name: 'orders', hidden: false }],
-      },
-      {
-        name: 'model_b',
-        label: 'Model B',
-        project_name: 'project_b',
-        allowed_db_connection_names: ['conn_b'],
-        explores: [{ name: 'employees', hidden: false }],
-      },
+      { name: 'model_a', label: 'Model A', project_name: 'project_a', allowed_db_connection_names: ['conn_a'], explores: [{ name: 'orders', hidden: false }] },
+      { name: 'model_b', label: 'Model B', project_name: 'project_b', allowed_db_connection_names: ['conn_b'], explores: [{ name: 'employees', hidden: false }] },
     ]
-
     const folders = [
       { id: '1', name: 'Shared', can: { show: true, edit_content: false } },
       { id: '5', name: 'Personal', is_personal: true, can: { show: true, edit_content: true } },
     ]
 
-    const caps = resolveUserCapabilities({
-      user: { id: '42', personal_folder_id: '5' },
-      roles,
-      models,
-      folders,
-    })
-
+    const caps = resolveUserCapabilities({ user: { id: '42', personal_folder_id: '5' }, roles, models, folders })
     expect(caps.isAdmin).toBe(false)
     expect(caps.rolesLoaded).toBe(true)
-
-    // Role A grants explore on model_a ONLY, never model_b
     expect(Array.from(caps.modelsByPermission.explore || [])).toEqual(['model_a'])
     expect(Array.from(caps.explorableModels)).toEqual(['model_a'])
     expect(caps.explorableModels.has('model_b')).toBe(false)
-
-    // Role B grants develop on model_b ONLY, never model_a
     expect(Array.from(caps.modelsByPermission.develop || [])).toEqual(['model_b'])
     expect(Array.from(caps.developableProjects)).toEqual(['project_b'])
     expect(caps.developableProjects.has('project_a')).toBe(false)
-
-    // Folder ACL filtering
     expect(Array.from(caps.editableFolderIds)).toEqual(['5'])
     expect(caps.editableFolderIds.has('1')).toBe(false)
-
-    // Tool availability
     expect(caps.tools.app.enabled).toBe(true)
     expect(caps.tools.app.readOnly).toBe(false)
     expect(caps.tools.lookml.enabled).toBe(true)
@@ -94,71 +57,30 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       {
         id: '20',
         name: 'Explore Model A',
-        permission_set: {
-          all_access: false,
-          permissions: ['access_data', 'explore'],
-        },
-        model_set: {
-          all_access: false,
-          models: ['model_a'],
-        },
+        permission_set: { all_access: false, permissions: ['access_data', 'explore'] },
+        model_set: { all_access: false, models: ['model_a'] },
       },
       {
         id: '21',
         name: 'Develop Model B1 in Project X',
-        permission_set: {
-          all_access: false,
-          permissions: ['access_data', 'see_lookml', 'develop', 'use_sql_runner'],
-        },
-        model_set: {
-          all_access: false,
-          models: ['model_b1'],
-        },
+        permission_set: { all_access: false, permissions: ['access_data', 'see_lookml', 'develop', 'use_sql_runner'] },
+        model_set: { all_access: false, models: ['model_b1'] },
       },
     ]
-
     const models = [
-      {
-        name: 'model_a',
-        project_name: 'project_y',
-        allowed_db_connection_names: ['bq_y'],
-        explores: [{ name: 'exp_a', hidden: false }],
-      },
-      {
-        name: 'model_b1',
-        project_name: 'project_x',
-        allowed_db_connection_names: ['bq_x'],
-        explores: [{ name: 'exp_b1', hidden: false }],
-      },
-      {
-        name: 'model_b2',
-        project_name: 'project_x',
-        allowed_db_connection_names: ['bq_x2'],
-        explores: [{ name: 'exp_b2', hidden: false }],
-      },
+      { name: 'model_a', project_name: 'project_y', allowed_db_connection_names: ['bq_y'], explores: [{ name: 'exp_a', hidden: false }] },
+      { name: 'model_b1', project_name: 'project_x', allowed_db_connection_names: ['bq_x'], explores: [{ name: 'exp_b1', hidden: false }] },
+      { name: 'model_b2', project_name: 'project_x', allowed_db_connection_names: ['bq_x2'], explores: [{ name: 'exp_b2', hidden: false }] },
     ]
 
-    const caps = resolveUserCapabilities({
-      user: { id: '7' },
-      roles,
-      models,
-      folders: [],
-    })
-
-    // Develop on model_b1 expands to unlock all of project_x (which includes model_b1 and model_b2)
+    const caps = resolveUserCapabilities({ user: { id: '7' }, roles, models, folders: [] })
     expect(caps.developableProjects.has('project_x')).toBe(true)
     expect(caps.developableProjects.has('project_y')).toBe(false)
     expect(caps.readableProjects.has('project_x')).toBe(true)
-
-    // Meanwhile, explorableModels remains strictly restricted to model_a
     expect(Array.from(caps.explorableModels)).toEqual(['model_a'])
     expect(caps.explorableModels.has('model_b1')).toBe(false)
     expect(caps.explorableModels.has('model_b2')).toBe(false)
-
-    // Model -> Connection expansion for use_sql_runner on model_b1
     expect(Array.from(caps.sqlRunnerConnections)).toEqual(['bq_x'])
-
-    // Missing save_content / save_dashboards makes app & dashboard readOnly
     expect(caps.tools.app.enabled).toBe(true)
     expect(caps.tools.app.readOnly).toBe(true)
     expect(caps.tools.app.missingPermissions).toEqual(['save_content', 'save_dashboards'])
@@ -167,11 +89,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
   test('3. falls back gracefully when sdk.user_roles returns 404 for non-see_users user', async () => {
     const mockSdk: any = {
       ok: async (p: any) => p,
-      me: async () => ({
-        id: '99',
-        display_name: 'Standard Analyst',
-        personal_folder_id: '50',
-      }),
+      me: async () => ({ id: '99', display_name: 'Standard Analyst', personal_folder_id: '50' }),
       user_roles: async () => {
         throw new Error('404 Not found: https://docs.looker.com/r/err/4.0/404/get/users/:user_id/roles')
       },
@@ -192,7 +110,6 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     }
 
     const meta = await fetchInitialLookerMetadata(mockSdk)
-
     expect(meta.roles).toBeNull()
     expect(meta.capabilities.rolesLoaded).toBe(false)
     expect(Array.from(meta.capabilities.explorableModels)).toEqual(['thelook'])
@@ -207,14 +124,10 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     const roleDenied = classifyLooker404Error(
       404,
       '/dashboards',
-      JSON.stringify({
-        message: 'Not found',
-        documentation_url: 'https://docs.looker.com/r/err/4.0/404/post/dashboards',
-      })
+      JSON.stringify({ message: 'Not found', documentation_url: 'https://docs.looker.com/r/err/4.0/404/post/dashboards' })
     )
     expect(roleDenied.kind).toBe('role_denied')
-    expect(roleDenied.remediation).toMatch(/Role-Denied 404/i)
-    expect(roleDenied.remediation).toMatch(/Admin > Roles/i)
+    expect(roleDenied.remediation).toMatch(/Role-Denied 404.*Admin > Roles/i)
 
     const featureDisabledSinatra = classifyLooker404Error(
       404,
@@ -227,10 +140,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     const featureDisabledBareDoc = classifyLooker404Error(
       404,
       '/data_app_extension',
-      JSON.stringify({
-        message: 'Not found',
-        documentation_url: 'https://docs.looker.com/',
-      })
+      JSON.stringify({ message: 'Not found', documentation_url: 'https://docs.looker.com/' })
     )
     expect(featureDisabledBareDoc.kind).toBe('feature_disabled')
     expect(featureDisabledBareDoc.remediation).toMatch(/inline_extensions/i)
@@ -241,15 +151,11 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
           rawRequest: async () => ({
             ok: false,
             statusCode: 404,
-            body: JSON.stringify({
-              message: 'Not found',
-              documentation_url: 'https://docs.looker.com/',
-            }),
+            body: JSON.stringify({ message: 'Not found', documentation_url: 'https://docs.looker.com/' }),
           }),
         },
       },
     }
-
     await expect(
       rawLookerRequest(mockSdkWith404, 'POST', '/data_app_extension', undefined, {})
     ).rejects.toThrow(/404 feature_disabled.*inline_extensions/i)
@@ -269,32 +175,14 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
           id: '8',
           name: 'Gemini',
           can: { create: true, delete: true, update: true },
-          permission_set: {
-            all_access: false,
-            permissions: ['chat_with_agent', 'chat_with_explore', 'gemini_in_looker', 'save_agents'],
-          },
-          model_set: {
-            all_access: true,
-            models: ['thelook', 'agentic_thelook'],
-          },
+          permission_set: { all_access: false, permissions: ['chat_with_agent', 'chat_with_explore', 'gemini_in_looker', 'save_agents'] },
+          model_set: { all_access: true, models: ['thelook', 'agentic_thelook'] },
         },
       ],
       models: [
-        {
-          name: 'thelook',
-          project_name: 'thelook_event',
-          allowed_db_connection_names: ['default_bigquery_connection'],
-        },
-        {
-          name: 'agentic_thelook',
-          project_name: 'agentic-thelook',
-          allowed_db_connection_names: ['default_bigquery_connection'],
-        },
-        {
-          name: 'deploytobarerepo_temp',
-          project_name: 'deploytobarerepo_temp',
-          allowed_db_connection_names: ['default_bigquery_connection'],
-        },
+        { name: 'thelook', project_name: 'thelook_event', allowed_db_connection_names: ['default_bigquery_connection'] },
+        { name: 'agentic_thelook', project_name: 'agentic-thelook', allowed_db_connection_names: ['default_bigquery_connection'] },
+        { name: 'deploytobarerepo_temp', project_name: 'deploytobarerepo_temp', allowed_db_connection_names: ['default_bigquery_connection'] },
       ],
       folders: [
         { id: '1', name: 'Shared', can: { edit_content: true, show: true } },
@@ -310,30 +198,17 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(devArgolisCaps.canConfigureExtension).toBe(true)
     expect(devArgolisCaps.canManageUserAttributes).toBe(true)
 
-    // Restricted analyst without use_sql_runner, see_system_activity, or develop
     const restrictedAnalyst = resolveUserCapabilities({
       user: { id: '25', personal_folder_id: '99' },
       roles: [
         {
           id: '3',
           name: 'LookML Reader',
-          permission_set: {
-            all_access: false,
-            permissions: ['access_data', 'see_lookml'],
-          },
-          model_set: {
-            all_access: false,
-            models: ['thelook'],
-          },
+          permission_set: { all_access: false, permissions: ['access_data', 'see_lookml'] },
+          model_set: { all_access: false, models: ['thelook'] },
         },
       ],
-      models: [
-        {
-          name: 'thelook',
-          project_name: 'thelook_event',
-          allowed_db_connection_names: ['default_bigquery_connection'],
-        },
-      ],
+      models: [{ name: 'thelook', project_name: 'thelook_event', allowed_db_connection_names: ['default_bigquery_connection'] }],
       folders: [],
     })
 
@@ -342,11 +217,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(restrictedAnalyst.tools.lookml.readOnly).toBe(true)
     expect(restrictedAnalyst.tools.lookml.missingPermissions).toEqual(['develop'])
     expect(restrictedAnalyst.tools.health.enabled).toBe(true)
-    expect(restrictedAnalyst.tools.health.missingPermissions).toEqual([
-      'see_system_activity',
-      'develop',
-      'use_sql_runner',
-    ])
+    expect(restrictedAnalyst.tools.health.missingPermissions).toEqual(['see_system_activity', 'develop', 'use_sql_runner'])
     expect(restrictedAnalyst.canConfigureExtension).toBe(false)
     expect(restrictedAnalyst.canManageUserAttributes).toBe(false)
   })
