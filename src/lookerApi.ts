@@ -975,17 +975,34 @@ export async function upsertPublishedDataApp(
   }
 }
 
-export type NativeContentType = 'dashboard' | 'look' | 'board'
+export type NativeContentType = 'dashboard' | 'lookml_dashboard' | 'look' | 'board'
 
 export interface NativeContentBundle {
   id: string
   content_type?: NativeContentType
+  contentType?: NativeContentType
   title: string
   folder_id?: string
+  folderId?: string
   embed_path?: string
+  url?: string
   tile_count?: number
   filter_count?: number
   schedule_id?: string
+  look_id?: string
+  board_id?: string
+  lookml_dashboard_id?: string
+  project_id?: string
+  model?: string
+  file_path?: string
+  layout_id?: string
+  element_ids?: string[]
+  filter_names?: string[]
+  layout_component_ids?: Record<string, string>
+  query_cache?: Record<string, string>
+  filter_cache?: Record<string, string>
+  summary?: string
+  elements?: any[]
   explores?: string[]
 }
 
@@ -998,6 +1015,20 @@ export interface NativeContentState {
   tileCount?: number
   filterCount?: number
   scheduleId?: string
+  lookId?: string
+  boardId?: string
+  lookmlDashboardId?: string
+  projectId?: string
+  model?: string
+  filePath?: string
+  layoutId?: string
+  elementIds?: string[]
+  filterNames?: string[]
+  layoutComponentIds?: Record<string, string>
+  queryCache?: Record<string, string>
+  filterCache?: Record<string, string>
+  summary?: string
+  elements?: any[]
   studio?: DashboardStudioMetadata
 }
 
@@ -1010,10 +1041,11 @@ export function resolveNativeEmbedPath(
   id: string,
   explicitPath?: string
 ): string {
-  const cleanId = encodeURIComponent(String(id).trim())
-  if (explicitPath && /^\/(?:embed\/(?:dashboards|looks)|boards)\//.test(explicitPath)) {
+  const raw = String(id).trim()
+  if (explicitPath && /^\/(?:embed\/(?:dashboards|looks)|dashboards|boards)\//.test(explicitPath)) {
     return explicitPath
   }
+  const cleanId = encodeURIComponent(raw).replace(/%3A%3A/gi, '::')
   if (contentType === 'look') return `/embed/looks/${cleanId}`
   if (contentType === 'board') return `/boards/${cleanId}`
   return `/embed/dashboards/${cleanId}`
@@ -1064,13 +1096,18 @@ export async function saveNativeContentArtifact(
   const id = String(bundle.id || existing?.id || '').trim()
   if (!id) throw new Error('Native content bundle is missing a target ID.')
   const contentType: NativeContentType =
-    bundle.content_type || existing?.contentType || 'dashboard'
+    bundle.content_type ||
+    bundle.contentType ||
+    existing?.contentType ||
+    (id.includes('::') ? 'lookml_dashboard' : 'dashboard')
   const title = bundle.title || existing?.title || `Native ${contentType} #${id}`
-  const effectiveFolderId = String(bundle.folder_id || existing?.folderId || folderId || '1')
+  const effectiveFolderId = String(
+    bundle.folder_id || bundle.folderId || existing?.folderId || folderId || '1'
+  )
   const embedPath = resolveNativeEmbedPath(
     contentType,
     id,
-    bundle.embed_path || existing?.embedPath
+    bundle.embed_path || bundle.url || existing?.embedPath
   )
   const nextStudio = mergeStudioMetadata(existing?.studio, studioUpdate)
   const updatedAt = nextStudio?.updatedAt || new Date().toISOString()
@@ -1108,6 +1145,23 @@ export async function saveNativeContentArtifact(
     tileCount: bundle.tile_count ?? existing?.tileCount,
     filterCount: bundle.filter_count ?? existing?.filterCount,
     scheduleId: bundle.schedule_id ?? existing?.scheduleId,
+    lookId: bundle.look_id ?? existing?.lookId,
+    boardId: bundle.board_id ?? existing?.boardId,
+    lookmlDashboardId:
+      bundle.lookml_dashboard_id ??
+      existing?.lookmlDashboardId ??
+      (contentType === 'lookml_dashboard' ? id : undefined),
+    projectId: bundle.project_id ?? existing?.projectId,
+    model: bundle.model ?? existing?.model,
+    filePath: bundle.file_path ?? existing?.filePath,
+    layoutId: bundle.layout_id ?? existing?.layoutId,
+    elementIds: bundle.element_ids ?? existing?.elementIds,
+    filterNames: bundle.filter_names ?? existing?.filterNames,
+    layoutComponentIds: bundle.layout_component_ids ?? existing?.layoutComponentIds,
+    queryCache: bundle.query_cache ?? existing?.queryCache,
+    filterCache: bundle.filter_cache ?? existing?.filterCache,
+    summary: bundle.summary ?? existing?.summary,
+    elements: bundle.elements ?? existing?.elements,
     studio: nextStudio,
   }
 
@@ -1145,6 +1199,20 @@ export async function saveNativeContentArtifact(
     tileCount: objPayload.tileCount,
     filterCount: objPayload.filterCount,
     scheduleId: objPayload.scheduleId,
+    lookId: objPayload.lookId,
+    boardId: objPayload.boardId,
+    lookmlDashboardId: objPayload.lookmlDashboardId,
+    projectId: objPayload.projectId,
+    model: objPayload.model,
+    filePath: objPayload.filePath,
+    layoutId: objPayload.layoutId,
+    elementIds: objPayload.elementIds,
+    filterNames: objPayload.filterNames,
+    layoutComponentIds: objPayload.layoutComponentIds,
+    queryCache: objPayload.queryCache,
+    filterCache: objPayload.filterCache,
+    summary: objPayload.summary,
+    elements: objPayload.elements,
     studio: nextStudio,
   }
 }
@@ -1154,7 +1222,7 @@ export async function loadNativeContentById(
   extensionSDK: any,
   rawId: string
 ): Promise<NativeContentState> {
-  const prefixMatch = rawId.trim().match(/^(dashboard|look|board):(.+)$/i)
+  const prefixMatch = rawId.trim().match(/^(dashboard|lookml_dashboard|look|board):(.+)$/i)
   const explicitType = prefixMatch ? (prefixMatch[1].toLowerCase() as NativeContentType) : undefined
   const cleanId = (prefixMatch ? prefixMatch[2] : rawId).trim()
   const stored = await readArtifactJson<any>(
@@ -1164,7 +1232,10 @@ export async function loadNativeContentById(
   )
   if (stored?.data?.id) {
     const d = stored.data
-    const cType: NativeContentType = explicitType || d.contentType || 'dashboard'
+    const cType: NativeContentType =
+      explicitType ||
+      d.contentType ||
+      (String(d.id).includes('::') ? 'lookml_dashboard' : 'dashboard')
     return {
       id: String(d.id),
       contentType: cType,
@@ -1174,11 +1245,26 @@ export async function loadNativeContentById(
       tileCount: d.tileCount,
       filterCount: d.filterCount,
       scheduleId: d.scheduleId,
+      lookId: d.lookId,
+      boardId: d.boardId,
+      lookmlDashboardId: d.lookmlDashboardId,
+      projectId: d.projectId,
+      model: d.model,
+      filePath: d.filePath,
+      layoutId: d.layoutId,
+      elementIds: d.elementIds,
+      filterNames: d.filterNames,
+      layoutComponentIds: d.layoutComponentIds,
+      queryCache: d.queryCache,
+      filterCache: d.filterCache,
+      summary: d.summary,
+      elements: d.elements,
       studio: d.studio,
     }
   }
 
-  const cType: NativeContentType = explicitType || 'dashboard'
+  const cType: NativeContentType =
+    explicitType || (cleanId.includes('::') ? 'lookml_dashboard' : 'dashboard')
   const item =
     cType === 'look'
       ? await rawLookerRequest<any>(sdk, 'GET', `/looks/${encodeURIComponent(cleanId)}`)
@@ -1186,14 +1272,22 @@ export async function loadNativeContentById(
       ? await rawLookerRequest<any>(sdk, 'GET', `/boards/${encodeURIComponent(cleanId)}`)
       : await sdk.ok(sdk.dashboard(cleanId))
   const id = String(item.id || cleanId)
+  const finalType: NativeContentType =
+    explicitType || (id.includes('::') ? 'lookml_dashboard' : cType)
   return {
     id,
-    contentType: cType,
-    title: item.title || `${cType} #${id}`,
+    contentType: finalType,
+    title: item.title || `${finalType} #${id}`,
     folderId: String(item.folder?.id || item.folder_id || '1'),
-    embedPath: resolveNativeEmbedPath(cType, id),
+    embedPath: resolveNativeEmbedPath(finalType, id),
     tileCount: item.dashboard_elements?.length,
     filterCount: item.dashboard_filters?.length,
+    lookmlDashboardId:
+      finalType === 'lookml_dashboard'
+        ? id
+        : item.lookml_link_id
+        ? String(item.lookml_link_id)
+        : undefined,
   }
 }
 

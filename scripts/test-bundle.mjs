@@ -361,10 +361,28 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
     'lookmlTool.tsx must persist user_${userId}_lookml_${id} and obj_lookml_${id}'
   )
   assert(
-    antigravityTs.includes("allowUpdateSession: toolMode === 'lookml'") &&
+    antigravityTs.includes("allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard'") &&
       antigravityTs.includes('LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.properties.vars') &&
       antigravityTs.includes('...customVars'),
-    'runAntigravityTurn must expose vars: { type: "object" } on RUN_LOOKER_CODEMODE_TOOL and pass allowUpdateSession: true + customVars in LookML mode'
+    'runAntigravityTurn must expose vars: { type: "object" } on RUN_LOOKER_CODEMODE_TOOL and pass allowUpdateSession: true + customVars in LookML and dashboard modes'
+  )
+  // Verify Issue #18: Content Studio (UDD & LookML Dashboards, Looks, Boards, Schedules)
+  assert(
+    lookerApiTs.includes("'lookml_dashboard'") &&
+      lookerApiTs.includes('lookmlDashboardId') &&
+      lookerApiTs.includes('layoutComponentIds') &&
+      antigravityTs.includes('DASHBOARD_CODEMODE_PREAMBLE_PY') &&
+      antigravityTs.includes('def upsert_udd(') &&
+      antigravityTs.includes('def upsert_lookml_dashboard(') &&
+      antigravityTs.includes('def reflow_24col(') &&
+      antigravityTs.includes('def pin_to_board(') &&
+      antigravityTs.includes('def schedule_dashboard(') &&
+      antigravityTs.includes('def emit_native_bundle(') &&
+      antigravityTs.includes('NATIVE_CONTENT_GUIDE_MD') &&
+      antigravityTs.includes('isDashboardMode\n    ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]') &&
+      antigravityTs.includes('looker_http_ms') &&
+      antigravityTs.includes('api_retries'),
+    'Issue #18: lookerApi.ts and antigravity.ts must include lookml_dashboard support, DASHBOARD_CODEMODE_PREAMBLE_PY macros, CodeMode-only activeTools in /dashboard mode, and Looker HTTP telemetry'
   )
   const lookmlPyMatch = lookmlToolTsx.match(/export const BOOTSTRAP_LOOKML_PY = `([\s\S]*?)`\n/)
   assert(lookmlPyMatch, 'Could not find BOOTSTRAP_LOOKML_PY in src/lookmlTool.tsx')
