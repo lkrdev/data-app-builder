@@ -1,6 +1,11 @@
 import React, { useState } from 'react'
 import type { Looker40SDK } from '@looker/sdk'
 import { PersistedChatTurn, rawLookerRequest } from './lookerApi'
+export {
+  BUNDLED_SKILLS_DEFLATE_B64,
+  BUNDLED_SKILLS_LOCK_HASHES,
+  BUNDLED_SKILLS_NAMES,
+} from './vendor/bundledSkills'
 
 export interface LookmlFileChange {
   path: string
@@ -79,6 +84,7 @@ export const BOOTSTRAP_LOOKML_PY = `#!/usr/bin/env python3
 2. Computes unified diffs between /workspace/lookml_baseline and /workspace/data/$RUN_ID/lookml (or /workspace/lookml).
 3. Emits <LOOKML_BUNDLE>{...}</LOOKML_BUNDLE> for the host Looker extension.
 """
+import base64
 import difflib
 import json
 import os
@@ -87,6 +93,7 @@ import subprocess
 import sys
 import tarfile
 import urllib.request
+import zlib
 from pathlib import Path
 
 WORKSPACE_DIR = Path(os.environ.get("WORKSPACE_DIR", "/workspace"))
@@ -111,8 +118,18 @@ REQUIRED_SKILLS = (
 def ensure_skills() -> list[str]:
     if not (SKILLS_ROOT / "agentic-lookml/SKILL.md").is_file():
         SKILLS_ROOT.mkdir(parents=True, exist_ok=True)
+        bundled_b64_path = WORKSPACE_DIR / "bundled_skills.deflate.b64"
         local_skills = os.environ.get("LKR_CLI_SKILLS_DIR")
-        if local_skills and Path(local_skills).is_dir():
+        if bundled_b64_path.is_file():
+            raw_b64 = bundled_b64_path.read_text("utf-8").strip()
+            files_map = json.loads(
+                zlib.decompress(base64.b64decode(raw_b64), -zlib.MAX_WBITS).decode("utf-8")
+            )
+            for rel_path, content in files_map.items():
+                dest = SKILLS_ROOT / rel_path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(content, encoding="utf-8")
+        elif local_skills and Path(local_skills).is_dir():
             for s in REQUIRED_SKILLS:
                 src = Path(local_skills) / s
                 if src.is_dir():

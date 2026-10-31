@@ -11,6 +11,7 @@
     "format": "prettier --write src",
     "sync-upstream": "bash scripts/sync-upstream.sh",
     "sync-codemode": "bash scripts/sync-codemode.sh",
+    "sync-skills": "node scripts/sync-skills-bundle.mjs",
     "test": "jest && node scripts/test-bundle.mjs"
   },
   "jest": {

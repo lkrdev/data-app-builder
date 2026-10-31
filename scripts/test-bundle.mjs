@@ -448,6 +448,43 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
     lookmlBundle.files.some((f) => f.path === 'bronze/orders.refinement.lkml' && f.diff.includes('+  measure: total_revenue')),
     'Expected unified diff for bronze/orders.refinement.lkml'
   )
+
+  // Verify version-controlled .agents/skills, skills-lock.json, and offline bundled_skills.deflate.b64 extraction
+  const skillsLock = JSON.parse(readFileSync(path.join(repoRoot, 'skills-lock.json'), 'utf8'))
+  assert.equal(skillsLock.version, 1, 'skills-lock.json must have version 1')
+  assert(
+    Object.keys(skillsLock.skills || {}).length >= 25,
+    'skills-lock.json must track external skills installed via npx skills'
+  )
+  const bundledSkillsTs = readFileSync(path.join(repoRoot, 'src/vendor/bundledSkills.ts'), 'utf8')
+  const b64Match = bundledSkillsTs.match(/export const BUNDLED_SKILLS_DEFLATE_B64 = "(.*?)"/)
+  assert(b64Match && b64Match[1].length > 1000, 'Expected BUNDLED_SKILLS_DEFLATE_B64 in src/vendor/bundledSkills.ts')
+  writeFileSync(path.join(workDir, 'bundled_skills.deflate.b64'), b64Match[1], 'utf8')
+  const ensureSkillsOut = execFileSync(
+    'python3',
+    [
+      '-c',
+      `import importlib.util, json; spec = importlib.util.spec_from_file_location("b", ${JSON.stringify(
+        bootstrapPyPath
+      )}); mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); print(json.dumps(sorted(mod.ensure_skills())))`,
+    ],
+    {
+      env: { ...process.env, WORKSPACE_DIR: workDir },
+      encoding: 'utf8',
+    }
+  )
+  const extractedSkills = JSON.parse(ensureSkillsOut)
+  for (const lockedSkill of Object.keys(skillsLock.skills)) {
+    assert(
+      extractedSkills.includes(lockedSkill),
+      `Offline bundled_skills.deflate.b64 must extract locked skill: ${lockedSkill}`
+    )
+  }
+  assert(
+    extractedSkills.includes('looker-permissions'),
+    'Offline bundled_skills.deflate.b64 must extract repo skill: looker-permissions'
+  )
+
   console.log('✓ test-bundle.mjs: all assertions passed!')
 } finally {
   rmSync(workDir, { recursive: true, force: true })
