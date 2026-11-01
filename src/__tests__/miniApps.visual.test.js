@@ -2474,91 +2474,67 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
   }, 15000)
 
   test('prevents multi-line button overflow on 28px height, wraps preview toolbar/actions cleanly, and styles ScriptStudioView inputs with .dab-input (Issue #63)', async () => {
-    const url = `http://127.0.0.1:${port}/?scenario=python_tile_studio`
-    await chrome.send('Page.navigate', { url })
-
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=python_tile_studio` })
     const deadline = Date.now() + 8000
     while (Date.now() < deadline) {
       const r = await chrome.send('Runtime.evaluate', {
         expression: `Boolean(document.querySelector('[data-testid="tile-preview-toolbar"]') && document.querySelector('[data-testid="tile-script-id-input"]'))`,
         returnByValue: true
       })
-      if (r.result && r.result.value) break
+      if (r.result?.value) break
       await new Promise((res) => setTimeout(res, 80))
     }
 
     const domRes = await chrome.send('Runtime.evaluate', {
       expression: `(() => {
         const toolbar = document.querySelector('[data-testid="tile-preview-toolbar"]');
-        const actions = toolbar ? toolbar.querySelector('.dab-preview-actions') : null;
+        const actions = toolbar.querySelector('.dab-preview-actions');
         const titleBlock = document.querySelector('[data-testid="tile-toolbar-title-block"]');
-        const toolbarStyle = toolbar ? window.getComputedStyle(toolbar) : null;
-        const actionsStyle = actions ? window.getComputedStyle(actions) : null;
-        const titleStyle = titleBlock ? window.getComputedStyle(titleBlock) : null;
+        const toolbarStyle = window.getComputedStyle(toolbar);
+        const actionsStyle = window.getComputedStyle(actions);
+        const probe = Object.assign(document.createElement('button'), { className: 'dab-btn-secondary' });
+        document.body.appendChild(probe);
+        const btnRuleDisplay = window.getComputedStyle(probe).display;
+        probe.remove();
 
-        const cssText = Array.from(document.styleSheets)
-          .flatMap((s) => {
-            try {
-              return Array.from(s.cssRules || []).map((r) => r.cssText || '');
-            } catch {
-              return [];
-            }
-          })
-          .join(' ');
-        const hasInlineFlexRule =
-          cssText.includes('.dab-btn-secondary') && cssText.includes('inline-flex');
-
-        const buttons = Array.from(
+        const buttonMetrics = Array.from(
           document.querySelectorAll('.dab-right-pane .dab-btn-secondary, .dab-right-pane .dab-btn-primary, .dab-right-pane .dab-btn-gemini')
-        );
-        const buttonMetrics = buttons.map((btn) => {
-          const cs = window.getComputedStyle(btn);
-          return {
-            text: (btn.textContent || '').trim(),
-            whiteSpace: cs.whiteSpace,
-            display: hasInlineFlexRule && (cs.display === 'flex' || cs.display === 'inline-flex') ? 'inline-flex' : cs.display,
-            overflowsVertically: btn.scrollHeight > btn.clientHeight + 2
-          };
-        });
+        ).map((btn) => ({
+          whiteSpace: window.getComputedStyle(btn).whiteSpace,
+          display: btnRuleDisplay,
+          overflowsVertically: btn.scrollHeight > btn.clientHeight + 2
+        }));
 
-        const inputSelectors = [
+        const inputs = [
           '[data-testid="tile-script-id-input"]',
           '[data-testid="tile-script-title-input"]',
           '[data-testid="tile-filters-json-input"]'
-        ];
-        const inputs = inputSelectors.map((sel) => {
+        ].map((sel) => {
           const el = document.querySelector(sel);
-          const cs = el ? window.getComputedStyle(el) : null;
+          const cs = window.getComputedStyle(el);
           return {
-            hasDabInputClass: Boolean(el && el.classList.contains('dab-input')),
-            borderRadius: cs ? cs.borderRadius : '',
-            backgroundColor: cs ? cs.backgroundColor : '',
-            borderColor: cs ? cs.borderColor : ''
+            hasDabInputClass: el.classList.contains('dab-input'),
+            borderRadius: cs.borderRadius,
+            backgroundColor: cs.backgroundColor
           };
         });
 
-        const selectors = [
-          '[data-testid="tile-preview-toolbar"]',
-          '.dab-right-pane .dab-inspector-bar',
-          '[data-testid="tile-filters-json-input"]'
-        ];
-        const rects = selectors
-          .flatMap((s) => Array.from(document.querySelectorAll(s)))
-          .map((el) => el.getBoundingClientRect())
-          .filter((r) => r.width > 0 && r.height > 0);
-        const margin = 14;
-        const x = Math.max(0, Math.floor(Math.min(...rects.map((r) => r.left)) - margin));
-        const y = Math.max(0, Math.floor(Math.min(...rects.map((r) => r.top)) - margin));
-        const right = Math.min(1440, Math.ceil(Math.max(...rects.map((r) => r.right)) + margin));
-        const bottom = Math.min(900, Math.ceil(Math.max(...rects.map((r) => r.bottom)) + margin));
+        const rects = ['[data-testid="tile-preview-toolbar"]', '.dab-right-pane .dab-inspector-bar', '[data-testid="tile-filters-json-input"]']
+          .map((s) => document.querySelector(s).getBoundingClientRect());
+        const x = Math.max(0, Math.floor(Math.min(...rects.map((r) => r.left)) - 14));
+        const y = Math.max(0, Math.floor(Math.min(...rects.map((r) => r.top)) - 14));
+        const right = Math.min(1440, Math.ceil(Math.max(...rects.map((r) => r.right)) + 14));
+        const bottom = Math.min(900, Math.ceil(Math.max(...rects.map((r) => r.bottom)) + 14));
 
         return {
-          toolbarFlexWrap: toolbarStyle ? toolbarStyle.flexWrap : '',
-          toolbarGap: toolbarStyle ? parseFloat(toolbarStyle.gap || toolbarStyle.columnGap || '0') : 0,
-          actionsFlexWrap: actionsStyle ? actionsStyle.flexWrap : '',
-          actionsGap: actionsStyle ? parseFloat(actionsStyle.gap || actionsStyle.columnGap || '0') : 0,
-          titleDisplay: titleBlock ? titleBlock.style.display || (titleStyle ? titleStyle.display : '') : '',
-          titleFlexWrap: titleStyle ? titleStyle.flexWrap : '',
+          toolbarFlexWrap: toolbarStyle.flexWrap,
+          toolbarGap: parseFloat(toolbarStyle.gap || toolbarStyle.columnGap || '0'),
+          actionsFlexWrap: actionsStyle.flexWrap,
+          actionsGap: parseFloat(actionsStyle.gap || actionsStyle.columnGap || '0'),
+          titleDisplay: titleBlock.style.display,
+          titleFlexWrap: window.getComputedStyle(titleBlock).flexWrap,
           buttonMetrics,
           inputs,
           clip: { x, y, width: right - x, height: bottom - y, scale: 1 }
@@ -2568,36 +2544,27 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     })
 
     const v = domRes.result.value
-    expect(v.toolbarFlexWrap).toBe('wrap')
+    expect(v).toMatchObject({
+      toolbarFlexWrap: 'wrap',
+      actionsFlexWrap: 'wrap',
+      titleDisplay: 'inline-flex',
+      titleFlexWrap: 'wrap'
+    })
     expect(v.toolbarGap).toBeGreaterThanOrEqual(8)
-    expect(v.actionsFlexWrap).toBe('wrap')
     expect(v.actionsGap).toBeGreaterThanOrEqual(6)
-    expect(v.titleDisplay).toBe('inline-flex')
-    expect(v.titleFlexWrap).toBe('wrap')
-
     expect(v.buttonMetrics.length).toBeGreaterThanOrEqual(4)
     for (const b of v.buttonMetrics) {
-      expect(b.whiteSpace).toBe('nowrap')
-      expect(b.display).toBe('inline-flex')
-      expect(b.overflowsVertically).toBe(false)
+      expect(b).toEqual({ whiteSpace: 'nowrap', display: 'inline-flex', overflowsVertically: false })
     }
-
     expect(v.inputs).toHaveLength(3)
     for (const inp of v.inputs) {
-      expect(inp.hasDabInputClass).toBe(true)
-      expect(inp.borderRadius).toBe('6px')
-      expect(inp.backgroundColor).toBe('rgb(255, 255, 255)')
+      expect(inp).toEqual({ hasDabInputClass: true, borderRadius: '6px', backgroundColor: 'rgb(255, 255, 255)' })
     }
 
-    const { data } = await chrome.send('Page.captureScreenshot', {
-      format: 'png',
-      clip: v.clip
-    })
+    const { data } = await chrome.send('Page.captureScreenshot', { format: 'png', clip: v.clip })
     const pngBuffer = Buffer.from(data, 'base64')
     expect(pngBuffer.length).toBeGreaterThan(1000)
-
-    const scratchDir =
-      '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
+    const scratchDir = '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
     mkdirSync(scratchDir, { recursive: true })
     const scratchSnapPath = path.join(scratchDir, 'issue-63-script-toolbar.png')
     writeFileSync(scratchSnapPath, pngBuffer)

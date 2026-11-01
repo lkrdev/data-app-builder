@@ -114,12 +114,7 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
       <div className="dab-preview-toolbar" data-testid="tile-preview-toolbar">
         <div
           data-testid="tile-toolbar-title-block"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            flexWrap: 'wrap',
-          }}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
         >
           <strong>{scriptTitle}</strong>
           <span className="dab-muted">
@@ -223,16 +218,7 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             padding: 10,
           }}
         >
-          <div
-            className="dab-inspector-bar"
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              gap: 8,
-              flexWrap: 'wrap',
-            }}
-          >
+          <div className="dab-inspector-bar" style={{ gap: 8, flexWrap: 'wrap' }}>
             <strong>Python Script (`LkrCodeMode.runPythonCode`)</strong>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
               <input
