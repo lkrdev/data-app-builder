@@ -4,20 +4,21 @@ import useSWR from 'swr'
 import { useLookerExtension } from './contexts/LookerExtensionContext'
 import {
   applyStudioDocumentTheme, archiveUserConversation, buildAvailableExploresCatalog, buildDenseExploreSchema,
-  CaConversationState, ConversationRecord, createLookerCaConversation, deleteUserArtifact,
-  deleteUserConversation, extractExploreIdsFromCode, extractResolvedUseCase,
-  fetchInitialLookerMetadata, formatExploreId, getAllowedUseCases, getArtifactNamespace,
-  getArtifactService, getUseCaseLabel, listSavedScripts, listUserArtifacts, listUserDashboardArtifacts,
-  loadExistingDashboardApp, loadNativeContentById, loadObjectArtifact, loadScriptArtifact,
-  loadStoredStudioThemeMode, loadUserConversations, loadUserEnvironmentId, NativeContentState,
-  NativeContentType, normalizeStudioThemeMode, parseExploreId, persistStudioThemeMode,
-  PublishedAppState, publishScriptDashboard, readInitialStudioThemeMode, resolveCaEmbedPath,
+  buildRootLookerFolders, CaConversationState, ConversationRecord, createLookerCaConversation,
+  deleteUserArtifact, deleteUserConversation, extractExploreIdsFromCode, extractResolvedUseCase,
+  fetchFolderChildren, fetchFolderWithAncestors, fetchInitialLookerMetadata, formatExploreId,
+  getAllowedUseCases, getArtifactNamespace, getArtifactService, getUseCaseLabel, listSavedScripts,
+  listUserArtifacts, loadExistingDashboardApp, loadNativeContentById,
+  loadObjectArtifact, loadScriptArtifact, loadStoredStudioThemeMode, loadUserConversations,
+  loadUserEnvironmentId, LookerFolderNode, NativeContentState, NativeContentType,
+  normalizeStudioThemeMode, parseExploreId, persistStudioThemeMode, PublishedAppState,
+  publishScriptDashboard, readInitialStudioThemeMode, resolveCaEmbedPath,
   resolveConversationRelatedContent, ResolvedStudioTheme, ResolvedStudioUseCase, resolveStudioTheme, resolveSystemTheme,
   resolveUserCapabilities, saveDashboardStudioMetadata, SavedScript, saveNativeContentArtifact,
-  saveScriptArtifact, saveUserArtifact, saveUserConversation, selectCaAgentViaIsolatedSubagent,
-  STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS, studioModeToUseCase, StudioThemeMode,
-  StudioUseCase, upsertPublishedDataApp, useCaseToStudioMode, UserArtifactIndex, UserCapabilities,
-  UserConversationEntry,
+  saveScriptArtifact, saveUserArtifact, saveUserConversation, searchLookerFolders, SearchLookerFoldersParams,
+  selectCaAgentViaIsolatedSubagent, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
+  studioModeToUseCase, StudioThemeMode, StudioUseCase, upsertPublishedDataApp, useCaseToStudioMode,
+  UserArtifactIndex, UserCapabilities, UserConversationEntry,
 } from './lookerApi'
 import {
   AgentSession, ANTIGRAVITY_ALLOWED_MODELS, AntigravityActivityStep, AntigravityAuth, AntigravityModelOption,
@@ -154,9 +155,24 @@ export function useStudioController() {
   const [allModels, setAllModels] = useState<
     Array<{ name: string; label: string; project_name?: string; explores: any[] }>
   >([])
+  const [loadingMetadata, setLoadingMetadata] = useState<boolean>(
+    () => Boolean(mockExt?.forceFolderSkeleton ?? true)
+  )
   const [folders, setFolders] = useState<Array<{ id: string; name: string }>>([])
+  const [folderTreeNodes, setFolderTreeNodes] = useState<Record<string, LookerFolderNode>>(() => {
+    const roots = buildRootLookerFolders()
+    return Object.fromEntries(roots.map((r) => [r.id, r]))
+  })
+  const [rootFolderIds, setRootFolderIds] = useState<string[]>(() =>
+    buildRootLookerFolders().map((r) => r.id)
+  )
+  const [folderChildrenById, setFolderChildrenById] = useState<Record<string, string[]>>({})
+  const [expandedFolderIds, setExpandedFolderIds] = useState<string[]>([])
+  const [loadingFolderIds, setLoadingFolderIds] = useState<string[]>([])
   const [selectedExplores, setSelectedExplores] = useState<string[]>([])
-  const [selectedFolderId, setSelectedFolderId] = useState('1')
+  const [selectedFolderId, setSelectedFolderId] = useState<string>(() =>
+    String(mockExt?.initialSelectedFolderId || '1')
+  )
   const [schemaMarkdown, setSchemaMarkdown] = useState('')
   const [loadingSchema, setLoadingSchema] = useState(false)
 
@@ -654,6 +670,123 @@ export function useStudioController() {
     }
   }
 
+  const hydrateFolderAncestors = useCallback(
+    async (targetFolderId: string) => {
+      const fid = String(targetFolderId || '').trim()
+      if (!fid) return
+      try {
+        const res = await fetchFolderWithAncestors(core40SDK, fid)
+        if (!res.folder && res.ancestors.length === 0) return
+        setFolderTreeNodes((prev) => {
+          const next = { ...prev }
+          for (const node of res.chain) {
+            const existing = next[node.id]
+            next[node.id] = existing ? { ...existing, ...node, name: existing.is_personal && existing.name === 'My folder' ? existing.name : node.name } : node
+          }
+          return next
+        })
+        if (res.chain.length > 0) {
+          const topRootId = res.chain[0].id
+          setRootFolderIds((prev) => (prev.includes(topRootId) ? prev : [topRootId, ...prev]))
+        }
+        if (res.chain.length > 1) {
+          setFolderChildrenById((prev) => {
+            const next = { ...prev }
+            for (let i = 0; i < res.chain.length - 1; i += 1) {
+              const parentId = res.chain[i].id
+              const childId = res.chain[i + 1].id
+              const cur = next[parentId] || []
+              if (!cur.includes(childId)) next[parentId] = [...cur, childId]
+            }
+            return next
+          })
+          setExpandedFolderIds((prev) => Array.from(new Set([...prev, ...res.expandedIds])))
+          for (const anc of res.ancestors) {
+            void fetchFolderChildren(core40SDK, anc.id)
+              .then((children) => {
+                if (!children.length) return
+                setFolderTreeNodes((prev) => {
+                  const next = { ...prev }
+                  for (const c of children) next[c.id] = { ...next[c.id], ...c }
+                  return next
+                })
+                setFolderChildrenById((prev) => {
+                  const cur = prev[anc.id] || []
+                  const merged = Array.from(new Set([...children.map((c) => c.id), ...cur]))
+                  return { ...prev, [anc.id]: merged }
+                })
+              })
+              .catch(() => {})
+          }
+        }
+      } catch {}
+    },
+    [core40SDK]
+  )
+
+  const toggleExpandFolder = useCallback(
+    async (folderId: string) => {
+      const fid = String(folderId || '').trim()
+      if (!fid) return
+      let shouldFetch = false
+      setExpandedFolderIds((prev) => {
+        if (prev.includes(fid)) return prev.filter((id) => id !== fid)
+        shouldFetch = true
+        return [...prev, fid]
+      })
+      if (!shouldFetch) return
+      setLoadingFolderIds((prev) => (prev.includes(fid) ? prev : [...prev, fid]))
+      try {
+        const children = await fetchFolderChildren(core40SDK, fid)
+        setFolderTreeNodes((prev) => {
+          const next = { ...prev }
+          for (const c of children) next[c.id] = { ...next[c.id], ...c }
+          if (next[fid] && children.length === 0) {
+            next[fid] = { ...next[fid], child_count: 0, has_children: false }
+          }
+          return next
+        })
+        setFolderChildrenById((prev) => {
+          const existing = prev[fid] || []
+          const merged = Array.from(new Set([...children.map((c) => c.id), ...existing]))
+          return { ...prev, [fid]: merged }
+        })
+      } catch {
+      } finally {
+        setLoadingFolderIds((prev) => prev.filter((id) => id !== fid))
+      }
+    },
+    [core40SDK]
+  )
+
+  const handleSearchFolders = useCallback(
+    async (params: SearchLookerFoldersParams): Promise<LookerFolderNode[]> => {
+      const results = await searchLookerFolders(core40SDK, params)
+      if (results.length > 0) {
+        setFolderTreeNodes((prev) => {
+          const next = { ...prev }
+          for (const r of results) next[r.id] = { ...next[r.id], ...r }
+          return next
+        })
+      }
+      return results
+    },
+    [core40SDK]
+  )
+
+  useEffect(() => {
+    const list = Object.values(folderTreeNodes).map((f) => ({
+      id: String(f.id),
+      name: `${f.name} (#${f.id})`,
+    }))
+    if (list.length > 0) setFolders(list)
+  }, [folderTreeNodes])
+
+  useEffect(() => {
+    if (!selectedFolderId) return
+    void hydrateFolderAncestors(selectedFolderId)
+  }, [selectedFolderId, hydrateFolderAncestors])
+
   useEffect(() => {
     let mounted = true
     fetchInitialLookerMetadata(core40SDK)
@@ -691,16 +824,31 @@ export function useStudioController() {
             explores: (m.explores || []).filter((e: any) => !e.hidden),
           }))
         )
-        const editableIds = meta.capabilities.editableFolderIds
-        const rawFolders = meta.folders || []
-        const filteredFolders = rawFolders.filter((f: any) => editableIds.has(String(f.id)))
+        const rawFolders = (meta.folders || []) as LookerFolderNode[]
+        setFolderTreeNodes((prev) => {
+          const next = { ...prev }
+          for (const f of rawFolders) next[f.id] = { ...next[f.id], ...f }
+          return next
+        })
+        setRootFolderIds(rawFolders.map((f) => String(f.id)))
         setFolders(
-          (filteredFolders.length > 0 ? filteredFolders : rawFolders).map((f: any) => ({
+          rawFolders.map((f: any) => ({
             id: String(f.id),
             name: `${f.name} (#${f.id})`,
           }))
         )
-        setSelectedFolderId((prev) => (prev === '1' ? meta.defaultFolderId : prev))
+        const targetInitialFolder = mockExt?.initialSelectedFolderId
+          ? String(mockExt.initialSelectedFolderId)
+          : meta.defaultFolderId
+        setSelectedFolderId((prev) =>
+          mockExt?.initialSelectedFolderId
+            ? String(mockExt.initialSelectedFolderId)
+            : prev === '1'
+            ? meta.defaultFolderId
+            : prev
+        )
+        if (!mockExt?.forceFolderSkeleton) setLoadingMetadata(false)
+        void hydrateFolderAncestors(targetInitialFolder)
         refreshCatalog(resolvedUserId)
         loadUserConversations(
           core40SDK,
@@ -711,6 +859,7 @@ export function useStudioController() {
         })
       })
       .catch((err) => {
+        if (!mockExt?.forceFolderSkeleton) setLoadingMetadata(false)
         setMessages((prev) => [
           ...prev,
           { role: 'error', text: `Failed to load Looker models: ${err.message}` },
@@ -719,7 +868,7 @@ export function useStudioController() {
     return () => {
       mounted = false
     }
-  }, [core40SDK, extensionSDK, syncSharedEnvironmentId])
+  }, [core40SDK, extensionSDK, syncSharedEnvironmentId, hydrateFolderAncestors])
 
   useEffect(() => {
     let mounted = true
@@ -2107,9 +2256,12 @@ export function useStudioController() {
         setNativeContent, setPublishedApp, bumpEmbedNonce,
         setMessages, setBusyStatus, setLiveActivitySteps,
         infoModalUseCase, setInfoModalUseCase,
+        loadingMetadata, setLoadingMetadata,
+        selectedFolderId, setSelectedFolderId,
+        hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders,
       }
     }
-  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce, setMessages, infoModalUseCase])
+  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce, setMessages, infoModalUseCase, loadingMetadata, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders])
 
   return {
     extensionSDK, core40SDK, lookerHostData, history, location, isTileMount,
@@ -2119,7 +2271,11 @@ export function useStudioController() {
     availableModels, enabledModes, oauthToken, setOauthToken, apiKey, setApiKey,
     isAuthenticated, oauthSigningIn, oauthRedirectUri,
     capabilities, setCapabilities, availableLookmlProjects, canDeployLookml,
-    models, folders, selectedExplores, setSelectedExplores,
+    loadingMetadata, setLoadingMetadata,
+    models, folders, folderTreeNodes, rootFolderIds, folderChildrenById,
+    expandedFolderIds, loadingFolderIds, toggleExpandFolder,
+    hydrateFolderAncestors, handleSearchFolders,
+    selectedExplores, setSelectedExplores,
     selectedFolderId, setSelectedFolderId, schemaMarkdown, loadingSchema,
     activeMode, isLookmlMode, isHealthCheckMode, isCaMode, builderMode,
     selectedUseCase, setSelectedUseCase: handleChangeUseCase,

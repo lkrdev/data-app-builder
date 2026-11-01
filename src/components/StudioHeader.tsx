@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { getGeminiUserAttributeName, LkrCodeMode } from '../antigravity'
 import { useLookerExtension } from '../contexts/LookerExtensionContext'
-import { formatExploreId } from '../lookerApi'
+import { formatExploreId, LookerFolderNode } from '../lookerApi'
 import {
   ResolvedStudioTheme,
   StudioController,
@@ -341,18 +341,21 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     lookmlProjectId,
     setLookmlProjectId,
     lookmlSessions,
-    loadLookmlInput,
-    setLoadLookmlInput,
     loadLookmlSessionById,
     lookmlBundle,
-    folders,
+    loadingMetadata,
+    folderTreeNodes,
+    rootFolderIds,
+    folderChildrenById,
+    expandedFolderIds,
+    loadingFolderIds,
+    toggleExpandFolder,
+    hydrateFolderAncestors,
+    handleSearchFolders,
     selectedFolderId,
     setSelectedFolderId,
     nativeContent,
     publishedApp,
-    loadDashInput,
-    setLoadDashInput,
-    handleLoadExistingDashboard,
     handleResetNewApp,
     authMode,
     oauthToken,
@@ -373,6 +376,22 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const comboRef = useRef<HTMLDivElement | null>(null)
   const dropdownRef = useRef<HTMLDivElement | null>(null)
 
+  const [folderPopoverOpen, setFolderPopoverOpen] = useState(() =>
+    Boolean(mockExt?.initialFolderPopoverOpen)
+  )
+  const [folderQuickSearch, setFolderQuickSearch] = useState('')
+  const [advModalOpen, setAdvModalOpen] = useState(() =>
+    Boolean(mockExt?.initialFolderSearchModalOpen)
+  )
+  const [advName, setAdvName] = useState('')
+  const [advParentId, setAdvParentId] = useState('')
+  const [advPersonal, setAdvPersonal] = useState<'any' | 'false' | 'true'>('any')
+  const [advCreatorId, setAdvCreatorId] = useState('')
+  const [advFolderId, setAdvFolderId] = useState('')
+  const [advResults, setAdvResults] = useState<LookerFolderNode[]>([])
+  const [advLoading, setAdvLoading] = useState(false)
+  const folderPickerRef = useRef<HTMLDivElement | null>(null)
+
   useEffect(() => {
     if (comboOpen && dropdownRef.current && typeof mockExt?.initialExploreScrollTop === 'number') {
       dropdownRef.current.scrollTop = mockExt.initialExploreScrollTop
@@ -384,10 +403,124 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
       if (comboRef.current && !comboRef.current.contains(e.target as Node)) {
         setComboOpen(false)
       }
+      if (
+        folderPickerRef.current &&
+        !folderPickerRef.current.contains(e.target as Node) &&
+        !(e.target as HTMLElement)?.closest?.('[data-testid="folder-advanced-search-modal"]')
+      ) {
+        setFolderPopoverOpen(false)
+      }
     }
     document.addEventListener('mousedown', onDocMouseDown)
     return () => document.removeEventListener('mousedown', onDocMouseDown)
   }, [])
+
+  const selectedFolderNode = folderTreeNodes[selectedFolderId]
+  const selectedFolderLabel = selectedFolderNode
+    ? `${selectedFolderNode.name} (#${selectedFolderNode.id})`
+    : `Folder #${selectedFolderId}`
+
+  const selectedFolderPath = useMemo(() => {
+    const parts: string[] = []
+    let cur: LookerFolderNode | undefined = folderTreeNodes[selectedFolderId]
+    const visited = new Set<string>()
+    while (cur && !visited.has(cur.id)) {
+      visited.add(cur.id)
+      parts.unshift(`${cur.name} (#${cur.id})`)
+      cur = cur.parent_id ? folderTreeNodes[cur.parent_id] : undefined
+    }
+    return parts.length > 0 ? parts.join(' / ') : selectedFolderLabel
+  }, [folderTreeNodes, selectedFolderId, selectedFolderLabel])
+
+  const quickFilteredFolders = useMemo(() => {
+    const q = folderQuickSearch.trim().toLowerCase()
+    if (!q) return null
+    return Object.values(folderTreeNodes).filter((node) =>
+      `${node.name} #${node.id} ${node.id}`.toLowerCase().includes(q)
+    )
+  }, [folderTreeNodes, folderQuickSearch])
+
+  const executeAdvancedSearch = async (overrideName?: string) => {
+    setAdvLoading(true)
+    try {
+      const results = await handleSearchFolders({
+        name: overrideName !== undefined ? overrideName : advName,
+        parent_id: advParentId,
+        is_personal: advPersonal,
+        creator_id: advCreatorId,
+        id: advFolderId,
+      })
+      setAdvResults(results)
+    } finally {
+      setAdvLoading(false)
+    }
+  }
+
+  const handleOpenAdvancedSearch = () => {
+    const seedName = folderQuickSearch.trim()
+    if (seedName && !advName) setAdvName(seedName)
+    setAdvModalOpen(true)
+    void executeAdvancedSearch(seedName || advName)
+  }
+
+  const handleSelectFolderNode = (fid: string, closeModal = false) => {
+    setSelectedFolderId(fid)
+    void hydrateFolderAncestors(fid)
+    if (closeModal) setAdvModalOpen(false)
+  }
+
+  const renderFolderTreeNode = (folderId: string, depth = 0, visited = new Set<string>()): React.ReactNode => {
+    if (visited.has(folderId)) return null
+    const node = folderTreeNodes[folderId]
+    if (!node) return null
+    const nextVisited = new Set(visited)
+    nextVisited.add(folderId)
+    const isExpanded = expandedFolderIds.includes(node.id)
+    const isLoading = loadingFolderIds.includes(node.id)
+    const childIds = folderChildrenById[node.id] || []
+    const canExpand = node.has_children !== false || childIds.length > 0
+    const isSelected = String(selectedFolderId) === String(node.id)
+
+    return (
+      <div key={node.id} className="dab-folder-tree-branch">
+        <div
+          className={`dab-folder-tree-row ${isSelected ? 'selected' : ''}`}
+          style={{ paddingLeft: 6 + depth * 14 }}
+        >
+          <button
+            type="button"
+            data-testid={`folder-expand-${node.id}`}
+            className="dab-folder-expand-btn"
+            onClick={(e) => {
+              e.stopPropagation()
+              if (canExpand) void toggleExpandFolder(node.id)
+            }}
+            disabled={!canExpand}
+            aria-label={isExpanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
+            title={canExpand ? (isExpanded ? 'Collapse folder' : 'Expand child folders') : 'No subfolders'}
+          >
+            {isLoading ? '⋯' : canExpand ? (isExpanded ? '▾' : '▸') : '·'}
+          </button>
+          <button
+            type="button"
+            data-testid={`folder-select-${node.id}`}
+            className="dab-folder-select-btn"
+            onClick={() => handleSelectFolderNode(node.id)}
+            title={`${node.name} (#${node.id})`}
+          >
+            <span className="dab-folder-node-icon">{node.is_personal ? '👤' : '📁'}</span>
+            <span className="dab-folder-node-name">{node.name}</span>
+            <span className="dab-folder-node-id">#{node.id}</span>
+          </button>
+        </div>
+        {isExpanded && childIds.length > 0 && (
+          <div className="dab-folder-tree-children">
+            {childIds.map((cid) => renderFolderTreeNode(cid, depth + 1, nextVisited))}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   const groupedExplores = useMemo(() => {
     const q = exploreSearch.trim().toLowerCase()
@@ -604,19 +737,28 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
           <>
             <label className="dab-field">
               <span>Project</span>
-              <input
-                type="text"
-                list="dab-lookml-projects"
-                placeholder="LookML project_id (opt)..."
-                value={lookmlProjectId}
-                onChange={(e) => setLookmlProjectId(e.target.value)}
-                style={{ width: 150 }}
-                title={
-                  availableLookmlProjects.length > 0
-                    ? `Developable projects: ${availableLookmlProjects.join(', ')}`
-                    : undefined
-                }
-              />
+              {loadingMetadata ? (
+                <div
+                  data-testid="folder-selector-skeleton"
+                  className="dab-skeleton dab-folder-trigger-fixed"
+                  aria-label="Loading LookML projects..."
+                />
+              ) : (
+                <input
+                  type="text"
+                  data-testid="topbar-lookml-project-input"
+                  className="dab-folder-trigger-fixed"
+                  list="dab-lookml-projects"
+                  placeholder="LookML project_id (opt)..."
+                  value={lookmlProjectId}
+                  onChange={(e) => setLookmlProjectId(e.target.value)}
+                  title={
+                    availableLookmlProjects.length > 0
+                      ? `Developable projects: ${availableLookmlProjects.join(', ')}`
+                      : undefined
+                  }
+                />
+              )}
               {availableLookmlProjects.length > 0 && (
                 <datalist id="dab-lookml-projects">
                   {availableLookmlProjects.map((proj) => (
@@ -634,93 +776,288 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                 🔒 No deploy
               </span>
             )}
-            <div className="dab-divider" />
-            <div className="dab-load-box">
-              {lookmlSessions.length > 0 && (
-                <select
-                  value=""
-                  onChange={(e) => {
-                    if (e.target.value) loadLookmlSessionById(e.target.value, true)
-                  }}
-                >
-                  <option value="">Saved LookML ({lookmlSessions.length})...</option>
-                  {lookmlSessions.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.title} ({s.id})
-                    </option>
-                  ))}
-                </select>
-              )}
-              <input
-                type="text"
-                placeholder="LookML Session ID..."
-                value={loadLookmlInput}
-                onChange={(e) => setLoadLookmlInput(e.target.value)}
-                style={{ width: 120 }}
-              />
-              <button
-                type="button"
-                className="dab-btn-secondary"
-                onClick={() => loadLookmlSessionById(loadLookmlInput, true)}
-                disabled={!!busyStatus || !loadLookmlInput.trim()}
-              >
-                Load LookML
-              </button>
-              {lookmlBundle && (
-                <button
-                  type="button"
-                  className="dab-btn-secondary"
-                  onClick={handleResetNewApp}
-                  disabled={!!busyStatus}
-                >
-                  New LookML
-                </button>
-              )}
-            </div>
+            {(lookmlSessions.length > 0 || lookmlBundle) && (
+              <>
+                <div className="dab-divider" />
+                <div className="dab-load-box">
+                  {lookmlSessions.length > 0 && (
+                    <select
+                      className="dab-folder-trigger-fixed"
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) loadLookmlSessionById(e.target.value, true)
+                      }}
+                    >
+                      <option value="">Saved LookML ({lookmlSessions.length})...</option>
+                      {lookmlSessions.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.title} ({s.id})
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {lookmlBundle && (
+                    <button
+                      type="button"
+                      className="dab-btn-secondary"
+                      onClick={handleResetNewApp}
+                      disabled={!!busyStatus}
+                    >
+                      New LookML
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
           </>
         ) : (
           <>
-            <label className="dab-field">
-              <span>Folder</span>
-              <select
-                value={selectedFolderId}
-                onChange={(e) => setSelectedFolderId(e.target.value)}
-              >
-                {folders.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="dab-divider" />
-            <div className="dab-load-box">
-              <input
-                type="text"
-                placeholder={builderMode === 'dashboard' ? 'ID or look:ID...' : 'Dashboard ID...'}
-                value={loadDashInput}
-                onChange={(e) => setLoadDashInput(e.target.value)}
-                style={{ width: 105 }}
-              />
-              <button
-                type="button"
-                className="dab-btn-secondary"
-                onClick={handleLoadExistingDashboard}
-                disabled={!!busyStatus || !loadDashInput.trim()}
-              >
-                {builderMode === 'dashboard' ? 'Load Content' : 'Load App'}
-              </button>
-              {(publishedApp || nativeContent) && (
+            <div
+              className="dab-field dab-folder-picker"
+              data-testid="topbar-folder-picker"
+              ref={folderPickerRef}
+            >
+              <span>Save to Folder:</span>
+              {loadingMetadata ? (
+                <div
+                  data-testid="folder-selector-skeleton"
+                  className="dab-skeleton dab-folder-trigger-fixed"
+                  aria-label="Loading folders..."
+                />
+              ) : (
                 <button
                   type="button"
-                  className="dab-btn-secondary"
-                  onClick={handleResetNewApp}
-                  disabled={!!busyStatus}
+                  data-testid="topbar-folder-trigger"
+                  className="dab-folder-trigger dab-folder-trigger-fixed"
+                  onClick={() => setFolderPopoverOpen((prev) => !prev)}
+                  title={`Publish target folder: ${selectedFolderPath}`}
                 >
-                  {builderMode === 'dashboard' ? 'New Content' : 'New App'}
+                  <span className="dab-folder-trigger-text">
+                    {selectedFolderNode?.is_personal ? '👤' : '📁'} {selectedFolderLabel}
+                  </span>
+                  <span className="dab-folder-trigger-caret">▾</span>
                 </button>
               )}
+
+              {folderPopoverOpen && !loadingMetadata && (
+                <div className="dab-folder-popover" data-testid="folder-tree-popover">
+                  <div className="dab-folder-popover-header">
+                    <input
+                      type="text"
+                      data-testid="folder-tree-quick-search"
+                      className="dab-folder-quick-search"
+                      placeholder="Quick filter loaded folders..."
+                      value={folderQuickSearch}
+                      onChange={(e) => setFolderQuickSearch(e.target.value)}
+                    />
+                  </div>
+                  <div className="dab-folder-tree-list" data-testid="folder-tree-list">
+                    {quickFilteredFolders ? (
+                      quickFilteredFolders.length === 0 ? (
+                        <div className="dab-folder-empty">
+                          No loaded folders match &ldquo;{folderQuickSearch}&rdquo;. Use Advanced Search below.
+                        </div>
+                      ) : (
+                        quickFilteredFolders.map((node) => {
+                          const isSelected = String(selectedFolderId) === String(node.id)
+                          return (
+                            <div
+                              key={node.id}
+                              className={`dab-folder-tree-row ${isSelected ? 'selected' : ''}`}
+                              style={{ paddingLeft: 10 }}
+                            >
+                              <button
+                                type="button"
+                                data-testid={`folder-select-${node.id}`}
+                                className="dab-folder-select-btn"
+                                onClick={() => handleSelectFolderNode(node.id)}
+                              >
+                                <span className="dab-folder-node-icon">
+                                  {node.is_personal ? '👤' : '📁'}
+                                </span>
+                                <span className="dab-folder-node-name">{node.name}</span>
+                                <span className="dab-folder-node-id">#{node.id}</span>
+                              </button>
+                            </div>
+                          )
+                        })
+                      )
+                    ) : (
+                      rootFolderIds.map((rid) => renderFolderTreeNode(rid, 0))
+                    )}
+                  </div>
+                  <div className="dab-folder-popover-footer">
+                    <span className="dab-muted" style={{ fontSize: 11 }}>
+                      Target: <strong>#{selectedFolderId}</strong>
+                    </span>
+                    <button
+                      type="button"
+                      data-testid="folder-advanced-search-btn"
+                      className="dab-btn-secondary dab-folder-adv-btn"
+                      onClick={handleOpenAdvancedSearch}
+                    >
+                      🔍 Advanced Search...
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {advModalOpen && (
+                <div
+                  className="dab-modal-backdrop dab-folder-modal-backdrop"
+                  onClick={() => setAdvModalOpen(false)}
+                >
+                  <div
+                    className="dab-modal dab-folder-search-modal"
+                    data-testid="folder-advanced-search-modal"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                      }}
+                    >
+                      <div>
+                        <strong style={{ fontSize: 14 }}>
+                          🔍 Advanced Looker Folder Search (<code>sdk.search_folders</code>)
+                        </strong>
+                        <div className="dab-muted" style={{ fontSize: 11.5, marginTop: 2 }}>
+                          Search across all Looker folders by name, parent_id, personal scope, creator_id, or ID
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        data-testid="folder-search-close-btn"
+                        className="dab-btn-secondary"
+                        onClick={() => setAdvModalOpen(false)}
+                      >
+                        ✕ Close
+                      </button>
+                    </div>
+
+                    <div className="dab-folder-search-grid">
+                      <div className="dab-modal-row">
+                        <label>Folder Name (name)</label>
+                        <input
+                          type="text"
+                          data-testid="folder-search-input-name"
+                          placeholder="e.g. subfolder test or %marketing%..."
+                          value={advName}
+                          onChange={(e) => setAdvName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') void executeAdvancedSearch()
+                          }}
+                        />
+                      </div>
+                      <div className="dab-modal-row">
+                        <label>Parent Folder ID (parent_id)</label>
+                        <input
+                          type="text"
+                          data-testid="folder-search-input-parent-id"
+                          placeholder="e.g. 1 or 501..."
+                          value={advParentId}
+                          onChange={(e) => setAdvParentId(e.target.value)}
+                        />
+                      </div>
+                      <div className="dab-modal-row">
+                        <label>Personal Scope (is_personal)</label>
+                        <select
+                          data-testid="folder-search-select-personal"
+                          value={advPersonal}
+                          onChange={(e) => setAdvPersonal(e.target.value as any)}
+                        >
+                          <option value="any">Any Folder</option>
+                          <option value="false">Shared Folders Only (is_personal=false)</option>
+                          <option value="true">Personal Folders Only (is_personal=true)</option>
+                        </select>
+                      </div>
+                      <div className="dab-modal-row">
+                        <label>Creator User ID (creator_id)</label>
+                        <input
+                          type="text"
+                          data-testid="folder-search-input-creator-id"
+                          placeholder="e.g. 1..."
+                          value={advCreatorId}
+                          onChange={(e) => setAdvCreatorId(e.target.value)}
+                        />
+                      </div>
+                      <div className="dab-modal-row">
+                        <label>Exact Folder ID (id)</label>
+                        <input
+                          type="text"
+                          data-testid="folder-search-input-id"
+                          placeholder="e.g. 502..."
+                          value={advFolderId}
+                          onChange={(e) => setAdvFolderId(e.target.value)}
+                        />
+                      </div>
+                      <div
+                        className="dab-modal-row"
+                        style={{ justifyContent: 'flex-end', alignItems: 'flex-end' }}
+                      >
+                        <button
+                          type="button"
+                          data-testid="folder-search-submit-btn"
+                          className="dab-btn-primary"
+                          onClick={() => void executeAdvancedSearch()}
+                          disabled={advLoading}
+                        >
+                          {advLoading ? 'Searching...' : 'Search Folders'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="dab-folder-search-results" data-testid="folder-search-results">
+                      {advResults.length === 0 ? (
+                        <div className="dab-folder-empty">
+                          {advLoading
+                            ? 'Searching Looker folders...'
+                            : 'No matching folders found. Adjust filters and click Search Folders.'}
+                        </div>
+                      ) : (
+                        advResults.map((item) => {
+                          const isSelected = String(selectedFolderId) === String(item.id)
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              data-testid={`folder-search-result-${item.id}`}
+                              className={`dab-folder-search-result-row ${isSelected ? 'selected' : ''}`}
+                              onClick={() => handleSelectFolderNode(item.id, true)}
+                            >
+                              <span style={{ fontWeight: 600 }}>
+                                {item.is_personal ? '👤' : '📁'} {item.name} (#{item.id})
+                              </span>
+                              <span className="dab-muted" style={{ fontSize: 11 }}>
+                                {item.parent_id ? `parent: #${item.parent_id}` : 'root'} ·{' '}
+                                {item.is_personal ? 'Personal' : 'Shared'}
+                              </span>
+                            </button>
+                          )
+                        })
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
+            {(publishedApp || nativeContent) && (
+              <>
+                <div className="dab-divider" />
+                <div className="dab-load-box">
+                  <button
+                    type="button"
+                    className="dab-btn-secondary"
+                    onClick={handleResetNewApp}
+                    disabled={!!busyStatus}
+                  >
+                    {builderMode === 'dashboard' ? 'New Content' : 'New App'}
+                  </button>
+                </div>
+              </>
+            )}
           </>
         )}
 
