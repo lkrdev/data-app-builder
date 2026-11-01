@@ -23,6 +23,7 @@ import {
   formatUserEnvArtifactKey,
   getAllowedUseCases,
   getArtifactService,
+  getUseCaseLabel,
   listUserArtifacts,
   loadUserConversations,
   loadUserEnvironmentId,
@@ -38,7 +39,9 @@ import {
   saveUserConversation,
   saveUserEnvironmentId,
   selectCaAgentViaIsolatedSubagent,
+  STUDIO_MODES,
   STUDIO_THEME_STORAGE_KEY,
+  STUDIO_USE_CASE_OPTIONS,
 } from '../lookerApi'
 import {
   AGENTS_MD,
@@ -72,8 +75,10 @@ import {
 } from '../antigravity'
 import {
   createLookerEmbedPreloadController,
+  getStarterPromptsForUseCase,
   normalizeLookerEmbedUrl,
   resolveLookerEmbedTarget,
+  STARTER_PROMPTS_BY_USE_CASE,
 } from '../components/StudioWorkspace'
 
 describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics', () => {
@@ -2221,5 +2226,50 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       ])
     )
     expect(typeof turnResult.thinkingDurationSec).toBe('number')
+  })
+
+  test('22. sorts STUDIO_USE_CASE_OPTIONS with Auto first and remaining use cases alphabetically, renames Python Tile to Script, and provides tailored starter prompts per use case (Issue #59)', () => {
+    expect(STUDIO_USE_CASE_OPTIONS.map((o) => o.label)).toEqual([
+      'Auto',
+      'Content Studio',
+      'Conversational Analytics',
+      'Data App',
+      'Health Check',
+      'LookML',
+      'Script',
+    ])
+    expect(STUDIO_USE_CASE_OPTIONS.map((o) => o.value)).toEqual([
+      'auto',
+      'dashboard',
+      'conversational-analytics',
+      'app',
+      'health-check',
+      'lookml',
+      'tile',
+    ])
+    expect(getUseCaseLabel('auto')).toBe('Auto')
+    expect(getUseCaseLabel('tile')).toBe('Script')
+    expect(STUDIO_MODES.find((m) => m.mode === 'tile')?.label).toBe('Script')
+
+    for (const uc of [
+      'auto',
+      'app',
+      'dashboard',
+      'conversational-analytics',
+      'health',
+      'health-check',
+      'lookml',
+      'tile',
+    ]) {
+      const prompts = getStarterPromptsForUseCase(uc)
+      expect(prompts.length).toBeGreaterThanOrEqual(3)
+      for (const item of prompts) {
+        expect(item.id.length).toBeGreaterThan(0)
+        expect(item.label.length).toBeGreaterThan(0)
+        expect(item.prompt.length).toBeGreaterThan(10)
+        expect(item.prompt).not.toMatch(/search_content|lookml_model_explore|Solr/i)
+      }
+    }
+    expect(STARTER_PROMPTS_BY_USE_CASE.health).toBe(STARTER_PROMPTS_BY_USE_CASE['health-check'])
   })
 })

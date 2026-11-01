@@ -67,13 +67,13 @@ export const STUDIO_USE_CASE_OPTIONS: Array<{
   label: string
   capabilityMode: StudioCapabilityMode | null
 }> = [
-  { value: 'auto', label: 'Auto (Agent Decides)', capabilityMode: null },
-  { value: 'app', label: 'Data App', capabilityMode: 'app' },
+  { value: 'auto', label: 'Auto', capabilityMode: null },
   { value: 'dashboard', label: 'Content Studio', capabilityMode: 'dashboard' },
-  { value: 'lookml', label: 'LookML', capabilityMode: 'lookml' },
-  { value: 'health-check', label: 'Health Check', capabilityMode: 'health' },
-  { value: 'tile', label: 'Python Tile', capabilityMode: 'tile' },
   { value: 'conversational-analytics', label: 'Conversational Analytics', capabilityMode: 'app' },
+  { value: 'app', label: 'Data App', capabilityMode: 'app' },
+  { value: 'health-check', label: 'Health Check', capabilityMode: 'health' },
+  { value: 'lookml', label: 'LookML', capabilityMode: 'lookml' },
+  { value: 'tile', label: 'Script', capabilityMode: 'tile' },
 ]
 
 export function getUseCaseLabel(useCase: StudioUseCase): string {
@@ -127,7 +127,7 @@ export const STUDIO_MODES: Array<{ mode: StudioMode; label: string; prefix: stri
   { mode: 'dashboard', label: 'Content Studio', prefix: '/dashboard' },
   { mode: 'lookml', label: 'LookML', prefix: '/lookml' },
   { mode: 'health', label: 'Health Check', prefix: '/health-check' },
-  { mode: 'tile', label: 'Python Tile', prefix: '/tile' },
+  { mode: 'tile', label: 'Script', prefix: '/tile' },
 ]
 
 const CONV_PREFIX_USE_CASES: Array<[RegExp, ResolvedStudioUseCase]> = [

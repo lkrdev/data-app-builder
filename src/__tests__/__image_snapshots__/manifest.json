@@ -6,7 +6,7 @@
     "snapshotName": "01-mode-data-app-and-permission-gate-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "dashboard",
@@ -15,7 +15,7 @@
     "snapshotName": "02-mode-native-dashboard-builder-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "lookml",
@@ -24,7 +24,7 @@
     "snapshotName": "03-mode-agentic-lookml-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "health_check",
@@ -33,7 +33,7 @@
     "snapshotName": "04-mode-3-pillar-health-check-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "python_tile_studio",
@@ -42,7 +42,7 @@
     "snapshotName": "05-mode-python-tile-studio-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "tile_mount_view",
@@ -105,18 +105,18 @@
     "title": "11. Chat Bar State — LookML Activated Turn Skills & Prompt",
     "snapshotName": "11-chatbar-state-lookml-activated-skills-snap.png",
     "width": 766,
-    "height": 265,
+    "height": 266,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "chatbar_pasted_image_inspector",
     "category": "Chat Bar States",
-    "title": "12. Chat Bar State — Pasted Screenshot Thumbnail & Code/Schema Inspector Open",
+    "title": "12. Chat Bar State — Pasted Screenshot Thumbnail & Composer Model Selector",
     "snapshotName": "12-chatbar-state-pasted-image-and-inspector-snap.png",
     "width": 427,
-    "height": 450,
+    "height": 240,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
     "changedInGit": false
@@ -133,7 +133,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_error_banner",
@@ -167,7 +167,7 @@
     "snapshotName": "16-mode-conversational-analytics-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "centered_empty_prompt",
@@ -175,10 +175,10 @@
     "title": "17. Centered New-Conversation Empty Prompt Box (Use-Case Selector, Input & Actions)",
     "snapshotName": "17-centered-empty-prompt-snap.png",
     "width": 768,
-    "height": 463,
+    "height": 513,
     "clipSelector": ".dab-empty-prompt-card",
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "studio_dark_theme",
@@ -187,6 +187,6 @@
     "snapshotName": "18-studio-dark-theme.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   }
 ]
