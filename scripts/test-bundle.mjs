@@ -554,6 +554,17 @@ chmod +x "${fakeBinDir}/uv"
       antigravityTs.includes('sdk: turnSdk'),
     'Issue #39: runAntigravityTurn must isolate per-turn Looker HTTP telemetry via turnSdk without mutating shared sdk.authSession.transport.rawRequest in place'
   )
+  assert(
+    appTsx.includes('@looker/embed-sdk') &&
+      appTsx.includes('getEmbedSDK') &&
+      appTsx.includes('.preload()') &&
+      appTsx.includes('loadDashboard(') &&
+      appTsx.includes('loadLook(') &&
+      appTsx.includes('loadUrl(') &&
+      appTsx.includes('asDashboardConnection().run()') &&
+      appTsx.includes('data-testid="looker-embed-container"'),
+    'Issue #45: StudioWorkspace.tsx must adopt @looker/embed-sdk with immediate .preload() and persistent ILookerConnection loadDashboard/loadLook/loadUrl/asDashboardConnection().run()'
+  )
   execFileSync(
     process.execPath,
     [path.join(repoRoot, 'scripts/bench-concurrent-convs.mjs'), '--iter=1'],

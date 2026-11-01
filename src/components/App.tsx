@@ -121,11 +121,9 @@ const StudioMain: React.FC = () => {
         {ctl.isEmptyConversation ? (
           <StudioCenteredEmptyStage ctl={ctl} />
         ) : (
-          <>
-            <StudioLeftPane ctl={ctl} />
-            <StudioRightPane ctl={ctl} />
-          </>
+          <StudioLeftPane ctl={ctl} />
         )}
+        <StudioRightPane ctl={ctl} />
       </div>
     </div>
   )

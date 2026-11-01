@@ -155,6 +155,8 @@ export function useStudioController() {
   const lastLookmlIdRef = useRef<string>('')
   const [publishedApp, setPublishedApp] = useState<PublishedAppState | null>(null)
   const [nativeContent, setNativeContent] = useState<NativeContentState | null>(null)
+  const [embedNonce, setEmbedNonce] = useState<number>(0)
+  const bumpEmbedNonce = useCallback(() => setEmbedNonce((n) => n + 1), [])
   const [myCreations, setMyCreations] = useState<
     Array<{ id: string; title: string; contentType: NativeContentType; embedPath: string }>
   >([])
@@ -1446,6 +1448,7 @@ export function useStudioController() {
           )
           lastNativeIdRef.current = savedNative.id
           setNativeContent(savedNative)
+          setEmbedNonce((n) => n + 1)
           setActiveObjectId(savedNative.id)
           setLoadDashInput(savedNative.id)
           const targetRoute = `/dashboard/${encodeURIComponent(savedNative.id)}`
@@ -1489,6 +1492,7 @@ export function useStudioController() {
           )
           lastPublishedIdRef.current = upserted.dashboardId
           setPublishedApp(upserted)
+          setEmbedNonce((n) => n + 1)
           setActiveObjectId(upserted.dashboardId)
           setCurrentAppCode(result.bundle.raw_code)
           setLoadDashInput(upserted.dashboardId)
@@ -1636,9 +1640,10 @@ export function useStudioController() {
         setSelectedModel, setAuthMode, setApiKey, setSidebarCollapsed,
         setSelectedUseCase: handleChangeUseCase, setCapabilities,
         handleResetNewApp, handleNewConversation, handleSelectConversation,
+        setNativeContent, setPublishedApp, bumpEmbedNonce,
       }
     }
-  }, [history, requestCodeModePermission, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation])
+  }, [history, requestCodeModePermission, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce])
 
   return {
     extensionSDK, core40SDK, history, location, isTileMount,
@@ -1653,7 +1658,7 @@ export function useStudioController() {
     isUseCaseLocked, allowedUseCases, useCaseOptions: STUDIO_USE_CASE_OPTIONS, getUseCaseLabel,
     lookmlProjectId, setLookmlProjectId, activatedLookmlSkills, setActivatedLookmlSkills,
     lookmlBundle, lookmlSessions, loadLookmlInput, setLoadLookmlInput,
-    publishedApp, nativeContent, myCreations,
+    publishedApp, nativeContent, embedNonce, bumpEmbedNonce, myCreations,
     healthReport, healthScope, setHealthScope, caConversation,
     currentAppCode, loadDashInput, setLoadDashInput,
     sharedEnvironmentId, syncSharedEnvironmentId,

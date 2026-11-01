@@ -1,9 +1,400 @@
-import React, { useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { getEmbedSDK, ILookerConnection, LookerEmbedExSDK } from '@looker/embed-sdk'
 import { handleImageClipboardPaste, LkrCodeMode, StudioUseCase } from '../antigravity'
 import { ConversationRecord, parseExploreId } from '../lookerApi'
 import { LOOKML_TURN_SKILLS, LookmlPreviewPane } from '../lookmlTool'
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import { StudioController } from '../useStudioController'
+
+export interface LookerEmbedTarget {
+  kind: 'preload' | 'dashboard' | 'look' | 'url'
+  target: string
+  previewMode: 'preload' | 'conversational-analytics' | 'dashboard' | 'data_app'
+  previewObjectId: string
+  nonce: number
+}
+
+export interface LookerEmbedSessionTelemetry {
+  hostUrl: string
+  state: 'preloaded' | 'dashboard' | 'look' | 'url'
+  target: string
+  running: boolean
+  runCount: number
+  loadCount: number
+  lastPageUrl: string
+  events: string[]
+  calls: Array<{ method: string; arg: string }>
+}
+
+export function normalizeLookerEmbedUrl(rawUrl: string, hostUrl?: string): string {
+  let clean = (rawUrl || '').trim()
+  if (!clean) return '/preload'
+  if (hostUrl) {
+    const base = hostUrl.replace(/\/$/, '')
+    if (base && clean.startsWith(base)) clean = clean.slice(base.length) || '/'
+  }
+  clean = clean.replace(/^https?:\/\/[^/]+/i, '')
+  if (!clean.startsWith('/')) clean = `/${clean}`
+  if (clean === '/preload' || clean.startsWith('/preload?') || clean.startsWith('/embed/')) {
+    return clean
+  }
+  return `/embed${clean}`
+}
+
+export function resolveLookerEmbedTarget(opts: {
+  isEmptyConversation?: boolean
+  isHealthCheckMode?: boolean
+  isLookmlMode?: boolean
+  isCaMode?: boolean
+  builderMode?: 'data_app' | 'dashboard'
+  caConversation?: { caConversationId: string; embedPath: string } | null
+  nativeContent?: {
+    id: string
+    contentType: string
+    embedPath: string
+    dashboardId?: string
+    lookId?: string
+    lookmlDashboardId?: string
+  } | null
+  publishedApp?: { dashboardId: string } | null
+  hostUrl?: string
+  nonce?: number
+}): LookerEmbedTarget {
+  const nonce = opts.nonce || 0
+  if (opts.isEmptyConversation || opts.isHealthCheckMode || opts.isLookmlMode) {
+    return { kind: 'preload', target: '/preload', previewMode: 'preload', previewObjectId: '', nonce }
+  }
+  if ((opts.isCaMode || opts.caConversation) && opts.caConversation?.embedPath) {
+    return {
+      kind: 'url',
+      target: normalizeLookerEmbedUrl(opts.caConversation.embedPath, opts.hostUrl),
+      previewMode: 'conversational-analytics',
+      previewObjectId: opts.caConversation.caConversationId,
+      nonce,
+    }
+  }
+  if (opts.builderMode === 'dashboard') {
+    const nc = opts.nativeContent
+    if (!nc) {
+      return { kind: 'preload', target: '/preload', previewMode: 'preload', previewObjectId: '', nonce }
+    }
+    if (nc.contentType === 'dashboard') {
+      const id = String(nc.dashboardId || nc.id)
+      return { kind: 'dashboard', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
+    }
+    if (nc.contentType === 'look') {
+      const id = String(nc.lookId || nc.id)
+      return { kind: 'look', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
+    }
+    const rawUrl =
+      nc.embedPath ||
+      `/embed/dashboards/${encodeURIComponent(String(nc.lookmlDashboardId || nc.id))}`
+    return {
+      kind: 'url',
+      target: normalizeLookerEmbedUrl(rawUrl, opts.hostUrl),
+      previewMode: 'dashboard',
+      previewObjectId: String(nc.lookmlDashboardId || nc.id),
+      nonce,
+    }
+  }
+  if (opts.publishedApp?.dashboardId) {
+    const id = String(opts.publishedApp.dashboardId)
+    return { kind: 'dashboard', target: id, previewMode: 'data_app', previewObjectId: id, nonce }
+  }
+  return { kind: 'preload', target: '/preload', previewMode: 'preload', previewObjectId: '', nonce }
+}
+
+export function createLookerEmbedPreloadController(opts: {
+  hostUrl: string
+  container: HTMLElement
+  mockPreviewHtml?: (mode: string, objectId: string) => string | undefined
+  onStateChange?: (telemetry: LookerEmbedSessionTelemetry) => void
+}) {
+  const telemetry: LookerEmbedSessionTelemetry = {
+    hostUrl: opts.hostUrl,
+    state: 'preloaded',
+    target: '/preload',
+    running: false,
+    runCount: 0,
+    loadCount: 0,
+    lastPageUrl: '/embed/preload',
+    events: [],
+    calls: [],
+  }
+  let activePreviewMeta = { mode: 'preload', objectId: '' }
+
+  const notify = () => {
+    opts.container?.setAttribute?.('data-embed-state', telemetry.state)
+    opts.container?.setAttribute?.('data-embed-target', telemetry.target)
+    opts.container?.setAttribute?.('data-embed-running', String(telemetry.running))
+    opts.container?.setAttribute?.('data-embed-run-count', String(telemetry.runCount))
+    if (typeof window !== 'undefined') {
+      ;(window as any).__LOOKER_EMBED_STATE__ = {
+        ...telemetry,
+        events: [...telemetry.events],
+        calls: [...telemetry.calls],
+      }
+    }
+    opts.onStateChange?.(telemetry)
+  }
+
+  if (typeof window === 'undefined') {
+    ;(globalThis as any).window = {
+      location: { origin: opts.hostUrl || 'https://looker.example.com' },
+      setTimeout,
+      clearTimeout,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }
+  }
+
+  const chattyHostCreator = (initialUrl: string) => {
+    const handlers: Record<string, Array<(...args: any[]) => void>> = {}
+    let targetEl: any = opts.container
+    const classNames: string[] = []
+    const frameAttrs: Array<[string, string]> = []
+    const emit = (evt: string, payload: any) => {
+      ;(handlers[evt] || []).forEach((fn) => fn(payload))
+    }
+    const builder: any = {
+      on: (evt: string, fn: (...args: any[]) => void) => {
+        ;(handlers[evt] = handlers[evt] || []).push(fn)
+        return builder
+      },
+      frameBorder: () => builder,
+      withTargetOrigin: () => builder,
+      withAriaLabel: () => builder,
+      withAllowAttribute: () => builder,
+      appendTo: (el: HTMLElement) => {
+        targetEl = el
+        return builder
+      },
+      withClassName: (cls: string) => {
+        if (cls) classNames.push(cls)
+        return builder
+      },
+      withFrameAttribute: (name: string, value: string) => {
+        frameAttrs.push([name, value])
+        return builder
+      },
+      withSandboxAttribute: () => builder,
+      build: () => {
+        const doc = targetEl?.ownerDocument || (typeof document !== 'undefined' ? document : null)
+        const iframe: any =
+          targetEl?.querySelector?.('iframe') ||
+          (doc
+            ? doc.createElement('iframe')
+            : {
+                setAttribute: () => {},
+                removeAttribute: () => {},
+                getAttribute: () => '',
+                classList: { add: () => {} },
+                style: {},
+                className: '',
+                src: '',
+                srcdoc: '',
+              })
+        if (!iframe.classList) {
+          iframe.classList = {
+            add: (...cls: string[]) => {
+              iframe.className = Array.from(new Set([...(iframe.className || '').split(/\s+/), ...cls]))
+                .filter(Boolean)
+                .join(' ')
+            },
+          }
+        }
+        if (classNames.length) iframe.classList.add(...classNames)
+        iframe.title = 'Looker Live Preview'
+        frameAttrs.forEach(([k, v]) => iframe.setAttribute?.(k, v))
+        const syncIframe = (rawUrl: string) => {
+          const isPreload = rawUrl.includes('/preload')
+          if (isPreload) {
+            iframe.srcdoc = '<!doctype html><html><body data-preload="true" style="margin:0"></body></html>'
+            iframe.removeAttribute?.('data-testid')
+          } else {
+            const html = opts.mockPreviewHtml?.(activePreviewMeta.mode, activePreviewMeta.objectId)
+            if (html) iframe.srcdoc = html
+            if (activePreviewMeta.mode === 'conversational-analytics') {
+              iframe.setAttribute?.('data-testid', 'ca-embed-iframe')
+            } else {
+              iframe.removeAttribute?.('data-testid')
+            }
+          }
+          iframe.setAttribute?.('data-embed-src', rawUrl)
+          iframe.setAttribute?.('src', rawUrl)
+        }
+        syncIframe(initialUrl)
+        if (doc && targetEl && iframe.parentNode !== targetEl) {
+          targetEl.appendChild(iframe)
+        }
+        const connectedHost = {
+          send: (event: string) => {
+            if (event === 'dashboard:run') {
+              syncIframe(iframe.getAttribute?.('src') || initialUrl)
+              emit('dashboard:run:start', {})
+              emit('dashboard:run:complete', {})
+            }
+          },
+          sendAndReceive: async (event: string, payload?: any) => {
+            if (event === 'page:load' && payload?.url) {
+              const nextUrl = String(payload.url)
+              syncIframe(nextUrl)
+              setTimeout(() => {
+                if (nextUrl.includes('/dashboards/')) {
+                  emit('dashboard:loaded', { dashboard: { url: nextUrl } })
+                  emit('dashboard:run:start', {})
+                  emit('dashboard:run:complete', {})
+                } else if (nextUrl.includes('/looks/')) {
+                  emit('look:ready', { look: { url: nextUrl } })
+                  emit('look:run:start', {})
+                  emit('look:run:complete', {})
+                } else if (nextUrl.includes('/explore/')) {
+                  emit('explore:ready', {})
+                  emit('explore:run:start', {})
+                  emit('explore:run:complete', {})
+                }
+                emit('page:changed', { page: { url: nextUrl, lookerVersion: '25.20.0' } })
+              }, 0)
+            }
+            return []
+          },
+        }
+        return {
+          iframe,
+          connect: () =>
+            Promise.resolve(connectedHost).then((host) => {
+              setTimeout(() => {
+                emit('page:changed', { page: { url: initialUrl, lookerVersion: '25.20.0' } })
+              }, 0)
+              return host
+            }),
+        }
+      },
+    }
+    return builder
+  }
+
+  const sdk = opts.mockPreviewHtml
+    ? getEmbedSDK(new LookerEmbedExSDK(chattyHostCreator as any))
+    : getEmbedSDK()
+  sdk.init(opts.hostUrl)
+  telemetry.calls.push({ method: 'init', arg: opts.hostUrl })
+  telemetry.calls.push({ method: 'preload', arg: '/embed/preload' })
+
+  const recordEvent = (name: string, running?: boolean) => {
+    telemetry.events.push(name)
+    if (typeof running === 'boolean') telemetry.running = running
+    if (name === 'dashboard:run:start' || name === 'look:run:start' || name === 'explore:run:start') {
+      telemetry.runCount += 1
+    }
+    notify()
+  }
+
+  const connectionPromise: Promise<ILookerConnection> = sdk
+    .preload()
+    .appendTo(opts.container)
+    .withClassName('dab-iframe')
+    .on('dashboard:loaded', () => recordEvent('dashboard:loaded', false))
+    .on('dashboard:run:start', () => recordEvent('dashboard:run:start', true))
+    .on('dashboard:run:complete', () => recordEvent('dashboard:run:complete', false))
+    .on('look:ready', () => recordEvent('look:ready', false))
+    .on('look:run:start', () => recordEvent('look:run:start', true))
+    .on('look:run:complete', () => recordEvent('look:run:complete', false))
+    .on('explore:ready', () => recordEvent('explore:ready', false))
+    .on('explore:run:start', () => recordEvent('explore:run:start', true))
+    .on('explore:run:complete', () => recordEvent('explore:run:complete', false))
+    .on('page:changed', (e: any) => {
+      if (e?.page?.url) telemetry.lastPageUrl = String(e.page.url)
+      recordEvent('page:changed')
+    })
+    .build()
+    .connect({ waitUntilLoaded: true })
+
+  let lastTarget: LookerEmbedTarget | null = null
+  let queue: Promise<ILookerConnection> = connectionPromise.then((conn) => {
+    notify()
+    return conn
+  })
+
+  const syncTarget = (next: LookerEmbedTarget): Promise<ILookerConnection> => {
+    queue = queue.then(async () => {
+      const connection = await connectionPromise
+      activePreviewMeta = { mode: next.previewMode, objectId: next.previewObjectId }
+      const prev = lastTarget
+      const isSameTarget = prev && prev.kind === next.kind && prev.target === next.target
+      if (!prev && next.kind === 'preload') {
+        lastTarget = next
+        telemetry.state = 'preloaded'
+        telemetry.target = '/preload'
+        notify()
+        return connection
+      }
+      if (isSameTarget && prev.nonce === next.nonce) {
+        return connection
+      }
+      lastTarget = next
+      if (next.kind === 'preload') {
+        if (prev && prev.kind !== 'preload') {
+          telemetry.calls.push({ method: 'loadUrl', arg: '/preload' })
+          telemetry.loadCount += 1
+          await connection.loadUrl({ url: '/preload', options: { waitUntilLoaded: true } })
+        }
+        telemetry.state = 'preloaded'
+        telemetry.target = '/preload'
+      } else if (next.kind === 'dashboard') {
+        if (isSameTarget && prev.nonce !== next.nonce) {
+          try {
+            telemetry.calls.push({ method: 'asDashboardConnection.run', arg: next.target })
+            connection.asDashboardConnection().run()
+          } catch {
+            telemetry.calls.push({ method: 'loadDashboard', arg: next.target })
+            telemetry.loadCount += 1
+            await connection.loadDashboard({ id: next.target, options: { waitUntilLoaded: true } })
+          }
+        } else {
+          telemetry.calls.push({ method: 'loadDashboard', arg: next.target })
+          telemetry.loadCount += 1
+          await connection.loadDashboard({ id: next.target, options: { waitUntilLoaded: true } })
+        }
+        telemetry.state = 'dashboard'
+        telemetry.target = next.target
+      } else if (next.kind === 'look') {
+        telemetry.calls.push({ method: 'loadLook', arg: next.target })
+        telemetry.loadCount += 1
+        await connection.loadLook({ id: next.target, options: { waitUntilLoaded: true } })
+        telemetry.state = 'look'
+        telemetry.target = next.target
+      } else {
+        telemetry.calls.push({ method: 'loadUrl', arg: next.target })
+        telemetry.loadCount += 1
+        await connection.loadUrl({ url: next.target, options: { waitUntilLoaded: true } })
+        telemetry.state = 'url'
+        telemetry.target = next.target
+      }
+      const iframeEl = opts.container?.querySelector?.('iframe')
+      if (iframeEl) {
+        if (next.previewMode === 'conversational-analytics') {
+          iframeEl.setAttribute('data-testid', 'ca-embed-iframe')
+        } else {
+          iframeEl.removeAttribute('data-testid')
+        }
+      }
+      notify()
+      return connection
+    })
+    return queue
+  }
+
+  return {
+    connectionPromise,
+    syncTarget,
+    getTelemetry: () => ({
+      ...telemetry,
+      events: [...telemetry.events],
+      calls: [...telemetry.calls],
+    }),
+  }
+}
 
 function formatConversationContentTag(conv: ConversationRecord): string {
   const c = conv.content || {}
@@ -669,6 +1060,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 
 export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
+    isEmptyConversation,
     isHealthCheckMode,
     isLookmlMode,
     isCaMode,
@@ -679,6 +1071,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     canDeployLookml,
     nativeContent,
     publishedApp,
+    embedNonce,
     extensionSDK,
   } = ctl
 
@@ -689,7 +1082,57 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     () => mockExt?.initialTddViewMode || 'rendered'
   )
   const [copiedTdd, setCopiedTdd] = useState(false)
-  const [iframeRev, setIframeRev] = useState(1)
+  const [iframeRev, setIframeRev] = useState(0)
+  const embedContainerRef = useRef<HTMLDivElement | null>(null)
+  const embedControllerRef = useRef<ReturnType<typeof createLookerEmbedPreloadController> | null>(
+    null
+  )
+
+  const embedTarget = useMemo(
+    () =>
+      resolveLookerEmbedTarget({
+        isEmptyConversation,
+        isHealthCheckMode,
+        isLookmlMode,
+        isCaMode,
+        builderMode,
+        caConversation,
+        nativeContent,
+        publishedApp,
+        hostUrl,
+        nonce: (embedNonce || 0) + iframeRev,
+      }),
+    [
+      isEmptyConversation,
+      isHealthCheckMode,
+      isLookmlMode,
+      isCaMode,
+      builderMode,
+      caConversation,
+      nativeContent,
+      publishedApp,
+      hostUrl,
+      embedNonce,
+      iframeRev,
+    ]
+  )
+
+  useEffect(() => {
+    const el = embedContainerRef.current
+    if (!el || embedControllerRef.current) return
+    embedControllerRef.current = createLookerEmbedPreloadController({
+      hostUrl,
+      container: el,
+      mockPreviewHtml: mockExt?.getMockPreviewHtml
+        ? (mode, objectId) => mockExt.getMockPreviewHtml(mode, objectId)
+        : undefined,
+    })
+  }, [hostUrl, mockExt])
+
+  useEffect(() => {
+    if (!embedControllerRef.current) return
+    void embedControllerRef.current.syncTarget(embedTarget)
+  }, [embedTarget])
 
   const handleCopyTddMarkdown = () => {
     if (!healthReport?.tddMarkdown) return
@@ -712,129 +1155,84 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
 
   const activePreviewId =
     builderMode === 'dashboard' ? nativeContent?.id : publishedApp?.dashboardId
-  const embedUrl =
-    builderMode === 'dashboard'
-      ? nativeContent
-        ? `${hostUrl.replace(/\/$/, '')}${nativeContent.embedPath}`
-        : ''
-      : publishedApp
-      ? `${hostUrl.replace(/\/$/, '')}/embed/dashboards/${encodeURIComponent(publishedApp.dashboardId)}`
-      : ''
   const openInLookerPath =
     builderMode === 'dashboard' && nativeContent
       ? nativeContent.embedPath.replace(/^\/embed/, '')
       : publishedApp
       ? `/dashboards/${encodeURIComponent(publishedApp.dashboardId)}`
       : ''
+  const hasActiveEmbed = embedTarget.kind !== 'preload'
 
   return (
-    <main className="dab-right-pane">
+    <main className="dab-right-pane" style={isEmptyConversation ? { display: 'none' } : undefined}>
       {isHealthCheckMode ? (
-        <>
-          <div className="dab-preview-toolbar">
-            <div>
-              {healthReport ? (
-                <>
-                  <strong>{healthReport.title}</strong>{' '}
-                  <span className="dab-badge">
-                    Health Score: {healthReport.scores.overallScore}% ({healthReport.scores.grade})
-                  </span>{' '}
-                  <span className="dab-badge">
-                    Transcriber: {healthReport.scores.transcriberScore}/4.00
-                  </span>{' '}
-                  <span className="dab-muted">
-                    (user_{healthReport.createdBy}_health_check_{healthReport.id} · obj_health_check_
-                    {healthReport.id})
-                  </span>
-                </>
-              ) : (
-                <span className="dab-muted">
-                  7-section TECHNICAL_DESIGN_DOCUMENT.md (0–100% health score) will render here
-                </span>
-              )}
-            </div>
-            {healthReport && (
-              <div className="dab-preview-actions">
-                <button
-                  type="button"
-                  className="dab-btn-secondary"
-                  onClick={() => setTddViewMode((m) => (m === 'rendered' ? 'raw' : 'rendered'))}
-                >
-                  {tddViewMode === 'rendered' ? '{ } Raw Markdown' : '📖 Rendered Report'}
-                </button>
-                <button
-                  type="button"
-                  className="dab-btn-secondary"
-                  onClick={handleCopyTddMarkdown}
-                >
-                  {copiedTdd ? '✓ Copied Markdown' : 'Copy Markdown'}
-                </button>
-                <button
-                  type="button"
-                  className="dab-btn-gemini"
-                  onClick={handleDownloadTddMarkdown}
-                >
-                  ✨ Download Markdown (.md)
-                </button>
-              </div>
-            )}
-          </div>
-          <div className="dab-iframe-container">
+        <div className="dab-preview-toolbar">
+          <div>
             {healthReport ? (
-              <div className="dab-tdd-viewer">
-                {tddViewMode === 'rendered' ? (
-                  <div
-                    className="dab-tdd-rendered"
-                    dangerouslySetInnerHTML={{
-                      __html: renderTddMarkdownToHtml(healthReport.tddMarkdown),
-                    }}
-                  />
-                ) : (
-                  <pre className="dab-tdd-markdown">{healthReport.tddMarkdown}</pre>
-                )}
-              </div>
+              <>
+                <strong>{healthReport.title}</strong>{' '}
+                <span className="dab-badge">
+                  Health Score: {healthReport.scores.overallScore}% ({healthReport.scores.grade})
+                </span>{' '}
+                <span className="dab-badge">
+                  Transcriber: {healthReport.scores.transcriberScore}/4.00
+                </span>{' '}
+                <span className="dab-muted">
+                  (user_{healthReport.createdBy}_health_check_{healthReport.id} · obj_health_check_
+                  {healthReport.id})
+                </span>
+              </>
             ) : (
-              <div className="dab-placeholder">
-                <p>No 3-Pillar Health Check report loaded yet.</p>
-                <p className="dab-muted">
-                  Click <strong>✨ Run 3-Pillar Audit</strong> in the top-right bar or enter a
-                  prompt on the left to execute Pillar 1 (System Activity), Pillar 2 (LookML 0–4
-                  Transcriber Rubric), and Pillar 3 (BigQuery INFORMATION_SCHEMA) in{' '}
-                  <code>LkrCodeMode</code>.
-                </p>
-              </div>
+              <span className="dab-muted">
+                7-section TECHNICAL_DESIGN_DOCUMENT.md (0–100% health score) will render here
+              </span>
             )}
           </div>
-        </>
-      ) : isLookmlMode ? (
-        <>
-          <div className="dab-preview-toolbar">
-            <div>
-              {lookmlBundle ? (
-                <>
-                  <strong>{lookmlBundle.title}</strong>{' '}
-                  <span className="dab-muted">
-                    (Session <code>obj_lookml_{lookmlBundle.id}</code> ·{' '}
-                    {lookmlBundle.files?.length || 0} .lkml files)
-                  </span>
-                </>
-              ) : (
-                <span className="dab-muted">
-                  Agentic LookML preview (.lkml diffs, validator, run_lookml_test &amp; /sql/:slug +
-                  /x/:slug parity)
-                </span>
-              )}
+          {healthReport && (
+            <div className="dab-preview-actions">
+              <button
+                type="button"
+                className="dab-btn-secondary"
+                onClick={() => setTddViewMode((m) => (m === 'rendered' ? 'raw' : 'rendered'))}
+              >
+                {tddViewMode === 'rendered' ? '{ } Raw Markdown' : '📖 Rendered Report'}
+              </button>
+              <button
+                type="button"
+                className="dab-btn-secondary"
+                onClick={handleCopyTddMarkdown}
+              >
+                {copiedTdd ? '✓ Copied Markdown' : 'Copy Markdown'}
+              </button>
+              <button
+                type="button"
+                className="dab-btn-gemini"
+                onClick={handleDownloadTddMarkdown}
+              >
+                ✨ Download Markdown (.md)
+              </button>
             </div>
+          )}
+        </div>
+      ) : isLookmlMode ? (
+        <div className="dab-preview-toolbar">
+          <div>
+            {lookmlBundle ? (
+              <>
+                <strong>{lookmlBundle.title}</strong>{' '}
+                <span className="dab-muted">
+                  (Session <code>obj_lookml_{lookmlBundle.id}</code> ·{' '}
+                  {lookmlBundle.files?.length || 0} .lkml files)
+                </span>
+              </>
+            ) : (
+              <span className="dab-muted">
+                Agentic LookML preview (.lkml diffs, validator, run_lookml_test &amp; /sql/:slug +
+                /x/:slug parity)
+              </span>
+            )}
           </div>
-          <div className="dab-iframe-container">
-            <LookmlPreviewPane
-              bundle={lookmlBundle}
-              hostUrl={hostUrl}
-              extensionSDK={extensionSDK}
-              canDeploy={canDeployLookml}
-            />
-          </div>
-        </>
+        </div>
       ) : isCaMode || caConversation ? (
         <>
           <div className="dab-preview-toolbar" data-testid="ca-preview-toolbar">
@@ -899,119 +1297,129 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               )}
             </div>
           )}
-          <div className="dab-iframe-container" data-testid="ca-embed-preview">
-            {caConversation ? (
-              <iframe
-                key={`ca-${caConversation.caConversationId}-${iframeRev}`}
-                data-testid="ca-embed-iframe"
-                src={`${hostUrl.replace(/\/$/, '')}${caConversation.embedPath}`}
-                srcDoc={
-                  typeof window !== 'undefined'
-                    ? (window as any).__MOCK_LOOKER_EXTENSION__?.getMockPreviewHtml?.(
-                        'conversational-analytics',
-                        caConversation.caConversationId
-                      )
-                    : undefined
-                }
-                title="Looker Conversational Analytics Embedded Chat"
-                className="dab-iframe"
-              />
-            ) : (
-              <div className="dab-placeholder">
-                <p>No active Conversational Analytics chat yet.</p>
-                <p className="dab-muted">
-                  Ask a data question on the left — a stateless isolated sub-agent will select the
-                  best Looker CA Agent, create the conversation, and embed it here.
-                </p>
-              </div>
-            )}
-          </div>
         </>
       ) : (
-        <>
-          <div className="dab-preview-toolbar">
-            <div>
-              {builderMode === 'dashboard' ? (
-                nativeContent ? (
-                  <>
-                    <strong>{nativeContent.title}</strong>{' '}
-                    <span className="dab-muted">
-                      ({nativeContent.contentType} #{nativeContent.id} ·{' '}
-                      <code>{nativeContent.embedPath}</code>)
-                    </span>
-                  </>
-                ) : (
-                  <span className="dab-muted">
-                    Live Looker UDD / Look / Board preview will appear here after the first turn
-                  </span>
-                )
-              ) : publishedApp ? (
+        <div className="dab-preview-toolbar">
+          <div>
+            {builderMode === 'dashboard' ? (
+              nativeContent ? (
                 <>
-                  <strong>{publishedApp.title}</strong>{' '}
+                  <strong>{nativeContent.title}</strong>{' '}
                   <span className="dab-muted">
-                    (Dashboard #{publishedApp.dashboardId} · Extension db::
-                    {publishedApp.extensionId.slice(0, 8)}…)
+                    ({nativeContent.contentType} #{nativeContent.id} ·{' '}
+                    <code>{nativeContent.embedPath}</code>)
                   </span>
                 </>
               ) : (
                 <span className="dab-muted">
-                  Live Looker Data App preview will appear here after the first turn
+                  Live Looker UDD / Look / Board preview will appear here after the first turn
                 </span>
+              )
+            ) : publishedApp ? (
+              <>
+                <strong>{publishedApp.title}</strong>{' '}
+                <span className="dab-muted">
+                  (Dashboard #{publishedApp.dashboardId} · Extension db::
+                  {publishedApp.extensionId.slice(0, 8)}…)
+                </span>
+              </>
+            ) : (
+              <span className="dab-muted">
+                Live Looker Data App preview will appear here after the first turn
+              </span>
+            )}
+          </div>
+          {activePreviewId && (
+            <div className="dab-preview-actions">
+              <button
+                type="button"
+                className="dab-btn-secondary"
+                onClick={() => setIframeRev((r) => r + 1)}
+              >
+                Reload Preview
+              </button>
+              <button
+                type="button"
+                className="dab-btn-secondary"
+                onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}
+              >
+                Open in Looker ↗
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="dab-iframe-container" data-testid="ca-embed-preview">
+        <div
+          ref={embedContainerRef}
+          data-testid="looker-embed-container"
+          className="dab-embed-container"
+          style={{
+            width: '100%',
+            height: '100%',
+            display: hasActiveEmbed ? 'block' : 'none',
+          }}
+        />
+        {isHealthCheckMode ? (
+          healthReport ? (
+            <div className="dab-tdd-viewer">
+              {tddViewMode === 'rendered' ? (
+                <div
+                  className="dab-tdd-rendered"
+                  dangerouslySetInnerHTML={{
+                    __html: renderTddMarkdownToHtml(healthReport.tddMarkdown),
+                  }}
+                />
+              ) : (
+                <pre className="dab-tdd-markdown">{healthReport.tddMarkdown}</pre>
               )}
             </div>
-            {activePreviewId && (
-              <div className="dab-preview-actions">
-                <button
-                  type="button"
-                  className="dab-btn-secondary"
-                  onClick={() => setIframeRev((r) => r + 1)}
-                >
-                  Reload Preview
-                </button>
-                <button
-                  type="button"
-                  className="dab-btn-secondary"
-                  onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}
-                >
-                  Open in Looker ↗
-                </button>
-              </div>
-            )}
-          </div>
-
-          <div className="dab-iframe-container">
-            {activePreviewId && embedUrl ? (
-              <iframe
-                key={`${builderMode}-${activePreviewId}-${iframeRev}`}
-                src={embedUrl}
-                srcDoc={
-                  typeof window !== 'undefined'
-                    ? (window as any).__MOCK_LOOKER_EXTENSION__?.getMockPreviewHtml?.(
-                        builderMode,
-                        activePreviewId
-                      )
-                    : undefined
-                }
-                title="Looker Live Preview"
-                className="dab-iframe"
-              />
-            ) : (
-              <div className="dab-placeholder">
-                <p>
-                  {builderMode === 'dashboard'
-                    ? 'No active native Looker content yet.'
-                    : 'No active Data App yet.'}
-                </p>
-                <p className="dab-muted">
-                  {builderMode === 'dashboard'
-                    ? 'Ask on the left to build a native Looker UDD, Look, Board, or Schedule via CodeMode, or pick from My Creations.'
-                    : 'Enter a prompt on the left to create a new Data App, or load an existing Dashboard ID from the top bar.'}
-                </p>
-              </div>
-            )}
-          </div>
-        </>
-      )}
+          ) : (
+            <div className="dab-placeholder">
+              <p>No 3-Pillar Health Check report loaded yet.</p>
+              <p className="dab-muted">
+                Click <strong>✨ Run 3-Pillar Audit</strong> in the top-right bar or enter a
+                prompt on the left to execute Pillar 1 (System Activity), Pillar 2 (LookML 0–4
+                Transcriber Rubric), and Pillar 3 (BigQuery INFORMATION_SCHEMA) in{' '}
+                <code>LkrCodeMode</code>.
+              </p>
+            </div>
+          )
+        ) : isLookmlMode ? (
+          <LookmlPreviewPane
+            bundle={lookmlBundle}
+            hostUrl={hostUrl}
+            extensionSDK={extensionSDK}
+            canDeploy={canDeployLookml}
+          />
+        ) : isCaMode || caConversation ? (
+          !caConversation && (
+            <div className="dab-placeholder">
+              <p>No active Conversational Analytics chat yet.</p>
+              <p className="dab-muted">
+                Ask a data question on the left — a stateless isolated sub-agent will select the
+                best Looker CA Agent, create the conversation, and embed it here.
+              </p>
+            </div>
+          )
+        ) : (
+          !hasActiveEmbed && (
+            <div className="dab-placeholder">
+              <p>
+                {builderMode === 'dashboard'
+                  ? 'No active native Looker content yet.'
+                  : 'No active Data App yet.'}
+              </p>
+              <p className="dab-muted">
+                {builderMode === 'dashboard'
+                  ? 'Ask on the left to build a native Looker UDD, Look, Board, or Schedule via CodeMode, or pick from My Creations.'
+                  : 'Enter a prompt on the left to create a new Data App, or load an existing Dashboard ID from the top bar.'}
+              </p>
+            </div>
+          )
+        )}
+      </div>
     </main>
   )
 }
