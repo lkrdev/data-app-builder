@@ -173,9 +173,7 @@ export async function fetchLookerCaAgentsCatalog(
             goldenQueries: [{ questions: ['what are our shipping statuses?'] }],
           },
         ]
-  try {
-    ;(SWRConfig as any).default?.cache?.set(unstable_serialize(['looker:ca_agents']), result)
-  } catch {}
+  ;(SWRConfig as any).default?.cache?.set?.(unstable_serialize(['looker:ca_agents']), result)
   void mutate(['looker:ca_agents'], result, false).catch(() => {})
   return result
 }

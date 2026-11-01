@@ -198,28 +198,11 @@ function parseUserIndexRow(row: any, fallbackUserId: string): UserArtifactIndexE
   }
 }
 
+const canonArtifactMode = (t?: StudioToolMode): string =>
+  t === 'data_app' ? 'app' : t === 'health_check' ? 'health' : t === 'script' ? 'tile' : t || ''
+
 function matchesArtifactType(entryType: StudioToolMode, filterType?: StudioToolMode): boolean {
-  if (!filterType) return true
-  if (entryType === filterType) return true
-  if (
-    (entryType === 'app' || entryType === 'data_app') &&
-    (filterType === 'app' || filterType === 'data_app')
-  ) {
-    return true
-  }
-  if (
-    (entryType === 'health' || entryType === 'health_check') &&
-    (filterType === 'health' || filterType === 'health_check')
-  ) {
-    return true
-  }
-  if (
-    (entryType === 'tile' || entryType === 'script') &&
-    (filterType === 'tile' || filterType === 'script')
-  ) {
-    return true
-  }
-  return false
+  return !filterType || canonArtifactMode(entryType) === canonArtifactMode(filterType)
 }
 
 // ponytail: Unified ArtifactService tracks `versionByKey` in memory so repeat saves skip redundant
@@ -300,6 +283,24 @@ export class ArtifactService {
     }
   }
 
+  private updateScriptsCache(
+    targetKey: string | undefined,
+    updater: (prev: SavedScript[]) => SavedScript[]
+  ): void {
+    const keys = targetKey ? [targetKey, '*'] : Array.from(this.scriptsCache.keys())
+    for (const k of keys) {
+      const prev =
+        this.scriptsCache.get(k) ??
+        readSwrCache<SavedScript[]>(['artifact:scripts', this.namespace, k === '*' ? undefined : k]) ??
+        []
+      const next = updater(prev).sort((a, b) =>
+        String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))
+      )
+      this.scriptsCache.set(k, next)
+      writeSwrCache(['artifact:scripts', this.namespace, k === '*' ? undefined : k], next)
+    }
+  }
+
   private syncInPlaceCachesOnWrite(key: string, parsedVal: any): void {
     this.valueByKey.set(key, parsedVal)
     writeSwrCache(['artifact:obj', this.namespace, key], parsedVal)
@@ -339,8 +340,10 @@ export class ArtifactService {
       this.userListCache.set(uid, nextAll)
       writeSwrCache(['artifact:user_list', this.namespace, uid, 'all'], nextAll)
       writeSwrCache(['artifact:user_list', this.namespace, uid, undefined], nextAll)
-      const typedList = nextAll.filter((e) => matchesArtifactType(e.type, entry.type))
-      writeSwrCache(['artifact:user_list', this.namespace, uid, entry.type], typedList)
+      writeSwrCache(
+        ['artifact:user_list', this.namespace, uid, entry.type],
+        nextAll.filter((e) => matchesArtifactType(e.type, entry.type))
+      )
       if (rawType !== entry.type) {
         writeSwrCache(
           ['artifact:user_list', this.namespace, uid, rawType],
@@ -356,18 +359,10 @@ export class ArtifactService {
           ...(parsedVal?.dashboardId ? { dashboardId: String(parsedVal.dashboardId) } : {}),
           ...(parsedVal?.elementId ? { elementId: String(parsedVal.elementId) } : {}),
         }
-        const prevScripts =
-          this.scriptsCache.get(uid) ??
-          readSwrCache<SavedScript[]>(['artifact:scripts', this.namespace, uid]) ??
-          []
-        const nextScripts = [
+        this.updateScriptsCache(uid, (prev) => [
           scriptEntry,
-          ...prevScripts.filter((s) => s.id !== scriptEntry.id),
-        ].sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
-        this.scriptsCache.set(uid, nextScripts)
-        this.scriptsCache.set('*', nextScripts)
-        writeSwrCache(['artifact:scripts', this.namespace, uid], nextScripts)
-        writeSwrCache(['artifact:scripts', this.namespace, undefined], nextScripts)
+          ...prev.filter((s) => s.id !== scriptEntry.id),
+        ])
       }
       return
     }
@@ -382,17 +377,10 @@ export class ArtifactService {
         code: String(parsedVal.code || ''),
         updatedAt: String(parsedVal.updatedAt || new Date().toISOString()),
       }
-      for (const cacheKey of Array.from(this.scriptsCache.keys())) {
-        const cur = this.scriptsCache.get(cacheKey) || []
-        const next = [scriptEntry, ...cur.filter((s) => s.id !== id)].sort((a, b) =>
-          String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))
-        )
-        this.scriptsCache.set(cacheKey, next)
-        writeSwrCache(
-          ['artifact:scripts', this.namespace, cacheKey === '*' ? undefined : cacheKey],
-          next
-        )
-      }
+      this.updateScriptsCache(undefined, (prev) => [
+        scriptEntry,
+        ...prev.filter((s) => s.id !== id),
+      ])
       return
     }
 
@@ -439,13 +427,7 @@ export class ArtifactService {
         nextAll.filter((e) => matchesArtifactType(e.type, rawType))
       )
       if (rawType === 'script' || rawType === 'tile') {
-        for (const k of [uid, '*']) {
-          if (this.scriptsCache.has(k)) {
-            const nextScripts = (this.scriptsCache.get(k) || []).filter((s) => s.id !== id)
-            this.scriptsCache.set(k, nextScripts)
-            writeSwrCache(['artifact:scripts', this.namespace, k === '*' ? undefined : k], nextScripts)
-          }
-        }
+        this.updateScriptsCache(uid, (prev) => prev.filter((s) => s.id !== id))
       }
       return
     }
@@ -453,11 +435,7 @@ export class ArtifactService {
     const objScriptMatch = key.match(/^obj_script_(.+)$/)
     if (objScriptMatch) {
       const id = objScriptMatch[1]
-      for (const k of Array.from(this.scriptsCache.keys())) {
-        const nextScripts = (this.scriptsCache.get(k) || []).filter((s) => s.id !== id)
-        this.scriptsCache.set(k, nextScripts)
-        writeSwrCache(['artifact:scripts', this.namespace, k === '*' ? undefined : k], nextScripts)
-      }
+      this.updateScriptsCache(undefined, (prev) => prev.filter((s) => s.id !== id))
       return
     }
 
@@ -902,22 +880,18 @@ export class ArtifactService {
 }
 
 let servicesBySdk = new WeakMap<object, Map<string, ArtifactService>>()
-const fallbackServicesByNamespace = new Map<string, ArtifactService>()
+const DEFAULT_SDK_KEY = {}
 
 export function getArtifactService(
   sdk: Looker40SDK,
   namespace = ARTIFACT_NAMESPACE
 ): ArtifactService {
   const ns = String(namespace || ARTIFACT_NAMESPACE).trim() || ARTIFACT_NAMESPACE
-  const rawKey = ((sdk as any)?.__rawSdk || sdk) as object | undefined
-  if (!rawKey || (typeof rawKey !== 'object' && typeof rawKey !== 'function')) {
-    let svc = fallbackServicesByNamespace.get(ns)
-    if (!svc) {
-      svc = new ArtifactService(sdk, ns)
-      fallbackServicesByNamespace.set(ns, svc)
-    }
-    return svc
-  }
+  const rawCandidate = (sdk as any)?.__rawSdk || sdk
+  const rawKey =
+    rawCandidate && (typeof rawCandidate === 'object' || typeof rawCandidate === 'function')
+      ? (rawCandidate as object)
+      : DEFAULT_SDK_KEY
   let byNs = servicesBySdk.get(rawKey)
   if (!byNs) {
     byNs = new Map<string, ArtifactService>()
@@ -933,7 +907,6 @@ export function getArtifactService(
 
 export function clearArtifactServiceCache(): void {
   servicesBySdk = new WeakMap<object, Map<string, ArtifactService>>()
-  fallbackServicesByNamespace.clear()
 }
 
 export async function searchArtifactsRaw(

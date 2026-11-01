@@ -64,24 +64,21 @@ const StudioMain: React.FC = () => {
 export const App = () => {
   const mockCtx =
     typeof window !== 'undefined' ? (window as any).__MOCK_LOOKER_EXTENSION__ : undefined
-  if (mockCtx) {
-    return (
-      <SWRConfig value={{ revalidateOnFocus: false, dedupingInterval: 15000 }}>
+  return (
+    <SWRConfig value={{ revalidateOnFocus: false, dedupingInterval: 15000 }}>
+      {mockCtx ? (
         <MemoryRouter initialEntries={[mockCtx.initialRoute || '/']}>
           <MockLookerExtensionProvider value={mockCtx}>
             <StudioMain />
           </MockLookerExtensionProvider>
         </MemoryRouter>
-      </SWRConfig>
-    )
-  }
-  return (
-    <SWRConfig value={{ revalidateOnFocus: false, dedupingInterval: 15000 }}>
-      <ExtensionProvider>
-        <LookerExtensionProvider>
-          <StudioMain />
-        </LookerExtensionProvider>
-      </ExtensionProvider>
+      ) : (
+        <ExtensionProvider>
+          <LookerExtensionProvider>
+            <StudioMain />
+          </LookerExtensionProvider>
+        </ExtensionProvider>
+      )}
     </SWRConfig>
   )
 }

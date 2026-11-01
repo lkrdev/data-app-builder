@@ -1,10 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import useSWR from 'swr'
 import { useLookerExtension } from '../contexts/LookerExtensionContext'
 import {
   bindTileScriptArtifact,
   getArtifactNamespace,
-  getArtifactService,
   listSavedScripts,
   loadScriptArtifact,
   loadTileScriptArtifact,
@@ -60,10 +59,6 @@ export const PythonTile: React.FC = () => {
   const filtersJson = JSON.stringify(tileHostData?.dashboardFilters || {})
 
   const namespace = getArtifactNamespace(extensionSDK)
-  const artifactService = useMemo(
-    () => getArtifactService(core40SDK, namespace),
-    [core40SDK, namespace]
-  )
   const { data: swrBinding, error: bindingError } = useSWR<TileScriptBinding | null>(
     elementId ? ['artifact:tile_script', namespace, elementId] : null,
     () => loadTileScriptArtifact(core40SDK, elementId, namespace).catch(() => null)
@@ -193,7 +188,6 @@ export const PythonTile: React.FC = () => {
       },
       namespace
     )
-    void artifactService
     setLocalBinding(nextBinding)
     setStatusMsg(`Bound "${chosen.title}" to tile #${elementId}`)
   }
