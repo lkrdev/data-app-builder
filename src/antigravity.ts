@@ -1,5 +1,6 @@
 import type { Looker40SDK } from '@looker/sdk'
 import {
+  createDeduplicatedLookerSdkProxy,
   DataAppBundle,
   extractResolvedUseCase,
   getAllowedUseCases,
@@ -196,6 +197,40 @@ export interface AntigravityTurnTelemetry {
 }
 
 export const DEFAULT_POLL_SCHEDULE_MS = [400, 700, 1000, 1500]
+export const CONCURRENT_POLL_SCHEDULE_MS = [250, 450, 750, 1100]
+
+// ponytail: coalesce concurrent environment creation per user so simultaneous Turn 1 / prewarm calls
+// spin up 1 remote container and attach all other conversations to the same environment_id.
+export const inFlightEnvProvisionByUser = new Map<string, Promise<string>>()
+export const sharedEnvExploreSchemas = new Map<string, Record<string, any>>()
+export const activeInteractionsByEnv = new Map<string, number>()
+
+export function resolveUserProvisionKey(userId?: string, auth?: AntigravityAuth): string {
+  return String(userId || auth?.oauthToken?.slice(-16) || auth?.apiKey?.slice(-16) || auth?.clientId || 'default').trim() || 'default'
+}
+
+export function recordSharedEnvExploreSchema(environmentId: string | undefined, exploreKey: string, schemaPayload: any): void {
+  const envId = normalizeEnvironmentId(environmentId)
+  const key = String(exploreKey || '').trim()
+  if (!envId || !key || !schemaPayload) return
+  sharedEnvExploreSchemas.set(envId, { ...(sharedEnvExploreSchemas.get(envId) || {}), [key]: schemaPayload })
+}
+
+export function getSharedEnvExploreSchemas(environmentId: string | undefined): Record<string, any> {
+  const envId = normalizeEnvironmentId(environmentId)
+  return envId ? { ...(sharedEnvExploreSchemas.get(envId) || {}) } : {}
+}
+
+export function resolveAdaptivePollScheduleMs(customSchedule?: number[], environmentId?: string, slotIndex = 0): number[] {
+  if (customSchedule && customSchedule.length > 0 && customSchedule !== DEFAULT_POLL_SCHEDULE_MS) return customSchedule
+  const envId = normalizeEnvironmentId(environmentId)
+  const concurrentCount = envId ? activeInteractionsByEnv.get(envId) || 0 : 0
+  if (concurrentCount > 1 || slotIndex > 0) {
+    const offset = (slotIndex % 4) * 35
+    return CONCURRENT_POLL_SCHEDULE_MS.map((ms, idx) => (idx === 0 ? ms + offset : ms))
+  }
+  return DEFAULT_POLL_SCHEDULE_MS
+}
 
 export function getGeminiSecretKeyTag(extensionSDK: any): string {
   if (extensionSDK && typeof extensionSDK.createSecretKeyTag === 'function') {
@@ -582,9 +617,16 @@ export function buildWorkspaceSources(params: {
   schemaMarkdown: string
   appFilePath?: string
   existingAppCode?: string
+  cachedExploreSchemas?: Record<string, any>
   extraSources?: Array<{ type: 'inline'; content: string; target: string }>
 }): Array<{ type: 'inline'; content: string; target: string }> {
-  const { schemaMarkdown, appFilePath = '/workspace/apps/current/app.js', existingAppCode, extraSources } = params
+  const {
+    schemaMarkdown,
+    appFilePath = '/workspace/apps/current/app.js',
+    existingAppCode,
+    cachedExploreSchemas,
+    extraSources,
+  } = params
   return [
     { type: 'inline', content: AGENTS_MD, target: '/workspace/AGENTS.md' },
     { type: 'inline', content: schemaMarkdown, target: '/workspace/schema.md' },
@@ -592,6 +634,11 @@ export function buildWorkspaceSources(params: {
     { type: 'inline', content: DATA_APP_GUIDE_MD, target: '/workspace/DATA_APP_GUIDE.md' },
     { type: 'inline', content: BOOTSTRAP_LOOKML_PY, target: '/workspace/bootstrap_lookml.py' },
     { type: 'inline', content: LKR_CLI_SITECUSTOMIZE_PY, target: '/workspace/sitecustomize.py' },
+    {
+      type: 'inline',
+      content: JSON.stringify(cachedExploreSchemas || {}),
+      target: '/workspace/.lkr_extension_cache/explore_schemas.json',
+    },
     ...(extraSources || []),
     ...(existingAppCode ? [{ type: 'inline' as const, content: existingAppCode, target: appFilePath }] : []),
   ]
@@ -735,6 +782,12 @@ export async function runAntigravityTurn(params: {
 
   const initialEnvId = normalizeEnvironmentId(environmentId || session.environmentId)
   let activeEnvId = initialEnvId
+  const userProvisionKey = resolveUserProvisionKey(userId, auth)
+  if (activeEnvId && schemaMarkdown && selectedExplores.length > 0) {
+    for (const expKey of selectedExplores) {
+      recordSharedEnvExploreSchema(activeEnvId, expKey, schemaMarkdown)
+    }
+  }
 
   // ponytail: decouple container state (environmentId) from conversation history (lastInteractionId).
   // A single per-user environmentId is shared across conversations and tool modes, while
@@ -819,6 +872,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     schemaMarkdown,
     appFilePath,
     existingAppCode: mode === 'data_app' ? existingAppCode : undefined,
+    cachedExploreSchemas: getSharedEnvExploreSchemas(activeEnvId),
     extraSources,
   })
 
@@ -879,7 +933,37 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     environment: { type: 'remote', sources },
   })
 
+  const provisionFreshEnvironmentInteraction = async (): Promise<any> => {
+    let resolveEnv!: (envId: string) => void
+    let rejectEnv!: (err: unknown) => void
+    const envPromise = new Promise<string>((res, rej) => {
+      resolveEnv = res
+      rejectEnv = rej
+    })
+    envPromise.catch(() => {})
+    inFlightEnvProvisionByUser.set(userProvisionKey, envPromise)
+    try {
+      const created = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', buildFreshPayload())
+      resolveEnv(normalizeEnvironmentId(created?.environment_id) || '')
+      return created
+    } catch (err) {
+      rejectEnv(err)
+      throw err
+    } finally {
+      if (inFlightEnvProvisionByUser.get(userProvisionKey) === envPromise) {
+        inFlightEnvProvisionByUser.delete(userProvisionKey)
+      }
+    }
+  }
+
   onStatus('Starting Antigravity sandbox interaction...')
+  if (!activeEnvId && inFlightEnvProvisionByUser.has(userProvisionKey)) {
+    try {
+      const coalescedId = normalizeEnvironmentId(await inFlightEnvProvisionByUser.get(userProvisionKey)!)
+      if (coalescedId) activeEnvId = coalescedId
+    } catch {}
+  }
+
   let interaction: any
   if (activeEnvId || (!isFreshConversation && session.lastInteractionId)) {
     try {
@@ -898,25 +982,18 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       // resumed conversation expired, spin up a fresh remote environment seeded with sources.
       apiRetries += 1
       onStatus('Resumed sandbox expired; provisioning fresh sandbox with app state...')
-      interaction = await callInteractionsApi(
-        extensionSDK,
-        auth,
-        'interactions',
-        'POST',
-        buildFreshPayload()
-      )
+      interaction = await provisionFreshEnvironmentInteraction()
     }
   } else {
-    interaction = await callInteractionsApi(
-      extensionSDK,
-      auth,
-      'interactions',
-      'POST',
-      buildFreshPayload()
-    )
+    interaction = await provisionFreshEnvironmentInteraction()
   }
   let trackedEnvId: string | undefined =
     normalizeEnvironmentId(interaction.environment_id) || activeEnvId
+  if (trackedEnvId && schemaMarkdown && selectedExplores.length > 0) {
+    for (const expKey of selectedExplores) {
+      recordSharedEnvExploreSchema(trackedEnvId, expKey, schemaMarkdown)
+    }
+  }
   await persistUserEnvIfChanged({
     sdk,
     extensionSDK,
@@ -962,6 +1039,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     target_explore: primaryExplore,
     target_folder_id: folderId || '1',
     target_project_id: lookmlProjectId || normalizedExistingNative?.projectId || '',
+    cached_explore_schemas: getSharedEnvExploreSchemas(trackedEnvId),
     ...(activeContentVars
       ? {
           active_content: activeContentVars,
@@ -970,242 +1048,227 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : {}),
   }
 
-  for (;;) {
-    while (
-      interaction.status === 'in_progress' ||
-      interaction.status === 'requires_action' ||
-      interaction.status === 'queued'
-    ) {
-      if (interaction.environment_id) {
-        trackedEnvId = interaction.environment_id
-      }
-      if (interaction.status === 'requires_action') {
-        const steps = interaction.steps || []
-        const executedIds = new Set(
-          steps.filter((s: any) => s.type === 'function_result').map((s: any) => s.call_id)
-        )
-        const pendingLookerCalls = steps.filter(
-          (s: any) =>
-            s.type === 'function_call' &&
-            (s.name === 'run_looker_codemode' || s.name === 'lkr_cli_extension_bridge') &&
-            !executedIds.has(s.id)
-        )
+  const turnSdk = createDeduplicatedLookerSdkProxy(sdk, (res, elapsedMs, err) => {
+    lookerHttpCalls += 1
+    lookerHttpMs += elapsedMs
+    if (err || (res && (res.ok === false || Number(res.statusCode) >= 400))) apiRetries += 1
+  })
+  const envSlotKey = normalizeEnvironmentId(trackedEnvId) || 'remote'
+  const envConcurrencySlot = activeInteractionsByEnv.get(envSlotKey) || 0
+  activeInteractionsByEnv.set(envSlotKey, envConcurrencySlot + 1)
 
-        if (pendingLookerCalls.length > 0) {
-          onStatus('Running Looker Code Mode (WASM Monty sandbox) in extension...')
-          const cmStart = Date.now()
-          codemodeCalls += pendingLookerCalls.length
-          const rawTransport = (sdk as any)?.authSession?.transport
-          const origRawReq = rawTransport?.rawRequest
-          const turnSdk =
-            typeof origRawReq === 'function'
-              ? {
-                  ...sdk,
-                  authSession: {
-                    ...(sdk as any).authSession,
-                    transport: {
-                      ...rawTransport,
-                      rawRequest: async (...reqArgs: any[]) => {
-                        lookerHttpCalls += 1
-                        const reqStart = Date.now()
-                        try {
-                          const res = await origRawReq.apply(rawTransport, reqArgs)
-                          if (res && (res.ok === false || Number(res.statusCode) >= 400)) apiRetries += 1
-                          return res
-                        } catch (err) {
-                          apiRetries += 1
-                          throw err
-                        } finally {
-                          lookerHttpMs += Date.now() - reqStart
-                        }
+  try {
+    for (;;) {
+      while (
+        interaction.status === 'in_progress' ||
+        interaction.status === 'requires_action' ||
+        interaction.status === 'queued'
+      ) {
+        if (interaction.environment_id) {
+          trackedEnvId = interaction.environment_id
+        }
+        if (interaction.status === 'requires_action') {
+          const steps = interaction.steps || []
+          const executedIds = new Set(
+            steps.filter((s: any) => s.type === 'function_result').map((s: any) => s.call_id)
+          )
+          const pendingLookerCalls = steps.filter(
+            (s: any) =>
+              s.type === 'function_call' &&
+              (s.name === 'run_looker_codemode' || s.name === 'lkr_cli_extension_bridge') &&
+              !executedIds.has(s.id)
+          )
+
+          if (pendingLookerCalls.length > 0) {
+            onStatus('Running Looker Code Mode (WASM Monty sandbox) in extension...')
+            const cmStart = Date.now()
+            codemodeCalls += pendingLookerCalls.length
+            const resultsInput = await Promise.all(
+              pendingLookerCalls.map(async (call: any) => {
+                const args = call.arguments || call.args || {}
+                let codeModeOutput: string
+                try {
+                  if (call.name === 'lkr_cli_extension_bridge') {
+                    const bridged = await executeLkrExtensionToolRequest({
+                      sdk: turnSdk,
+                      req: args,
+                      defaultVars: defaultCodeModeVars,
+                      extensionSDK,
+                      requirePermission,
+                      approvedOperations,
+                      onPermissionRequest,
+                    })
+                    resolvedBridgeCacheKeys.add(bridged.cacheKey)
+                    codeModeOutput = JSON.stringify({
+                      ok: true,
+                      cache_key: bridged.cacheKey,
+                      cache_path: `/workspace/.lkr_extension_cache/${bridged.cacheKey}.json`,
+                      result: bridged.result,
+                    })
+                  } else {
+                    const customVars =
+                      args.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
+                        ? args.vars
+                        : {}
+                    const rawCode = String(args.code || '')
+                    codeModeOutput = await LkrCodeMode.runPythonCode({
+                      code: isDashboardMode ? wrapDashboardCodeMode(rawCode) : rawCode,
+                      sdk: turnSdk,
+                      extensionSDK,
+                      allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard',
+                      requirePermission,
+                      approvedOperations,
+                      onPermissionRequest,
+                      vars: {
+                        ...defaultCodeModeVars,
+                        ...customVars,
                       },
-                    },
-                  },
-                }
-              : sdk
-          const resultsInput = await Promise.all(
-            pendingLookerCalls.map(async (call: any) => {
-              const args = call.arguments || call.args || {}
-              let codeModeOutput: string
-              try {
-                if (call.name === 'lkr_cli_extension_bridge') {
-                  const bridged = await executeLkrExtensionToolRequest({
-                    sdk: turnSdk,
-                    req: args,
-                    defaultVars: defaultCodeModeVars,
-                    extensionSDK,
-                    requirePermission,
-                    approvedOperations,
-                    onPermissionRequest,
-                  })
-                  resolvedBridgeCacheKeys.add(bridged.cacheKey)
+                    })
+                  }
+                } catch (err: any) {
+                  apiRetries += 1
                   codeModeOutput = JSON.stringify({
-                    ok: true,
-                    cache_key: bridged.cacheKey,
-                    cache_path: `/workspace/.lkr_extension_cache/${bridged.cacheKey}.json`,
-                    result: bridged.result,
-                  })
-                } else {
-                  const customVars =
-                    args.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
-                      ? args.vars
-                      : {}
-                  const rawCode = String(args.code || '')
-                  codeModeOutput = await LkrCodeMode.runPythonCode({
-                    code: isDashboardMode ? wrapDashboardCodeMode(rawCode) : rawCode,
-                    sdk: turnSdk,
-                    extensionSDK,
-                    allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard',
-                    requirePermission,
-                    approvedOperations,
-                    onPermissionRequest,
-                    vars: {
-                      ...defaultCodeModeVars,
-                      ...customVars,
-                    },
+                    ok: false,
+                    error: err?.message || String(err),
                   })
                 }
-              } catch (err: any) {
-                apiRetries += 1
-                codeModeOutput = JSON.stringify({
-                  ok: false,
-                  error: err?.message || String(err),
-                })
-              }
-              return {
-                type: 'function_result',
-                name: call.name || 'run_looker_codemode',
-                call_id: call.id,
-                result: codeModeOutput,
-              }
-            })
-          )
-          codemodeExecMs += Date.now() - cmStart
+                return {
+                  type: 'function_result',
+                  name: call.name || 'run_looker_codemode',
+                  call_id: call.id,
+                  result: codeModeOutput,
+                }
+              })
+            )
+            codemodeExecMs += Date.now() - cmStart
 
-          interaction = await callInteractionsApi(
-            extensionSDK,
-            auth,
-            'interactions',
-            'POST',
-            {
-              agent: 'antigravity-preview-09-2026',
-              agent_config: agentConfig,
-              background: true,
-              environment: interaction.environment_id || trackedEnvId || 'remote',
-              previous_interaction_id: interaction.id,
-              tools: activeTools,
-              input: resultsInput,
+            interaction = await callInteractionsApi(
+              extensionSDK,
+              auth,
+              'interactions',
+              'POST',
+              {
+                agent: 'antigravity-preview-09-2026',
+                agent_config: agentConfig,
+                background: true,
+                environment: interaction.environment_id || trackedEnvId || 'remote',
+                previous_interaction_id: interaction.id,
+                tools: activeTools,
+                input: resultsInput,
+              }
+            )
+            if (interaction.environment_id) {
+              trackedEnvId = interaction.environment_id
             }
-          )
-          if (interaction.environment_id) {
-            trackedEnvId = interaction.environment_id
+            pollIdx = 0
+            prevStepCount = (interaction.steps || []).length
+            prevStatus = interaction.status
+            continue
           }
-          pollIdx = 0
-          prevStepCount = (interaction.steps || []).length
-          prevStatus = interaction.status
-          continue
         }
-      }
 
-      onStatus(summarizeProgress(interaction))
-      const schedule =
-        pollScheduleMs.length > 0 ? pollScheduleMs : DEFAULT_POLL_SCHEDULE_MS
-      const sleepMs = schedule[Math.min(pollIdx, schedule.length - 1)]
-      pollIdx += 1
-      pollCount += 1
-      pollWaitMs += sleepMs
-      if (sleepMs > 0) {
-        await new Promise((r) => setTimeout(r, sleepMs))
-      }
-      interaction = await callInteractionsApi(
-        extensionSDK,
-        auth,
-        `interactions/${encodeURIComponent(interaction.id)}`,
-        'GET'
-      )
-      if (interaction.environment_id) {
-        trackedEnvId = interaction.environment_id
-      }
-      const curStepCount = (interaction.steps || []).length
-      if (curStepCount !== prevStepCount || interaction.status !== prevStatus) {
-        pollIdx = 0
-        prevStepCount = curStepCount
-        prevStatus = interaction.status
-      }
-    }
-
-    if (interaction.status === 'failed' || interaction.status === 'cancelled') {
-      throw new Error(
-        `Antigravity interaction ${interaction.status}: ${
-          interaction.error?.message || JSON.stringify(interaction.error || interaction)
-        }`
-      )
-    }
-
-    const hasFinalBundle = Boolean(
-      extractBundleFromInteraction(interaction) ||
-        extractNativeContentFromInteraction(interaction) ||
-        extractLookmlBundleFromInteraction(interaction) ||
-        extractTddFromInteraction(interaction)
-    )
-    const pendingBridgeReqs = extractLkrExtensionToolRequests(interaction).filter(
-      (r) => !resolvedBridgeCacheKeys.has(r.cache_key || computeLkrExtensionCacheKey(r))
-    )
-
-    if (!hasFinalBundle && pendingBridgeReqs.length > 0 && bridgeRound < 8) {
-      bridgeRound += 1
-      accumulatedSteps.push(...(interaction.steps || []))
-      onStatus('Executing bridged lkr-dev-cli request(s) in Looker extension...')
-      const bridgeStart = Date.now()
-      const bridgedLines: string[] = []
-      for (const req of pendingBridgeReqs) {
-        if (req.kind === 'sdk_request') lookerHttpCalls += 1
-        else codemodeCalls += 1
-        const { cacheKey, result } = await executeLkrExtensionToolRequest({
-          sdk,
-          req,
-          defaultVars: defaultCodeModeVars,
+        onStatus(summarizeProgress(interaction))
+        const schedule = resolveAdaptivePollScheduleMs(pollScheduleMs, trackedEnvId, envConcurrencySlot)
+        const sleepMs = schedule[Math.min(pollIdx, schedule.length - 1)]
+        pollIdx += 1
+        pollCount += 1
+        pollWaitMs += sleepMs
+        if (sleepMs > 0) {
+          await new Promise((r) => setTimeout(r, sleepMs))
+        }
+        interaction = await callInteractionsApi(
           extensionSDK,
-          requirePermission,
-          approvedOperations,
-          onPermissionRequest,
-        })
-        resolvedBridgeCacheKeys.add(cacheKey)
-        bridgedLines.push(`/workspace/.lkr_extension_cache/${cacheKey}.json\n\`\`\`json\n${JSON.stringify(result)}\n\`\`\``)
-      }
-      codemodeExecMs += Date.now() - bridgeStart
-
-      const seedText = [
-        '[LKR_EXTENSION_BRIDGE_RESULT] Executed online lkr-dev-cli request(s) in the host Looker Extension.',
-        'Write the resolved JSON payload(s) below to /workspace/.lkr_extension_cache/ and re-run your sandbox command so it hits the local cache and completes:',
-        ...bridgedLines,
-      ].join('\n\n')
-
-      interaction = await callInteractionsApi(
-        extensionSDK,
-        auth,
-        'interactions',
-        'POST',
-        {
-          agent: 'antigravity-preview-09-2026',
-          agent_config: agentConfig,
-          background: true,
-          environment: interaction.environment_id || trackedEnvId || 'remote',
-          previous_interaction_id: interaction.id,
-          tools: activeTools,
-          input: [{ type: 'text', text: seedText }],
+          auth,
+          `interactions/${encodeURIComponent(interaction.id)}`,
+          'GET'
+        )
+        if (interaction.environment_id) {
+          trackedEnvId = interaction.environment_id
         }
-      )
-      if (interaction.environment_id) {
-        trackedEnvId = interaction.environment_id
+        const curStepCount = (interaction.steps || []).length
+        if (curStepCount !== prevStepCount || interaction.status !== prevStatus) {
+          pollIdx = 0
+          prevStepCount = curStepCount
+          prevStatus = interaction.status
+        }
       }
-      pollIdx = 0
-      prevStepCount = (interaction.steps || []).length
-      prevStatus = interaction.status
-      continue
-    }
 
-    break
+      if (interaction.status === 'failed' || interaction.status === 'cancelled') {
+        throw new Error(
+          `Antigravity interaction ${interaction.status}: ${
+            interaction.error?.message || JSON.stringify(interaction.error || interaction)
+          }`
+        )
+      }
+
+      const hasFinalBundle = Boolean(
+        extractBundleFromInteraction(interaction) ||
+          extractNativeContentFromInteraction(interaction) ||
+          extractLookmlBundleFromInteraction(interaction) ||
+          extractTddFromInteraction(interaction)
+      )
+      const pendingBridgeReqs = extractLkrExtensionToolRequests(interaction).filter(
+        (r) => !resolvedBridgeCacheKeys.has(r.cache_key || computeLkrExtensionCacheKey(r))
+      )
+
+      if (!hasFinalBundle && pendingBridgeReqs.length > 0 && bridgeRound < 8) {
+        bridgeRound += 1
+        accumulatedSteps.push(...(interaction.steps || []))
+        onStatus('Executing bridged lkr-dev-cli request(s) in Looker extension...')
+        const bridgeStart = Date.now()
+        const bridgedLines: string[] = []
+        for (const req of pendingBridgeReqs) {
+          if (req.kind !== 'sdk_request') codemodeCalls += 1
+          const { cacheKey, result } = await executeLkrExtensionToolRequest({
+            sdk: turnSdk,
+            req,
+            defaultVars: defaultCodeModeVars,
+            extensionSDK,
+            requirePermission,
+            approvedOperations,
+            onPermissionRequest,
+          })
+          resolvedBridgeCacheKeys.add(cacheKey)
+          bridgedLines.push(`/workspace/.lkr_extension_cache/${cacheKey}.json\n\`\`\`json\n${JSON.stringify(result)}\n\`\`\``)
+        }
+        codemodeExecMs += Date.now() - bridgeStart
+
+        const seedText = [
+          '[LKR_EXTENSION_BRIDGE_RESULT] Executed online lkr-dev-cli request(s) in the host Looker Extension.',
+          'Write the resolved JSON payload(s) below to /workspace/.lkr_extension_cache/ and re-run your sandbox command so it hits the local cache and completes:',
+          ...bridgedLines,
+        ].join('\n\n')
+
+        interaction = await callInteractionsApi(
+          extensionSDK,
+          auth,
+          'interactions',
+          'POST',
+          {
+            agent: 'antigravity-preview-09-2026',
+            agent_config: agentConfig,
+            background: true,
+            environment: interaction.environment_id || trackedEnvId || 'remote',
+            previous_interaction_id: interaction.id,
+            tools: activeTools,
+            input: [{ type: 'text', text: seedText }],
+          }
+        )
+        if (interaction.environment_id) {
+          trackedEnvId = interaction.environment_id
+        }
+        pollIdx = 0
+        prevStepCount = (interaction.steps || []).length
+        prevStatus = interaction.status
+        continue
+      }
+
+      break
+    }
+  } finally {
+    const remaining = (activeInteractionsByEnv.get(envSlotKey) || 1) - 1
+    if (remaining <= 0) activeInteractionsByEnv.delete(envSlotKey)
+    else activeInteractionsByEnv.set(envSlotKey, remaining)
   }
 
   if (accumulatedSteps.length > 0) {
@@ -1425,6 +1488,14 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
       ],
     }
 
+    const userProvisionKey = resolveUserProvisionKey(userId, auth)
+    if (!activeEnvId && inFlightEnvProvisionByUser.has(userProvisionKey)) {
+      try {
+        const coalescedId = normalizeEnvironmentId(await inFlightEnvProvisionByUser.get(userProvisionKey)!)
+        if (coalescedId) activeEnvId = coalescedId
+      } catch {}
+    }
+
     if (activeEnvId) {
       try {
         const woken = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
@@ -1456,11 +1527,20 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
       }
     }
 
+    let resolveEnv!: (envId: string) => void
+    let rejectEnv!: (err: unknown) => void
+    const envPromise = new Promise<string>((res, rej) => {
+      resolveEnv = res
+      rejectEnv = rej
+    })
+    envPromise.catch(() => {})
+    inFlightEnvProvisionByUser.set(userProvisionKey, envPromise)
     try {
       const sources = buildWorkspaceSources({
         schemaMarkdown,
         appFilePath,
         existingAppCode: toolType === 'app' ? existingAppCode : undefined,
+        cachedExploreSchemas: getSharedEnvExploreSchemas(activeEnvId),
         extraSources,
       })
       const pre = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
@@ -1477,6 +1557,7 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
       const newEnvId =
         normalizeEnvironmentId(pre?.environment_id) ||
         `env_${toolType}_${Date.now().toString(36).slice(-4)}`
+      resolveEnv(newEnvId)
       await persistUserEnvIfChanged({
         sdk,
         extensionSDK,
@@ -1495,8 +1576,13 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
         },
         status: 'prelaunched',
       }
-    } catch {
+    } catch (err) {
+      rejectEnv(err)
       // Fall back to standby session slot
+    } finally {
+      if (inFlightEnvProvisionByUser.get(userProvisionKey) === envPromise) {
+        inFlightEnvProvisionByUser.delete(userProvisionKey)
+      }
     }
   }
 

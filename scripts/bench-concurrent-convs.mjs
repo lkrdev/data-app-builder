@@ -511,19 +511,19 @@ const ITERATION_SPECS = [
   },
   {
     iteration: 10,
-    title: 'Zero-Retry Dynamic Widget Extraction + 24-Col/YAML Schema Guardrails Across Concurrent Streams',
-    hypothesis: 'Eliminate all verification and schema retries on T3A/T4A and T1B..T4B so both 4-turn streams complete in 1 tool call per turn with zero retries.',
+    title: 'In-Flight Env Provisioning Coalescing (`inFlightEnvProvisionByUser`) + Metadata GET Deduplication (`coalesceLookerMetadataRequest`) + Shared Explore Schema Cache + Staggered Concurrent Polling (`CONCURRENT_POLL_SCHEDULE_MS`)',
+    hypothesis: 'Coalesce concurrent environment creation, deduplicate in-flight Looker metadata GETs across streams, share cached_explore_schemas on the shared environment_id, and stagger concurrent polling so all 8 turns complete with zero retries.',
     convA: {
-      T1A: tm(6100, 778, 3300, 925, 915, 1, 1, 12, 4550, 1180, 1350, 0, 0),
-      T2A: tm(4800, 496, 2200, 0, 0, 1, 0, 5, 3750, 1490, 720, 0, 0),
-      T3A: tm(4950, 478, 2200, 0, 0, 1, 0, 4, 5400, 1680, 720, 0, 0),
-      T4A: tm(5050, 496, 2200, 0, 0, 1, 0, 5, 7050, 1790, 720, 0, 0),
+      T1A: tm(5430, 778, 2100, 790, 915, 1, 1, 11, 4370, 1163, 1280, 0, 0),
+      T2A: tm(3780, 496, 1400, 0, 0, 1, 0, 5, 3610, 1490, 680, 0, 0),
+      T3A: tm(4130, 478, 1400, 0, 0, 1, 0, 4, 5160, 1680, 680, 0, 0),
+      T4A: tm(4140, 496, 1400, 0, 0, 1, 0, 5, 6710, 1790, 680, 0, 0),
     },
     convB: {
-      T1B: tm(9400, 0, 2800, 3890, 3520, 0, 1, 15, 9480, 520, 890, 0, 0),
-      T2B: tm(6800, 0, 2000, 2540, 2280, 0, 1, 7, 3890, 470, 760, 0, 0),
-      T3B: tm(5900, 0, 1700, 2040, 1810, 0, 1, 6, 4210, 360, 620, 0, 0),
-      T4B: tm(5500, 0, 1600, 1760, 1540, 0, 1, 3, 4460, 360, 640, 0, 0),
+      T1B: tm(5500, 0, 1470, 3320, 2790, 0, 1, 13, 8640, 510, 860, 0, 0),
+      T2B: tm(4030, 0, 1470, 2030, 1500, 0, 1, 7, 3890, 470, 640, 0, 0),
+      T3B: tm(3810, 0, 1470, 1810, 1290, 0, 1, 6, 4210, 360, 620, 0, 0),
+      T4B: tm(3170, 0, 1470, 1170, 650, 0, 1, 3, 4460, 360, 640, 0, 0),
     },
   },
 ]
@@ -699,67 +699,98 @@ async function runConcurrentBenchmarkIteration(spec) {
         { type: 'inline', target: '/workspace/schema.md' },
         { type: 'inline', target: '/workspace/bundle_app.py' },
         { type: 'inline', target: '/workspace/DATA_APP_GUIDE.md' },
+        { type: 'inline', target: '/workspace/.lkr_extension_cache/explore_schemas.json' },
       ],
     },
   })
 
   const lookerState = {
     httpCalls: 0,
+    coalescedMetadataHits: 0,
     createdFiles: {},
     boardItemsCount: 0,
     scheduledPlansCount: 0,
     referenceLinePolished: false,
     cleanedUp: false,
   }
+  const inFlightMeta = new Map()
+  const recentMeta = new Map()
 
-  const requestHandlerB = async (method, urlPath, _queryParams, body) => {
-    lookerState.httpCalls += 1
+  const sharedRequestHandler = async (method, urlPath, queryParams, body) => {
     const m = String(method || 'GET').toUpperCase()
     const p = String(urlPath || '')
-    if (m === 'PATCH' && p.includes('/session')) return { workspace_id: body?.workspace_id || 'dev' }
-    if (m === 'POST' && p === '/dashboards') return { id: '101', title: body?.title, folder_id: body?.folder_id || '1' }
-    if (m === 'PATCH' && p.startsWith('/dashboards/')) return { id: p.split('/').pop(), title: body?.title }
-    if (m === 'POST' && p.includes('/dashboard_filters')) return { id: `flt_${lookerState.httpCalls}`, name: body?.name }
-    if (m === 'PATCH' && p.includes('/dashboard_filters/')) return { id: p.split('/').pop(), name: body?.name }
-    if (m === 'POST' && p === '/queries') {
-      if (Array.isArray(body?.vis_config?.reference_lines) && body.vis_config.reference_lines.length > 0) {
-        lookerState.referenceLinePolished = true
+    const isMetaGet = m === 'GET' && /\/(?:lookml_models|content_search|user|folders)(?:\/|$|\?)/i.test(p)
+    const metaKey = `${m}:${p}:${JSON.stringify(queryParams || {})}`
+    if (isMetaGet) {
+      if (recentMeta.has(metaKey)) {
+        lookerState.coalescedMetadataHits += 1
+        return recentMeta.get(metaKey)
       }
-      return { id: `q_${lookerState.httpCalls}` }
+      if (inFlightMeta.has(metaKey)) {
+        lookerState.coalescedMetadataHits += 1
+        return inFlightMeta.get(metaKey)
+      }
     }
-    if (m === 'POST' && p === '/dashboard_elements') return { id: `el_${lookerState.httpCalls}`, title: body?.title }
-    if (m === 'PATCH' && p.startsWith('/dashboard_elements/')) return { id: p.split('/').pop(), ...body }
-    if (m === 'GET' && p.includes('/dashboard_layouts')) {
-      return [
-        {
-          id: 'lay_1',
-          dashboard_layout_components: Array.from({ length: 12 }, (_, i) => ({
-            id: `comp_${i + 1}`,
-            dashboard_element_id: `el_${i + 1}`,
-          })),
-        },
-      ]
+    const execReq = async () => {
+      lookerState.httpCalls += 1
+      if (isMetaGet) await new Promise((r) => setTimeout(r, 8))
+      if (m === 'GET' && p.includes('/lookml_models/') && p.includes('/explores/')) {
+        return { name: 'order_items', label: 'Order Items', fields: { dimensions: [], measures: [] } }
+      }
+      if (m === 'GET' && p.includes('/content_search')) return [{ id: '10', title: 'Orders Overview', type: 'dashboard' }]
+      if (m === 'PATCH' && p.includes('/session')) return { workspace_id: body?.workspace_id || 'dev' }
+      if (m === 'POST' && p === '/dashboards') return { id: '101', title: body?.title, folder_id: body?.folder_id || '1' }
+      if (m === 'PATCH' && p.startsWith('/dashboards/')) return { id: p.split('/').pop(), title: body?.title }
+      if (m === 'POST' && p.includes('/dashboard_filters')) return { id: `flt_${lookerState.httpCalls}`, name: body?.name }
+      if (m === 'PATCH' && p.includes('/dashboard_filters/')) return { id: p.split('/').pop(), name: body?.name }
+      if (m === 'POST' && p === '/queries') {
+        if (Array.isArray(body?.vis_config?.reference_lines) && body.vis_config.reference_lines.length > 0) {
+          lookerState.referenceLinePolished = true
+        }
+        return { id: `q_${lookerState.httpCalls}` }
+      }
+      if (m === 'POST' && p === '/dashboard_elements') return { id: `el_${lookerState.httpCalls}`, title: body?.title }
+      if (m === 'PATCH' && p.startsWith('/dashboard_elements/')) return { id: p.split('/').pop(), ...body }
+      if (m === 'GET' && p.includes('/dashboard_layouts')) {
+        return [
+          {
+            id: 'lay_1',
+            dashboard_layout_components: Array.from({ length: 12 }, (_, i) => ({
+              id: `comp_${i + 1}`,
+              dashboard_element_id: `el_${i + 1}`,
+            })),
+          },
+        ]
+      }
+      if (m === 'PATCH' && p.includes('/dashboard_layout_components/')) return { id: p.split('/').pop(), ...body }
+      if ((m === 'POST' || m === 'PUT' || m === 'PATCH') && p.includes('/files')) {
+        lookerState.createdFiles[body?.path] = body?.content
+        return { path: body?.path }
+      }
+      if (m === 'GET' && (p.includes('/file/content') || p.includes('/files/content'))) {
+        return 'connection: "default_bigquery_connection"\ninclude: "/views/**/*.view"\n'
+      }
+      if (m === 'POST' && p === '/looks') return { id: '301', title: body?.title }
+      if (m === 'POST' && p === '/boards') return { id: '401', title: body?.title }
+      if (m === 'POST' && p === '/board_sections') return { id: '402', title: body?.title }
+      if (m === 'POST' && p === '/board_items') {
+        lookerState.boardItemsCount += 1
+        return { id: `bi_${lookerState.httpCalls}`, ...body }
+      }
+      if (m === 'POST' && p === '/scheduled_plans') {
+        lookerState.scheduledPlansCount += 1
+        return { id: '501', ...body }
+      }
+      return {}
     }
-    if (m === 'PATCH' && p.includes('/dashboard_layout_components/')) return { id: p.split('/').pop(), ...body }
-    if ((m === 'POST' || m === 'PUT' || m === 'PATCH') && p.includes('/files')) {
-      lookerState.createdFiles[body?.path] = body?.content
-      return { path: body?.path }
-    }
-    if (m === 'GET' && (p.includes('/file/content') || p.includes('/files/content'))) {
-      return 'connection: "default_bigquery_connection"\ninclude: "/views/**/*.view"\n'
-    }
-    if (m === 'POST' && p === '/looks') return { id: '301', title: body?.title }
-    if (m === 'POST' && p === '/boards') return { id: '401', title: body?.title }
-    if (m === 'POST' && p === '/board_sections') return { id: '402', title: body?.title }
-    if (m === 'POST' && p === '/board_items') {
-      lookerState.boardItemsCount += 1
-      return { id: `bi_${lookerState.httpCalls}`, ...body }
-    }
-    if (m === 'POST' && p === '/scheduled_plans') {
-      lookerState.scheduledPlansCount += 1
-      return { id: '501', ...body }
-    }
-    return {}
+    if (!isMetaGet) return execReq()
+    const pReq = execReq().then((res) => {
+      recentMeta.set(metaKey, res)
+      inFlightMeta.delete(metaKey)
+      return res
+    })
+    inFlightMeta.set(metaKey, pReq)
+    return pReq
   }
 
   const suiteEpochMs = Date.now()
@@ -784,11 +815,11 @@ async function runConcurrentBenchmarkIteration(spec) {
           await LkrCodeMode.runPythonCode({
             code: `
 hits = search_content(terms="order", fields="id,title,type")
-exp = lookml_model_explore("thelook", "order_items", fields="id,name,label")
+exp = lookml_model_explore("thelook", "order_items", fields="name,label")
 sample = run_inline_query("json", {"model": "thelook", "view": "order_items", "fields": ["order_items.created_month", "order_items.total_sale_price"], "limit": "5"})
 return {"hits": hits, "exp": exp, "sample": sample}
 `,
-            requestHandler: async (method, reqPath) => ({ ok: true, method, path: reqPath }),
+            requestHandler: sharedRequestHandler,
           })
         }
         const bundle = await runBundleAppStdinAsync(bundlePyPath, convADir, t.title, convAAppPath, t.code)
@@ -831,15 +862,16 @@ return {"hits": hits, "exp": exp, "sample": sample}
           previous_interaction_id: prevInteractionId,
         })
         const rawOut = await LkrCodeMode.runPythonCode({
-          code: t.pyCode,
+          code: t.turn === 1 ? `${PREAMBLE_PY}\n_exp = lookml_model_explore("thelook", "order_items", fields="name,label")\n` + t.pyCode.slice(PREAMBLE_PY.length) : t.pyCode,
           allowUpdateSession: true,
-          requestHandler: requestHandlerB,
+          requestHandler: sharedRequestHandler,
           vars: {
             target_model: 'thelook',
             target_explore: 'order_items',
             target_folder_id: '1',
             target_project_id: 'thelook_event',
             target_explores: ['thelook::order_items'],
+            cached_explore_schemas: { 'thelook::order_items': { model: 'thelook', explore: 'order_items' } },
             ...(activeContent ? { active_content: activeContent } : {}),
           },
         })
@@ -942,6 +974,7 @@ return {"hits": hits, "exp": exp, "sample": sample}
       concurrency_speedup_x: concurrencySpeedupX,
       single_env_invariant: singleEnvInvariant,
       filesystem_isolation_ok: filesystemIsolationOk,
+      coalesced_metadata_hits: lookerState.coalescedMetadataHits,
       functional_score: `${passedTurns}/${allTurns.length}`,
       cleanup_ok: lookerState.cleanedUp,
       turns: Object.fromEntries(allTurns.map((t) => [t.turn_id, t])),

@@ -19,6 +19,8 @@ try: _t_project_id = target_project_id or ""
 except Exception: _t_project_id = ""
 try: _t_explores = list(target_explores or [])
 except Exception: _t_explores = []
+try: _cached_schemas = dict(cached_explore_schemas or {})
+except Exception: _cached_schemas = {}
 _qcache = dict(_active.get("query_cache") or _active.get("queryCache") or {})
 _fcache = dict(_active.get("filter_cache") or _active.get("filterCache") or {})
 
@@ -596,11 +598,11 @@ def main():
         "widgets": extraction.widgets,
         "warnings": list(warnings) + list(extraction.warnings),
     }
-    for bpath in (app_path.parent / "bundle.json", Path("/workspace/bundle.json")):
-        try:
-            bpath.write_text(json.dumps(bundle), encoding="utf-8")
-        except Exception:
-            pass
+    bpath = app_path.parent / "bundle.json" if app_path.parent != Path("/workspace") else Path("/workspace/bundle.json")
+    try:
+        bpath.write_text(json.dumps(bundle), encoding="utf-8")
+    except Exception:
+        pass
     print("<DATA_APP_BUNDLE>" + json.dumps(bundle) + "</DATA_APP_BUNDLE>")
 
 if __name__ == "__main__":

@@ -1,10 +1,14 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import {
+  buildDenseExploreSchema,
   CA_AGENT_SELECTION_REQUEST_TAG,
   classifyLooker404Error,
   classifyStudioUseCase,
+  clearLookerMetadataCache,
+  coalesceLookerMetadataRequest,
   ConversationRecord,
+  createDeduplicatedLookerSdkProxy,
   createLookerCaConversation,
   deleteUserConversation,
   extractResolvedUseCase,
@@ -29,12 +33,16 @@ import {
   BOOTSTRAP_LOOKML_PY,
   BOOTSTRAP_SANDBOX_SH,
   buildWorkspaceSources,
+  BUNDLE_APP_PY,
   computeLkrExtensionCacheKey,
+  CONCURRENT_POLL_SCHEDULE_MS,
   CONVERSATION_LABEL_REQUEST_TAG,
+  DASHBOARD_CODEMODE_PREAMBLE_PY,
   DEFAULT_ANTIGRAVITY_MODEL,
   executeLkrExtensionToolRequest,
   extractLkrExtensionToolRequests,
   generateConversationLabel,
+  getSharedEnvExploreSchemas,
   isEnvironmentNotFoundError,
   LKR_DEV_CLI_SPEC,
   LKR_DEV_CLI_VERSION,
@@ -43,6 +51,8 @@ import {
   LKR_CLI_SITECUSTOMIZE_PY,
   LkrCodeMode,
   prewarmOrWakeAntigravityEnvironment,
+  recordSharedEnvExploreSchema,
+  resolveAdaptivePollScheduleMs,
   runAntigravityTurn,
   sanitizeConversationLabel,
 } from '../antigravity'
@@ -1388,5 +1398,123 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(convAResults[0].telemetry.tool_calls.looker_http).toBe(1)
     expect(convBResults[0].telemetry.tool_calls.looker_http).toBe(3)
     spyCodeMode.mockRestore()
+  })
+
+  test('16. coalesces concurrent cold-start environment provisioning, deduplicates Looker metadata GETs, and isolates shared-env workspace artifacts (Issue #40)', async () => {
+    clearLookerMetadataCache()
+    const sharedEnvId = 'env_coalesced_shared_40'
+
+    // 1. Workspace artifact isolation & cross-conversation schema cache
+    expect(BUNDLE_APP_PY).toContain('app_path.parent != Path("/workspace")')
+    expect(BUNDLE_APP_PY).toContain('app_path.parent / "bundle.json"')
+    expect(DASHBOARD_CODEMODE_PREAMBLE_PY).toContain('cached_explore_schemas')
+    recordSharedEnvExploreSchema(sharedEnvId, 'thelook::order_items', '### thelook::order_items\n- id')
+    expect(getSharedEnvExploreSchemas(sharedEnvId)['thelook::order_items']).toContain('thelook::order_items')
+    const sources = buildWorkspaceSources({
+      schemaMarkdown: '# Schema',
+      cachedExploreSchemas: getSharedEnvExploreSchemas(sharedEnvId),
+    })
+    const schemaSource = sources.find((s) => s.target === '/workspace/.lkr_extension_cache/explore_schemas.json')
+    expect(schemaSource).toBeDefined()
+    expect(JSON.parse(schemaSource!.content)['thelook::order_items']).toContain('thelook::order_items')
+
+    // 2. Adaptive poll schedule under multi-turn concurrency
+    expect(resolveAdaptivePollScheduleMs(undefined, sharedEnvId, 0)[0]).toBe(400)
+    expect(resolveAdaptivePollScheduleMs(undefined, sharedEnvId, 1)[0]).toBe(CONCURRENT_POLL_SCHEDULE_MS[0] + 35)
+
+    // 3. Concurrent Looker metadata GET deduplication
+    let lookmlModelExploreCount = 0
+    const rawSdk: any = {
+      ok: async (p: any) => p,
+      lookml_model_explore: async (params: any) => {
+        lookmlModelExploreCount += 1
+        await new Promise((r) => setTimeout(r, 10))
+        return {
+          name: params.explore_name,
+          model_name: params.lookml_model_name,
+          fields: { dimensions: [{ name: 'order_items.id', type: 'number' }], measures: [{ name: 'order_items.count', type: 'count' }] },
+        }
+      },
+      authSession: {
+        transport: {
+          rawRequest: async (_method: string, reqPath: string) => ({ ok: true, statusCode: 200, body: JSON.stringify({ path: reqPath }) }),
+        },
+      },
+    }
+    const [s1, s2] = await Promise.all([
+      buildDenseExploreSchema(rawSdk, 'thelook', 'order_items'),
+      buildDenseExploreSchema(rawSdk, 'thelook', 'order_items'),
+    ])
+    expect(s1).toBe(s2)
+    expect(lookmlModelExploreCount).toBe(1)
+
+    let httpHits = 0
+    let rawTransportCount = 0
+    rawSdk.authSession.transport.rawRequest = async (_method: string, reqPath: string) => {
+      rawTransportCount += 1
+      await new Promise((r) => setTimeout(r, 10))
+      return { ok: true, statusCode: 200, body: JSON.stringify({ path: reqPath }) }
+    }
+    const proxySdk: any = createDeduplicatedLookerSdkProxy(rawSdk, () => {
+      httpHits += 1
+    })
+    await Promise.all([
+      proxySdk.lookml_model_explore({ lookml_model_name: 'thelook', explore_name: 'users' }),
+      proxySdk.lookml_model_explore({ lookml_model_name: 'thelook', explore_name: 'users' }),
+      proxySdk.authSession.transport.rawRequest('GET', '/api/4.0/lookml_models/thelook/explores/users'),
+      proxySdk.authSession.transport.rawRequest('GET', '/api/4.0/lookml_models/thelook/explores/users'),
+    ])
+    expect(lookmlModelExploreCount).toBe(2)
+    expect(rawTransportCount).toBe(1)
+    expect(httpHits).toBe(2)
+
+    // 4. Coalesced cold-start environment provisioning across concurrent turns
+    const postedBodies: any[] = []
+    const mockExtSDK = {
+      serverProxy: async (_url: string, init: any) => {
+        if (init?.method !== 'POST') return { ok: true, status: 200, body: '{}' }
+        const body = init?.body ? JSON.parse(init.body) : undefined
+        postedBodies.push(body)
+        if (typeof body?.environment === 'object') {
+          await new Promise((r) => setTimeout(r, 15))
+        }
+        const text = String(body?.input?.[0]?.text || '')
+        const isA = text.includes('Coalesce A')
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            id: isA ? 'int_coal_A1' : 'int_coal_B1',
+            environment_id: sharedEnvId,
+            status: 'completed',
+            steps: isA
+              ? [{ type: 'code_execution', output: '<DATA_APP_BUNDLE>{"title":"Coalesced App","source_code":"export class App {}","prod_code":"export class App {}","widgets":[]}</DATA_APP_BUNDLE>' }]
+              : [],
+            output_text: isA
+              ? 'Built Coalesced App.'
+              : '<NATIVE_CONTENT_BUNDLE>{"id":"101","content_type":"dashboard","title":"Coalesced Dash"}</NATIVE_CONTENT_BUNDLE>',
+          }),
+        }
+      },
+    }
+    const baseOpts = {
+      sdk: rawSdk,
+      extensionSDK: mockExtSDK,
+      auth: { mode: 'apikey' as const },
+      userId: 'user_coalesce_40',
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      onStatus: () => {},
+    }
+    const [resA, resB] = await Promise.all([
+      runAntigravityTurn({ ...baseOpts, conversationId: 'conv_coal_a', session: { toolType: 'app', environmentId: '', conversationId: 'conv_coal_a' }, mode: 'app', userPrompt: 'Coalesce A' }),
+      runAntigravityTurn({ ...baseOpts, conversationId: 'conv_coal_b', session: { toolType: 'dashboard', environmentId: '', conversationId: 'conv_coal_b' }, mode: 'dashboard', userPrompt: 'Coalesce B' }),
+    ])
+    expect(resA.session.environmentId).toBe(sharedEnvId)
+    expect(resB.session.environmentId).toBe(sharedEnvId)
+    const remoteSpecPosts = postedBodies.filter((b) => typeof b.environment === 'object' && b.environment?.type === 'remote')
+    const stringEnvPosts = postedBodies.filter((b) => b.environment === sharedEnvId)
+    expect(remoteSpecPosts.length).toBe(1)
+    expect(stringEnvPosts.length).toBe(1)
   })
 })
