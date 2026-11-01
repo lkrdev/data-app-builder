@@ -17,11 +17,20 @@ export const LookerExtensionContext = createContext<LookerExtensionContextState 
 export const MockLookerExtensionProvider: React.FC<{
   value: LookerExtensionContextState;
   children: ReactNode;
-}> = ({ value, children }) => (
-  <LookerExtensionContext.Provider value={value}>
-    {children}
-  </LookerExtensionContext.Provider>
-);
+}> = ({ value, children }) => {
+  const [tileHostData, setTileHostData] = React.useState(value.tileHostData);
+  React.useEffect(() => {
+    setTileHostData(value.tileHostData);
+  }, [value.tileHostData]);
+  if (typeof window !== 'undefined' && (window as any).__MOCK_LOOKER_EXTENSION__ === value) {
+    (value as any).setTileHostData = setTileHostData;
+  }
+  return (
+    <LookerExtensionContext.Provider value={{ ...value, tileHostData }}>
+      {children}
+    </LookerExtensionContext.Provider>
+  );
+};
 
 export const LookerExtensionProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const extensionContext = useContext(ExtensionContext) as ExtensionContextData;
