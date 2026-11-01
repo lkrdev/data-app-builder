@@ -28,13 +28,20 @@ import {
   ANTIGRAVITY_ALLOWED_MODELS,
   BOOTSTRAP_LOOKML_PY,
   BOOTSTRAP_SANDBOX_SH,
+  buildWorkspaceSources,
+  computeLkrExtensionCacheKey,
   CONVERSATION_LABEL_REQUEST_TAG,
   DEFAULT_ANTIGRAVITY_MODEL,
+  executeLkrExtensionToolRequest,
+  extractLkrExtensionToolRequests,
   generateConversationLabel,
   isEnvironmentNotFoundError,
   LKR_DEV_CLI_SPEC,
   LKR_DEV_CLI_VERSION,
   listAvailableAntigravityModels,
+  LKR_CLI_BRIDGE_TOOL,
+  LKR_CLI_SITECUSTOMIZE_PY,
+  LkrCodeMode,
   prewarmOrWakeAntigravityEnvironment,
   runAntigravityTurn,
   sanitizeConversationLabel,
@@ -1053,5 +1060,242 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         }),
       ])
     )
+  })
+
+  test('14. monkey-patches online lkr-dev-cli calls via LKR_CLI_SITECUSTOMIZE_PY, extracts & executes <LKR_EXTENSION_TOOL_REQUEST> (codemode + sdk_request), and auto-bridges in runAntigravityTurn', async () => {
+    // 1. Verify LKR_CLI_SITECUSTOMIZE_PY injection in buildWorkspaceSources and BOOTSTRAP_LOOKML_PY
+    expect(LKR_CLI_SITECUSTOMIZE_PY).toContain('<LKR_EXTENSION_TOOL_REQUEST>')
+    expect(LKR_CLI_SITECUSTOMIZE_PY).toContain('.lkr_extension_cache')
+    expect(LKR_CLI_SITECUSTOMIZE_PY).toContain('_patch_auth_service')
+    expect(LKR_CLI_SITECUSTOMIZE_PY).toContain('_patch_codemode')
+    expect(BOOTSTRAP_LOOKML_PY).toContain('ensure_sitecustomize')
+    expect(BOOTSTRAP_LOOKML_PY).toContain('lkr-dev-cli/lib')
+    expect(BOOTSTRAP_LOOKML_PY).toContain('python3.*/site-packages')
+    expect(BOOTSTRAP_LOOKML_PY).toContain('lkr-dev-cli[tools,code-mode,parse]')
+    expect(LKR_CLI_BRIDGE_TOOL.name).toBe('lkr_cli_extension_bridge')
+
+    const sources = buildWorkspaceSources({ schemaMarkdown: '# Schema' })
+    expect(sources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          target: '/workspace/sitecustomize.py',
+          content: LKR_CLI_SITECUSTOMIZE_PY,
+        }),
+        expect.objectContaining({
+          target: '/workspace/bootstrap_lookml.py',
+          content: BOOTSTRAP_LOOKML_PY,
+        }),
+      ])
+    )
+
+    // 2. Verify 1:1 SHA-256 cache_key parity with Python sitecustomize.py + extractLkrExtensionToolRequests
+    const codemodeKey = computeLkrExtensionCacheKey({
+      kind: 'codemode',
+      code: 'return me()',
+      vars: { project_id: 'thelook' },
+      dev_mode: true,
+    })
+    expect(codemodeKey).toBe('467cb154b6e27c76e1ac62129a7b15b0bd5615f0ebdb2a7ab5d396e0400b0306')
+
+    const sdkReqKey = computeLkrExtensionCacheKey({
+      kind: 'sdk_request',
+      method: 'GET',
+      path: 'https://extension.looker.local/api/4.0/user',
+      query_params: null,
+      body: null,
+      dev_mode: true,
+    })
+    expect(sdkReqKey).toBe('14ccf6639b5130d140a0fa3444c5373cf44dcc96d00b265369948529564a4784')
+
+    const extracted = extractLkrExtensionToolRequests({
+      steps: [
+        {
+          type: 'code_execution',
+          stdout: `<LKR_EXTENSION_TOOL_REQUEST>${JSON.stringify({
+            kind: 'codemode',
+            cache_key: codemodeKey,
+            code: 'return me()',
+            vars: { project_id: 'thelook' },
+            dev_mode: true,
+          })}</LKR_EXTENSION_TOOL_REQUEST>`,
+          stderr: `<LKR_EXTENSION_TOOL_REQUEST>${JSON.stringify({
+            kind: 'codemode',
+            cache_key: codemodeKey,
+            code: 'return me()',
+            vars: { project_id: 'thelook' },
+            dev_mode: true,
+          })}</LKR_EXTENSION_TOOL_REQUEST>\n<LKR_EXTENSION_TOOL_REQUEST>${JSON.stringify({
+            kind: 'sdk_request',
+            method: 'GET',
+            path: '/api/4.0/user',
+            query_params: {},
+            body: null,
+            dev_mode: true,
+          })}</LKR_EXTENSION_TOOL_REQUEST>`,
+        },
+      ],
+    })
+    expect(extracted).toHaveLength(2)
+    expect(extracted[0]).toEqual({
+      kind: 'codemode',
+      cache_key: codemodeKey,
+      code: 'return me()',
+      vars: { project_id: 'thelook' },
+      dev_mode: true,
+    })
+    expect(extracted[1]).toEqual({
+      kind: 'sdk_request',
+      cache_key: sdkReqKey,
+      method: 'GET',
+      path: '/user',
+      query_params: null,
+      body: null,
+      dev_mode: true,
+    })
+
+    // 3. Verify executeLkrExtensionToolRequest for both codemode and sdk_request
+    const rawTransportCalls: Array<{ method: string; path: string; queryParams?: any; body?: any }> = []
+    const mockSdk: any = {
+      ok: async (p: any) => p,
+      authSession: {
+        transport: {
+          rawRequest: async (method: string, reqPath: string, queryParams?: any, body?: any) => {
+            rawTransportCalls.push({ method, path: reqPath, queryParams, body })
+            if (reqPath === '/session') {
+              return { ok: true, statusCode: 200, body: JSON.stringify({ workspace_id: 'dev' }) }
+            }
+            return {
+              ok: true,
+              statusCode: 200,
+              body: JSON.stringify({ id: '1', display_name: 'Super Admin', email: 'admin@bryanweber.altostrat.com' }),
+            }
+          },
+        },
+      },
+    }
+
+    const spyCodeMode = jest
+      .spyOn(LkrCodeMode, 'runPythonCode')
+      .mockResolvedValueOnce(
+        JSON.stringify({ id: '1', display_name: 'Super Admin', project_id: 'thelook' })
+      )
+
+    const cmExec = await executeLkrExtensionToolRequest({
+      sdk: mockSdk,
+      req: extracted[0],
+      defaultVars: { target_model: 'thelook' },
+    })
+    expect(cmExec.cacheKey).toBe(codemodeKey)
+    expect(cmExec.result).toEqual({ id: '1', display_name: 'Super Admin', project_id: 'thelook' })
+    expect(spyCodeMode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'return me()',
+        sdk: mockSdk,
+        vars: { target_model: 'thelook', project_id: 'thelook' },
+        allowUpdateSession: true,
+      })
+    )
+
+    const sdkExec = await executeLkrExtensionToolRequest({
+      sdk: mockSdk,
+      req: extracted[1],
+    })
+    expect(sdkExec.cacheKey).toBe(sdkReqKey)
+    expect(sdkExec.result).toEqual({
+      id: '1',
+      display_name: 'Super Admin',
+      email: 'admin@bryanweber.altostrat.com',
+    })
+    expect(rawTransportCalls).toEqual([
+      { method: 'PATCH', path: '/session', queryParams: undefined, body: JSON.stringify({ workspace_id: 'dev' }) },
+      { method: 'GET', path: '/user', queryParams: undefined, body: undefined },
+    ])
+
+    // 4. End-to-end runAntigravityTurn auto-bridging when sandbox code_execution emits <LKR_EXTENSION_TOOL_REQUEST>
+    spyCodeMode.mockResolvedValueOnce(
+      JSON.stringify({ run_id: '20261101_1', branch_name: '20261101_1', model_name: 'thelook' })
+    )
+
+    const interactionPostBodies: any[] = []
+    let interactionPostCount = 0
+    const mockExtSDK = {
+      serverProxy: async (_url: string, init: any) => {
+        const body = init?.body ? JSON.parse(init.body) : undefined
+        if (init?.method === 'POST') {
+          interactionPostCount += 1
+          interactionPostBodies.push(body)
+          if (interactionPostCount === 1) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_bridge_round_1',
+                environment_id: 'env_lookml_shared',
+                status: 'completed',
+                steps: [
+                  {
+                    type: 'code_execution',
+                    output: `<LKR_EXTENSION_TOOL_REQUEST>${JSON.stringify({
+                      kind: 'codemode',
+                      cache_key: codemodeKey,
+                      code: 'return me()',
+                      vars: { project_id: 'thelook' },
+                      dev_mode: true,
+                    })}</LKR_EXTENSION_TOOL_REQUEST>`,
+                  },
+                ],
+                output_text: 'Waiting on bridged lkr code-mode sandbox execution.',
+              }),
+            }
+          }
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_bridge_round_2',
+              environment_id: 'env_lookml_shared',
+              status: 'completed',
+              steps: [
+                {
+                  type: 'code_execution',
+                  output:
+                    '<LOOKML_BUNDLE>{"id":"20261101_1","title":"LookML: thelook","project_id":"thelook","model_name":"thelook","branch_name":"20261101_1","files":[{"path":"views/orders.view.lkml","action":"updated","content":"view: orders {}","diff":"@@ -1 +1 @@"}]}</LOOKML_BUNDLE>',
+                },
+              ],
+              output_text: 'Curated orders.view.lkml after replaying cached lkr code-mode sandbox response.',
+            }),
+          }
+        }
+        return { ok: true, status: 200, body: '{}' }
+      },
+    }
+
+    const turnResult = await runAntigravityTurn({
+      sdk: mockSdk,
+      extensionSDK: mockExtSDK,
+      auth: { mode: 'apikey' },
+      session: { toolType: 'lookml', environmentId: 'env_lookml_shared' },
+      toolMode: 'lookml',
+      lookmlProjectId: 'thelook',
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      userPrompt: 'Run init_branch.py and curate orders view',
+      onStatus: () => {},
+    })
+
+    expect(interactionPostBodies).toHaveLength(2)
+    expect(interactionPostBodies[1].previous_interaction_id).toBe('int_bridge_round_1')
+    expect(interactionPostBodies[1].environment).toBe('env_lookml_shared')
+    expect(interactionPostBodies[1].input[0].text).toContain(
+      `/workspace/.lkr_extension_cache/${codemodeKey}.json`
+    )
+    expect(interactionPostBodies[1].input[0].text).toContain('"branch_name":"20261101_1"')
+    expect(turnResult.lookmlBundle?.project_id).toBe('thelook')
+    expect(turnResult.lookmlBundle?.branch_name).toBe('20261101_1')
+    expect(turnResult.session.lastInteractionId).toBe('int_bridge_round_2')
+    expect(turnResult.telemetry.tool_calls.codemode).toBe(1)
+    expect(turnResult.telemetry.tool_calls.bash).toBe(2)
+
+    spyCodeMode.mockRestore()
   })
 })

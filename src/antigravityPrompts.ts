@@ -1,5 +1,6 @@
 import { NativeContentState } from './lookerApi'
 import { LKR_DEV_CLI_SPEC, LKR_DEV_CLI_VERSION } from './lookmlTool'
+export { LKR_CLI_SITECUSTOMIZE_PY } from './lookmlTool'
 
 export const DASHBOARD_CODEMODE_PREAMBLE_PY = `# ponytail: pre-injected Monty Python macros for UDDs, LookML Dashboards (.dashboard.lookml), Looks, Boards & Schedules
 import json
