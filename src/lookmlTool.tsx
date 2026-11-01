@@ -80,9 +80,13 @@ export interface LookmlArtifactPayload {
   }
 }
 
+export const LKR_DEV_CLI_VERSION = '0.0.61'
+export const LKR_DEV_CLI_SPEC = `lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}`
+export const BOOTSTRAP_SANDBOX_SH = `command -v uv >/dev/null 2>&1 || pip install --break-system-packages --quiet uv || python3 -m pip install --break-system-packages --quiet uv; lkr --version 2>/dev/null | grep -q "${LKR_DEV_CLI_VERSION}" || UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"`
+
 export const BOOTSTRAP_LOOKML_PY = `#!/usr/bin/env python3
 """Sandbox helper for Agentic LookML:
-1. Bootstraps lkr-dev-cli[parse] (offline lkr parse & lkr schema) and lkrdev/cli/skills/ into /workspace.
+1. Bootstraps uv (via pip install --break-system-packages --quiet uv) + lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION} (via UV_TOOL_BIN_DIR=/usr/local/bin uv tool install) and lkrdev/cli/skills/ into /workspace.
 2. Computes unified diffs between /workspace/lookml_baseline and /workspace/data/$RUN_ID/lookml (or /workspace/lookml).
 3. Emits <LOOKML_BUNDLE>{...}</LOOKML_BUNDLE> for the host Looker extension.
 """
@@ -101,6 +105,11 @@ SKILLS_ROOT = WORKSPACE_DIR / ".agents/skills"
 SKILLS_ALIAS = WORKSPACE_DIR / "skills"
 LOOKML_DIR = Path(os.environ.get("LOOKML_DIR", str(WORKSPACE_DIR / "lookml")))
 BASELINE_DIR = Path(os.environ.get("LOOKML_BASELINE_DIR", str(WORKSPACE_DIR / "lookml_baseline")))
+_PINNED_CLI_VERSION = "${LKR_DEV_CLI_VERSION}"
+LKR_DEV_CLI_VERSION = os.environ.get(
+    "LKR_DEV_CLI_VERSION",
+    "0.0.61" if _PINNED_CLI_VERSION.startswith("$") else _PINNED_CLI_VERSION,
+)
 CLI_TARBALL_URL = os.environ.get(
     "LKR_CLI_TARBALL_URL",
     "https://codeload.github.com/lkrdev/cli/tar.gz/refs/heads/main",
@@ -147,14 +156,17 @@ def ensure_skills() -> list[str]:
     return [d.name for d in SKILLS_ROOT.iterdir() if d.is_dir()]
 
 def ensure_lkr_cli() -> str:
+    if not shutil.which("uv"):
+        for pip_cmd in (["pip"], [sys.executable, "-m", "pip"]):
+            subprocess.run([*pip_cmd, "install", "--break-system-packages", "--quiet", "uv"], check=False)
+            if shutil.which("uv"):
+                break
+    pkg_spec = f"lkr-dev-cli[tools,code-mode,parse]=={LKR_DEV_CLI_VERSION}"
     lkr_bin = shutil.which("lkr") or shutil.which("lkr-dev-cli")
-    if not lkr_bin:
-        cmd = (
-            ["uv", "pip", "install", "--system", "--quiet", "lkr-dev-cli[parse]"]
-            if shutil.which("uv")
-            else [sys.executable, "-m", "pip", "install", "--quiet", "lkr-dev-cli[parse]"]
-        )
-        subprocess.run(cmd, check=False)
+    ver_out = subprocess.run([lkr_bin, "--version"], capture_output=True, text=True, check=False).stdout if lkr_bin else ""
+    if LKR_DEV_CLI_VERSION not in ver_out:
+        cmd = ["uv", "tool", "install", "--force", "--quiet", pkg_spec] if shutil.which("uv") else [sys.executable, "-m", "pip", "install", "--break-system-packages", "--quiet", pkg_spec]
+        subprocess.run(cmd, env={**os.environ, "UV_TOOL_BIN_DIR": "/usr/local/bin"}, check=False)
     return shutil.which("lkr") or shutil.which("lkr-dev-cli") or "lkr"
 
 def compute_diff(old_text: str, new_text: str, rel_path: str) -> str:
@@ -211,12 +223,17 @@ def normalize_queries(raw_queries: list[dict]) -> list[dict]:
 
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "setup"
+    if cmd in ("cli", "bootstrap"):
+        lkr_bin = ensure_lkr_cli()
+        print(json.dumps({"ok": True, "uv": shutil.which("uv") or "uv", "lkr": lkr_bin, "version": LKR_DEV_CLI_VERSION}))
+        return
+
     if cmd == "setup":
         skills = ensure_skills()
         lkr_bin = ensure_lkr_cli()
         LOOKML_DIR.mkdir(parents=True, exist_ok=True)
         BASELINE_DIR.mkdir(parents=True, exist_ok=True)
-        print(json.dumps({"ok": True, "lkr": lkr_bin, "skills": sorted(skills)}))
+        print(json.dumps({"ok": True, "uv": shutil.which("uv") or "uv", "lkr": lkr_bin, "version": LKR_DEV_CLI_VERSION, "skills": sorted(skills)}))
         return
 
     if cmd == "bundle":
@@ -356,7 +373,7 @@ export function buildLookmlSystemGuide(params: {
       : `See /workspace/schema.md for available models and explores.`,
     `Follow these exact steps:`,
     `1. **Sandbox Bootstrap (\`/workspace\`)**:`,
-    `   Run \`python3 /workspace/bootstrap_lookml.py setup\` in your Linux sandbox to install \`lkr-dev-cli[parse]\` and unpack \`/workspace/.agents/skills/\` (\`agentic-lookml-workflow\`, \`agentic-lookml\`, \`generate-view-from-table\`, \`lookml-field-curation\`, \`lookml\`). Read the SKILL.md files for your Activated Turn Skills (${activeSkillList.join(', ')}).`,
+    `   Run \`python3 /workspace/bootstrap_lookml.py setup\` in your Linux sandbox to install \`uv\` (\`pip install --break-system-packages --quiet uv\`), \`${LKR_DEV_CLI_SPEC}\` (\`UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"\`), and unpack \`/workspace/.agents/skills/\` (\`agentic-lookml-workflow\`, \`agentic-lookml\`, \`generate-view-from-table\`, \`lookml-field-curation\`, \`lookml\`). Read the SKILL.md files for your Activated Turn Skills (${activeSkillList.join(', ')}).`,
     `2. **Host-Bridged LookML Sync via Browser WASM \`run_looker_codemode(code, vars)\` (\`allowUpdateSession: true\`)**:`,
     `   - Zero sandbox Looker credentials are needed: \`run_looker_codemode\` runs in the browser extension with \`allowUpdateSession: true\`, accepts \`vars: {...}\`, and has all \`ExtendedLooker40SDK\` methods pre-bound.`,
     `   - Switch to the user's dev workspace (\`update_session({"workspace_id": "dev"})\`) and use whatever branch/state is already in the user's dev mode (inspect via \`git_branch(project_id)\` — do NOT reset to production or create a new git branch unless explicitly asked). Pull LookML files via \`all_project_files\` + \`get_file_content\` into \`/workspace/lookml_baseline/\` and \`/workspace/data/$RUN_ID/lookml/\`.`,

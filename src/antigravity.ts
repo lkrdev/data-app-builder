@@ -28,9 +28,18 @@ export {
 export type { ResolvedStudioUseCase, StudioUseCase } from './lookerApi'
 import {
   BOOTSTRAP_LOOKML_PY,
+  BOOTSTRAP_SANDBOX_SH,
   buildLookmlSystemGuide,
   extractLookmlBundleFromInteraction,
+  LKR_DEV_CLI_SPEC,
+  LKR_DEV_CLI_VERSION,
   LookmlBundle,
+} from './lookmlTool'
+export {
+  BOOTSTRAP_LOOKML_PY,
+  BOOTSTRAP_SANDBOX_SH,
+  LKR_DEV_CLI_SPEC,
+  LKR_DEV_CLI_VERSION,
 } from './lookmlTool'
 import {
   AGENTS_MD,
@@ -1317,6 +1326,13 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
       })
       const pre = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
         ...prewarmBase,
+        tools: [{ type: 'code_execution' }, LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL],
+        input: [
+          {
+            type: 'text',
+            text: `[PREWARM:${toolType.toUpperCase()}] Initialize ${toolType} workspace: run \`python3 /workspace/bootstrap_lookml.py cli\` (${BOOTSTRAP_SANDBOX_SH}) so \`uv\` and \`${LKR_DEV_CLI_SPEC}\` are installed in \`/usr/local/bin\`, then reply READY.`,
+          },
+        ],
         environment: { type: 'remote', sources },
       })
       const newEnvId =

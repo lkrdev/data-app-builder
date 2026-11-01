@@ -466,13 +466,68 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
 
   const rootAgentsMd = readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8')
   const upstreamAgentsMd = readFileSync(path.join(repoRoot, 'upstream/payload/AGENTS.md'), 'utf8')
+  const pinnedVersionTxt = readFileSync(path.join(repoRoot, 'lkr-dev-cli-version.txt'), 'utf8').trim()
+  const updateSkillsYml = readFileSync(path.join(repoRoot, '.github/workflows/update-skills.yml'), 'utf8')
+  assert.equal(pinnedVersionTxt, '0.0.61', 'lkr-dev-cli-version.txt must pin 0.0.61')
+  assert(
+    lookmlToolTsx.includes("export const LKR_DEV_CLI_VERSION = '0.0.61'") &&
+      lookmlToolTsx.includes('"install", "--break-system-packages", "--quiet", "uv"') &&
+      lookmlToolTsx.includes('"UV_TOOL_BIN_DIR": "/usr/local/bin"') &&
+      lookmlToolTsx.includes('"uv", "tool", "install", "--force", "--quiet", pkg_spec') &&
+      updateSkillsYml.includes('cron: "0 9 * * 1,4"') &&
+      updateSkillsYml.includes('https://pypi.org/pypi/lkr-dev-cli/json') &&
+      updateSkillsYml.includes('chore/update-skills'),
+    'Issue #32: lookmlTool.tsx and .github/workflows/update-skills.yml must pin lkr-dev-cli==0.0.61, bootstrap uv via pip --break-system-packages + uv tool install, and auto-PR new PyPI releases'
+  )
+
+  // Live prototype check of bootstrap_lookml.py cli with mock pip & uv shims
+  const fakeBinDir = path.join(workDir, 'fake_bin')
+  const cmdLogPath = path.join(workDir, 'cmd.log')
+  execFileSync('mkdir', ['-p', fakeBinDir])
+  writeFileSync(
+    path.join(fakeBinDir, 'pip'),
+    `#!/bin/sh
+echo "pip $@" >> "${cmdLogPath}"
+cat << 'EOF' > "${fakeBinDir}/uv"
+#!/bin/sh
+echo "UV_TOOL_BIN_DIR=\${UV_TOOL_BIN_DIR:-} uv $@" >> "${cmdLogPath}"
+cat << 'INNER' > "${fakeBinDir}/lkr"
+#!/bin/sh
+echo "lkr, version 0.0.61"
+INNER
+chmod +x "${fakeBinDir}/lkr"
+EOF
+chmod +x "${fakeBinDir}/uv"
+`,
+    { mode: 0o755 }
+  )
+  const cliBootstrapOut = execFileSync('/usr/bin/python3', [bootstrapPyPath, 'cli'], {
+    env: {
+      PATH: `${fakeBinDir}:/usr/bin:/bin`,
+      WORKSPACE_DIR: workDir,
+    },
+    encoding: 'utf8',
+  })
+  const cliBootstrapJson = JSON.parse(cliBootstrapOut.trim())
+  assert.equal(cliBootstrapJson.ok, true)
+  assert.equal(cliBootstrapJson.version, '0.0.61')
+  const loggedCmds = readFileSync(cmdLogPath, 'utf8')
+  assert(
+    loggedCmds.includes('pip install --break-system-packages --quiet uv') &&
+      loggedCmds.includes('UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet lkr-dev-cli[tools,code-mode,parse]==0.0.61'),
+    'bootstrap_lookml.py cli must execute pip install --break-system-packages --quiet uv followed by UV_TOOL_BIN_DIR=/usr/local/bin uv tool install'
+  )
+
   assert(
     rootAgentsMd.includes('## Conversation Labeling (Stateless Side-Request)') &&
       rootAgentsMd.includes('[CONVERSATION_LABEL_REQUEST]') &&
       rootAgentsMd.includes('## Use Case Auto-Classification (Turn 1 Routing)') &&
       rootAgentsMd.includes('<USE_CASE>') &&
+      rootAgentsMd.includes('pip install --break-system-packages --quiet uv') &&
+      rootAgentsMd.includes('UV_TOOL_BIN_DIR=/usr/local/bin uv tool install') &&
       upstreamAgentsMd.includes('## Conversation Labeling (Stateless Side-Request)') &&
       upstreamAgentsMd.includes('## Use Case Auto-Classification (Turn 1 Routing)') &&
+      upstreamAgentsMd.includes('pip install --break-system-packages --quiet uv') &&
       antigravityTs.includes("target: '/workspace/AGENTS.md'") &&
       antigravityTs.includes('generateConversationLabel') &&
       antigravityTs.includes('sanitizeConversationLabel') &&
@@ -488,7 +543,7 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
       lookerApiTs.includes('selectCaAgentViaIsolatedSubagent') &&
       lookerApiTs.includes('createLookerCaConversation') &&
       appTsx.includes('data-testid="ca-embed-preview"'),
-    'Issues #25, #26 & #27: AGENTS.md routing + labeling + CA sub-agent selection, /workspace/AGENTS.md seeding, use-case-selector, locked-use-case-badge, ca-embed-preview, and user_conversations:${me.id} persistence must be present'
+    'Issues #25, #26, #27 & #32: AGENTS.md routing + labeling + CA sub-agent selection + uv/lkr-dev-cli bootstrap, /workspace/AGENTS.md seeding, use-case-selector, locked-use-case-badge, ca-embed-preview, and user_conversations:${me.id} persistence must be present'
   )
   console.log('✓ test-bundle.mjs: all assertions passed!')
 } finally {
