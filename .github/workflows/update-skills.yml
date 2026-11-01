@@ -105,7 +105,7 @@ jobs:
             printf "%s\n" "$LATEST_LKR_CLI" > lkr-dev-cli-version.txt
             node -e '
               const fs = require("fs"), [oldVer, newVer] = process.argv.slice(1);
-              for (const f of ["src/lookmlTool.tsx", "AGENTS.md", "upstream/payload/AGENTS.md"]) {
+              for (const f of ["src/lkrCliBridge.ts", "src/lookmlTool.tsx", "AGENTS.md", "upstream/payload/AGENTS.md"]) {
                 if (fs.existsSync(f)) fs.writeFileSync(f, fs.readFileSync(f, "utf8").split(oldVer).join(newVer));
               }
             ' "$CURRENT_LKR_CLI" "$LATEST_LKR_CLI"
@@ -140,7 +140,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$BRANCH"
-          git add lkr-dev-cli-version.txt src/lookmlTool.tsx AGENTS.md upstream
+          git add lkr-dev-cli-version.txt src/lkrCliBridge.ts src/lookmlTool.tsx AGENTS.md upstream
           [ -d .agents/skills ] && git add .agents/skills
           [ -f skills-lock.json ] && git add skills-lock.json
           git commit -m "chore(skills): sync agent skills, skills-lock.json, and lkr-dev-cli pin"

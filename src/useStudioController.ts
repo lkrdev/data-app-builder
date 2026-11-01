@@ -2,83 +2,30 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useHistory, useLocation } from 'react-router-dom'
 import { useLookerExtension } from './contexts/LookerExtensionContext'
 import {
-  buildAvailableExploresCatalog,
-  buildDenseExploreSchema,
-  CaConversationState,
-  ConversationRecord,
-  createLookerCaConversation,
-  deleteUserArtifact,
-  deleteUserConversation,
-  extractExploreIdsFromCode,
-  extractResolvedUseCase,
-  fetchInitialLookerMetadata,
-  fetchLookerCaAgentsCatalog,
-  formatExploreId,
-  getAllowedUseCases,
-  getArtifactNamespace,
-  getUseCaseLabel,
-  listUserArtifacts,
-  listUserDashboardArtifacts,
-  loadExistingDashboardApp,
-  loadNativeContentById,
-  loadObjectArtifact,
-  loadUserConversations,
-  loadUserEnvironmentId,
-  LookerCaAgentSummary,
-  NativeContentState,
-  NativeContentType,
-  parseExploreId,
-  PublishedAppState,
-   resolveCaEmbedPath,
-  ResolvedStudioUseCase,
-  resolveUserCapabilities,
-  saveDashboardStudioMetadata,
-  saveNativeContentArtifact,
-  saveUserArtifact,
-  saveUserConversation,
-  selectCaAgentViaIsolatedSubagent,
-  STUDIO_USE_CASE_OPTIONS,
-  studioModeToUseCase,
-  StudioUseCase,
-  upsertPublishedDataApp,
-  useCaseToStudioMode,
-  UserArtifactIndex,
-  UserCapabilities,
-  UserConversationEntry,
+  buildAvailableExploresCatalog, buildDenseExploreSchema, CaConversationState, ConversationRecord,
+  createLookerCaConversation, deleteUserArtifact, deleteUserConversation, extractExploreIdsFromCode,
+  extractResolvedUseCase, fetchInitialLookerMetadata, formatExploreId, getAllowedUseCases,
+  getArtifactNamespace, getUseCaseLabel, listUserArtifacts, listUserDashboardArtifacts,
+  loadExistingDashboardApp, loadNativeContentById, loadObjectArtifact, loadUserConversations,
+  loadUserEnvironmentId, NativeContentState, NativeContentType, parseExploreId, PublishedAppState,
+  resolveCaEmbedPath, ResolvedStudioUseCase, resolveUserCapabilities, saveDashboardStudioMetadata,
+  saveNativeContentArtifact, saveUserArtifact, saveUserConversation, selectCaAgentViaIsolatedSubagent,
+  STUDIO_USE_CASE_OPTIONS, studioModeToUseCase, StudioUseCase, upsertPublishedDataApp,
+  useCaseToStudioMode, UserArtifactIndex, UserCapabilities, UserConversationEntry,
 } from './lookerApi'
 import {
-  AgentSession,
-  ANTIGRAVITY_ALLOWED_MODELS,
-  AntigravityAuth,
-  AntigravityModelOption,
-  CodeModePermissionDecision,
-  CodeModePermissionRequest,
-  DEFAULT_ANTIGRAVITY_MODEL,
-  ensureGeminiApiKeyUserAttribute,
-  ExtensionAuthContextConfig,
-  generateConversationLabel,
-  listAvailableAntigravityModels,
-  loginWithGoogleOAuth,
-  normalizeEnvironmentId,
-  PastedImage,
-  prewarmOrWakeAntigravityEnvironment,
-  runAntigravityTurn,
-  sanitizeConversationLabel,
+  AgentSession, ANTIGRAVITY_ALLOWED_MODELS, AntigravityAuth, AntigravityModelOption,
+  CodeModePermissionDecision, CodeModePermissionRequest, DEFAULT_ANTIGRAVITY_MODEL,
+  ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig, generateConversationLabel,
+  listAvailableAntigravityModels, loginWithGoogleOAuth, normalizeEnvironmentId, PastedImage,
+  prewarmOrWakeAntigravityEnvironment, runAntigravityTurn, sanitizeConversationLabel,
 } from './antigravity'
 import {
-  listUserLookmlSessions,
-  loadLookmlSessionArtifact,
-  LookmlBundle,
-  LookmlSessionIndex,
-  saveLookmlSessionArtifact,
+  listUserLookmlSessions, loadLookmlSessionArtifact, LookmlBundle, LookmlSessionIndex, saveLookmlSessionArtifact,
 } from './lookmlTool'
 import {
-  HEALTH_CHECK_SYSTEM_GUIDE,
-  HealthCheckReportPayload,
-  loadHealthCheckArtifact,
-  runThreePillarHealthCheckViaCodeMode,
-  saveHealthCheckArtifact,
-  THREE_PILLAR_CODEMODE_PY,
+  HEALTH_CHECK_SYSTEM_GUIDE, HealthCheckReportPayload, loadHealthCheckArtifact,
+  runThreePillarHealthCheckViaCodeMode, saveHealthCheckArtifact, THREE_PILLAR_CODEMODE_PY,
 } from './healthCheck'
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
 
@@ -157,7 +104,6 @@ export function useStudioController() {
   )
   const [lockedByTurn, setLockedByTurn] = useState<boolean>(false)
   const [caConversation, setCaConversation] = useState<CaConversationState | null>(null)
-  const [caAgentsCatalog, setCaAgentsCatalog] = useState<LookerCaAgentSummary[]>([])
   const lastCaIdRef = useRef<string>('')
   const isCaMode = Boolean(
     parsedRoute.isCaRoute || selectedUseCase === 'conversational-analytics' || caConversation
@@ -359,35 +305,13 @@ export function useStudioController() {
         }))
       } catch {}
     },
-    [
-      activeMode,
-      core40SDK,
-      userId,
-      extensionSDK,
-      authMode,
-      oauthToken,
-      clientId,
-      projectId,
-      apiKey,
-      selectedModel,
-      sessionsByMode,
-      selectedExplores,
-      schemaMarkdown,
-      currentAppCode,
-      syncSharedEnvironmentId,
-    ]
+    [activeMode, core40SDK, userId, extensionSDK, authMode, oauthToken, clientId, projectId, apiKey, selectedModel, sessionsByMode, selectedExplores, schemaMarkdown, currentAppCode, syncSharedEnvironmentId]
   )
 
   useEffect(() => {
     if (!isConfigured && !oauthToken && !apiKey) return
     let mounted = true
-    listAvailableAntigravityModels(extensionSDK, {
-      mode: authMode,
-      oauthToken,
-      clientId,
-      projectId,
-      apiKey,
-    }).then((list) => {
+    listAvailableAntigravityModels(extensionSDK, { mode: authMode, oauthToken, clientId, projectId, apiKey }).then((list) => {
       if (mounted && list.length > 0) setAvailableModels(list)
     })
     return () => {
@@ -557,11 +481,6 @@ export function useStudioController() {
         listUserLookmlSessions(core40SDK, extensionSDK, resolvedUserId).then((s) => {
           if (mounted) setLookmlSessions(s)
         })
-        fetchLookerCaAgentsCatalog(core40SDK)
-          .then((agents) => {
-            if (mounted && agents.length > 0) setCaAgentsCatalog(agents)
-          })
-          .catch(() => {})
         setAllModels(
           meta.models.map((m: any) => ({
             name: String(m.name),
@@ -702,258 +621,199 @@ export function useStudioController() {
     [mockExt?.initialBusyStatus, setMessages]
   )
 
+  const hydrateLoadedArtifact = useCallback(
+    (opts: {
+      mode: StudioMode; id: string; route: string; pushRoute: boolean; convTypes: string[]
+      convId?: string; explores?: string[]; studio?: any; lastInteractionId?: string
+      environmentId?: string; defaultEnvId: string; messages?: ChatMessage[]
+      fallbackText: string; dashboardId?: string
+    }) => {
+      const explores = opts.explores ?? opts.studio?.explores?.filter(Boolean)
+      const msgs = opts.messages ?? opts.studio?.messages
+      setActiveObjectId(opts.id)
+      setActiveConversationId((prev) => {
+        if (opts.convId) return opts.convId
+        const match = conversations.find((c) => {
+          const cid = String(
+            c.content?.dashboardId || c.content?.lookId || c.content?.lookmlDashboardId ||
+            c.content?.reportId || c.content?.sessionId || c.content?.caConversationId || c.content?.id || ''
+          )
+          return cid === opts.id && opts.convTypes.includes(c.type)
+        })
+        const prefix = `conv_${opts.mode}_`
+        return match ? match.id : prev.startsWith(prefix) ? prev : `${prefix}${opts.id}`
+      })
+      if (explores && explores.length > 0) setSelectedExplores(explores)
+      setAgentSession(
+        {
+          lastInteractionId: opts.lastInteractionId || opts.studio?.lastInteractionId || opts.studio?.lastSession?.lastInteractionId,
+          environmentId: sharedEnvIdRef.current || opts.environmentId || opts.studio?.environmentId || opts.studio?.lastSession?.environmentId || opts.defaultEnvId,
+          conversationId: opts.id,
+          explores,
+          toolType: opts.mode,
+        },
+        opts.mode
+      )
+      setMessages(
+        msgs?.length
+          ? msgs
+          : [{ role: 'assistant', text: opts.fallbackText, ...(opts.dashboardId ? { dashboardId: opts.dashboardId } : {}) }],
+        opts.mode
+      )
+      if (opts.pushRoute && location.pathname !== opts.route) history.replace(opts.route)
+    },
+    [conversations, history, location.pathname, setAgentSession, setMessages]
+  )
+
+  const persistConversationAndLabel = useCallback(
+    async (opts: {
+      id: string; type: string; interactionId?: string; environmentId?: string; label?: string
+      explores?: string[]; content?: Record<string, any>; messages: ChatMessage[]
+      isFirstTurn?: boolean; userPrompt?: string; assistantText?: string; updateArtifactIndex?: boolean
+    }) => {
+      const namespace = getArtifactNamespace(extensionSDK)
+      const auth: AntigravityAuth = { mode: authMode, oauthToken, clientId, projectId, apiKey }
+      const baseConv = {
+        id: opts.id, type: opts.type, interactionId: opts.interactionId, environmentId: opts.environmentId,
+        explores: opts.explores, ...(opts.content ? { content: opts.content } : {}), messages: opts.messages,
+      }
+      setActiveConversationId(opts.id)
+      await saveUserConversation(
+        core40SDK, userId,
+        { ...baseConv, ...(opts.label ? { label: opts.label } : {}), updatedAt: new Date().toISOString() },
+        namespace
+      ).then(setConversations).catch(() => {})
+
+      if (opts.isFirstTurn && opts.userPrompt && opts.assistantText) {
+        void generateConversationLabel({
+          extensionSDK, auth, environmentId: opts.environmentId,
+          userPrompt: opts.userPrompt, assistantText: opts.assistantText, model: selectedModel,
+        })
+          .then(async (label) => {
+            if (!label) return
+            conversationLabelsRef.current[opts.id] = label
+            setCaConversation((prev) => (prev && prev.id === opts.id ? { ...prev, label } : prev))
+            setCatalogItems((prev) => prev.map((it) => (it.id === opts.id ? { ...it, label, title: label } : it)))
+            setMyCreations((prev) => prev.map((c) => (c.id === opts.id ? { ...c, title: label } : c)))
+            setLookmlSessions((prev) => prev.map((s) => (s.id === opts.id ? { ...s, title: label } : s)))
+            const updatedAt = new Date().toISOString()
+            await saveUserConversation(core40SDK, userId, { ...baseConv, label, updatedAt }, namespace)
+              .then(setConversations).catch(() => {})
+            if (opts.updateArtifactIndex) {
+              await saveUserArtifact(
+                core40SDK, userId,
+                {
+                  id: opts.id, type: useCaseToStudioMode(studioModeToUseCase(opts.type)),
+                  title: label, label, explores: opts.explores,
+                  lastInteractionId: opts.interactionId, environmentId: opts.environmentId,
+                  updatedAt, createdBy: userId,
+                },
+                undefined, namespace
+              ).catch(() => {})
+            }
+          })
+          .catch(() => {})
+      }
+    },
+    [apiKey, authMode, clientId, core40SDK, extensionSDK, oauthToken, projectId, selectedModel, userId]
+  )
+
   const loadDashboardById = useCallback(
     async (rawId: string, pushRoute = true) => {
       const id = rawId.trim()
       if (!id) return
-      await runWithBusy(
-        `Loading Data App from dashboard #${id}...`,
-        `Could not load dashboard #${id}`,
-        async () => {
-          const loaded = await loadExistingDashboardApp(core40SDK, id)
-          lastPublishedIdRef.current = loaded.dashboardId
-          setPublishedApp(loaded)
-          setActiveObjectId(loaded.dashboardId)
-          setActiveConversationId((prev) => {
-            const match = conversations.find(
-              (c) =>
-                String(c.content?.dashboardId || c.content?.id || '') === loaded.dashboardId &&
-                (c.type === 'app' || c.type === 'data_app')
-            )
-            return match ? match.id : prev.startsWith('conv_app_') ? prev : `conv_app_${loaded.dashboardId}`
-          })
-          setCurrentAppCode(loaded.code)
-          setLoadDashInput(loaded.dashboardId)
-          setSelectedFolderId(loaded.folderId)
-          const studioExplores = loaded.studio?.explores?.filter(Boolean) || []
-          const legacyExplore =
-            loaded.studio?.modelName && loaded.studio?.exploreName
-              ? [formatExploreId(loaded.studio.modelName, loaded.studio.exploreName)]
-              : []
-          const queryExplores = Array.from(
-            new Set(
-              (loaded.manifestQueries || [])
-                .filter((q) => q.model && q.explore)
-                .map((q) => formatExploreId(q.model, q.explore))
-            )
-          )
-          const resolvedExplores =
-            studioExplores.length > 0
-              ? studioExplores
-              : legacyExplore.length > 0
-              ? legacyExplore
-              : queryExplores.length > 0
-              ? queryExplores
-              : extractExploreIdsFromCode(loaded.code)
-          setSelectedExplores(resolvedExplores)
-          const savedInteractionId =
-            loaded.studio?.lastInteractionId || loaded.studio?.lastSession?.lastInteractionId
-          const savedEnvironmentId =
-            sharedEnvIdRef.current ||
-            loaded.studio?.environmentId ||
-            loaded.studio?.lastSession?.environmentId
-          setAgentSession(
-            {
-              lastInteractionId: savedInteractionId,
-              environmentId: savedEnvironmentId || 'env_app_42',
-              conversationId: loaded.dashboardId,
-              explores: resolvedExplores,
-              toolType: 'app',
-            },
-            'app'
-          )
-          if (pushRoute && location.pathname !== `/${loaded.dashboardId}`) {
-            history.replace(`/${encodeURIComponent(loaded.dashboardId)}`)
-          }
-          setMessages(
-            loaded.studio?.messages?.length
-              ? loaded.studio.messages
-              : [
-                  {
-                    role: 'assistant',
-                    text: `Loaded existing Data App "${loaded.title}" (Dashboard #${loaded.dashboardId}, ${loaded.code.length.toLocaleString()} bytes). Describe any changes to update it in place.`,
-                    dashboardId: loaded.dashboardId,
-                  },
-                ],
-            'app'
-          )
-        }
-      )
+      await runWithBusy(`Loading Data App from dashboard #${id}...`, `Could not load dashboard #${id}`, async () => {
+        const loaded = await loadExistingDashboardApp(core40SDK, id)
+        lastPublishedIdRef.current = loaded.dashboardId
+        setPublishedApp(loaded)
+        setCurrentAppCode(loaded.code)
+        setLoadDashInput(loaded.dashboardId)
+        setSelectedFolderId(loaded.folderId)
+        const studioExplores = loaded.studio?.explores?.filter(Boolean) || []
+        const legacyExplore =
+          loaded.studio?.modelName && loaded.studio?.exploreName
+            ? [formatExploreId(loaded.studio.modelName, loaded.studio.exploreName)]
+            : []
+        const queryExplores = Array.from(
+          new Set((loaded.manifestQueries || []).filter((q) => q.model && q.explore).map((q) => formatExploreId(q.model, q.explore)))
+        )
+        const resolvedExplores =
+          studioExplores.length > 0 ? studioExplores
+          : legacyExplore.length > 0 ? legacyExplore
+          : queryExplores.length > 0 ? queryExplores
+          : extractExploreIdsFromCode(loaded.code)
+        setSelectedExplores(resolvedExplores)
+        hydrateLoadedArtifact({
+          mode: 'app', id: loaded.dashboardId, route: `/${encodeURIComponent(loaded.dashboardId)}`,
+          pushRoute, convTypes: ['app', 'data_app'], explores: resolvedExplores, studio: loaded.studio,
+          defaultEnvId: 'env_app_42', dashboardId: loaded.dashboardId,
+          fallbackText: `Loaded existing Data App "${loaded.title}" (Dashboard #${loaded.dashboardId}, ${loaded.code.length.toLocaleString()} bytes). Describe any changes to update it in place.`,
+        })
+      })
     },
-    [core40SDK, history, location.pathname, runWithBusy, setAgentSession, setMessages]
+    [core40SDK, hydrateLoadedArtifact, runWithBusy]
   )
 
   const loadNativeById = useCallback(
     async (rawId: string, pushRoute = true) => {
       const id = rawId.trim()
       if (!id) return
-      await runWithBusy(
-        `Loading native Looker content #${id}...`,
-        `Could not load native content #${id}`,
-        async () => {
-          const loaded = await loadNativeContentById(core40SDK, extensionSDK, id)
-          lastNativeIdRef.current = loaded.id
-          setNativeContent(loaded)
-          setActiveObjectId(loaded.id)
-          setActiveConversationId((prev) => {
-            const match = conversations.find(
-              (c) =>
-                String(
-                  c.content?.dashboardId ||
-                    c.content?.lookId ||
-                    c.content?.lookmlDashboardId ||
-                    c.content?.id ||
-                    ''
-                ) === loaded.id && c.type === 'dashboard'
-            )
-            return match ? match.id : prev.startsWith('conv_dashboard_') ? prev : `conv_dashboard_${loaded.id}`
-          })
-          setLoadDashInput(loaded.id)
-          setSelectedFolderId(loaded.folderId)
-          const studioExplores = loaded.studio?.explores?.filter(Boolean) || []
-          if (studioExplores.length > 0) setSelectedExplores(studioExplores)
-          const savedInteractionId =
-            loaded.studio?.lastInteractionId || loaded.studio?.lastSession?.lastInteractionId
-          const savedEnvironmentId =
-            sharedEnvIdRef.current ||
-            loaded.studio?.environmentId ||
-            loaded.studio?.lastSession?.environmentId
-          setAgentSession(
-            {
-              lastInteractionId: savedInteractionId,
-              environmentId: savedEnvironmentId || 'env_dashboard_7',
-              conversationId: loaded.id,
-              explores: studioExplores,
-              toolType: 'dashboard',
-            },
-            'dashboard'
-          )
-          const targetRoute = `/dashboard/${encodeURIComponent(loaded.id)}`
-          if (pushRoute && location.pathname !== targetRoute) history.replace(targetRoute)
-          setMessages(
-            loaded.studio?.messages?.length
-              ? loaded.studio.messages
-              : [
-                  {
-                    role: 'assistant',
-                    text: `Loaded native Looker ${loaded.contentType} "${loaded.title}" (#${loaded.id}). Ask for tiles, filters, looks, boards, or schedules to update it via CodeMode.`,
-                    dashboardId: loaded.id,
-                  },
-                ],
-            'dashboard'
-          )
-        }
-      )
+      await runWithBusy(`Loading native Looker content #${id}...`, `Could not load native content #${id}`, async () => {
+        const loaded = await loadNativeContentById(core40SDK, extensionSDK, id)
+        lastNativeIdRef.current = loaded.id
+        setNativeContent(loaded)
+        setLoadDashInput(loaded.id)
+        setSelectedFolderId(loaded.folderId)
+        hydrateLoadedArtifact({
+          mode: 'dashboard', id: loaded.id, route: `/dashboard/${encodeURIComponent(loaded.id)}`,
+          pushRoute, convTypes: ['dashboard'], studio: loaded.studio, defaultEnvId: 'env_dashboard_7',
+          dashboardId: loaded.id,
+          fallbackText: `Loaded native Looker ${loaded.contentType} "${loaded.title}" (#${loaded.id}). Ask for tiles, filters, looks, boards, or schedules to update it via CodeMode.`,
+        })
+      })
     },
-    [core40SDK, extensionSDK, history, location.pathname, runWithBusy, setAgentSession, setMessages]
+    [core40SDK, extensionSDK, hydrateLoadedArtifact, runWithBusy]
   )
 
   const loadHealthCheckById = useCallback(
     async (rawId: string, pushRoute = true) => {
       const id = rawId.trim()
       if (!id) return
-      await runWithBusy(
-        `Loading Health Check report "${id}"...`,
-        `Could not load Health Check "${id}"`,
-        async () => {
-          const loaded = await loadHealthCheckArtifact(core40SDK, extensionSDK, id)
-          lastHealthIdRef.current = loaded.id
-          setHealthReport(loaded)
-          setActiveObjectId(loaded.id)
-          setActiveConversationId((prev) => {
-            const match = conversations.find(
-              (c) =>
-                String(c.content?.reportId || c.content?.id || '') === loaded.id &&
-                (c.type === 'health' || c.type === 'health-check' || c.type === 'health_check')
-            )
-            return match ? match.id : prev.startsWith('conv_health_') ? prev : `conv_health_${loaded.id}`
-          })
-          setLoadDashInput(loaded.id)
-          setAgentSession(
-            {
-              lastInteractionId: loaded.lastInteractionId,
-              environmentId:
-                sharedEnvIdRef.current || loaded.environmentId || `env_health_${loaded.id}`,
-              conversationId: loaded.id,
-              toolType: 'health',
-            },
-            'health'
-          )
-          setMessages(
-            loaded.messages?.length
-              ? loaded.messages
-              : [
-                  {
-                    role: 'assistant',
-                    text: `Loaded "${loaded.title}" (Health Score: ${loaded.scores.overallScore}%, Transcriber: ${loaded.scores.transcriberScore}/4.00) from obj_health_check_${loaded.id}.`,
-                  },
-                ],
-            'health'
-          )
-          if (pushRoute && location.pathname !== `/health-check/${loaded.id}`) {
-            history.replace(`/health-check/${encodeURIComponent(loaded.id)}`)
-          }
-        }
-      )
+      await runWithBusy(`Loading Health Check report "${id}"...`, `Could not load Health Check "${id}"`, async () => {
+        const loaded = await loadHealthCheckArtifact(core40SDK, extensionSDK, id)
+        lastHealthIdRef.current = loaded.id
+        setHealthReport(loaded)
+        setLoadDashInput(loaded.id)
+        hydrateLoadedArtifact({
+          mode: 'health', id: loaded.id, route: `/health-check/${encodeURIComponent(loaded.id)}`,
+          pushRoute, convTypes: ['health', 'health-check', 'health_check'], studio: loaded,
+          defaultEnvId: `env_health_${loaded.id}`,
+          fallbackText: `Loaded "${loaded.title}" (Health Score: ${loaded.scores.overallScore}%, Transcriber: ${loaded.scores.transcriberScore}/4.00) from obj_health_check_${loaded.id}.`,
+        })
+      })
     },
-    [core40SDK, extensionSDK, history, location.pathname, runWithBusy, setAgentSession, setMessages]
+    [core40SDK, extensionSDK, hydrateLoadedArtifact, runWithBusy]
   )
 
   const loadLookmlSessionById = useCallback(
     async (rawId: string, pushRoute = true) => {
       const id = rawId.trim()
       if (!id) return
-      await runWithBusy(
-        `Loading LookML session "${id}"...`,
-        `Could not load LookML session "${id}"`,
-        async () => {
-          const loaded = await loadLookmlSessionArtifact(core40SDK, extensionSDK, id)
-          lastLookmlIdRef.current = loaded.id
-          setLookmlBundle(loaded.bundle)
-          setActiveObjectId(loaded.id)
-          setActiveConversationId((prev) => {
-            const match = conversations.find(
-              (c) =>
-                String(c.content?.sessionId || c.content?.id || '') === loaded.id &&
-                c.type === 'lookml'
-            )
-            return match ? match.id : prev.startsWith('conv_lookml_') ? prev : `conv_lookml_${loaded.id}`
-          })
-          setLoadLookmlInput(loaded.id)
-          if (loaded.bundle?.project_id) setLookmlProjectId(loaded.bundle.project_id)
-          const savedExplores = loaded.studio?.explores?.filter(Boolean) || []
-          setSelectedExplores(savedExplores)
-          setAgentSession(
-            {
-              lastInteractionId: loaded.studio?.lastInteractionId,
-              environmentId:
-                sharedEnvIdRef.current ||
-                loaded.studio?.environmentId ||
-                `env_lookml_${loaded.id}`,
-              conversationId: loaded.id,
-              explores: savedExplores,
-              toolType: 'lookml',
-            },
-            'lookml'
-          )
-          setMessages(
-            loaded.studio?.messages?.length
-              ? loaded.studio.messages
-              : [
-                  {
-                    role: 'assistant',
-                    text: `Loaded LookML session "${loaded.title}" (${loaded.bundle?.files?.length || 0} modified .lkml files).`,
-                  },
-                ],
-            'lookml'
-          )
-          if (pushRoute && location.pathname !== `/lookml/${loaded.id}`) {
-            history.replace(`/lookml/${encodeURIComponent(loaded.id)}`)
-          }
-        }
-      )
+      await runWithBusy(`Loading LookML session "${id}"...`, `Could not load LookML session "${id}"`, async () => {
+        const loaded = await loadLookmlSessionArtifact(core40SDK, extensionSDK, id)
+        lastLookmlIdRef.current = loaded.id
+        setLookmlBundle(loaded.bundle)
+        setLoadLookmlInput(loaded.id)
+        if (loaded.bundle?.project_id) setLookmlProjectId(loaded.bundle.project_id)
+        setSelectedExplores(loaded.studio?.explores?.filter(Boolean) || [])
+        hydrateLoadedArtifact({
+          mode: 'lookml', id: loaded.id, route: `/lookml/${encodeURIComponent(loaded.id)}`,
+          pushRoute, convTypes: ['lookml'], studio: loaded.studio, defaultEnvId: `env_lookml_${loaded.id}`,
+          fallbackText: `Loaded LookML session "${loaded.title}" (${loaded.bundle?.files?.length || 0} modified .lkml files).`,
+        })
+      })
     },
-    [core40SDK, extensionSDK, history, location.pathname, runWithBusy, setAgentSession, setMessages]
+    [core40SDK, extensionSDK, hydrateLoadedArtifact, runWithBusy]
   )
 
   const loadCaConversationById = useCallback(
@@ -964,33 +824,16 @@ export function useStudioController() {
         `Loading Conversational Analytics session "${id}"...`,
         `Could not load Conversational Analytics session "${id}"`,
         async () => {
-          const loaded = await loadObjectArtifact<any>(
-            core40SDK,
-            'conversational-analytics',
-            id,
-            getArtifactNamespace(extensionSDK)
-          )
-          const convFromList = conversations.find(
-            (c) =>
-              c.id === id ||
-              String(c.content?.caConversationId || c.content?.id || '') === id
-          )
+          const loaded = await loadObjectArtifact<any>(core40SDK, 'conversational-analytics', id, getArtifactNamespace(extensionSDK))
+          const convFromList = conversations.find((c) => c.id === id || String(c.content?.caConversationId || c.content?.id || '') === id)
           const content = loaded || convFromList?.content || {}
-          const agentId = String(
-            content.agentId || content.agent_id || 'ad69f74cd9e2494090e9e9e9c50190c8'
-          )
+          const agentId = String(content.agentId || content.agent_id || 'ad69f74cd9e2494090e9e9e9c50190c8')
           const agentName = String(content.agentName || content.agent_name || 'Looker CA Agent')
           const caConvId = String(content.caConversationId || content.id || id)
-          const explores = Array.isArray(content.explores)
-            ? content.explores
-            : convFromList?.explores || []
-          const resolvedTitle = String(
-            content.title || content.label || convFromList?.label || id
-          )
+          const explores = Array.isArray(content.explores) ? content.explores : convFromList?.explores || []
+          const resolvedTitle = String(content.title || content.label || convFromList?.label || id)
           const resolvedRationale = String(
-            content.selectionRationale ||
-              content.rationale ||
-              `Routed to Looker CA agent "${agentName}" (${agentId}) via isolated sub-agent.`
+            content.selectionRationale || content.rationale || `Routed to Looker CA agent "${agentName}" (${agentId}) via isolated sub-agent.`
           )
           const state: CaConversationState = {
             id: caConvId,
@@ -1002,80 +845,59 @@ export function useStudioController() {
             label: resolvedTitle,
             rationale: resolvedRationale,
             selectionRationale: resolvedRationale,
-            initialPrompt: String(
-              content.initialPrompt || content.title || convFromList?.label || id
-            ),
+            initialPrompt: String(content.initialPrompt || content.title || convFromList?.label || id),
             explores,
-            interactionId:
-              content.studio?.lastInteractionId ||
-              content.lastInteractionId ||
-              convFromList?.interactionId,
-            updatedAt: String(
-              content.updatedAt || convFromList?.updatedAt || new Date().toISOString()
-            ),
+            interactionId: content.studio?.lastInteractionId || content.lastInteractionId || convFromList?.interactionId,
+            updatedAt: String(content.updatedAt || convFromList?.updatedAt || new Date().toISOString()),
           }
           lastCaIdRef.current = caConvId
           setCaConversation(state)
           setSelectedUseCase('conversational-analytics')
           setLockedByTurn(true)
-          setActiveObjectId(caConvId)
-          setActiveConversationId(convFromList?.id || caConvId)
           setLoadDashInput(caConvId)
-          if (explores.length > 0) setSelectedExplores(explores)
           const msgs = content.studio?.messages || content.messages || convFromList?.messages
-          setMessages(
-            Array.isArray(msgs) && msgs.length > 0
-              ? msgs
-              : [
-                  { role: 'user', text: state.initialPrompt },
-                  {
-                    role: 'assistant',
-                    text: `Routed via isolated CA sub-agent to **${state.agentName}** (\`${state.agentId}\`) and opened embedded Looker CA conversation \`${state.caConversationId}\`.\n\n**Sub-Agent Rationale:** ${state.rationale}`,
-                    interactionId: state.interactionId,
-                  },
-                ],
-            'app'
-          )
-          if (pushRoute && location.pathname !== `/conversational-analytics/${caConvId}`) {
-            history.replace(`/conversational-analytics/${encodeURIComponent(caConvId)}`)
-          }
+          hydrateLoadedArtifact({
+            mode: 'app',
+            id: caConvId,
+            route: `/conversational-analytics/${encodeURIComponent(caConvId)}`,
+            pushRoute,
+            convTypes: ['conversational-analytics'],
+            convId: convFromList?.id || caConvId,
+            explores,
+            lastInteractionId: state.interactionId,
+            defaultEnvId: 'env_app_isolated',
+            messages:
+              Array.isArray(msgs) && msgs.length > 0
+                ? msgs
+                : [
+                    { role: 'user', text: state.initialPrompt },
+                    {
+                      role: 'assistant',
+                      text: `Routed via isolated CA sub-agent to **${state.agentName}** (\`${state.agentId}\`) and opened embedded Looker CA conversation \`${state.caConversationId}\`.\n\n**Sub-Agent Rationale:** ${state.rationale}`,
+                      interactionId: state.interactionId,
+                    },
+                  ],
+            fallbackText: state.rationale,
+          })
         }
       )
     },
-    [conversations, core40SDK, extensionSDK, history, location.pathname, runWithBusy, setMessages]
+    [conversations, core40SDK, extensionSDK, hydrateLoadedArtifact, runWithBusy]
   )
 
-  const handleRunConversationalAnalytics = async (
-    userQuestion: string,
-    baseMessages: ChatMessage[]
-  ) => {
+  const handleRunConversationalAnalytics = async (userQuestion: string, baseMessages: ChatMessage[]) => {
     const auth: AntigravityAuth = { mode: authMode, oauthToken, clientId, projectId, apiKey }
     const isFirstTurn = baseMessages.filter((m) => m.role === 'user').length <= 1
     try {
       const selection = await selectCaAgentViaIsolatedSubagent({
-        sdk: core40SDK,
-        extensionSDK,
-        auth,
-        userQuestion,
-        model: selectedModel,
-        agentsCatalog: caAgentsCatalog.length > 0 ? caAgentsCatalog : undefined,
-        onStatus: setBusyStatus,
+        sdk: core40SDK, extensionSDK, auth, userQuestion, model: selectedModel, onStatus: setBusyStatus,
       })
       setBusyStatus(`Creating Looker CA conversation with "${selection.agentName}"...`)
-      const created = await createLookerCaConversation(
-        core40SDK,
-        selection.agentId,
-        userQuestion,
-        selection.agentName
-      )
+      const created = await createLookerCaConversation(core40SDK, selection.agentId, userQuestion, selection.agentName)
       const assistantText = `Routed via isolated CA sub-agent to **${selection.agentName}** (\`${selection.agentId}\`) and opened embedded Looker CA conversation \`${created.caConversationId}\`.\n\n**Sub-Agent Rationale:** ${selection.rationale}`
       const nextMsgs: ChatMessage[] = [
         ...baseMessages,
-        {
-          role: 'assistant',
-          text: assistantText,
-          interactionId: selection.isolatedInteractionId,
-        },
+        { role: 'assistant', text: assistantText, interactionId: selection.isolatedInteractionId },
       ]
       const nextCaState: CaConversationState = {
         id: created.caConversationId,
@@ -1097,34 +919,14 @@ export function useStudioController() {
       setSelectedUseCase('conversational-analytics')
       setLockedByTurn(true)
       setActiveObjectId(created.caConversationId)
-      setActiveConversationId(created.caConversationId)
       setLoadDashInput(created.caConversationId)
       if (selection.explores.length > 0) setSelectedExplores(selection.explores)
       setMessages(nextMsgs, 'app')
       if (location.pathname !== `/conversational-analytics/${created.caConversationId}`) {
-        history.replace(
-          `/conversational-analytics/${encodeURIComponent(created.caConversationId)}`
-        )
+        history.replace(`/conversational-analytics/${encodeURIComponent(created.caConversationId)}`)
       }
 
       const namespace = getArtifactNamespace(extensionSDK)
-      const convEntry = {
-        id: created.caConversationId,
-        type: 'conversational-analytics',
-        interactionId: selection.isolatedInteractionId,
-        environmentId: sharedEnvIdRef.current || agentSession.environmentId,
-        label: created.label,
-        explores: nextCaState.explores,
-        content: {
-          agentId: selection.agentId,
-          agentName: selection.agentName,
-          caConversationId: created.caConversationId,
-          embedPath: created.embedPath,
-          rationale: selection.rationale,
-        },
-        messages: nextMsgs,
-        updatedAt: nextCaState.updatedAt,
-      }
       await saveUserArtifact(
         core40SDK,
         userId,
@@ -1142,59 +944,39 @@ export function useStudioController() {
           ...nextCaState,
           type: 'conversational-analytics',
           title: created.label,
-          studio: {
-            explores: nextCaState.explores,
-            lastInteractionId: selection.isolatedInteractionId,
-            messages: nextMsgs,
-          },
+          studio: { explores: nextCaState.explores, lastInteractionId: selection.isolatedInteractionId, messages: nextMsgs },
           createdBy: userId,
         },
         namespace
       ).catch(() => {})
-      await saveUserConversation(core40SDK, userId, convEntry, namespace)
-        .then(setConversations)
-        .catch(() => {})
+      await persistConversationAndLabel({
+        id: created.caConversationId,
+        type: 'conversational-analytics',
+        interactionId: selection.isolatedInteractionId,
+        environmentId: sharedEnvIdRef.current || agentSession.environmentId,
+        label: created.label,
+        explores: nextCaState.explores,
+        content: {
+          agentId: selection.agentId,
+          agentName: selection.agentName,
+          caConversationId: created.caConversationId,
+          embedPath: created.embedPath,
+          rationale: selection.rationale,
+        },
+        messages: nextMsgs,
+        isFirstTurn,
+        userPrompt: userQuestion,
+        assistantText,
+      })
       await refreshCatalog()
-
-      if (isFirstTurn) {
-        void generateConversationLabel({
-          extensionSDK,
-          auth,
-          environmentId: sharedEnvIdRef.current || agentSession.environmentId,
-          userPrompt: userQuestion,
-          assistantText,
-          model: selectedModel,
-        })
-          .then(async (label) => {
-            if (!label) return
-            conversationLabelsRef.current[created.caConversationId] = label
-            setCaConversation((prev) => (prev ? { ...prev, label } : prev))
-            await saveUserConversation(
-              core40SDK,
-              userId,
-              { ...convEntry, label, updatedAt: new Date().toISOString() },
-              namespace
-            )
-              .then(setConversations)
-              .catch(() => {})
-          })
-          .catch(() => {})
-      }
     } catch (err: any) {
-      setMessages(
-        (prev) => [...prev, { role: 'error', text: err?.message || String(err) }],
-        'app'
-      )
+      setMessages((prev) => [...prev, { role: 'error', text: err?.message || String(err) }], 'app')
     } finally {
       setBusyStatus(null)
     }
   }
 
-  const handleRunHealthCheck = async (
-    customFocus?: string,
-    baseMessages?: ChatMessage[],
-    images?: PastedImage[]
-  ) => {
+  const handleRunHealthCheck = async (customFocus?: string, baseMessages?: ChatMessage[], images?: PastedImage[]) => {
     const activeMsgs = baseMessages || messages
     try {
       const baseRes = await runThreePillarHealthCheckViaCodeMode({
@@ -1227,16 +1009,8 @@ export function useStudioController() {
             images,
             customSystemGuide: HEALTH_CHECK_SYSTEM_GUIDE,
             extraSources: [
-              {
-                type: 'inline',
-                content: THREE_PILLAR_CODEMODE_PY,
-                target: '/workspace/three_pillar_audit.py',
-              },
-              {
-                type: 'inline',
-                content: finalReport.tddMarkdown,
-                target: '/workspace/TECHNICAL_DESIGN_DOCUMENT.md',
-              },
+              { type: 'inline', content: THREE_PILLAR_CODEMODE_PY, target: '/workspace/three_pillar_audit.py' },
+              { type: 'inline', content: finalReport.tddMarkdown, target: '/workspace/TECHNICAL_DESIGN_DOCUMENT.md' },
             ],
             priorMessages: messages,
             onStatus: setBusyStatus,
@@ -1269,40 +1043,49 @@ export function useStudioController() {
         },
       ]
       setMessages(nextHealthMsgs)
-      const convId = activeConversationId.startsWith('conv_health_')
-        ? activeConversationId
-        : `conv_health_${finalReport.id}`
-      setActiveConversationId(convId)
+      const convId = activeConversationId.startsWith('conv_health_') ? activeConversationId : `conv_health_${finalReport.id}`
       setSelectedUseCase('health-check')
       setLockedByTurn(true)
-      void saveUserConversation(
-        core40SDK,
-        userId,
-        {
-          id: convId,
-          type: 'health-check',
-          interactionId: finalReport.lastInteractionId || agentSession.lastInteractionId,
-          environmentId: finalReport.environmentId || agentSession.environmentId,
-          label: finalReport.title,
-          content: {
-            reportId: finalReport.id,
-            projectId: finalReport.projectId,
-            overallScore: finalReport.scores.overallScore,
-            grade: finalReport.scores.grade,
-          },
-          messages: nextHealthMsgs,
-          explores: selectedExplores,
+      void persistConversationAndLabel({
+        id: convId,
+        type: 'health-check',
+        interactionId: finalReport.lastInteractionId || agentSession.lastInteractionId,
+        environmentId: finalReport.environmentId || agentSession.environmentId,
+        label: finalReport.title,
+        explores: selectedExplores,
+        content: {
+          reportId: finalReport.id,
+          projectId: finalReport.projectId,
+          overallScore: finalReport.scores.overallScore,
+          grade: finalReport.scores.grade,
         },
-        getArtifactNamespace(extensionSDK)
-      )
-        .then(setConversations)
-        .catch(() => {})
+        messages: nextHealthMsgs,
+      })
     } catch (err: any) {
       setMessages((prev) => [...prev, { role: 'error', text: err?.message || String(err) }])
     } finally {
       setBusyStatus(null)
     }
   }
+
+  const openArtifactByMode = useCallback(
+    async (typeOrMode: string, id: string, pushRoute: boolean) => {
+      if (!id) return
+      if (typeOrMode === 'conversational-analytics') return loadCaConversationById(id, pushRoute)
+      const mode = normalizeCatalogMode(typeOrMode)
+      if (mode === 'app') return loadDashboardById(id, pushRoute)
+      if (mode === 'dashboard') return loadNativeById(id, pushRoute)
+      if (mode === 'lookml') return loadLookmlSessionById(id, pushRoute)
+      if (mode === 'health') return loadHealthCheckById(id, pushRoute)
+      if (mode === 'tile' && pushRoute) {
+        history.push(`/tile/${encodeURIComponent(id)}`)
+        return
+      }
+      const loaded = await loadObjectArtifact(core40SDK, typeOrMode as any, id)
+      if (loaded?.messages) setMessages(loaded.messages)
+    },
+    [core40SDK, history, loadCaConversationById, loadDashboardById, loadHealthCheckById, loadLookmlSessionById, loadNativeById, setMessages]
+  )
 
   useEffect(() => {
     if (isTileMount || location.pathname === '/config') return
@@ -1316,61 +1099,28 @@ export function useStudioController() {
   }, [isTileMount, isConfigured, location.pathname, activeMode, disabledModes, enabledModes, history])
 
   useEffect(() => {
-    if (
-      isTileMount ||
-      location.pathname === '/config' ||
-      activeMode === 'tile' ||
-      disabledModes.includes(activeMode)
-    )
-      return
+    if (isTileMount || location.pathname === '/config' || activeMode === 'tile' || disabledModes.includes(activeMode)) return
     const id = parsedRoute.objectId
     if (!id) return
-    if (
-      parsedRoute.isCaRoute &&
-      id !== caConversation?.caConversationId &&
-      id !== lastCaIdRef.current
-    ) {
-      loadCaConversationById(id, false)
-    } else if (activeMode === 'lookml' && id !== lookmlBundle?.id && id !== lastLookmlIdRef.current) {
-      loadLookmlSessionById(id, false)
-    } else if (activeMode === 'health' && id !== healthReport?.id && id !== lastHealthIdRef.current) {
-      loadHealthCheckById(id, false)
-    } else if (
-      activeMode === 'dashboard' &&
-      id !== nativeContent?.id &&
-      id !== lastNativeIdRef.current
-    ) {
-      loadNativeById(id, false)
-    } else if (
-      activeMode === 'app' &&
-      id !== publishedApp?.dashboardId &&
-      id !== lastPublishedIdRef.current
-    ) {
-      loadDashboardById(id, false)
+    const loadedPair: [string | undefined, string] = parsedRoute.isCaRoute
+      ? [caConversation?.caConversationId, lastCaIdRef.current]
+      : activeMode === 'lookml'
+      ? [lookmlBundle?.id, lastLookmlIdRef.current]
+      : activeMode === 'health'
+      ? [healthReport?.id, lastHealthIdRef.current]
+      : activeMode === 'dashboard'
+      ? [nativeContent?.id, lastNativeIdRef.current]
+      : [publishedApp?.dashboardId, lastPublishedIdRef.current]
+    if (id !== loadedPair[0] && id !== loadedPair[1]) {
+      void openArtifactByMode(parsedRoute.isCaRoute ? 'conversational-analytics' : activeMode, id, false)
     }
   }, [
-    isTileMount,
-    location.pathname,
-    activeMode,
-    parsedRoute.objectId,
-    parsedRoute.isCaRoute,
-    publishedApp?.dashboardId,
-    nativeContent?.id,
-    lookmlBundle?.id,
-    healthReport?.id,
-    caConversation?.caConversationId,
-    loadDashboardById,
-    loadNativeById,
-    loadLookmlSessionById,
-    loadHealthCheckById,
-    loadCaConversationById,
+    isTileMount, location.pathname, activeMode, disabledModes, parsedRoute.objectId, parsedRoute.isCaRoute,
+    publishedApp?.dashboardId, nativeContent?.id, lookmlBundle?.id, healthReport?.id, caConversation?.caConversationId, openArtifactByMode,
   ])
 
   const handleLoadExistingDashboard = async () => {
-    if (isHealthCheckMode) await loadHealthCheckById(loadDashInput, true)
-    else if (isCaMode) await loadCaConversationById(loadDashInput, true)
-    else if (builderMode === 'dashboard') await loadNativeById(loadDashInput, true)
-    else await loadDashboardById(loadDashInput, true)
+    await openArtifactByMode(isHealthCheckMode ? 'health' : isCaMode ? 'conversational-analytics' : builderMode, loadDashInput, true)
   }
 
   const handleResetNewApp = (resetToDefaultRoute?: boolean | React.MouseEvent) => {
@@ -1397,9 +1147,7 @@ export function useStudioController() {
       conversationId: `conv_${Date.now().toString(36)}`,
     })
     setMessages([])
-    if (forceDefaultRoute) {
-      setMessages([], 'app')
-    }
+    if (forceDefaultRoute) setMessages([], 'app')
     setPastedImages([])
     setPrompt('')
     setLockedByTurn(false)
@@ -1425,36 +1173,22 @@ export function useStudioController() {
     setActiveConversationId(conv.id)
     if (conv.explores?.length) setSelectedExplores(conv.explores)
     const c = conv.content || {}
-    if (conv.type === 'conversational-analytics' && (c.caConversationId || c.id || conv.id)) {
-      const targetId = String(c.caConversationId || c.id || conv.id)
+    const targetId = String(
+      (conv.type === 'conversational-analytics' && (c.caConversationId || c.id || conv.id)) ||
+        c.dashboardId ||
+        c.lookId ||
+        c.lookmlDashboardId ||
+        c.sessionId ||
+        c.reportId ||
+        c.scriptId ||
+        c.id ||
+        ''
+    )
+    if (targetId) {
       setActiveObjectId(targetId)
-      await loadCaConversationById(targetId, true)
-    } else if (mode === 'app' && (c.dashboardId || c.id)) {
-      const targetId = String(c.dashboardId || c.id)
-      setActiveObjectId(targetId)
-      await loadDashboardById(targetId, true)
-    } else if (
-      mode === 'dashboard' &&
-      (c.dashboardId || c.lookId || c.lookmlDashboardId || c.id)
-    ) {
-      const targetId = String(c.dashboardId || c.lookId || c.lookmlDashboardId || c.id)
-      setActiveObjectId(targetId)
-      await loadNativeById(targetId, true)
-    } else if (mode === 'lookml' && (c.sessionId || c.id)) {
-      const targetId = String(c.sessionId || c.id)
-      setActiveObjectId(targetId)
-      await loadLookmlSessionById(targetId, true)
-    } else if (mode === 'health' && (c.reportId || c.id)) {
-      const targetId = String(c.reportId || c.id)
-      setActiveObjectId(targetId)
-      await loadHealthCheckById(targetId, true)
-    } else if (mode === 'tile' && (c.scriptId || c.id)) {
-      const targetId = String(c.scriptId || c.id)
-      setActiveObjectId(targetId)
-      history.push(`/tile/${encodeURIComponent(targetId)}`)
+      await openArtifactByMode(conv.type, targetId, true)
     } else {
-      const modeInfo = STUDIO_MODES.find((m) => m.mode === mode)
-      const targetPath = modeInfo ? modeInfo.prefix : '/app'
+      const targetPath = STUDIO_MODES.find((m) => m.mode === mode)?.prefix || '/app'
       if (location.pathname !== targetPath) history.push(targetPath)
     }
     setActiveConversationId(conv.id)
@@ -1499,20 +1233,10 @@ export function useStudioController() {
     const targetPath =
       item.type === 'conversational-analytics'
         ? `/conversational-analytics/${encodeURIComponent(item.id)}`
-        : modeInfo
-        ? `${modeInfo.prefix}/${encodeURIComponent(item.id)}`
-        : `/app/${encodeURIComponent(item.id)}`
+        : `${modeInfo?.prefix || '/app'}/${encodeURIComponent(item.id)}`
     setActiveObjectId(item.id)
     if (location.pathname !== targetPath) history.push(targetPath)
-    if (item.type === 'conversational-analytics') await loadCaConversationById(item.id, false)
-    else if (mode === 'app') await loadDashboardById(item.id, false)
-    else if (mode === 'dashboard') await loadNativeById(item.id, false)
-    else if (mode === 'lookml') await loadLookmlSessionById(item.id, false)
-    else if (mode === 'health') await loadHealthCheckById(item.id, false)
-    else {
-      const loaded = await loadObjectArtifact(core40SDK, item.type, item.id)
-      if (loaded?.messages) setMessages(loaded.messages)
-    }
+    await openArtifactByMode(item.type, item.id, false)
   }
 
   const handleDeleteCatalogItem = async (e: React.MouseEvent, item: UserArtifactIndex) => {
@@ -1877,83 +1601,20 @@ export function useStudioController() {
         }
       }
 
-      setActiveConversationId(convId)
-      const namespace = getArtifactNamespace(extensionSDK)
-      const convModeForArtifact = useCaseToStudioMode(studioModeToUseCase(convType))
-      const baseConv = {
+      void persistConversationAndLabel({
         id: convId,
         type: convType,
         interactionId: result.session.lastInteractionId,
         environmentId: result.session.environmentId,
+        label: isFirstTurn ? convTitle || sanitizeConversationLabel('', effectivePrompt) : undefined,
         explores: convExplores,
-        ...(convContent ? { content: convContent } : {}),
+        content: convContent,
         messages: finalMsgs,
-      }
-      void saveUserConversation(
-        core40SDK,
-        userId,
-        {
-          ...baseConv,
-          ...(isFirstTurn
-            ? { label: convTitle || sanitizeConversationLabel('', effectivePrompt) }
-            : {}),
-          updatedAt: new Date().toISOString(),
-        },
-        namespace
-      )
-        .then(setConversations)
-        .catch(() => {})
-
-      if (isFirstTurn) {
-        void generateConversationLabel({
-          extensionSDK,
-          auth,
-          environmentId: result.session.environmentId,
-          userPrompt: effectivePrompt,
-          assistantText: result.assistantText,
-          model: selectedModel,
-        })
-          .then(async (label) => {
-            if (!label) return
-            conversationLabelsRef.current[convId] = label
-            setCatalogItems((prev) =>
-              prev.map((it) => (it.id === convId ? { ...it, label, title: label } : it))
-            )
-            setMyCreations((prev) =>
-              prev.map((c) => (c.id === convId ? { ...c, title: label } : c))
-            )
-            setLookmlSessions((prev) =>
-              prev.map((s) => (s.id === convId ? { ...s, title: label } : s))
-            )
-            const updatedAt = new Date().toISOString()
-            await saveUserConversation(
-              core40SDK,
-              userId,
-              { ...baseConv, label, updatedAt },
-              namespace
-            )
-              .then(setConversations)
-              .catch(() => {})
-            await saveUserArtifact(
-              core40SDK,
-              userId,
-              {
-                id: convId,
-                type: convModeForArtifact,
-                title: label,
-                label,
-                explores: convExplores,
-                lastInteractionId: result.session.lastInteractionId,
-                environmentId: result.session.environmentId,
-                updatedAt,
-                createdBy: userId,
-              },
-              undefined,
-              namespace
-            ).catch(() => {})
-          })
-          .catch(() => {})
-      }
+        isFirstTurn,
+        userPrompt: effectivePrompt,
+        assistantText: result.assistantText,
+        updateArtifactIndex: true,
+      })
     } catch (err: any) {
       setMessages((prev) => [...prev, { role: 'error', text: err?.message || String(err) }])
     } finally {
@@ -1962,146 +1623,49 @@ export function useStudioController() {
     }
   }
 
-  const isEmptyConversation =
-    !isTileMount &&
-    location.pathname !== '/config' &&
-    activeMode !== 'tile' &&
-    !parsedRoute.objectId &&
-    messages.length === 0 &&
-    !publishedApp &&
-    !nativeContent &&
-    !lookmlBundle &&
-    !healthReport &&
-    !caConversation &&
-    !busyStatus
+      const isEmptyConversation =
+    !isTileMount && location.pathname !== '/config' && activeMode !== 'tile' &&
+    !parsedRoute.objectId && messages.length === 0 && !publishedApp && !nativeContent &&
+    !lookmlBundle && !healthReport && !caConversation && !busyStatus
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
       ;(window as any).__DAB_STUDIO__ = {
-        history,
-        requestCodeModePermission,
-        setRequirePermission,
-        setDisabledModes,
-        setSelectedModel,
-        setAuthMode,
-        setApiKey,
-        setSidebarCollapsed,
-        setSelectedUseCase: handleChangeUseCase,
-        setCapabilities,
-        handleResetNewApp,
-        handleNewConversation,
-        handleSelectConversation,
+        history, requestCodeModePermission, setRequirePermission, setDisabledModes,
+        setSelectedModel, setAuthMode, setApiKey, setSidebarCollapsed,
+        setSelectedUseCase: handleChangeUseCase, setCapabilities,
+        handleResetNewApp, handleNewConversation, handleSelectConversation,
       }
     }
-  }, [
-    history,
-    requestCodeModePermission,
-    handleChangeUseCase,
-    handleResetNewApp,
-    handleNewConversation,
-    handleSelectConversation,
-  ])
+  }, [history, requestCodeModePermission, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation])
 
   return {
-    extensionSDK,
-    core40SDK,
-    history,
-    location,
-    isTileMount,
-    authMode,
-    setAuthMode,
-    clientId,
-    setClientId,
-    projectId,
-    setProjectId,
-    disabledModes,
-    setDisabledModes,
-    selectedModel,
-    setSelectedModel,
-    availableModels,
-    enabledModes,
-    oauthToken,
-    apiKey,
-    setApiKey,
-    capabilities,
-    setCapabilities,
-    availableLookmlProjects,
-    canDeployLookml,
-    models,
-    folders,
-    selectedExplores,
-    setSelectedExplores,
-    selectedFolderId,
-    setSelectedFolderId,
-    schemaMarkdown,
-    loadingSchema,
-    activeMode,
-    isLookmlMode,
-    isHealthCheckMode,
-    isCaMode,
-    builderMode,
-    selectedUseCase,
-    setSelectedUseCase: handleChangeUseCase,
-    isUseCaseLocked,
-    allowedUseCases,
-    useCaseOptions: STUDIO_USE_CASE_OPTIONS,
-    getUseCaseLabel,
-    lookmlProjectId,
-    setLookmlProjectId,
-    activatedLookmlSkills,
-    setActivatedLookmlSkills,
-    lookmlBundle,
-    lookmlSessions,
-    loadLookmlInput,
-    setLoadLookmlInput,
-    publishedApp,
-    nativeContent,
-    myCreations,
-    healthReport,
-    healthScope,
-    setHealthScope,
-    caConversation,
-    caAgentsCatalog,
-    currentAppCode,
-    loadDashInput,
-    setLoadDashInput,
-    sharedEnvironmentId,
-    syncSharedEnvironmentId,
-    agentSession,
-    messages,
-    prompt,
-    setPrompt,
-    pastedImages,
-    setPastedImages,
-    busyStatus,
-    handleWakeModeEnv,
-    filteredCatalog,
-    catalogSearch,
-    setCatalogSearch,
-    activeObjectId,
-    conversations: filteredConversations,
-    activeConversationId,
-    sidebarCollapsed,
-    setSidebarCollapsed,
-    isEmptyConversation,
-    requirePermission,
-    setRequirePermission,
-    pendingPerm,
-    resolvePermDecision,
-    handleSaveAuthSetup,
-    handleOAuthLogin,
-    loadNativeById,
-    loadLookmlSessionById,
-    loadCaConversationById,
-    handleRunHealthCheck,
-    handleRunConversationalAnalytics,
-    handleLoadExistingDashboard,
-    handleResetNewApp,
-    handleNewConversation,
-    handleSelectConversation,
-    handleDeleteConversation,
-    handleSelectCatalogItem,
-    handleDeleteCatalogItem,
+    extensionSDK, core40SDK, history, location, isTileMount,
+    authMode, setAuthMode, clientId, setClientId, projectId, setProjectId,
+    disabledModes, setDisabledModes, selectedModel, setSelectedModel,
+    availableModels, enabledModes, oauthToken, apiKey, setApiKey,
+    capabilities, setCapabilities, availableLookmlProjects, canDeployLookml,
+    models, folders, selectedExplores, setSelectedExplores,
+    selectedFolderId, setSelectedFolderId, schemaMarkdown, loadingSchema,
+    activeMode, isLookmlMode, isHealthCheckMode, isCaMode, builderMode,
+    selectedUseCase, setSelectedUseCase: handleChangeUseCase,
+    isUseCaseLocked, allowedUseCases, useCaseOptions: STUDIO_USE_CASE_OPTIONS, getUseCaseLabel,
+    lookmlProjectId, setLookmlProjectId, activatedLookmlSkills, setActivatedLookmlSkills,
+    lookmlBundle, lookmlSessions, loadLookmlInput, setLoadLookmlInput,
+    publishedApp, nativeContent, myCreations,
+    healthReport, healthScope, setHealthScope, caConversation,
+    currentAppCode, loadDashInput, setLoadDashInput,
+    sharedEnvironmentId, syncSharedEnvironmentId,
+    agentSession, messages, prompt, setPrompt, pastedImages, setPastedImages,
+    busyStatus, handleWakeModeEnv, filteredCatalog, catalogSearch, setCatalogSearch,
+    activeObjectId, conversations: filteredConversations, activeConversationId,
+    sidebarCollapsed, setSidebarCollapsed, isEmptyConversation,
+    requirePermission, setRequirePermission, pendingPerm, resolvePermDecision,
+    handleSaveAuthSetup, handleOAuthLogin,
+    loadNativeById, loadLookmlSessionById, loadCaConversationById,
+    handleRunHealthCheck, handleRunConversationalAnalytics, handleLoadExistingDashboard,
+    handleResetNewApp, handleNewConversation, handleSelectConversation,
+    handleDeleteConversation, handleSelectCatalogItem, handleDeleteCatalogItem,
     handleSendPrompt,
   }
 }

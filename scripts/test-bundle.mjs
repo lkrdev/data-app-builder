@@ -369,7 +369,9 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
   ])
 
   // Verify Agentic LookML tool (BOOTSTRAP_LOOKML_PY, allowUpdateSession, vars, and artifact keys)
-  const lookmlToolTsx = readFileSync(path.join(repoRoot, 'src/lookmlTool.tsx'), 'utf8')
+  const lookmlToolTsx = ['src/lookmlTool.tsx', 'src/lkrCliBridge.ts']
+    .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
+    .join('\n')
   assert(
     lookmlToolTsx.includes('user_${cleanUser}_lookml_${cleanId}') &&
       lookmlToolTsx.includes('obj_lookml_${cleanId}'),

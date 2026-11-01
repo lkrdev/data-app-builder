@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { LkrCodeMode, StudioUseCase } from '../antigravity'
+import { handleImageClipboardPaste, LkrCodeMode, StudioUseCase } from '../antigravity'
 import { ConversationRecord, parseExploreId } from '../lookerApi'
 import { LOOKML_TURN_SKILLS, LookmlPreviewPane } from '../lookmlTool'
 import { renderTddMarkdownToHtml } from '../healthCheck'
@@ -213,29 +213,8 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   )
   const [codeModeOutput, setCodeModeOutput] = useState('')
 
-  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const items = Array.from(e.clipboardData?.items || []).filter((item) =>
-      item.type.startsWith('image/')
-    )
-    if (items.length === 0) return
-    e.preventDefault()
-    for (const item of items) {
-      const file = item.getAsFile()
-      if (!file) continue
-      const reader = new FileReader()
-      reader.onload = () => {
-        const dataUrl = String(reader.result || '')
-        const base64 = dataUrl.split(',')[1]
-        if (base64) {
-          setPastedImages((prev) => [
-            ...prev,
-            { mimeType: file.type || 'image/png', data: base64, dataUrl },
-          ])
-        }
-      }
-      reader.readAsDataURL(file)
-    }
-  }
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) =>
+    handleImageClipboardPaste(e, setPastedImages)
 
   return (
     <div className="dab-composer dab-chatbar">

@@ -1,7 +1,7 @@
 import type { Looker40SDK } from '@looker/sdk';
 
 import { LkrCodeMode } from './antigravity';
-import { getArtifactJson, getArtifactNamespace, PersistedChatTurn, putArtifacts } from './lookerApi';
+import { getArtifactNamespace, loadObjectArtifact, PersistedChatTurn, saveUserArtifact } from './lookerApi';
 export { getArtifactNamespace } from './lookerApi';
 
 export interface PillarBreakdown {
@@ -615,30 +615,21 @@ export async function saveHealthCheckArtifact(
   const cleanUser = String(userId || '1').trim();
   const userKey = `user_${cleanUser}_health_check_${cleanId}`;
   const objKey = `obj_health_check_${cleanId}`;
-
-  const indexEntry: HealthCheckIndexEntry = {
-    id: cleanId,
+  await saveUserArtifact({
+    sdk,
+    userId: cleanUser,
     type: 'health_check',
+    id: cleanId,
     title: report.title,
-    updatedAt: report.updatedAt,
-    createdBy: cleanUser,
     targetId: cleanId,
     explores: [report.projectId],
     healthScore: report.scores.overallScore,
     transcriberScore: report.scores.transcriberScore,
     lastInteractionId: report.lastInteractionId,
     environmentId: report.environmentId,
-  };
-
-  await putArtifacts(
-    sdk,
-    [
-      { key: userKey, value: indexEntry },
-      { key: objKey, value: { ...report, id: cleanId } },
-    ],
-    namespace
-  );
-
+    content: { ...report, id: cleanId },
+    namespace,
+  });
   return { userKey, objKey, namespace };
 }
 
@@ -652,10 +643,9 @@ export async function loadHealthCheckArtifact(
     .trim()
     .replace(/^obj_health_check_/, '')
     .replace(/^user_[^_]+_health_check_/, '');
-  const objKey = `obj_health_check_${cleanId}`;
-  const found = await getArtifactJson<HealthCheckReportPayload>(sdk, objKey, namespace);
+  const found = await loadObjectArtifact<HealthCheckReportPayload>(sdk, 'health_check', cleanId, namespace);
   if (!found) {
-    throw new Error(`Health Check artifact "${objKey}" not found in namespace "${namespace}".`);
+    throw new Error(`Health Check artifact "obj_health_check_${cleanId}" not found in namespace "${namespace}".`);
   }
   return found;
 }
