@@ -46,6 +46,7 @@ assert(
 )
 const appTsx = [
   'src/components/App.tsx',
+  'src/components/StudioDesignSystem.tsx',
   'src/components/StudioHeader.tsx',
   'src/components/StudioWorkspace.tsx',
   'src/useStudioController.ts',
@@ -589,6 +590,19 @@ chmod +x "${fakeBinDir}/uv"
     assert.equal(turnEntry.environment_id, iter1Report.shared_environment_id, `Expected ${tid} on shared environment_id`)
     assert.equal(turnEntry.self_eval?.passed, true, `Expected ${tid} self_eval.passed === true`)
   }
+
+  const indexCss = readFileSync(path.join(repoRoot, 'src/styles/index.css'), 'utf8')
+  const studioDsSkillMd = readFileSync(path.join(repoRoot, 'skills/studio-design-system/SKILL.md'), 'utf8')
+  assert(
+    indexCss.includes('--dab-success-bg') &&
+      indexCss.includes('--dab-warning-bg') &&
+      indexCss.includes('--dab-danger-bg') &&
+      appTsx.includes('export function StudioModal(') &&
+      appTsx.includes('export function StudioToolbar(') &&
+      studioDsSkillMd.includes('name: studio-design-system') &&
+      rootAgentsMd.includes('skills/studio-design-system/SKILL.md'),
+    'StudioDesignSystem primitives, semantic status CSS tokens, and skills/studio-design-system/SKILL.md must be present'
+  )
 
   console.log('✓ test-bundle.mjs: all assertions passed!')
 } finally {

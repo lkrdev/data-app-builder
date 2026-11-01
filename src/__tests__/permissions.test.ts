@@ -94,6 +94,16 @@ import {
   USE_CASE_GUIDE_ORDER,
   USE_CASE_GUIDES,
 } from '../components/StudioWorkspace'
+import {
+  StudioBadge,
+  StudioButton,
+  StudioCard,
+  StudioDocPreview,
+  StudioModal,
+  StudioSelect,
+  StudioSkeleton,
+  StudioToolbar,
+} from '../components/StudioDesignSystem'
 
 describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics', () => {
   test('1. evaluates Role = PermissionSet x ModelSet per role without cross-role model bleeding', () => {
@@ -2734,5 +2744,62 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(searchRes).toEqual([
       expect.objectContaining({ id: '502', name: 'subfolder test', parent_id: '501' }),
     ])
+  })
+
+  test('27. provides StudioDesignSystem primitives (StudioButton, StudioBadge, StudioModal, StudioToolbar, StudioCard, StudioSkeleton, StudioDocPreview) and studio-design-system skill documentation', () => {
+    expect(typeof StudioSelect).toBe('function')
+
+    const btn = StudioButton({ variant: 'primary', testId: 'ds-btn', children: 'Run' }) as any
+    expect(btn.type).toBe('button')
+    expect(btn.props['data-testid']).toBe('ds-btn')
+    expect(btn.props.className).toContain('dab-btn-primary')
+
+    const dangerBtn = StudioButton({ variant: 'danger', children: 'Delete' }) as any
+    expect(dangerBtn.props.className).toContain('dab-badge-danger')
+
+    const badge = StudioBadge({ tone: 'success', testId: 'ds-badge', children: 'OK' }) as any
+    expect(badge.props['data-testid']).toBe('ds-badge')
+    expect(badge.props.className).toContain('dab-badge')
+    expect(badge.props.className).toContain('dab-badge-success')
+
+    const pill = StudioBadge({ tone: 'warning', pill: true, children: '2 warnings' }) as any
+    expect(pill.props.className).toContain('dab-msg-pill')
+    expect(pill.props.className).toContain('dab-badge-warning')
+
+    expect(typeof StudioModal).toBe('function')
+
+    const toolbar = StudioToolbar({
+      testId: 'ds-toolbar',
+      titleBlockTestId: 'ds-title-block',
+      title: 'Preview',
+      badges: 'Badge',
+      actions: 'Action',
+    }) as any
+    expect(toolbar.props['data-testid']).toBe('ds-toolbar')
+    expect(toolbar.props.className).toContain('dab-preview-toolbar')
+
+    const card = StudioCard({ testId: 'ds-card', children: 'Card body' }) as any
+    expect(card.props['data-testid']).toBe('ds-card')
+    expect(card.props.className).toContain('dab-ds-card')
+
+    const skel = StudioSkeleton({ width: 120, height: 28, testId: 'ds-skel' }) as any
+    expect(skel.props['data-testid']).toBe('ds-skel')
+    expect(skel.props.className).toContain('dab-skeleton')
+    expect(skel.props.style).toMatchObject({ width: 120, height: 28 })
+
+    const docPrev = StudioDocPreview({ component: 'RunPythonButton', children: 'Preview' }) as any
+    expect(docPrev.props['data-testid']).toBe('doc-ui-preview')
+    expect(docPrev.props['data-component']).toBe('RunPythonButton')
+    expect(docPrev.props.style).toEqual({ pointerEvents: 'none', userSelect: 'none' })
+
+    const repoRoot = path.resolve(__dirname, '../..')
+    const skillMd = readFileSync(path.join(repoRoot, 'skills/studio-design-system/SKILL.md'), 'utf8')
+    expect(skillMd).toContain('name: studio-design-system')
+    expect(skillMd).toContain('StudioModal')
+    expect(skillMd).toContain('StudioToolbar')
+    expect(skillMd).toContain('--dab-success-bg')
+
+    const agentsMd = readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8')
+    expect(agentsMd).toContain('skills/studio-design-system/SKILL.md')
   })
 })
