@@ -107,6 +107,7 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     loadScriptById,
     busyStatus,
     extensionSDK,
+    setInfoModalUseCase,
   } = ctl
 
   return (
@@ -200,6 +201,15 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               Open Dashboard #{publishedTileDash.dashboardId} ↗
             </button>
           )}
+          <button
+            type="button"
+            data-testid="use-case-info-btn"
+            className="dab-btn dab-btn-secondary dab-info-trigger"
+            title="Use case guide & controls reference"
+            onClick={() => setInfoModalUseCase('tile')}
+          >
+            ?
+          </button>
         </div>
       </div>
 

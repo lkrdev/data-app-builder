@@ -375,6 +375,299 @@ function formatConversationContentTag(conv: ConversationRecord): string {
   return c.id ? `#${c.id}` : ''
 }
 
+export const DOC_UI_COMPONENTS: Record<string, () => React.ReactElement> = {
+  PublishDashboardButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>✨ Publish Dashboard</button>,
+  ScheduleScriptButton: () => <button type="button" className="dab-btn-secondary" tabIndex={-1}>⏰ Schedule Script</button>,
+  SaveScriptButton: () => <button type="button" className="dab-btn-secondary" tabIndex={-1}>Save Script</button>,
+  RunPythonButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>✨ Run Python</button>,
+  ScriptModeSelect: () => (
+    <select className="dab-select" defaultValue="summary" tabIndex={-1}>
+      <option value="summary">summary</option>
+      <option value="detailed_audit">detailed_audit</option>
+      <option value="anomaly_alert">anomaly_alert</option>
+    </select>
+  ),
+  ReloadPreviewButton: () => <button type="button" className="dab-btn-secondary" tabIndex={-1}>Reload Preview</button>,
+  OpenInLookerButton: () => <button type="button" className="dab-btn-secondary" tabIndex={-1}>Open in Looker ↗</button>,
+  LookmlTurnSkills: () => (
+    <div className="dab-skill-bar">
+      <span className="dab-skill-label">Turn Skills:</span>
+      {LOOKML_TURN_SKILLS.slice(0, 3).map((sk) => (
+        <button key={sk.id} type="button" className="dab-skill-chip active" tabIndex={-1}>✓ {sk.label}</button>
+      ))}
+    </div>
+  ),
+  PushLookmlButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>✨ Update LookML</button>,
+  ExportHealthTddButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>✨ Download Markdown (.md)</button>,
+  UseCaseBadge: () => <span className="dab-badge dab-locked-use-case-badge">🔒 Locked Use Case</span>,
+}
+
+export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: string; markdown: string }> = {
+  auto: {
+    title: 'Auto (Agent Decides) — Turn-1 Routing Guide',
+    tabLabel: 'Auto',
+    markdown: [
+      '# Auto Use-Case Routing',
+      'Evaluates your first prompt against `AGENTS.md` and your Looker role permissions (`explore`, `save_dashboards`, `develop`, `use_sql_runner`) to select the best Studio workflow automatically.',
+      '## Conversation Use-Case Lock',
+      '<UseCaseBadge />',
+      '- After Turn 1 completes, the conversation locks to the resolved use case so follow-up turns preserve your artifact, sandbox state, and preview pane.',
+      '- Click `+ New Conversation` in the left sidebar at any time to unlock the selector and start a fresh task.',
+    ].join('\n'),
+  },
+  app: {
+    title: 'Data App — Custom Lit Web Component Guide',
+    tabLabel: 'Data App',
+    markdown: [
+      '# Interactive Looker Data App (`apps/<name>/app.js`)',
+      'Builds a self-contained single-file Lit web component (`<app-kpi>`, `<app-chart>`, `<app-grid>`) validated in `/workspace` and published directly into a Looker dashboard extension tile.',
+      '## Live Preview Controls',
+      '<ReloadPreviewButton />',
+      'Re-runs the warm `@looker/embed-sdk` dashboard connection (`asDashboardConnection().run()`) without recreating the iframe.',
+      '### Open Published Dashboard in Looker',
+      '<OpenInLookerButton />',
+      '- Opens the underlying Looker dashboard (`/dashboards/:id`) in a new browser tab.',
+      '- Supports pasting screenshots (`Cmd+V`) into the composer to convert mockups into live Data Apps.',
+    ].join('\n'),
+  },
+  dashboard: {
+    title: 'Content Studio — Native UDDs, Looks, Boards & Schedules',
+    tabLabel: 'Content Studio',
+    markdown: [
+      '# Native Looker Content Studio',
+      'Creates and updates native Looker User-Defined Dashboards (UDDs), Saved Looks, Boards, and Scheduled Plans in-browser via `LkrCodeMode`.',
+      '## Preview & Navigation Controls',
+      '<ReloadPreviewButton />',
+      'Refreshes the embedded Looker UDD or Saved Look inside the warm preview container.',
+      '### Open Native Content in Looker',
+      '<OpenInLookerButton />',
+      '- Launches the native Looker dashboard (`/dashboards/:id`) or Look (`/looks/:id`) directly in Looker.',
+      '- All created content is indexed in **My Creations** and persisted to your personal or selected shared folder.',
+    ].join('\n'),
+  },
+  'conversational-analytics': {
+    title: 'Conversational Analytics — Isolated Sub-Agent & Embedded Chat',
+    tabLabel: 'Conversational Analytics',
+    markdown: [
+      '# Looker Conversational Analytics (CA)',
+      'Routes natural-language analytical questions to the best Looker CA Agent via a stateless isolated sub-agent (`[CA_AGENT_SELECTION_REQUEST]`, `tools=[]`) and embeds the live CA chat.',
+      '## Embedded CA Chat Controls',
+      '<ReloadPreviewButton />',
+      'Reloads the embedded `/embed/conversations/:id` session in the right preview pane.',
+      '### Open CA Conversation in Looker',
+      '<OpenInLookerButton />',
+      '- Opens the full Looker Conversational Analytics conversation in a new tab.',
+      '- Displays the isolated sub-agent selection rationale and matched `model::explore` scope below the toolbar.',
+    ].join('\n'),
+  },
+  lookml: {
+    title: 'Agentic LookML — Dev Workspace Sync, Curation & Parity',
+    tabLabel: 'LookML',
+    markdown: [
+      '# Agentic LookML (`lkr-dev-cli` + `LkrCodeMode`)',
+      'Switches to your active Looker `dev` workspace in-browser, runs offline `lkr parse` & `lkr schema validate` in `/workspace`, and verifies `/sql/:slug` vs `/x/:slug` parity.',
+      '## Per-Turn Activated LookML Skills',
+      '<LookmlTurnSkills />',
+      'Toggle per-turn skills (`lookml-field-curation`, `lookml-tests`, `lookml-snapshot`, `generate-view-from-table`, `agentic-lookml-workflow`) to steer field descriptions, `.test.lkml` assertions, and Bronze/Silver/Gold refinements.',
+      '## Push & Validate LookML Changes',
+      '<PushLookmlButton />',
+      '- Pushes modified `.lkml` files to your active dev branch, runs `validate_project` and `run_lookml_test`, and renders unified diffs.',
+    ].join('\n'),
+  },
+  'health-check': {
+    title: '3-Pillar Looker & BigQuery Health Check Guide',
+    tabLabel: 'Health Check',
+    markdown: [
+      '# 3-Pillar Looker & BigQuery Health Check',
+      'Executes a zero-CLI audit in `LkrCodeMode` across **Pillar 1** (`system__activity` latency & cache), **Pillar 2** (LookML 0–4 Transcriber Maturity Rubric), and **Pillar 3** (BigQuery `INFORMATION_SCHEMA` slot & partition telemetry).',
+      '## Export Technical Design Document (TDD)',
+      '<ExportHealthTddButton />',
+      '- Downloads the synthesized 7-section `TECHNICAL_DESIGN_DOCUMENT.md` with remediation diffs, BigQuery `PARTITION BY` / `CLUSTER BY` DDL, and quantified ROI.',
+      '- Switch between **Rendered Report** and **`{ } Raw Markdown`** or copy the full Markdown to your clipboard.',
+    ].join('\n'),
+  },
+  tile: {
+    title: 'Python Tile (Script) — WASM Monty Sandbox & Scheduler Guide',
+    tabLabel: 'Script',
+    markdown: [
+      '# Publish As Dashboard',
+      '<PublishDashboardButton />',
+      'Publishes the current script as a Looker UDD tile in your selected target folder (`load_configuration="wait"`, `layout="extension"`) and binds `tile_element_<id>` to `obj_script_<id>`.',
+      '## Execute & Test Script Mode',
+      '<RunPythonButton />',
+      '<ScriptModeSelect />',
+      'Executes your Python script in the browser WASM Monty sandbox (`LkrCodeMode.runPythonCode`) with `vars.mode` (`summary`, `detailed_audit`, `anomaly_alert`) and `vars.dashboard_filters`.',
+      '## Save & Schedule Recurring Runs',
+      '<SaveScriptButton />',
+      '<ScheduleScriptButton />',
+      '- **Save Script**: Persists `obj_script_<id>` and indexes it in **My Creations**.',
+      '- **Schedule Script**: Opens the Custom CodeMode Script Scheduler (`obj_schedule_<id>`) to configure cron cadence, `vars.mode`, and snapshot/webhook delivery.',
+    ].join('\n'),
+  },
+}
+
+export const USE_CASE_GUIDE_ORDER = (Object.keys(USE_CASE_GUIDES) as StudioUseCase[]).map((useCase) => ({
+  useCase,
+  tabLabel: USE_CASE_GUIDES[useCase].tabLabel,
+}))
+
+// ponytail: lightweight Markdown + <ComponentName /> parser that wraps mapped React UI controls in a non-actionable preview container
+export function renderUseCaseGuideMarkdown(markdown: string): React.ReactElement {
+  const wrapPreview = (compName: string, key: string): React.ReactElement | null => {
+    const renderFn = DOC_UI_COMPONENTS[compName]
+    if (!renderFn) return null
+    return (
+      <div
+        key={key}
+        data-testid="doc-ui-preview"
+        data-component={compName}
+        className="dab-doc-ui-preview"
+        style={{ pointerEvents: 'none', userSelect: 'none' }}
+        aria-hidden="true"
+        tabIndex={-1}
+      >
+        {renderFn()}
+      </div>
+    )
+  }
+
+  const renderInline = (text: string, keyPrefix: string): React.ReactNode[] =>
+    text
+      .split(/(`[^`]+`|\*\*[^*]+\*\*|<[A-Z][A-Za-z0-9_]*\s*\/>)/g)
+      .filter(Boolean)
+      .map((part, idx) => {
+        if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
+          return <code key={`${keyPrefix}-c-${idx}`}>{part.slice(1, -1)}</code>
+        }
+        if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
+          return <strong key={`${keyPrefix}-b-${idx}`}>{part.slice(2, -2)}</strong>
+        }
+        const tagMatch = part.match(/^<([A-Z][A-Za-z0-9_]*)\s*\/>$/)
+        if (tagMatch && DOC_UI_COMPONENTS[tagMatch[1]]) {
+          return wrapPreview(tagMatch[1], `${keyPrefix}-ui-${idx}`)
+        }
+        return part
+      })
+
+  const lines = String(markdown || '').split(/\r?\n/)
+  const blocks: React.ReactNode[] = []
+  let i = 0
+  while (i < lines.length) {
+    const trimmed = lines[i].trim()
+    if (!trimmed) {
+      i++
+      continue
+    }
+    const standaloneComp = trimmed.match(/^<([A-Z][A-Za-z0-9_]*)\s*\/>$/)
+    if (standaloneComp && DOC_UI_COMPONENTS[standaloneComp[1]]) {
+      blocks.push(wrapPreview(standaloneComp[1], `block-ui-${i}`))
+      i++
+      continue
+    }
+    const hMatch = trimmed.match(/^(#{1,3})\s+(.*)$/)
+    if (hMatch) {
+      const tag = `h${hMatch[1].length}`
+      blocks.push(React.createElement(tag, { key: `${tag}-${i}` }, renderInline(hMatch[2], `${tag}-${i}`)))
+      i++
+      continue
+    }
+    if (/^[-*]\s+/.test(trimmed)) {
+      const items: React.ReactNode[] = []
+      while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
+        const itemText = lines[i].trim().replace(/^[-*]\s+/, '')
+        items.push(<li key={`li-${i}`}>{renderInline(itemText, `li-${i}`)}</li>)
+        i++
+      }
+      blocks.push(<ul key={`ul-${i}`}>{items}</ul>)
+      continue
+    }
+    blocks.push(<p key={`p-${i}`}>{renderInline(trimmed, `p-${i}`)}</p>)
+    i++
+  }
+
+  return <div className="dab-tdd-rendered dab-use-case-guide-markdown">{blocks}</div>
+}
+
+export const UseCaseInfoTrigger: React.FC<{
+  useCase: StudioUseCase
+  onOpen: (uc: StudioUseCase) => void
+}> = ({ useCase, onOpen }) => (
+  <button
+    type="button"
+    data-testid="use-case-info-btn"
+    className="dab-btn dab-btn-secondary dab-info-trigger"
+    title="Use case guide & controls reference"
+    onClick={() => onOpen(useCase)}
+  >
+    ?
+  </button>
+)
+
+export const UseCaseInfoModal: React.FC<{
+  activeUseCase: StudioUseCase | null
+  onSelectUseCase: (uc: StudioUseCase) => void
+  onClose: () => void
+}> = ({ activeUseCase, onSelectUseCase, onClose }) => {
+  if (!activeUseCase) return null
+  const guide = USE_CASE_GUIDES[activeUseCase] || USE_CASE_GUIDES.auto
+  return (
+    <div
+      className="dab-modal-backdrop"
+      data-testid="use-case-info-modal"
+      onClick={onClose}
+    >
+      <div
+        className="dab-modal dab-use-case-info-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <div>
+            <strong style={{ fontSize: 15 }}>📖 {guide.title}</strong>
+            <div className="dab-muted" style={{ fontSize: 11.5 }}>
+              Interactive guide &amp; live-themed UI controls reference (non-actionable preview)
+            </div>
+          </div>
+          <button
+            type="button"
+            data-testid="use-case-info-close-btn"
+            className="dab-btn-secondary"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="dab-use-case-guide-tabs" role="tablist" aria-label="Use Case Guides">
+          {USE_CASE_GUIDE_ORDER.map((item) => (
+            <button
+              key={item.useCase}
+              type="button"
+              role="tab"
+              aria-selected={activeUseCase === item.useCase}
+              data-testid={`use-case-guide-tab-${item.useCase}`}
+              className={`dab-skill-chip ${activeUseCase === item.useCase ? 'active' : ''}`}
+              onClick={() => onSelectUseCase(item.useCase)}
+            >
+              {item.tabLabel}
+            </button>
+          ))}
+        </div>
+
+        <div className="dab-use-case-guide-body">
+          {renderUseCaseGuideMarkdown(guide.markdown)}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
     conversations,
@@ -633,8 +926,23 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     lookmlBundle,
     nativeContent,
     publishedApp,
+    infoModalUseCase,
+    setInfoModalUseCase,
   } = ctl
 
+  const activeGuideUseCase: StudioUseCase = !isUseCaseLocked
+    ? selectedUseCase
+    : isCaMode || caConversation
+    ? 'conversational-analytics'
+    : isHealthCheckMode
+    ? 'health-check'
+    : isLookmlMode
+    ? 'lookml'
+    : activeMode === 'tile'
+    ? 'tile'
+    : builderMode === 'dashboard'
+    ? 'dashboard'
+    : selectedUseCase || 'app'
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) =>
     handleImageClipboardPaste(e, setPastedImages)
 
@@ -704,8 +1012,15 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               🔒 {getUseCaseLabel(selectedUseCase)}
             </span>
           )}
+          <UseCaseInfoTrigger useCase={activeGuideUseCase} onOpen={setInfoModalUseCase} />
         </div>
       </div>
+
+      <UseCaseInfoModal
+        activeUseCase={infoModalUseCase}
+        onSelectUseCase={setInfoModalUseCase}
+        onClose={() => setInfoModalUseCase(null)}
+      />
 
       {isLookmlMode && (
         <div className="dab-skill-bar" aria-label="Activated Turn Skills">
@@ -1129,6 +1444,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     currentAppCode,
     embedNonce,
     extensionSDK,
+    setInfoModalUseCase,
   } = ctl
   const isTileMode = activeMode === 'tile'
 
@@ -1250,31 +1566,34 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               </span>
             )}
           </div>
-          {healthReport && (
-            <div className="dab-preview-actions">
-              <button
-                type="button"
-                className="dab-btn-secondary"
-                onClick={() => setTddViewMode((m) => (m === 'rendered' ? 'raw' : 'rendered'))}
-              >
-                {tddViewMode === 'rendered' ? '{ } Raw Markdown' : '📖 Rendered Report'}
-              </button>
-              <button
-                type="button"
-                className="dab-btn-secondary"
-                onClick={handleCopyTddMarkdown}
-              >
-                {copiedTdd ? '✓ Copied Markdown' : 'Copy Markdown'}
-              </button>
-              <button
-                type="button"
-                className="dab-btn-gemini"
-                onClick={handleDownloadTddMarkdown}
-              >
-                ✨ Download Markdown (.md)
-              </button>
-            </div>
-          )}
+          <div className="dab-preview-actions">
+            {healthReport && (
+              <>
+                <button
+                  type="button"
+                  className="dab-btn-secondary"
+                  onClick={() => setTddViewMode((m) => (m === 'rendered' ? 'raw' : 'rendered'))}
+                >
+                  {tddViewMode === 'rendered' ? '{ } Raw Markdown' : '📖 Rendered Report'}
+                </button>
+                <button
+                  type="button"
+                  className="dab-btn-secondary"
+                  onClick={handleCopyTddMarkdown}
+                >
+                  {copiedTdd ? '✓ Copied Markdown' : 'Copy Markdown'}
+                </button>
+                <button
+                  type="button"
+                  className="dab-btn-gemini"
+                  onClick={handleDownloadTddMarkdown}
+                >
+                  ✨ Download Markdown (.md)
+                </button>
+              </>
+            )}
+            <UseCaseInfoTrigger useCase="health-check" onOpen={setInfoModalUseCase} />
+          </div>
         </div>
       ) : isLookmlMode ? (
         <div className="dab-preview-toolbar">
@@ -1293,6 +1612,9 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                 /x/:slug parity)
               </span>
             )}
+          </div>
+          <div className="dab-preview-actions">
+            <UseCaseInfoTrigger useCase="lookml" onOpen={setInfoModalUseCase} />
           </div>
         </div>
       ) : isCaMode || caConversation ? (
@@ -1316,29 +1638,32 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                 </span>
               )}
             </div>
-            {caConversation && (
-              <div className="dab-preview-actions">
-                <button
-                  type="button"
-                  className="dab-btn-secondary"
-                  onClick={() => setIframeRev((r) => r + 1)}
-                >
-                  Reload CA Chat
-                </button>
-                <button
-                  type="button"
-                  className="dab-btn-secondary"
-                  onClick={() =>
-                    extensionSDK.openBrowserWindow(
-                      caConversation.embedPath.replace(/^\/embed/, ''),
-                      '_blank'
-                    )
-                  }
-                >
-                  Open in Looker ↗
-                </button>
-              </div>
-            )}
+            <div className="dab-preview-actions">
+              {caConversation && (
+                <>
+                  <button
+                    type="button"
+                    className="dab-btn-secondary"
+                    onClick={() => setIframeRev((r) => r + 1)}
+                  >
+                    Reload CA Chat
+                  </button>
+                  <button
+                    type="button"
+                    className="dab-btn-secondary"
+                    onClick={() =>
+                      extensionSDK.openBrowserWindow(
+                        caConversation.embedPath.replace(/^\/embed/, ''),
+                        '_blank'
+                      )
+                    }
+                  >
+                    Open in Looker ↗
+                  </button>
+                </>
+              )}
+              <UseCaseInfoTrigger useCase="conversational-analytics" onOpen={setInfoModalUseCase} />
+            </div>
           </div>
           {caConversation?.selectionRationale && (
             <div
@@ -1391,38 +1716,40 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               </span>
             )}
           </div>
-          {(activePreviewId || (builderMode !== 'dashboard' && currentAppCode)) && (
-            <div className="dab-preview-actions">
-              {builderMode !== 'dashboard' && currentAppCode && (
+          <div className="dab-preview-actions">
+            {builderMode !== 'dashboard' && currentAppCode && (
+              <button
+                type="button"
+                data-testid="preview-view-code-btn"
+                className="dab-btn-secondary"
+                onClick={() => setShowAppCode((v) => !v)}
+              >
+                {showAppCode ? 'Hide app.js' : '{ } View app.js'}
+              </button>
+            )}
+            {activePreviewId && (
+              <>
                 <button
                   type="button"
-                  data-testid="preview-view-code-btn"
                   className="dab-btn-secondary"
-                  onClick={() => setShowAppCode((v) => !v)}
+                  onClick={() => setIframeRev((r) => r + 1)}
                 >
-                  {showAppCode ? 'Hide app.js' : '{ } View app.js'}
+                  Reload Preview
                 </button>
-              )}
-              {activePreviewId && (
-                <>
-                  <button
-                    type="button"
-                    className="dab-btn-secondary"
-                    onClick={() => setIframeRev((r) => r + 1)}
-                  >
-                    Reload Preview
-                  </button>
-                  <button
-                    type="button"
-                    className="dab-btn-secondary"
-                    onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}
-                  >
-                    Open in Looker ↗
-                  </button>
-                </>
-              )}
-            </div>
-          )}
+                <button
+                  type="button"
+                  className="dab-btn-secondary"
+                  onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}
+                >
+                  Open in Looker ↗
+                </button>
+              </>
+            )}
+            <UseCaseInfoTrigger
+              useCase={builderMode === 'dashboard' ? 'dashboard' : 'app'}
+              onOpen={setInfoModalUseCase}
+            />
+          </div>
         </div>
       )}
 

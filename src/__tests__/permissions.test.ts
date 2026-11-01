@@ -79,10 +79,14 @@ import {
 } from '../antigravity'
 import {
   createLookerEmbedPreloadController,
+  DOC_UI_COMPONENTS,
   getStarterPromptsForUseCase,
   normalizeLookerEmbedUrl,
+  renderUseCaseGuideMarkdown,
   resolveLookerEmbedTarget,
   STARTER_PROMPTS_BY_USE_CASE,
+  USE_CASE_GUIDE_ORDER,
+  USE_CASE_GUIDES,
 } from '../components/StudioWorkspace'
 
 describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics', () => {
@@ -2335,6 +2339,62 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       expect(listeners.focus?.length || 0).toBe(0)
     } finally {
       ;(globalThis as any).window = prevWindow
+    }
+  })
+
+  test('24. renders contextual use-case Markdown guides with embedded non-actionable React UI preview components (Issue #64)', () => {
+    expect(USE_CASE_GUIDE_ORDER.map((u) => u.tabLabel)).toEqual([
+      'Auto',
+      'Data App',
+      'Content Studio',
+      'Conversational Analytics',
+      'LookML',
+      'Health Check',
+      'Script',
+    ])
+
+    const expectedComponents = [
+      'PublishDashboardButton',
+      'ScheduleScriptButton',
+      'SaveScriptButton',
+      'RunPythonButton',
+      'ScriptModeSelect',
+      'ReloadPreviewButton',
+      'OpenInLookerButton',
+      'LookmlTurnSkills',
+      'PushLookmlButton',
+      'ExportHealthTddButton',
+      'UseCaseBadge',
+    ]
+    for (const compName of expectedComponents) {
+      expect(typeof DOC_UI_COMPONENTS[compName]).toBe('function')
+    }
+
+    const allGuideMarkdown = Object.values(USE_CASE_GUIDES)
+      .map((g) => g.markdown)
+      .join('\n')
+    for (const compName of expectedComponents) {
+      expect(allGuideMarkdown).toContain(`<${compName} />`)
+    }
+
+    const tree = renderUseCaseGuideMarkdown(USE_CASE_GUIDES.tile.markdown)
+    expect(tree.props.className).toContain('dab-use-case-guide-markdown')
+    const children: any[] = Array.isArray(tree.props.children)
+      ? tree.props.children
+      : [tree.props.children]
+    const previews = children.filter((c) => c?.props?.['data-testid'] === 'doc-ui-preview')
+    expect(previews.map((p) => p.props['data-component'])).toEqual([
+      'PublishDashboardButton',
+      'RunPythonButton',
+      'ScriptModeSelect',
+      'SaveScriptButton',
+      'ScheduleScriptButton',
+    ])
+    for (const preview of previews) {
+      expect(preview.props.className).toBe('dab-doc-ui-preview')
+      expect(preview.props.style).toEqual({ pointerEvents: 'none', userSelect: 'none' })
+      expect(preview.props['aria-hidden']).toBe('true')
+      expect(preview.props.tabIndex).toBe(-1)
     }
   })
 })
