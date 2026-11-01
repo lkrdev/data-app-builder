@@ -1,21 +1,27 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import {
+  CA_AGENT_SELECTION_REQUEST_TAG,
   classifyLooker404Error,
+  classifyStudioUseCase,
   ConversationRecord,
+  createLookerCaConversation,
   deleteUserConversation,
   extractResolvedUseCase,
   fetchInitialLookerMetadata,
+  fetchLookerCaAgentsCatalog,
   formatUserConversationsArtifactKey,
   formatUserConversationsKey,
   formatUserEnvArtifactKey,
   getAllowedUseCases,
   loadUserConversations,
   loadUserEnvironmentId,
+  parseCaAgentSelectionResponse,
   rawLookerRequest,
   resolveUserCapabilities,
   saveUserConversation,
   saveUserEnvironmentId,
+  selectCaAgentViaIsolatedSubagent,
 } from '../lookerApi'
 import {
   AGENTS_MD,
@@ -826,5 +832,151 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(prewarmRecovered.status).toBe('prelaunched')
     expect(prewarmRecovered.session.environmentId).toBe('env_prewarm_recovered_777')
     expect(await loadUserEnvironmentId(mockSdk, '1')).toBe('env_prewarm_recovered_777')
+  })
+
+  test('12. routes Conversational Analytics via stateless isolated sub-agent (no previous_interaction_id, tools=[]), creates Looker CA conversation, and persists to user_conversations:${me.id}', async () => {
+    expect(
+      classifyStudioUseCase('Why did gross margin drop in Q3 compared to Q2?', 'auto', [
+        'app',
+        'dashboard',
+        'lookml',
+        'health-check',
+        'tile',
+        'conversational-analytics',
+      ])
+    ).toBe('conversational-analytics')
+    expect(
+      classifyStudioUseCase('Build an Executive Revenue Data App on order_items', 'auto', [
+        'app',
+        'dashboard',
+        'lookml',
+        'health-check',
+        'tile',
+        'conversational-analytics',
+      ])
+    ).toBe('app')
+
+    const artifactStore = new Map<string, { key: string; version: number; value: string }>()
+    const mockSdk: any = {
+      ok: async (p: any) => p,
+      me: async () => ({ id: '1' }),
+      search_agents: async () => [
+        {
+          id: 'ca_agent_ecommerce',
+          name: 'eCommerce Analytics Agent',
+          description: 'Answers order revenue, gross margin, and retention questions.',
+          explores: ['thelook::order_items', 'thelook::users'],
+        },
+        {
+          id: 'ca_agent_bq_ops',
+          name: 'BigQuery Cost & Jobs Agent',
+          description: 'Answers BigQuery slot usage, bytes billed, and streaming buffer questions.',
+          explores: ['bigquery_information_schema::jobs_timeline'],
+        },
+      ],
+      create_conversation: async (body: any) => ({
+        id: 'ca_conv_9001',
+        agent_id: body.agent_id,
+        title: body.title,
+      }),
+      conversational_analytics_chat: async () => ({
+        reply:
+          'Streaming buffer usage peaked on looker-private-demo.thelook.events at 507.5 MB across 2.89M rows.',
+      }),
+      artifact: async ({ key }: { namespace: string; key: string }) => {
+        const hit = artifactStore.get(key)
+        return hit ? [hit] : []
+      },
+      update_artifacts: async (_ns: string, items: Array<{ key: string; value: string; version?: number }>) => {
+        for (const item of items) {
+          const prev = artifactStore.get(item.key)
+          artifactStore.set(item.key, {
+            key: item.key,
+            version: (prev?.version || 0) + 1,
+            value: item.value,
+          })
+        }
+        return items
+      },
+    }
+
+    const catalog = await fetchLookerCaAgentsCatalog(mockSdk, [])
+    expect(catalog).toHaveLength(2)
+    expect(catalog[0].id).toBe('ca_agent_ecommerce')
+    expect(catalog[1].id).toBe('ca_agent_bq_ops')
+
+    const capturedPayloads: any[] = []
+    const mockExtensionSDK = {
+      serverProxy: async (_url: string, init: any) => {
+        const body = init.body ? JSON.parse(init.body) : undefined
+        capturedPayloads.push(body)
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            id: 'int_subagent_ca_1',
+            status: 'completed',
+            output_text:
+              '<CA_AGENT_SELECTION>{"agent_id":"ca_agent_bq_ops","agent_name":"BigQuery Cost & Jobs Agent","rationale":"Question asks about BigQuery streaming buffer usage on jobs_timeline/streaming_timeline.","initial_question":"Which BigQuery tables have the highest streaming buffer usage?"}</CA_AGENT_SELECTION>',
+          }),
+        }
+      },
+    }
+
+    const selection = await selectCaAgentViaIsolatedSubagent({
+      extensionSDK: mockExtensionSDK,
+      auth: { mode: 'apikey' },
+      environmentId: 'env_shared_1',
+      userPrompt: 'Which BigQuery tables have the highest streaming buffer usage?',
+      agents: catalog,
+      selectedExplores: [],
+    })
+
+    // Stateless isolated sub-agent call must NEVER pass previous_interaction_id and must pass tools: []
+    expect(capturedPayloads).toHaveLength(1)
+    expect(capturedPayloads[0].previous_interaction_id).toBeUndefined()
+    expect(capturedPayloads[0].tools).toEqual([])
+    expect(capturedPayloads[0].environment).toBe('env_shared_1')
+    expect(capturedPayloads[0].input[0].text).toContain(CA_AGENT_SELECTION_REQUEST_TAG)
+
+    expect(selection.agentId).toBe('ca_agent_bq_ops')
+    expect(selection.agentName).toBe('BigQuery Cost & Jobs Agent')
+    expect(selection.rationale).toContain('BigQuery streaming buffer usage')
+
+    const parsedFallback = parseCaAgentSelectionResponse(
+      'Unstructured output mentioning ca_agent_ecommerce',
+      catalog,
+      'What was Q4 revenue?'
+    )
+    expect(parsedFallback.agentId).toBe('ca_agent_ecommerce')
+
+    const created = await createLookerCaConversation({
+      sdk: mockSdk,
+      agent: catalog[1],
+      selection,
+      userPrompt: 'Which BigQuery tables have the highest streaming buffer usage?',
+    })
+    expect(created.caConversationId).toBe('ca_conv_9001')
+    expect(created.embedPath).toContain('/embed/conversations/ca_conv_9001')
+    expect(created.assistantReply).toContain('507.5 MB')
+
+    const savedList = await saveUserConversation(mockSdk, '1', {
+      id: created.caConversationId,
+      type: 'conversational-analytics',
+      environmentId: 'env_shared_1',
+      label: created.title,
+      explores: catalog[1].explores,
+      content: {
+        caConversationId: created.caConversationId,
+        agentId: catalog[1].id,
+        agentName: catalog[1].name,
+        embedPath: created.embedPath,
+        selectionRationale: selection.rationale,
+      },
+    })
+    expect(savedList).toHaveLength(1)
+    expect(savedList[0].type).toBe('conversational-analytics')
+    expect(savedList[0].content?.caConversationId).toBe('ca_conv_9001')
+    expect(savedList[0].content?.agentId).toBe('ca_agent_bq_ops')
   })
 })

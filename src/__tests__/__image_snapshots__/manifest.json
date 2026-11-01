@@ -11,28 +11,28 @@
     "category": "Mini-App Modes",
     "title": "2. Content Studio Mode (Create & Update UDDs, Looks, Boards, Schedules)",
     "snapshotName": "02-mode-native-dashboard-builder-snap.png",
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "lookml",
     "category": "Mini-App Modes",
     "title": "3. Agentic LookML Mode (Turn Skills, Active User Dev Mode & .lkml Diffs)",
     "snapshotName": "03-mode-agentic-lookml-snap.png",
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "health_check",
     "category": "Mini-App Modes",
     "title": "4. 3-Pillar Health Check Mode (Rendered Markdown Viewer & Top-Right Gemini Button)",
     "snapshotName": "04-mode-3-pillar-health-check-snap.png",
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "python_tile_studio",
     "category": "Mini-App Modes",
     "title": "5. Python Tile Studio Mode (Mode Selector, Schedule Script & Live Grid)",
     "snapshotName": "05-mode-python-tile-studio-snap.png",
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "tile_mount_view",
@@ -60,48 +60,55 @@
     "category": "Config & Explore Dropdown",
     "title": "9. Explore Combobox Dropdown — Open (Top Scroll State)",
     "snapshotName": "09-explore-dropdown-open-top-snap.png",
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "explore_dropdown_scrolled",
     "category": "Config & Explore Dropdown",
     "title": "10. Explore Combobox Dropdown — Scrolled State (Retail Ops & System Activity)",
     "snapshotName": "10-explore-dropdown-scrolled-snap.png",
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_lookml_skills",
     "category": "Chat Bar States",
     "title": "11. Chat Bar State — LookML Activated Turn Skills & Prompt",
     "snapshotName": "11-chatbar-state-lookml-activated-skills-snap.png",
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_pasted_image_inspector",
     "category": "Chat Bar States",
     "title": "12. Chat Bar State — Pasted Screenshot Thumbnail & Code/Schema Inspector Open",
     "snapshotName": "12-chatbar-state-pasted-image-and-inspector-snap.png",
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_busy_running",
     "category": "Chat Bar States",
     "title": "13. Chat Bar State — Busy / Running Spinner Banner",
     "snapshotName": "13-chatbar-state-busy-running-snap.png",
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_error_banner",
     "category": "Chat Bar States",
     "title": "14. Chat Bar State — Error Diagnostic Banner",
     "snapshotName": "14-chatbar-state-error-banner-snap.png",
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "python_tile_scheduler_modal",
     "category": "Tile & Scheduler Modal",
     "title": "15. Custom CodeMode Script Scheduler Modal (Cron, vars.mode & Custom Controls)",
     "snapshotName": "15-python-tile-scheduler-modal-snap.png",
+    "changedInGit": false
+  },
+  {
+    "id": "conversational_analytics",
+    "category": "Mini-App Modes",
+    "title": "16. Conversational Analytics Mode (Isolated Sub-Agent Selection & Embedded CA Chat)",
+    "snapshotName": "16-mode-conversational-analytics-snap.png",
     "changedInGit": true
   }
 ]

@@ -7,6 +7,7 @@ import { StudioController } from '../useStudioController'
 
 function formatConversationContentTag(conv: ConversationRecord): string {
   const c = conv.content || {}
+  if (c.caConversationId || c.agentId) return `CA · ${c.agentName || c.agentId || c.caConversationId}`
   if (c.reportId) return `TDD #${c.reportId}${typeof c.overallScore === 'number' ? ` (${c.overallScore}%)` : ''}`
   if (c.scriptId) return `Script ${c.scriptId}${c.dashboardId ? ` · #${c.dashboardId}` : ''}`
   if (c.lookmlDashboardId || c.lookId || c.dashboardId) return `${c.lookmlDashboardId ? 'LookML' : c.lookId ? 'Look' : 'Dash'} #${c.lookmlDashboardId || c.lookId || c.dashboardId}`
@@ -175,6 +176,8 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     builderMode,
     isLookmlMode,
     isHealthCheckMode,
+    isCaMode,
+    caConversation,
     selectedUseCase,
     setSelectedUseCase,
     isUseCaseLocked,
@@ -372,6 +375,8 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
         placeholder={
           isHealthCheckMode
             ? 'Optional custom focus for 3-Pillar Looker & BigQuery Health Check...'
+            : isCaMode || selectedUseCase === 'conversational-analytics'
+            ? 'Ask a natural-language data question for Looker Conversational Analytics...'
             : isLookmlMode
             ? 'Describe LookML changes, SQL query to model, or field descriptions/tests to run in your active dev mode...'
             : builderMode === 'dashboard'
@@ -471,11 +476,16 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 
         <button
           type="button"
+          data-testid="studio-send-btn"
           className="dab-btn-gemini"
           onClick={handleSendPrompt}
           disabled={!!busyStatus || (!prompt.trim() && pastedImages.length === 0)}
         >
-          {isLookmlMode
+          {isCaMode || selectedUseCase === 'conversational-analytics'
+            ? caConversation
+              ? '✨ Ask CA Agent'
+              : '✨ Route & Start CA Chat'
+            : isLookmlMode
             ? lookmlBundle
               ? '✨ Update LookML'
               : '✨ Run Agentic LookML'
@@ -682,9 +692,11 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const {
     isHealthCheckMode,
     isLookmlMode,
+    isCaMode,
     builderMode,
     healthReport,
     lookmlBundle,
+    caConversation,
     canDeployLookml,
     nativeContent,
     publishedApp,
@@ -842,6 +854,98 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               extensionSDK={extensionSDK}
               canDeploy={canDeployLookml}
             />
+          </div>
+        </>
+      ) : isCaMode || caConversation ? (
+        <>
+          <div className="dab-preview-toolbar" data-testid="ca-preview-toolbar">
+            <div>
+              {caConversation ? (
+                <>
+                  <strong>{caConversation.title}</strong>{' '}
+                  <span className="dab-badge" data-testid="ca-selected-agent-badge">
+                    🤖 Agent: {caConversation.agentName} ({caConversation.agentId})
+                  </span>{' '}
+                  <span className="dab-muted">
+                    (Conversation <code>{caConversation.caConversationId}</code> ·{' '}
+                    <code>{caConversation.embedPath}</code>)
+                  </span>
+                </>
+              ) : (
+                <span className="dab-muted">
+                  Looker Conversational Analytics embedded chat will appear here after routing
+                </span>
+              )}
+            </div>
+            {caConversation && (
+              <div className="dab-preview-actions">
+                <button
+                  type="button"
+                  className="dab-btn-secondary"
+                  onClick={() => setIframeRev((r) => r + 1)}
+                >
+                  Reload CA Chat
+                </button>
+                <button
+                  type="button"
+                  className="dab-btn-secondary"
+                  onClick={() =>
+                    extensionSDK.openBrowserWindow(
+                      caConversation.embedPath.replace(/^\/embed/, ''),
+                      '_blank'
+                    )
+                  }
+                >
+                  Open in Looker ↗
+                </button>
+              </div>
+            )}
+          </div>
+          {caConversation?.selectionRationale && (
+            <div
+              data-testid="ca-selection-rationale"
+              style={{
+                padding: '6px 12px',
+                fontSize: 12,
+                background: '#f8fafc',
+                borderBottom: '1px solid #e2e8f0',
+                color: '#334155',
+              }}
+            >
+              <strong>Isolated Sub-Agent Selection:</strong> {caConversation.selectionRationale}
+              {caConversation.explores?.length > 0 && (
+                <span style={{ marginLeft: 8, color: '#64748b' }}>
+                  · Explores: <code>{caConversation.explores.join(', ')}</code>
+                </span>
+              )}
+            </div>
+          )}
+          <div className="dab-iframe-container" data-testid="ca-embed-preview">
+            {caConversation ? (
+              <iframe
+                key={`ca-${caConversation.caConversationId}-${iframeRev}`}
+                data-testid="ca-embed-iframe"
+                src={`${hostUrl.replace(/\/$/, '')}${caConversation.embedPath}`}
+                srcDoc={
+                  typeof window !== 'undefined'
+                    ? (window as any).__MOCK_LOOKER_EXTENSION__?.getMockPreviewHtml?.(
+                        'conversational-analytics',
+                        caConversation.caConversationId
+                      )
+                    : undefined
+                }
+                title="Looker Conversational Analytics Embedded Chat"
+                className="dab-iframe"
+              />
+            ) : (
+              <div className="dab-placeholder">
+                <p>No active Conversational Analytics chat yet.</p>
+                <p className="dab-muted">
+                  Ask a data question on the left — a stateless isolated sub-agent will select the
+                  best Looker CA Agent, create the conversation, and embed it here.
+                </p>
+              </div>
+            )}
           </div>
         </>
       ) : (

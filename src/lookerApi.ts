@@ -4,6 +4,7 @@ import { classifyLooker404Error, resolveUserCapabilities } from './lookerPermiss
 export * from './lookerPermissions'
 export * from './dataAppPublisher'
 export * from './lookerArtifacts'
+export * from './conversationalAnalytics'
 
 export function formatExploreId(modelName: string, exploreName: string): string {
   return `${modelName.trim()}::${exploreName.trim()}`

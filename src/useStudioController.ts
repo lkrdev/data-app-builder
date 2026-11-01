@@ -4,12 +4,15 @@ import { useLookerExtension } from './contexts/LookerExtensionContext'
 import {
   buildAvailableExploresCatalog,
   buildDenseExploreSchema,
+  CaConversationState,
   ConversationRecord,
+  createLookerCaConversation,
   deleteUserArtifact,
   deleteUserConversation,
   extractExploreIdsFromCode,
   extractResolvedUseCase,
   fetchInitialLookerMetadata,
+  fetchLookerCaAgentsCatalog,
   formatExploreId,
   getAllowedUseCases,
   getArtifactNamespace,
@@ -21,16 +24,19 @@ import {
   loadObjectArtifact,
   loadUserConversations,
   loadUserEnvironmentId,
+  LookerCaAgentSummary,
   NativeContentState,
   NativeContentType,
   parseExploreId,
   PublishedAppState,
+   resolveCaEmbedPath,
   ResolvedStudioUseCase,
   resolveUserCapabilities,
   saveDashboardStudioMetadata,
   saveNativeContentArtifact,
   saveUserArtifact,
   saveUserConversation,
+  selectCaAgentViaIsolatedSubagent,
   STUDIO_USE_CASE_OPTIONS,
   studioModeToUseCase,
   StudioUseCase,
@@ -143,11 +149,19 @@ export function useStudioController() {
     activeMode === 'dashboard' ? 'dashboard' : 'data_app'
 
   const [selectedUseCase, setSelectedUseCase] = useState<StudioUseCase>(() =>
-    parsedRoute.objectId || parsedRoute.mode !== 'app'
+    parsedRoute.isCaRoute
+      ? 'conversational-analytics'
+      : parsedRoute.objectId || parsedRoute.mode !== 'app'
       ? studioModeToUseCase(parsedRoute.mode)
       : 'auto'
   )
   const [lockedByTurn, setLockedByTurn] = useState<boolean>(false)
+  const [caConversation, setCaConversation] = useState<CaConversationState | null>(null)
+  const [caAgentsCatalog, setCaAgentsCatalog] = useState<LookerCaAgentSummary[]>([])
+  const lastCaIdRef = useRef<string>('')
+  const isCaMode = Boolean(
+    parsedRoute.isCaRoute || selectedUseCase === 'conversational-analytics' || caConversation
+  )
 
   const allowedUseCases = useMemo(
     () => getAllowedUseCases(capabilities, disabledModes),
@@ -292,14 +306,17 @@ export function useStudioController() {
       publishedApp ||
       nativeContent ||
       lookmlBundle ||
-      healthReport
+      healthReport ||
+      caConversation
   )
 
   useEffect(() => {
-    if (parsedRoute.objectId) {
+    if (parsedRoute.isCaRoute) {
+      setSelectedUseCase('conversational-analytics')
+    } else if (parsedRoute.objectId) {
       setSelectedUseCase(studioModeToUseCase(activeMode))
     }
-  }, [parsedRoute.objectId, activeMode])
+  }, [parsedRoute.objectId, parsedRoute.isCaRoute, activeMode])
 
   const handleChangeUseCase = useCallback(
     (nextUseCase: StudioUseCase) => {
@@ -446,6 +463,7 @@ export function useStudioController() {
       'health-check': 'health',
       script: 'tile',
       data_app: 'app',
+      'conversational-analytics': 'app',
     } as Record<string, StudioMode>)[t || ''] ||
     (t as StudioMode) ||
     'app'
@@ -539,6 +557,11 @@ export function useStudioController() {
         listUserLookmlSessions(core40SDK, extensionSDK, resolvedUserId).then((s) => {
           if (mounted) setLookmlSessions(s)
         })
+        fetchLookerCaAgentsCatalog(core40SDK)
+          .then((agents) => {
+            if (mounted && agents.length > 0) setCaAgentsCatalog(agents)
+          })
+          .catch(() => {})
         setAllModels(
           meta.models.map((m: any) => ({
             name: String(m.name),
@@ -933,6 +956,240 @@ export function useStudioController() {
     [core40SDK, extensionSDK, history, location.pathname, runWithBusy, setAgentSession, setMessages]
   )
 
+  const loadCaConversationById = useCallback(
+    async (rawId: string, pushRoute = true) => {
+      const id = rawId.trim()
+      if (!id) return
+      await runWithBusy(
+        `Loading Conversational Analytics session "${id}"...`,
+        `Could not load Conversational Analytics session "${id}"`,
+        async () => {
+          const loaded = await loadObjectArtifact<any>(
+            core40SDK,
+            'conversational-analytics',
+            id,
+            getArtifactNamespace(extensionSDK)
+          )
+          const convFromList = conversations.find(
+            (c) =>
+              c.id === id ||
+              String(c.content?.caConversationId || c.content?.id || '') === id
+          )
+          const content = loaded || convFromList?.content || {}
+          const agentId = String(
+            content.agentId || content.agent_id || 'ad69f74cd9e2494090e9e9e9c50190c8'
+          )
+          const agentName = String(content.agentName || content.agent_name || 'Looker CA Agent')
+          const caConvId = String(content.caConversationId || content.id || id)
+          const explores = Array.isArray(content.explores)
+            ? content.explores
+            : convFromList?.explores || []
+          const resolvedTitle = String(
+            content.title || content.label || convFromList?.label || id
+          )
+          const resolvedRationale = String(
+            content.selectionRationale ||
+              content.rationale ||
+              `Routed to Looker CA agent "${agentName}" (${agentId}) via isolated sub-agent.`
+          )
+          const state: CaConversationState = {
+            id: caConvId,
+            caConversationId: caConvId,
+            agentId,
+            agentName,
+            embedPath: content.embedPath || resolveCaEmbedPath(agentId, caConvId),
+            title: resolvedTitle,
+            label: resolvedTitle,
+            rationale: resolvedRationale,
+            selectionRationale: resolvedRationale,
+            initialPrompt: String(
+              content.initialPrompt || content.title || convFromList?.label || id
+            ),
+            explores,
+            interactionId:
+              content.studio?.lastInteractionId ||
+              content.lastInteractionId ||
+              convFromList?.interactionId,
+            updatedAt: String(
+              content.updatedAt || convFromList?.updatedAt || new Date().toISOString()
+            ),
+          }
+          lastCaIdRef.current = caConvId
+          setCaConversation(state)
+          setSelectedUseCase('conversational-analytics')
+          setLockedByTurn(true)
+          setActiveObjectId(caConvId)
+          setActiveConversationId(convFromList?.id || caConvId)
+          setLoadDashInput(caConvId)
+          if (explores.length > 0) setSelectedExplores(explores)
+          const msgs = content.studio?.messages || content.messages || convFromList?.messages
+          setMessages(
+            Array.isArray(msgs) && msgs.length > 0
+              ? msgs
+              : [
+                  { role: 'user', text: state.initialPrompt },
+                  {
+                    role: 'assistant',
+                    text: `Routed via isolated CA sub-agent to **${state.agentName}** (\`${state.agentId}\`) and opened embedded Looker CA conversation \`${state.caConversationId}\`.\n\n**Sub-Agent Rationale:** ${state.rationale}`,
+                    interactionId: state.interactionId,
+                  },
+                ],
+            'app'
+          )
+          if (pushRoute && location.pathname !== `/conversational-analytics/${caConvId}`) {
+            history.replace(`/conversational-analytics/${encodeURIComponent(caConvId)}`)
+          }
+        }
+      )
+    },
+    [conversations, core40SDK, extensionSDK, history, location.pathname, runWithBusy, setMessages]
+  )
+
+  const handleRunConversationalAnalytics = async (
+    userQuestion: string,
+    baseMessages: ChatMessage[]
+  ) => {
+    const auth: AntigravityAuth = { mode: authMode, oauthToken, clientId, projectId, apiKey }
+    const isFirstTurn = baseMessages.filter((m) => m.role === 'user').length <= 1
+    try {
+      const selection = await selectCaAgentViaIsolatedSubagent({
+        sdk: core40SDK,
+        extensionSDK,
+        auth,
+        userQuestion,
+        model: selectedModel,
+        agentsCatalog: caAgentsCatalog.length > 0 ? caAgentsCatalog : undefined,
+        onStatus: setBusyStatus,
+      })
+      setBusyStatus(`Creating Looker CA conversation with "${selection.agentName}"...`)
+      const created = await createLookerCaConversation(
+        core40SDK,
+        selection.agentId,
+        userQuestion,
+        selection.agentName
+      )
+      const assistantText = `Routed via isolated CA sub-agent to **${selection.agentName}** (\`${selection.agentId}\`) and opened embedded Looker CA conversation \`${created.caConversationId}\`.\n\n**Sub-Agent Rationale:** ${selection.rationale}`
+      const nextMsgs: ChatMessage[] = [
+        ...baseMessages,
+        {
+          role: 'assistant',
+          text: assistantText,
+          interactionId: selection.isolatedInteractionId,
+        },
+      ]
+      const nextCaState: CaConversationState = {
+        id: created.caConversationId,
+        caConversationId: created.caConversationId,
+        agentId: selection.agentId,
+        agentName: selection.agentName,
+        embedPath: created.embedPath,
+        title: created.label,
+        label: created.label,
+        rationale: selection.rationale,
+        selectionRationale: selection.rationale,
+        initialPrompt: userQuestion,
+        explores: selection.explores.length > 0 ? selection.explores : selectedExplores,
+        interactionId: selection.isolatedInteractionId,
+        updatedAt: new Date().toISOString(),
+      }
+      lastCaIdRef.current = created.caConversationId
+      setCaConversation(nextCaState)
+      setSelectedUseCase('conversational-analytics')
+      setLockedByTurn(true)
+      setActiveObjectId(created.caConversationId)
+      setActiveConversationId(created.caConversationId)
+      setLoadDashInput(created.caConversationId)
+      if (selection.explores.length > 0) setSelectedExplores(selection.explores)
+      setMessages(nextMsgs, 'app')
+      if (location.pathname !== `/conversational-analytics/${created.caConversationId}`) {
+        history.replace(
+          `/conversational-analytics/${encodeURIComponent(created.caConversationId)}`
+        )
+      }
+
+      const namespace = getArtifactNamespace(extensionSDK)
+      const convEntry = {
+        id: created.caConversationId,
+        type: 'conversational-analytics',
+        interactionId: selection.isolatedInteractionId,
+        environmentId: sharedEnvIdRef.current || agentSession.environmentId,
+        label: created.label,
+        explores: nextCaState.explores,
+        content: {
+          agentId: selection.agentId,
+          agentName: selection.agentName,
+          caConversationId: created.caConversationId,
+          embedPath: created.embedPath,
+          rationale: selection.rationale,
+        },
+        messages: nextMsgs,
+        updatedAt: nextCaState.updatedAt,
+      }
+      await saveUserArtifact(
+        core40SDK,
+        userId,
+        {
+          id: created.caConversationId,
+          type: 'conversational-analytics',
+          title: created.label,
+          label: created.label,
+          explores: nextCaState.explores,
+          lastInteractionId: selection.isolatedInteractionId,
+          updatedAt: nextCaState.updatedAt,
+          createdBy: userId,
+        },
+        {
+          ...nextCaState,
+          type: 'conversational-analytics',
+          title: created.label,
+          studio: {
+            explores: nextCaState.explores,
+            lastInteractionId: selection.isolatedInteractionId,
+            messages: nextMsgs,
+          },
+          createdBy: userId,
+        },
+        namespace
+      ).catch(() => {})
+      await saveUserConversation(core40SDK, userId, convEntry, namespace)
+        .then(setConversations)
+        .catch(() => {})
+      await refreshCatalog()
+
+      if (isFirstTurn) {
+        void generateConversationLabel({
+          extensionSDK,
+          auth,
+          environmentId: sharedEnvIdRef.current || agentSession.environmentId,
+          userPrompt: userQuestion,
+          assistantText,
+          model: selectedModel,
+        })
+          .then(async (label) => {
+            if (!label) return
+            conversationLabelsRef.current[created.caConversationId] = label
+            setCaConversation((prev) => (prev ? { ...prev, label } : prev))
+            await saveUserConversation(
+              core40SDK,
+              userId,
+              { ...convEntry, label, updatedAt: new Date().toISOString() },
+              namespace
+            )
+              .then(setConversations)
+              .catch(() => {})
+          })
+          .catch(() => {})
+      }
+    } catch (err: any) {
+      setMessages(
+        (prev) => [...prev, { role: 'error', text: err?.message || String(err) }],
+        'app'
+      )
+    } finally {
+      setBusyStatus(null)
+    }
+  }
+
   const handleRunHealthCheck = async (
     customFocus?: string,
     baseMessages?: ChatMessage[],
@@ -1068,7 +1325,13 @@ export function useStudioController() {
       return
     const id = parsedRoute.objectId
     if (!id) return
-    if (activeMode === 'lookml' && id !== lookmlBundle?.id && id !== lastLookmlIdRef.current) {
+    if (
+      parsedRoute.isCaRoute &&
+      id !== caConversation?.caConversationId &&
+      id !== lastCaIdRef.current
+    ) {
+      loadCaConversationById(id, false)
+    } else if (activeMode === 'lookml' && id !== lookmlBundle?.id && id !== lastLookmlIdRef.current) {
       loadLookmlSessionById(id, false)
     } else if (activeMode === 'health' && id !== healthReport?.id && id !== lastHealthIdRef.current) {
       loadHealthCheckById(id, false)
@@ -1090,18 +1353,22 @@ export function useStudioController() {
     location.pathname,
     activeMode,
     parsedRoute.objectId,
+    parsedRoute.isCaRoute,
     publishedApp?.dashboardId,
     nativeContent?.id,
     lookmlBundle?.id,
     healthReport?.id,
+    caConversation?.caConversationId,
     loadDashboardById,
     loadNativeById,
     loadLookmlSessionById,
     loadHealthCheckById,
+    loadCaConversationById,
   ])
 
   const handleLoadExistingDashboard = async () => {
     if (isHealthCheckMode) await loadHealthCheckById(loadDashInput, true)
+    else if (isCaMode) await loadCaConversationById(loadDashInput, true)
     else if (builderMode === 'dashboard') await loadNativeById(loadDashInput, true)
     else await loadDashboardById(loadDashInput, true)
   }
@@ -1112,12 +1379,14 @@ export function useStudioController() {
     lastNativeIdRef.current = ''
     lastLookmlIdRef.current = ''
     lastHealthIdRef.current = ''
+    lastCaIdRef.current = ''
     setActiveObjectId('')
     setActiveConversationId(`conv_${Date.now()}`)
     setPublishedApp(null)
     setNativeContent(null)
     setLookmlBundle(null)
     setHealthReport(null)
+    setCaConversation(null)
     setCurrentAppCode('')
     setLoadDashInput('')
     setLoadLookmlInput('')
@@ -1156,7 +1425,11 @@ export function useStudioController() {
     setActiveConversationId(conv.id)
     if (conv.explores?.length) setSelectedExplores(conv.explores)
     const c = conv.content || {}
-    if (mode === 'app' && (c.dashboardId || c.id)) {
+    if (conv.type === 'conversational-analytics' && (c.caConversationId || c.id || conv.id)) {
+      const targetId = String(c.caConversationId || c.id || conv.id)
+      setActiveObjectId(targetId)
+      await loadCaConversationById(targetId, true)
+    } else if (mode === 'app' && (c.dashboardId || c.id)) {
       const targetId = String(c.dashboardId || c.id)
       setActiveObjectId(targetId)
       await loadDashboardById(targetId, true)
@@ -1223,12 +1496,16 @@ export function useStudioController() {
     setSelectedUseCase(studioModeToUseCase(item.type))
     setLockedByTurn(true)
     const modeInfo = STUDIO_MODES.find((m) => m.mode === mode)
-    const targetPath = modeInfo
-      ? `${modeInfo.prefix}/${encodeURIComponent(item.id)}`
-      : `/app/${encodeURIComponent(item.id)}`
+    const targetPath =
+      item.type === 'conversational-analytics'
+        ? `/conversational-analytics/${encodeURIComponent(item.id)}`
+        : modeInfo
+        ? `${modeInfo.prefix}/${encodeURIComponent(item.id)}`
+        : `/app/${encodeURIComponent(item.id)}`
     setActiveObjectId(item.id)
     if (location.pathname !== targetPath) history.push(targetPath)
-    if (mode === 'app') await loadDashboardById(item.id, false)
+    if (item.type === 'conversational-analytics') await loadCaConversationById(item.id, false)
+    else if (mode === 'app') await loadDashboardById(item.id, false)
     else if (mode === 'dashboard') await loadNativeById(item.id, false)
     else if (mode === 'lookml') await loadLookmlSessionById(item.id, false)
     else if (mode === 'health') await loadHealthCheckById(item.id, false)
@@ -1268,6 +1545,18 @@ export function useStudioController() {
       setSelectedUseCase('health-check')
       await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages)
       await refreshCatalog()
+      return
+    }
+
+    if (
+      selectedUseCase === 'conversational-analytics' ||
+      isCaMode ||
+      (isFirstTurn &&
+        selectedUseCase === 'auto' &&
+        extractResolvedUseCase('', effectivePrompt, allowedUseCases) === 'conversational-analytics')
+    ) {
+      setSelectedUseCase('conversational-analytics')
+      await handleRunConversationalAnalytics(effectivePrompt, messagesWithUser)
       return
     }
 
@@ -1327,6 +1616,10 @@ export function useStudioController() {
           : result.resolvedUseCase ||
             extractResolvedUseCase(result.assistantText, effectivePrompt, allowedUseCases)
       setSelectedUseCase(resolvedUseCase)
+      if (resolvedUseCase === 'conversational-analytics') {
+        await handleRunConversationalAnalytics(effectivePrompt, messagesWithUser)
+        return
+      }
       const resolvedMode: StudioMode = useCaseToStudioMode(resolvedUseCase)
 
       let convId = activeObjectId || activeConversationId || result.session.lastInteractionId || 'conv_1'
@@ -1679,6 +1972,7 @@ export function useStudioController() {
     !nativeContent &&
     !lookmlBundle &&
     !healthReport &&
+    !caConversation &&
     !busyStatus
 
   useEffect(() => {
@@ -1744,6 +2038,7 @@ export function useStudioController() {
     activeMode,
     isLookmlMode,
     isHealthCheckMode,
+    isCaMode,
     builderMode,
     selectedUseCase,
     setSelectedUseCase: handleChangeUseCase,
@@ -1765,6 +2060,8 @@ export function useStudioController() {
     healthReport,
     healthScope,
     setHealthScope,
+    caConversation,
+    caAgentsCatalog,
     currentAppCode,
     loadDashInput,
     setLoadDashInput,
@@ -1795,7 +2092,9 @@ export function useStudioController() {
     handleOAuthLogin,
     loadNativeById,
     loadLookmlSessionById,
+    loadCaConversationById,
     handleRunHealthCheck,
+    handleRunConversationalAnalytics,
     handleLoadExistingDashboard,
     handleResetNewApp,
     handleNewConversation,
