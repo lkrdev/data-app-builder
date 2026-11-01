@@ -100,7 +100,17 @@ export function createDeduplicatedLookerSdkProxy(
   const origRawReq = rawTransport?.rawRequest
   const wrappedsdk: any = Object.create(sdk)
   wrappedsdk.__rawSdk = (sdk as any).__rawSdk || sdk
-  for (const method of ['lookml_model_explore', 'all_lookml_models', 'search_content', 'me', 'all_folders']) {
+  for (const method of [
+    'lookml_model_explore',
+    'all_lookml_models',
+    'search_content',
+    'me',
+    'all_folders',
+    'folder',
+    'folder_children',
+    'folder_ancestors',
+    'search_folders',
+  ]) {
     if (typeof (sdk as any)[method] === 'function') {
       const origFn = (sdk as any)[method].bind(sdk)
       wrappedSdkMethod(wrappedsdk, method, origFn)
@@ -179,8 +189,260 @@ export async function rawLookerRequest<T = any>(
   return (rawResp.body ?? rawResp) as T
 }
 
+export interface LookerFolderNode {
+  id: string
+  name: string
+  parent_id?: string | null
+  child_count?: number
+  is_personal?: boolean
+  is_personal_descendant?: boolean
+  creator_id?: string | null
+  has_children?: boolean
+  can?: Record<string, boolean>
+}
+
+export interface SearchLookerFoldersParams {
+  name?: string
+  parent_id?: string
+  is_personal?: boolean | string
+  is_personal_descendant?: boolean | string
+  creator_id?: string
+  id?: string
+  fields?: string
+}
+
+export const LOOKER_FOLDER_FIELDS =
+  'id,name,parent_id,child_count,is_personal,is_personal_descendant,creator_id,can'
+
+export function normalizeLookerFolderNode(
+  raw: any,
+  fallbackParentId?: string | null
+): LookerFolderNode {
+  const childCount = typeof raw?.child_count === 'number' ? raw.child_count : undefined
+  const parentId =
+    raw?.parent_id !== undefined && raw?.parent_id !== null && raw?.parent_id !== ''
+      ? String(raw.parent_id)
+      : fallbackParentId ?? null
+  return {
+    id: String(raw?.id ?? ''),
+    name: String(raw?.name || `Folder #${raw?.id ?? ''}`),
+    parent_id: parentId,
+    ...(childCount !== undefined ? { child_count: childCount } : {}),
+    is_personal: Boolean(raw?.is_personal),
+    is_personal_descendant: Boolean(raw?.is_personal_descendant),
+    ...(raw?.creator_id != null ? { creator_id: String(raw.creator_id) } : {}),
+    has_children:
+      typeof raw?.has_children === 'boolean'
+        ? raw.has_children
+        : childCount === undefined
+        ? true
+        : childCount > 0,
+    ...(raw?.can ? { can: raw.can } : {}),
+  }
+}
+
+export function buildRootLookerFolders(user?: any): LookerFolderNode[] {
+  const canEdit = { show: true, edit_content: true, save_content: true }
+  const candidates: LookerFolderNode[] = [
+    { id: String(user?.personal_folder_id || '5'), name: 'My folder', parent_id: null, is_personal: true, has_children: true, can: canEdit },
+    { id: String(user?.home_folder_id || '1'), name: 'Shared folders', parent_id: null, is_personal: false, has_children: true, can: canEdit },
+    { id: '2', name: 'People', parent_id: null, is_personal: false, has_children: true },
+    { id: '3', name: 'Embed Users', parent_id: null, is_personal: false, has_children: true },
+    { id: '4', name: 'Embed Groups', parent_id: null, is_personal: false, has_children: true },
+  ]
+  return Array.from(new Map(candidates.filter((n) => n.id).map((n) => [n.id, n])).values())
+}
+
+async function unwrapSdkCall(sdk: any, p: any): Promise<any> {
+  const resolved = await p
+  if (typeof sdk?.ok === 'function') return sdk.ok(Promise.resolve(resolved))
+  return resolved
+}
+
+export async function fetchFolderChildren(
+  sdk: Looker40SDK,
+  folderId: string
+): Promise<LookerFolderNode[]> {
+  const fid = String(folderId || '').trim()
+  if (!fid) return []
+  return coalesceLookerMetadataRequest(
+    `folder_children:${fid}`,
+    async () => {
+      const s = sdk as any
+      if (typeof s?.folder_children === 'function') {
+        const rows = await unwrapSdkCall(
+          s,
+          s.folder_children({
+            folder_id: fid,
+            fields: 'id,name,parent_id,child_count,is_personal,can',
+          })
+        )
+        return (Array.isArray(rows) ? rows : []).map((r) => normalizeLookerFolderNode(r, fid))
+      }
+      if (typeof s?.all_folders === 'function') {
+        const all = await unwrapSdkCall(
+          s,
+          s.all_folders('id,name,parent_id,child_count,is_personal,can')
+        )
+        return (Array.isArray(all) ? all : [])
+          .filter((r: any) => String(r?.parent_id ?? '') === fid)
+          .map((r: any) => normalizeLookerFolderNode(r, fid))
+      }
+      return []
+    },
+    LOOKER_METADATA_CACHE_TTL_MS,
+    ['looker:folder_children', fid]
+  )
+}
+
+async function callFolderIdEndpoint(
+  sdk: any,
+  method: 'folder' | 'folder_ancestors',
+  folderId: string,
+  fields: string
+): Promise<any> {
+  const fn = sdk?.[method]
+  if (typeof fn !== 'function') return null
+  if (typeof sdk?.get === 'function') {
+    return unwrapSdkCall(sdk, fn.call(sdk, folderId, fields))
+  }
+  try {
+    const res = await unwrapSdkCall(sdk, fn.call(sdk, { folder_id: folderId, fields }))
+    if (res !== undefined) return res
+  } catch {}
+  return unwrapSdkCall(sdk, fn.call(sdk, folderId, fields))
+}
+
+export async function fetchFolderWithAncestors(
+  sdk: Looker40SDK,
+  folderId: string
+): Promise<{
+  folder: LookerFolderNode | null
+  ancestors: LookerFolderNode[]
+  chain: LookerFolderNode[]
+  expandedIds: string[]
+}> {
+  const fid = String(folderId || '').trim()
+  if (!fid) return { folder: null, ancestors: [], chain: [], expandedIds: [] }
+  return coalesceLookerMetadataRequest(
+    `folder_ancestors:${fid}`,
+    async () => {
+      const s = sdk as any
+      let rawFolder: any = null
+      let rawAncestors: any[] | null = null
+      try {
+        if (typeof s?.folder === 'function') {
+          rawFolder = await callFolderIdEndpoint(s, 'folder', fid, LOOKER_FOLDER_FIELDS)
+        }
+      } catch {}
+      try {
+        if (typeof s?.folder_ancestors === 'function') {
+          const anc = await callFolderIdEndpoint(s, 'folder_ancestors', fid, LOOKER_FOLDER_FIELDS)
+          if (Array.isArray(anc)) rawAncestors = anc
+        }
+      } catch {}
+
+      if ((!rawFolder || !rawAncestors) && typeof s?.all_folders === 'function') {
+        try {
+          const all = await unwrapSdkCall(s, s.all_folders(LOOKER_FOLDER_FIELDS))
+          const list = Array.isArray(all) ? all : []
+          const byId = new Map<string, any>(list.map((f: any) => [String(f.id), f]))
+          if (!rawFolder) rawFolder = byId.get(fid) || null
+          if (!rawAncestors && rawFolder) {
+            const chainUp: any[] = []
+            let cur = rawFolder.parent_id ? byId.get(String(rawFolder.parent_id)) : null
+            const visited = new Set<string>([fid])
+            while (cur && !visited.has(String(cur.id))) {
+              visited.add(String(cur.id))
+              chainUp.unshift(cur)
+              cur = cur.parent_id ? byId.get(String(cur.parent_id)) : null
+            }
+            rawAncestors = chainUp
+          }
+        } catch {}
+      }
+
+      const folder = rawFolder ? normalizeLookerFolderNode(rawFolder) : null
+      const normAnc = (rawAncestors || []).map((a) => normalizeLookerFolderNode(a))
+      const orderedAncestors =
+        normAnc.length > 1 && normAnc[0].parent_id ? [...normAnc].reverse() : normAnc
+      const chain = [...orderedAncestors, ...(folder ? [folder] : [])]
+      return {
+        folder,
+        ancestors: orderedAncestors,
+        chain,
+        expandedIds: orderedAncestors.map((a) => a.id),
+      }
+    },
+    LOOKER_METADATA_CACHE_TTL_MS,
+    ['looker:folder_ancestors', fid]
+  )
+}
+
+export async function searchLookerFolders(
+  sdk: Looker40SDK,
+  params: SearchLookerFoldersParams = {}
+): Promise<LookerFolderNode[]> {
+  const req: Record<string, any> = {
+    fields: params.fields || LOOKER_FOLDER_FIELDS,
+  }
+  if (params.name?.trim()) req.name = params.name.trim()
+  if (params.parent_id?.trim()) req.parent_id = params.parent_id.trim()
+  if (params.id?.trim()) req.id = params.id.trim()
+  if (params.creator_id?.trim()) req.creator_id = params.creator_id.trim()
+  if (params.is_personal !== undefined && params.is_personal !== '' && params.is_personal !== 'any') {
+    req.is_personal = params.is_personal === true || params.is_personal === 'true'
+  }
+  if (
+    params.is_personal_descendant !== undefined &&
+    params.is_personal_descendant !== '' &&
+    params.is_personal_descendant !== 'any'
+  ) {
+    req.is_personal_descendant =
+      params.is_personal_descendant === true || params.is_personal_descendant === 'true'
+  }
+
+  return coalesceLookerMetadataRequest(
+    `search_folders:${JSON.stringify(req)}`,
+    async () => {
+      const s = sdk as any
+      if (typeof s?.search_folders === 'function') {
+        const rows = await unwrapSdkCall(s, s.search_folders(req))
+        return (Array.isArray(rows) ? rows : []).map((r) => normalizeLookerFolderNode(r))
+      }
+      if (typeof s?.all_folders === 'function') {
+        const rows = await unwrapSdkCall(s, s.all_folders(LOOKER_FOLDER_FIELDS))
+        const all = (Array.isArray(rows) ? rows : []).map((r) => normalizeLookerFolderNode(r))
+        const nameQ = String(req.name || '')
+          .replace(/%/g, '')
+          .trim()
+          .toLowerCase()
+        return all.filter((f) => {
+          if (nameQ && !f.name.toLowerCase().includes(nameQ)) return false
+          if (req.parent_id && String(f.parent_id || '') !== String(req.parent_id)) return false
+          if (req.id && String(f.id) !== String(req.id)) return false
+          if (req.creator_id && String(f.creator_id || '') !== String(req.creator_id)) return false
+          if (typeof req.is_personal === 'boolean' && Boolean(f.is_personal) !== req.is_personal)
+            return false
+          if (
+            typeof req.is_personal_descendant === 'boolean' &&
+            Boolean(f.is_personal_descendant) !== req.is_personal_descendant
+          )
+            return false
+          return true
+        })
+      }
+      return []
+    },
+    LOOKER_METADATA_CACHE_TTL_MS,
+    ['looker:search_folders', req]
+  )
+}
+
+// ponytail: seed Looker root folder nodes from me (personal_folder_id + home_folder_id + standard roots)
+// instead of calling slow sdk.all_folders() upfront on startup; child folders and ancestors hydrate lazily.
 export async function fetchInitialLookerMetadata(sdk: Looker40SDK) {
-  const [me, models, folders] = await Promise.all([
+  const [me, models] = await Promise.all([
     coalesceLookerMetadataRequest(
       'meta:me',
       () =>
@@ -200,12 +462,6 @@ export async function fetchInitialLookerMetadata(sdk: Looker40SDK) {
       LOOKER_METADATA_CACHE_TTL_MS,
       ['looker:models']
     ),
-    coalesceLookerMetadataRequest(
-      'meta:all_folders',
-      () => sdk.ok(sdk.all_folders('id,name,parent_id,is_personal,can')),
-      LOOKER_METADATA_CACHE_TTL_MS,
-      ['looker:folders']
-    ),
   ])
   let roles: any[] | null = null
   if (me?.id && typeof (sdk as any).user_roles === 'function') {
@@ -224,12 +480,22 @@ export async function fetchInitialLookerMetadata(sdk: Looker40SDK) {
   }
   const allModels = models || []
   const validModels = allModels.filter((m) => m.name && m.explores && m.explores.length > 0)
-  const allFolders = folders || []
+  const rootFolders = buildRootLookerFolders(me)
+  const capFolders = me?.personal_folder_id
+    ? [
+        {
+          id: String(me.personal_folder_id),
+          name: 'My folder',
+          is_personal: true,
+          can: { show: true, edit_content: true },
+        },
+      ]
+    : []
   const capabilities = resolveUserCapabilities({
     user: me,
     roles,
     models: allModels,
-    folders: allFolders,
+    folders: capFolders,
   })
   const defaultFolderId = String(me.personal_folder_id || me.home_folder_id || '1')
   return {
@@ -237,7 +503,7 @@ export async function fetchInitialLookerMetadata(sdk: Looker40SDK) {
     roles,
     models: validModels,
     allModels,
-    folders: allFolders,
+    folders: rootFolders,
     defaultFolderId,
     capabilities,
   }

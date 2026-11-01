@@ -158,7 +158,7 @@
     "height": 418,
     "clipSelector": ".dab-modal",
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "conversational_analytics",
@@ -178,7 +178,7 @@
     "height": 393,
     "clipSelector": ".dab-empty-prompt-card",
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "studio_dark_theme",

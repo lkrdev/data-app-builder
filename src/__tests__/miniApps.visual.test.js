@@ -406,9 +406,74 @@ function buildHtmlPage(scenario) {
           }
         }),
         all_folders: async () => [
-          { id: '5', name: 'Bryan Weber (Personal)' },
-          { id: '1', name: 'Shared' }
+          { id: '5', name: 'Bryan Weber (Personal)', parent_id: '2', is_personal: true, child_count: 1 },
+          { id: '1', name: 'Shared', parent_id: null, is_personal: false, child_count: 1 },
+          { id: '501', name: 'Marketing Analytics', parent_id: '1', is_personal: false, child_count: 1 },
+          { id: '502', name: 'subfolder test', parent_id: '501', is_personal: false, child_count: 0 },
+          { id: '503', name: 'Personal Experiments', parent_id: '5', is_personal: true, child_count: 0 }
         ],
+        folder_children: async (params) => {
+          const pid = String((params && params.folder_id) || params || '');
+          const map = {
+            '5': [
+              { id: '503', name: 'Personal Experiments', parent_id: '5', is_personal: true, child_count: 0 }
+            ],
+            '1': [
+              { id: '501', name: 'Marketing Analytics', parent_id: '1', is_personal: false, child_count: 1 }
+            ],
+            '501': [
+              { id: '502', name: 'subfolder test', parent_id: '501', is_personal: false, child_count: 0 }
+            ]
+          };
+          return map[pid] || [];
+        },
+        folder: async (params) => {
+          const fid = String((params && params.folder_id) || params || '');
+          const map = {
+            '5': { id: '5', name: 'My folder', parent_id: '2', is_personal: true, child_count: 1 },
+            '1': { id: '1', name: 'Shared folders', parent_id: null, is_personal: false, child_count: 1 },
+            '501': { id: '501', name: 'Marketing Analytics', parent_id: '1', is_personal: false, child_count: 1 },
+            '502': { id: '502', name: 'subfolder test', parent_id: '501', is_personal: false, child_count: 0 },
+            '503': { id: '503', name: 'Personal Experiments', parent_id: '5', is_personal: true, child_count: 0 }
+          };
+          return map[fid] || { id: fid, name: 'Folder ' + fid, parent_id: '1', child_count: 0 };
+        },
+        folder_ancestors: async (params) => {
+          const fid = String((params && params.folder_id) || params || '');
+          if (fid === '502') {
+            return [
+              { id: '1', name: 'Shared folders', parent_id: null, is_personal: false, child_count: 1 },
+              { id: '501', name: 'Marketing Analytics', parent_id: '1', is_personal: false, child_count: 1 }
+            ];
+          }
+          if (fid === '501') {
+            return [
+              { id: '1', name: 'Shared folders', parent_id: null, is_personal: false, child_count: 1 }
+            ];
+          }
+          return [];
+        },
+        search_folders: async (params) => {
+          const all = [
+            { id: '5', name: 'My folder', parent_id: '2', is_personal: true, creator_id: '1', child_count: 1 },
+            { id: '1', name: 'Shared folders', parent_id: null, is_personal: false, child_count: 1 },
+            { id: '501', name: 'Marketing Analytics', parent_id: '1', is_personal: false, child_count: 1 },
+            { id: '502', name: 'subfolder test', parent_id: '501', is_personal: false, child_count: 0 },
+            { id: '503', name: 'Personal Experiments', parent_id: '5', is_personal: true, creator_id: '1', child_count: 0 }
+          ];
+          const p = params || {};
+          return all.filter((f) => {
+            if (p.id && String(f.id) !== String(p.id)) return false;
+            if (p.parent_id && String(f.parent_id || '') !== String(p.parent_id)) return false;
+            if (p.creator_id && String(f.creator_id || '') !== String(p.creator_id)) return false;
+            if (typeof p.is_personal === 'boolean' && Boolean(f.is_personal) !== p.is_personal) return false;
+            if (p.name) {
+              const needle = String(p.name).replace(/%/g, '').toLowerCase();
+              if (needle && !String(f.name).toLowerCase().includes(needle)) return false;
+            }
+            return true;
+          });
+        },
         search_agents: async () => [
           {
             id: 'ca_agent_ecommerce',
@@ -3294,4 +3359,170 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     expect(afterConfirmRes.result.value.remainingItemsCount).toBe(0)
     expect(afterConfirmRes.result.value.showsEmptyMessage).toBe(true)
   }, 20000)
+
+  test('renders Looker-style lazy folder tree with ancestor hydration, in-memory quick search, advanced search_folders modal, fixed-width loading skeleton, and removes legacy manual ID loaders (Issue #62)', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    const url = `http://127.0.0.1:${port}/?scenario=data_app`
+    await chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="topbar-folder-trigger"]'))`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    const domRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const s = window.__DAB_STUDIO__;
+        // 1. Check removal of legacy manual ID loaders
+        const hasDashboardIdInput = Boolean(document.querySelector('input[placeholder*="Dashboard ID"]'));
+        const hasLookmlSessionIdInput = Boolean(document.querySelector('input[placeholder*="LookML Session ID"]'));
+
+        // 2. Check fixed width on Save to Folder trigger
+        const trigger = document.querySelector('[data-testid="topbar-folder-trigger"]');
+        const triggerStyle = trigger ? window.getComputedStyle(trigger) : null;
+        const triggerMinWidth = triggerStyle ? triggerStyle.minWidth : '';
+        const triggerMaxWidth = triggerStyle ? triggerStyle.maxWidth : '';
+        const triggerLabel = document.querySelector('[data-testid="topbar-folder-picker"]')?.textContent || '';
+
+        // 3. Toggle loadingMetadata to verify skeleton renders with same dimensions
+        s.setLoadingMetadata(true);
+        await new Promise((r) => setTimeout(r, 80));
+        const skeleton = document.querySelector('[data-testid="folder-selector-skeleton"]');
+        const hasSkeleton = Boolean(skeleton && skeleton.classList.contains('dab-skeleton'));
+        s.setLoadingMetadata(false);
+        await new Promise((r) => setTimeout(r, 80));
+
+        // 4. Open Folder Tree Popover & expand Personal folder ('5')
+        const triggerAfter = document.querySelector('[data-testid="topbar-folder-trigger"]');
+        triggerAfter.click();
+        await new Promise((r) => setTimeout(r, 80));
+
+        const expandPersonalBtn = document.querySelector('[data-testid="folder-expand-5"]');
+        if (expandPersonalBtn) expandPersonalBtn.click();
+        await new Promise((r) => setTimeout(r, 120));
+        const hasPersonalChild = Boolean(document.querySelector('[data-testid="folder-select-503"]'));
+
+        // 5. Test In-Memory Quick Search
+        const quickSearch = document.querySelector('[data-testid="folder-tree-quick-search"]');
+        const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        inputSetter.call(quickSearch, 'Experiments');
+        quickSearch.dispatchEvent(new Event('input', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 80));
+        const quickSearchFilteredText = document.querySelector('[data-testid="folder-tree-list"]')?.textContent || '';
+        inputSetter.call(quickSearch, '');
+        quickSearch.dispatchEvent(new Event('input', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 80));
+
+        // 6. Open Advanced Search modal, search for 'subfolder test', select '502'
+        const advBtn = document.querySelector('[data-testid="folder-advanced-search-btn"]');
+        advBtn.click();
+        await new Promise((r) => setTimeout(r, 80));
+
+        const nameInput = document.querySelector('[data-testid="folder-search-input-name"]');
+        inputSetter.call(nameInput, 'subfolder');
+        nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 60));
+
+        const runSearchBtn = document.querySelector('[data-testid="folder-search-submit-btn"]');
+        runSearchBtn.click();
+        await new Promise((r) => setTimeout(r, 120));
+
+        const result502 = document.querySelector('[data-testid="folder-search-result-502"]');
+        const hasSearchResult502 = Boolean(result502);
+        if (result502) result502.click();
+        await new Promise((r) => setTimeout(r, 150));
+
+        // 7. Ensure popover is open and re-open Advanced Search modal so both are visible for the visual snapshot
+        const triggerFinal = document.querySelector('[data-testid="topbar-folder-trigger"]');
+        const selectedTriggerText = triggerFinal?.textContent?.trim() || '';
+        if (!document.querySelector('[data-testid="folder-tree-popover"]') && triggerFinal) {
+          triggerFinal.click();
+          await new Promise((r) => setTimeout(r, 100));
+        }
+
+        const hasHydratedParent501 = Boolean(document.querySelector('[data-testid="folder-select-501"]'));
+        const hasHydratedLeaf502 = Boolean(document.querySelector('[data-testid="folder-select-502"]'));
+
+        const advBtn2 = document.querySelector('[data-testid="folder-advanced-search-btn"]');
+        if (advBtn2) advBtn2.click();
+        await new Promise((r) => setTimeout(r, 100));
+
+        return {
+          hasDashboardIdInput,
+          hasLookmlSessionIdInput,
+          triggerMinWidth,
+          triggerMaxWidth,
+          hasSaveToFolderLabel: triggerLabel.includes('Save to Folder:'),
+          hasSkeleton,
+          hasPersonalChild,
+          quickSearchMatchesExperiments: quickSearchFilteredText.includes('Personal Experiments'),
+          hasSearchResult502,
+          selectedTriggerText,
+          hasHydratedParent501,
+          hasHydratedLeaf502
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(domRes.result.value).toEqual({
+      hasDashboardIdInput: false,
+      hasLookmlSessionIdInput: false,
+      triggerMinWidth: '180px',
+      triggerMaxWidth: '240px',
+      hasSaveToFolderLabel: true,
+      hasSkeleton: true,
+      hasPersonalChild: true,
+      quickSearchMatchesExperiments: true,
+      hasSearchResult502: true,
+      selectedTriggerText: '📁 subfolder test (#502)▾',
+      hasHydratedParent501: true,
+      hasHydratedLeaf502: true
+    })
+
+    const clipRes = await chrome.send('Runtime.evaluate', {
+      expression: `(() => {
+        const selectors = [
+          '[data-testid="topbar-folder-picker"]',
+          '[data-testid="folder-tree-popover"]',
+          '[data-testid="folder-advanced-search-modal"]'
+        ];
+        const rects = selectors
+          .flatMap((s) => Array.from(document.querySelectorAll(s)))
+          .map((el) => el.getBoundingClientRect())
+          .filter((r) => r.width > 0 && r.height > 0);
+        if (!rects.length) return null;
+        const margin = 16;
+        const x = Math.max(0, Math.floor(Math.min(...rects.map((r) => r.left)) - margin));
+        const y = Math.max(0, Math.floor(Math.min(...rects.map((r) => r.top)) - margin));
+        const right = Math.min(1440, Math.ceil(Math.max(...rects.map((r) => r.right)) + margin));
+        const bottom = Math.min(900, Math.ceil(Math.max(...rects.map((r) => r.bottom)) + margin));
+        return { x, y, width: right - x, height: bottom - y, scale: 1 };
+      })()`,
+      returnByValue: true
+    })
+    const clip = clipRes.result?.value
+    expect(clip).toBeTruthy()
+
+    const { data } = await chrome.send('Page.captureScreenshot', {
+      format: 'png',
+      clip
+    })
+    const pngBuffer = Buffer.from(data, 'base64')
+    expect(pngBuffer.length).toBeGreaterThan(1000)
+
+    const scratchDir =
+      '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
+    mkdirSync(scratchDir, { recursive: true })
+    const scratchSnapPath = path.join(scratchDir, 'issue-62-folder-tree.png')
+    writeFileSync(scratchSnapPath, pngBuffer)
+    expect(existsSync(scratchSnapPath)).toBe(true)
+  }, 15000)
 })

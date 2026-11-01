@@ -5,6 +5,7 @@ import {
   ARTIFACT_NAMESPACE,
   ArtifactService,
   buildDenseExploreSchema,
+  buildRootLookerFolders,
   CA_AGENT_SELECTION_REQUEST_TAG,
   classifyLooker404Error,
   classifyStudioUseCase,
@@ -17,6 +18,8 @@ import {
   deleteUserArtifact,
   deleteUserConversation,
   extractResolvedUseCase,
+  fetchFolderChildren,
+  fetchFolderWithAncestors,
   fetchInitialLookerMetadata,
   fetchLookerCaAgentsCatalog,
   formatUserConversationsArtifactKey,
@@ -40,6 +43,7 @@ import {
   saveUserArtifact,
   saveUserConversation,
   saveUserEnvironmentId,
+  searchLookerFolders,
   selectCaAgentViaIsolatedSubagent,
   STUDIO_MODES,
   STUDIO_THEME_STORAGE_KEY,
@@ -2588,5 +2592,147 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     // 6. Verify empty user_conversations:1 stays [] even after cache clear
     clearArtifactServiceCache()
     expect(await loadUserConversations(mockSdk, '1')).toEqual([])
+  })
+
+  test('26. seeds lazy root folders without upfront all_folders, lazily fetches folder_children, hydrates folder_ancestors, and queries search_folders (Issue #62)', async () => {
+    clearLookerMetadataCache()
+    let allFoldersCalls = 0
+    const childCalls: any[] = []
+    const folderCalls: any[] = []
+    const ancestorCalls: any[] = []
+    const searchCalls: any[] = []
+
+    const mockSdk: any = {
+      ok: async (p: any) => p,
+      me: async () => ({
+        id: '1',
+        display_name: 'Bryan Weber',
+        personal_folder_id: '5',
+        home_folder_id: '1',
+        is_iam_admin: true,
+      }),
+      all_lookml_models: async () => [
+        {
+          name: 'thelook',
+          label: 'eCommerce',
+          project_name: 'thelook_event',
+          explores: [{ name: 'order_items', hidden: false }],
+        },
+      ],
+      all_folders: async () => {
+        allFoldersCalls += 1
+        return []
+      },
+      folder_children: async (req: any) => {
+        childCalls.push(req)
+        if (String(req.folder_id) === '1') {
+          return [
+            { id: '501', name: 'Marketing Analytics', parent_id: '1', child_count: 1, is_personal: false },
+            { id: '503', name: 'Finance & RevOps', parent_id: '1', child_count: 0, is_personal: false },
+          ]
+        }
+        if (String(req.folder_id) === '501') {
+          return [
+            { id: '502', name: 'subfolder test', parent_id: '501', child_count: 0, is_personal: false },
+          ]
+        }
+        return []
+      },
+      folder: async (req: any) => {
+        folderCalls.push(req)
+        const fid = String(typeof req === 'object' ? req.folder_id : req)
+        if (fid === '502') {
+          return {
+            id: '502',
+            name: 'subfolder test',
+            parent_id: '501',
+            child_count: 0,
+            is_personal: false,
+            creator_id: '1',
+          }
+        }
+        return { id: fid, name: `Folder #${fid}`, parent_id: null, child_count: 0 }
+      },
+      folder_ancestors: async (req: any) => {
+        ancestorCalls.push(req)
+        const fid = String(typeof req === 'object' ? req.folder_id : req)
+        if (fid === '502') {
+          return [
+            { id: '501', name: 'Marketing Analytics', parent_id: '1', child_count: 1, is_personal: false },
+            { id: '1', name: 'Shared folders', parent_id: null, child_count: 2, is_personal: false },
+          ]
+        }
+        return []
+      },
+      search_folders: async (req: any) => {
+        searchCalls.push(req)
+        return [
+          {
+            id: '502',
+            name: 'subfolder test',
+            parent_id: '501',
+            child_count: 0,
+            is_personal: false,
+            creator_id: '1',
+          },
+        ]
+      },
+    }
+
+    // 1. fetchInitialLookerMetadata does NOT call all_folders upfront and seeds top-level roots
+    const meta = await fetchInitialLookerMetadata(mockSdk)
+    expect(allFoldersCalls).toBe(0)
+    expect(meta.defaultFolderId).toBe('5')
+    expect(meta.folders.map((f: any) => ({ id: f.id, name: f.name }))).toEqual([
+      { id: '5', name: 'My folder' },
+      { id: '1', name: 'Shared folders' },
+      { id: '2', name: 'People' },
+      { id: '3', name: 'Embed Users' },
+      { id: '4', name: 'Embed Groups' },
+    ])
+    expect(buildRootLookerFolders({ personal_folder_id: '5', home_folder_id: '1' })).toHaveLength(5)
+
+    // 2. fetchFolderChildren calls sdk.folder_children lazily
+    const sharedChildren = await fetchFolderChildren(mockSdk, '1')
+    expect(childCalls).toEqual([
+      {
+        folder_id: '1',
+        fields: 'id,name,parent_id,child_count,is_personal,can',
+      },
+    ])
+    expect(sharedChildren).toEqual([
+      expect.objectContaining({ id: '501', name: 'Marketing Analytics', parent_id: '1', has_children: true }),
+      expect.objectContaining({ id: '503', name: 'Finance & RevOps', parent_id: '1', has_children: false }),
+    ])
+
+    // 3. fetchFolderWithAncestors calls sdk.folder + sdk.folder_ancestors and orders ancestors root -> parent
+    const hydrated = await fetchFolderWithAncestors(mockSdk, '502')
+    expect(folderCalls).toHaveLength(1)
+    expect(ancestorCalls).toHaveLength(1)
+    expect(hydrated.folder).toMatchObject({ id: '502', name: 'subfolder test', parent_id: '501' })
+    expect(hydrated.ancestors.map((a) => a.id)).toEqual(['1', '501'])
+    expect(hydrated.chain.map((c) => c.id)).toEqual(['1', '501', '502'])
+    expect(hydrated.expandedIds).toEqual(['1', '501'])
+
+    // 4. searchLookerFolders calls sdk.search_folders with normalized filter params
+    const searchRes = await searchLookerFolders(mockSdk, {
+      name: 'subfolder',
+      parent_id: '501',
+      is_personal: 'false',
+      creator_id: '1',
+      id: '502',
+    })
+    expect(searchCalls).toEqual([
+      expect.objectContaining({
+        name: 'subfolder',
+        parent_id: '501',
+        is_personal: false,
+        creator_id: '1',
+        id: '502',
+      }),
+    ])
+    expect(searchRes).toEqual([
+      expect.objectContaining({ id: '502', name: 'subfolder test', parent_id: '501' }),
+    ])
   })
 })
