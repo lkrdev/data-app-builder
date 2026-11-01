@@ -204,57 +204,25 @@ export async function saveLookmlSessionArtifact(params: {
 }) {
   const { sdk, extensionSDK, userId, bundle, studio } = params
   const namespace = getArtifactNamespace(extensionSDK)
-  const rawId =
-    bundle.id ||
-    bundle.branch_name ||
-    `${bundle.project_id || 'lookml'}_${Date.now().toString(36)}`
+  const rawId = bundle.id || bundle.branch_name || `${bundle.project_id || 'lookml'}_${Date.now().toString(36)}`
   const { id, userKey, objKey } = getLookmlArtifactKeys(userId, rawId)
   const updatedAt = new Date().toISOString()
-
+  const title = bundle.title || `LookML (${bundle.project_id || id})`
+  const explores = studio.explores || []
   const index: LookmlSessionIndex = {
-    id,
-    type: 'lookml',
-    title: bundle.title || `LookML (${bundle.project_id || id})`,
-    updatedAt,
-    createdBy: String(userId),
-    targetId: bundle.project_id || '',
-    branchName: bundle.branch_name,
-    explores: studio.explores || [],
-    lastInteractionId: studio.lastInteractionId,
-    environmentId: studio.environmentId,
+    id, type: 'lookml', title, updatedAt, createdBy: String(userId),
+    targetId: bundle.project_id || '', branchName: bundle.branch_name,
+    explores, lastInteractionId: studio.lastInteractionId, environmentId: studio.environmentId,
   }
-
   const payload: LookmlArtifactPayload = {
-    id,
-    type: 'lookml',
-    title: index.title,
-    updatedAt,
-    createdBy: String(userId),
+    id, type: 'lookml', title, updatedAt, createdBy: String(userId),
     bundle: { ...bundle, id },
     studio: {
-      explores: studio.explores || [],
-      lastInteractionId: studio.lastInteractionId,
-      environmentId: studio.environmentId,
-      messages: (studio.messages || [])
-        .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .slice(-200),
+      explores, lastInteractionId: studio.lastInteractionId, environmentId: studio.environmentId,
+      messages: (studio.messages || []).filter((m) => m.role === 'user' || m.role === 'assistant').slice(-200),
     },
   }
-
-  await saveUserArtifact({
-    sdk,
-    userId,
-    type: 'lookml',
-    id,
-    title: index.title,
-    targetId: index.targetId,
-    explores: index.explores,
-    branchName: index.branchName,
-    lastInteractionId: index.lastInteractionId,
-    environmentId: index.environmentId,
-    content: payload,
-    namespace,
-  })
+  await saveUserArtifact({ ...index, sdk, userId, content: payload, namespace })
   return { id, userKey, objKey, index, payload }
 }
 
