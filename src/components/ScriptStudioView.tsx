@@ -112,15 +112,23 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   return (
     <>
       <div className="dab-preview-toolbar" data-testid="tile-preview-toolbar">
-        <div>
-          <strong>{scriptTitle}</strong>{' '}
+        <div
+          data-testid="tile-toolbar-title-block"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            flexWrap: 'wrap',
+          }}
+        >
+          <strong>{scriptTitle}</strong>
           <span className="dab-muted">
             (Artifact <code>obj_script_{scriptId}</code>
             {publishedTileDash
               ? ` · Dashboard #${publishedTileDash.dashboardId} · tile_element_${publishedTileDash.elementId}`
               : ''}
             )
-          </span>{' '}
+          </span>
           {savedScheduleBadge && (
             <span
               className="dab-badge"
@@ -135,6 +143,7 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           {savedScripts.length > 0 && (
             <select
               data-testid="tile-saved-scripts-select"
+              className="dab-select"
               value={savedScripts.some((s) => s.id === scriptId) ? scriptId : ''}
               onChange={(e) => {
                 if (e.target.value) loadScriptById(e.target.value, true)
@@ -150,6 +159,7 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           )}
           <select
             data-testid="tile-mode-select"
+            className="dab-select"
             value={scriptMode}
             onChange={(e) => setScriptMode(e.target.value)}
             title="Custom script mode injected as vars.mode and dashboard_filters.script_mode"
@@ -215,12 +225,20 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         >
           <div
             className="dab-inspector-bar"
-            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 8,
+              flexWrap: 'wrap',
+            }}
           >
             <strong>Python Script (`LkrCodeMode.runPythonCode`)</strong>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
               <input
                 type="text"
+                className="dab-input"
+                data-testid="tile-script-id-input"
                 value={scriptId}
                 onChange={(e) => setScriptId(e.target.value)}
                 placeholder="script_id"
@@ -228,6 +246,8 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               />
               <input
                 type="text"
+                className="dab-input"
+                data-testid="tile-script-title-input"
                 value={scriptTitle}
                 onChange={(e) => setScriptTitle(e.target.value)}
                 placeholder="Script title"
@@ -265,6 +285,8 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             <span>Test `vars.dashboard_filters` / Custom Controls (JSON):</span>
             <input
               type="text"
+              className="dab-input"
+              data-testid="tile-filters-json-input"
               value={filtersJson}
               onChange={(e) => setFiltersJson(e.target.value)}
               style={{ flex: 1, fontFamily: 'monospace', fontSize: 11 }}

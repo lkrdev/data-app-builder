@@ -91,6 +91,9 @@ body {
 }
 
 .dab-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: var(--dab-badge-bg, #eff6ff);
   color: var(--dab-accent-text, #1d4ed8);
   border: 1px solid var(--dab-accent-border, #bfdbfe);
@@ -98,6 +101,7 @@ body {
   padding: 2px 8px;
   font-size: 11px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .dab-controls {
@@ -121,11 +125,12 @@ body {
 
 .dab-controls select,
 .dab-controls input,
+.dab-preview-actions select,
 .dab-input,
 .dab-select {
   height: 28px;
   padding: 0 8px;
-  border: 1px solid var(--dab-border-strong, #cbd5e1);
+  border: 1px solid var(--dab-border-strong, var(--dab-border, #cbd5e1));
   border-radius: 6px;
   font-size: 12px;
   background: var(--dab-input-bg, #fff);
@@ -143,6 +148,18 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.dab-btn,
+.dab-btn-primary,
+.dab-btn-secondary,
+.dab-btn-gemini {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .dab-btn-primary {
@@ -365,6 +382,7 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   background: var(--dab-surface-subtle, #f1f5f9);
 }
 
@@ -372,14 +390,20 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 14px;
+  gap: 10px;
+  flex-wrap: wrap;
+  height: auto;
+  min-height: 44px;
+  padding: 6px 12px;
   background: var(--dab-surface, #ffffff);
   border-bottom: 1px solid var(--dab-border, #e2e8f0);
 }
 
 .dab-preview-actions {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .dab-muted {
