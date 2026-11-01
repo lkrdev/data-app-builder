@@ -999,99 +999,88 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           const origRawReq = rawTransport?.rawRequest
           const turnSdk =
             typeof origRawReq === 'function'
-              ? Object.assign(
-                  Object.create(Object.getPrototypeOf(sdk) || Object.prototype),
-                  sdk,
-                  {
-                    authSession: {
-                      ...(sdk as any).authSession,
-                      transport: {
-                        ...rawTransport,
-                        rawRequest: (...reqArgs: any[]) => {
-                          lookerHttpCalls += 1
-                          const reqStart = Date.now()
-                          return Promise.resolve(origRawReq.apply(rawTransport, reqArgs)).then(
-                            (res: any) => {
-                              lookerHttpMs += Date.now() - reqStart
-                              if (res && (res.ok === false || Number(res.statusCode) >= 400)) {
-                                apiRetries += 1
-                              }
-                              return res
-                            },
-                            (err: any) => {
-                              lookerHttpMs += Date.now() - reqStart
-                              apiRetries += 1
-                              throw err
-                            }
-                          )
-                        },
+              ? {
+                  ...sdk,
+                  authSession: {
+                    ...(sdk as any).authSession,
+                    transport: {
+                      ...rawTransport,
+                      rawRequest: async (...reqArgs: any[]) => {
+                        lookerHttpCalls += 1
+                        const reqStart = Date.now()
+                        try {
+                          const res = await origRawReq.apply(rawTransport, reqArgs)
+                          if (res && (res.ok === false || Number(res.statusCode) >= 400)) apiRetries += 1
+                          return res
+                        } catch (err) {
+                          apiRetries += 1
+                          throw err
+                        } finally {
+                          lookerHttpMs += Date.now() - reqStart
+                        }
                       },
                     },
-                  }
-                )
+                  },
+                }
               : sdk
-          let resultsInput: any[]
-          try {
-            resultsInput = await Promise.all(
-              pendingLookerCalls.map(async (call: any) => {
-                const args = call.arguments || call.args || {}
-                let codeModeOutput: string
-                try {
-                  if (call.name === 'lkr_cli_extension_bridge') {
-                    const bridged = await executeLkrExtensionToolRequest({
-                      sdk: turnSdk,
-                      req: args,
-                      defaultVars: defaultCodeModeVars,
-                      extensionSDK,
-                      requirePermission,
-                      approvedOperations,
-                      onPermissionRequest,
-                    })
-                    resolvedBridgeCacheKeys.add(bridged.cacheKey)
-                    codeModeOutput = JSON.stringify({
-                      ok: true,
-                      cache_key: bridged.cacheKey,
-                      cache_path: `/workspace/.lkr_extension_cache/${bridged.cacheKey}.json`,
-                      result: bridged.result,
-                    })
-                  } else {
-                    const customVars =
-                      args.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
-                        ? args.vars
-                        : {}
-                    const rawCode = String(args.code || '')
-                    codeModeOutput = await LkrCodeMode.runPythonCode({
-                      code: isDashboardMode ? wrapDashboardCodeMode(rawCode) : rawCode,
-                      sdk: turnSdk,
-                      extensionSDK,
-                      allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard',
-                      requirePermission,
-                      approvedOperations,
-                      onPermissionRequest,
-                      vars: {
-                        ...defaultCodeModeVars,
-                        ...customVars,
-                      },
-                    })
-                  }
-                } catch (err: any) {
-                  apiRetries += 1
+          const resultsInput = await Promise.all(
+            pendingLookerCalls.map(async (call: any) => {
+              const args = call.arguments || call.args || {}
+              let codeModeOutput: string
+              try {
+                if (call.name === 'lkr_cli_extension_bridge') {
+                  const bridged = await executeLkrExtensionToolRequest({
+                    sdk: turnSdk,
+                    req: args,
+                    defaultVars: defaultCodeModeVars,
+                    extensionSDK,
+                    requirePermission,
+                    approvedOperations,
+                    onPermissionRequest,
+                  })
+                  resolvedBridgeCacheKeys.add(bridged.cacheKey)
                   codeModeOutput = JSON.stringify({
-                    ok: false,
-                    error: err?.message || String(err),
+                    ok: true,
+                    cache_key: bridged.cacheKey,
+                    cache_path: `/workspace/.lkr_extension_cache/${bridged.cacheKey}.json`,
+                    result: bridged.result,
+                  })
+                } else {
+                  const customVars =
+                    args.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
+                      ? args.vars
+                      : {}
+                  const rawCode = String(args.code || '')
+                  codeModeOutput = await LkrCodeMode.runPythonCode({
+                    code: isDashboardMode ? wrapDashboardCodeMode(rawCode) : rawCode,
+                    sdk: turnSdk,
+                    extensionSDK,
+                    allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard',
+                    requirePermission,
+                    approvedOperations,
+                    onPermissionRequest,
+                    vars: {
+                      ...defaultCodeModeVars,
+                      ...customVars,
+                    },
                   })
                 }
-                return {
-                  type: 'function_result',
-                  name: call.name || 'run_looker_codemode',
-                  call_id: call.id,
-                  result: codeModeOutput,
-                }
-              })
-            )
-          } finally {
-            codemodeExecMs += Date.now() - cmStart
-          }
+              } catch (err: any) {
+                apiRetries += 1
+                codeModeOutput = JSON.stringify({
+                  ok: false,
+                  error: err?.message || String(err),
+                })
+              }
+              return {
+                type: 'function_result',
+                name: call.name || 'run_looker_codemode',
+                call_id: call.id,
+                result: codeModeOutput,
+              }
+            })
+          )
+          codemodeExecMs += Date.now() - cmStart
 
           interaction = await callInteractionsApi(
             extensionSDK,

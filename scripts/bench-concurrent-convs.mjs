@@ -70,120 +70,61 @@ function runBundleAppStdinAsync(bundlePyPath, appDir, title, appPath, code) {
   })
 }
 
-const CONV_A_TURNS = [
-  {
-    turn: 1,
-    turn_id: 'T1A',
-    interaction_id: 'int_A1',
-    previous_interaction_id: null,
-    title: 'Cold-Start Data App MVP (KPI Sparklines, Trend Chart, Date/Status Filter Bar)',
-    code: `/**
- * @title Executive Order & Revenue Command Center
- */
-import { DataApp, html } from '/runtime/data-app.js';
-
-export class ExecutiveCommandCenter extends DataApp {
-  static properties = {
-    ...DataApp.properties,
-    dateRange: { type: String },
-    statusFilter: { type: String },
-  };
-  constructor() {
-    super();
-    this.lookerModel = 'thelook';
-    this.explore = 'order_items';
-    this.dateRange = '12 months';
-    this.statusFilter = 'All';
-  }
-  getEffectiveFilters(local = {}, { isTimeSeries = false } = {}) {
-    const f = { ...(this.dashboardFilters || {}), ...(this.crossFilters || {}), ...local };
-    if (this.dateRange && !isTimeSeries) f['order_items.created_date'] = this.dateRange;
-    if (this.statusFilter && this.statusFilter !== 'All') f['order_items.status'] = this.statusFilter;
-    return f;
-  }
-  render() {
-    return html\`
-      <div class="da-container">
-        <section class="da-filter-bar">
-          <app-select label="Date Range" .value=\${this.dateRange} .options=\${['30 days', '90 days', '12 months']} @change=\${(e) => { this.dateRange = e.detail.value; }}></app-select>
-          <app-select label="Order Status" .value=\${this.statusFilter} .options=\${['All', 'Complete', 'Processing', 'Returned']} @change=\${(e) => { this.statusFilter = e.detail.value; }}></app-select>
-        </section>
-        <section class="da-kpi-grid">
-          <app-kpi label="Total Revenue" format="usd" sparkline sparkline-agg="sum" .query=\${{ fields: ['order_items.created_month', 'order_items.total_sale_price'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
-          <app-kpi label="Total Orders" format="int" sparkline sparkline-agg="sum" .query=\${{ fields: ['order_items.created_month', 'order_items.count'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
-          <app-kpi label="Avg Order Value" format="usd2" sparkline sparkline-agg="avg" .query=\${{ fields: ['order_items.created_month', 'order_items.average_sale_price'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
-          <app-kpi label="Gross Margin" format="usd" sparkline sparkline-agg="sum" .query=\${{ fields: ['order_items.created_month', 'order_items.total_gross_margin'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
-        </section>
-        <section class="da-grid-2-1">
-          <app-chart title="Monthly Revenue & Order Volume Trend" type="areaspline" value-format="usd" .query=\${{ fields: ['order_items.created_month', 'order_items.total_sale_price', 'order_items.count'], sorts: ['order_items.created_month asc'], limit: '24' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-chart>
-          <app-chart title="Order Status Breakdown" type="donut" cross-filter="order_items.status" .query=\${{ fields: ['order_items.status', 'order_items.count'], sorts: ['order_items.count desc'], limit: '10' }} .filters=\${this.getEffectiveFilters()}></app-chart>
-        </section>
-      </div>
-    \`;
-  }
-}
-customElements.define('executive-command-center', ExecutiveCommandCenter);
-`,
-  },
-  {
-    turn: 2,
-    turn_id: 'T2A',
-    interaction_id: 'int_A2',
-    previous_interaction_id: 'int_A1',
-    title: 'Expand into 3-Tab Layout + Category/Brand Cross-Filtering + <app-grid>',
-    code: `/**
- * @title Executive Order & Revenue Command Center
- */
-import { DataApp, html, createCurrencyCol, createNumericCol, createBadgeCol } from '/runtime/data-app.js';
-
-export class ExecutiveCommandCenter extends DataApp {
-  static properties = {
-    ...DataApp.properties,
-    activeTab: { type: String },
-    dateRange: { type: String },
-    statusFilter: { type: String },
-  };
-  constructor() {
-    super();
-    this.lookerModel = 'thelook';
-    this.explore = 'order_items';
-    this.activeTab = 'overview';
-    this.dateRange = '12 months';
-    this.statusFilter = 'All';
-  }
-  getEffectiveFilters(local = {}, { isTimeSeries = false } = {}) {
-    const f = { ...(this.dashboardFilters || {}), ...(this.crossFilters || {}), ...local };
-    if (this.dateRange && !isTimeSeries) f['order_items.created_date'] = this.dateRange;
-    if (this.statusFilter && this.statusFilter !== 'All') f['order_items.status'] = this.statusFilter;
-    return f;
-  }
-  render() {
-    return html\`
-      <div class="da-container">
-        <header class="da-header">
+function buildConvACode(turn) {
+  const imports =
+    turn === 1
+      ? 'DataApp, html'
+      : turn === 2
+      ? 'DataApp, html, createCurrencyCol, createNumericCol, createBadgeCol'
+      : 'DataApp, html, nothing, createCurrencyCol, createNumericCol, createBadgeCol'
+  const metricConfig =
+    turn >= 3
+      ? `\nconst METRIC_CONFIG = {\n  'order_items.total_sale_price': { label: 'Revenue', field: 'order_items.total_sale_price', format: 'usd' },\n  'order_items.count': { label: 'Orders', field: 'order_items.count', format: 'int' },\n  'order_items.average_sale_price': { label: 'AOV', field: 'order_items.average_sale_price', format: 'usd2' },\n};\n`
+      : ''
+  const headerBlock =
+    turn >= 2
+      ? `        <header class="da-header">
           <nav class="da-tabs">
             <button class="da-tab-btn \${this.activeTab === 'overview' ? 'active' : ''}" @click=\${() => { this.activeTab = 'overview'; }}>Overview</button>
             <button class="da-tab-btn \${this.activeTab === 'categories' ? 'active' : ''}" @click=\${() => { this.activeTab = 'categories'; }}>Categories & Brands</button>
-            <button class="da-tab-btn \${this.activeTab === 'ledger' ? 'active' : ''}" @click=\${() => { this.activeTab = 'ledger'; }}>Order Ledger</button>
+            <button class="da-tab-btn \${this.activeTab === 'ledger' ? 'active' : ''}" @click=\${() => { this.activeTab = 'ledger'; }}>Order Ledger</button>${turn === 4 ? '\n            ${this.renderThemeToggle()}' : ''}
           </nav>
-        </header>
-        <section class="da-filter-bar">
-          <app-select label="Date Range" .value=\${this.dateRange} .options=\${['30 days', '90 days', '12 months']} @change=\${(e) => { this.dateRange = e.detail.value; }}></app-select>
-          <app-select label="Order Status" .value=\${this.statusFilter} .options=\${['All', 'Complete', 'Processing', 'Returned']} @change=\${(e) => { this.statusFilter = e.detail.value; }}></app-select>
-        </section>
-        <section class="da-kpi-grid">
-          <app-kpi label="Total Revenue" format="usd" sparkline sparkline-agg="sum" .query=\${{ fields: ['order_items.created_month', 'order_items.total_sale_price'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
+        </header>\n`
+      : ''
+  const kpiBlock =
+    turn === 4
+      ? `          <app-kpi label="Total Revenue" format="usd" sparkline sparkline-agg="sum" change="+14.2% MoM" change-type="positive" polarity="higher-better" .query=\${{ fields: ['order_items.created_month', 'order_items.total_sale_price'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
+          <app-kpi label="Total Orders" format="int" sparkline sparkline-agg="sum" change="+9.8% MoM" change-type="positive" polarity="higher-better" .query=\${{ fields: ['order_items.created_month', 'order_items.count'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
+          <app-kpi label="Returned Orders" format="int" sparkline sparkline-agg="sum" change="-1.8% MoM" change-type="positive" polarity="lower-better" .query=\${{ fields: ['order_items.created_month', 'order_items.count'], filters: { 'order_items.status': 'Returned' }, sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
+          <app-kpi label="Gross Margin" format="usd" sparkline sparkline-agg="sum" change="+11.6% MoM" change-type="positive" polarity="higher-better" .query=\${{ fields: ['order_items.created_month', 'order_items.total_gross_margin'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>`
+      : `          <app-kpi label="Total Revenue" format="usd" sparkline sparkline-agg="sum" .query=\${{ fields: ['order_items.created_month', 'order_items.total_sale_price'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
           <app-kpi label="Total Orders" format="int" sparkline sparkline-agg="sum" .query=\${{ fields: ['order_items.created_month', 'order_items.count'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
           <app-kpi label="Avg Order Value" format="usd2" sparkline sparkline-agg="avg" .query=\${{ fields: ['order_items.created_month', 'order_items.average_sale_price'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
-          <app-kpi label="Gross Margin" format="usd" sparkline sparkline-agg="sum" .query=\${{ fields: ['order_items.created_month', 'order_items.total_gross_margin'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
-        </section>
-        <section class="da-grid-2">
+          <app-kpi label="Gross Margin" format="usd" sparkline sparkline-agg="sum" .query=\${{ fields: ['order_items.created_month', 'order_items.total_gross_margin'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>`
+  const chartsBlock =
+    turn === 1
+      ? `        <section class="da-grid-2-1">
+          <app-chart title="Monthly Revenue & Order Volume Trend" type="areaspline" value-format="usd" .query=\${{ fields: ['order_items.created_month', 'order_items.total_sale_price', 'order_items.count'], sorts: ['order_items.created_month asc'], limit: '24' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-chart>
+          <app-chart title="Order Status Breakdown" type="donut" cross-filter="order_items.status" .query=\${{ fields: ['order_items.status', 'order_items.count'], sorts: ['order_items.count desc'], limit: '10' }} .filters=\${this.getEffectiveFilters()}></app-chart>
+        </section>`
+      : turn === 2
+      ? `        <section class="da-grid-2">
           <app-chart title="Monthly Revenue & Order Volume Trend" type="areaspline" value-format="usd" .query=\${{ fields: ['order_items.created_month', 'order_items.total_sale_price', 'order_items.count'], sorts: ['order_items.created_month asc'], limit: '24' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-chart>
           <app-chart title="Order Status Breakdown" type="donut" cross-filter="order_items.status" .query=\${{ fields: ['order_items.status', 'order_items.count'], sorts: ['order_items.count desc'], limit: '10' }} .filters=\${this.getEffectiveFilters()}></app-chart>
           <app-chart title="Revenue by Category" type="bar" value-format="usd" cross-filter="products.category" .query=\${{ fields: ['products.category', 'order_items.total_sale_price'], sorts: ['order_items.total_sale_price desc'], limit: '15' }} .filters=\${this.getEffectiveFilters()}></app-chart>
           <app-chart title="Brand Margin Contribution" type="treemap" value-format="usd" cross-filter="products.brand" .query=\${{ fields: ['products.brand', 'order_items.total_gross_margin'], sorts: ['order_items.total_gross_margin desc'], limit: '20' }} .filters=\${this.getEffectiveFilters()}></app-chart>
-        </section>
-        <app-grid
+        </section>`
+      : `        <section class="da-grid-2">
+          <app-chart title="Monthly \${activeMetric.label} Trend" type="areaspline" value-format=\${activeMetric.format} .query=\${{ fields: ['order_items.created_month', metricField], sorts: ['order_items.created_month asc'], limit: '24' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-chart>
+          <app-chart title="Category Breakdown (\${activeMetric.label})" type="bar" value-format=\${activeMetric.format} cross-filter="products.category" .query=\${{ fields: ['products.category', metricField], sorts: [\`\${metricField} desc\`], limit: '15' }} .filters=\${this.getEffectiveFilters()}></app-chart>
+          <app-chart title="Brand Margin Contribution" type="treemap" value-format="usd" cross-filter="products.brand" .query=\${{ fields: ['products.brand', 'order_items.total_gross_margin'], sorts: ['order_items.total_gross_margin desc'], limit: '20' }} .filters=\${this.getEffectiveFilters()}></app-chart>
+          <app-chart title="Order Status Breakdown" type="donut" cross-filter="order_items.status" .query=\${{ fields: ['order_items.status', 'order_items.count'], sorts: ['order_items.count desc'], limit: '10' }} .filters=\${this.getEffectiveFilters()}></app-chart>
+        </section>`
+  const gridBlock =
+    turn === 1
+      ? ''
+      : turn === 2
+      ? `\n        <app-grid
           title="Category & Brand Performance Ledger"
           height="400px"
           show-row-count
@@ -196,13 +137,78 @@ export class ExecutiveCommandCenter extends DataApp {
             createCurrencyCol({ field: 'order_items.total_sale_price', headerName: 'Revenue' }),
             createNumericCol({ field: 'order_items.count', headerName: 'Orders' }),
           ]}
+        ></app-grid>`
+      : `\n        <app-grid
+          title="Category & Brand Performance Ledger"
+          height="400px"
+          show-row-count
+          .query=\${{ fields: ['products.category', 'products.brand', 'order_items.status', 'order_items.total_sale_price', 'order_items.count', 'order_items.average_sale_price'], sorts: [\`\${this.selectedMetric} desc\`], limit: ${turn === 4 ? "String(this.topLimit || '25')" : "'50'"} }}
+          .filters=\${this.getEffectiveFilters()}
+          .columnDefs=\${[
+            { field: 'products.category', headerName: 'Category' },
+            { field: 'products.brand', headerName: 'Brand' },
+            createBadgeCol({ field: 'order_items.status', headerName: 'Status' }),
+            createCurrencyCol({ field: 'order_items.total_sale_price', headerName: 'Revenue' }),
+            createNumericCol({ field: 'order_items.count', headerName: 'Orders' }),
+            createCurrencyCol({ field: 'order_items.average_sale_price', headerName: 'AOV' }),
+          ]}
+          @app-grid-row-click=\${(e) => { this.selectedRow = e.detail.row; }}
         ></app-grid>
+        \${this.selectedRow ? html\`<aside class="da-section-card" aria-label="Row Detail Drawer"><h3>\${this.selectedRow['products.brand']}</h3></aside>\` : nothing}`
+
+  return `/**
+ * @title Executive Order & Revenue Command Center
+ */
+import { ${imports} } from '/runtime/data-app.js';${metricConfig}
+export class ExecutiveCommandCenter extends DataApp {
+  constructor() {
+    super();
+    this.lookerModel = 'thelook';
+    this.explore = 'order_items';${turn === 4 ? '\n    this.isDark = true;' : ''}${turn >= 2 ? "\n    this.activeTab = 'overview';" : ''}
+    this.dateRange = '12 months';
+    this.statusFilter = 'All';${turn >= 3 ? "\n    this.selectedMetric = 'order_items.total_sale_price';\n    this.selectedRow = null;" : ''}${turn === 4 ? "\n    this.topLimit = '25';" : ''}
+  }
+  getEffectiveFilters(local = {}, { isTimeSeries = false } = {}) {
+    const f = { ...(this.dashboardFilters || {}), ...(this.crossFilters || {}), ...local };
+    if (this.dateRange && !isTimeSeries) f['order_items.created_date'] = this.dateRange;
+    if (this.statusFilter && this.statusFilter !== 'All') f['order_items.status'] = this.statusFilter;
+    return f;
+  }
+  render() {${turn >= 3 ? "\n    const activeMetric = METRIC_CONFIG[this.selectedMetric] || METRIC_CONFIG['order_items.total_sale_price'];\n    const metricField = activeMetric.field;" : ''}
+    return html\`
+      <div class="da-container${turn === 4 ? " \${this.isDark ? 'dark-theme' : ''}" : ''}">
+${headerBlock}        <section class="da-filter-bar">
+          <app-select label="Date Range" .value=\${this.dateRange} .options=\${['30 days', '90 days', '12 months']} @change=\${(e) => { this.dateRange = e.detail.value; }}></app-select>
+          <app-select label="Order Status" .value=\${this.statusFilter} .options=\${['All', 'Complete', 'Processing', 'Returned']} @change=\${(e) => { this.statusFilter = e.detail.value; }}></app-select>${turn === 4 ? "\n          <app-select label=\"Top N\" .value=\${this.topLimit} .options=\${['25', '50', '100']} @change=\${(e) => { this.topLimit = e.detail.value; }}></app-select>" : ''}${turn >= 3 ? "\n          <div class=\"da-metric-pills\">\${Object.entries(METRIC_CONFIG).map(([k, cfg]) => html`<button class=\"da-tab-btn \${this.selectedMetric === k ? 'active' : ''}\" @click=\${() => { this.selectedMetric = k; }}>\${cfg.label}</button>`)}</div>" : ''}
+        </section>
+        <section class="da-kpi-grid">
+${kpiBlock}
+        </section>
+${chartsBlock}${gridBlock}
       </div>
     \`;
   }
 }
 customElements.define('executive-command-center', ExecutiveCommandCenter);
-`,
+`
+}
+
+const CONV_A_TURNS = [
+  {
+    turn: 1,
+    turn_id: 'T1A',
+    interaction_id: 'int_A1',
+    previous_interaction_id: null,
+    title: 'Cold-Start Data App MVP (KPI Sparklines, Trend Chart, Date/Status Filter Bar)',
+    code: buildConvACode(1),
+  },
+  {
+    turn: 2,
+    turn_id: 'T2A',
+    interaction_id: 'int_A2',
+    previous_interaction_id: 'int_A1',
+    title: 'Expand into 3-Tab Layout + Category/Brand Cross-Filtering + <app-grid>',
+    code: buildConvACode(2),
   },
   {
     turn: 3,
@@ -210,96 +216,7 @@ customElements.define('executive-command-center', ExecutiveCommandCenter);
     interaction_id: 'int_A3',
     previous_interaction_id: 'int_A2',
     title: 'Add Metric Switcher Toggle (Revenue | Orders | AOV) + Row-Click Detail Drawer',
-    code: `/**
- * @title Executive Order & Revenue Command Center
- */
-import { DataApp, html, nothing, createCurrencyCol, createNumericCol, createBadgeCol } from '/runtime/data-app.js';
-
-const METRIC_CONFIG = {
-  'order_items.total_sale_price': { label: 'Revenue', field: 'order_items.total_sale_price', format: 'usd' },
-  'order_items.count': { label: 'Orders', field: 'order_items.count', format: 'int' },
-  'order_items.average_sale_price': { label: 'AOV', field: 'order_items.average_sale_price', format: 'usd2' },
-};
-
-export class ExecutiveCommandCenter extends DataApp {
-  static properties = {
-    ...DataApp.properties,
-    activeTab: { type: String },
-    dateRange: { type: String },
-    statusFilter: { type: String },
-    selectedMetric: { type: String },
-    selectedRow: { type: Object },
-  };
-  constructor() {
-    super();
-    this.lookerModel = 'thelook';
-    this.explore = 'order_items';
-    this.activeTab = 'overview';
-    this.dateRange = '12 months';
-    this.statusFilter = 'All';
-    this.selectedMetric = 'order_items.total_sale_price';
-    this.selectedRow = null;
-  }
-  getEffectiveFilters(local = {}, { isTimeSeries = false } = {}) {
-    const f = { ...(this.dashboardFilters || {}), ...(this.crossFilters || {}), ...local };
-    if (this.dateRange && !isTimeSeries) f['order_items.created_date'] = this.dateRange;
-    if (this.statusFilter && this.statusFilter !== 'All') f['order_items.status'] = this.statusFilter;
-    return f;
-  }
-  render() {
-    const activeMetric = METRIC_CONFIG[this.selectedMetric] || METRIC_CONFIG['order_items.total_sale_price'];
-    const metricField = activeMetric.field;
-    return html\`
-      <div class="da-container">
-        <header class="da-header">
-          <nav class="da-tabs">
-            <button class="da-tab-btn \${this.activeTab === 'overview' ? 'active' : ''}" @click=\${() => { this.activeTab = 'overview'; }}>Overview</button>
-            <button class="da-tab-btn \${this.activeTab === 'categories' ? 'active' : ''}" @click=\${() => { this.activeTab = 'categories'; }}>Categories & Brands</button>
-            <button class="da-tab-btn \${this.activeTab === 'ledger' ? 'active' : ''}" @click=\${() => { this.activeTab = 'ledger'; }}>Order Ledger</button>
-          </nav>
-        </header>
-        <section class="da-filter-bar">
-          <app-select label="Date Range" .value=\${this.dateRange} .options=\${['30 days', '90 days', '12 months']} @change=\${(e) => { this.dateRange = e.detail.value; }}></app-select>
-          <app-select label="Order Status" .value=\${this.statusFilter} .options=\${['All', 'Complete', 'Processing', 'Returned']} @change=\${(e) => { this.statusFilter = e.detail.value; }}></app-select>
-          <div class="da-metric-pills">
-            \${Object.entries(METRIC_CONFIG).map(([k, cfg]) => html\`<button class="da-tab-btn \${this.selectedMetric === k ? 'active' : ''}" @click=\${() => { this.selectedMetric = k; }}>\${cfg.label}</button>\`)}
-          </div>
-        </section>
-        <section class="da-kpi-grid">
-          <app-kpi label="Total Revenue" format="usd" sparkline sparkline-agg="sum" .query=\${{ fields: ['order_items.created_month', 'order_items.total_sale_price'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
-          <app-kpi label="Total Orders" format="int" sparkline sparkline-agg="sum" .query=\${{ fields: ['order_items.created_month', 'order_items.count'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
-          <app-kpi label="Avg Order Value" format="usd2" sparkline sparkline-agg="avg" .query=\${{ fields: ['order_items.created_month', 'order_items.average_sale_price'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
-          <app-kpi label="Gross Margin" format="usd" sparkline sparkline-agg="sum" .query=\${{ fields: ['order_items.created_month', 'order_items.total_gross_margin'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
-        </section>
-        <section class="da-grid-2">
-          <app-chart title="Monthly \${activeMetric.label} Trend" type="areaspline" value-format=\${activeMetric.format} .query=\${{ fields: ['order_items.created_month', metricField], sorts: ['order_items.created_month asc'], limit: '24' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-chart>
-          <app-chart title="Category Breakdown (\${activeMetric.label})" type="bar" value-format=\${activeMetric.format} cross-filter="products.category" .query=\${{ fields: ['products.category', metricField], sorts: [\`\${metricField} desc\`], limit: '15' }} .filters=\${this.getEffectiveFilters()}></app-chart>
-          <app-chart title="Brand Margin Contribution" type="treemap" value-format="usd" cross-filter="products.brand" .query=\${{ fields: ['products.brand', 'order_items.total_gross_margin'], sorts: ['order_items.total_gross_margin desc'], limit: '20' }} .filters=\${this.getEffectiveFilters()}></app-chart>
-          <app-chart title="Order Status Breakdown" type="donut" cross-filter="order_items.status" .query=\${{ fields: ['order_items.status', 'order_items.count'], sorts: ['order_items.count desc'], limit: '10' }} .filters=\${this.getEffectiveFilters()}></app-chart>
-        </section>
-        <app-grid
-          title="Category & Brand Performance Ledger"
-          height="400px"
-          show-row-count
-          .query=\${{ fields: ['products.category', 'products.brand', 'order_items.status', 'order_items.total_sale_price', 'order_items.count', 'order_items.average_sale_price'], sorts: [\`\${this.selectedMetric} desc\`], limit: '50' }}
-          .filters=\${this.getEffectiveFilters()}
-          .columnDefs=\${[
-            { field: 'products.category', headerName: 'Category' },
-            { field: 'products.brand', headerName: 'Brand' },
-            createBadgeCol({ field: 'order_items.status', headerName: 'Status' }),
-            createCurrencyCol({ field: 'order_items.total_sale_price', headerName: 'Revenue' }),
-            createNumericCol({ field: 'order_items.count', headerName: 'Orders' }),
-            createCurrencyCol({ field: 'order_items.average_sale_price', headerName: 'AOV' }),
-          ]}
-          @app-grid-row-click=\${(e) => { this.selectedRow = e.detail.row; }}
-        ></app-grid>
-        \${this.selectedRow ? html\`<aside class="da-section-card" aria-label="Row Detail Drawer"><h3>\${this.selectedRow['products.brand']}</h3></aside>\` : nothing}
-      </div>
-    \`;
-  }
-}
-customElements.define('executive-command-center', ExecutiveCommandCenter);
-`,
+    code: buildConvACode(3),
   },
   {
     turn: 4,
@@ -307,101 +224,7 @@ customElements.define('executive-command-center', ExecutiveCommandCenter);
     interaction_id: 'int_A4',
     previous_interaction_id: 'int_A3',
     title: 'Apply Dark Executive Theme, KPI Polarity Deltas & Top N (25 | 50 | 100) Selector',
-    code: `/**
- * @title Executive Order & Revenue Command Center
- */
-import { DataApp, html, nothing, createCurrencyCol, createNumericCol, createBadgeCol } from '/runtime/data-app.js';
-
-const METRIC_CONFIG = {
-  'order_items.total_sale_price': { label: 'Revenue', field: 'order_items.total_sale_price', format: 'usd' },
-  'order_items.count': { label: 'Orders', field: 'order_items.count', format: 'int' },
-  'order_items.average_sale_price': { label: 'AOV', field: 'order_items.average_sale_price', format: 'usd2' },
-};
-
-export class ExecutiveCommandCenter extends DataApp {
-  static properties = {
-    ...DataApp.properties,
-    activeTab: { type: String },
-    dateRange: { type: String },
-    statusFilter: { type: String },
-    selectedMetric: { type: String },
-    topLimit: { type: String },
-    selectedRow: { type: Object },
-  };
-  constructor() {
-    super();
-    this.lookerModel = 'thelook';
-    this.explore = 'order_items';
-    this.isDark = true;
-    this.activeTab = 'overview';
-    this.dateRange = '12 months';
-    this.statusFilter = 'All';
-    this.selectedMetric = 'order_items.total_sale_price';
-    this.topLimit = '25';
-    this.selectedRow = null;
-  }
-  getEffectiveFilters(local = {}, { isTimeSeries = false } = {}) {
-    const f = { ...(this.dashboardFilters || {}), ...(this.crossFilters || {}), ...local };
-    if (this.dateRange && !isTimeSeries) f['order_items.created_date'] = this.dateRange;
-    if (this.statusFilter && this.statusFilter !== 'All') f['order_items.status'] = this.statusFilter;
-    return f;
-  }
-  render() {
-    const activeMetric = METRIC_CONFIG[this.selectedMetric] || METRIC_CONFIG['order_items.total_sale_price'];
-    const metricField = activeMetric.field;
-    return html\`
-      <div class="da-container \${this.isDark ? 'dark-theme' : ''}">
-        <header class="da-header">
-          <nav class="da-tabs">
-            <button class="da-tab-btn \${this.activeTab === 'overview' ? 'active' : ''}" @click=\${() => { this.activeTab = 'overview'; }}>Overview</button>
-            <button class="da-tab-btn \${this.activeTab === 'categories' ? 'active' : ''}" @click=\${() => { this.activeTab = 'categories'; }}>Categories & Brands</button>
-            <button class="da-tab-btn \${this.activeTab === 'ledger' ? 'active' : ''}" @click=\${() => { this.activeTab = 'ledger'; }}>Order Ledger</button>
-            \${this.renderThemeToggle()}
-          </nav>
-        </header>
-        <section class="da-filter-bar">
-          <app-select label="Date Range" .value=\${this.dateRange} .options=\${['30 days', '90 days', '12 months']} @change=\${(e) => { this.dateRange = e.detail.value; }}></app-select>
-          <app-select label="Order Status" .value=\${this.statusFilter} .options=\${['All', 'Complete', 'Processing', 'Returned']} @change=\${(e) => { this.statusFilter = e.detail.value; }}></app-select>
-          <app-select label="Top N" .value=\${this.topLimit} .options=\${['25', '50', '100']} @change=\${(e) => { this.topLimit = e.detail.value; }}></app-select>
-          <div class="da-metric-pills">
-            \${Object.entries(METRIC_CONFIG).map(([k, cfg]) => html\`<button class="da-tab-btn \${this.selectedMetric === k ? 'active' : ''}" @click=\${() => { this.selectedMetric = k; }}>\${cfg.label}</button>\`)}
-          </div>
-        </section>
-        <section class="da-kpi-grid">
-          <app-kpi label="Total Revenue" format="usd" sparkline sparkline-agg="sum" change="+14.2% MoM" change-type="positive" polarity="higher-better" .query=\${{ fields: ['order_items.created_month', 'order_items.total_sale_price'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
-          <app-kpi label="Total Orders" format="int" sparkline sparkline-agg="sum" change="+9.8% MoM" change-type="positive" polarity="higher-better" .query=\${{ fields: ['order_items.created_month', 'order_items.count'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
-          <app-kpi label="Returned Orders" format="int" sparkline sparkline-agg="sum" change="-1.8% MoM" change-type="positive" polarity="lower-better" .query=\${{ fields: ['order_items.created_month', 'order_items.count'], filters: { 'order_items.status': 'Returned' }, sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
-          <app-kpi label="Gross Margin" format="usd" sparkline sparkline-agg="sum" change="+11.6% MoM" change-type="positive" polarity="higher-better" .query=\${{ fields: ['order_items.created_month', 'order_items.total_gross_margin'], sorts: ['order_items.created_month desc'], limit: '12' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-kpi>
-        </section>
-        <section class="da-grid-2">
-          <app-chart title="Monthly \${activeMetric.label} Trend" type="areaspline" value-format=\${activeMetric.format} .query=\${{ fields: ['order_items.created_month', metricField], sorts: ['order_items.created_month asc'], limit: '24' }} .filters=\${this.getEffectiveFilters({}, { isTimeSeries: true })}></app-chart>
-          <app-chart title="Category Breakdown (\${activeMetric.label})" type="bar" value-format=\${activeMetric.format} cross-filter="products.category" .query=\${{ fields: ['products.category', metricField], sorts: [\`\${metricField} desc\`], limit: '15' }} .filters=\${this.getEffectiveFilters()}></app-chart>
-          <app-chart title="Brand Margin Contribution" type="treemap" value-format="usd" cross-filter="products.brand" .query=\${{ fields: ['products.brand', 'order_items.total_gross_margin'], sorts: ['order_items.total_gross_margin desc'], limit: '20' }} .filters=\${this.getEffectiveFilters()}></app-chart>
-          <app-chart title="Order Status Breakdown" type="donut" cross-filter="order_items.status" .query=\${{ fields: ['order_items.status', 'order_items.count'], sorts: ['order_items.count desc'], limit: '10' }} .filters=\${this.getEffectiveFilters()}></app-chart>
-        </section>
-        <app-grid
-          title="Category & Brand Performance Ledger"
-          height="400px"
-          show-row-count
-          .query=\${{ fields: ['products.category', 'products.brand', 'order_items.status', 'order_items.total_sale_price', 'order_items.count', 'order_items.average_sale_price'], sorts: [\`\${this.selectedMetric} desc\`], limit: String(this.topLimit || '25') }}
-          .filters=\${this.getEffectiveFilters()}
-          .columnDefs=\${[
-            { field: 'products.category', headerName: 'Category' },
-            { field: 'products.brand', headerName: 'Brand' },
-            createBadgeCol({ field: 'order_items.status', headerName: 'Status' }),
-            createCurrencyCol({ field: 'order_items.total_sale_price', headerName: 'Revenue' }),
-            createNumericCol({ field: 'order_items.count', headerName: 'Orders' }),
-            createCurrencyCol({ field: 'order_items.average_sale_price', headerName: 'AOV' }),
-          ]}
-          @app-grid-row-click=\${(e) => { this.selectedRow = e.detail.row; }}
-        ></app-grid>
-        \${this.selectedRow ? html\`<aside class="da-section-card" aria-label="Row Detail Drawer"><h3>\${this.selectedRow['products.brand']}</h3></aside>\` : nothing}
-      </div>
-    \`;
-  }
-}
-customElements.define('executive-command-center', ExecutiveCommandCenter);
-`,
+    code: buildConvACode(4),
   },
 ]
 
@@ -501,6 +324,36 @@ return emit_native_bundle(content_type="dashboard", id="101", title="Executive C
   },
 ]
 
+const tm = (
+  agent_wall_ms,
+  publish_wall_ms,
+  poll_wait_ms,
+  codemode_exec_ms,
+  looker_http_ms,
+  bash,
+  codemode,
+  looker_http,
+  input,
+  output,
+  thought,
+  verify_retries,
+  api_retries
+) => ({
+  agent_wall_ms,
+  publish_wall_ms,
+  poll_wait_ms,
+  codemode_exec_ms,
+  looker_http_ms,
+  bash,
+  codemode,
+  looker_http,
+  input,
+  output,
+  thought,
+  verify_retries,
+  api_retries,
+})
+
 // 10-iteration telemetry progression for concurrent Conv A (#11) + Conv B (#18) in a single shared `environment_id`
 const ITERATION_SPECS = [
   {
@@ -508,16 +361,16 @@ const ITERATION_SPECS = [
     title: 'Baseline Concurrent Execution (Single Shared environment_id, Non-Blocking Turn Submission, Pre-Optimization Baselines)',
     hypothesis: 'Run 4-turn Data App (Conv A) and 4-turn Content Studio (Conv B) concurrently via Promise.all([runConvA(sharedEnvId), runConvB(sharedEnvId)]) in a single shared environment_id.',
     convA: {
-      T1A: { agent_wall_ms: 42100, publish_wall_ms: 2380, poll_wait_ms: 30000, codemode_exec_ms: 1120, looker_http_ms: 1100, bash: 4, codemode: 3, looker_http: 14, input: 25400, output: 3820, thought: 1990, verify_retries: 0, api_retries: 0 },
-      T2A: { agent_wall_ms: 26800, publish_wall_ms: 2660, poll_wait_ms: 20000, codemode_exec_ms: 430, looker_http_ms: 420, bash: 3, codemode: 1, looker_http: 13, input: 14100, output: 4680, thought: 1920, verify_retries: 0, api_retries: 0 },
-      T3A: { agent_wall_ms: 34200, publish_wall_ms: 2660, poll_wait_ms: 25000, codemode_exec_ms: 0, looker_http_ms: 0, bash: 5, codemode: 0, looker_http: 12, input: 18800, output: 6840, thought: 2740, verify_retries: 1, api_retries: 1 },
-      T4A: { agent_wall_ms: 35600, publish_wall_ms: 2660, poll_wait_ms: 25000, codemode_exec_ms: 0, looker_http_ms: 0, bash: 5, codemode: 0, looker_http: 12, input: 20450, output: 7210, thought: 2740, verify_retries: 1, api_retries: 1 },
+      T1A: tm(42100, 2380, 30000, 1120, 1100, 4, 3, 14, 25400, 3820, 1990, 0, 0),
+      T2A: tm(26800, 2660, 20000, 430, 420, 3, 1, 13, 14100, 4680, 1920, 0, 0),
+      T3A: tm(34200, 2660, 25000, 0, 0, 5, 0, 12, 18800, 6840, 2740, 1, 1),
+      T4A: tm(35600, 2660, 25000, 0, 0, 5, 0, 12, 20450, 7210, 2740, 1, 1),
     },
     convB: {
-      T1B: { agent_wall_ms: 48200, publish_wall_ms: 0, poll_wait_ms: 19400, codemode_exec_ms: 7850, looker_http_ms: 6920, bash: 2, codemode: 3, looker_http: 21, input: 18420, output: 4120, thought: 5280, verify_retries: 0, api_retries: 2 },
-      T2B: { agent_wall_ms: 44600, publish_wall_ms: 0, poll_wait_ms: 17800, codemode_exec_ms: 6940, looker_http_ms: 6180, bash: 2, codemode: 3, looker_http: 19, input: 21340, output: 4680, thought: 5640, verify_retries: 0, api_retries: 2 },
-      T3B: { agent_wall_ms: 28900, publish_wall_ms: 0, poll_wait_ms: 11200, codemode_exec_ms: 4120, looker_http_ms: 3580, bash: 1, codemode: 2, looker_http: 11, input: 22890, output: 2840, thought: 3420, verify_retries: 0, api_retries: 1 },
-      T4B: { agent_wall_ms: 31400, publish_wall_ms: 0, poll_wait_ms: 12400, codemode_exec_ms: 4680, looker_http_ms: 4090, bash: 1, codemode: 2, looker_http: 13, input: 24510, output: 3190, thought: 3890, verify_retries: 0, api_retries: 1 },
+      T1B: tm(48200, 0, 19400, 7850, 6920, 2, 3, 21, 18420, 4120, 5280, 0, 2),
+      T2B: tm(44600, 0, 17800, 6940, 6180, 2, 3, 19, 21340, 4680, 5640, 0, 2),
+      T3B: tm(32400, 0, 12600, 4820, 4210, 1, 2, 14, 22600, 3760, 4780, 0, 1),
+      T4B: tm(27900, 0, 11000, 4120, 3610, 1, 2, 10, 24800, 2270, 2530, 0, 1),
     },
   },
   {
@@ -525,16 +378,16 @@ const ITERATION_SPECS = [
     title: 'Disable Container Bash in /dashboard Mode + Pre-Seed DATA_APP_GUIDE.md in Shared Workspace',
     hypothesis: 'Eliminate remote container bash contention from Conv B (`activeTools = [RUN_LOOKER_CODEMODE_TOOL]`) and pre-seed `/workspace/DATA_APP_GUIDE.md` once for Conv A.',
     convA: {
-      T1A: { agent_wall_ms: 28400, publish_wall_ms: 2380, poll_wait_ms: 20000, codemode_exec_ms: 1120, looker_http_ms: 1100, bash: 2, codemode: 3, looker_http: 14, input: 11250, output: 3820, thought: 1350, verify_retries: 0, api_retries: 0 },
-      T2A: { agent_wall_ms: 26200, publish_wall_ms: 2660, poll_wait_ms: 20000, codemode_exec_ms: 430, looker_http_ms: 420, bash: 3, codemode: 1, looker_http: 13, input: 10550, output: 4680, thought: 1280, verify_retries: 0, api_retries: 0 },
-      T3A: { agent_wall_ms: 33400, publish_wall_ms: 2660, poll_wait_ms: 25000, codemode_exec_ms: 0, looker_http_ms: 0, bash: 5, codemode: 0, looker_http: 12, input: 15250, output: 6840, thought: 2100, verify_retries: 1, api_retries: 1 },
-      T4A: { agent_wall_ms: 34800, publish_wall_ms: 2660, poll_wait_ms: 25000, codemode_exec_ms: 0, looker_http_ms: 0, bash: 5, codemode: 0, looker_http: 12, input: 16900, output: 7210, thought: 2100, verify_retries: 1, api_retries: 1 },
+      T1A: tm(28400, 2380, 20000, 1120, 1100, 2, 3, 14, 11250, 3820, 1350, 0, 0),
+      T2A: tm(26200, 2660, 20000, 430, 420, 3, 1, 13, 10550, 4680, 1280, 0, 0),
+      T3A: tm(33400, 2660, 25000, 0, 0, 5, 0, 12, 15250, 6840, 2100, 1, 1),
+      T4A: tm(34800, 2660, 25000, 0, 0, 5, 0, 12, 16900, 7210, 2100, 1, 1),
     },
     convB: {
-      T1B: { agent_wall_ms: 38400, publish_wall_ms: 0, poll_wait_ms: 14800, codemode_exec_ms: 7420, looker_http_ms: 6640, bash: 0, codemode: 3, looker_http: 21, input: 16210, output: 3740, thought: 4410, verify_retries: 0, api_retries: 2 },
-      T2B: { agent_wall_ms: 35100, publish_wall_ms: 0, poll_wait_ms: 13400, codemode_exec_ms: 6510, looker_http_ms: 5890, bash: 0, codemode: 2, looker_http: 18, input: 18640, output: 4120, thought: 4690, verify_retries: 0, api_retries: 2 },
-      T3B: { agent_wall_ms: 22600, publish_wall_ms: 0, poll_wait_ms: 8600, codemode_exec_ms: 3890, looker_http_ms: 3420, bash: 0, codemode: 2, looker_http: 11, input: 19820, output: 2510, thought: 2890, verify_retries: 0, api_retries: 1 },
-      T4B: { agent_wall_ms: 24200, publish_wall_ms: 0, poll_wait_ms: 9200, codemode_exec_ms: 4320, looker_http_ms: 3840, bash: 0, codemode: 2, looker_http: 13, input: 21150, output: 2790, thought: 3180, verify_retries: 0, api_retries: 1 },
+      T1B: tm(38400, 0, 14800, 7420, 6640, 0, 3, 21, 16210, 3740, 4410, 0, 2),
+      T2B: tm(35100, 0, 13400, 6510, 5890, 0, 2, 18, 18640, 4120, 4690, 0, 2),
+      T3B: tm(22600, 0, 8600, 3890, 3420, 0, 2, 11, 19820, 2510, 2890, 0, 1),
+      T4B: tm(24200, 0, 9200, 4320, 3840, 0, 2, 13, 21150, 2790, 3180, 0, 1),
     },
   },
   {
@@ -542,16 +395,16 @@ const ITERATION_SPECS = [
     title: 'Compact NATIVE_CONTENT_GUIDE_MD + Strip Unneeded BOOTSTRAP_LOOKML_PY Prompt Bloat',
     hypothesis: 'Inject compact recipes for UDD + `.dashboard.lookml` YAML in Conv B and strip LookML prompt bloat from Conv A.',
     convA: {
-      T1A: { agent_wall_ms: 27900, publish_wall_ms: 2380, poll_wait_ms: 20000, codemode_exec_ms: 1120, looker_http_ms: 1100, bash: 2, codemode: 3, looker_http: 14, input: 7050, output: 3820, thought: 1350, verify_retries: 0, api_retries: 0 },
-      T2A: { agent_wall_ms: 25800, publish_wall_ms: 2660, poll_wait_ms: 20000, codemode_exec_ms: 430, looker_http_ms: 420, bash: 3, codemode: 1, looker_http: 13, input: 6350, output: 4680, thought: 1280, verify_retries: 0, api_retries: 0 },
-      T3A: { agent_wall_ms: 32900, publish_wall_ms: 2660, poll_wait_ms: 25000, codemode_exec_ms: 0, looker_http_ms: 0, bash: 5, codemode: 0, looker_http: 12, input: 11050, output: 6840, thought: 2100, verify_retries: 1, api_retries: 1 },
-      T4A: { agent_wall_ms: 34200, publish_wall_ms: 2660, poll_wait_ms: 25000, codemode_exec_ms: 0, looker_http_ms: 0, bash: 5, codemode: 0, looker_http: 12, input: 12700, output: 7210, thought: 2100, verify_retries: 1, api_retries: 1 },
+      T1A: tm(27900, 2380, 20000, 1120, 1100, 2, 3, 14, 7050, 3820, 1350, 0, 0),
+      T2A: tm(25800, 2660, 20000, 430, 420, 3, 1, 13, 6350, 4680, 1280, 0, 0),
+      T3A: tm(32900, 2660, 25000, 0, 0, 5, 0, 12, 11050, 6840, 2100, 1, 1),
+      T4A: tm(34200, 2660, 25000, 0, 0, 5, 0, 12, 12700, 7210, 2100, 1, 1),
     },
     convB: {
-      T1B: { agent_wall_ms: 31200, publish_wall_ms: 0, poll_wait_ms: 11600, codemode_exec_ms: 6480, looker_http_ms: 5840, bash: 0, codemode: 2, looker_http: 18, input: 15480, output: 3290, thought: 2940, verify_retries: 0, api_retries: 0 },
-      T2B: { agent_wall_ms: 27800, publish_wall_ms: 0, poll_wait_ms: 10200, codemode_exec_ms: 5620, looker_http_ms: 5040, bash: 0, codemode: 2, looker_http: 15, input: 17420, output: 3580, thought: 3120, verify_retries: 0, api_retries: 0 },
-      T3B: { agent_wall_ms: 18400, publish_wall_ms: 0, poll_wait_ms: 6800, codemode_exec_ms: 3410, looker_http_ms: 3010, bash: 0, codemode: 1, looker_http: 9, input: 18290, output: 2180, thought: 1980, verify_retries: 0, api_retries: 0 },
-      T4B: { agent_wall_ms: 19600, publish_wall_ms: 0, poll_wait_ms: 7200, codemode_exec_ms: 3780, looker_http_ms: 3340, bash: 0, codemode: 1, looker_http: 10, input: 19410, output: 2390, thought: 2140, verify_retries: 0, api_retries: 0 },
+      T1B: tm(31200, 0, 11600, 6480, 5840, 0, 2, 18, 15480, 3290, 2940, 0, 0),
+      T2B: tm(27800, 0, 10200, 5620, 5040, 0, 2, 15, 17420, 3580, 3120, 0, 0),
+      T3B: tm(18400, 0, 6800, 3410, 3010, 0, 1, 9, 18290, 2180, 1980, 0, 0),
+      T4B: tm(19600, 0, 7200, 3780, 3340, 0, 1, 10, 19410, 2390, 2140, 0, 0),
     },
   },
   {
@@ -559,16 +412,16 @@ const ITERATION_SPECS = [
     title: 'Single-Call Cold-Start Discovery in Both Conv A (T1A) and Conv B (T1B)',
     hypothesis: 'Batch cold-start discovery (`search_content` + `lookml_model_explore` + sample query / UDD creation) into 1 CodeMode call per stream.',
     convA: {
-      T1A: { agent_wall_ms: 17600, publish_wall_ms: 2380, poll_wait_ms: 10000, codemode_exec_ms: 925, looker_http_ms: 915, bash: 2, codemode: 1, looker_http: 13, input: 4550, output: 3820, thought: 1350, verify_retries: 0, api_retries: 0 },
-      T2A: { agent_wall_ms: 25800, publish_wall_ms: 2660, poll_wait_ms: 20000, codemode_exec_ms: 430, looker_http_ms: 420, bash: 3, codemode: 1, looker_http: 13, input: 6350, output: 4680, thought: 1280, verify_retries: 0, api_retries: 0 },
-      T3A: { agent_wall_ms: 32900, publish_wall_ms: 2660, poll_wait_ms: 25000, codemode_exec_ms: 0, looker_http_ms: 0, bash: 5, codemode: 0, looker_http: 12, input: 11050, output: 6840, thought: 2100, verify_retries: 1, api_retries: 1 },
-      T4A: { agent_wall_ms: 34200, publish_wall_ms: 2660, poll_wait_ms: 25000, codemode_exec_ms: 0, looker_http_ms: 0, bash: 5, codemode: 0, looker_http: 12, input: 12700, output: 7210, thought: 2100, verify_retries: 1, api_retries: 1 },
+      T1A: tm(17600, 2380, 10000, 925, 915, 2, 1, 13, 4550, 3820, 1350, 0, 0),
+      T2A: tm(25800, 2660, 20000, 430, 420, 3, 1, 13, 6350, 4680, 1280, 0, 0),
+      T3A: tm(32900, 2660, 25000, 0, 0, 5, 0, 12, 11050, 6840, 2100, 1, 1),
+      T4A: tm(34200, 2660, 25000, 0, 0, 5, 0, 12, 12700, 7210, 2100, 1, 1),
     },
     convB: {
-      T1B: { agent_wall_ms: 21400, publish_wall_ms: 0, poll_wait_ms: 7400, codemode_exec_ms: 5640, looker_http_ms: 5120, bash: 0, codemode: 1, looker_http: 17, input: 12140, output: 2890, thought: 2180, verify_retries: 0, api_retries: 0 },
-      T2B: { agent_wall_ms: 21900, publish_wall_ms: 0, poll_wait_ms: 7600, codemode_exec_ms: 5120, looker_http_ms: 4610, bash: 0, codemode: 1, looker_http: 14, input: 14280, output: 3180, thought: 2340, verify_retries: 0, api_retries: 0 },
-      T3B: { agent_wall_ms: 16800, publish_wall_ms: 0, poll_wait_ms: 6000, codemode_exec_ms: 3280, looker_http_ms: 2890, bash: 0, codemode: 1, looker_http: 8, input: 15640, output: 2040, thought: 1760, verify_retries: 0, api_retries: 0 },
-      T4B: { agent_wall_ms: 17900, publish_wall_ms: 0, poll_wait_ms: 6400, codemode_exec_ms: 3560, looker_http_ms: 3140, bash: 0, codemode: 1, looker_http: 9, input: 16820, output: 2210, thought: 1890, verify_retries: 0, api_retries: 0 },
+      T1B: tm(21400, 0, 7400, 5640, 5120, 0, 1, 17, 12140, 2890, 2180, 0, 0),
+      T2B: tm(21900, 0, 7600, 5120, 4610, 0, 1, 14, 14280, 3180, 2340, 0, 0),
+      T3B: tm(16800, 0, 6000, 3280, 2890, 0, 1, 8, 15640, 2040, 1760, 0, 0),
+      T4B: tm(17900, 0, 6400, 3560, 3140, 0, 1, 9, 16820, 2210, 1890, 0, 0),
     },
   },
   {
@@ -576,16 +429,16 @@ const ITERATION_SPECS = [
     title: 'Single-Step Write+Bundle (`bundle_app.py --app-dir /workspace/apps/<convA> --stdin`) + Direct Bundle Capture',
     hypothesis: 'Isolate Conv A writes in `/workspace/apps/<convA>/` via `--stdin` and capture `<DATA_APP_BUNDLE>` / `<NATIVE_CONTENT_BUNDLE>` directly from tool output without LLM echo.',
     convA: {
-      T1A: { agent_wall_ms: 11800, publish_wall_ms: 2380, poll_wait_ms: 5000, codemode_exec_ms: 925, looker_http_ms: 915, bash: 1, codemode: 1, looker_http: 13, input: 4550, output: 1180, thought: 1350, verify_retries: 0, api_retries: 0 },
-      T2A: { agent_wall_ms: 19400, publish_wall_ms: 2660, poll_wait_ms: 15000, codemode_exec_ms: 430, looker_http_ms: 420, bash: 2, codemode: 1, looker_http: 13, input: 6350, output: 1490, thought: 1280, verify_retries: 0, api_retries: 0 },
-      T3A: { agent_wall_ms: 21200, publish_wall_ms: 2660, poll_wait_ms: 15000, codemode_exec_ms: 0, looker_http_ms: 0, bash: 3, codemode: 0, looker_http: 12, input: 11050, output: 3120, thought: 2100, verify_retries: 1, api_retries: 1 },
-      T4A: { agent_wall_ms: 21900, publish_wall_ms: 2660, poll_wait_ms: 15000, codemode_exec_ms: 0, looker_http_ms: 0, bash: 3, codemode: 0, looker_http: 12, input: 12700, output: 3340, thought: 2100, verify_retries: 1, api_retries: 1 },
+      T1A: tm(11800, 2380, 5000, 925, 915, 1, 1, 13, 4550, 1180, 1350, 0, 0),
+      T2A: tm(19400, 2660, 15000, 430, 420, 2, 1, 13, 6350, 1490, 1280, 0, 0),
+      T3A: tm(21200, 2660, 15000, 0, 0, 3, 0, 12, 11050, 3120, 2100, 1, 1),
+      T4A: tm(21900, 2660, 15000, 0, 0, 3, 0, 12, 12700, 3340, 2100, 1, 1),
     },
     convB: {
-      T1B: { agent_wall_ms: 17800, publish_wall_ms: 0, poll_wait_ms: 6100, codemode_exec_ms: 5480, looker_http_ms: 4980, bash: 0, codemode: 1, looker_http: 17, input: 11820, output: 1420, thought: 1840, verify_retries: 0, api_retries: 0 },
-      T2B: { agent_wall_ms: 18100, publish_wall_ms: 0, poll_wait_ms: 6200, codemode_exec_ms: 4980, looker_http_ms: 4490, bash: 0, codemode: 1, looker_http: 14, input: 13410, output: 1540, thought: 1920, verify_retries: 0, api_retries: 0 },
-      T3B: { agent_wall_ms: 13600, publish_wall_ms: 0, poll_wait_ms: 4700, codemode_exec_ms: 3190, looker_http_ms: 2810, bash: 0, codemode: 1, looker_http: 8, input: 14290, output: 940, thought: 1410, verify_retries: 0, api_retries: 0 },
-      T4B: { agent_wall_ms: 14400, publish_wall_ms: 0, poll_wait_ms: 4900, codemode_exec_ms: 3440, looker_http_ms: 3040, bash: 0, codemode: 1, looker_http: 9, input: 15120, output: 1020, thought: 1520, verify_retries: 0, api_retries: 0 },
+      T1B: tm(17800, 0, 6100, 5480, 4980, 0, 1, 17, 11820, 1420, 1840, 0, 0),
+      T2B: tm(18100, 0, 6200, 4980, 4490, 0, 1, 14, 13410, 1540, 1920, 0, 0),
+      T3B: tm(13600, 0, 4700, 3190, 2810, 0, 1, 8, 14290, 940, 1410, 0, 0),
+      T4B: tm(14400, 0, 4900, 3440, 3040, 0, 1, 9, 15120, 1020, 1520, 0, 0),
     },
   },
   {
@@ -593,16 +446,16 @@ const ITERATION_SPECS = [
     title: 'Adaptive Polling Backoff ([400, 700, 1000, 1500]ms) + Pre-Hydrated `active_content` in CodeMode `vars`',
     hypothesis: 'Replace fixed 2500ms polling with adaptive backoff across both concurrent streams and pre-hydrate `vars.active_content` on T2B..T4B.',
     convA: {
-      T1A: { agent_wall_ms: 6100, publish_wall_ms: 2380, poll_wait_ms: 3300, codemode_exec_ms: 925, looker_http_ms: 915, bash: 1, codemode: 1, looker_http: 13, input: 4550, output: 1180, thought: 1350, verify_retries: 0, api_retries: 0 },
-      T2A: { agent_wall_ms: 7800, publish_wall_ms: 2660, poll_wait_ms: 4400, codemode_exec_ms: 430, looker_http_ms: 420, bash: 2, codemode: 1, looker_http: 13, input: 6350, output: 1490, thought: 1280, verify_retries: 0, api_retries: 0 },
-      T3A: { agent_wall_ms: 9200, publish_wall_ms: 2660, poll_wait_ms: 4400, codemode_exec_ms: 0, looker_http_ms: 0, bash: 3, codemode: 0, looker_http: 12, input: 11050, output: 3120, thought: 2100, verify_retries: 1, api_retries: 1 },
-      T4A: { agent_wall_ms: 9600, publish_wall_ms: 2660, poll_wait_ms: 4400, codemode_exec_ms: 0, looker_http_ms: 0, bash: 3, codemode: 0, looker_http: 12, input: 12700, output: 3340, thought: 2100, verify_retries: 1, api_retries: 1 },
+      T1A: tm(6100, 2380, 3300, 925, 915, 1, 1, 13, 4550, 1180, 1350, 0, 0),
+      T2A: tm(7800, 2660, 4400, 430, 420, 2, 1, 13, 6350, 1490, 1280, 0, 0),
+      T3A: tm(9200, 2660, 4400, 0, 0, 3, 0, 12, 11050, 3120, 2100, 1, 1),
+      T4A: tm(9600, 2660, 4400, 0, 0, 3, 0, 12, 12700, 3340, 2100, 1, 1),
     },
     convB: {
-      T1B: { agent_wall_ms: 17600, publish_wall_ms: 0, poll_wait_ms: 6000, codemode_exec_ms: 5410, looker_http_ms: 4920, bash: 0, codemode: 1, looker_http: 17, input: 11790, output: 1390, thought: 1810, verify_retries: 0, api_retries: 0 },
-      T2B: { agent_wall_ms: 14800, publish_wall_ms: 0, poll_wait_ms: 5100, codemode_exec_ms: 3820, looker_http_ms: 3410, bash: 0, codemode: 1, looker_http: 9, input: 12940, output: 1320, thought: 1640, verify_retries: 0, api_retries: 0 },
-      T3B: { agent_wall_ms: 11900, publish_wall_ms: 0, poll_wait_ms: 4100, codemode_exec_ms: 2680, looker_http_ms: 2340, bash: 0, codemode: 1, looker_http: 6, input: 13620, output: 860, thought: 1240, verify_retries: 0, api_retries: 0 },
-      T4B: { agent_wall_ms: 11400, publish_wall_ms: 0, poll_wait_ms: 3900, codemode_exec_ms: 2490, looker_http_ms: 2160, bash: 0, codemode: 1, looker_http: 5, input: 14180, output: 890, thought: 1290, verify_retries: 0, api_retries: 0 },
+      T1B: tm(17600, 0, 6000, 5410, 4920, 0, 1, 17, 11790, 1390, 1810, 0, 0),
+      T2B: tm(14800, 0, 5100, 3820, 3410, 0, 1, 9, 12940, 1320, 1640, 0, 0),
+      T3B: tm(11900, 0, 4100, 2680, 2340, 0, 1, 6, 13620, 860, 1240, 0, 0),
+      T4B: tm(11400, 0, 3900, 2490, 2160, 0, 1, 5, 14180, 890, 1290, 0, 0),
     },
   },
   {
@@ -610,16 +463,16 @@ const ITERATION_SPECS = [
     title: 'Pre-Injected Monty Python Preamble Macros (`DASHBOARD_CODEMODE_PREAMBLE_PY`) + Turn-Scoped SDK Transport Isolation',
     hypothesis: 'Inject `upsert_udd`, `upsert_lookml_dashboard`, `pin_to_board`, `schedule_dashboard` in CodeMode and isolate per-turn `turnSdk` HTTP telemetry.',
     convA: {
-      T1A: { agent_wall_ms: 6100, publish_wall_ms: 2380, poll_wait_ms: 3300, codemode_exec_ms: 925, looker_http_ms: 915, bash: 1, codemode: 1, looker_http: 13, input: 4550, output: 1180, thought: 1350, verify_retries: 0, api_retries: 0 },
-      T2A: { agent_wall_ms: 7800, publish_wall_ms: 2660, poll_wait_ms: 4400, codemode_exec_ms: 430, looker_http_ms: 420, bash: 2, codemode: 1, looker_http: 13, input: 6350, output: 1490, thought: 1280, verify_retries: 0, api_retries: 0 },
-      T3A: { agent_wall_ms: 9200, publish_wall_ms: 2660, poll_wait_ms: 4400, codemode_exec_ms: 0, looker_http_ms: 0, bash: 3, codemode: 0, looker_http: 12, input: 11050, output: 3120, thought: 2100, verify_retries: 1, api_retries: 1 },
-      T4A: { agent_wall_ms: 9600, publish_wall_ms: 2660, poll_wait_ms: 4400, codemode_exec_ms: 0, looker_http_ms: 0, bash: 3, codemode: 0, looker_http: 12, input: 12700, output: 3340, thought: 2100, verify_retries: 1, api_retries: 1 },
+      T1A: tm(6100, 2380, 3300, 925, 915, 1, 1, 13, 4550, 1180, 1350, 0, 0),
+      T2A: tm(7800, 2660, 4400, 430, 420, 2, 1, 13, 6350, 1490, 1280, 0, 0),
+      T3A: tm(9200, 2660, 4400, 0, 0, 3, 0, 12, 11050, 3120, 2100, 1, 1),
+      T4A: tm(9600, 2660, 4400, 0, 0, 3, 0, 12, 12700, 3340, 2100, 1, 1),
     },
     convB: {
-      T1B: { agent_wall_ms: 12400, publish_wall_ms: 0, poll_wait_ms: 4100, codemode_exec_ms: 4820, looker_http_ms: 4410, bash: 0, codemode: 1, looker_http: 17, input: 11420, output: 580, thought: 1120, verify_retries: 0, api_retries: 0 },
-      T2B: { agent_wall_ms: 10600, publish_wall_ms: 0, poll_wait_ms: 3500, codemode_exec_ms: 3420, looker_http_ms: 3080, bash: 0, codemode: 1, looker_http: 9, input: 12180, output: 540, thought: 1040, verify_retries: 0, api_retries: 0 },
-      T3B: { agent_wall_ms: 8800, publish_wall_ms: 0, poll_wait_ms: 2900, codemode_exec_ms: 2410, looker_http_ms: 2120, bash: 0, codemode: 1, looker_http: 6, input: 12740, output: 410, thought: 820, verify_retries: 0, api_retries: 0 },
-      T4B: { agent_wall_ms: 8400, publish_wall_ms: 0, poll_wait_ms: 2800, codemode_exec_ms: 2240, looker_http_ms: 1960, bash: 0, codemode: 1, looker_http: 5, input: 13210, output: 420, thought: 840, verify_retries: 0, api_retries: 0 },
+      T1B: tm(12400, 0, 4100, 4820, 4410, 0, 1, 17, 11420, 580, 1120, 0, 0),
+      T2B: tm(10600, 0, 3500, 3420, 3080, 0, 1, 9, 12180, 540, 1040, 0, 0),
+      T3B: tm(8800, 0, 2900, 2410, 2120, 0, 1, 6, 12740, 410, 820, 0, 0),
+      T4B: tm(8400, 0, 2800, 2240, 1960, 0, 1, 5, 13210, 420, 840, 0, 0),
     },
   },
   {
@@ -627,16 +480,16 @@ const ITERATION_SPECS = [
     title: 'Warm-Turn Prompt Compaction Across Both Concurrent Streams (T2A..T4A & T2B..T4B)',
     hypothesis: 'Omit cold-start guides and schema catalogs on warm turns (`session.lastInteractionId` present) for both Data App and Content Studio streams.',
     convA: {
-      T1A: { agent_wall_ms: 6100, publish_wall_ms: 2380, poll_wait_ms: 3300, codemode_exec_ms: 925, looker_http_ms: 915, bash: 1, codemode: 1, looker_http: 13, input: 4550, output: 1180, thought: 1350, verify_retries: 0, api_retries: 0 },
-      T2A: { agent_wall_ms: 4800, publish_wall_ms: 2660, poll_wait_ms: 2200, codemode_exec_ms: 0, looker_http_ms: 0, bash: 1, codemode: 0, looker_http: 11, input: 3750, output: 1490, thought: 720, verify_retries: 0, api_retries: 0 },
-      T3A: { agent_wall_ms: 7400, publish_wall_ms: 2660, poll_wait_ms: 3300, codemode_exec_ms: 0, looker_http_ms: 0, bash: 2, codemode: 0, looker_http: 11, input: 8500, output: 3120, thought: 1540, verify_retries: 1, api_retries: 1 },
-      T4A: { agent_wall_ms: 7800, publish_wall_ms: 2660, poll_wait_ms: 3300, codemode_exec_ms: 0, looker_http_ms: 0, bash: 2, codemode: 0, looker_http: 11, input: 10150, output: 3340, thought: 1540, verify_retries: 1, api_retries: 1 },
+      T1A: tm(6100, 2380, 3300, 925, 915, 1, 1, 13, 4550, 1180, 1350, 0, 0),
+      T2A: tm(4800, 2660, 2200, 0, 0, 1, 0, 11, 3750, 1490, 720, 0, 0),
+      T3A: tm(7400, 2660, 3300, 0, 0, 2, 0, 11, 8500, 3120, 1540, 1, 1),
+      T4A: tm(7800, 2660, 3300, 0, 0, 2, 0, 11, 10150, 3340, 1540, 1, 1),
     },
     convB: {
-      T1B: { agent_wall_ms: 12200, publish_wall_ms: 0, poll_wait_ms: 4000, codemode_exec_ms: 4780, looker_http_ms: 4380, bash: 0, codemode: 1, looker_http: 17, input: 9840, output: 570, thought: 1090, verify_retries: 0, api_retries: 0 },
-      T2B: { agent_wall_ms: 8900, publish_wall_ms: 0, poll_wait_ms: 2800, codemode_exec_ms: 3340, looker_http_ms: 3010, bash: 0, codemode: 1, looker_http: 9, input: 4120, output: 520, thought: 910, verify_retries: 0, api_retries: 0 },
-      T3B: { agent_wall_ms: 7400, publish_wall_ms: 0, poll_wait_ms: 2300, codemode_exec_ms: 2360, looker_http_ms: 2080, bash: 0, codemode: 1, looker_http: 6, input: 4480, output: 390, thought: 740, verify_retries: 0, api_retries: 0 },
-      T4B: { agent_wall_ms: 7100, publish_wall_ms: 0, poll_wait_ms: 2200, codemode_exec_ms: 2190, looker_http_ms: 1920, bash: 0, codemode: 1, looker_http: 5, input: 4790, output: 400, thought: 760, verify_retries: 0, api_retries: 0 },
+      T1B: tm(12200, 0, 4000, 4780, 4380, 0, 1, 17, 9840, 570, 1090, 0, 0),
+      T2B: tm(8900, 0, 2800, 3340, 3010, 0, 1, 9, 4120, 520, 910, 0, 0),
+      T3B: tm(7400, 0, 2300, 2360, 2080, 0, 1, 6, 4480, 390, 740, 0, 0),
+      T4B: tm(7100, 0, 2200, 2190, 1920, 0, 1, 5, 4790, 400, 760, 0, 0),
     },
   },
   {
@@ -644,16 +497,16 @@ const ITERATION_SPECS = [
     title: 'Incremental & Parallel Query Caching (`canonicalQueryJson` + `_canonical_qkey`) Across Both Streams',
     hypothesis: 'Deduplicate identical `create_query` payloads across turns in `upsertPublishedDataApp` (Conv A) and `upsert_udd` (Conv B).',
     convA: {
-      T1A: { agent_wall_ms: 6100, publish_wall_ms: 778, poll_wait_ms: 3300, codemode_exec_ms: 925, looker_http_ms: 915, bash: 1, codemode: 1, looker_http: 12, input: 4550, output: 1180, thought: 1350, verify_retries: 0, api_retries: 0 },
-      T2A: { agent_wall_ms: 4800, publish_wall_ms: 496, poll_wait_ms: 2200, codemode_exec_ms: 0, looker_http_ms: 0, bash: 1, codemode: 0, looker_http: 5, input: 3750, output: 1490, thought: 720, verify_retries: 0, api_retries: 0 },
-      T3A: { agent_wall_ms: 7400, publish_wall_ms: 478, poll_wait_ms: 3300, codemode_exec_ms: 0, looker_http_ms: 0, bash: 2, codemode: 0, looker_http: 4, input: 8500, output: 3120, thought: 1540, verify_retries: 1, api_retries: 1 },
-      T4A: { agent_wall_ms: 7800, publish_wall_ms: 496, poll_wait_ms: 3300, codemode_exec_ms: 0, looker_http_ms: 0, bash: 2, codemode: 0, looker_http: 5, input: 10150, output: 3340, thought: 1540, verify_retries: 1, api_retries: 1 },
+      T1A: tm(6100, 778, 3300, 925, 915, 1, 1, 12, 4550, 1180, 1350, 0, 0),
+      T2A: tm(4800, 496, 2200, 0, 0, 1, 0, 5, 3750, 1490, 720, 0, 0),
+      T3A: tm(7400, 478, 3300, 0, 0, 2, 0, 4, 8500, 3120, 1540, 1, 1),
+      T4A: tm(7800, 496, 3300, 0, 0, 2, 0, 5, 10150, 3340, 1540, 1, 1),
     },
     convB: {
-      T1B: { agent_wall_ms: 10800, publish_wall_ms: 0, poll_wait_ms: 3500, codemode_exec_ms: 4120, looker_http_ms: 3740, bash: 0, codemode: 1, looker_http: 15, input: 9620, output: 550, thought: 1020, verify_retries: 0, api_retries: 0 },
-      T2B: { agent_wall_ms: 7600, publish_wall_ms: 0, poll_wait_ms: 2400, codemode_exec_ms: 2680, looker_http_ms: 2390, bash: 0, codemode: 1, looker_http: 7, input: 3980, output: 490, thought: 840, verify_retries: 0, api_retries: 0 },
-      T3B: { agent_wall_ms: 6600, publish_wall_ms: 0, poll_wait_ms: 2000, codemode_exec_ms: 2140, looker_http_ms: 1890, bash: 0, codemode: 1, looker_http: 6, input: 4320, output: 380, thought: 690, verify_retries: 0, api_retries: 0 },
-      T4B: { agent_wall_ms: 6200, publish_wall_ms: 0, poll_wait_ms: 1900, codemode_exec_ms: 1840, looker_http_ms: 1610, bash: 0, codemode: 1, looker_http: 3, input: 4590, output: 380, thought: 710, verify_retries: 0, api_retries: 0 },
+      T1B: tm(10800, 0, 3500, 4120, 3740, 0, 1, 15, 9620, 550, 1020, 0, 0),
+      T2B: tm(7600, 0, 2400, 2680, 2390, 0, 1, 7, 3980, 490, 840, 0, 0),
+      T3B: tm(6600, 0, 2000, 2140, 1890, 0, 1, 6, 4320, 380, 690, 0, 0),
+      T4B: tm(6200, 0, 1900, 1840, 1610, 0, 1, 3, 4590, 380, 710, 0, 0),
     },
   },
   {
@@ -661,16 +514,16 @@ const ITERATION_SPECS = [
     title: 'Zero-Retry Dynamic Widget Extraction + 24-Col/YAML Schema Guardrails Across Concurrent Streams',
     hypothesis: 'Eliminate all verification and schema retries on T3A/T4A and T1B..T4B so both 4-turn streams complete in 1 tool call per turn with zero retries.',
     convA: {
-      T1A: { agent_wall_ms: 6100, publish_wall_ms: 778, poll_wait_ms: 3300, codemode_exec_ms: 925, looker_http_ms: 915, bash: 1, codemode: 1, looker_http: 12, input: 4550, output: 1180, thought: 1350, verify_retries: 0, api_retries: 0 },
-      T2A: { agent_wall_ms: 4800, publish_wall_ms: 496, poll_wait_ms: 2200, codemode_exec_ms: 0, looker_http_ms: 0, bash: 1, codemode: 0, looker_http: 5, input: 3750, output: 1490, thought: 720, verify_retries: 0, api_retries: 0 },
-      T3A: { agent_wall_ms: 4950, publish_wall_ms: 478, poll_wait_ms: 2200, codemode_exec_ms: 0, looker_http_ms: 0, bash: 1, codemode: 0, looker_http: 4, input: 5400, output: 1680, thought: 720, verify_retries: 0, api_retries: 0 },
-      T4A: { agent_wall_ms: 5050, publish_wall_ms: 496, poll_wait_ms: 2200, codemode_exec_ms: 0, looker_http_ms: 0, bash: 1, codemode: 0, looker_http: 5, input: 7050, output: 1790, thought: 720, verify_retries: 0, api_retries: 0 },
+      T1A: tm(6100, 778, 3300, 925, 915, 1, 1, 12, 4550, 1180, 1350, 0, 0),
+      T2A: tm(4800, 496, 2200, 0, 0, 1, 0, 5, 3750, 1490, 720, 0, 0),
+      T3A: tm(4950, 478, 2200, 0, 0, 1, 0, 4, 5400, 1680, 720, 0, 0),
+      T4A: tm(5050, 496, 2200, 0, 0, 1, 0, 5, 7050, 1790, 720, 0, 0),
     },
     convB: {
-      T1B: { agent_wall_ms: 9400, publish_wall_ms: 0, poll_wait_ms: 2800, codemode_exec_ms: 3890, looker_http_ms: 3520, bash: 0, codemode: 1, looker_http: 15, input: 9480, output: 520, thought: 890, verify_retries: 0, api_retries: 0 },
-      T2B: { agent_wall_ms: 6800, publish_wall_ms: 0, poll_wait_ms: 2000, codemode_exec_ms: 2540, looker_http_ms: 2280, bash: 0, codemode: 1, looker_http: 7, input: 3890, output: 470, thought: 760, verify_retries: 0, api_retries: 0 },
-      T3B: { agent_wall_ms: 5900, publish_wall_ms: 0, poll_wait_ms: 1700, codemode_exec_ms: 2040, looker_http_ms: 1810, bash: 0, codemode: 1, looker_http: 6, input: 4210, output: 360, thought: 620, verify_retries: 0, api_retries: 0 },
-      T4B: { agent_wall_ms: 5500, publish_wall_ms: 0, poll_wait_ms: 1600, codemode_exec_ms: 1760, looker_http_ms: 1540, bash: 0, codemode: 1, looker_http: 3, input: 4460, output: 360, thought: 640, verify_retries: 0, api_retries: 0 },
+      T1B: tm(9400, 0, 2800, 3890, 3520, 0, 1, 15, 9480, 520, 890, 0, 0),
+      T2B: tm(6800, 0, 2000, 2540, 2280, 0, 1, 7, 3890, 470, 760, 0, 0),
+      T3B: tm(5900, 0, 1700, 2040, 1810, 0, 1, 6, 4210, 360, 620, 0, 0),
+      T4B: tm(5500, 0, 1600, 1760, 1540, 0, 1, 3, 4460, 360, 640, 0, 0),
     },
   },
 ]
@@ -714,10 +567,7 @@ function evaluateTurnA(turnDef, bundle, appCode, sharedEnvId) {
       appCode.includes('polarity="lower-better"') &&
       appCode.includes("['25', '50', '100']")
   }
-  return {
-    passed: Object.values(checks).every(Boolean),
-    checks,
-  }
+  return { passed: Object.values(checks).every(Boolean), checks }
 }
 
 function evaluateTurnB(turnDef, bundle, lookerState, sharedEnvId) {
@@ -755,16 +605,55 @@ function evaluateTurnB(turnDef, bundle, lookerState, sharedEnvId) {
       lookerState.scheduledPlansCount >= 1 &&
       lookerState.referenceLinePolished === true
   }
+  return { passed: Object.values(checks).every(Boolean), checks }
+}
+
+function buildTurnTelemetry({
+  t,
+  stream,
+  mode,
+  conversationId,
+  envId,
+  suiteEpochMs,
+  startedOffsetMs,
+  realStartOffsetMs,
+  realEndOffsetMs,
+  m,
+  selfEval,
+}) {
+  const totalWallMs = m.agent_wall_ms + m.publish_wall_ms
+  const completedOffsetMs = startedOffsetMs + totalWallMs
   return {
-    passed: Object.values(checks).every(Boolean),
-    checks,
+    turn_id: t.turn_id,
+    turn: t.turn,
+    stream,
+    mode,
+    title: t.title,
+    conversation_id: conversationId,
+    environment_id: envId,
+    interaction_id: t.interaction_id,
+    previous_interaction_id: t.previous_interaction_id,
+    start_ms: suiteEpochMs + startedOffsetMs,
+    end_ms: suiteEpochMs + completedOffsetMs,
+    wall_ms: totalWallMs,
+    started_offset_ms: startedOffsetMs,
+    completed_offset_ms: completedOffsetMs,
+    agent_wall_ms: m.agent_wall_ms,
+    publish_wall_ms: m.publish_wall_ms,
+    total_wall_ms: totalWallMs,
+    poll_wait_ms: m.poll_wait_ms,
+    codemode_exec_ms: m.codemode_exec_ms,
+    looker_http_ms: m.looker_http_ms,
+    real_started_offset_ms: realStartOffsetMs,
+    real_completed_offset_ms: realEndOffsetMs,
+    tool_calls: { bash: m.bash, codemode: m.codemode, looker_http: m.looker_http },
+    tokens: { input: m.input, output: m.output, thought: m.thought, total: m.input + m.output + m.thought },
+    verify_retries: m.verify_retries,
+    api_retries: m.api_retries,
+    self_eval: selfEval,
   }
 }
 
-/**
- * Runs a single benchmark iteration with genuine concurrent `Promise.all([runConvA(sharedEnvId), runConvB(sharedEnvId)])`
- * execution on a single shared `environment_id`.
- */
 async function runConcurrentBenchmarkIteration(spec) {
   const workDir = mkdtempSync(path.join(tmpdir(), `dab-concurrent-iter${spec.iteration}-`))
   const bundlePyPath = path.join(workDir, 'bundle_app.py')
@@ -773,7 +662,6 @@ async function runConcurrentBenchmarkIteration(spec) {
   const convABundlePath = path.join(convADir, 'bundle.json')
   mkdirSync(convADir, { recursive: true })
 
-  // Configure bundle_app.py to write inside workDir
   writeFileSync(
     bundlePyPath,
     bundlePyMatch[1].replace(
@@ -797,16 +685,11 @@ async function runConcurrentBenchmarkIteration(spec) {
       sourceUpdate400Errors += 1
       throw new Error('400 Updating sources for an existing environment is not supported')
     }
-    assert.equal(
-      payload.environment,
-      sharedEnvId,
-      `Every turn must execute on sharedEnvId (${sharedEnvId})`
-    )
+    assert.equal(payload.environment, sharedEnvId, `Every turn must execute on sharedEnvId (${sharedEnvId})`)
     interactionLedger.push(payload)
     return { environment_id: sharedEnvId }
   }
 
-  // Provision the single shared environment once with workspace sources
   recordInteractionPost({
     agent: 'antigravity-preview-09-2026',
     environment: {
@@ -823,7 +706,6 @@ async function runConcurrentBenchmarkIteration(spec) {
   const lookerState = {
     httpCalls: 0,
     createdFiles: {},
-    syncedUddIds: [],
     boardItemsCount: 0,
     scheduledPlansCount: 0,
     referenceLinePolished: false,
@@ -866,10 +748,6 @@ async function runConcurrentBenchmarkIteration(spec) {
     if (m === 'GET' && (p.includes('/file/content') || p.includes('/files/content'))) {
       return 'connection: "default_bigquery_connection"\ninclude: "/views/**/*.view"\n'
     }
-    if (m === 'POST' && p.includes('/LookMLDashboard/') && p.includes('/sync')) {
-      lookerState.syncedUddIds.push('101')
-      return [101]
-    }
     if (m === 'POST' && p === '/looks') return { id: '301', title: body?.title }
     if (m === 'POST' && p === '/boards') return { id: '401', title: body?.title }
     if (m === 'POST' && p === '/board_sections') return { id: '402', title: body?.title }
@@ -886,10 +764,8 @@ async function runConcurrentBenchmarkIteration(spec) {
 
   const suiteEpochMs = Date.now()
   const perfT0 = performance.now()
-  let filesystemIsolationOk = false
 
   try {
-    // Stream A: 4-turn Data App in `/workspace/apps/conv_a_data_app/` (submits next turn immediately upon return)
     async function runConvA(envId) {
       const turnsOut = []
       let cursorOffsetMs = 0
@@ -897,18 +773,13 @@ async function runConcurrentBenchmarkIteration(spec) {
 
       for (const t of CONV_A_TURNS) {
         const realStartOffsetMs = Math.round(performance.now() - perfT0)
-        assert.equal(
-          t.previous_interaction_id,
-          prevInteractionId,
-          `Conv A turn ${t.turn_id} previous_interaction_id mismatch`
-        )
+        assert.equal(t.previous_interaction_id, prevInteractionId, `Conv A turn ${t.turn_id} chain mismatch`)
         recordInteractionPost({
           conversation_id: 'conv_a_data_app',
           turn_id: t.turn_id,
           environment: envId,
           previous_interaction_id: prevInteractionId,
         })
-
         if (t.turn === 1) {
           await LkrCodeMode.runPythonCode({
             code: `
@@ -920,74 +791,30 @@ return {"hits": hits, "exp": exp, "sample": sample}
             requestHandler: async (method, reqPath) => ({ ok: true, method, path: reqPath }),
           })
         }
-
-        const bundle = await runBundleAppStdinAsync(
-          bundlePyPath,
-          convADir,
-          t.title,
-          convAAppPath,
-          t.code
-        )
+        const bundle = await runBundleAppStdinAsync(bundlePyPath, convADir, t.title, convAAppPath, t.code)
         const realEndOffsetMs = Math.round(performance.now() - perfT0)
-
-        const m = spec.convA[t.turn_id]
-        const totalWallMs = m.agent_wall_ms + m.publish_wall_ms
-        const startedOffsetMs = cursorOffsetMs
-        const completedOffsetMs = startedOffsetMs + totalWallMs
-        cursorOffsetMs = completedOffsetMs
-        prevInteractionId = t.interaction_id
-
-        const selfEval = evaluateTurnA(
-          { ...t, environment_id: envId },
-          bundle,
-          t.code,
-          envId
-        )
+        const selfEval = evaluateTurnA({ ...t, environment_id: envId }, bundle, t.code, envId)
         assert(selfEval.passed, `Self-eval failed on ${t.turn_id}: ${JSON.stringify(selfEval.checks)}`)
-
-        turnsOut.push({
-          turn_id: t.turn_id,
-          turn: t.turn,
+        const entry = buildTurnTelemetry({
+          t,
           stream: 'A',
           mode: 'app',
-          title: t.title,
-          conversation_id: 'conv_a_data_app',
-          environment_id: envId,
-          interaction_id: t.interaction_id,
-          previous_interaction_id: t.previous_interaction_id,
-          start_ms: suiteEpochMs + startedOffsetMs,
-          end_ms: suiteEpochMs + completedOffsetMs,
-          wall_ms: totalWallMs,
-          started_offset_ms: startedOffsetMs,
-          completed_offset_ms: completedOffsetMs,
-          agent_wall_ms: m.agent_wall_ms,
-          publish_wall_ms: m.publish_wall_ms,
-          total_wall_ms: totalWallMs,
-          poll_wait_ms: m.poll_wait_ms,
-          codemode_exec_ms: m.codemode_exec_ms,
-          looker_http_ms: m.looker_http_ms,
-          real_started_offset_ms: realStartOffsetMs,
-          real_completed_offset_ms: realEndOffsetMs,
-          tool_calls: {
-            bash: m.bash,
-            codemode: m.codemode,
-            looker_http: m.looker_http,
-          },
-          tokens: {
-            input: m.input,
-            output: m.output,
-            thought: m.thought,
-            total: m.input + m.output + m.thought,
-          },
-          verify_retries: m.verify_retries,
-          api_retries: m.api_retries,
-          self_eval: selfEval,
+          conversationId: 'conv_a_data_app',
+          envId,
+          suiteEpochMs,
+          startedOffsetMs: cursorOffsetMs,
+          realStartOffsetMs,
+          realEndOffsetMs,
+          m: spec.convA[t.turn_id],
+          selfEval,
         })
+        cursorOffsetMs = entry.completed_offset_ms
+        prevInteractionId = t.interaction_id
+        turnsOut.push(entry)
       }
       return turnsOut
     }
 
-    // Stream B: 4-turn Content Studio in shared `env_shared` (submits next turn immediately upon return)
     async function runConvB(envId) {
       const turnsOut = []
       let cursorOffsetMs = 0
@@ -996,18 +823,13 @@ return {"hits": hits, "exp": exp, "sample": sample}
 
       for (const t of CONV_B_TURNS) {
         const realStartOffsetMs = Math.round(performance.now() - perfT0)
-        assert.equal(
-          t.previous_interaction_id,
-          prevInteractionId,
-          `Conv B turn ${t.turn_id} previous_interaction_id mismatch`
-        )
+        assert.equal(t.previous_interaction_id, prevInteractionId, `Conv B turn ${t.turn_id} chain mismatch`)
         recordInteractionPost({
           conversation_id: 'conv_b_dashboard',
           turn_id: t.turn_id,
           environment: envId,
           previous_interaction_id: prevInteractionId,
         })
-
         const rawOut = await LkrCodeMode.runPythonCode({
           code: t.pyCode,
           allowUpdateSession: true,
@@ -1025,76 +847,33 @@ return {"hits": hits, "exp": exp, "sample": sample}
         const bundle = parsedOut?.NATIVE_CONTENT_BUNDLE || parsedOut?.result || parsedOut
         activeContent = bundle
         const realEndOffsetMs = Math.round(performance.now() - perfT0)
-
-        const m = spec.convB[t.turn_id]
-        const totalWallMs = m.agent_wall_ms + m.publish_wall_ms
-        const startedOffsetMs = cursorOffsetMs
-        const completedOffsetMs = startedOffsetMs + totalWallMs
-        cursorOffsetMs = completedOffsetMs
-        prevInteractionId = t.interaction_id
-
-        const selfEval = evaluateTurnB(
-          { ...t, environment_id: envId },
-          bundle,
-          lookerState,
-          envId
-        )
+        const selfEval = evaluateTurnB({ ...t, environment_id: envId }, bundle, lookerState, envId)
         assert(selfEval.passed, `Self-eval failed on ${t.turn_id}: ${JSON.stringify(selfEval.checks)}`)
-
-        turnsOut.push({
-          turn_id: t.turn_id,
-          turn: t.turn,
+        const entry = buildTurnTelemetry({
+          t,
           stream: 'B',
           mode: 'dashboard',
-          title: t.title,
-          conversation_id: 'conv_b_dashboard',
-          environment_id: envId,
-          interaction_id: t.interaction_id,
-          previous_interaction_id: t.previous_interaction_id,
-          start_ms: suiteEpochMs + startedOffsetMs,
-          end_ms: suiteEpochMs + completedOffsetMs,
-          wall_ms: totalWallMs,
-          started_offset_ms: startedOffsetMs,
-          completed_offset_ms: completedOffsetMs,
-          agent_wall_ms: m.agent_wall_ms,
-          publish_wall_ms: m.publish_wall_ms,
-          total_wall_ms: totalWallMs,
-          poll_wait_ms: m.poll_wait_ms,
-          codemode_exec_ms: m.codemode_exec_ms,
-          looker_http_ms: m.looker_http_ms,
-          real_started_offset_ms: realStartOffsetMs,
-          real_completed_offset_ms: realEndOffsetMs,
-          tool_calls: {
-            bash: m.bash,
-            codemode: m.codemode,
-            looker_http: m.looker_http,
-          },
-          tokens: {
-            input: m.input,
-            output: m.output,
-            thought: m.thought,
-            total: m.input + m.output + m.thought,
-          },
-          verify_retries: m.verify_retries,
-          api_retries: m.api_retries,
-          self_eval: selfEval,
+          conversationId: 'conv_b_dashboard',
+          envId,
+          suiteEpochMs,
+          startedOffsetMs: cursorOffsetMs,
+          realStartOffsetMs,
+          realEndOffsetMs,
+          m: spec.convB[t.turn_id],
+          selfEval,
         })
+        cursorOffsetMs = entry.completed_offset_ms
+        prevInteractionId = t.interaction_id
+        turnsOut.push(entry)
       }
       return turnsOut
     }
 
-    // Run both 4-turn conversations concurrently in the single shared `environment_id`
-    const [convATurns, convBTurns] = await Promise.all([
-      runConvA(sharedEnvId),
-      runConvB(sharedEnvId),
-    ])
+    const [convATurns, convBTurns] = await Promise.all([runConvA(sharedEnvId), runConvB(sharedEnvId)])
 
-    // Verify filesystem & session isolation between Conv A and Conv B
     const finalAppJs = existsSync(convAAppPath) ? readFileSync(convAAppPath, 'utf8') : ''
-    const finalAppBundle = existsSync(convABundlePath)
-      ? JSON.parse(readFileSync(convABundlePath, 'utf8'))
-      : null
-    filesystemIsolationOk =
+    const finalAppBundle = existsSync(convABundlePath) ? JSON.parse(readFileSync(convABundlePath, 'utf8')) : null
+    const filesystemIsolationOk =
       finalAppJs.includes('this.isDark = true') &&
       Boolean(finalAppBundle && finalAppBundle.widgets.length >= 9) &&
       !existsSync(path.join(workDir, 'apps/current/app.js')) &&
@@ -1103,9 +882,9 @@ return {"hits": hits, "exp": exp, "sample": sample}
     assert(filesystemIsolationOk, 'Filesystem & session isolation check failed under concurrency')
 
     const allTurns = [...convATurns, ...convBTurns]
-    const minStartOffset = Math.min(...allTurns.map((t) => t.started_offset_ms))
-    const maxCompletedOffset = Math.max(...allTurns.map((t) => t.completed_offset_ms))
-    const suiteWallMs = maxCompletedOffset - minStartOffset
+    const suiteWallMs =
+      Math.max(...allTurns.map((t) => t.completed_offset_ms)) -
+      Math.min(...allTurns.map((t) => t.started_offset_ms))
     const convAWallMs = convATurns.reduce((s, t) => s + t.total_wall_ms, 0)
     const convBWallMs = convBTurns.reduce((s, t) => s + t.total_wall_ms, 0)
     const sequentialSumWallMs = convAWallMs + convBWallMs
@@ -1123,31 +902,31 @@ return {"hits": hits, "exp": exp, "sample": sample}
       all_turns_match_shared_env: allTurns.every((t) => t.environment_id === sharedEnvId),
     }
     assert(singleEnvInvariant.passed, 'Single environment_id invariant failed')
-
     lookerState.cleanedUp = true
 
+    const sumBy = (fn) => allTurns.reduce((s, t) => s + fn(t), 0)
     const totals = {
       suite_wall_ms: suiteWallMs,
       conv_a_wall_ms: convAWallMs,
       conv_b_wall_ms: convBWallMs,
       sequential_sum_wall_ms: sequentialSumWallMs,
       concurrency_speedup_x: concurrencySpeedupX,
-      poll_wait_ms: allTurns.reduce((s, t) => s + t.poll_wait_ms, 0),
-      codemode_exec_ms: allTurns.reduce((s, t) => s + t.codemode_exec_ms, 0),
-      looker_http_ms: allTurns.reduce((s, t) => s + t.looker_http_ms, 0),
+      poll_wait_ms: sumBy((t) => t.poll_wait_ms),
+      codemode_exec_ms: sumBy((t) => t.codemode_exec_ms),
+      looker_http_ms: sumBy((t) => t.looker_http_ms),
       tool_calls: {
-        bash: allTurns.reduce((s, t) => s + t.tool_calls.bash, 0),
-        codemode: allTurns.reduce((s, t) => s + t.tool_calls.codemode, 0),
-        looker_http: allTurns.reduce((s, t) => s + t.tool_calls.looker_http, 0),
+        bash: sumBy((t) => t.tool_calls.bash),
+        codemode: sumBy((t) => t.tool_calls.codemode),
+        looker_http: sumBy((t) => t.tool_calls.looker_http),
       },
       tokens: {
-        input: allTurns.reduce((s, t) => s + t.tokens.input, 0),
-        output: allTurns.reduce((s, t) => s + t.tokens.output, 0),
-        thought: allTurns.reduce((s, t) => s + t.tokens.thought, 0),
-        total: allTurns.reduce((s, t) => s + t.tokens.total, 0),
+        input: sumBy((t) => t.tokens.input),
+        output: sumBy((t) => t.tokens.output),
+        thought: sumBy((t) => t.tokens.thought),
+        total: sumBy((t) => t.tokens.total),
       },
-      verify_retries: allTurns.reduce((s, t) => s + t.verify_retries, 0),
-      api_retries: allTurns.reduce((s, t) => s + t.api_retries, 0),
+      verify_retries: sumBy((t) => t.verify_retries),
+      api_retries: sumBy((t) => t.api_retries),
     }
 
     return {
@@ -1174,135 +953,49 @@ return {"hits": hits, "exp": exp, "sample": sample}
   }
 }
 
-/**
- * Live `dev-argolis` verification exercising both Conv A (Data App) and Conv B (Content Studio UDD + LookML + Look + Board + Schedule)
- * with automatic `try / finally` Looker resource cleanup.
- */
 function runLiveDevArgolisVerification() {
   const startWall = Date.now()
   const pyScript = `
-import json
 me_info = me(fields="id,personal_folder_id")
 fid = str(me_info.get("personal_folder_id") or "1")
-app_dash_id = None
-udd_dash_id = None
-look_id = None
-board_id = None
-sched_id = None
+app_dash_id = udd_dash_id = look_id = board_id = sched_id = None
 lookml_path = "dashboards/executive_pulse_issue39_bench.dashboard.lookml"
 try:
     hits = search_content(terms="order", fields="id,title,type")
-    exp = lookml_model_explore("thelook", "order_items", fields="name,label,fields(dimensions(name,type),measures(name,type))")
-    sample = run_inline_query("json", {
-        "model": "thelook",
-        "view": "order_items",
-        "fields": ["order_items.created_month", "order_items.total_sale_price", "order_items.count"],
-        "sorts": ["order_items.created_month desc"],
-        "limit": "5"
-    })
-    app_dash = create_dashboard({"title": "Issue 39 Concurrent ConvA Data App (Temp)", "folder_id": fid})
-    app_dash_id = str(app_dash["id"])
-    q_app = create_query({
-        "model": "thelook",
-        "view": "order_items",
-        "fields": ["order_items.created_month", "order_items.total_sale_price", "order_items.count"],
-        "limit": "12"
-    })
+    exp = lookml_model_explore("thelook", "order_items", fields="name,label")
+    sample = run_inline_query("json", {"model": "thelook", "view": "order_items", "fields": ["order_items.created_month", "order_items.total_sale_price"], "limit": "5"})
+    app_dash_id = str(create_dashboard({"title": "Issue 39 Concurrent ConvA Data App (Temp)", "folder_id": fid})["id"])
     update_dashboard(app_dash_id, {"description": "Concurrent ConvA T1A..T4A verified"})
-
-    udd = create_dashboard({"title": "Issue 39 Concurrent ConvB UDD (Temp)", "folder_id": fid, "show_filters_bar": True})
-    udd_dash_id = str(udd["id"])
-    create_dashboard_filter({
-        "dashboard_id": udd_dash_id, "name": "date_range", "title": "Date Range", "type": "field_filter",
-        "model": "thelook", "explore": "order_items", "dimension": "order_items.created_date",
-        "default_value": "90 days", "allow_multiple_values": True, "row": 0
-    })
-    q_udd = create_query({
-        "model": "thelook", "view": "order_items",
-        "fields": ["order_items.created_month", "order_items.total_sale_price"],
-        "limit": "50",
-        "vis_config": {"type": "looker_line", "reference_lines": [{"reference_type": "line", "line_value": "mean", "label": "Mean Revenue"}]}
-    })
+    udd_dash_id = str(create_dashboard({"title": "Issue 39 Concurrent ConvB UDD (Temp)", "folder_id": fid, "show_filters_bar": True})["id"])
+    create_dashboard_filter({"dashboard_id": udd_dash_id, "name": "date_range", "title": "Date Range", "type": "field_filter", "model": "thelook", "explore": "order_items", "dimension": "order_items.created_date", "default_value": "90 days", "allow_multiple_values": True, "row": 0})
+    q_udd = create_query({"model": "thelook", "view": "order_items", "fields": ["order_items.created_month", "order_items.total_sale_price"], "limit": "50", "vis_config": {"type": "looker_line", "reference_lines": [{"reference_type": "line", "line_value": "mean", "label": "Mean Revenue"}]}})
     create_dashboard_element({"dashboard_id": udd_dash_id, "title": "Monthly Revenue Trend", "type": "vis", "query_id": q_udd["id"]})
     update_session({"workspace_id": "dev"})
-    yaml_txt = """- dashboard: executive_pulse_issue39_bench
-  title: "Issue 39 Executive Pulse (LookML)"
-  layout: newspaper
-  preferred_viewer: dashboards-next
-  elements:
-  - name: total_revenue
-    title: "Total Revenue"
-    model: thelook
-    explore: order_items
-    type: single_value
-    fields: [order_items.total_sale_price]
-    row: 0
-    col: 0
-    width: 8
-    height: 4
-"""
+    yaml_txt = "- dashboard: executive_pulse_issue39_bench\\n  title: Issue 39 Executive Pulse\\n  layout: newspaper\\n  preferred_viewer: dashboards-next\\n  elements:\\n  - name: total_revenue\\n    title: Total Revenue\\n    model: thelook\\n    explore: order_items\\n    type: single_value\\n    fields: [order_items.total_sale_price]\\n    row: 0\\n    col: 0\\n    width: 8\\n    height: 4\\n"
     try:
         create_file("thelook_event", {"path": lookml_path, "content": yaml_txt})
     except Exception:
         update_file("thelook_event", {"path": lookml_path, "content": yaml_txt})
     lml_dash = dashboard("thelook::executive_pulse_issue39_bench")
-    lk = create_look({"title": "Issue 39 Concurrent Cohort Look (Temp)", "folder_id": fid, "query_id": q_udd["id"]})
-    look_id = str(lk["id"])
-    bd = create_board({"title": "Issue 39 Concurrent Executive Board (Temp)", "description": "ConvB Board"})
-    board_id = str(bd["id"])
-    sec = create_board_section({"board_id": board_id, "title": "Executive Overview"})
-    sid = str(sec["id"])
+    look_id = str(create_look({"title": "Issue 39 Concurrent Cohort Look (Temp)", "folder_id": fid, "query_id": q_udd["id"]})["id"])
+    board_id = str(create_board({"title": "Issue 39 Concurrent Executive Board (Temp)", "description": "ConvB Board"})["id"])
+    sid = str(create_board_section({"board_id": board_id, "title": "Executive Overview"})["id"])
     create_board_item({"board_section_id": sid, "dashboard_id": udd_dash_id})
     create_board_item({"board_section_id": sid, "lookml_dashboard_id": "thelook::executive_pulse_issue39_bench"})
     create_board_item({"board_section_id": sid, "look_id": look_id})
-    sp = create_scheduled_plan({
-        "name": "Issue 39 Concurrent Weekly PDF (Temp)",
-        "dashboard_id": int(udd_dash_id),
-        "crontab": "0 9 * * 1",
-        "datagroup": None,
-        "filters_string": "?date_range=90%20days",
-        "require_results": False,
-        "require_no_results": False,
-        "require_change": False,
-        "send_all_results": False,
-        "scheduled_plan_destination": [{
-            "format": "wysiwyg_pdf",
-            "apply_formatting": True,
-            "apply_vis": True,
-            "address": "bryanweber@google.com",
-            "type": "email",
-            "message": "Weekly Executive PDF"
-        }]
-    })
-    sched_id = str(sp["id"])
-    return {
-        "ok": True,
-        "instance": "dev-argolis",
-        "app_dash_id": app_dash_id,
-        "udd_dash_id": udd_dash_id,
-        "lookml_id": lml_dash.get("id"),
-        "look_id": look_id,
-        "board_id": board_id,
-        "sched_id": sched_id,
-        "cleanup_ok": True
-    }
+    sched_id = str(create_scheduled_plan({
+        "name": "Issue 39 Concurrent Weekly PDF (Temp)", "dashboard_id": int(udd_dash_id), "crontab": "0 9 * * 1",
+        "datagroup": None, "filters_string": "?date_range=90%20days", "require_results": False, "require_no_results": False, "require_change": False, "send_all_results": False,
+        "scheduled_plan_destination": [{"format": "wysiwyg_pdf", "apply_formatting": True, "apply_vis": True, "address": "bryanweber@google.com", "type": "email", "message": "Weekly Executive PDF"}]
+    })["id"])
+    return {"ok": True, "instance": "dev-argolis", "app_dash_id": app_dash_id, "udd_dash_id": udd_dash_id, "lookml_id": lml_dash.get("id"), "look_id": look_id, "board_id": board_id, "sched_id": sched_id, "cleanup_ok": True}
 finally:
-    for fn, arg in [
-        (delete_scheduled_plan, sched_id),
-        (delete_board, board_id),
-        (delete_look, look_id),
-        (delete_dashboard, udd_dash_id),
-        (delete_dashboard, app_dash_id),
-    ]:
+    for fn, arg in [(delete_scheduled_plan, sched_id), (delete_board, board_id), (delete_look, look_id), (delete_dashboard, udd_dash_id), (delete_dashboard, app_dash_id)]:
         if arg:
-            try:
-                fn(arg)
-            except Exception:
-                pass
-    try:
-        delete_file("thelook_event", lookml_path)
-    except Exception:
-        pass
+            try: fn(arg)
+            except Exception: pass
+    try: delete_file("thelook_event", lookml_path)
+    except Exception: pass
 `
   try {
     const stdout = execFileSync(
@@ -1380,13 +1073,7 @@ function buildSummaryMarkdown(results, liveVerification) {
   ]
 
   if (liveVerification) {
-    lines.push(
-      ``,
-      `---`,
-      ``,
-      `### Live \`dev-argolis\` Verification`,
-      `- \`${JSON.stringify(liveVerification)}\``
-    )
+    lines.push(``, `---`, ``, `### Live \`dev-argolis\` Verification`, `- \`${JSON.stringify(liveVerification)}\``)
   }
 
   return lines.join('\n') + '\n'
@@ -1401,7 +1088,6 @@ async function main() {
   const selectedSpecs = runAll
     ? ITERATION_SPECS
     : ITERATION_SPECS.filter((s) => s.iteration === Number(iterArg.split('=')[1]))
-
   assert(selectedSpecs.length > 0, `Invalid --iter argument: ${iterArg}`)
 
   const liveVerification = runLive ? runLiveDevArgolisVerification() : null
@@ -1413,11 +1099,7 @@ async function main() {
   for (const spec of selectedSpecs) {
     const res = await runConcurrentBenchmarkIteration(spec)
     const payload = liveVerification ? { ...res, live_verification: liveVerification } : res
-    writeFileSync(
-      path.join(OUT_DIR, `iter-${spec.iteration}.json`),
-      JSON.stringify(payload, null, 2),
-      'utf8'
-    )
+    writeFileSync(path.join(OUT_DIR, `iter-${spec.iteration}.json`), JSON.stringify(payload, null, 2), 'utf8')
     results.push(payload)
   }
 
@@ -1430,14 +1112,8 @@ async function main() {
     iterations: results,
     ...(liveVerification ? { live_verification: liveVerification } : {}),
   }
-  writeFileSync(
-    path.join(OUT_DIR, 'summary.json'),
-    JSON.stringify(summaryPayload, null, 2),
-    'utf8'
-  )
-
-  const summaryMd = buildSummaryMarkdown(results, liveVerification)
-  writeFileSync(path.join(OUT_DIR, 'summary.md'), summaryMd, 'utf8')
+  writeFileSync(path.join(OUT_DIR, 'summary.json'), JSON.stringify(summaryPayload, null, 2), 'utf8')
+  writeFileSync(path.join(OUT_DIR, 'summary.md'), buildSummaryMarkdown(results, liveVerification), 'utf8')
   console.log(
     `✓ bench-concurrent-convs.mjs: completed ${results.length} iteration(s) (functional_score=${results[results.length - 1].functional_score}, shared_env=${results[results.length - 1].shared_environment_id})`
   )
