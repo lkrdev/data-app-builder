@@ -1,6 +1,5 @@
 import { NativeContentState } from './lookerApi'
-import { BOOTSTRAP_SANDBOX_SH, LKR_DEV_CLI_SPEC, LKR_DEV_CLI_VERSION } from './lookmlTool'
-export { BOOTSTRAP_SANDBOX_SH, LKR_DEV_CLI_SPEC, LKR_DEV_CLI_VERSION } from './lookmlTool'
+import { LKR_DEV_CLI_SPEC, LKR_DEV_CLI_VERSION } from './lookmlTool'
 
 export const DASHBOARD_CODEMODE_PREAMBLE_PY = `# ponytail: pre-injected Monty Python macros for UDDs, LookML Dashboards (.dashboard.lookml), Looks, Boards & Schedules
 import json

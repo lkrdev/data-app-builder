@@ -99,34 +99,14 @@ jobs:
 
           # 5. Check PyPI for a newer release of lkr-dev-cli and update pinned version
           LATEST_LKR_CLI=$(curl -fsSL https://pypi.org/pypi/lkr-dev-cli/json | jq -r '.info.version')
-          CURRENT_LKR_CLI=$(tr -d '[:space:]' < lkr-dev-cli-version.txt 2>/dev/null || node -e '
-            const fs = require("fs");
-            const m = fs.readFileSync("src/lookmlTool.tsx", "utf8").match(/export const LKR_DEV_CLI_VERSION = ['\''"]([^'\''"]+)['\''"]/);
-            process.stdout.write(m ? m[1] : "");
-          ')
+          CURRENT_LKR_CLI=$(tr -d '[:space:]' < lkr-dev-cli-version.txt)
           if [ -n "$LATEST_LKR_CLI" ] && [ "$LATEST_LKR_CLI" != "null" ] && [ "$LATEST_LKR_CLI" != "$CURRENT_LKR_CLI" ]; then
             echo "Updating pinned lkr-dev-cli version: ${CURRENT_LKR_CLI} -> ${LATEST_LKR_CLI}"
             printf "%s\n" "$LATEST_LKR_CLI" > lkr-dev-cli-version.txt
             node -e '
-              const fs = require("fs");
-              const oldVer = process.argv[1];
-              const newVer = process.argv[2];
-              const file = "src/lookmlTool.tsx";
-              const updated = fs
-                .readFileSync(file, "utf8")
-                .replace(
-                  /export const LKR_DEV_CLI_VERSION = ['\''"][^'\''"]+['\''"]/,
-                  `export const LKR_DEV_CLI_VERSION = '\''${newVer}'\''`
-                )
-                .replace(
-                  /"[0-9]+\.[0-9]+\.[0-9]+[^"]*" if _PINNED_CLI_VERSION/,
-                  `"${newVer}" if _PINNED_CLI_VERSION`
-                );
-              fs.writeFileSync(file, updated);
-              for (const md of ["AGENTS.md", "upstream/payload/AGENTS.md"]) {
-                if (fs.existsSync(md) && oldVer) {
-                  fs.writeFileSync(md, fs.readFileSync(md, "utf8").split(`==${oldVer}`).join(`==${newVer}`));
-                }
+              const fs = require("fs"), [oldVer, newVer] = process.argv.slice(1);
+              for (const f of ["src/lookmlTool.tsx", "AGENTS.md", "upstream/payload/AGENTS.md"]) {
+                if (fs.existsSync(f)) fs.writeFileSync(f, fs.readFileSync(f, "utf8").split(oldVer).join(newVer));
               }
             ' "$CURRENT_LKR_CLI" "$LATEST_LKR_CLI"
             echo "lkr_cli_version=${CURRENT_LKR_CLI} -> ${LATEST_LKR_CLI}" >> "$GITHUB_OUTPUT"

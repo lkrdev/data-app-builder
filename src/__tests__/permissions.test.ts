@@ -995,7 +995,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(BOOTSTRAP_SANDBOX_SH).toContain(
       'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.61"'
     )
-    expect(BOOTSTRAP_LOOKML_PY).toContain('["pip", "install", "--break-system-packages", "--quiet", "uv"]')
+    expect(BOOTSTRAP_LOOKML_PY).toContain('"install", "--break-system-packages", "--quiet", "uv"')
     expect(BOOTSTRAP_LOOKML_PY).toContain('"UV_TOOL_BIN_DIR": "/usr/local/bin"')
     expect(BOOTSTRAP_LOOKML_PY).toContain('["uv", "tool", "install", "--force", "--quiet", pkg_spec]')
     expect(AGENTS_MD).toContain('pip install --break-system-packages --quiet uv')
@@ -1010,7 +1010,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(workflowYml).toContain('cron: "0 9 * * 1,4"')
     expect(workflowYml).toContain('https://pypi.org/pypi/lkr-dev-cli/json')
     expect(workflowYml).toContain('lkr-dev-cli-version.txt')
-    expect(workflowYml).toContain('export const LKR_DEV_CLI_VERSION =')
+    expect(workflowYml).toContain('src/lookmlTool.tsx')
     expect(workflowYml).toContain('chore/update-skills')
 
     const postedBodies: any[] = []

@@ -157,38 +157,16 @@ def ensure_skills() -> list[str]:
 
 def ensure_lkr_cli() -> str:
     if not shutil.which("uv"):
-        subprocess.run(
-            ["pip", "install", "--break-system-packages", "--quiet", "uv"],
-            check=False,
-        )
-        if not shutil.which("uv"):
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--break-system-packages", "--quiet", "uv"],
-                check=False,
-            )
+        for pip_cmd in (["pip"], [sys.executable, "-m", "pip"]):
+            subprocess.run([*pip_cmd, "install", "--break-system-packages", "--quiet", "uv"], check=False)
+            if shutil.which("uv"):
+                break
     pkg_spec = f"lkr-dev-cli[tools,code-mode,parse]=={LKR_DEV_CLI_VERSION}"
     lkr_bin = shutil.which("lkr") or shutil.which("lkr-dev-cli")
-    installed_ver = ""
-    if lkr_bin:
-        try:
-            installed_ver = subprocess.run(
-                [lkr_bin, "--version"], capture_output=True, text=True, check=False
-            ).stdout.strip()
-        except Exception:
-            installed_ver = ""
-    if not lkr_bin or LKR_DEV_CLI_VERSION not in installed_ver:
-        if shutil.which("uv"):
-            env = {**os.environ, "UV_TOOL_BIN_DIR": "/usr/local/bin"}
-            subprocess.run(
-                ["uv", "tool", "install", "--force", "--quiet", pkg_spec],
-                env=env,
-                check=False,
-            )
-        else:
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--break-system-packages", "--quiet", pkg_spec],
-                check=False,
-            )
+    ver_out = subprocess.run([lkr_bin, "--version"], capture_output=True, text=True, check=False).stdout if lkr_bin else ""
+    if LKR_DEV_CLI_VERSION not in ver_out:
+        cmd = ["uv", "tool", "install", "--force", "--quiet", pkg_spec] if shutil.which("uv") else [sys.executable, "-m", "pip", "install", "--break-system-packages", "--quiet", pkg_spec]
+        subprocess.run(cmd, env={**os.environ, "UV_TOOL_BIN_DIR": "/usr/local/bin"}, check=False)
     return shutil.which("lkr") or shutil.which("lkr-dev-cli") or "lkr"
 
 def compute_diff(old_text: str, new_text: str, rel_path: str) -> str:

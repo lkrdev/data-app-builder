@@ -471,7 +471,7 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
   assert.equal(pinnedVersionTxt, '0.0.61', 'lkr-dev-cli-version.txt must pin 0.0.61')
   assert(
     lookmlToolTsx.includes("export const LKR_DEV_CLI_VERSION = '0.0.61'") &&
-      lookmlToolTsx.includes('pip", "install", "--break-system-packages", "--quiet", "uv"') &&
+      lookmlToolTsx.includes('"install", "--break-system-packages", "--quiet", "uv"') &&
       lookmlToolTsx.includes('"UV_TOOL_BIN_DIR": "/usr/local/bin"') &&
       lookmlToolTsx.includes('"uv", "tool", "install", "--force", "--quiet", pkg_spec') &&
       updateSkillsYml.includes('cron: "0 9 * * 1,4"') &&
