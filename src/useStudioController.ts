@@ -1069,7 +1069,7 @@ export function useStudioController() {
         mode: 'tile', id: loaded?.id || id, route: `/c/${encodeURIComponent(loaded?.id || id)}`,
         pushRoute, convTypes: ['tile', 'script'], studio: loaded,
         messages: loaded?.messages as ChatMessage[] | undefined, defaultEnvId: 'env_tile_isolated',
-        fallbackText: loaded ? `Loaded script "${loaded.title}" (${loaded.id}).` : `Opened Python Tile script "${scriptTitle}" (${id}).`,
+        fallbackText: loaded ? `Loaded script "${loaded.title}" (${loaded.id}).` : `Opened Script "${scriptTitle}" (${id}).`,
       })
       await handleRunPython(effectiveCode, filtersJson)
     },

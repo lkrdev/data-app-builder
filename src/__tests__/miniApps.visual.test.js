@@ -1079,13 +1079,11 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     {
       id: 'chatbar_pasted_image_inspector',
       category: 'Chat Bar States',
-      title: '12. Chat Bar State — Pasted Screenshot Thumbnail & Code/Schema Inspector Open',
+      title: '12. Chat Bar State — Pasted Screenshot Thumbnail & Composer Model Selector',
       snapshotName: '12-chatbar-state-pasted-image-and-inspector-snap.png',
       clipSelector: '.dab-composer',
       expectText: [
-        'Inspect Code / Schema',
-        'Compiled Explore Schema (/workspace/schema.md)',
-        'Test WASM Code Mode (Monty)',
+        'Gemini 3.8 Flash',
         '✨ Update App'
       ]
     },
@@ -1341,14 +1339,14 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
 
     expect(afterSave.result.value).toEqual({
       savedDisabledModes: ['lookml', 'health', 'tile'],
-      useCaseOptionsAfterSave: ['auto', 'app', 'dashboard', 'conversational-analytics'],
+      useCaseOptionsAfterSave: ['auto', 'dashboard', 'conversational-analytics', 'app'],
       hasFilteredCatalogCount: true,
       routeAfterDisabledPush: '/',
       noTopbarModeSwitcher: true
     })
   }, 15000)
 
-  test('switches Antigravity models via config-default-model-select and topbar-model-select and persists defaultModel', async () => {
+  test('switches Antigravity models via config-default-model-select and composer-model-select in composer footer and persists defaultModel (Issue #59)', async () => {
     const url = `http://127.0.0.1:${port}/?scenario=config_page`
     await chrome.send('Page.navigate', { url })
 
@@ -1383,22 +1381,26 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         if (saveBtn) saveBtn.click();
         await new Promise((r) => setTimeout(r, 150));
 
-        const topbarSelect = document.querySelector('[data-testid="topbar-model-select"]');
-        const syncedTopbarModel = topbarSelect ? topbarSelect.value : '';
+        const noTopbarModelSelect = !document.querySelector('.dab-topbar [data-testid="topbar-model-select"]');
+        const noComposerInspector = !document.querySelector('.dab-composer-actions .dab-inspector');
+        const composerSelect = document.querySelector('.dab-composer-actions [data-testid="composer-model-select"]');
+        const syncedComposerModel = composerSelect ? composerSelect.value : '';
 
-        setReactSelect(topbarSelect, 'gemini-3.5-flash-lite');
+        setReactSelect(composerSelect, 'gemini-3.5-flash-lite');
         await new Promise((r) => setTimeout(r, 50));
-        const afterLiteSwitch = topbarSelect ? topbarSelect.value : '';
+        const afterLiteSwitch = composerSelect ? composerSelect.value : '';
 
-        setReactSelect(topbarSelect, 'gemini-3.8-flash');
+        setReactSelect(composerSelect, 'gemini-3.8-flash');
         await new Promise((r) => setTimeout(r, 50));
-        const afterFlashSwitch = topbarSelect ? topbarSelect.value : '';
+        const afterFlashSwitch = composerSelect ? composerSelect.value : '';
 
         return {
           initialDefault,
           optionIds,
           savedDefaultModel: window.__LAST_SAVED_CONTEXT_DATA__?.defaultModel,
-          syncedTopbarModel,
+          noTopbarModelSelect,
+          noComposerInspector,
+          syncedComposerModel,
           afterLiteSwitch,
           afterFlashSwitch
         };
@@ -1417,7 +1419,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         'gemini-3.5-flash-lite'
       ],
       savedDefaultModel: 'gemini-4-argon',
-      syncedTopbarModel: 'gemini-4-argon',
+      noTopbarModelSelect: true,
+      noComposerInspector: true,
+      syncedComposerModel: 'gemini-4-argon',
       afterLiteSwitch: 'gemini-3.5-flash-lite',
       afterFlashSwitch: 'gemini-3.8-flash'
     })
@@ -1647,6 +1651,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const sel = document.querySelector('[data-testid="use-case-selector"]');
         const defaultUseCase = sel ? sel.value : null;
         const optionValues = sel ? Array.from(sel.options).map((o) => o.value) : [];
+        const optionLabels = sel ? Array.from(sel.options).map((o) => (o.textContent || '').trim()) : [];
 
         // 2. Verify permission gating disables LookML with 🔒 indicator & tooltip when user lacks develop permission
         window.__DAB_STUDIO__.setCapabilities({
@@ -1736,6 +1741,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         return {
           defaultUseCase,
           optionValues,
+          optionLabels,
           lookmlOptDisabledWhenRestricted,
           lookmlOptHasLockLabel,
           lookmlOptTitle,
@@ -1756,12 +1762,21 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       defaultUseCase: 'auto',
       optionValues: [
         'auto',
-        'app',
         'dashboard',
-        'lookml',
+        'conversational-analytics',
+        'app',
         'health-check',
-        'tile',
-        'conversational-analytics'
+        'lookml',
+        'tile'
+      ],
+      optionLabels: [
+        'Auto',
+        'Content Studio',
+        'Conversational Analytics',
+        'Data App',
+        'Health Check',
+        'LookML',
+        'Script'
       ],
       lookmlOptDisabledWhenRestricted: true,
       lookmlOptHasLockLabel: true,
@@ -2567,6 +2582,94 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     const scratchDir = '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
     mkdirSync(scratchDir, { recursive: true })
     const scratchSnapPath = path.join(scratchDir, 'issue-63-script-toolbar.png')
+    writeFileSync(scratchSnapPath, pngBuffer)
+    expect(existsSync(scratchSnapPath)).toBe(true)
+  }, 15000)
+
+  test('renders mode-aware starter prompt buttons in empty state without Solr/WASM jargon, populates studio-prompt-input on click, and places model selector in composer footer (Issue #59)', async () => {
+    const url = `http://127.0.0.1:${port}/?scenario=centered_empty_prompt`
+    await chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(document.querySelector('[data-testid="starter-prompt-list"] button[data-testid^="starter-prompt-"]'))`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    const res = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const heroEl = document.querySelector('.dab-empty-hero');
+        const hasJargon = /search_content|lookml_model_explore|Solr/i.test(heroEl ? heroEl.innerText : '');
+        const starterBtns = Array.from(document.querySelectorAll('[data-testid="starter-prompt-list"] button[data-testid^="starter-prompt-"]'));
+        starterBtns[0]?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const ta = document.querySelector('[data-testid="studio-prompt-input"]');
+        const promptAfterClick = ta ? ta.value : '';
+
+        const ucSelect = document.querySelector('[data-testid="use-case-selector"]');
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+        setter.call(ucSelect, 'tile');
+        ucSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 80));
+
+        const tileBtns = Array.from(document.querySelectorAll('[data-testid="starter-prompt-list"] button[data-testid^="starter-prompt-"]'));
+        tileBtns[0]?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const promptAfterTileClick = ta ? ta.value : '';
+        const tilePlaceholder = ta ? ta.getAttribute('placeholder') || '' : '';
+
+        setter.call(ucSelect, 'auto');
+        ucSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 60));
+
+        const r = document.querySelector('.dab-empty-prompt-card')?.getBoundingClientRect();
+        const clip = r ? { x: Math.max(0, Math.floor(r.left - 16)), y: Math.max(0, Math.floor(r.top - 16)), width: Math.min(1440, Math.ceil(r.width + 32)), height: Math.min(900, Math.ceil(r.height + 32)), scale: 1 } : null;
+
+        return {
+          hasJargon,
+          autoChipCount: starterBtns.length,
+          promptAfterClick,
+          tileChipCount: tileBtns.length,
+          promptAfterTileClick,
+          tilePlaceholder,
+          hasComposerModelSelect: Boolean(document.querySelector('.dab-composer-actions [data-testid="composer-model-select"]')),
+          noTopbarModelSelect: !document.querySelector('.dab-topbar [data-testid="topbar-model-select"]'),
+          noComposerInspector: !document.querySelector('.dab-composer-actions .dab-inspector'),
+          clip
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(res.result.value).toMatchObject({
+      hasJargon: false,
+      autoChipCount: 4,
+      promptAfterClick:
+        'Build an Executive Revenue Data App on order_items with Total Revenue, Total Orders, Avg Order Value KPIs and a monthly trend chart.',
+      tileChipCount: 3,
+      promptAfterTileClick:
+        'Write a Script summarizing visible LookML models, explores, and active dashboard filters as a table.',
+      tilePlaceholder: 'Describe the Script to generate or update (or paste a screenshot)...',
+      hasComposerModelSelect: true,
+      noTopbarModelSelect: true,
+      noComposerInspector: true
+    })
+
+    const clip = res.result.value.clip
+    expect(clip).toBeTruthy()
+    const { data } = await chrome.send('Page.captureScreenshot', { format: 'png', clip })
+    const pngBuffer = Buffer.from(data, 'base64')
+    expect(pngBuffer.length).toBeGreaterThan(1000)
+
+    const scratchDir =
+      '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
+    mkdirSync(scratchDir, { recursive: true })
+    const scratchSnapPath = path.join(scratchDir, 'issue-59-composer-starters.png')
     writeFileSync(scratchSnapPath, pngBuffer)
     expect(existsSync(scratchSnapPath)).toBe(true)
   }, 15000)

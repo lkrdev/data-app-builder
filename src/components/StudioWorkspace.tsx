@@ -3,10 +3,9 @@ import { getEmbedSDK, ILookerConnection, LookerEmbedExSDK } from '@looker/embed-
 import {
   AntigravityActivityStep,
   handleImageClipboardPaste,
-  LkrCodeMode,
   StudioUseCase,
 } from '../antigravity'
-import { ConversationRecord, parseExploreId } from '../lookerApi'
+import { ConversationRecord } from '../lookerApi'
 import { LOOKML_TURN_SKILLS, LookmlPreviewPane } from '../lookmlTool'
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import { StudioController } from '../useStudioController'
@@ -534,6 +533,71 @@ export const StudioCatalogBar: React.FC<{ ctl: StudioController }> = ({ ctl }) =
   )
 }
 
+export interface StarterPromptItem {
+  id: string
+  label: string
+  prompt: string
+}
+
+export const STARTER_PROMPTS_BY_USE_CASE: Record<string, StarterPromptItem[]> = {
+  auto: [
+    { id: 'exec-app', label: '📊 Build an Executive Revenue Data App', prompt: 'Build an Executive Revenue Data App on order_items with Total Revenue, Total Orders, Avg Order Value KPIs and a monthly trend chart.' },
+    { id: 'native-udd', label: '📈 Create a Native Looker Dashboard', prompt: 'Create a native Looker UDD on order_items with a Total Revenue & Orders KPI, a Revenue by Status column chart, and an Order Status filter.' },
+    { id: 'ask-ca', label: '💬 Ask a Data Question', prompt: 'What are the top 3 product categories by gross margin in Q4?' },
+    { id: 'lookml-measure', label: '🧩 Add LookML Measures & Data Tests', prompt: 'Add total_revenue and gross_margin measures to orders, curate field descriptions, and add a LookML data test.' },
+  ],
+  app: [
+    { id: 'exec-kpi', label: '📊 Executive Revenue KPI App', prompt: 'Build an Executive Revenue Data App on order_items with Total Revenue, Total Orders, Avg Order Value KPIs and a monthly trend chart.' },
+    { id: 'cohort-grid', label: '🧮 Interactive Cohort & Margin Explorer', prompt: 'Build an interactive Data App with a metric switcher, category breakdown chart, and drillable order grid.' },
+    { id: 'funnel-app', label: '🛒 Customer Conversion Funnel App', prompt: 'Create a customer conversion and retention Data App with regional filters and YoY comparison cards.' },
+  ],
+  dashboard: [
+    { id: 'udd-exec', label: '📈 Executive Order Performance UDD', prompt: 'Create a native Looker UDD on order_items with a Total Revenue & Orders KPI, a Revenue by Status column chart, and an Order Status filter.' },
+    { id: 'saved-look', label: '🔍 Top Brands & Categories Saved Look', prompt: 'Create a Saved Look showing top 10 brands by revenue and gross margin with a 90-day date filter.' },
+    { id: 'board-schedule', label: '📌 Executive Board & Morning Schedule', prompt: 'Pin our key revenue dashboards to an Executive Pulse board and schedule a weekday 8 AM summary.' },
+  ],
+  'conversational-analytics': [
+    { id: 'ca-margin', label: '💬 Top Categories by Gross Margin', prompt: 'What are the top 3 product categories by gross margin in Q4?' },
+    { id: 'ca-spike', label: '📉 Q4 Revenue & Streaming Volume Q&A', prompt: 'Why did order revenue spike in Q4 and which BigQuery tables had the highest streaming buffer volume?' },
+    { id: 'ca-retention', label: '🔁 Repeat Customer Cohort Breakdown', prompt: 'Show me the monthly breakdown of repeat vs first-time customer orders over the past year.' },
+  ],
+  'health-check': [
+    { id: 'hc-full', label: '🩺 Full 3-Pillar Looker & BigQuery Audit', prompt: 'Run a full 3-pillar Looker & BigQuery health check and generate a prioritized Technical Design Document.' },
+    { id: 'hc-lookml', label: '📐 LookML Transcriber Rubric & PK Audit', prompt: 'Audit LookML views for missing primary keys, symmetric aggregate fanouts, and 0–4 Transcriber maturity score.' },
+    { id: 'hc-bq', label: '⚡ BigQuery Partitioning & Slot Cost Audit', prompt: 'Analyze BigQuery INFORMATION_SCHEMA for unpartitioned tables, high-byte scans, and clustering recommendations.' },
+  ],
+  lookml: [
+    { id: 'lkml-measures', label: '🧩 Add Revenue & Margin Measures', prompt: 'Add total_revenue and gross_margin measures to orders refinement, curate field descriptions, and verify SQL vs Explore parity.' },
+    { id: 'lkml-tests', label: '🧪 Generate LookML Assert Data Tests', prompt: 'Curate descriptions on order_items, generate assert data tests (.test.lkml), and capture a LookML parity snapshot.' },
+    { id: 'lkml-ndt', label: '🧱 Model a Native Derived Table Rollup', prompt: 'Create a customer lifetime value native derived table (NDT) view and join it into the order_items explore.' },
+  ],
+  tile: [
+    { id: 'script-summary', label: '🐍 Explore & Active Filter Summary', prompt: 'Write a Script summarizing visible LookML models, explores, and active dashboard filters as a table.' },
+    { id: 'script-anomaly', label: '🚨 Daily Revenue Anomaly Detector', prompt: 'Write a Script that queries daily order revenue, flags days outside 2 standard deviations, and outputs a markdown alert.' },
+    { id: 'script-audit', label: '📋 Unused Content & Schedule Audit', prompt: 'Write a Script that lists top scheduled plans and dashboard element counts across folders.' },
+  ],
+}
+STARTER_PROMPTS_BY_USE_CASE.health = STARTER_PROMPTS_BY_USE_CASE['health-check']
+
+export function getStarterPromptsForUseCase(useCase?: string): StarterPromptItem[] {
+  const key = String(useCase || 'auto').trim().toLowerCase()
+  return STARTER_PROMPTS_BY_USE_CASE[key] || STARTER_PROMPTS_BY_USE_CASE.auto
+}
+
+export const StarterPromptButtons: React.FC<{
+  useCase?: string
+  onSelect: (promptText: string) => void
+  disabled?: boolean
+}> = ({ useCase, onSelect, disabled }) => (
+  <div className="dab-starter-prompts" data-testid="starter-prompt-list">
+    {getStarterPromptsForUseCase(useCase).map((item) => (
+      <button key={item.id} type="button" data-testid={`starter-prompt-${item.id}`} className="dab-starter-chip" disabled={disabled} onClick={() => onSelect(item.prompt)} title={item.prompt}>
+        {item.label}
+      </button>
+    ))}
+  </div>
+)
+
 export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
     activeMode,
@@ -549,8 +613,9 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     useCaseOptions,
     getUseCaseLabel,
     capabilities,
-    selectedExplores,
-    schemaMarkdown,
+    selectedModel,
+    setSelectedModel,
+    availableModels,
     busyStatus,
     activatedLookmlSkills,
     setActivatedLookmlSkills,
@@ -559,24 +624,10 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     prompt,
     setPrompt,
     handleSendPrompt,
-    currentAppCode,
-    core40SDK,
-    extensionSDK,
-    selectedFolderId,
-    lookmlProjectId,
     lookmlBundle,
     nativeContent,
     publishedApp,
-    publishedTileDash,
   } = ctl
-
-  const mockExt =
-    typeof window !== 'undefined' ? (window as any).__MOCK_LOOKER_EXTENSION__ : undefined
-  const [inspectorOpen, setInspectorOpen] = useState(() => Boolean(mockExt?.initialInspectorOpen))
-  const [codeModeSnippet, setCodeModeSnippet] = useState(
-    'return search_content(terms="order", types="lookml_explore")'
-  )
-  const [codeModeOutput, setCodeModeOutput] = useState('')
 
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) =>
     handleImageClipboardPaste(e, setPastedImages)
@@ -723,7 +774,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
             : isLookmlMode
             ? 'Describe LookML changes, SQL query to model, or field descriptions/tests to run in your active dev mode...'
             : activeMode === 'tile'
-            ? 'Describe the Python Tile script to generate or update (or paste a screenshot)...'
+            ? 'Describe the Script to generate or update (or paste a screenshot)...'
             : builderMode === 'dashboard'
             ? 'Describe a Looker UDD, Look, Board, or Schedule to create or update...'
             : 'Describe the Data App to build or paste a screenshot (Cmd+Enter to send)...'
@@ -741,83 +792,21 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       />
 
       <div className="dab-composer-actions">
-        <details
-          className="dab-inspector"
-          open={inspectorOpen}
-          onToggle={(e) => setInspectorOpen((e.currentTarget as HTMLDetailsElement).open)}
+        <select
+          data-testid="composer-model-select"
+          className="dab-composer-model-select"
+          value={selectedModel}
+          onChange={(e) => setSelectedModel(e.target.value)}
+          disabled={!!busyStatus}
+          aria-label="Select Antigravity model"
+          title="Select Antigravity model for this turn (/v1beta/models)"
         >
-          <summary>
-            Inspect Code / Schema {currentAppCode ? `(${currentAppCode.length} B)` : ''}
-          </summary>
-          <div className="dab-inspector-content">
-            {currentAppCode && (
-              <>
-                <div className="dab-inspector-bar">
-                  <strong>app.js</strong>
-                  <button
-                    type="button"
-                    className="dab-btn-secondary"
-                    onClick={() => navigator.clipboard?.writeText(currentAppCode)}
-                  >
-                    Copy app.js
-                  </button>
-                </div>
-                <pre>{currentAppCode}</pre>
-              </>
-            )}
-            <strong>Compiled Explore Schema (/workspace/schema.md)</strong>
-            <pre>{schemaMarkdown}</pre>
-            <div className="dab-inspector-bar">
-              <strong>Test WASM Code Mode (Monty)</strong>
-              <button
-                type="button"
-                className="dab-btn-secondary"
-                onClick={async () => {
-                  try {
-                    setCodeModeOutput('Running in WASM Monty sandbox...')
-                    const firstParsed = selectedExplores[0]
-                      ? parseExploreId(selectedExplores[0])
-                      : null
-                    const out = await LkrCodeMode.runPythonCode({
-                      code: codeModeSnippet,
-                      sdk: core40SDK,
-                      extensionSDK,
-                      allowUpdateSession: isLookmlMode || builderMode === 'dashboard',
-                      vars: {
-                        target_explores: selectedExplores,
-                        target_model: firstParsed?.modelName || '',
-                        target_explore: firstParsed?.exploreName || '',
-                        target_folder_id: selectedFolderId,
-                        target_project_id: lookmlProjectId,
-                      },
-                    })
-                    setCodeModeOutput(out)
-                  } catch (err: any) {
-                    setCodeModeOutput(`Error: ${err?.message || err}`)
-                  }
-                }}
-              >
-                Run Python
-              </button>
-            </div>
-            <textarea
-              rows={3}
-              value={codeModeSnippet}
-              onChange={(e) => setCodeModeSnippet(e.target.value)}
-              style={{
-                width: '100%',
-                fontFamily: 'monospace',
-                fontSize: 11,
-                background: '#1e293b',
-                color: '#f8fafc',
-                border: '1px solid #334155',
-                borderRadius: 4,
-                padding: 6,
-              }}
-            />
-            {codeModeOutput && <pre>{codeModeOutput}</pre>}
-          </div>
-        </details>
+          {availableModels.map((m) => (
+            <option key={m.id} value={m.id} title={m.description}>
+              {m.label}
+            </option>
+          ))}
+        </select>
 
         <button
           type="button"
@@ -855,10 +844,10 @@ export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ 
     builderMode,
     isLookmlMode,
     isHealthCheckMode,
-    models,
+    selectedUseCase,
     selectedExplores,
-    loadingSchema,
-    schemaMarkdown,
+    setPrompt,
+    busyStatus,
   } = ctl
 
   return (
@@ -872,28 +861,15 @@ export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ 
               : isLookmlMode
               ? 'Author & Validate Agentic LookML'
               : activeMode === 'tile'
-              ? 'Author & Schedule a WASM CodeMode Python Tile'
+              ? 'Author & Schedule a Looker Script'
               : builderMode === 'dashboard'
               ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)'
               : 'Build a Looker Data App with Antigravity'}
           </h2>
           <p className="dab-muted">
-            {selectedExplores.length === 0 ? (
-              <>
-                <strong>Let Agent Decide:</strong> No explore pre-selected — Antigravity will
-                search across all {models.length} models using Looker&apos;s Solr{' '}
-                <code>search_content</code> &amp; <code>lookml_model_explore</code> in WASM
-                CodeMode.
-              </>
-            ) : (
-              <>
-                Compiled schema for <code>{selectedExplores.join(', ')}</code>{' '}
-                {loadingSchema
-                  ? 'is loading...'
-                  : `is ready (${schemaMarkdown.length.toLocaleString()} chars).`}
-              </>
-            )}
+            {selectedExplores.length > 0 ? <>Exploring <code>{selectedExplores.join(', ')}</code> — pick a starter prompt below or describe what you want to build.</> : 'Pick a starter prompt below or describe what you want to build, analyze, or automate.'}
           </p>
+          <StarterPromptButtons useCase={selectedUseCase} onSelect={setPrompt} disabled={!!busyStatus} />
         </div>
 
         <StudioComposer ctl={ctl} />
@@ -948,10 +924,9 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   const {
     messages,
     builderMode,
-    models,
+    selectedUseCase,
     selectedExplores,
-    loadingSchema,
-    schemaMarkdown,
+    setPrompt,
     busyStatus,
     liveActivitySteps,
     pendingPerm,
@@ -972,28 +947,10 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                   : 'Build a Looker Data App with Antigravity'}
               </strong>
             </p>
-            <p>
-              {selectedExplores.length === 0 ? (
-                <>
-                  <strong>Let Agent Decide:</strong> No explore pre-selected — Antigravity will
-                  search across all {models.length} models using Looker&apos;s Solr{' '}
-                  <code>search_content</code> &amp; <code>lookml_model_explore</code> in WASM
-                  CodeMode.
-                </>
-              ) : (
-                <>
-                  Compiled schema for <code>{selectedExplores.join(', ')}</code>{' '}
-                  {loadingSchema
-                    ? 'is loading...'
-                    : `is ready (${schemaMarkdown.length.toLocaleString()} chars).`}
-                </>
-              )}
+            <p className="dab-muted">
+              {selectedExplores.length > 0 ? <>Exploring <code>{selectedExplores.join(', ')}</code> — pick a starter prompt below or describe what you want to build.</> : 'Pick a starter prompt below or describe what you want to build, analyze, or automate.'}
             </p>
-            <p>
-              {builderMode === 'dashboard'
-                ? 'Creates or updates native Looker UDDs, Looks, Boards, and Schedules via CodeMode, indexes them in your My Creations catalog, and previews them on the right.'
-                : "Every turn validates your app in Antigravity's Linux sandbox, registers widget queries, and auto-publishes the live Looker dashboard on the right."}
-            </p>
+            <StarterPromptButtons useCase={selectedUseCase} onSelect={setPrompt} disabled={!!busyStatus} />
           </div>
         )}
 
@@ -1138,6 +1095,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     canDeployLookml,
     nativeContent,
     publishedApp,
+    currentAppCode,
     embedNonce,
     extensionSDK,
   } = ctl
@@ -1150,6 +1108,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     () => mockExt?.initialTddViewMode || 'rendered'
   )
   const [copiedTdd, setCopiedTdd] = useState(false)
+  const [showAppCode, setShowAppCode] = useState(false)
   const [iframeRev, setIframeRev] = useState(0)
   const embedContainerRef = useRef<HTMLDivElement | null>(null)
   const embedControllerRef = useRef<ReturnType<typeof createLookerEmbedPreloadController> | null>(
@@ -1401,24 +1360,48 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               </span>
             )}
           </div>
-          {activePreviewId && (
+          {(activePreviewId || (builderMode !== 'dashboard' && currentAppCode)) && (
             <div className="dab-preview-actions">
-              <button
-                type="button"
-                className="dab-btn-secondary"
-                onClick={() => setIframeRev((r) => r + 1)}
-              >
-                Reload Preview
-              </button>
-              <button
-                type="button"
-                className="dab-btn-secondary"
-                onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}
-              >
-                Open in Looker ↗
-              </button>
+              {builderMode !== 'dashboard' && currentAppCode && (
+                <button
+                  type="button"
+                  data-testid="preview-view-code-btn"
+                  className="dab-btn-secondary"
+                  onClick={() => setShowAppCode((v) => !v)}
+                >
+                  {showAppCode ? 'Hide app.js' : '{ } View app.js'}
+                </button>
+              )}
+              {activePreviewId && (
+                <>
+                  <button
+                    type="button"
+                    className="dab-btn-secondary"
+                    onClick={() => setIframeRev((r) => r + 1)}
+                  >
+                    Reload Preview
+                  </button>
+                  <button
+                    type="button"
+                    className="dab-btn-secondary"
+                    onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}
+                  >
+                    Open in Looker ↗
+                  </button>
+                </>
+              )}
             </div>
           )}
+        </div>
+      )}
+
+      {showAppCode && currentAppCode && builderMode !== 'dashboard' && (
+        <div className="dab-code-drawer" data-testid="preview-app-code-drawer" style={{ padding: 12, background: 'var(--dab-code-bg, #0f172a)', color: '#e2e8f0', borderBottom: '1px solid var(--dab-border, #e2e8f0)', maxHeight: 260, overflow: 'auto', fontSize: 12 }}>
+          <div className="dab-inspector-bar">
+            <strong>app.js ({currentAppCode.length} B)</strong>
+            <button type="button" className="dab-btn-secondary" onClick={() => navigator.clipboard?.writeText(currentAppCode)}>Copy app.js</button>
+          </div>
+          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{currentAppCode}</pre>
         </div>
       )}
 

@@ -55,15 +55,13 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 }
 `;
 
-exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders chatbar_pasted_image_inspector (12. Chat Bar State — Pasted Screenshot Thumbnail & Code/Schema Inspector Open) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders chatbar_pasted_image_inspector (12. Chat Bar State — Pasted Screenshot Thumbnail & Composer Model Selector) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,
   "modeTabs": [],
   "scenario": "chatbar_pasted_image_inspector",
   "verifiedVisibleText": [
-    "Inspect Code / Schema",
-    "Compiled Explore Schema (/workspace/schema.md)",
-    "Test WASM Code Mode (Monty)",
+    "Gemini 3.8 Flash",
     "✨ Update App",
   ],
 }

@@ -293,9 +293,6 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     resolvedTheme,
     setThemeMode,
     activeMode,
-    selectedModel,
-    setSelectedModel,
-    availableModels,
     agentSession,
     handleWakeModeEnv,
     requirePermission,
@@ -325,7 +322,6 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     myCreations,
     nativeContent,
     publishedApp,
-    healthReport,
     loadDashInput,
     setLoadDashInput,
     handleLoadExistingDashboard,
@@ -463,19 +459,6 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
             🔒 {getUseCaseLabel(selectedUseCase)}
           </span>
         )}
-        <select
-          data-testid="topbar-model-select"
-          value={selectedModel}
-          onChange={(e) => setSelectedModel(e.target.value)}
-          title="Select Antigravity model (/v1beta/models)"
-          style={{ height: 26, fontSize: 11.5, padding: '0 6px', borderRadius: 6, border: '1px solid var(--dab-border-strong, #cbd5e1)', background: 'var(--dab-surface-muted, #f8fafc)', color: 'var(--dab-text-strong, #0f172a)', fontWeight: 500 }}
-        >
-          {availableModels.map((m) => (
-            <option key={m.id} value={m.id} title={m.description}>
-              {m.label}
-            </option>
-          ))}
-        </select>
         <ThemeModeSelect
           themeMode={themeMode}
           resolvedTheme={resolvedTheme}
