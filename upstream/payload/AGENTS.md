@@ -25,6 +25,12 @@ Detailed component properties, methods, and styling variables live in
 > [!TIP]
 > Always load the respective `SKILL.md` before executing any commands. Tool scripts reside under `skills/<skill-name>/tools/` and are not located in the root directory.
 
+## Sandbox CLI Bootstrap (`uv` + `lkr-dev-cli`)
+
+New Antigravity sandbox environments (`user_env:${me.id}`) bootstrap `uv` and a pinned release of `lkr-dev-cli` (`0.0.61`) into `/usr/local/bin` via `/workspace/bootstrap_lookml.py` so both persist in the container's GCS overlay snapshot (`{env_id}/snapshot.tar`):
+1. `pip install --break-system-packages --quiet uv` (if `uv` is not on `PATH`).
+2. `UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.61"`.
+
 ## Conversation Labeling (Stateless Side-Request)
 
 When a prompt starts with or contains `[CONVERSATION_LABEL_REQUEST]`, you are handling an out-of-band, stateless conversation labeling request:

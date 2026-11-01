@@ -26,10 +26,14 @@ import {
 import {
   AGENTS_MD,
   ANTIGRAVITY_ALLOWED_MODELS,
+  BOOTSTRAP_LOOKML_PY,
+  BOOTSTRAP_SANDBOX_SH,
   CONVERSATION_LABEL_REQUEST_TAG,
   DEFAULT_ANTIGRAVITY_MODEL,
   generateConversationLabel,
   isEnvironmentNotFoundError,
+  LKR_DEV_CLI_SPEC,
+  LKR_DEV_CLI_VERSION,
   listAvailableAntigravityModels,
   prewarmOrWakeAntigravityEnvironment,
   runAntigravityTurn,
@@ -978,5 +982,76 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(savedList[0].type).toBe('conversational-analytics')
     expect(savedList[0].content?.caConversationId).toBe('ca_conv_9001')
     expect(savedList[0].content?.agentId).toBe('ca_agent_bq_ops')
+  })
+
+  test('13. pins LKR_DEV_CLI_VERSION=0.0.61, bootstraps uv via pip --break-system-packages + uv tool install in new environments, and configures Monday/Thursday PyPI auto-PR workflow', async () => {
+    const repoRoot = path.resolve(__dirname, '../..')
+    const versionTxt = readFileSync(path.join(repoRoot, 'lkr-dev-cli-version.txt'), 'utf8').trim()
+    expect(LKR_DEV_CLI_VERSION).toBe('0.0.61')
+    expect(versionTxt).toBe(LKR_DEV_CLI_VERSION)
+    expect(LKR_DEV_CLI_SPEC).toBe('lkr-dev-cli[tools,code-mode,parse]==0.0.61')
+
+    expect(BOOTSTRAP_SANDBOX_SH).toContain('pip install --break-system-packages --quiet uv')
+    expect(BOOTSTRAP_SANDBOX_SH).toContain(
+      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.61"'
+    )
+    expect(BOOTSTRAP_LOOKML_PY).toContain('["pip", "install", "--break-system-packages", "--quiet", "uv"]')
+    expect(BOOTSTRAP_LOOKML_PY).toContain('"UV_TOOL_BIN_DIR": "/usr/local/bin"')
+    expect(BOOTSTRAP_LOOKML_PY).toContain('["uv", "tool", "install", "--force", "--quiet", pkg_spec]')
+    expect(AGENTS_MD).toContain('pip install --break-system-packages --quiet uv')
+    expect(AGENTS_MD).toContain(
+      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.61"'
+    )
+
+    const workflowYml = readFileSync(
+      path.join(repoRoot, '.github/workflows/update-skills.yml'),
+      'utf8'
+    )
+    expect(workflowYml).toContain('cron: "0 9 * * 1,4"')
+    expect(workflowYml).toContain('https://pypi.org/pypi/lkr-dev-cli/json')
+    expect(workflowYml).toContain('lkr-dev-cli-version.txt')
+    expect(workflowYml).toContain('export const LKR_DEV_CLI_VERSION =')
+    expect(workflowYml).toContain('chore/update-skills')
+
+    const postedBodies: any[] = []
+    const mockExtensionSDK = {
+      serverProxy: async (_url: string, init: any) => {
+        const body = init.body ? JSON.parse(init.body) : undefined
+        postedBodies.push(body)
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            id: 'int_prewarm_bootstrap_1',
+            environment_id: 'env_fresh_bootstrap_1',
+            status: 'completed',
+            output_text: 'READY',
+          }),
+        }
+      },
+    }
+
+    const res = await prewarmOrWakeAntigravityEnvironment({
+      extensionSDK: mockExtensionSDK,
+      auth: { mode: 'apikey' },
+      toolType: 'app',
+      schemaMarkdown: '# Schema',
+    })
+    expect(res.status).toBe('prelaunched')
+    expect(res.session.environmentId).toBe('env_fresh_bootstrap_1')
+    expect(postedBodies).toHaveLength(1)
+    expect(postedBodies[0].input[0].text).toContain('python3 /workspace/bootstrap_lookml.py cli')
+    expect(postedBodies[0].input[0].text).toContain('pip install --break-system-packages --quiet uv')
+    expect(postedBodies[0].input[0].text).toContain(
+      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.61"'
+    )
+    expect(postedBodies[0].environment.sources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          target: '/workspace/bootstrap_lookml.py',
+          content: BOOTSTRAP_LOOKML_PY,
+        }),
+      ])
+    )
   })
 })

@@ -1,4 +1,6 @@
 import { NativeContentState } from './lookerApi'
+import { BOOTSTRAP_SANDBOX_SH, LKR_DEV_CLI_SPEC, LKR_DEV_CLI_VERSION } from './lookmlTool'
+export { BOOTSTRAP_SANDBOX_SH, LKR_DEV_CLI_SPEC, LKR_DEV_CLI_VERSION } from './lookmlTool'
 
 export const DASHBOARD_CODEMODE_PREAMBLE_PY = `# ponytail: pre-injected Monty Python macros for UDDs, LookML Dashboards (.dashboard.lookml), Looks, Boards & Schedules
 import json
@@ -470,6 +472,12 @@ export const AGENTS_MD = `# Looker Data Apps
 This directory is an installed Looker Data Apps environment. A **Data App** is a
 code-first application for Looker, authored as a single self-contained ES module
 in \`apps/<name>/app.js\` and published directly into Looker dashboard tiles.
+
+## Sandbox CLI Bootstrap (\`uv\` + \`lkr-dev-cli\`)
+
+New Antigravity sandbox environments (\`user_env:\${me.id}\`) bootstrap \`uv\` and a pinned release of \`lkr-dev-cli\` (\`${LKR_DEV_CLI_VERSION}\`) into \`/usr/local/bin\` via \`/workspace/bootstrap_lookml.py\` so both persist in the container's GCS overlay snapshot (\`{env_id}/snapshot.tar\`):
+1. \`pip install --break-system-packages --quiet uv\` (if \`uv\` is not on \`PATH\`).
+2. \`UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"\`.
 
 ## Conversation Labeling (Stateless Side-Request)
 

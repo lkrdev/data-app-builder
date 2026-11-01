@@ -1,0 +1,180 @@
+name: Update Agent Skills
+
+on:
+  schedule:
+    # Runs every Monday and Thursday at 09:00 UTC
+    - cron: "0 9 * * 1,4"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-skills:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+
+      - name: Update installed skills and sync lkr-dev-cli release pin
+        id: sync_skills
+        run: |
+          set -euo pipefail
+
+          # 1. Update all existing skills tracked in skills-lock.json (if present)
+          if [ -f skills-lock.json ]; then
+            npx --yes skills update -p -y
+          fi
+
+          # 2. Check lkrdev/cli for any new skills under skills/*
+          CLI_DIR=$(mktemp -d)
+          git clone --depth 1 https://github.com/lkrdev/cli.git "$CLI_DIR"
+          NEW_CLI_SKILLS=()
+          for skill_dir in "$CLI_DIR"/skills/*; do
+            [ -d "$skill_dir" ] || continue
+            [ -f "$skill_dir/SKILL.md" ] || continue
+            skill_name=$(basename "$skill_dir")
+            if [ ! -d ".agents/skills/$skill_name" ]; then
+              NEW_CLI_SKILLS+=("$skill_name")
+            fi
+          done
+          rm -rf "$CLI_DIR"
+
+          if [ ${#NEW_CLI_SKILLS[@]} -gt 0 ]; then
+            echo "Installing new lkrdev/cli skills: ${NEW_CLI_SKILLS[*]}"
+            npx --yes skills add lkrdev/cli \
+              --agent antigravity \
+              --skill "${NEW_CLI_SKILLS[@]}" \
+              -y
+          fi
+
+          # 3. Check looker-open-source/looker-skills for any new lookml-* skills
+          LOOKER_SKILLS_DIR=$(mktemp -d)
+          git clone --depth 1 https://github.com/looker-open-source/looker-skills.git "$LOOKER_SKILLS_DIR"
+          NEW_LOOKML_SKILLS=()
+          for skill_dir in "$LOOKER_SKILLS_DIR"/skills/lookml-*; do
+            [ -d "$skill_dir" ] || continue
+            skill_name=$(basename "$skill_dir")
+            if [ ! -d ".agents/skills/$skill_name" ]; then
+              NEW_LOOKML_SKILLS+=("$skill_name")
+            fi
+          done
+          rm -rf "$LOOKER_SKILLS_DIR"
+
+          if [ ${#NEW_LOOKML_SKILLS[@]} -gt 0 ]; then
+            echo "Installing new looker-open-source/looker-skills: ${NEW_LOOKML_SKILLS[*]}"
+            npx --yes skills add looker-open-source/looker-skills \
+              --agent antigravity \
+              --skill "${NEW_LOOKML_SKILLS[@]}" \
+              -y
+          fi
+
+          # 4. Check lkrdev/ojof-gym for any new *ojof* skills
+          OJOF_DIR=$(mktemp -d)
+          git clone --depth 1 https://github.com/lkrdev/ojof-gym.git "$OJOF_DIR"
+          NEW_OJOF_SKILLS=()
+          while IFS= read -r skill_md; do
+            skill_dir=$(dirname "$skill_md")
+            skill_name=$(basename "$skill_dir")
+            if [[ "$skill_name" == *ojof* ]] && [ ! -d ".agents/skills/$skill_name" ]; then
+              NEW_OJOF_SKILLS+=("$skill_name")
+            fi
+          done < <(find "$OJOF_DIR" -name "SKILL.md")
+          rm -rf "$OJOF_DIR"
+
+          if [ ${#NEW_OJOF_SKILLS[@]} -gt 0 ]; then
+            echo "Installing new lkrdev/ojof-gym skills: ${NEW_OJOF_SKILLS[*]}"
+            npx --yes skills add lkrdev/ojof-gym \
+              --agent antigravity \
+              --skill "${NEW_OJOF_SKILLS[@]}" \
+              -y
+          fi
+
+          # 5. Check PyPI for a newer release of lkr-dev-cli and update pinned version
+          LATEST_LKR_CLI=$(curl -fsSL https://pypi.org/pypi/lkr-dev-cli/json | jq -r '.info.version')
+          CURRENT_LKR_CLI=$(tr -d '[:space:]' < lkr-dev-cli-version.txt 2>/dev/null || node -e '
+            const fs = require("fs");
+            const m = fs.readFileSync("src/lookmlTool.tsx", "utf8").match(/export const LKR_DEV_CLI_VERSION = ['\''"]([^'\''"]+)['\''"]/);
+            process.stdout.write(m ? m[1] : "");
+          ')
+          if [ -n "$LATEST_LKR_CLI" ] && [ "$LATEST_LKR_CLI" != "null" ] && [ "$LATEST_LKR_CLI" != "$CURRENT_LKR_CLI" ]; then
+            echo "Updating pinned lkr-dev-cli version: ${CURRENT_LKR_CLI} -> ${LATEST_LKR_CLI}"
+            printf "%s\n" "$LATEST_LKR_CLI" > lkr-dev-cli-version.txt
+            node -e '
+              const fs = require("fs");
+              const oldVer = process.argv[1];
+              const newVer = process.argv[2];
+              const file = "src/lookmlTool.tsx";
+              const updated = fs
+                .readFileSync(file, "utf8")
+                .replace(
+                  /export const LKR_DEV_CLI_VERSION = ['\''"][^'\''"]+['\''"]/,
+                  `export const LKR_DEV_CLI_VERSION = '\''${newVer}'\''`
+                )
+                .replace(
+                  /"[0-9]+\.[0-9]+\.[0-9]+[^"]*" if _PINNED_CLI_VERSION/,
+                  `"${newVer}" if _PINNED_CLI_VERSION`
+                );
+              fs.writeFileSync(file, updated);
+              for (const md of ["AGENTS.md", "upstream/payload/AGENTS.md"]) {
+                if (fs.existsSync(md) && oldVer) {
+                  fs.writeFileSync(md, fs.readFileSync(md, "utf8").split(`==${oldVer}`).join(`==${newVer}`));
+                }
+              }
+            ' "$CURRENT_LKR_CLI" "$LATEST_LKR_CLI"
+            echo "lkr_cli_version=${CURRENT_LKR_CLI} -> ${LATEST_LKR_CLI}" >> "$GITHUB_OUTPUT"
+          else
+            echo "lkr_cli_version=${CURRENT_LKR_CLI} (unchanged)" >> "$GITHUB_OUTPUT"
+          fi
+
+          # 6. Sync upstream Data Apps toolkit payload
+          npm run sync-upstream
+
+          ALL_NEW_SKILLS=("${NEW_CLI_SKILLS[@]}" "${NEW_LOOKML_SKILLS[@]}" "${NEW_OJOF_SKILLS[@]}")
+          if [ ${#ALL_NEW_SKILLS[@]} -gt 0 ]; then
+            echo "new_skills=${ALL_NEW_SKILLS[*]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "new_skills=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or Update Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          NEW_SKILLS: ${{ steps.sync_skills.outputs.new_skills }}
+          LKR_CLI_VERSION: ${{ steps.sync_skills.outputs.lkr_cli_version }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet && [ -z "$(git status --porcelain)" ]; then
+            echo "No skill, lockfile, or lkr-dev-cli version changes detected."
+            exit 0
+          fi
+
+          BRANCH="chore/update-skills"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add lkr-dev-cli-version.txt src/lookmlTool.tsx AGENTS.md upstream
+          [ -d .agents/skills ] && git add .agents/skills
+          [ -f skills-lock.json ] && git add skills-lock.json
+          git commit -m "chore(skills): sync agent skills, skills-lock.json, and lkr-dev-cli pin"
+          git push --force origin "$BRANCH"
+
+          BODY="Automated Monday/Thursday sync of agent skills and \`lkr-dev-cli\` release pin from [\`lkrdev/cli\`](https://github.com/lkrdev/cli), [\`looker-open-source/looker-skills\`](https://github.com/looker-open-source/looker-skills), [\`lkrdev/ojof-gym\`](https://github.com/lkrdev/ojof-gym), and Looker Data Apps upstream.
+
+          - Updates version-controlled skills in \`.agents/skills/*\` and \`skills-lock.json\`.
+          - \`lkr-dev-cli\` release pin (\`LKR_DEV_CLI_VERSION\`): \`${LKR_CLI_VERSION}\`
+          - Newly discovered skills installed: \`${NEW_SKILLS:-none}\`"
+
+          EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING_PR" ]; then
+            gh pr edit "$EXISTING_PR" --title "chore(skills): automated agent skills & lkr-dev-cli release sync" --body "$BODY"
+          else
+            gh pr create --head "$BRANCH" --title "chore(skills): automated agent skills & lkr-dev-cli release sync" --body "$BODY"
+          fi
