@@ -74,12 +74,14 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     enabledModes,
     apiKey,
     setApiKey,
+    oauthRedirectUri,
     capabilities,
     extensionSDK,
     busyStatus,
     messages,
     handleSaveAuthSetup,
   } = ctl
+  const [copiedRedirectUri, setCopiedRedirectUri] = useState(false)
   const errorText = messages.filter((m) => m.role === 'error').slice(-1)[0]?.text
   const canSaveContext = capabilities?.canConfigureExtension !== false
   const canManageAttrs = capabilities?.canManageUserAttributes !== false
@@ -183,6 +185,33 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               ✨ Save Setup
             </button>
           </div>
+          {authMode === 'oauth' && (
+            <div className="dab-oauth-redirect-helper">
+              <div className="dab-oauth-redirect-row">
+                <span>
+                  <strong>Authorized redirect URI:</strong>{' '}
+                  <code data-testid="config-oauth-redirect-uri">{oauthRedirectUri}</code>
+                </span>
+                <button
+                  type="button"
+                  data-testid="config-copy-redirect-uri-btn"
+                  className="dab-btn-secondary"
+                  style={{ height: 24, fontSize: 11, padding: '0 8px' }}
+                  onClick={() => {
+                    navigator.clipboard?.writeText?.(oauthRedirectUri)
+                    setCopiedRedirectUri(true)
+                    setTimeout(() => setCopiedRedirectUri(false), 1800)
+                  }}
+                >
+                  {copiedRedirectUri ? '✓ Copied Redirect URI' : 'Copy Redirect URI'}
+                </button>
+              </div>
+              <div className="dab-muted" style={{ fontSize: 11 }}>
+                Add this URI under <strong>Authorized redirect URIs</strong> on your GCP Web OAuth 2.0
+                Client ID to avoid <code>Error 400: redirect_uri_mismatch</code>.
+              </div>
+            </div>
+          )}
           <div
             style={{
               borderTop: '1px solid var(--dab-border, #e2e8f0)',
@@ -329,7 +358,9 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     handleResetNewApp,
     authMode,
     oauthToken,
+    oauthSigningIn,
     handleOAuthLogin,
+    handleCancelOAuthLogin,
     extensionSDK,
     healthScope,
     setHealthScope,
@@ -715,13 +746,27 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
 
         <div className="dab-auth-box">
           {authMode === 'oauth' ? (
-            <button
-              type="button"
-              className={oauthToken ? 'dab-btn-secondary' : 'dab-btn-primary'}
-              onClick={handleOAuthLogin}
-            >
-              {oauthToken ? '✓ Signed In' : 'Sign In'}
-            </button>
+            <>
+              <button
+                type="button"
+                data-testid="topbar-oauth-signin-btn"
+                className={oauthToken ? 'dab-btn-secondary' : 'dab-btn-primary'}
+                onClick={handleOAuthLogin}
+              >
+                {oauthToken ? '✓ Signed In' : oauthSigningIn ? 'Retry Sign In' : 'Sign In'}
+              </button>
+              {oauthSigningIn && (
+                <button
+                  type="button"
+                  data-testid="topbar-oauth-cancel-btn"
+                  className="dab-btn-secondary"
+                  onClick={handleCancelOAuthLogin}
+                  title="Cancel pending Google OAuth sign-in popup"
+                >
+                  Cancel Sign-In
+                </button>
+              )}
+            </>
           ) : (
             <span
               className="dab-badge"

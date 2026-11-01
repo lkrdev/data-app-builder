@@ -69,7 +69,7 @@
     "snapshotName": "08-config-page-setup-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "explore_dropdown_open_top",
@@ -119,7 +119,7 @@
     "height": 240,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "chatbar_busy_running",
@@ -133,7 +133,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "chatbar_error_banner",
@@ -147,7 +147,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "python_tile_scheduler_modal",

@@ -21,10 +21,10 @@ import {
 } from './lookerApi'
 import {
   AgentSession, ANTIGRAVITY_ALLOWED_MODELS, AntigravityActivityStep, AntigravityAuth, AntigravityModelOption,
-  CodeModePermissionDecision, CodeModePermissionRequest, DEFAULT_ANTIGRAVITY_MODEL,
-  ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig, generateConversationLabel,
+  authenticateGoogleOAuth, CodeModePermissionDecision, CodeModePermissionRequest, computeIsAuthenticated,
+  DEFAULT_ANTIGRAVITY_MODEL, ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig, generateConversationLabel,
   listAvailableAntigravityModels, LkrCodeMode, loginWithGoogleOAuth, normalizeEnvironmentId,
-  PastedImage, prewarmOrWakeAntigravityEnvironment, runAntigravityTurn, sanitizeConversationLabel,
+  PastedImage, prewarmOrWakeAntigravityEnvironment, resolveLookerOAuthRedirectUri, runAntigravityTurn, sanitizeConversationLabel,
 } from './antigravity'
 import {
   listUserLookmlSessions, loadLookmlSessionArtifact, LookmlBundle, LookmlSessionIndex, saveLookmlSessionArtifact,
@@ -37,7 +37,10 @@ import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
 
 export {
+  authenticateGoogleOAuth,
+  computeIsAuthenticated,
   normalizeStudioThemeMode,
+  resolveLookerOAuthRedirectUri,
   resolveStudioTheme,
   resolveSystemTheme,
   STUDIO_THEME_STORAGE_KEY,
@@ -65,6 +68,8 @@ export function useStudioController() {
       return undefined
     }
   })()
+  const mockExt =
+    typeof window !== 'undefined' ? (window as any).__MOCK_LOOKER_EXTENSION__ : undefined
   const [authMode, setAuthMode] = useState<'oauth' | 'apikey'>(initialCtx?.authMode || 'oauth')
   const [clientId, setClientId] = useState(initialCtx?.clientId || '')
   const [projectId, setProjectId] = useState(initialCtx?.projectId || '')
@@ -81,14 +86,21 @@ export function useStudioController() {
     const list = STUDIO_MODES.filter((m) => !disabledModes.includes(m.mode))
     return list.length > 0 ? list : [STUDIO_MODES[0]]
   }, [disabledModes])
-  const [oauthToken, setOauthToken] = useState('')
-  const [apiKey, setApiKey] = useState('')
+  const [oauthToken, setOauthToken] = useState(() => String(mockExt?.initialOauthToken || ''))
+  const [apiKey, setApiKey] = useState(() => String(mockExt?.initialApiKey || ''))
+  const [oauthSigningIn, setOauthSigningIn] = useState(false)
+  const oauthAbortRef = useRef<AbortController | null>(null)
+  const isAuthenticated = authMode === 'apikey' ? Boolean(apiKey.trim()) : Boolean(oauthToken.trim())
+  const oauthRedirectUri = useMemo(
+    () =>
+      resolveLookerOAuthRedirectUri(
+        lookerHostData?.hostUrl || (extensionSDK as any)?.lookerHostData?.hostUrl
+      ),
+    [lookerHostData?.hostUrl, extensionSDK]
+  )
   const [isConfigured, setIsConfigured] = useState(() =>
     Boolean(initialCtx?.authMode && (initialCtx.authMode === 'apikey' || initialCtx.clientId))
   )
-
-  const mockExt =
-    typeof window !== 'undefined' ? (window as any).__MOCK_LOOKER_EXTENSION__ : undefined
   const [themeMode, setThemeModeState] = useState<StudioThemeMode>(() =>
     readInitialStudioThemeMode()
   )
@@ -766,6 +778,12 @@ export function useStudioController() {
     }
   }, [core40SDK, selectedExplores, models])
 
+  const handleCancelOAuthLogin = useCallback(() => {
+    oauthAbortRef.current?.abort()
+    oauthAbortRef.current = null
+    setOauthSigningIn(false)
+  }, [])
+
   const handleOAuthLogin = async () => {
     if (!clientId.trim()) {
       setMessages((prev) => [
@@ -774,16 +792,31 @@ export function useStudioController() {
       ])
       return
     }
+    oauthAbortRef.current?.abort()
+    const controller = new AbortController()
+    oauthAbortRef.current = controller
+    setOauthSigningIn(true)
     try {
-      setBusyStatus('Opening Google OAuth sign-in...')
-      setOauthToken(await loginWithGoogleOAuth(extensionSDK, clientId))
-      setBusyStatus(null)
+      const token = await loginWithGoogleOAuth(extensionSDK, clientId, {
+        signal: controller.signal,
+        focusReturnDelayMs:
+          typeof mockExt?.oauthFocusReturnDelayMs === 'number'
+            ? mockExt.oauthFocusReturnDelayMs
+            : 1500,
+      })
+      if (oauthAbortRef.current === controller) setOauthToken(token)
     } catch (err: any) {
-      setBusyStatus(null)
-      setMessages((prev) => [
-        ...prev,
-        { role: 'error', text: `Google OAuth failed: ${err.message || err}` },
-      ])
+      if (oauthAbortRef.current === controller && !controller.signal.aborted) {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'error', text: `Google OAuth failed: ${err.message || err}` },
+        ])
+      }
+    } finally {
+      if (oauthAbortRef.current === controller) {
+        oauthAbortRef.current = null
+        setOauthSigningIn(false)
+      }
     }
   }
 
@@ -1610,7 +1643,7 @@ export function useStudioController() {
 
   const handleSendPrompt = async () => {
     const text = prompt.trim()
-    if ((!text && pastedImages.length === 0) || busyStatus) return
+    if (!isAuthenticated || (!text && pastedImages.length === 0) || busyStatus) return
     const auth: AntigravityAuth = { mode: authMode, oauthToken, clientId, projectId, apiKey }
     const attachedImages = pastedImages
     const effectivePrompt = text || 'See the attached screenshot.'
@@ -2049,22 +2082,25 @@ export function useStudioController() {
     if (typeof window !== 'undefined') {
       ;(window as any).__DAB_STUDIO__ = {
         history, requestCodeModePermission, setRequirePermission, setDisabledModes,
-        setSelectedModel, setAuthMode, setApiKey, setSidebarCollapsed,
-        themeMode, resolvedTheme, setThemeMode,
+        setSelectedModel, setAuthMode, setClientId, setOauthToken, setApiKey,
+        isAuthenticated, oauthSigningIn, oauthRedirectUri,
+        handleOAuthLogin, handleCancelOAuthLogin,
+        setSidebarCollapsed, themeMode, resolvedTheme, setThemeMode,
         setSelectedUseCase: handleChangeUseCase, setCapabilities,
         handleResetNewApp, handleNewConversation, handleSelectConversation,
         setNativeContent, setPublishedApp, bumpEmbedNonce,
         setMessages, setBusyStatus, setLiveActivitySteps,
       }
     }
-  }, [history, requestCodeModePermission, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce, setMessages])
+  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce, setMessages])
 
   return {
-    extensionSDK, core40SDK, history, location, isTileMount,
+    extensionSDK, core40SDK, lookerHostData, history, location, isTileMount,
     themeMode, resolvedTheme, setThemeMode,
     authMode, setAuthMode, clientId, setClientId, projectId, setProjectId,
     disabledModes, setDisabledModes, selectedModel, setSelectedModel,
-    availableModels, enabledModes, oauthToken, apiKey, setApiKey,
+    availableModels, enabledModes, oauthToken, setOauthToken, apiKey, setApiKey,
+    isAuthenticated, oauthSigningIn, oauthRedirectUri,
     capabilities, setCapabilities, availableLookmlProjects, canDeployLookml,
     models, folders, selectedExplores, setSelectedExplores,
     selectedFolderId, setSelectedFolderId, schemaMarkdown, loadingSchema,
@@ -2084,17 +2120,17 @@ export function useStudioController() {
     currentAppCode, loadDashInput, setLoadDashInput,
     sharedEnvironmentId, syncSharedEnvironmentId,
     agentSession, messages, setMessages, prompt, setPrompt, pastedImages, setPastedImages,
-    busyStatus, liveActivitySteps, setLiveActivitySteps,
+    busyStatus, loading: Boolean(busyStatus), liveActivitySteps, setLiveActivitySteps,
     handleWakeModeEnv, filteredCatalog, catalogSearch, setCatalogSearch,
     activeObjectId, conversations: filteredConversations, activeConversationId,
     sidebarCollapsed, setSidebarCollapsed, isEmptyConversation,
     requirePermission, setRequirePermission, pendingPerm, resolvePermDecision,
-    handleSaveAuthSetup, handleOAuthLogin,
+    handleSaveAuthSetup, handleOAuthLogin, handleCancelOAuthLogin,
     loadNativeById, loadLookmlSessionById, loadCaConversationById,
     handleRunHealthCheck, handleRunConversationalAnalytics, handleLoadExistingDashboard,
     handleResetNewApp, handleNewConversation, handleSelectConversation,
     handleDeleteConversation, handleSelectCatalogItem, handleDeleteCatalogItem,
-    handleSendPrompt,
+    handleSendPrompt, handleSend: handleSendPrompt,
   }
 }
 

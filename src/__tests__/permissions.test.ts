@@ -46,10 +46,12 @@ import {
 import {
   AGENTS_MD,
   ANTIGRAVITY_ALLOWED_MODELS,
+  authenticateGoogleOAuth,
   BOOTSTRAP_LOOKML_PY,
   BOOTSTRAP_SANDBOX_SH,
   buildWorkspaceSources,
   BUNDLE_APP_PY,
+  computeIsAuthenticated,
   computeLkrExtensionCacheKey,
   CONCURRENT_POLL_SCHEDULE_MS,
   CONVERSATION_LABEL_REQUEST_TAG,
@@ -67,9 +69,11 @@ import {
   LKR_CLI_BRIDGE_TOOL,
   LKR_CLI_SITECUSTOMIZE_PY,
   LkrCodeMode,
+  loginWithGoogleOAuth,
   prewarmOrWakeAntigravityEnvironment,
   recordSharedEnvExploreSchema,
   resolveAdaptivePollScheduleMs,
+  resolveLookerOAuthRedirectUri,
   runAntigravityTurn,
   sanitizeConversationLabel,
 } from '../antigravity'
@@ -2271,5 +2275,66 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       }
     }
     expect(STARTER_PROMPTS_BY_USE_CASE.health).toBe(STARTER_PROMPTS_BY_USE_CASE['health-check'])
+  })
+
+  test('23. computes isAuthenticated, resolves Looker OAuth redirect URI (/extensions/oauth2_redirect), and prevents hanging oauth2Authenticate popups from locking via focus-return & abort guards (Issue #65)', async () => {
+    expect(computeIsAuthenticated('oauth', '', '')).toBe(false)
+    expect(computeIsAuthenticated('oauth', '   ', 'AIzaSyKey')).toBe(false)
+    expect(computeIsAuthenticated('oauth', 'mock_valid_token', '')).toBe(true)
+    expect(computeIsAuthenticated('apikey', 'mock_valid_token', '')).toBe(false)
+    expect(computeIsAuthenticated('apikey', '', '   ')).toBe(false)
+    expect(computeIsAuthenticated('apikey', '', 'AIzaSyKey')).toBe(true)
+
+    expect(resolveLookerOAuthRedirectUri('https://dev-argolis.looker.com')).toBe(
+      'https://dev-argolis.looker.com/extensions/oauth2_redirect'
+    )
+    expect(resolveLookerOAuthRedirectUri('https://dev-argolis.looker.com/')).toBe(
+      'https://dev-argolis.looker.com/extensions/oauth2_redirect'
+    )
+    expect(resolveLookerOAuthRedirectUri('', 'https://looker.example.com/')).toBe(
+      'https://looker.example.com/extensions/oauth2_redirect'
+    )
+
+    // 1. Successful OAuth sign-in resolves token cleanly
+    const okSdk = {
+      oauth2Authenticate: async () => ({ access_token: 'mock_oauth_ok' }),
+    }
+    await expect(authenticateGoogleOAuth(okSdk, 'client-123')).resolves.toBe('mock_oauth_ok')
+
+    // 2. Hanging OAuth popup (e.g. Error 400: redirect_uri_mismatch or closed window) settles when window regains focus
+    const listeners: Record<string, Array<() => void>> = {}
+    const prevWindow = (globalThis as any).window
+    ;(globalThis as any).window = {
+      ...(prevWindow || {}),
+      location: { origin: 'https://dev-argolis.looker.com' },
+      addEventListener: (evt: string, fn: () => void) => {
+        ;(listeners[evt] = listeners[evt] || []).push(fn)
+      },
+      removeEventListener: (evt: string, fn: () => void) => {
+        listeners[evt] = (listeners[evt] || []).filter((x) => x !== fn)
+      },
+    }
+    try {
+      const hangingSdk = {
+        oauth2Authenticate: () => new Promise(() => {}),
+      }
+      const focusPromise = loginWithGoogleOAuth(hangingSdk, 'client-123', {
+        focusReturnDelayMs: 25,
+      })
+      for (const fn of listeners.focus || []) fn()
+      await expect(focusPromise).rejects.toThrow(/popup closed or failed.*redirect_uri_mismatch/i)
+      expect(listeners.focus?.length || 0).toBe(0)
+
+      // 3. Explicit abort via AbortController (Cancel Sign-In or retry) rejects immediately
+      const abortCtl = new AbortController()
+      const abortPromise = loginWithGoogleOAuth(hangingSdk, 'client-123', {
+        signal: abortCtl.signal,
+      })
+      abortCtl.abort()
+      await expect(abortPromise).rejects.toThrow(/cancelled/i)
+      expect(listeners.focus?.length || 0).toBe(0)
+    } finally {
+      ;(globalThis as any).window = prevWindow
+    }
   })
 })

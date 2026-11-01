@@ -624,6 +624,12 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     prompt,
     setPrompt,
     handleSendPrompt,
+    isAuthenticated,
+    authMode,
+    clientId,
+    oauthSigningIn,
+    handleOAuthLogin,
+    history,
     lookmlBundle,
     nativeContent,
     publishedApp,
@@ -808,31 +814,56 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
           ))}
         </select>
 
-        <button
-          type="button"
-          data-testid="studio-send-btn"
-          className="dab-btn-gemini"
-          onClick={handleSendPrompt}
-          disabled={!!busyStatus || (!prompt.trim() && pastedImages.length === 0)}
+        <div
+          className="dab-composer-send-group"
+          style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}
         >
-          {isCaMode || selectedUseCase === 'conversational-analytics'
-            ? caConversation
-              ? '✨ Ask CA Agent'
-              : '✨ Route & Start CA Chat'
-            : isLookmlMode
-            ? lookmlBundle
-              ? '✨ Update LookML'
-              : '✨ Run Agentic LookML'
-            : activeMode === 'tile'
-            ? '✨ Ask AI'
-            : builderMode === 'dashboard'
-            ? nativeContent
-              ? '✨ Update Content'
-              : '✨ Create / Update Content'
-            : publishedApp
-            ? '✨ Update App'
-            : '✨ Build App'}
-        </button>
+          {!isAuthenticated && (
+            <button
+              type="button"
+              data-testid="composer-signin-inline-btn"
+              className="dab-inline-signin-btn"
+              onClick={() =>
+                authMode === 'oauth' && clientId.trim()
+                  ? handleOAuthLogin()
+                  : history.push('/config')
+              }
+            >
+              {authMode === 'oauth' && clientId.trim()
+                ? oauthSigningIn
+                  ? 'Signing in… (click to retry)'
+                  : 'Sign in to send'
+                : 'Configure credentials to send'}
+            </button>
+          )}
+          <button
+            type="button"
+            data-testid="studio-send-btn"
+            className="dab-btn-gemini"
+            onClick={handleSendPrompt}
+            disabled={
+              !isAuthenticated || !!busyStatus || (!prompt.trim() && pastedImages.length === 0)
+            }
+          >
+            {isCaMode || selectedUseCase === 'conversational-analytics'
+              ? caConversation
+                ? '✨ Ask CA Agent'
+                : '✨ Route & Start CA Chat'
+              : isLookmlMode
+              ? lookmlBundle
+                ? '✨ Update LookML'
+                : '✨ Run Agentic LookML'
+              : activeMode === 'tile'
+              ? '✨ Ask AI'
+              : builderMode === 'dashboard'
+              ? nativeContent
+                ? '✨ Update Content'
+                : '✨ Create / Update Content'
+              : publishedApp
+              ? '✨ Update App'
+              : '✨ Build App'}
+          </button>
+        </div>
       </div>
     </div>
   )

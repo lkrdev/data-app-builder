@@ -580,6 +580,14 @@ function buildHtmlPage(scenario) {
           } catch {}
         },
         openBrowserWindow: () => {},
+        oauth2Authenticate: async (authUrl, params, method) => {
+          window.__OAUTH_CALLS__ = window.__OAUTH_CALLS__ || [];
+          window.__OAUTH_CALLS__.push({ authUrl, params, method });
+          if (typeof window.__MOCK_OAUTH_IMPL__ === 'function') {
+            return window.__MOCK_OAUTH_IMPL__(authUrl, params, method);
+          }
+          return { access_token: 'mock_oauth_token_123' };
+        },
         updateLocation: (url, state, target) => {
           window.__UPDATED_LOCATIONS__ = window.__UPDATED_LOCATIONS__ || [];
           window.__UPDATED_LOCATIONS__.push({ url, state, target });
@@ -780,6 +788,7 @@ async function startHeadlessChrome() {
       '--headless',
       '--disable-gpu',
       '--no-sandbox',
+      '--disable-dev-shm-usage',
       '--disable-extensions',
       '--no-first-run',
       '--disable-background-networking',
@@ -825,12 +834,28 @@ async function startHeadlessChrome() {
     }
   })
 
-  const send = (method, params = {}) =>
+  const rawSend = (method, params = {}) =>
     new Promise((resolve, reject) => {
       const id = ++msgId
       pending.set(id, { resolve, reject })
       ws.send(JSON.stringify({ id, method, params }))
     })
+
+  const send = async (method, params = {}) => {
+    if (method === 'Page.navigate') {
+      try {
+        await rawSend('Runtime.evaluate', {
+          expression: `(() => {
+            delete window.__DAB_STUDIO__;
+            delete window.__RENDERED_CALLS__;
+            delete window.__LOOKER_EMBED_STATE__;
+            if (document.body) document.body.innerHTML = '';
+          })()`
+        })
+      } catch {}
+    }
+    return rawSend(method, params)
+  }
 
   await send('Page.enable')
   await send('Runtime.enable')
@@ -1446,6 +1471,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         window.__INTERACTION_CALLS__ = [];
         window.__ARTIFACT_UPDATES__ = [];
         window.__DAB_STUDIO__.setAuthMode('apikey');
+        window.__DAB_STUDIO__.setApiKey('mock-api-key');
         const newBtn = document.querySelector('[data-testid="new-conversation-btn"]');
         if (newBtn) newBtn.click();
         await new Promise((r) => setTimeout(r, 80));
@@ -1707,6 +1733,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         await new Promise((r) => setTimeout(r, 80));
 
         // 3. Submit Turn 1 LookML prompt with selector in 'auto'
+        window.__DAB_STUDIO__.setOauthToken('mock_oauth_token');
+        await new Promise((r) => setTimeout(r, 40));
         const ta = document.querySelector('[data-testid="studio-prompt-input"]');
         const taSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
         taSetter.call(ta, 'Add a measure for gross_margin to order_items.view.lkml and run LookML data tests');
@@ -1810,6 +1838,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         window.__INTERACTION_CALLS__ = [];
         window.__ARTIFACT_UPDATES__ = [];
         window.__DAB_STUDIO__.setAuthMode('apikey');
+        window.__DAB_STUDIO__.setApiKey('mock-api-key');
         const newBtn = document.querySelector('[data-testid="new-conversation-btn"]');
         if (newBtn) newBtn.click();
         await new Promise((r) => setTimeout(r, 100));
@@ -2670,6 +2699,210 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
     mkdirSync(scratchDir, { recursive: true })
     const scratchSnapPath = path.join(scratchDir, 'issue-59-composer-starters.png')
+    writeFileSync(scratchSnapPath, pngBuffer)
+    expect(existsSync(scratchSnapPath)).toBe(true)
+  }, 15000)
+
+  test('gates chat submission when signed out with inline Sign In button, prevents hanging oauth2Authenticate popup from locking busyStatus, and surfaces copyable Authorized Redirect URI in /config (Issue #65)', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    const url = `http://127.0.0.1:${port}/?scenario=centered_empty_prompt`
+    await chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="studio-send-btn"]'))`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    // 1. Verify signed-out state: Send button is disabled, inline Sign In button is rendered, and Cmd+Enter does NOT clear prompt or start a turn
+    const signedOutRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const ta = document.querySelector('[data-testid="studio-prompt-input"]');
+        const taSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        taSetter.call(ta, 'Build an executive revenue dashboard');
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        ta.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 60));
+
+        const sendBtn = document.querySelector('[data-testid="studio-send-btn"]');
+        const inlineSignInBtn = document.querySelector('[data-testid="composer-signin-inline-btn"]');
+        const sendDisabledWhenSignedOut = Boolean(sendBtn?.disabled);
+        const inlineSignInText = (inlineSignInBtn?.textContent || '').trim();
+        const inlineSignInClass = inlineSignInBtn?.className || '';
+
+        // Attempt Cmd+Enter and clicking disabled Send button while signed out
+        ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }));
+        sendBtn?.click();
+        await new Promise((r) => setTimeout(r, 80));
+
+        const promptPreserved = ta.value === 'Build an executive revenue dashboard';
+        const stillEmptyCentered = Boolean(document.querySelector('[data-testid="centered-empty-prompt"]'));
+        const useCaseStillUnlocked = Boolean(document.querySelector('[data-testid="use-case-selector"]'));
+        const noErrorBanner = !document.querySelector('.dab-msg-error');
+
+        // 2. Simulate hanging oauth2Authenticate (e.g. closed popup or Error 400: redirect_uri_mismatch)
+        window.__MOCK_LOOKER_EXTENSION__.oauthFocusReturnDelayMs = 80;
+        window.__MOCK_OAUTH_IMPL__ = () => new Promise(() => {});
+        inlineSignInBtn?.click();
+        await new Promise((r) => setTimeout(r, 40));
+
+        const cancelBtnDuringSignIn = document.querySelector('[data-testid="topbar-oauth-cancel-btn"]');
+        const topbarSignInBtn = document.querySelector('[data-testid="topbar-oauth-signin-btn"]');
+        const newConvBtn = document.querySelector('[data-testid="new-conversation-btn"]');
+        const busyBannerDuringOAuth = document.querySelector('.dab-status-banner');
+        const duringHangingPopup = {
+          hasCancelBtn: Boolean(cancelBtnDuringSignIn),
+          topbarSignInText: (topbarSignInBtn?.textContent || '').trim(),
+          topbarSignInDisabled: Boolean(topbarSignInBtn?.disabled),
+          promptInputDisabled: Boolean(ta.disabled),
+          newConvDisabled: Boolean(newConvBtn?.disabled),
+          hasGlobalBusyBanner: Boolean(busyBannerDuringOAuth)
+        };
+
+        // 3. Simulate host window regaining focus after popup closed/failed -> clears oauthSigningIn after settle delay
+        window.dispatchEvent(new Event('focus'));
+        await new Promise((r) => setTimeout(r, 150));
+        const afterFocusRecovery = {
+          hasCancelBtn: Boolean(document.querySelector('[data-testid="topbar-oauth-cancel-btn"]')),
+          topbarSignInText: (document.querySelector('[data-testid="topbar-oauth-signin-btn"]')?.textContent || '').trim()
+        };
+
+        // 4. Re-click Sign In and cancel immediately via Cancel Sign-In button
+        document.querySelector('[data-testid="topbar-oauth-signin-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 30));
+        const hasCancelBeforeClick = Boolean(document.querySelector('[data-testid="topbar-oauth-cancel-btn"]'));
+        document.querySelector('[data-testid="topbar-oauth-cancel-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 30));
+        const hasCancelAfterClick = Boolean(document.querySelector('[data-testid="topbar-oauth-cancel-btn"]'));
+
+        // 5. Restore working OAuth mock and click inline Sign In button -> enables Send button
+        window.__MOCK_OAUTH_IMPL__ = null;
+        document.querySelector('[data-testid="composer-signin-inline-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const afterSuccessSignIn = {
+          sendDisabled: Boolean(document.querySelector('[data-testid="studio-send-btn"]')?.disabled),
+          hasInlineSignInBtn: Boolean(document.querySelector('[data-testid="composer-signin-inline-btn"]')),
+          topbarText: (document.querySelector('[data-testid="topbar-oauth-signin-btn"]')?.textContent || '').trim()
+        };
+
+        // Reset back to signed-out so we can also test missing clientId -> /config navigation & screenshot
+        window.__DAB_STUDIO__.setOauthToken('');
+        await new Promise((r) => setTimeout(r, 50));
+
+        return {
+          sendDisabledWhenSignedOut,
+          inlineSignInText,
+          inlineSignInClass,
+          promptPreserved,
+          stillEmptyCentered,
+          useCaseStillUnlocked,
+          noErrorBanner,
+          duringHangingPopup,
+          afterFocusRecovery,
+          hasCancelBeforeClick,
+          hasCancelAfterClick,
+          afterSuccessSignIn
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(signedOutRes.result.value).toEqual({
+      sendDisabledWhenSignedOut: true,
+      inlineSignInText: 'Sign in to send',
+      inlineSignInClass: 'dab-inline-signin-btn',
+      promptPreserved: true,
+      stillEmptyCentered: true,
+      useCaseStillUnlocked: true,
+      noErrorBanner: true,
+      duringHangingPopup: {
+        hasCancelBtn: true,
+        topbarSignInText: 'Retry Sign In',
+        topbarSignInDisabled: false,
+        promptInputDisabled: false,
+        newConvDisabled: false,
+        hasGlobalBusyBanner: false
+      },
+      afterFocusRecovery: {
+        hasCancelBtn: false,
+        topbarSignInText: 'Sign In'
+      },
+      hasCancelBeforeClick: true,
+      hasCancelAfterClick: false,
+      afterSuccessSignIn: {
+        sendDisabled: false,
+        hasInlineSignInBtn: false,
+        topbarText: '✓ Signed In'
+      }
+    })
+
+    // Navigate to /config and verify Authorized Redirect URI helper + Copy button
+    const configRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        window.__DAB_STUDIO__.setClientId('');
+        await new Promise((r) => setTimeout(r, 40));
+        const missingClientBtnText = (document.querySelector('[data-testid="composer-signin-inline-btn"]')?.textContent || '').trim();
+        document.querySelector('[data-testid="composer-signin-inline-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 80));
+
+        const routeAfterClick = window.__DAB_STUDIO__.history.location.pathname;
+        const redirectUriEl = document.querySelector('[data-testid="config-oauth-redirect-uri"]');
+        const copyBtn = document.querySelector('[data-testid="config-copy-redirect-uri-btn"]');
+        const redirectUriText = (redirectUriEl?.textContent || '').trim();
+        const copyBtnInitialText = (copyBtn?.textContent || '').trim();
+        copyBtn?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const copyBtnAfterText = (copyBtn?.textContent || '').trim();
+
+        const helperRect = document.querySelector('.dab-oauth-redirect-helper')?.getBoundingClientRect();
+        const clip = helperRect
+          ? {
+              x: Math.max(0, Math.floor(helperRect.left - 20)),
+              y: Math.max(0, Math.floor(helperRect.top - 20)),
+              width: Math.min(1440, Math.ceil(helperRect.width + 40)),
+              height: Math.min(900, Math.ceil(helperRect.height + 40)),
+              scale: 1
+            }
+          : null;
+
+        return {
+          missingClientBtnText,
+          routeAfterClick,
+          redirectUriText,
+          copyBtnInitialText,
+          copyBtnAfterText,
+          clip
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(configRes.result.value).toMatchObject({
+      missingClientBtnText: 'Configure credentials to send',
+      routeAfterClick: '/config',
+      redirectUriText: 'https://dev-argolis.looker.com/extensions/oauth2_redirect',
+      copyBtnInitialText: 'Copy Redirect URI',
+      copyBtnAfterText: '✓ Copied Redirect URI'
+    })
+    expect(configRes.result.value.clip).toBeTruthy()
+
+    const { data } = await chrome.send('Page.captureScreenshot', {
+      format: 'png',
+      clip: configRes.result.value.clip
+    })
+    const pngBuffer = Buffer.from(data, 'base64')
+    expect(pngBuffer.length).toBeGreaterThan(500)
+    const scratchDir =
+      '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
+    mkdirSync(scratchDir, { recursive: true })
+    const scratchSnapPath = path.join(scratchDir, 'issue-65-auth-gate-redirect-uri.png')
     writeFileSync(scratchSnapPath, pngBuffer)
     expect(existsSync(scratchSnapPath)).toBe(true)
   }, 15000)
