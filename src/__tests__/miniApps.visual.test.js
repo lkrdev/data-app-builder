@@ -311,25 +311,25 @@ function buildHtmlPage(scenario) {
       };
 
       const routeMap = {
-        data_app: '/app/42',
-        dashboard: '/dashboard/7',
-        lookml: '/lookml/20261030_dev_branch',
-        health_check: '/health-check/demo',
-        python_tile_studio: '/tile/demo1',
-        tile_mount_view: '/app',
-        tile_mount_edit: '/app',
-        tile_mount_unbound: '/app',
+        data_app: '/c/conv_app_42',
+        dashboard: '/c/conv_dashboard_7',
+        lookml: '/c/conv_lookml_20261030_dev_branch',
+        health_check: '/c/conv_health_demo',
+        python_tile_studio: '/c/conv_tile_demo1',
+        tile_mount_view: '/',
+        tile_mount_edit: '/',
+        tile_mount_unbound: '/',
         config_page: '/config',
-        explore_dropdown_open_top: '/app/42',
-        explore_dropdown_scrolled: '/app/42',
+        explore_dropdown_open_top: '/c/conv_app_42',
+        explore_dropdown_scrolled: '/c/conv_app_42',
         chatbar_lookml_skills: '/lookml',
-        chatbar_pasted_image_inspector: '/app/42',
-        chatbar_busy_running: '/app/42',
-        chatbar_error_banner: '/app',
-        python_tile_scheduler_modal: '/tile/demo1',
-        conversational_analytics: '/conversational-analytics/ca_conv_streaming_1',
-        centered_empty_prompt: '/app',
-        studio_dark_theme: '/app/42'
+        chatbar_pasted_image_inspector: '/c/conv_app_42',
+        chatbar_busy_running: '/c/conv_app_42',
+        chatbar_error_banner: '/',
+        python_tile_scheduler_modal: '/c/conv_tile_demo1',
+        conversational_analytics: '/c/ca_conv_streaming_1',
+        centered_empty_prompt: '/',
+        studio_dark_theme: '/c/conv_app_42'
       };
 
       try {
@@ -930,11 +930,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       expectText: [
         'Agent',
         'Agentic LookML',
-        'Data App',
-        'Content Studio',
-        'LookML',
-        'Health Check',
-        'Python Tile',
+        '🔒 Data App',
         'Safe Mode (Ask)',
         'My Creations (5)',
         'Approve Looker State Mutation?',
@@ -1294,7 +1290,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     expect(fullPageEntry.clipSelector).toBeUndefined()
   })
 
-  test('enables/disables individual tool modes via /config and filters topbar tabs, catalog & routes', async () => {
+  test('enables/disables individual tool modes via /config and filters use-case-selector options, catalog & routes', async () => {
     chrome.close()
     chrome = await startHeadlessChrome()
     const url = `http://127.0.0.1:${port}/?scenario=config_page`
@@ -1323,26 +1319,20 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         );
         if (saveBtn) saveBtn.click();
         await new Promise((r) => setTimeout(r, 150));
-        const tabs = Array.from(document.querySelectorAll('.dab-mode-tab')).map((el) =>
-          (el.textContent || '').trim()
-        );
+        const sel = document.querySelector('[data-testid="use-case-selector"]');
+        const useCaseOptionsAfterSave = sel ? Array.from(sel.options).map((o) => o.value) : [];
         const text = document.body ? document.body.innerText : '';
-        // Navigate to disabled route /lookml and verify redirect back to first enabled mode (/app)
+        // Navigate to disabled route /lookml/20261030_dev_branch and verify redirect back to '/'
         window.__DAB_STUDIO__.history.push('/lookml/20261030_dev_branch');
-        await new Promise((r) => setTimeout(r, 100));
-        const activeAfterDisabledPush = (
-          document.querySelector('.dab-mode-tab.active')?.textContent || ''
-        ).trim();
-        // Disable 'dashboard' too so only 1 mode ('app') remains -> mode switcher hides
-        window.__DAB_STUDIO__.setDisabledModes(['dashboard', 'lookml', 'health', 'tile']);
-        await new Promise((r) => setTimeout(r, 100));
-        const switcherHiddenWhenSingleMode = !document.querySelector('.dab-mode-switcher');
+        await new Promise((r) => setTimeout(r, 120));
+        const routeAfterDisabledPush = window.__DAB_STUDIO__.history.location.pathname;
+        const noTopbarModeSwitcher = !document.querySelector('.dab-mode-switcher');
         return {
           savedDisabledModes: window.__LAST_SAVED_CONTEXT_DATA__?.disabledModes || [],
-          tabs,
+          useCaseOptionsAfterSave,
           hasFilteredCatalogCount: text.includes('My Creations (2)'),
-          activeAfterDisabledPush,
-          switcherHiddenWhenSingleMode
+          routeAfterDisabledPush,
+          noTopbarModeSwitcher
         };
       })()`,
       awaitPromise: true,
@@ -1351,10 +1341,10 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
 
     expect(afterSave.result.value).toEqual({
       savedDisabledModes: ['lookml', 'health', 'tile'],
-      tabs: ['Data App', 'Content Studio'],
+      useCaseOptionsAfterSave: ['auto', 'app', 'dashboard', 'conversational-analytics'],
       hasFilteredCatalogCount: true,
-      activeAfterDisabledPush: 'Data App',
-      switcherHiddenWhenSingleMode: true
+      routeAfterDisabledPush: '/',
+      noTopbarModeSwitcher: true
     })
   }, 15000)
 
@@ -1452,11 +1442,11 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         window.__INTERACTION_CALLS__ = [];
         window.__ARTIFACT_UPDATES__ = [];
         window.__DAB_STUDIO__.setAuthMode('apikey');
-        const newBtn = Array.from(document.querySelectorAll('button')).find((b) =>
-          (b.textContent || '').includes('New Content')
-        );
+        const newBtn = document.querySelector('[data-testid="new-conversation-btn"]');
         if (newBtn) newBtn.click();
         await new Promise((r) => setTimeout(r, 80));
+        window.__DAB_STUDIO__.setSelectedUseCase('dashboard');
+        await new Promise((r) => setTimeout(r, 50));
 
         const ta = document.querySelector('.dab-composer textarea');
         const taSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
@@ -1488,6 +1478,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           labelCallTools: labelCall ? labelCall.body.tools : null,
           labelCallHasPrevId: labelCall ? ('previous_interaction_id' in labelCall.body) : null,
           savedConvLabel: latestConvList[0] ? latestConvList[0].label : null,
+          routeAfterTurn1: window.__DAB_STUDIO__.history.location.pathname,
           sidebarShowsGeneratedLabel:
             bodyText.includes('[dashboard] Quarterly Order Margin Analysis (#99)') &&
             Boolean(sidebarEl && (sidebarEl.innerText || '').includes('Quarterly Order Margin Analysis'))
@@ -1502,11 +1493,12 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       labelCallTools: [],
       labelCallHasPrevId: false,
       savedConvLabel: 'Quarterly Order Margin Analysis',
+      routeAfterTurn1: '/c/99',
       sidebarShowsGeneratedLabel: true
     })
   }, 15000)
 
-  test('renders collapsible left conversations sidebar, switches to centered empty-state prompt on + New Conversation, and restores conversation state on click', async () => {
+  test('renders collapsible left conversations sidebar, switches to centered empty-state prompt on + New Conversation, and restores conversation state on /c/:conversationId click', async () => {
     const url = `http://127.0.0.1:${port}/?scenario=data_app`
     await chrome.send('Page.navigate', { url })
 
@@ -1537,7 +1529,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         await new Promise((r) => setTimeout(r, 60));
         const expandedState = !sidebar.classList.contains('collapsed');
 
-        // Click + New Conversation -> should show centered empty-state prompt box
+        // Click + New Conversation -> should route to '/' and show centered empty-state prompt box
         newBtn.click();
         await new Promise((r) => setTimeout(r, 120));
         const centeredStage = document.querySelector('[data-testid="centered-empty-prompt"]');
@@ -1547,6 +1539,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           initialItems,
           collapsedState,
           expandedState,
+          routeOnNew: window.__DAB_STUDIO__.history.location.pathname,
           hasCenteredStage: Boolean(centeredStage),
           centeredHeroText: centeredStage ? centeredStage.innerText : '',
           cardCenteredHorizontally: rect ? rect.left > 240 && rect.right < 1400 : false,
@@ -1566,6 +1559,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     ])
     expect(step1.result.value.collapsedState).toBe(true)
     expect(step1.result.value.expandedState).toBe(true)
+    expect(step1.result.value.routeOnNew).toBe('/')
     expect(step1.result.value.hasCenteredStage).toBe(true)
     expect(step1.result.value.centeredHeroText).toContain('New Conversation')
     expect(step1.result.value.centeredHeroText).toContain('Build a Looker Data App with Antigravity')
@@ -1581,21 +1575,35 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     const scratchScreenshot = path.join(scratchDir, 'issue-24-sidebar-and-centered-prompt.png')
     writeFileSync(scratchScreenshot, pngBuffer)
     expect(existsSync(scratchScreenshot)).toBe(true)
+    const issue47Screenshot = path.join(scratchDir, 'issue-47-unified-routing.png')
+    writeFileSync(issue47Screenshot, pngBuffer)
+    expect(existsSync(issue47Screenshot)).toBe(true)
 
-    // Click previous conversation (conv_dashboard_7) -> switches to Content Studio, restores chat & preview
+    // Click previous conversation (conv_dashboard_7) -> routes to /c/7, shows 🔒 Content Studio badge, restores chat & preview
     const step2 = await chrome.send('Runtime.evaluate', {
       expression: `(async () => {
         const item = document.querySelector('[data-testid="conversation-item-conv_dashboard_7"]');
         if (item) item.click();
         await new Promise((r) => setTimeout(r, 200));
-        const activeTab = (document.querySelector('.dab-mode-tab.active')?.textContent || '').trim();
+        const topbarBadge = (document.querySelector('[data-testid="topbar-use-case-badge"]')?.textContent || '').trim();
+        const routeAfterSelect = window.__DAB_STUDIO__.history.location.pathname;
         const centeredGone = !document.querySelector('[data-testid="centered-empty-prompt"]');
         const bodyText = document.body ? document.body.innerText : '';
+
+        // Also test legacy route redirect (/lookml/20261030_dev_branch -> /c/20261030_dev_branch)
+        window.__DAB_STUDIO__.history.push('/lookml/20261030_dev_branch');
+        await new Promise((r) => setTimeout(r, 150));
+        const redirectedLegacyRoute = window.__DAB_STUDIO__.history.location.pathname;
+        const lookmlBadge = (document.querySelector('[data-testid="topbar-use-case-badge"]')?.textContent || '').trim();
+
         return {
-          activeTab,
+          topbarBadge,
+          routeAfterSelect,
           centeredGone,
           restoredChatMsg: bodyText.includes('Created native Looker Dashboard #7'),
-          restoredPreview: bodyText.includes('/embed/dashboards/7')
+          restoredPreview: bodyText.includes('/embed/dashboards/7'),
+          redirectedLegacyRoute,
+          lookmlBadge
         };
       })()`,
       awaitPromise: true,
@@ -1603,14 +1611,17 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     })
 
     expect(step2.result.value).toEqual({
-      activeTab: 'Content Studio',
+      topbarBadge: '🔒 Content Studio',
+      routeAfterSelect: '/c/7',
       centeredGone: true,
       restoredChatMsg: true,
-      restoredPreview: true
+      restoredPreview: true,
+      redirectedLegacyRoute: '/c/20261030_dev_branch',
+      lookmlBadge: '🔒 LookML'
     })
   }, 15000)
 
-  test('defaults use-case selector to Auto on new conversation, gates options by permissions, routes Turn 1 via AGENTS.md, locks to read-only badge, and resets to Auto on New Conversation', async () => {
+  test('defaults use-case selector to Auto on new conversation, gates options by permissions with 🔒 indicator, routes Turn 1 via AGENTS.md, locks to read-only badge, and resets to Auto on New Conversation', async () => {
     chrome.close()
     chrome = await startHeadlessChrome()
     const url = `http://127.0.0.1:${port}/?scenario=chatbar_error_banner`
@@ -1637,7 +1648,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const defaultUseCase = sel ? sel.value : null;
         const optionValues = sel ? Array.from(sel.options).map((o) => o.value) : [];
 
-        // 2. Verify permission gating disables LookML when user lacks develop permission
+        // 2. Verify permission gating disables LookML with 🔒 indicator & tooltip when user lacks develop permission
         window.__DAB_STUDIO__.setCapabilities({
           isAdmin: false,
           rolesLoaded: true,
@@ -1660,9 +1671,12 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         });
         await new Promise((r) => setTimeout(r, 80));
         const selRestricted = document.querySelector('[data-testid="use-case-selector"]');
-        const lookmlOptDisabledWhenRestricted = selRestricted
-          ? Boolean(Array.from(selRestricted.options).find((o) => o.value === 'lookml')?.disabled)
-          : false;
+        const lookmlOpt = selRestricted
+          ? Array.from(selRestricted.options).find((o) => o.value === 'lookml')
+          : null;
+        const lookmlOptDisabledWhenRestricted = Boolean(lookmlOpt?.disabled);
+        const lookmlOptHasLockLabel = Boolean((lookmlOpt?.textContent || '').includes('🔒') && (lookmlOpt?.textContent || '').includes('(Locked)'));
+        const lookmlOptTitle = lookmlOpt?.getAttribute('title') || '';
 
         // Restore full admin capabilities so Auto can route to LookML on Turn 1
         window.__DAB_STUDIO__.setCapabilities({
@@ -1702,10 +1716,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const selectorGoneAfterTurn1 = !document.querySelector('[data-testid="use-case-selector"]');
         const lockedBadge = document.querySelector('[data-testid="locked-use-case-badge"]');
         const lockedBadgeText = lockedBadge ? (lockedBadge.textContent || '').trim() : '';
-        const activeModeTab = (document.querySelector('.dab-mode-tab.active')?.textContent || '').trim();
-        const nonActiveTabsDisabled = Array.from(document.querySelectorAll('.dab-mode-tab:not(.active)')).every(
-          (b) => b.disabled
-        );
+        const topbarBadge = document.querySelector('[data-testid="topbar-use-case-badge"]');
+        const topbarBadgeText = topbarBadge ? (topbarBadge.textContent || '').trim() : '';
+        const noModeSwitcher = !document.querySelector('.dab-mode-switcher');
 
         const convUpdates = (window.__ARTIFACT_UPDATES__ || []).filter(
           (u) => u.key === 'user_conversations:1'
@@ -1713,7 +1726,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const latestConversations =
           convUpdates.length > 0 ? JSON.parse(convUpdates[convUpdates.length - 1].value) : [];
 
-        // 4. Click + New Conversation -> resets back to editable Auto selector
+        // 4. Click + New Conversation -> resets back to editable Auto selector at '/'
         const resetBtn = document.querySelector('[data-testid="new-conversation-btn"]');
         if (resetBtn) resetBtn.click();
         await new Promise((r) => setTimeout(r, 120));
@@ -1724,10 +1737,12 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           defaultUseCase,
           optionValues,
           lookmlOptDisabledWhenRestricted,
+          lookmlOptHasLockLabel,
+          lookmlOptTitle,
           selectorGoneAfterTurn1,
           lockedBadgeText,
-          activeModeTab,
-          nonActiveTabsDisabled,
+          topbarBadgeText,
+          noModeSwitcher,
           persistedType: latestConversations[0]?.type,
           resetUseCase: selAfterReset ? selAfterReset.value : null,
           badgeGoneAfterReset: !badgeAfterReset
@@ -1749,10 +1764,12 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         'conversational-analytics'
       ],
       lookmlOptDisabledWhenRestricted: true,
+      lookmlOptHasLockLabel: true,
+      lookmlOptTitle: 'Missing Looker permissions: develop',
       selectorGoneAfterTurn1: true,
       lockedBadgeText: '🔒 LookML',
-      activeModeTab: 'LookML',
-      nonActiveTabsDisabled: true,
+      topbarBadgeText: '🔒 LookML',
+      noModeSwitcher: true,
       persistedType: 'lookml',
       resetUseCase: 'auto',
       badgeGoneAfterReset: true
@@ -1858,7 +1875,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const btn = document.querySelector('[data-testid="topbar-fullscreen-toggle"]');
         const configLabel = (btn?.textContent || '').trim();
         btn?.click();
-        window.__DAB_STUDIO__.history.push('/app/42');
+        window.__DAB_STUDIO__.history.push('/c/42');
         await new Promise((r) => setTimeout(r, 80));
         document.querySelector('[data-testid="topbar-fullscreen-toggle"]')?.click();
         const r = document.querySelector('.dab-topbar').getBoundingClientRect();
@@ -1875,7 +1892,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     expect(standardRes.result.value.configLabel).toBe('⤢ Full Screen')
     expect(standardRes.result.value.calls).toEqual([
       { url: '/spartan/data_app_builder::data_app_builder/config', state: undefined, target: '_top' },
-      { url: '/spartan/data_app_builder::data_app_builder/app/42', state: undefined, target: '_top' }
+      { url: '/spartan/data_app_builder::data_app_builder/c/42', state: undefined, target: '_top' }
     ])
 
     const { data } = await chrome.send('Page.captureScreenshot', { format: 'png', clip: standardRes.result.value.clip })
@@ -1888,12 +1905,13 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     await waitForToggle('spartan_fullscreen')
     const spartanRes = await chrome.send('Runtime.evaluate', {
       expression: `(async () => {
+        await new Promise((r) => setTimeout(r, 80));
         window.__UPDATED_LOCATIONS__ = [];
         const btn = document.querySelector('[data-testid="topbar-fullscreen-toggle"]');
         const spartanLabel = (btn?.textContent || '').trim();
         btn?.click();
         window.__MOCK_LOOKER_EXTENSION__.lookerHostData.mountPoint = 'dashboard-tile';
-        window.__DAB_STUDIO__.history.push('/dashboard/7');
+        window.__DAB_STUDIO__.history.push('/c/7');
         await new Promise((r) => setTimeout(r, 80));
         return {
           spartanLabel,
@@ -1907,7 +1925,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
 
     expect(spartanRes.result.value).toEqual({
       spartanLabel: '⤡ Exit Full Screen',
-      calls: [{ url: '/extensions/data_app_builder::data_app_builder/app/42', state: undefined, target: '_top' }],
+      calls: [{ url: '/extensions/data_app_builder::data_app_builder/c/42', state: undefined, target: '_top' }],
       hiddenInTile: true
     })
   }, 15000)

@@ -1,458 +1,143 @@
-import React, { useCallback, useEffect, useState } from 'react'
-import { useHistory, useLocation } from 'react-router-dom'
-import { useLookerExtension } from '../contexts/LookerExtensionContext'
-import {
-  fetchInitialLookerMetadata,
-  getAllowedUseCases,
-  getArtifactNamespace,
-  getUseCaseLabel,
-  listSavedScripts,
-  loadScriptArtifact,
-  loadUserEnvironmentId,
-  PersistedChatTurn,
-  publishScriptDashboard,
-  SavedScript,
-  saveScriptArtifact,
-  STUDIO_USE_CASE_OPTIONS,
-  useCaseToStudioMode,
-  UserCapabilities,
-} from '../lookerApi'
-import {
-  AgentSession,
-  ANTIGRAVITY_ALLOWED_MODELS,
-  AntigravityAuth,
-  AntigravityModelOption,
-  DEFAULT_ANTIGRAVITY_MODEL,
-  LkrCodeMode,
-  normalizeEnvironmentId,
-  prewarmOrWakeAntigravityEnvironment,
-  runAntigravityTurn,
-} from '../antigravity'
-import {
-  DEFAULT_PYTHON_SCRIPT,
-  PYTHON_TILE_SKILL_GUIDE,
-  ScriptOutputRenderer,
-} from './PythonTile'
-import { STUDIO_MODES } from './App'
-import { ThemeModeSelect } from './StudioHeader'
-import { ResolvedStudioTheme, StudioThemeMode } from '../useStudioController'
+import React from 'react'
+import { renderTddMarkdownToHtml } from '../healthCheck'
+import type { StudioController } from '../useStudioController'
 
-export const ScriptStudioView: React.FC<{
-  auth: AntigravityAuth
-  themeMode?: StudioThemeMode
-  resolvedTheme?: ResolvedStudioTheme
-  onChangeThemeMode?: (mode: StudioThemeMode) => void
-  selectedModel?: string
-  availableModels?: AntigravityModelOption[]
-  onChangeModel?: (model: string) => void
-  schemaMarkdown: string
-  selectedExplores: string[]
-  selectedFolderId: string
-  folders: Array<{ id: string; name: string }>
-  onChangeFolder: (folderId: string) => void
-  disabledModes?: string[]
-  capabilities?: UserCapabilities
-  sharedEnvironmentId?: string
-  onEnvironmentUpdated?: (environmentId: string) => void
-}> = ({
-  auth,
-  themeMode = 'system',
-  resolvedTheme = 'light',
-  onChangeThemeMode,
-  selectedModel = DEFAULT_ANTIGRAVITY_MODEL,
-  availableModels = ANTIGRAVITY_ALLOWED_MODELS,
-  onChangeModel,
-  schemaMarkdown,
-  selectedExplores,
-  selectedFolderId,
-  folders,
-  onChangeFolder,
-  disabledModes = [],
-  capabilities,
-  sharedEnvironmentId,
-  onEnvironmentUpdated,
-}) => {
-  const { extensionSDK, core40SDK } = useLookerExtension()
-  const history = useHistory()
-  const location = useLocation()
+// ponytail: reuse shared zero-dependency Markdown renderer from healthCheck.ts
+export function renderMarkdownOrHtmlString(input: string): string {
+  const trimmed = input.trim()
+  if (/^<[a-zA-Z][^>]*>[\s\S]*<\/[a-zA-Z0-9]+>\s*$/.test(trimmed)) {
+    return trimmed
+  }
+  return renderTddMarkdownToHtml(trimmed)
+}
 
-  const [userId, setUserId] = useState('1')
-  const [savedScripts, setSavedScripts] = useState<SavedScript[]>([])
-  const [scriptId, setScriptId] = useState(
-    () => `script_${Date.now().toString(36).slice(-5)}`
-  )
-  const [scriptTitle, setScriptTitle] = useState('Looker Explore Summary Script')
-  const [scriptCode, setScriptCode] = useState(DEFAULT_PYTHON_SCRIPT)
-  const [filtersJson, setFiltersJson] = useState('{}')
-  const [scriptOutput, setScriptOutput] = useState('')
-  const [messages, setMessages] = useState<PersistedChatTurn[]>([])
-  const [prompt, setPrompt] = useState('')
-  const [agentSession, setAgentSession] = useState<AgentSession>({
-    toolType: 'tile',
-    environmentId: sharedEnvironmentId || 'env_tile_isolated',
-  })
-  const [busyStatus, setBusyStatus] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (sharedEnvironmentId) {
-      setAgentSession((prev) => ({ ...prev, environmentId: sharedEnvironmentId }))
-    }
-  }, [sharedEnvironmentId])
-
-  const handleWakeTileEnv = useCallback(async () => {
+export const ScriptOutputRenderer: React.FC<{ output: string }> = ({ output }) => {
+  const parsed = (() => {
+    const trimmed = String(output ?? '').trim()
+    if (!trimmed) return ''
     try {
-      const res = await prewarmOrWakeAntigravityEnvironment({
-        sdk: core40SDK,
-        userId,
-        extensionSDK,
-        auth,
-        toolType: 'tile',
-        model: selectedModel,
-        environmentId: sharedEnvironmentId || agentSession.environmentId,
-        conversationId: scriptId,
-        existingSession: agentSession,
-        selectedExplores,
-        schemaMarkdown,
-        onEnvironmentUpdated,
-      })
-      setAgentSession(res.session)
-    } catch {}
-  }, [
-    core40SDK,
-    userId,
-    extensionSDK,
-    auth,
-    selectedModel,
-    sharedEnvironmentId,
-    scriptId,
-    agentSession,
-    selectedExplores,
-    schemaMarkdown,
-    onEnvironmentUpdated,
-  ])
+      return JSON.parse(trimmed)
+    } catch {
+      return output
+    }
+  })()
 
-  useEffect(() => {
-    handleWakeTileEnv()
-  }, [])
-  const [publishedDash, setPublishedDash] = useState<{
-    dashboardId: string
-    elementId: string
-  } | null>(null)
-  const [scriptMode, setScriptMode] = useState('summary')
-  const [schedulerOpen, setSchedulerOpen] = useState(() =>
-    Boolean(
-      typeof window !== 'undefined' &&
-        (window as any).__MOCK_LOOKER_EXTENSION__?.openSchedulerModal
+  if (
+    Array.isArray(parsed) &&
+    (parsed.length === 0 ||
+      (typeof parsed[0] === 'object' && parsed[0] !== null && !Array.isArray(parsed[0])))
+  ) {
+    if (parsed.length === 0) {
+      return <div className="dab-py-empty">0 rows returned.</div>
+    }
+    const colSet = new Set<string>()
+    for (const row of parsed) {
+      if (row && typeof row === 'object') {
+        Object.keys(row).forEach((k) => colSet.add(k))
+      }
+    }
+    const columns: string[] = Array.from(colSet)
+    return (
+      <div className="dab-py-table-wrap">
+        <table className="dab-py-table dab-tile-table">
+          <thead>
+            <tr>
+              {columns.map((col) => (
+                <th key={col}>{col}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {parsed.map((row: Record<string, any>, rIdx: number) => (
+              <tr key={rIdx}>
+                {columns.map((col) => {
+                  const v = row?.[col]
+                  const cellText =
+                    v === null || v === undefined
+                      ? ''
+                      : typeof v === 'object'
+                      ? JSON.stringify(v)
+                      : String(v)
+                  return <td key={col}>{cellText}</td>
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     )
-  )
-  const [scheduleConfig, setScheduleConfig] = useState<{
-    name: string
-    cron: string
-    mode: string
-    customVarsJson: string
-    destination: 'artifact_snapshot' | 'webhook' | 'looker_scheduled_plan'
-    targetUrlOrEmail: string
-    enabled: boolean
-  }>({
-    name: 'Daily Morning Explore & Filter Snapshot',
-    cron: '0 8 * * *',
-    mode: 'summary',
-    customVarsJson: '{"region":"AMER","threshold":0.95}',
-    destination: 'artifact_snapshot',
-    targetUrlOrEmail: 'https://hooks.example.com/looker-script-webhook',
-    enabled: true,
-  })
-  const [savedScheduleBadge, setSavedScheduleBadge] = useState<string | null>('0 8 * * * · summary')
-
-  const refreshScriptsList = useCallback(
-    async (uid: string) => {
-      const list = await listSavedScripts(core40SDK, uid)
-      setSavedScripts(list)
-    },
-    [core40SDK]
-  )
-
-  useEffect(() => {
-    let mounted = true
-    fetchInitialLookerMetadata(core40SDK)
-      .then((meta) => {
-        if (!mounted) return
-        const uid = String(meta.user?.id || '1')
-        setUserId(uid)
-        refreshScriptsList(uid)
-        if (!sharedEnvironmentId) {
-          loadUserEnvironmentId(core40SDK, uid, getArtifactNamespace(extensionSDK)).then(
-            (savedEnvId) => {
-              if (mounted && savedEnvId) {
-                setAgentSession((prev) => ({ ...prev, environmentId: savedEnvId }))
-                onEnvironmentUpdated?.(savedEnvId)
-              }
-            }
-          )
-        }
-      })
-      .catch(() => {})
-    return () => {
-      mounted = false
-    }
-  }, [core40SDK, extensionSDK, refreshScriptsList, sharedEnvironmentId, onEnvironmentUpdated])
-
-  // Load script when route matches /script/:scriptId or /tile/:scriptId
-  useEffect(() => {
-    const m = location.pathname.match(/^\/(?:script|tile)\/([^/]+)\/?$/)
-    const routeScriptId = m ? decodeURIComponent(m[1]).trim() : ''
-    if (!routeScriptId) return
-    let mounted = true
-    loadScriptArtifact(core40SDK, routeScriptId).then((loaded) => {
-      if (!mounted || !loaded) return
-      setScriptId(loaded.id)
-      setScriptTitle(loaded.title || loaded.id)
-      setScriptCode(loaded.code || DEFAULT_PYTHON_SCRIPT)
-      setMessages(loaded.messages || [])
-      if (loaded.dashboardId) {
-        setPublishedDash({
-          dashboardId: loaded.dashboardId,
-          elementId: loaded.elementId || '',
-        })
-      }
-      if (loaded.code) {
-        handleRunPython(loaded.code)
-      }
-    })
-    return () => {
-      mounted = false
-    }
-  }, [core40SDK, location.pathname])
-
-  const handleRunPython = async (codeToRun = scriptCode) => {
-    try {
-      setBusyStatus('Running Python in WASM Monty sandbox...')
-      let parsedFilters: Record<string, string> = {}
-      try {
-        parsedFilters = JSON.parse(filtersJson || '{}')
-      } catch {
-        parsedFilters = {}
-      }
-      const out = await LkrCodeMode.runPythonCode({
-        code: codeToRun,
-        sdk: core40SDK,
-        extensionSDK,
-        vars: {
-          mode: scriptMode,
-          dashboard_filters: { script_mode: scriptMode, ...parsedFilters },
-          target_explores: selectedExplores,
-          target_folder_id: selectedFolderId,
-        },
-      })
-      setScriptOutput(out)
-    } catch (err: any) {
-      setScriptOutput(JSON.stringify({ error: err?.message || String(err) }))
-    } finally {
-      setBusyStatus(null)
-    }
   }
 
-  const handleSaveScript = async (
-    overrideCode = scriptCode,
-    overrideMsgs = messages,
-    dashInfo = publishedDash
-  ): Promise<SavedScript> => {
-    const cleanId =
-      scriptId.trim().replace(/[^a-zA-Z0-9_-]/g, '_') ||
-      `script_${Date.now().toString(36).slice(-5)}`
-    setBusyStatus(`Saving script "${cleanId}" to Looker Artifacts...`)
-    try {
-      const saved = await saveScriptArtifact(core40SDK, userId, {
-        id: cleanId,
-        title: scriptTitle.trim() || cleanId,
-        code: overrideCode,
-        messages: overrideMsgs,
-        updatedAt: new Date().toISOString(),
-        ...(dashInfo?.dashboardId ? { dashboardId: dashInfo.dashboardId } : {}),
-        ...(dashInfo?.elementId ? { elementId: dashInfo.elementId } : {}),
-      })
-      setScriptId(saved.id)
-      await refreshScriptsList(userId)
-      if (location.pathname !== `/script/${saved.id}`) {
-        history.replace(`/script/${encodeURIComponent(saved.id)}`)
-      }
-      return saved
-    } finally {
-      setBusyStatus(null)
-    }
+  if (typeof parsed === 'string') {
+    return (
+      <div
+        className="dab-py-markdown"
+        dangerouslySetInnerHTML={{ __html: renderMarkdownOrHtmlString(parsed) }}
+      />
+    )
   }
 
-  const handlePublishDashboard = async () => {
-    try {
-      const saved = await handleSaveScript()
-      setBusyStatus('Publishing extension-layout Looker dashboard & binding tile artifact...')
-      const extId =
-        (extensionSDK as any)?.lookerHostData?.extensionId ||
-        'data_app_builder::data_app_builder'
-      const pub = await publishScriptDashboard(core40SDK, {
-        script: saved,
-        folderId: selectedFolderId,
-        extensionId: extId,
-        existingDashboardId: publishedDash?.dashboardId,
-      })
-      const nextDash = { dashboardId: pub.dashboardId, elementId: pub.elementId }
-      setPublishedDash(nextDash)
-      await handleSaveScript(saved.code, saved.messages || [], nextDash)
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          text: `Published Dashboard #${pub.dashboardId} (load_configuration="wait", show_dashboard_header=true, layout="extension") and bound tile_element_${pub.elementId} -> ${saved.id}.`,
-          dashboardId: pub.dashboardId,
-        },
-      ])
-    } catch (err: any) {
-      setBusyStatus(null)
-      setMessages((prev) => [
-        ...prev,
-        { role: 'error', text: err?.message || String(err) },
-      ])
-    }
-  }
+  return <pre className="dab-py-pre">{JSON.stringify(parsed, null, 2)}</pre>
+}
 
-  const handleSendChatPrompt = async () => {
-    const text = prompt.trim()
-    if (!text || busyStatus) return
-    const nextUserTurn: PersistedChatTurn = { role: 'user', text }
-    const turnsWithUser = [...messages, nextUserTurn]
-    setPrompt('')
-    setMessages(turnsWithUser)
-    setBusyStatus('Asking Antigravity to write/update CodeMode Python script...')
-    try {
-      const scriptDirective = [
-        `IMPORTANT: You are authoring a Looker CodeMode Monty Python script (NOT a Lit Data App).`,
-        PYTHON_TILE_SKILL_GUIDE,
-        `Write Python code that uses pre-bound Looker 4.0 SDK globals (e.g. run_inline_query, lookml_model_explore, search_content, all_lookml_models, create_dashboard_filter) and reads \`dashboard_filters\` and \`mode\` if present.`,
-        `Test your snippet using \`run_looker_codemode\` first, then include the final script inside a \`\`\`python ... \`\`\` block ending with \`return ...\` (returning a list[dict] for a table, a Markdown/HTML string, or a dict).`,
-        `Current script:\n\`\`\`python\n${scriptCode}\n\`\`\``,
-        `User request: ${text}`,
-      ].join('\n\n')
-      const res = await runAntigravityTurn({
-        sdk: core40SDK,
-        extensionSDK,
-        userId,
-        environmentId: sharedEnvironmentId || agentSession.environmentId,
-        conversationId: scriptId,
-        onEnvironmentUpdated,
-        auth,
-        session: agentSession,
-        model: selectedModel,
-        selectedExplores,
-        folderId: selectedFolderId,
-        schemaMarkdown,
-        userPrompt: scriptDirective,
-        priorMessages: messages,
-        onStatus: setBusyStatus,
-      })
-      if (normalizeEnvironmentId(res.session.environmentId)) {
-        onEnvironmentUpdated?.(res.session.environmentId!)
-      }
-      setAgentSession(res.session)
-      const pyMatch = res.assistantText.match(/```python\s*([\s\S]*?)```/i)
-      const extractedCode = pyMatch ? pyMatch[1].trim() : scriptCode
-      if (pyMatch && extractedCode) {
-        setScriptCode(extractedCode)
-        await handleRunPython(extractedCode)
-      }
-      const nextTurns: PersistedChatTurn[] = [
-        ...turnsWithUser,
-        {
-          role: 'assistant',
-          text: res.assistantText,
-          interactionId: res.session.lastInteractionId,
-        },
-      ]
-      setMessages(nextTurns)
-      await handleSaveScript(extractedCode, nextTurns)
-    } catch (err: any) {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'error', text: err?.message || String(err) },
-      ])
-    } finally {
-      setBusyStatus(null)
-    }
-  }
+export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
+  const {
+    scriptId,
+    setScriptId,
+    scriptTitle,
+    setScriptTitle,
+    scriptCode,
+    setScriptCode,
+    filtersJson,
+    setFiltersJson,
+    scriptOutput,
+    scriptMode,
+    setScriptMode,
+    savedScripts,
+    publishedTileDash,
+    schedulerOpen,
+    setSchedulerOpen,
+    scheduleConfig,
+    setScheduleConfig,
+    savedScheduleBadge,
+    setSavedScheduleBadge,
+    handleRunPython,
+    handleSaveScript,
+    handlePublishTileDashboard,
+    loadScriptById,
+    busyStatus,
+    extensionSDK,
+  } = ctl
 
   return (
-    <div className="dab-shell" data-theme={resolvedTheme} data-theme-mode={themeMode}>
-      <header className="dab-topbar">
-        <div className="dab-brand">
-          <strong>Agent</strong>
-          <span className="dab-badge">Agentic LookML</span>
-          <span className="dab-badge">WASM CodeMode ✓</span>
-          <span
-            className="dab-badge"
-            onClick={handleWakeTileEnv}
-            style={{
-              cursor: 'pointer',
-              background: '#ecfdf5',
-              color: '#047857',
-              borderColor: '#a7f3d0',
-            }}
-            title="Mode-isolated Antigravity sandbox environment (click to wake or reload)"
-          >
-            🟢 Env [tile]: {agentSession.environmentId || 'env_tile_isolated'}
-          </span>
-          {(() => {
-            const enabledModes = STUDIO_MODES.filter((m) => !disabledModes.includes(m.mode))
-            return enabledModes.length > 1 ? (
-              <div className="dab-mode-switcher" role="tablist" aria-label="Tool Mode">
-                {enabledModes.map((m) => {
-                  const tc = capabilities?.rolesLoaded ? capabilities.tools?.[m.mode] : undefined
-                  const label = tc && !tc.enabled ? `🔒 ${m.label}` : tc?.readOnly ? `${m.label} 🔒` : m.label
-                  return (
-                    <button
-                      key={m.mode}
-                      type="button"
-                      role="tab"
-                      aria-selected={m.mode === 'tile'}
-                      title={tc?.reason}
-                      className={`dab-mode-tab ${m.mode === 'tile' ? 'active' : ''}`}
-                      onClick={() => history.push(m.prefix)}
-                    >
-                      {label}
-                    </button>
-                  )
-                })}
-              </div>
-            ) : null
-          })()}
-          <select
-            data-testid="topbar-model-select"
-            value={selectedModel}
-            onChange={(e) => onChangeModel?.(e.target.value)}
-            title="Select Antigravity model (/v1beta/models)"
-            style={{ height: 26, fontSize: 11.5, padding: '0 6px', borderRadius: 6, border: '1px solid var(--dab-border-strong, #cbd5e1)', background: 'var(--dab-surface-muted, #f8fafc)', color: 'var(--dab-text-strong, #0f172a)', fontWeight: 500 }}
-          >
-            {availableModels.map((m) => (
-              <option key={m.id} value={m.id} title={m.description}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-          {onChangeThemeMode && (
-            <ThemeModeSelect
-              themeMode={themeMode}
-              resolvedTheme={resolvedTheme}
-              onChange={onChangeThemeMode}
-            />
+    <>
+      <div className="dab-preview-toolbar" data-testid="tile-preview-toolbar">
+        <div>
+          <strong>{scriptTitle}</strong>{' '}
+          <span className="dab-muted">
+            (Artifact <code>obj_script_{scriptId}</code>
+            {publishedTileDash
+              ? ` · Dashboard #${publishedTileDash.dashboardId} · tile_element_${publishedTileDash.elementId}`
+              : ''}
+            )
+          </span>{' '}
+          {savedScheduleBadge && (
+            <span
+              className="dab-badge"
+              onClick={() => setSchedulerOpen(true)}
+              style={{ cursor: 'pointer' }}
+            >
+              ⏰ Scheduled: {savedScheduleBadge}
+            </span>
           )}
         </div>
-
-        <div className="dab-controls">
-          <label className="dab-field">
-            <span>Saved Scripts</span>
+        <div className="dab-preview-actions">
+          {savedScripts.length > 0 && (
             <select
+              data-testid="tile-saved-scripts-select"
               value={savedScripts.some((s) => s.id === scriptId) ? scriptId : ''}
               onChange={(e) => {
-                const id = e.target.value
-                if (id) history.push(`/script/${encodeURIComponent(id)}`)
+                if (e.target.value) loadScriptById(e.target.value, true)
               }}
             >
               <option value="">-- Select Saved Script --</option>
@@ -462,71 +147,17 @@ export const ScriptStudioView: React.FC<{
                 </option>
               ))}
             </select>
-          </label>
-
-          <label className="dab-field">
-            <span>ID</span>
-            <input
-              type="text"
-              value={scriptId}
-              onChange={(e) => setScriptId(e.target.value)}
-              style={{ width: 95 }}
-            />
-          </label>
-
-          <label className="dab-field">
-            <span>Title</span>
-            <input
-              type="text"
-              value={scriptTitle}
-              onChange={(e) => setScriptTitle(e.target.value)}
-              style={{ width: 165 }}
-            />
-          </label>
-
-          <label className="dab-field">
-            <span>Mode</span>
-            <select
-              value={scriptMode}
-              onChange={(e) => setScriptMode(e.target.value)}
-              title="Custom script mode injected as vars.mode and dashboard_filters.script_mode"
-            >
-              <option value="summary">summary</option>
-              <option value="detailed_audit">detailed_audit</option>
-              <option value="anomaly_alert">anomaly_alert</option>
-            </select>
-          </label>
-
-          <label className="dab-field">
-            <span>Folder</span>
-            <select
-              value={selectedFolderId}
-              onChange={(e) => onChangeFolder(e.target.value)}
-            >
-              {folders.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <button
-            type="button"
-            className="dab-btn-secondary"
-            onClick={() => {
-              const newId = `script_${Date.now().toString(36).slice(-5)}`
-              setScriptId(newId)
-              setScriptTitle('Untitled Python Script')
-              setScriptCode(DEFAULT_PYTHON_SCRIPT)
-              setMessages([])
-              setPublishedDash(null)
-              history.push('/script')
-            }}
+          )}
+          <select
+            data-testid="tile-mode-select"
+            value={scriptMode}
+            onChange={(e) => setScriptMode(e.target.value)}
+            title="Custom script mode injected as vars.mode and dashboard_filters.script_mode"
           >
-            New Script
-          </button>
-
+            <option value="summary">summary</option>
+            <option value="detailed_audit">detailed_audit</option>
+            <option value="anomaly_alert">anomaly_alert</option>
+          </select>
           <button
             type="button"
             className="dab-btn-secondary"
@@ -535,7 +166,6 @@ export const ScriptStudioView: React.FC<{
           >
             Save Script
           </button>
-
           <button
             type="button"
             className="dab-btn-secondary"
@@ -543,89 +173,69 @@ export const ScriptStudioView: React.FC<{
           >
             ⏰ Schedule Script
           </button>
-
           <button
             type="button"
             className="dab-btn-gemini"
-            onClick={handlePublishDashboard}
+            onClick={handlePublishTileDashboard}
             disabled={!!busyStatus}
           >
             ✨ Publish Dashboard
           </button>
+          {publishedTileDash && (
+            <button
+              type="button"
+              className="dab-btn-secondary"
+              onClick={() =>
+                extensionSDK.openBrowserWindow(
+                  `/dashboards/${encodeURIComponent(publishedTileDash.dashboardId)}`,
+                  '_blank'
+                )
+              }
+            >
+              Open Dashboard #{publishedTileDash.dashboardId} ↗
+            </button>
+          )}
         </div>
-      </header>
+      </div>
 
-      <div className="dab-workspace">
-        <aside className="dab-left-pane">
-          <div className="dab-chat-log">
-            {messages.length === 0 && (
-              <div className="dab-empty-chat">
-                <strong>Scriptable CodeMode Python Authoring</strong>
-                <p style={{ margin: '6px 0 0' }}>
-                  Edit the Python script below or ask Antigravity to query Looker explores
-                  and format a table (<code>list[dict]</code>), Markdown/HTML string, or
-                  dict. Saves to <code>user_{'{userId}'}_script_{'{scriptId}'}</code> &amp;{' '}
-                  <code>obj_script_{'{scriptId}'}</code>.
-                </p>
-              </div>
-            )}
-            {messages.map((m, i) => (
-              <div key={i} className={`dab-msg dab-msg-${m.role}`}>
-                <div className="dab-msg-header">
-                  {m.role === 'user' ? 'You' : m.role === 'error' ? 'Error' : 'Antigravity'}
-                  {m.dashboardId && (
-                    <span className="dab-msg-pill">Dashboard #{m.dashboardId}</span>
-                  )}
-                </div>
-                <div className="dab-msg-body">{m.text}</div>
-              </div>
-            ))}
-            {busyStatus && (
-              <div className="dab-status-banner">
-                <span className="dab-spinner" />
-                <span>{busyStatus}</span>
-              </div>
-            )}
-          </div>
-
-          <div className="dab-composer dab-chatbar">
-            <div className="dab-use-case-bar" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, marginBottom: 4 }}>
-              <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Use Case:</strong>
-              {messages.length === 0 && !publishedDash ? (
-                <select
-                  data-testid="use-case-selector"
-                  value="tile"
-                  onChange={(e) => {
-                    const next = e.target.value as any
-                    if (next && next !== 'tile' && next !== 'auto') {
-                      const m = useCaseToStudioMode(next)
-                      history.push(m === 'health' ? '/health-check' : `/${m}`)
-                    } else if (next === 'auto') {
-                      history.push('/app')
-                    }
-                  }}
-                  disabled={!!busyStatus}
-                >
-                  {STUDIO_USE_CASE_OPTIONS.map((opt) => {
-                    const allowed = getAllowedUseCases(capabilities, disabledModes as any)
-                    const isAllowed = opt.value === 'auto' || allowed.includes(opt.value as any)
-                    return (
-                      <option key={opt.value} value={opt.value} disabled={!isAllowed}>
-                        {opt.label}{!isAllowed ? ' (Locked)' : ''}
-                      </option>
-                    )
-                  })}
-                </select>
-              ) : (
-                <span data-testid="locked-use-case-badge" className="dab-badge dab-locked-use-case-badge">
-                  🔒 {getUseCaseLabel('tile')}
-                </span>
-              )}
-            </div>
-            <div className="dab-inspector-bar">
-              <strong>Python Script (`LkrCodeMode.runPythonCode`)</strong>
+      <div
+        className="dab-iframe-container"
+        style={{ padding: 14, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            background: 'var(--dab-surface-muted, #f8fafc)',
+            border: '1px solid var(--dab-border, #e2e8f0)',
+            borderRadius: 8,
+            padding: 10,
+          }}
+        >
+          <div
+            className="dab-inspector-bar"
+            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+          >
+            <strong>Python Script (`LkrCodeMode.runPythonCode`)</strong>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input
+                type="text"
+                value={scriptId}
+                onChange={(e) => setScriptId(e.target.value)}
+                placeholder="script_id"
+                style={{ width: 95, fontSize: 11.5 }}
+              />
+              <input
+                type="text"
+                value={scriptTitle}
+                onChange={(e) => setScriptTitle(e.target.value)}
+                placeholder="Script title"
+                style={{ width: 165, fontSize: 11.5 }}
+              />
               <button
                 type="button"
+                data-testid="tile-run-python-btn"
                 className="dab-btn-gemini"
                 onClick={() => handleRunPython()}
                 disabled={!!busyStatus}
@@ -633,109 +243,48 @@ export const ScriptStudioView: React.FC<{
                 ✨ Run Python
               </button>
             </div>
-            <textarea
-              rows={8}
-              value={scriptCode}
-              onChange={(e) => setScriptCode(e.target.value)}
-              style={{
-                fontFamily: 'monospace',
-                fontSize: 12,
-                background: 'var(--dab-code-bg, #0f172a)',
-                color: '#f8fafc',
-              }}
+          </div>
+          <textarea
+            rows={5}
+            data-testid="tile-script-editor"
+            value={scriptCode}
+            onChange={(e) => setScriptCode(e.target.value)}
+            style={{
+              fontFamily: 'monospace',
+              fontSize: 12,
+              background: 'var(--dab-code-bg, #0f172a)',
+              color: '#f8fafc',
+              borderRadius: 6,
+              padding: 8,
+            }}
+          />
+          <label
+            className="dab-field"
+            style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <span>Test `vars.dashboard_filters` / Custom Controls (JSON):</span>
+            <input
+              type="text"
+              value={filtersJson}
+              onChange={(e) => setFiltersJson(e.target.value)}
+              style={{ flex: 1, fontFamily: 'monospace', fontSize: 11 }}
             />
-            <label className="dab-field" style={{ width: '100%' }}>
-              <span>Test `vars.dashboard_filters` / Custom Controls (JSON):</span>
-              <input
-                type="text"
-                value={filtersJson}
-                onChange={(e) => setFiltersJson(e.target.value)}
-                style={{ flex: 1, fontFamily: 'monospace', fontSize: 11 }}
-              />
-            </label>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <input
-                type="text"
-                placeholder="Ask Agent to write or update Python script..."
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    handleSendChatPrompt()
-                  }
-                }}
-                style={{
-                  flex: 1,
-                  height: 30,
-                  padding: '0 8px',
-                  border: '1px solid var(--dab-border-strong, #cbd5e1)',
-                  borderRadius: 6,
-                  background: 'var(--dab-input-bg, #ffffff)',
-                  color: 'var(--dab-text, #1f2937)',
-                }}
-              />
-              <button
-                type="button"
-                className="dab-btn-gemini"
-                onClick={handleSendChatPrompt}
-                disabled={!!busyStatus || !prompt.trim()}
-              >
-                ✨ Ask AI
-              </button>
-            </div>
-          </div>
-        </aside>
+          </label>
+        </div>
 
-        <main className="dab-right-pane">
-          <div className="dab-preview-toolbar">
-            <div>
-              <strong>{scriptTitle}</strong>{' '}
-              <span className="dab-muted">
-                (Artifact <code>obj_script_{scriptId}</code>
-                {publishedDash
-                  ? ` · Dashboard #${publishedDash.dashboardId} · tile_element_${publishedDash.elementId}`
-                  : ''}
-                )
-              </span>{' '}
-              {savedScheduleBadge && (
-                <span className="dab-badge" onClick={() => setSchedulerOpen(true)} style={{ cursor: 'pointer' }}>
-                  ⏰ Scheduled: {savedScheduleBadge}
-                </span>
-              )}
+        <div data-testid="tile-script-output" style={{ flex: 1, minHeight: 160 }}>
+          {scriptOutput ? (
+            <ScriptOutputRenderer output={scriptOutput} />
+          ) : (
+            <div className="dab-placeholder">
+              <p>Click &ldquo;✨ Run Python&rdquo; to execute in WASM Monty sandbox.</p>
+              <p className="dab-muted">
+                Renders a table for <code>list[dict]</code>, HTML/Markdown for{' '}
+                <code>str</code>, or <code>&lt;pre&gt;</code> for <code>dict</code>.
+              </p>
             </div>
-            <div className="dab-preview-actions">
-              {publishedDash && (
-                <button
-                  type="button"
-                  className="dab-btn-secondary"
-                  onClick={() =>
-                    extensionSDK.openBrowserWindow(
-                      `/dashboards/${encodeURIComponent(publishedDash.dashboardId)}`,
-                      '_blank'
-                    )
-                  }
-                >
-                  Open Dashboard #{publishedDash.dashboardId} ↗
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="dab-iframe-container" style={{ padding: 16, overflow: 'auto' }}>
-            {scriptOutput ? (
-              <ScriptOutputRenderer output={scriptOutput} />
-            ) : (
-              <div className="dab-placeholder">
-                <p>Click &ldquo;✨ Run Python&rdquo; to execute in WASM Monty sandbox.</p>
-                <p className="dab-muted">
-                  Renders a table for <code>list[dict]</code>, HTML/Markdown for{' '}
-                  <code>str</code>, or <code>&lt;pre&gt;</code> for <code>dict</code>.
-                </p>
-              </div>
-            )}
-          </div>
-        </main>
+          )}
+        </div>
       </div>
 
       {schedulerOpen && (
@@ -865,6 +414,8 @@ export const ScriptStudioView: React.FC<{
           </div>
         </div>
       )}
-    </div>
+    </>
   )
 }
+
+export const ScriptStudioView = TilePreviewPane

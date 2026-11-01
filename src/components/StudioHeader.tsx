@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import { getGeminiUserAttributeName, LkrCodeMode, studioModeToUseCase } from '../antigravity'
+import { getGeminiUserAttributeName, LkrCodeMode } from '../antigravity'
 import { useLookerExtension } from '../contexts/LookerExtensionContext'
 import { formatExploreId } from '../lookerApi'
 import {
@@ -293,13 +293,11 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     resolvedTheme,
     setThemeMode,
     activeMode,
-    enabledModes,
     selectedModel,
     setSelectedModel,
     availableModels,
     agentSession,
     handleWakeModeEnv,
-    history,
     requirePermission,
     setRequirePermission,
     capabilities,
@@ -312,7 +310,8 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     isHealthCheckMode,
     builderMode,
     isUseCaseLocked,
-    setSelectedUseCase,
+    selectedUseCase,
+    getUseCaseLabel,
     lookmlProjectId,
     setLookmlProjectId,
     lookmlSessions,
@@ -449,49 +448,20 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
         >
           🟢 Env [{activeMode}]: {agentSession.environmentId || `env_${activeMode}_isolated`}
         </span>
-        {enabledModes.length > 1 && (
-          <div className="dab-mode-switcher" role="tablist" aria-label="Tool Mode">
-            {enabledModes.map((m) => {
-              const tc = capabilities?.rolesLoaded ? capabilities.tools?.[m.mode] : undefined
-              const locked = Boolean(tc && !tc.enabled)
-              const ro = Boolean(tc?.readOnly)
-              const disabledByConversationLock = Boolean(isUseCaseLocked && activeMode !== m.mode)
-              return (
-                <button
-                  key={m.mode}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeMode === m.mode}
-                  disabled={disabledByConversationLock}
-                  data-permission-locked={locked ? 'true' : undefined}
-                  data-permission-readonly={ro ? 'true' : undefined}
-                  title={
-                    disabledByConversationLock
-                      ? 'Use case is locked for this conversation — click + New Conversation to switch modes'
-                      : tc?.reason
-                  }
-                  className={`dab-mode-tab ${activeMode === m.mode ? 'active' : ''}`}
-                  onClick={() => {
-                    if (disabledByConversationLock) return
-                    setSelectedUseCase(studioModeToUseCase(m.mode))
-                    const target =
-                      m.mode === 'app' && publishedApp?.dashboardId
-                        ? `/app/${encodeURIComponent(publishedApp.dashboardId)}`
-                        : m.mode === 'dashboard' && nativeContent?.id
-                        ? `/dashboard/${encodeURIComponent(nativeContent.id)}`
-                        : m.mode === 'lookml' && lookmlBundle?.id
-                        ? `/lookml/${encodeURIComponent(lookmlBundle.id)}`
-                        : m.mode === 'health' && healthReport?.id
-                        ? `/health-check/${encodeURIComponent(healthReport.id)}`
-                        : m.prefix
-                    history.push(target)
-                  }}
-                >
-                  {locked ? `🔒 ${m.label}` : ro ? `${m.label} 🔒` : m.label}
-                </button>
-              )
-            })}
-          </div>
+        {isUseCaseLocked && (
+          <span
+            data-testid="topbar-use-case-badge"
+            className="dab-badge dab-locked-use-case-badge"
+            style={{
+              background: 'var(--dab-badge-bg, #eff6ff)',
+              color: 'var(--dab-accent-text, #1d4ed8)',
+              borderColor: 'var(--dab-accent-border, #bfdbfe)',
+              fontWeight: 600,
+            }}
+            title="Conversation use case is locked — click + New Conversation in the sidebar to start another use case"
+          >
+            🔒 {getUseCaseLabel(selectedUseCase)}
+          </span>
         )}
         <select
           data-testid="topbar-model-select"

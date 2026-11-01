@@ -225,8 +225,9 @@ assert(
     appTsx.includes('parseStudioRoute') &&
     appTsx.includes('PythonTileMount') &&
     appTsx.includes('dab-permission-bar') &&
-    appTsx.includes('dab-mode-switcher'),
-  'App.tsx must include STUDIO_MODES switcher, parseStudioRoute, PythonTileMount, and dab-permission-bar'
+    appTsx.includes('topbar-use-case-badge') &&
+    !appTsx.includes('dab-mode-switcher'),
+  'App.tsx must include STUDIO_MODES, parseStudioRoute, PythonTileMount, dab-permission-bar, and topbar-use-case-badge without topbar dab-mode-switcher'
 )
 const match = antigravityTs.match(/export const BUNDLE_APP_PY = `([\s\S]*?)`\n/)
 assert(match, 'Could not find BUNDLE_APP_PY in src/antigravity.ts')

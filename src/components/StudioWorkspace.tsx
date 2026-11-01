@@ -5,6 +5,7 @@ import { ConversationRecord, parseExploreId } from '../lookerApi'
 import { LOOKML_TURN_SKILLS, LookmlPreviewPane } from '../lookmlTool'
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import { StudioController } from '../useStudioController'
+import { TilePreviewPane } from './ScriptStudioView'
 
 export interface LookerEmbedTarget {
   kind: 'preload' | 'dashboard' | 'look' | 'url'
@@ -45,6 +46,7 @@ export function resolveLookerEmbedTarget(opts: {
   isEmptyConversation?: boolean
   isHealthCheckMode?: boolean
   isLookmlMode?: boolean
+  isTileMode?: boolean
   isCaMode?: boolean
   builderMode?: 'data_app' | 'dashboard'
   caConversation?: { caConversationId: string; embedPath: string } | null
@@ -68,7 +70,8 @@ export function resolveLookerEmbedTarget(opts: {
     previewObjectId: '',
     nonce,
   }
-  if (opts.isEmptyConversation || opts.isHealthCheckMode || opts.isLookmlMode) return preload
+  if (opts.isEmptyConversation || opts.isHealthCheckMode || opts.isLookmlMode || opts.isTileMode)
+    return preload
   if ((opts.isCaMode || opts.caConversation) && opts.caConversation?.embedPath) {
     return {
       kind: 'url',
@@ -528,6 +531,7 @@ export const StudioCatalogBar: React.FC<{ ctl: StudioController }> = ({ ctl }) =
 
 export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
+    activeMode,
     builderMode,
     isLookmlMode,
     isHealthCheckMode,
@@ -558,6 +562,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     lookmlBundle,
     nativeContent,
     publishedApp,
+    publishedTileDash,
   } = ctl
 
   const mockExt =
@@ -617,8 +622,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                     disabled={!isAllowed}
                     title={!isAllowed ? toolReason || 'Missing Looker permissions' : undefined}
                   >
-                    {opt.label}
-                    {!isAllowed ? ' (Locked)' : ''}
+                    {!isAllowed ? `🔒 ${opt.label} (Locked)` : opt.label}
                   </option>
                 )
               })}
@@ -713,6 +717,8 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
             ? 'Ask a natural-language data question for Looker Conversational Analytics...'
             : isLookmlMode
             ? 'Describe LookML changes, SQL query to model, or field descriptions/tests to run in your active dev mode...'
+            : activeMode === 'tile'
+            ? 'Describe the Python Tile script to generate or update (or paste a screenshot)...'
             : builderMode === 'dashboard'
             ? 'Describe a Looker UDD, Look, Board, or Schedule to create or update...'
             : 'Describe the Data App to build or paste a screenshot (Cmd+Enter to send)...'
@@ -823,6 +829,8 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
             ? lookmlBundle
               ? '✨ Update LookML'
               : '✨ Run Agentic LookML'
+            : activeMode === 'tile'
+            ? '✨ Ask AI'
             : builderMode === 'dashboard'
             ? nativeContent
               ? '✨ Update Content'
@@ -838,6 +846,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 
 export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
+    activeMode,
     builderMode,
     isLookmlMode,
     isHealthCheckMode,
@@ -857,6 +866,8 @@ export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ 
               ? 'Run a 3-Pillar Looker & BigQuery Health Check'
               : isLookmlMode
               ? 'Author & Validate Agentic LookML'
+              : activeMode === 'tile'
+              ? 'Author & Schedule a WASM CodeMode Python Tile'
               : builderMode === 'dashboard'
               ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)'
               : 'Build a Looker Data App with Antigravity'}
@@ -1024,6 +1035,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 
 export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
+    activeMode,
     isEmptyConversation,
     isHealthCheckMode,
     isLookmlMode,
@@ -1038,6 +1050,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     embedNonce,
     extensionSDK,
   } = ctl
+  const isTileMode = activeMode === 'tile'
 
   const hostUrl = (extensionSDK as any)?.lookerHostData?.hostUrl || window.location.origin
   const mockExt =
@@ -1058,6 +1071,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         isEmptyConversation,
         isHealthCheckMode,
         isLookmlMode,
+        isTileMode,
         isCaMode,
         builderMode,
         caConversation,
@@ -1070,6 +1084,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
       isEmptyConversation,
       isHealthCheckMode,
       isLookmlMode,
+      isTileMode,
       isCaMode,
       builderMode,
       caConversation,
@@ -1129,7 +1144,9 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
 
   return (
     <main className="dab-right-pane" style={isEmptyConversation ? { display: 'none' } : undefined}>
-      {isHealthCheckMode ? (
+      {isTileMode ? (
+        <TilePreviewPane ctl={ctl} />
+      ) : isHealthCheckMode ? (
         <div className="dab-preview-toolbar">
           <div>
             {healthReport ? (
@@ -1314,7 +1331,11 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         </div>
       )}
 
-      <div className="dab-iframe-container" data-testid="ca-embed-preview">
+      <div
+        className="dab-iframe-container"
+        data-testid="ca-embed-preview"
+        style={isTileMode ? { display: 'none' } : undefined}
+      >
         <div
           ref={embedContainerRef}
           data-testid="looker-embed-container"
