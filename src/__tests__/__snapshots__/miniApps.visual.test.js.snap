@@ -154,6 +154,43 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 }
 `;
 
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders conversational_analytics (16. Conversational Analytics Mode (Isolated Sub-Agent Selection & Embedded CA Chat)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "dropdownScrollTop": null,
+  "modeTabs": [
+    {
+      "active": true,
+      "label": "Data App",
+    },
+    {
+      "active": false,
+      "label": "Content Studio",
+    },
+    {
+      "active": false,
+      "label": "LookML",
+    },
+    {
+      "active": false,
+      "label": "Health Check",
+    },
+    {
+      "active": false,
+      "label": "Python Tile",
+    },
+  ],
+  "scenario": "conversational_analytics",
+  "verifiedVisibleText": [
+    "🔒 Conversational Analytics",
+    "BigQuery Streaming Buffer & Order Revenue Q&A",
+    "🤖 Agent: eCommerce & BigQuery Analytics Agent (ca_agent_ecommerce)",
+    "Isolated Sub-Agent Selection:",
+    "/embed/conversations/ca_conv_streaming_1",
+    "✨ Ask CA Agent",
+  ],
+}
+`;
+
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders dashboard (2. Content Studio Mode (Create & Update UDDs, Looks, Boards, Schedules)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,

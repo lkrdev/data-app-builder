@@ -223,7 +223,7 @@ export async function loginWithGoogleOAuth(
   return String(token)
 }
 
-async function callInteractionsApi(
+export async function callInteractionsApi(
   extensionSDK: any,
   auth: AntigravityAuth,
   path: string,

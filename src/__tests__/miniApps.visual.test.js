@@ -228,6 +228,23 @@ function buildHtmlPage(scenario) {
           code: 'return [\\n  {"model": "thelook", "label": "eCommerce", "visible_explores": 11, "first_explore": "order_items", "filter_status": dashboard_filters.get("status", "Complete")},\\n  {"model": "agentic_thelook", "label": "Agentic Thelook", "visible_explores": 24, "first_explore": "order_shards", "filter_status": dashboard_filters.get("status", "Complete")}\\n]',
           updatedAt: '2026-10-30T23:36:00Z'
         },
+        'obj_conversational-analytics_ca_conv_streaming_1': {
+          id: 'ca_conv_streaming_1',
+          type: 'conversational-analytics',
+          title: 'BigQuery Streaming Buffer & Order Revenue Q&A',
+          caConversationId: 'ca_conv_streaming_1',
+          agentId: 'ca_agent_ecommerce',
+          agentName: 'eCommerce & BigQuery Analytics Agent',
+          embedPath: '/embed/conversations/ca_conv_streaming_1?agent_id=ca_agent_ecommerce',
+          explores: ['thelook::order_items', 'bigquery_information_schema::streaming_timeline'],
+          selectionRationale: 'Matched order revenue + BigQuery streaming buffer explores on eCommerce & BigQuery Analytics Agent.',
+          updatedAt: '2026-10-30T23:41:00Z',
+          createdBy: '1',
+          messages: [
+            { role: 'user', text: 'Why did order revenue spike in Q4 and which BigQuery tables had the highest streaming buffer volume?' },
+            { role: 'assistant', text: 'Routed to Looker Conversational Analytics Agent "eCommerce & BigQuery Analytics Agent" (ca_agent_ecommerce).\\n\\nQ4 order revenue rose +18.4% YoY ($4.28M), while looker-private-demo.thelook.events accounted for 84% of streaming buffer bytes (507.5 MB across 2.89M rows).' }
+          ]
+        },
         'user_conversations:1': [
           {
             id: 'conv_app_42',
@@ -308,7 +325,8 @@ function buildHtmlPage(scenario) {
         chatbar_pasted_image_inspector: '/app/42',
         chatbar_busy_running: '/app/42',
         chatbar_error_banner: '/app',
-        python_tile_scheduler_modal: '/tile/demo1'
+        python_tile_scheduler_modal: '/tile/demo1',
+        conversational_analytics: '/conversational-analytics/ca_conv_streaming_1'
       };
 
       const isTile = scenario === 'tile_mount_view' || scenario === 'tile_mount_edit';
@@ -377,6 +395,28 @@ function buildHtmlPage(scenario) {
           { id: '5', name: 'Bryan Weber (Personal)' },
           { id: '1', name: 'Shared' }
         ],
+        search_agents: async () => [
+          {
+            id: 'ca_agent_ecommerce',
+            name: 'eCommerce & BigQuery Analytics Agent',
+            description: 'Answers order revenue, gross margin, customer retention, and BigQuery streaming buffer questions.',
+            explores: ['thelook::order_items', 'bigquery_information_schema::streaming_timeline']
+          },
+          {
+            id: 'ca_agent_retail_ops',
+            name: 'Retail Operations Agent',
+            description: 'Answers store transactions, supply chain shipments, and warehouse stock questions.',
+            explores: ['retail_ops::store_transactions', 'retail_ops::warehouse_stock']
+          }
+        ],
+        create_conversation: async (body) => ({
+          id: 'ca_conv_live_77',
+          agent_id: (body && body.agent_id) || 'ca_agent_ecommerce',
+          title: (body && body.title) || 'Conversational Analytics Chat'
+        }),
+        conversational_analytics_chat: async () => ({
+          reply: 'Top 3 categories by gross margin in Q4: Outerwear ($1.42M, 54.2% margin), Jeans ($1.18M, 51.8% margin), and Sweaters ($940K, 49.6% margin).'
+        }),
         search_artifacts: async (params) => {
           const pattern = String((params && params.key) || '');
           if (pattern.startsWith('user_1_dashboard_')) {
@@ -517,6 +557,17 @@ function buildHtmlPage(scenario) {
           const body = init && init.body ? JSON.parse(init.body) : undefined;
           window.__INTERACTION_CALLS__.push({ url, method: (init && init.method) || 'GET', body });
           const inputText = (body && body.input && body.input[0] && body.input[0].text) || '';
+          if (inputText.includes('[CA_AGENT_SELECTION_REQUEST]')) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_ca_subagent_1',
+                status: 'completed',
+                output_text: '<CA_AGENT_SELECTION>{"agent_id":"ca_agent_ecommerce","agent_name":"eCommerce & BigQuery Analytics Agent","rationale":"Question asks about gross margin by product category in thelook::order_items.","initial_question":"What are the top 3 product categories by gross margin in Q4?"}</CA_AGENT_SELECTION>'
+              })
+            };
+          }
           if (inputText.includes('[CONVERSATION_LABEL_REQUEST]')) {
             return {
               ok: true,
@@ -588,7 +639,26 @@ function buildHtmlPage(scenario) {
           dashboardRunState: 'RUNNING',
           dashboardFilters: { status: 'Complete', model: 'thelook' }
         } : undefined,
-        getMockPreviewHtml: (mode) => {
+        getMockPreviewHtml: (mode, objectId) => {
+          if (mode === 'conversational-analytics') {
+            return \`<!DOCTYPE html><html><body style="font-family:Inter,system-ui,sans-serif;margin:0;padding:24px;background:#f8fafc;color:#0f172a;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <div>
+                  <span style="background:#ede9fe;color:#6d28d9;font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;">LOOKER CONVERSATIONAL ANALYTICS · \${objectId || 'ca_conv_streaming_1'}</span>
+                  <h2 style="margin:6px 0 0;font-size:20px;">eCommerce &amp; BigQuery Analytics Agent (Embedded Conversation)</h2>
+                </div>
+                <span style="background:#fff;border:1px solid #cbd5e1;padding:6px 12px;border-radius:6px;font-size:12px;">Agent ID: <strong>ca_agent_ecommerce</strong></span>
+              </div>
+              <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:18px;margin-bottom:14px;">
+                <div style="font-size:12px;color:#64748b;font-weight:600;">USER QUESTION</div>
+                <div style="font-size:14px;color:#0f172a;margin-top:4px;font-weight:600;">Why did order revenue spike in Q4 and which BigQuery tables had the highest streaming buffer volume?</div>
+              </div>
+              <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:18px;">
+                <div style="font-size:12px;color:#6d28d9;font-weight:700;">CA AGENT VERIFIED ANSWER · thelook::order_items + streaming_timeline</div>
+                <p style="font-size:13px;line-height:1.5;color:#1e293b;margin:8px 0 12px;">Q4 order revenue rose <strong>+18.4% YoY ($4.28M)</strong> led by Outerwear and Jeans, while <strong>looker-private-demo.thelook.events</strong> accounted for 84% of streaming buffer bytes (507.5 MB across 2.89M rows).</p>
+              </div>
+            </body></html>\`;
+          }
           if (mode === 'dashboard') {
             return \`<!DOCTYPE html><html><body style="font-family:Inter,system-ui,sans-serif;margin:0;padding:24px;background:#f8fafc;color:#0f172a;">
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
@@ -991,6 +1061,20 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         'Custom Controls / Non-Query Variables (`vars.custom_controls` JSON)',
         '✨ Save Script Schedule'
       ]
+    },
+    {
+      id: 'conversational_analytics',
+      category: 'Mini-App Modes',
+      title: '16. Conversational Analytics Mode (Isolated Sub-Agent Selection & Embedded CA Chat)',
+      snapshotName: '16-mode-conversational-analytics-snap.png',
+      expectText: [
+        '🔒 Conversational Analytics',
+        'BigQuery Streaming Buffer & Order Revenue Q&A',
+        '🤖 Agent: eCommerce & BigQuery Analytics Agent (ca_agent_ecommerce)',
+        'Isolated Sub-Agent Selection:',
+        '/embed/conversations/ca_conv_streaming_1',
+        '✨ Ask CA Agent'
+      ]
     }
   ]
 
@@ -1072,6 +1156,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
   )
 
   test('enables/disables individual tool modes via /config and filters topbar tabs, catalog & routes', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
     const url = `http://127.0.0.1:${port}/?scenario=config_page`
     await chrome.send('Page.navigate', { url })
 
@@ -1531,6 +1617,84 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       persistedType: 'lookml',
       resetUseCase: 'auto',
       badgeGoneAfterReset: true
+    })
+  }, 15000)
+
+  test('routes Turn-1 Auto question to Conversational Analytics via stateless isolated sub-agent (no previous_interaction_id, tools=[]), embeds CA conversation, and persists to user_conversations:1', async () => {
+    const url = `http://127.0.0.1:${port}/?scenario=chatbar_error_banner`
+    await chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="new-conversation-btn"]'))`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    const res = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        window.__INTERACTION_CALLS__ = [];
+        window.__ARTIFACT_UPDATES__ = [];
+        window.__DAB_STUDIO__.setAuthMode('apikey');
+        const newBtn = document.querySelector('[data-testid="new-conversation-btn"]');
+        if (newBtn) newBtn.click();
+        await new Promise((r) => setTimeout(r, 100));
+
+        const ta = document.querySelector('[data-testid="studio-prompt-input"]');
+        const taSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        taSetter.call(ta, 'What are the top 3 product categories by gross margin in Q4?');
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        ta.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 60));
+
+        const sendBtn = document.querySelector('[data-testid="studio-send-btn"]');
+        if (sendBtn) sendBtn.click();
+
+        const waitUntil = Date.now() + 5000;
+        while (Date.now() < waitUntil) {
+          if (document.querySelector('[data-testid="ca-selected-agent-badge"]')) break;
+          await new Promise((r) => setTimeout(r, 80));
+        }
+
+        const subagentCall = (window.__INTERACTION_CALLS__ || []).find((c) =>
+          ((c.body && c.body.input && c.body.input[0] && c.body.input[0].text) || '').includes('[CA_AGENT_SELECTION_REQUEST]')
+        );
+        const lockedBadge = document.querySelector('[data-testid="locked-use-case-badge"]');
+        const agentBadge = document.querySelector('[data-testid="ca-selected-agent-badge"]');
+        const caIframe = document.querySelector('[data-testid="ca-embed-iframe"]');
+        const convUpdates = (window.__ARTIFACT_UPDATES__ || []).filter((u) => u.key === 'user_conversations:1');
+        const latestConversations =
+          convUpdates.length > 0 ? JSON.parse(convUpdates[convUpdates.length - 1].value) : [];
+
+        return {
+          hasSubagentCall: Boolean(subagentCall),
+          subagentTools: subagentCall ? subagentCall.body.tools : null,
+          subagentHasPrevId: subagentCall ? ('previous_interaction_id' in subagentCall.body) : null,
+          lockedBadgeText: lockedBadge ? (lockedBadge.textContent || '').trim() : '',
+          agentBadgeText: agentBadge ? (agentBadge.textContent || '').trim() : '',
+          hasCaIframe: Boolean(caIframe),
+          persistedType: latestConversations[0]?.type,
+          persistedCaId: latestConversations[0]?.content?.caConversationId,
+          persistedAgentId: latestConversations[0]?.content?.agentId
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(res.result.value).toEqual({
+      hasSubagentCall: true,
+      subagentTools: [],
+      subagentHasPrevId: false,
+      lockedBadgeText: '🔒 Conversational Analytics',
+      agentBadgeText: '🤖 Agent: eCommerce & BigQuery Analytics Agent (ca_agent_ecommerce)',
+      hasCaIframe: true,
+      persistedType: 'conversational-analytics',
+      persistedCaId: 'ca_conv_live_77',
+      persistedAgentId: 'ca_agent_ecommerce'
     })
   }, 15000)
 })

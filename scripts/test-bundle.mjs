@@ -69,6 +69,7 @@ const lookerApiTs = [
   'src/lookerPermissions.ts',
   'src/lookerArtifacts.ts',
   'src/dataAppPublisher.ts',
+  'src/conversationalAnalytics.ts',
 ]
   .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
   .join('\n')
@@ -481,8 +482,13 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
       lookerApiTs.includes('loadUserConversations') &&
       lookerApiTs.includes('saveUserConversation') &&
       appTsx.includes('data-testid="use-case-selector"') &&
-      appTsx.includes('data-testid="locked-use-case-badge"'),
-    'Issues #25 & #26: AGENTS.md routing + labeling, /workspace/AGENTS.md seeding, use-case-selector, locked-use-case-badge, and user_conversations:${me.id} persistence must be present'
+      appTsx.includes('data-testid="locked-use-case-badge"') &&
+      rootAgentsMd.includes('<CA_AGENT_SELECTION>') &&
+      upstreamAgentsMd.includes('<CA_AGENT_SELECTION>') &&
+      lookerApiTs.includes('selectCaAgentViaIsolatedSubagent') &&
+      lookerApiTs.includes('createLookerCaConversation') &&
+      appTsx.includes('data-testid="ca-embed-preview"'),
+    'Issues #25, #26 & #27: AGENTS.md routing + labeling + CA sub-agent selection, /workspace/AGENTS.md seeding, use-case-selector, locked-use-case-badge, ca-embed-preview, and user_conversations:${me.id} persistence must be present'
   )
   console.log('✓ test-bundle.mjs: all assertions passed!')
 } finally {

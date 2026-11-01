@@ -33,9 +33,14 @@ export const STUDIO_MODES: Array<{
 export function parseStudioRoute(pathname: string): {
   mode: StudioMode
   objectId: string
+  isCaRoute?: boolean
 } {
   const clean = (pathname || '/').trim()
   if (clean === '/' || clean === '/config') return { mode: 'app', objectId: '' }
+  if (clean.startsWith('/conversational-analytics') || clean === '/ca' || clean.startsWith('/ca/')) {
+    const rest = clean.replace(/^\/(?:conversational-analytics|ca)\/?/, '')
+    return { mode: 'app', objectId: decodeURIComponent(rest), isCaRoute: true }
+  }
   if (clean.startsWith('/health')) {
     const rest = clean.replace(/^\/health(?:-check)?\/?/, '')
     return { mode: 'health', objectId: decodeURIComponent(rest) }

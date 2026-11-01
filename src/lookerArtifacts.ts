@@ -633,7 +633,15 @@ export async function publishScriptDashboard(
 }
 
 export type StudioToolMode =
-  | 'app' | 'data_app' | 'lookml' | 'tile' | 'script' | 'dashboard' | 'health' | 'health_check'
+  | 'app'
+  | 'data_app'
+  | 'lookml'
+  | 'tile'
+  | 'script'
+  | 'dashboard'
+  | 'health'
+  | 'health_check'
+  | 'conversational-analytics'
 
 export interface UserArtifactIndexEntry {
   id: string
@@ -703,7 +711,7 @@ export async function listUserArtifacts(
           ? (JSON.parse(row.value) as Record<string, any>)
           : (row.value as Record<string, any>)
       const keyMatch = String(row.key || '').match(
-        /^user_[^_]+_(app|data_app|lookml|tile|script|health|health_check|dashboard)_(.+)$/
+        /^user_[^_]+_(app|data_app|lookml|tile|script|health|health_check|dashboard|conversational-analytics)_(.+)$/
       )
       const inferredType = (parsed.type ||
         parsed.contentType ||

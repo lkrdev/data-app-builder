@@ -60,7 +60,14 @@ application: data_app_builder {
       "validate_project",
       "all_connections",
       "create_sql_query",
-      "run_sql_query"
+      "run_sql_query",
+      "search_agents",
+      "get_agent",
+      "create_conversation",
+      "get_conversation",
+      "search_conversations",
+      "create_conversation_message",
+      "conversational_analytics_chat"
     ]
     scoped_user_attributes: [
       "gemini_api_key"

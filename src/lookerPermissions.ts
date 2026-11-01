@@ -145,7 +145,7 @@ const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
   ['tile', /\b(python\s*tile|python\s*script|codemode\s*script|obj_script|monty\s*python\s*tile)\b/i],
   ['dashboard', /\b(udd|user[- ]defined\s*dashboard|native\s*dashboard|saved\s*look|lookml\s*dashboard|pin\s*to\s*board|schedule\s*dashboard|content\s*studio)\b/i],
   ['app', /\b(data\s*app|lit\s*app|web\s*component|app-kpi|app-chart|app-grid|custom\s*app|interactive\s*app)\b/i],
-  ['conversational-analytics', /\b(conversational\s*analytics|what\s+is\s+the|how\s+many|why\s+did|summarize\s+the|explain\s+the|answer\s+this\s+question)\b/i],
+  ['conversational-analytics', /\b(conversational\s*analytics|ca\s*agent|what\s+(?:is|are)|how\s+many|which\s+\w+|why\s+did|summarize\s+the|explain\s+the|answer\s+this\s+question|show\s+(?:me\s+)?the\s+monthly\s+breakdown)\b|\?\s*$/i],
   ['lookml', /\b(add\s+a\s+measure|add\s+a\s+dimension|create\s+a\s+view|edit\s+view|sql_table_name|derived_table)\b/i],
   ['dashboard', /\b(build\s+a\s+dashboard|create\s+a\s+dashboard|create\s+a\s+look|create\s+a\s+board)\b/i],
 ]
