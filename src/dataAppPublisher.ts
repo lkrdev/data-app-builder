@@ -29,6 +29,8 @@ export interface PersistedChatTurn {
   interactionId?: string
   dashboardId?: string
   widgetCount?: number
+  activitySteps?: any[]
+  thinkingDurationSec?: number
 }
 
 export interface DashboardStudioMetadata {

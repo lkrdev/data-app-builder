@@ -8,6 +8,7 @@ import {
 } from '../contexts/LookerExtensionContext'
 import { useStudioController } from '../useStudioController'
 import { parseStudioRoute, STUDIO_MODES, type StudioMode } from '../lookerApi'
+import type { AntigravityActivityStep } from '../antigravity'
 import { PythonTile } from './PythonTile'
 import { ConfigSetupView, StudioTopbar } from './StudioHeader'
 import {
@@ -30,6 +31,8 @@ export interface ChatMessage {
   interactionId?: string
   dashboardId?: string
   widgetCount?: number
+  activitySteps?: AntigravityActivityStep[]
+  thinkingDurationSec?: number
 }
 
 const StudioMain: React.FC = () => {

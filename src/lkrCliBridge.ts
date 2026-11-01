@@ -18,6 +18,7 @@ export interface LkrExtensionToolRequest {
   path?: string
   query_params?: Record<string, any> | null
   body?: any
+  thought?: string
 }
 
 export const LKR_CLI_SITECUSTOMIZE_PY = `"""Antigravity Looker Extension Bridge for lkr-dev-cli (sitecustomize.py).
@@ -565,6 +566,11 @@ export const LKR_CLI_BRIDGE_TOOL = {
         type: 'object',
         description: 'Optional request body when kind="sdk_request".',
       },
+      thought: {
+        type: 'string',
+        description:
+          'Concise 1-sentence summary of what this bridged lkr-dev-cli call is doing with the Looker API (falls back to "<method> <path>" when omitted).',
+      },
     },
     required: ['kind'],
   },
@@ -700,6 +706,8 @@ export function extractLkrExtensionToolRequests(interactionOrText: any): LkrExte
     try {
       const parsed = JSON.parse(m[1].trim())
       if (!parsed || (parsed.kind !== 'codemode' && parsed.kind !== 'sdk_request')) continue
+      const thoughtProp =
+        typeof parsed.thought === 'string' && parsed.thought.trim() ? { thought: parsed.thought.trim() } : {}
       const normalized: LkrExtensionToolRequest =
         parsed.kind === 'sdk_request'
           ? {
@@ -710,6 +718,7 @@ export function extractLkrExtensionToolRequests(interactionOrText: any): LkrExte
               body: parsed.body ?? null,
               dev_mode: Boolean(parsed.dev_mode),
               cache_key: parsed.cache_key || computeLkrExtensionCacheKey(parsed),
+              ...thoughtProp,
             }
           : {
               kind: 'codemode',
@@ -717,6 +726,7 @@ export function extractLkrExtensionToolRequests(interactionOrText: any): LkrExte
               vars: parsed.vars && typeof parsed.vars === 'object' ? parsed.vars : {},
               dev_mode: Boolean(parsed.dev_mode),
               cache_key: parsed.cache_key || computeLkrExtensionCacheKey(parsed),
+              ...thoughtProp,
             }
       const key = normalized.cache_key!
       if (!seen.has(key)) {
@@ -766,6 +776,8 @@ export async function executeLkrExtensionToolRequest(params: {
     return { cacheKey, result }
   }
 
+  const effectiveThought = typeof req.thought === 'string' && req.thought.trim() ? req.thought.trim() : undefined
+
   const rawOut = await LkrCodeMode.runPythonCode({
     code: String(req.code || ''),
     sdk,
@@ -774,7 +786,15 @@ export async function executeLkrExtensionToolRequest(params: {
     extensionSDK,
     requirePermission,
     approvedOperations,
-    onPermissionRequest,
+    onPermissionRequest: onPermissionRequest
+      ? (permReq: any) =>
+          onPermissionRequest({
+            ...permReq,
+            ...(permReq?.thought || effectiveThought
+              ? { thought: permReq?.thought || effectiveThought }
+              : {}),
+          })
+      : undefined,
   })
   let result: any = rawOut
   if (typeof rawOut === 'string') {

@@ -20,7 +20,7 @@ import {
   UserConversationEntry,
 } from './lookerApi'
 import {
-  AgentSession, ANTIGRAVITY_ALLOWED_MODELS, AntigravityAuth, AntigravityModelOption,
+  AgentSession, ANTIGRAVITY_ALLOWED_MODELS, AntigravityActivityStep, AntigravityAuth, AntigravityModelOption,
   CodeModePermissionDecision, CodeModePermissionRequest, DEFAULT_ANTIGRAVITY_MODEL,
   ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig, generateConversationLabel,
   listAvailableAntigravityModels, LkrCodeMode, loginWithGoogleOAuth, normalizeEnvironmentId,
@@ -365,6 +365,9 @@ export function useStudioController() {
     tile: { toolType: 'tile', environmentId: 'env_tile_isolated' },
   })
   const [messagesByMode, setMessagesByMode] = useState<Record<StudioMode, ChatMessage[]>>(() => {
+    if (Array.isArray(mockExt?.initialMessages)) {
+      return { app: mockExt.initialMessages, dashboard: [], lookml: [], health: [], tile: [] }
+    }
     const initialErr = mockExt?.initialError
       ? [{ role: 'error' as const, text: String(mockExt.initialError) }]
       : []
@@ -430,6 +433,9 @@ export function useStudioController() {
   )
   const [busyStatus, setBusyStatus] = useState<string | null>(
     () => mockExt?.initialBusyStatus || null
+  )
+  const [liveActivitySteps, setLiveActivitySteps] = useState<AntigravityActivityStep[]>(
+    () => (Array.isArray(mockExt?.initialLiveActivitySteps) ? mockExt.initialLiveActivitySteps : [])
   )
 
   const isUseCaseLocked = Boolean(
@@ -1655,6 +1661,7 @@ export function useStudioController() {
       'current'
 
     setBusyStatus('Connecting to Antigravity...')
+    setLiveActivitySteps([])
     try {
       const effectiveLookmlTurn = isLookmlMode || selectedUseCase === 'lookml'
       const effectiveBuilderMode: 'data_app' | 'dashboard' =
@@ -1691,6 +1698,7 @@ export function useStudioController() {
         requirePermission,
         approvedOperations: approvedOpsRef.current,
         onPermissionRequest: requestCodeModePermission,
+        onProgressSteps: setLiveActivitySteps,
         onStatus: setBusyStatus,
       })
 
@@ -1721,6 +1729,8 @@ export function useStudioController() {
             role: 'assistant',
             text: result.assistantText,
             interactionId: result.session.lastInteractionId,
+            activitySteps: result.activitySteps,
+            thinkingDurationSec: result.thinkingDurationSec,
           },
         ]
         setLookmlBundle(result.lookmlBundle)
@@ -1776,6 +1786,8 @@ export function useStudioController() {
             role: 'assistant',
             text: result.assistantText || 'Updated Python script and executed in WASM Monty sandbox.',
             interactionId: result.session.lastInteractionId,
+            activitySteps: result.activitySteps,
+            thinkingDurationSec: result.thinkingDurationSec,
           },
         ]
         setAgentSession({ ...result.session, explores: selectedExplores }, 'tile')
@@ -1814,6 +1826,8 @@ export function useStudioController() {
             text: result.assistantText,
             interactionId: result.session.lastInteractionId,
             widgetCount: result.nativeBundle.tile_count,
+            activitySteps: result.activitySteps,
+            thinkingDurationSec: result.thinkingDurationSec,
           }
           const savedNative = await saveNativeContentArtifact(
             core40SDK,
@@ -1861,6 +1875,8 @@ export function useStudioController() {
             text: result.assistantText,
             interactionId: result.session.lastInteractionId,
             widgetCount: result.bundle?.widgets?.length || 0,
+            activitySteps: result.activitySteps,
+            thinkingDurationSec: result.thinkingDurationSec,
           }
           const upserted = await upsertPublishedDataApp(
             core40SDK,
@@ -1933,6 +1949,8 @@ export function useStudioController() {
               role: 'assistant',
               text: result.assistantText,
               interactionId: result.session.lastInteractionId,
+              activitySteps: result.activitySteps,
+              thinkingDurationSec: result.thinkingDurationSec,
             },
           ]
           setMessages(finalMsgs, resolvedMode)
@@ -2015,13 +2033,17 @@ export function useStudioController() {
     } finally {
       setPendingPerm(null)
       setBusyStatus(null)
+      setLiveActivitySteps(
+        Array.isArray(mockExt?.initialLiveActivitySteps) ? mockExt.initialLiveActivitySteps : []
+      )
     }
   }
 
   const isEmptyConversation =
     !isTileMount && location.pathname !== '/config' &&
     !parsedRoute.objectId && messages.length === 0 && !publishedApp && !nativeContent &&
-    !lookmlBundle && !healthReport && !caConversation && !loadedScript && !busyStatus
+    !lookmlBundle && !healthReport && !caConversation && !loadedScript && !busyStatus &&
+    liveActivitySteps.length === 0
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -2032,9 +2054,10 @@ export function useStudioController() {
         setSelectedUseCase: handleChangeUseCase, setCapabilities,
         handleResetNewApp, handleNewConversation, handleSelectConversation,
         setNativeContent, setPublishedApp, bumpEmbedNonce,
+        setMessages, setBusyStatus, setLiveActivitySteps,
       }
     }
-  }, [history, requestCodeModePermission, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce])
+  }, [history, requestCodeModePermission, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce, setMessages])
 
   return {
     extensionSDK, core40SDK, history, location, isTileMount,
@@ -2060,8 +2083,9 @@ export function useStudioController() {
     handleRunPython, handleSaveScript, handlePublishTileDashboard, loadScriptById,
     currentAppCode, loadDashInput, setLoadDashInput,
     sharedEnvironmentId, syncSharedEnvironmentId,
-    agentSession, messages, prompt, setPrompt, pastedImages, setPastedImages,
-    busyStatus, handleWakeModeEnv, filteredCatalog, catalogSearch, setCatalogSearch,
+    agentSession, messages, setMessages, prompt, setPrompt, pastedImages, setPastedImages,
+    busyStatus, liveActivitySteps, setLiveActivitySteps,
+    handleWakeModeEnv, filteredCatalog, catalogSearch, setCatalogSearch,
     activeObjectId, conversations: filteredConversations, activeConversationId,
     sidebarCollapsed, setSidebarCollapsed, isEmptyConversation,
     requirePermission, setRequirePermission, pendingPerm, resolvePermDecision,
