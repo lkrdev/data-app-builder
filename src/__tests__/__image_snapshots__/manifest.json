@@ -42,7 +42,7 @@
     "snapshotName": "05-mode-python-tile-studio-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "tile_mount_view",
@@ -60,7 +60,7 @@
     "snapshotName": "07-dashboard-tile-mount-edit-mode-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "config_page",
@@ -69,7 +69,7 @@
     "snapshotName": "08-config-page-setup-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "explore_dropdown_open_top",
@@ -83,7 +83,7 @@
       ".dab-dropdown"
     ],
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "explore_dropdown_scrolled",
@@ -97,7 +97,7 @@
       ".dab-dropdown"
     ],
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_lookml_skills",
@@ -108,7 +108,7 @@
     "height": 268,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_pasted_image_inspector",
@@ -119,7 +119,7 @@
     "height": 245,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_busy_running",
@@ -147,7 +147,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "python_tile_scheduler_modal",
@@ -155,7 +155,7 @@
     "title": "15. Custom CodeMode Script Scheduler Modal (Cron, vars.mode & Custom Controls)",
     "snapshotName": "15-python-tile-scheduler-modal-snap.png",
     "width": 568,
-    "height": 414,
+    "height": 416,
     "clipSelector": ".dab-modal",
     "clipMargin": 24,
     "changedInGit": true
@@ -178,7 +178,7 @@
     "height": 395,
     "clipSelector": ".dab-empty-prompt-card",
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "studio_dark_theme",

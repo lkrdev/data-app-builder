@@ -34,9 +34,14 @@ export const FullScreenToggleButton: React.FC = () => {
   )
 }
 
-import { StudioSelect, ThemeModeIcon } from './StudioSelect'
-export { StudioSelect, ThemeModeIcon }
-export type { StudioSelectOption, StudioSelectProps } from './StudioSelect'
+import {
+  StudioBadge,
+  StudioModal,
+  StudioSelect,
+  StudioSkeleton,
+  ThemeModeIcon,
+} from './StudioDesignSystem'
+export * from './StudioDesignSystem'
 
 export const ThemeModeSelect: React.FC<{
   themeMode: StudioThemeMode
@@ -299,13 +304,13 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             })}
           </div>
           {!canSaveContext && (
-            <div className="dab-muted" style={{ fontSize: 11, color: '#b45309' }}>
+            <div className="dab-muted" style={{ fontSize: 11, color: 'var(--dab-warning-text)' }}>
               🔒 Read-only: saving shared extension context requires Looker <code>develop</code> or{' '}
               <code>admin</code> permission.
             </div>
           )}
           {authMode === 'apikey' && !canManageAttrs && (
-            <div className="dab-muted" style={{ fontSize: 11, color: '#b45309' }}>
+            <div className="dab-muted" style={{ fontSize: 11, color: 'var(--dab-warning-text)' }}>
               🔒 Creating or updating hidden Looker User Attributes requires{' '}
               <code>manage_user_attributes</code> or <code>admin</code> permission.
             </div>
@@ -604,33 +609,23 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
         <span className="dab-badge">
           {LkrCodeMode?.runPythonCode ? 'WASM CodeMode ✓' : 'WASM CodeMode (pending build)'}
         </span>
-        <span
-          className="dab-badge"
+        <StudioBadge
+          tone="success"
           onClick={() => handleWakeModeEnv(activeMode)}
-          style={{
-            cursor: 'pointer',
-            background: '#ecfdf5',
-            color: '#047857',
-            borderColor: '#a7f3d0',
-          }}
+          style={{ cursor: 'pointer' }}
           title="Mode-isolated Antigravity sandbox environment (click to wake or reload)"
         >
           🟢 Env [{activeMode}]: {agentSession.environmentId || `env_${activeMode}_isolated`}
-        </span>
+        </StudioBadge>
         {isUseCaseLocked && (
-          <span
-            data-testid="topbar-use-case-badge"
-            className="dab-badge dab-locked-use-case-badge"
-            style={{
-              background: 'var(--dab-badge-bg, #eff6ff)',
-              color: 'var(--dab-accent-text, #1d4ed8)',
-              borderColor: 'var(--dab-accent-border, #bfdbfe)',
-              fontWeight: 600,
-            }}
+          <StudioBadge
+            testId="topbar-use-case-badge"
+            tone="accent"
+            className="dab-locked-use-case-badge"
             title="Conversation use case is locked — click + New Conversation in the sidebar to start another use case"
           >
             🔒 {getUseCaseLabel(selectedUseCase)}
-          </span>
+          </StudioBadge>
         )}
         <ThemeModeSelect
           themeMode={themeMode}
@@ -749,10 +744,10 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
             <label className="dab-field">
               <span>Project</span>
               {loadingMetadata ? (
-                <div
-                  data-testid="folder-selector-skeleton"
-                  className="dab-skeleton dab-folder-trigger-fixed"
-                  aria-label="Loading LookML projects..."
+                <StudioSkeleton
+                  testId="folder-selector-skeleton"
+                  className="dab-folder-trigger-fixed"
+                  ariaLabel="Loading LookML projects..."
                 />
               ) : (
                 <input
@@ -779,13 +774,12 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
               )}
             </label>
             {capabilities?.rolesLoaded && !canDeployLookml && (
-              <span
-                className="dab-badge"
-                style={{ background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }}
+              <StudioBadge
+                tone="warning"
                 title="Deploy to production requires Looker 'deploy' or 'admin' permission"
               >
                 🔒 No deploy
-              </span>
+              </StudioBadge>
             )}
             {(lookmlSessions.length > 0 || lookmlBundle) && (
               <>
@@ -831,10 +825,10 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
             >
               <span>Save to Folder:</span>
               {loadingMetadata ? (
-                <div
-                  data-testid="folder-selector-skeleton"
-                  className="dab-skeleton dab-folder-trigger-fixed"
-                  aria-label="Loading folders..."
+                <StudioSkeleton
+                  testId="folder-selector-skeleton"
+                  className="dab-folder-trigger-fixed"
+                  ariaLabel="Loading folders..."
                 />
               ) : (
                 <button
@@ -914,147 +908,125 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                 </div>
               )}
 
-              {advModalOpen && (
-                <div
-                  className="dab-modal-backdrop dab-folder-modal-backdrop"
-                  onClick={() => setAdvModalOpen(false)}
-                >
-                  <div
-                    className="dab-modal dab-folder-search-modal"
-                    data-testid="folder-advanced-search-modal"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
+              <StudioModal
+                open={advModalOpen}
+                onClose={() => setAdvModalOpen(false)}
+                testId="folder-advanced-search-modal"
+                closeTestId="folder-search-modal-close"
+                closeLabel="✕ Close"
+                backdropClassName="dab-folder-modal-backdrop"
+                className="dab-folder-search-modal"
+                title={
+                  <>
+                    🔍 Advanced Looker Folder Search (<code>sdk.search_folders</code>)
+                  </>
+                }
+                subtitle="Search across all Looker folders by name, parent_id, personal scope, creator_id, or ID"
+              >
+                <div className="dab-folder-search-grid">
+                  <div className="dab-modal-row">
+                    <label>Folder Name (name)</label>
+                    <input
+                      type="text"
+                      data-testid="folder-search-input-name"
+                      placeholder="e.g. subfolder test or %marketing%..."
+                      value={advName}
+                      onChange={(e) => setAdvName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void executeAdvancedSearch()
                       }}
+                    />
+                  </div>
+                  <div className="dab-modal-row">
+                    <label>Parent Folder ID (parent_id)</label>
+                    <input
+                      type="text"
+                      data-testid="folder-search-input-parent-id"
+                      placeholder="e.g. 1 or 501..."
+                      value={advParentId}
+                      onChange={(e) => setAdvParentId(e.target.value)}
+                    />
+                  </div>
+                  <div className="dab-modal-row">
+                    <label>Personal Scope (is_personal)</label>
+                    <StudioSelect
+                      testId="folder-search-select-personal"
+                      value={advPersonal}
+                      onChange={(val) => setAdvPersonal(val as any)}
+                      options={[
+                        { value: 'any', label: 'Any Folder' },
+                        { value: 'false', label: 'Shared Folders Only (is_personal=false)' },
+                        { value: 'true', label: 'Personal Folders Only (is_personal=true)' },
+                      ]}
+                    />
+                  </div>
+                  <div className="dab-modal-row">
+                    <label>Creator User ID (creator_id)</label>
+                    <input
+                      type="text"
+                      data-testid="folder-search-input-creator-id"
+                      placeholder="e.g. 1..."
+                      value={advCreatorId}
+                      onChange={(e) => setAdvCreatorId(e.target.value)}
+                    />
+                  </div>
+                  <div className="dab-modal-row">
+                    <label>Exact Folder ID (id)</label>
+                    <input
+                      type="text"
+                      data-testid="folder-search-input-id"
+                      placeholder="e.g. 502..."
+                      value={advFolderId}
+                      onChange={(e) => setAdvFolderId(e.target.value)}
+                    />
+                  </div>
+                  <div
+                    className="dab-modal-row"
+                    style={{ justifyContent: 'flex-end', alignItems: 'flex-end' }}
+                  >
+                    <button
+                      type="button"
+                      data-testid="folder-search-submit-btn"
+                      className="dab-btn-primary"
+                      onClick={() => void executeAdvancedSearch()}
+                      disabled={advLoading}
                     >
-                      <div>
-                        <strong style={{ fontSize: 14 }}>
-                          🔍 Advanced Looker Folder Search (<code>sdk.search_folders</code>)
-                        </strong>
-                        <div className="dab-muted" style={{ fontSize: 11.5, marginTop: 2 }}>
-                          Search across all Looker folders by name, parent_id, personal scope, creator_id, or ID
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        data-testid="folder-search-close-btn"
-                        className="dab-btn-secondary"
-                        onClick={() => setAdvModalOpen(false)}
-                      >
-                        ✕ Close
-                      </button>
-                    </div>
-
-                    <div className="dab-folder-search-grid">
-                      <div className="dab-modal-row">
-                        <label>Folder Name (name)</label>
-                        <input
-                          type="text"
-                          data-testid="folder-search-input-name"
-                          placeholder="e.g. subfolder test or %marketing%..."
-                          value={advName}
-                          onChange={(e) => setAdvName(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') void executeAdvancedSearch()
-                          }}
-                        />
-                      </div>
-                      <div className="dab-modal-row">
-                        <label>Parent Folder ID (parent_id)</label>
-                        <input
-                          type="text"
-                          data-testid="folder-search-input-parent-id"
-                          placeholder="e.g. 1 or 501..."
-                          value={advParentId}
-                          onChange={(e) => setAdvParentId(e.target.value)}
-                        />
-                      </div>
-                      <div className="dab-modal-row">
-                        <label>Personal Scope (is_personal)</label>
-                        <StudioSelect
-                          testId="folder-search-select-personal"
-                          value={advPersonal}
-                          onChange={(val) => setAdvPersonal(val as any)}
-                          options={[
-                            { value: 'any', label: 'Any Folder' },
-                            { value: 'false', label: 'Shared Folders Only (is_personal=false)' },
-                            { value: 'true', label: 'Personal Folders Only (is_personal=true)' },
-                          ]}
-                        />
-                      </div>
-                      <div className="dab-modal-row">
-                        <label>Creator User ID (creator_id)</label>
-                        <input
-                          type="text"
-                          data-testid="folder-search-input-creator-id"
-                          placeholder="e.g. 1..."
-                          value={advCreatorId}
-                          onChange={(e) => setAdvCreatorId(e.target.value)}
-                        />
-                      </div>
-                      <div className="dab-modal-row">
-                        <label>Exact Folder ID (id)</label>
-                        <input
-                          type="text"
-                          data-testid="folder-search-input-id"
-                          placeholder="e.g. 502..."
-                          value={advFolderId}
-                          onChange={(e) => setAdvFolderId(e.target.value)}
-                        />
-                      </div>
-                      <div
-                        className="dab-modal-row"
-                        style={{ justifyContent: 'flex-end', alignItems: 'flex-end' }}
-                      >
-                        <button
-                          type="button"
-                          data-testid="folder-search-submit-btn"
-                          className="dab-btn-primary"
-                          onClick={() => void executeAdvancedSearch()}
-                          disabled={advLoading}
-                        >
-                          {advLoading ? 'Searching...' : 'Search Folders'}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="dab-folder-search-results" data-testid="folder-search-results">
-                      {advResults.length === 0 ? (
-                        <div className="dab-folder-empty">
-                          {advLoading
-                            ? 'Searching Looker folders...'
-                            : 'No matching folders found. Adjust filters and click Search Folders.'}
-                        </div>
-                      ) : (
-                        advResults.map((item) => {
-                          const isSelected = String(selectedFolderId) === String(item.id)
-                          return (
-                            <button
-                              key={item.id}
-                              type="button"
-                              data-testid={`folder-search-result-${item.id}`}
-                              className={`dab-folder-search-result-row ${isSelected ? 'selected' : ''}`}
-                              onClick={() => handleSelectFolderNode(item.id, true)}
-                            >
-                              <span style={{ fontWeight: 600 }}>
-                                {item.is_personal ? '👤' : '📁'} {item.name} (#{item.id})
-                              </span>
-                              <span className="dab-muted" style={{ fontSize: 11 }}>
-                                {item.parent_id ? `parent: #${item.parent_id}` : 'root'} ·{' '}
-                                {item.is_personal ? 'Personal' : 'Shared'}
-                              </span>
-                            </button>
-                          )
-                        })
-                      )}
-                    </div>
+                      {advLoading ? 'Searching...' : 'Search Folders'}
+                    </button>
                   </div>
                 </div>
-              )}
+
+                <div className="dab-folder-search-results" data-testid="folder-search-results">
+                  {advResults.length === 0 ? (
+                    <div className="dab-folder-empty">
+                      {advLoading
+                        ? 'Searching Looker folders...'
+                        : 'No matching folders found. Adjust filters and click Search Folders.'}
+                    </div>
+                  ) : (
+                    advResults.map((item) => {
+                      const isSelected = String(selectedFolderId) === String(item.id)
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          data-testid={`folder-search-result-${item.id}`}
+                          className={`dab-folder-search-result-row ${isSelected ? 'selected' : ''}`}
+                          onClick={() => handleSelectFolderNode(item.id, true)}
+                        >
+                          <span style={{ fontWeight: 600 }}>
+                            {item.is_personal ? '👤' : '📁'} {item.name} (#{item.id})
+                          </span>
+                          <span className="dab-muted" style={{ fontSize: 11 }}>
+                            {item.parent_id ? `parent: #${item.parent_id}` : 'root'} ·{' '}
+                            {item.is_personal ? 'Personal' : 'Shared'}
+                          </span>
+                        </button>
+                      )
+                    })
+                  )}
+                </div>
+              </StudioModal>
             </div>
             {(publishedApp || nativeContent) && (
               <>
@@ -1110,13 +1082,12 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
           {isHealthCheckMode && (
             <>
               {capabilities?.rolesLoaded && capabilities.tools.health.missingPermissions.length > 0 && (
-                <span
-                  className="dab-badge"
-                  style={{ background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }}
+                <StudioBadge
+                  tone="warning"
                   title={capabilities.tools.health.reason}
                 >
                   ⚠️ Missing: {capabilities.tools.health.missingPermissions.join(', ')}
-                </span>
+                </StudioBadge>
               )}
               <StudioSelect
                 testId="topbar-health-scope-select"

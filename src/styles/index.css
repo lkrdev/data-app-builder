@@ -19,6 +19,9 @@
   --dab-input-bg: #ffffff;
   --dab-code-bg: #0f172a;
   --dab-empty-gradient: radial-gradient(circle at 50% 25%, #eff6ff 0%, #f8fafc 70%);
+  --dab-success-bg: #ecfdf5; --dab-success-text: #047857; --dab-success-border: #a7f3d0;
+  --dab-warning-bg: #fef3c7; --dab-warning-text: #92400e; --dab-warning-border: #fde68a;
+  --dab-danger-bg: #fee2e2; --dab-danger-text: #991b1b; --dab-danger-border: #fecaca;
   color-scheme: light;
 }
 
@@ -42,6 +45,9 @@
   --dab-input-bg: #0f172a;
   --dab-code-bg: #020617;
   --dab-empty-gradient: radial-gradient(circle at 50% 25%, #172554 0%, #0b1120 70%);
+  --dab-success-bg: rgba(16, 185, 129, 0.16); --dab-success-text: #6ee7b7; --dab-success-border: rgba(52, 211, 153, 0.35);
+  --dab-warning-bg: rgba(245, 158, 11, 0.16); --dab-warning-text: #fcd34d; --dab-warning-border: rgba(251, 191, 36, 0.35);
+  --dab-danger-bg: rgba(239, 68, 68, 0.16); --dab-danger-text: #fca5a5; --dab-danger-border: rgba(248, 113, 113, 0.35);
   color-scheme: dark;
 }
 
@@ -1559,5 +1565,15 @@ body {
 .dab-studio-menu-badge { font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 4px; background: var(--dab-surface-subtle, #f1f5f9); color: var(--dab-text-secondary, #475569); flex-shrink: 0; }
 .dab-studio-menu-check { font-size: 11px; font-weight: 700; color: var(--dab-accent, #2563eb); flex-shrink: 0; }
 
-
+/* Studio Design System semantic badges, cards, modals & toolbars */
+.dab-badge-neutral { background: var(--dab-surface-subtle); color: var(--dab-text-secondary); border-color: var(--dab-border-strong); }
+.dab-badge-accent { background: var(--dab-badge-bg); color: var(--dab-accent-text); border-color: var(--dab-accent-border); }
+.dab-badge-success { background: var(--dab-success-bg); color: var(--dab-success-text); border-color: var(--dab-success-border); }
+.dab-badge-warning { background: var(--dab-warning-bg); color: var(--dab-warning-text); border-color: var(--dab-warning-border); }
+.dab-badge-danger { background: var(--dab-danger-bg); color: var(--dab-danger-text); border-color: var(--dab-danger-border); }
+.dab-ds-card { background: var(--dab-surface); color: var(--dab-text); border: 1px solid var(--dab-border); border-radius: 8px; padding: 12px; }
+.dab-ds-modal-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dab-ds-modal-title-group { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dab-ds-modal-footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.dab-ds-toolbar-title-block { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
 

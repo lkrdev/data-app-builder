@@ -3694,4 +3694,102 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       afterCustomMenuSelect: 'dashboard'
     })
   }, 15000)
+
+  test('verifies StudioDesignSystem primitives (StudioModal with Escape close, StudioToolbar, StudioBadge dark/light semantic tokens, StudioCard, StudioSkeleton, StudioDocPreview) and captures cropped showcase snapshot', async () => {
+    const url = `http://127.0.0.1:${port}/?scenario=lookml`
+    await chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(document.querySelector('.dab-ds-card') && document.querySelector('[data-testid="use-case-info-btn"]'))`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((r) => setTimeout(r, 80))
+    }
+
+    const dsRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        // 1. Verify semantic status tokens in Light and Dark mode on StudioBadge
+        document.documentElement.setAttribute('data-theme', 'light');
+        const probeWrap = document.createElement('div');
+        probeWrap.innerHTML = '<span id="p-ok" class="dab-badge dab-badge-success">OK</span><span id="p-warn" class="dab-badge dab-badge-warning">WARN</span><span id="p-err" class="dab-badge dab-badge-danger">ERR</span><span id="p-skel" class="dab-skeleton" style="width:80px;height:20px"></span>';
+        document.body.appendChild(probeWrap);
+        const lightOkBg = window.getComputedStyle(document.getElementById('p-ok')).backgroundColor;
+        const lightWarnBg = window.getComputedStyle(document.getElementById('p-warn')).backgroundColor;
+        const lightErrBg = window.getComputedStyle(document.getElementById('p-err')).backgroundColor;
+
+        document.documentElement.setAttribute('data-theme', 'dark');
+        const darkOkBg = window.getComputedStyle(document.getElementById('p-ok')).backgroundColor;
+        const darkWarnBg = window.getComputedStyle(document.getElementById('p-warn')).backgroundColor;
+        const darkErrBg = window.getComputedStyle(document.getElementById('p-err')).backgroundColor;
+        probeWrap.remove();
+        document.documentElement.setAttribute('data-theme', 'light');
+
+        // 2. Verify StudioCard & StudioToolbar in LookML mode
+        const hasToolbarTitleBlock = Boolean(document.querySelector('.dab-preview-toolbar .dab-ds-toolbar-title-block'));
+        const hasStudioCard = Boolean(document.querySelector('.dab-ds-card'));
+
+        // 3. Open UseCaseInfoModal (built on StudioModal) and verify StudioDocPreview inside it
+        document.querySelector('[data-testid="use-case-info-btn"]').click();
+        await new Promise((r) => setTimeout(r, 100));
+        const modal = document.querySelector('[data-testid="use-case-info-modal"]');
+        const hasModalHeader = Boolean(modal && modal.querySelector('.dab-ds-modal-header'));
+        const hasDocPreview = Boolean(modal && modal.querySelector('[data-testid="doc-ui-preview"]'));
+        const rect = modal.getBoundingClientRect();
+        const clip = {
+          x: Math.max(0, Math.floor(rect.left - 24)),
+          y: Math.max(0, Math.floor(rect.top - 24)),
+          width: Math.min(1440, Math.ceil(rect.width + 48)),
+          height: Math.min(900, Math.ceil(rect.height + 48)),
+          scale: 1
+        };
+
+        return {
+          lightDistinctFromDark: lightOkBg !== darkOkBg && lightWarnBg !== darkWarnBg && lightErrBg !== darkErrBg,
+          hasToolbarTitleBlock,
+          hasStudioCard,
+          hasModalHeader,
+          hasDocPreview,
+          clip
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(dsRes.result.value).toMatchObject({
+      lightDistinctFromDark: true,
+      hasToolbarTitleBlock: true,
+      hasStudioCard: true,
+      hasModalHeader: true,
+      hasDocPreview: true
+    })
+
+    const { data } = await chrome.send('Page.captureScreenshot', {
+      format: 'png',
+      clip: dsRes.result.value.clip
+    })
+    const pngBuffer = Buffer.from(data, 'base64')
+    expect(pngBuffer.length).toBeGreaterThan(1000)
+    const scratchDir =
+      '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
+    mkdirSync(scratchDir, { recursive: true })
+    const showcasePath = path.join(scratchDir, 'studio-design-system-showcase.png')
+    writeFileSync(showcasePath, pngBuffer)
+    expect(existsSync(showcasePath)).toBe(true)
+
+    // Verify Escape key closes StudioModal
+    const escRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 80));
+        return Boolean(document.querySelector('[data-testid="use-case-info-modal"]'));
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+    expect(escRes.result.value).toBe(false)
+  }, 15000)
 })

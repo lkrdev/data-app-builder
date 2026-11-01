@@ -13,7 +13,14 @@ import { LOOKML_TURN_SKILLS, LookmlPreviewPane } from '../lookmlTool'
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import { StudioController } from '../useStudioController'
 import { TilePreviewPane } from './ScriptStudioView'
-import { StudioSelect, StudioSelectOption } from './StudioSelect'
+import {
+  StudioBadge,
+  StudioDocPreview,
+  StudioModal,
+  StudioSelect,
+  StudioSelectOption,
+  StudioToolbar,
+} from './StudioDesignSystem'
 
 function buildUseCaseMenuOptions(ctl: StudioController): StudioSelectOption[] {
   const { useCaseOptions, allowedUseCases, capabilities } = ctl
@@ -541,20 +548,7 @@ export const USE_CASE_GUIDE_ORDER = (Object.keys(USE_CASE_GUIDES) as StudioUseCa
 export function renderUseCaseGuideMarkdown(markdown: string): React.ReactElement {
   const wrapPreview = (compName: string, key: string): React.ReactElement | null => {
     const renderFn = DOC_UI_COMPONENTS[compName]
-    if (!renderFn) return null
-    return (
-      <div
-        key={key}
-        data-testid="doc-ui-preview"
-        data-component={compName}
-        className="dab-doc-ui-preview"
-        style={{ pointerEvents: 'none', userSelect: 'none' }}
-        aria-hidden="true"
-        tabIndex={-1}
-      >
-        {renderFn()}
-      </div>
-    )
+    return renderFn ? StudioDocPreview({ key, component: compName, children: renderFn() }) : null
   }
 
   const renderInline = (text: string, keyPrefix: string): React.ReactNode[] =>
@@ -634,63 +628,38 @@ export const UseCaseInfoModal: React.FC<{
   onSelectUseCase: (uc: StudioUseCase) => void
   onClose: () => void
 }> = ({ activeUseCase, onSelectUseCase, onClose }) => {
-  if (!activeUseCase) return null
-  const guide = USE_CASE_GUIDES[activeUseCase] || USE_CASE_GUIDES.auto
+  const guide = (activeUseCase && USE_CASE_GUIDES[activeUseCase]) || USE_CASE_GUIDES.auto
   return (
-    <div
-      className="dab-modal-backdrop"
-      data-testid="use-case-info-modal"
-      onClick={onClose}
+    <StudioModal
+      open={Boolean(activeUseCase)}
+      onClose={onClose}
+      testId="use-case-info-modal"
+      closeTestId="use-case-info-close-btn"
+      closeLabel="Close"
+      className="dab-use-case-info-modal"
+      title={`📖 ${guide.title}`}
+      subtitle="Interactive guide & live-themed UI controls reference (non-actionable preview)"
     >
-      <div
-        className="dab-modal dab-use-case-info-modal"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            gap: 8,
-          }}
-        >
-          <div>
-            <strong style={{ fontSize: 15 }}>📖 {guide.title}</strong>
-            <div className="dab-muted" style={{ fontSize: 11.5 }}>
-              Interactive guide &amp; live-themed UI controls reference (non-actionable preview)
-            </div>
-          </div>
+      <div className="dab-use-case-guide-tabs" role="tablist" aria-label="Use Case Guides">
+        {USE_CASE_GUIDE_ORDER.map((item) => (
           <button
+            key={item.useCase}
             type="button"
-            data-testid="use-case-info-close-btn"
-            className="dab-btn-secondary"
-            onClick={onClose}
+            role="tab"
+            aria-selected={activeUseCase === item.useCase}
+            data-testid={`use-case-guide-tab-${item.useCase}`}
+            className={`dab-skill-chip ${activeUseCase === item.useCase ? 'active' : ''}`}
+            onClick={() => onSelectUseCase(item.useCase)}
           >
-            Close
+            {item.tabLabel}
           </button>
-        </div>
-
-        <div className="dab-use-case-guide-tabs" role="tablist" aria-label="Use Case Guides">
-          {USE_CASE_GUIDE_ORDER.map((item) => (
-            <button
-              key={item.useCase}
-              type="button"
-              role="tab"
-              aria-selected={activeUseCase === item.useCase}
-              data-testid={`use-case-guide-tab-${item.useCase}`}
-              className={`dab-skill-chip ${activeUseCase === item.useCase ? 'active' : ''}`}
-              onClick={() => onSelectUseCase(item.useCase)}
-            >
-              {item.tabLabel}
-            </button>
-          ))}
-        </div>
-
-        <div className="dab-use-case-guide-body">
-          {renderUseCaseGuideMarkdown(guide.markdown)}
-        </div>
+        ))}
       </div>
-    </div>
+
+      <div className="dab-use-case-guide-body">
+        {renderUseCaseGuideMarkdown(guide.markdown)}
+      </div>
+    </StudioModal>
   )
 }
 
@@ -910,95 +879,79 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
         </div>
       )}
 
-      {pendingDeleteConv && relatedInfo && (
-        <div
-          className="dab-modal-backdrop"
-          onClick={handleCancelDeleteConversation}
-        >
-          <div
-            className="dab-modal"
-            data-testid="delete-conv-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="dab-delete-conv-modal-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="dab-modal-header">
-              <strong id="dab-delete-conv-modal-title">Delete Conversation?</strong>
-              <button
-                type="button"
-                className="dab-conv-action-btn"
-                onClick={handleCancelDeleteConversation}
-                aria-label="Close modal"
-              >
-                ×
-              </button>
-            </div>
-            <div className="dab-modal-body">
-              <p style={{ margin: '0 0 8px' }}>
-                Remove <strong>{pendingDeleteConv.label}</strong> (<code>{pendingDeleteConv.type}</code>)
-                from your conversation history (<code>user_conversations:{userId || '1'}</code>
-                {relatedInfo.userIndexKeys[0] ? ` and ${relatedInfo.userIndexKeys[0]}` : ''})?
-              </p>
-              {relatedInfo.items.length > 0 && (
-                <div className="dab-modal-related-box" data-testid="delete-conv-related-summary">
-                  <strong>Linked Looker &amp; Shared Artifact Content:</strong>
-                  <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-                    {relatedInfo.items.map((item, idx) => (
-                      <li key={idx}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              <label className="dab-modal-checkbox-row">
-                <input
-                  type="checkbox"
-                  data-testid="delete-related-content-checkbox"
-                  checked={deleteRelatedContent}
-                  onChange={(e) => setDeleteRelatedContent(e.target.checked)}
-                />
-                <span>
-                  Also delete related Looker content &amp; shared artifacts ({relatedInfo.summary})
-                </span>
-              </label>
-            </div>
-            <div className="dab-modal-actions">
-              <button
-                type="button"
-                className="dab-btn-secondary"
-                data-testid="cancel-delete-conv-btn"
-                onClick={handleCancelDeleteConversation}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="dab-btn-secondary"
-                data-testid="confirm-delete-conv-only-btn"
-                onClick={() => handleConfirmDeleteConversation(false)}
-              >
-                Delete Conversation Only
-              </button>
-              <button
-                type="button"
-                className="dab-btn-danger"
-                data-testid="confirm-delete-conv-and-content-btn"
-                onClick={() => handleConfirmDeleteConversation(true)}
-              >
-                Delete Conversation &amp; Related Content
-              </button>
-              <button
-                type="button"
-                className="dab-btn-primary"
-                data-testid="confirm-delete-conv-btn"
-                onClick={() => handleConfirmDeleteConversation()}
-              >
-                Confirm Delete
-              </button>
-            </div>
+      <StudioModal
+        open={Boolean(pendingDeleteConv && relatedInfo)}
+        onClose={handleCancelDeleteConversation}
+        testId="delete-conv-modal"
+        title="Delete Conversation?"
+        footer={
+          <>
+            <button
+              type="button"
+              className="dab-btn-secondary"
+              data-testid="cancel-delete-conv-btn"
+              onClick={handleCancelDeleteConversation}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="dab-btn-secondary"
+              data-testid="confirm-delete-conv-only-btn"
+              onClick={() => handleConfirmDeleteConversation(false)}
+            >
+              Delete Conversation Only
+            </button>
+            <button
+              type="button"
+              className="dab-btn-danger"
+              data-testid="confirm-delete-conv-and-content-btn"
+              onClick={() => handleConfirmDeleteConversation(true)}
+            >
+              Delete Conversation &amp; Related Content
+            </button>
+            <button
+              type="button"
+              className="dab-btn-primary"
+              data-testid="confirm-delete-conv-btn"
+              onClick={() => handleConfirmDeleteConversation()}
+            >
+              Confirm Delete
+            </button>
+          </>
+        }
+      >
+        {pendingDeleteConv && relatedInfo && (
+          <div className="dab-modal-body" style={{ padding: 0 }}>
+            <p style={{ margin: '0 0 8px' }}>
+              Remove <strong>{pendingDeleteConv.label}</strong> (<code>{pendingDeleteConv.type}</code>)
+              from your conversation history (<code>user_conversations:{userId || '1'}</code>
+              {relatedInfo.userIndexKeys[0] ? ` and ${relatedInfo.userIndexKeys[0]}` : ''})?
+            </p>
+            {relatedInfo.items.length > 0 && (
+              <div className="dab-modal-related-box" data-testid="delete-conv-related-summary">
+                <strong>Linked Looker &amp; Shared Artifact Content:</strong>
+                <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                  {relatedInfo.items.map((item, idx) => (
+                    <li key={idx}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <label className="dab-modal-checkbox-row">
+              <input
+                type="checkbox"
+                data-testid="delete-related-content-checkbox"
+                checked={deleteRelatedContent}
+                onChange={(e) => setDeleteRelatedContent(e.target.checked)}
+              />
+              <span>
+                Also delete related Looker content &amp; shared artifacts ({relatedInfo.summary})
+              </span>
+            </label>
           </div>
-        </div>
-      )}
+        )}
+      </StudioModal>
     </nav>
   )
 }
@@ -1148,19 +1101,15 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               options={buildUseCaseMenuOptions(ctl)}
             />
           ) : (
-            <span
+            <StudioBadge
               data-testid="locked-use-case-badge"
-              className="dab-badge dab-locked-use-case-badge"
-              style={{
-                background: 'var(--dab-badge-bg, #eff6ff)',
-                color: 'var(--dab-accent-text, #1d4ed8)',
-                borderColor: 'var(--dab-accent-border, #bfdbfe)',
-                fontWeight: 600,
-              }}
+              testId="locked-use-case-badge"
+              tone="accent"
+              className="dab-locked-use-case-badge"
               title="Use case is locked after Turn 1 — start a new conversation to switch use cases"
             >
               🔒 {getUseCaseLabel(selectedUseCase)}
-            </span>
+            </StudioBadge>
           )}
           <UseCaseInfoTrigger useCase={activeGuideUseCase} onOpen={setInfoModalUseCase} />
         </div>
@@ -1691,17 +1640,17 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
       {isTileMode ? (
         <TilePreviewPane ctl={ctl} />
       ) : isHealthCheckMode ? (
-        <div className="dab-preview-toolbar">
-          <div>
-            {healthReport ? (
+        <StudioToolbar
+          title={
+            healthReport ? (
               <>
                 <strong>{healthReport.title}</strong>{' '}
-                <span className="dab-badge">
+                <StudioBadge>
                   Health Score: {healthReport.scores.overallScore}% ({healthReport.scores.grade})
-                </span>{' '}
-                <span className="dab-badge">
+                </StudioBadge>{' '}
+                <StudioBadge>
                   Transcriber: {healthReport.scores.transcriberScore}/4.00
-                </span>{' '}
+                </StudioBadge>{' '}
                 <span className="dab-muted">
                   (user_{healthReport.createdBy}_health_check_{healthReport.id} · obj_health_check_
                   {healthReport.id})
@@ -1711,41 +1660,43 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               <span className="dab-muted">
                 7-section TECHNICAL_DESIGN_DOCUMENT.md (0–100% health score) will render here
               </span>
-            )}
-          </div>
-          <div className="dab-preview-actions">
-            {healthReport && (
-              <>
-                <button
-                  type="button"
-                  className="dab-btn-secondary"
-                  onClick={() => setTddViewMode((m) => (m === 'rendered' ? 'raw' : 'rendered'))}
-                >
-                  {tddViewMode === 'rendered' ? '{ } Raw Markdown' : '📖 Rendered Report'}
-                </button>
-                <button
-                  type="button"
-                  className="dab-btn-secondary"
-                  onClick={handleCopyTddMarkdown}
-                >
-                  {copiedTdd ? '✓ Copied Markdown' : 'Copy Markdown'}
-                </button>
-                <button
-                  type="button"
-                  className="dab-btn-gemini"
-                  onClick={handleDownloadTddMarkdown}
-                >
-                  ✨ Download Markdown (.md)
-                </button>
-              </>
-            )}
-            <UseCaseInfoTrigger useCase="health-check" onOpen={setInfoModalUseCase} />
-          </div>
-        </div>
+            )
+          }
+          actions={
+            <>
+              {healthReport && (
+                <>
+                  <button
+                    type="button"
+                    className="dab-btn-secondary"
+                    onClick={() => setTddViewMode((m) => (m === 'rendered' ? 'raw' : 'rendered'))}
+                  >
+                    {tddViewMode === 'rendered' ? '{ } Raw Markdown' : '📖 Rendered Report'}
+                  </button>
+                  <button
+                    type="button"
+                    className="dab-btn-secondary"
+                    onClick={handleCopyTddMarkdown}
+                  >
+                    {copiedTdd ? '✓ Copied Markdown' : 'Copy Markdown'}
+                  </button>
+                  <button
+                    type="button"
+                    className="dab-btn-gemini"
+                    onClick={handleDownloadTddMarkdown}
+                  >
+                    ✨ Download Markdown (.md)
+                  </button>
+                </>
+              )}
+              <UseCaseInfoTrigger useCase="health-check" onOpen={setInfoModalUseCase} />
+            </>
+          }
+        />
       ) : isLookmlMode ? (
-        <div className="dab-preview-toolbar">
-          <div>
-            {lookmlBundle ? (
+        <StudioToolbar
+          title={
+            lookmlBundle ? (
               <>
                 <strong>{lookmlBundle.title}</strong>{' '}
                 <span className="dab-muted">
@@ -1758,22 +1709,21 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                 Agentic LookML preview (.lkml diffs, validator, run_lookml_test &amp; /sql/:slug +
                 /x/:slug parity)
               </span>
-            )}
-          </div>
-          <div className="dab-preview-actions">
-            <UseCaseInfoTrigger useCase="lookml" onOpen={setInfoModalUseCase} />
-          </div>
-        </div>
+            )
+          }
+          actions={<UseCaseInfoTrigger useCase="lookml" onOpen={setInfoModalUseCase} />}
+        />
       ) : isCaMode || caConversation ? (
         <>
-          <div className="dab-preview-toolbar" data-testid="ca-preview-toolbar">
-            <div>
-              {caConversation ? (
+          <StudioToolbar
+            testId="ca-preview-toolbar"
+            title={
+              caConversation ? (
                 <>
                   <strong>{caConversation.title}</strong>{' '}
-                  <span className="dab-badge" data-testid="ca-selected-agent-badge">
+                  <StudioBadge testId="ca-selected-agent-badge">
                     🤖 Agent: {caConversation.agentName} ({caConversation.agentId})
-                  </span>{' '}
+                  </StudioBadge>{' '}
                   <span className="dab-muted">
                     (Conversation <code>{caConversation.caConversationId}</code> ·{' '}
                     <code>{caConversation.embedPath}</code>)
@@ -1783,35 +1733,37 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                 <span className="dab-muted">
                   Looker Conversational Analytics embedded chat will appear here after routing
                 </span>
-              )}
-            </div>
-            <div className="dab-preview-actions">
-              {caConversation && (
-                <>
-                  <button
-                    type="button"
-                    className="dab-btn-secondary"
-                    onClick={() => setIframeRev((r) => r + 1)}
-                  >
-                    Reload CA Chat
-                  </button>
-                  <button
-                    type="button"
-                    className="dab-btn-secondary"
-                    onClick={() =>
-                      extensionSDK.openBrowserWindow(
-                        caConversation.embedPath.replace(/^\/embed/, ''),
-                        '_blank'
-                      )
-                    }
-                  >
-                    Open in Looker ↗
-                  </button>
-                </>
-              )}
-              <UseCaseInfoTrigger useCase="conversational-analytics" onOpen={setInfoModalUseCase} />
-            </div>
-          </div>
+              )
+            }
+            actions={
+              <>
+                {caConversation && (
+                  <>
+                    <button
+                      type="button"
+                      className="dab-btn-secondary"
+                      onClick={() => setIframeRev((r) => r + 1)}
+                    >
+                      Reload CA Chat
+                    </button>
+                    <button
+                      type="button"
+                      className="dab-btn-secondary"
+                      onClick={() =>
+                        extensionSDK.openBrowserWindow(
+                          caConversation.embedPath.replace(/^\/embed/, ''),
+                          '_blank'
+                        )
+                      }
+                    >
+                      Open in Looker ↗
+                    </button>
+                  </>
+                )}
+                <UseCaseInfoTrigger useCase="conversational-analytics" onOpen={setInfoModalUseCase} />
+              </>
+            }
+          />
           {caConversation?.selectionRationale && (
             <div
               data-testid="ca-selection-rationale"
@@ -1833,9 +1785,9 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           )}
         </>
       ) : (
-        <div className="dab-preview-toolbar">
-          <div>
-            {builderMode === 'dashboard' ? (
+        <StudioToolbar
+          title={
+            builderMode === 'dashboard' ? (
               nativeContent ? (
                 <>
                   <strong>{nativeContent.title}</strong>{' '}
@@ -1861,43 +1813,45 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               <span className="dab-muted">
                 Live Looker Data App preview will appear here after the first turn
               </span>
-            )}
-          </div>
-          <div className="dab-preview-actions">
-            {builderMode !== 'dashboard' && currentAppCode && (
-              <button
-                type="button"
-                data-testid="preview-view-code-btn"
-                className="dab-btn-secondary"
-                onClick={() => setShowAppCode((v) => !v)}
-              >
-                {showAppCode ? 'Hide app.js' : '{ } View app.js'}
-              </button>
-            )}
-            {activePreviewId && (
-              <>
+            )
+          }
+          actions={
+            <>
+              {builderMode !== 'dashboard' && currentAppCode && (
                 <button
                   type="button"
+                  data-testid="preview-view-code-btn"
                   className="dab-btn-secondary"
-                  onClick={() => setIframeRev((r) => r + 1)}
+                  onClick={() => setShowAppCode((v) => !v)}
                 >
-                  Reload Preview
+                  {showAppCode ? 'Hide app.js' : '{ } View app.js'}
                 </button>
-                <button
-                  type="button"
-                  className="dab-btn-secondary"
-                  onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}
-                >
-                  Open in Looker ↗
-                </button>
-              </>
-            )}
-            <UseCaseInfoTrigger
-              useCase={builderMode === 'dashboard' ? 'dashboard' : 'app'}
-              onOpen={setInfoModalUseCase}
-            />
-          </div>
-        </div>
+              )}
+              {activePreviewId && (
+                <>
+                  <button
+                    type="button"
+                    className="dab-btn-secondary"
+                    onClick={() => setIframeRev((r) => r + 1)}
+                  >
+                    Reload Preview
+                  </button>
+                  <button
+                    type="button"
+                    className="dab-btn-secondary"
+                    onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}
+                  >
+                    Open in Looker ↗
+                  </button>
+                </>
+              )}
+              <UseCaseInfoTrigger
+                useCase={builderMode === 'dashboard' ? 'dashboard' : 'app'}
+                onOpen={setInfoModalUseCase}
+              />
+            </>
+          }
+        />
       )}
 
       {showAppCode && currentAppCode && builderMode !== 'dashboard' && (

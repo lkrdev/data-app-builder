@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import type { StudioController } from '../useStudioController'
-import { StudioSelect } from './StudioSelect'
+import { StudioBadge, StudioModal, StudioSelect, StudioToolbar } from './StudioDesignSystem'
 
 // ponytail: reuse shared zero-dependency Markdown renderer from healthCheck.ts
 export function renderMarkdownOrHtmlString(input: string): string {
@@ -113,107 +113,111 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
 
   return (
     <>
-      <div className="dab-preview-toolbar" data-testid="tile-preview-toolbar">
-        <div
-          data-testid="tile-toolbar-title-block"
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
-        >
-          <strong>{scriptTitle}</strong>
-          <span className="dab-muted">
-            (Artifact <code>obj_script_{scriptId}</code>
-            {publishedTileDash
-              ? ` · Dashboard #${publishedTileDash.dashboardId} · tile_element_${publishedTileDash.elementId}`
-              : ''}
-            )
-          </span>
-          {savedScheduleBadge && (
-            <span
-              className="dab-badge"
+      <StudioToolbar
+        testId="tile-preview-toolbar"
+        titleBlockTestId="tile-toolbar-title-block"
+        title={
+          <>
+            <strong>{scriptTitle}</strong>
+            <span className="dab-muted">
+              (Artifact <code>obj_script_{scriptId}</code>
+              {publishedTileDash
+                ? ` · Dashboard #${publishedTileDash.dashboardId} · tile_element_${publishedTileDash.elementId}`
+                : ''}
+              )
+            </span>
+          </>
+        }
+        badges={
+          savedScheduleBadge ? (
+            <StudioBadge
               onClick={() => setSchedulerOpen(true)}
               style={{ cursor: 'pointer' }}
             >
               ⏰ Scheduled: {savedScheduleBadge}
-            </span>
-          )}
-        </div>
-        <div className="dab-preview-actions">
-          {savedScripts.length > 0 && (
+            </StudioBadge>
+          ) : null
+        }
+        actions={
+          <>
+            {savedScripts.length > 0 && (
+              <StudioSelect
+                testId="tile-saved-scripts-select"
+                className="dab-select"
+                value={savedScripts.some((s) => s.id === scriptId) ? scriptId : ''}
+                onChange={(val) => {
+                  if (val) loadScriptById(val, true)
+                }}
+                options={[
+                  { value: '', label: '-- Select Saved Script --' },
+                  ...savedScripts.map((s) => ({
+                    value: s.id,
+                    label: `${s.title} (${s.id})`,
+                  })),
+                ]}
+              />
+            )}
             <StudioSelect
-              testId="tile-saved-scripts-select"
+              testId="tile-mode-select"
               className="dab-select"
-              value={savedScripts.some((s) => s.id === scriptId) ? scriptId : ''}
-              onChange={(val) => {
-                if (val) loadScriptById(val, true)
-              }}
+              value={scriptMode}
+              onChange={setScriptMode}
+              title="Custom script mode injected as vars.mode and dashboard_filters.script_mode"
               options={[
-                { value: '', label: '-- Select Saved Script --' },
-                ...savedScripts.map((s) => ({
-                  value: s.id,
-                  label: `${s.title} (${s.id})`,
-                })),
+                { value: 'summary', label: 'summary' },
+                { value: 'detailed_audit', label: 'detailed_audit' },
+                { value: 'anomaly_alert', label: 'anomaly_alert' },
               ]}
             />
-          )}
-          <StudioSelect
-            testId="tile-mode-select"
-            className="dab-select"
-            value={scriptMode}
-            onChange={setScriptMode}
-            title="Custom script mode injected as vars.mode and dashboard_filters.script_mode"
-            options={[
-              { value: 'summary', label: 'summary' },
-              { value: 'detailed_audit', label: 'detailed_audit' },
-              { value: 'anomaly_alert', label: 'anomaly_alert' },
-            ]}
-          />
-          <button
-            type="button"
-            className="dab-btn-secondary"
-            onClick={() => handleSaveScript()}
-            disabled={!!busyStatus}
-          >
-            Save Script
-          </button>
-          <button
-            type="button"
-            className="dab-btn-secondary"
-            onClick={() => setSchedulerOpen(true)}
-          >
-            ⏰ Schedule Script
-          </button>
-          <button
-            type="button"
-            className="dab-btn-gemini"
-            onClick={handlePublishTileDashboard}
-            disabled={!!busyStatus}
-          >
-            ✨ Publish Dashboard
-          </button>
-          {publishedTileDash && (
             <button
               type="button"
               className="dab-btn-secondary"
-              onClick={() =>
-                extensionSDK.openBrowserWindow(
-                  `/dashboards/${encodeURIComponent(publishedTileDash.dashboardId)}`,
-                  '_blank'
-                )
-              }
+              onClick={() => handleSaveScript()}
+              disabled={!!busyStatus}
             >
-              Open Dashboard #{publishedTileDash.dashboardId} ↗
+              Save Script
             </button>
-          )}
-          <button
-            type="button"
-            data-testid="use-case-info-btn"
-            className="dab-btn dab-btn-secondary dab-info-trigger"
-            title="Use case guide & controls reference"
-            onClick={() => setInfoModalUseCase('tile')}
-          >
-            ?
-          </button>
-        </div>
-      </div>
+            <button
+              type="button"
+              className="dab-btn-secondary"
+              onClick={() => setSchedulerOpen(true)}
+            >
+              ⏰ Schedule Script
+            </button>
+            <button
+              type="button"
+              className="dab-btn-gemini"
+              onClick={handlePublishTileDashboard}
+              disabled={!!busyStatus}
+            >
+              ✨ Publish Dashboard
+            </button>
+            {publishedTileDash && (
+              <button
+                type="button"
+                className="dab-btn-secondary"
+                onClick={() =>
+                  extensionSDK.openBrowserWindow(
+                    `/dashboards/${encodeURIComponent(publishedTileDash.dashboardId)}`,
+                    '_blank'
+                  )
+                }
+              >
+                Open Dashboard #{publishedTileDash.dashboardId} ↗
+              </button>
+            )}
+            <button
+              type="button"
+              data-testid="use-case-info-btn"
+              className="dab-btn dab-btn-secondary dab-info-trigger"
+              title="Use case guide & controls reference"
+              onClick={() => setInfoModalUseCase('tile')}
+            >
+              ?
+            </button>
+          </>
+        }
+      />
 
       <div
         className="dab-iframe-container"
@@ -307,137 +311,135 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         </div>
       </div>
 
-      {schedulerOpen && (
-        <div className="dab-modal-backdrop" onClick={() => setSchedulerOpen(false)}>
-          <div className="dab-modal" onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <strong style={{ fontSize: 15 }}>⏰ Custom CodeMode Script Scheduler</strong>
-                <div className="dab-muted" style={{ fontSize: 11.5 }}>
-                  Schedule <code>obj_script_{scriptId}</code> with custom <code>vars.mode</code> &amp; non-query controls
-                </div>
-              </div>
-              <span className="dab-badge">obj_schedule_{scriptId}</span>
-            </div>
+      <StudioModal
+        open={schedulerOpen}
+        onClose={() => setSchedulerOpen(false)}
+        testId="tile-schedule-modal"
+        title="⏰ Custom CodeMode Script Scheduler"
+        subtitle={
+          <>
+            Schedule <code>obj_script_{scriptId}</code> with custom <code>vars.mode</code> &amp; non-query controls
+          </>
+        }
+        headerRight={<StudioBadge>obj_schedule_{scriptId}</StudioBadge>}
+        footer={
+          <>
+            <button
+              type="button"
+              className="dab-btn-secondary"
+              onClick={() => setSchedulerOpen(false)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="dab-btn-gemini"
+              onClick={() => {
+                setSavedScheduleBadge(`${scheduleConfig.cron} · ${scheduleConfig.mode}`)
+                setScriptMode(scheduleConfig.mode)
+                setSchedulerOpen(false)
+              }}
+            >
+              ✨ Save Script Schedule
+            </button>
+          </>
+        }
+      >
+        <div className="dab-modal-row">
+          <label>Schedule Name</label>
+          <input
+            type="text"
+            value={scheduleConfig.name}
+            onChange={(e) =>
+              setScheduleConfig((prev) => ({ ...prev, name: e.target.value }))
+            }
+          />
+        </div>
 
-            <div className="dab-modal-row">
-              <label>Schedule Name</label>
-              <input
-                type="text"
-                value={scheduleConfig.name}
-                onChange={(e) =>
-                  setScheduleConfig((prev) => ({ ...prev, name: e.target.value }))
-                }
-              />
-            </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div className="dab-modal-row">
+            <label>Cron Cadence</label>
+            <StudioSelect
+              testId="scheduler-cron-select"
+              value={scheduleConfig.cron}
+              onChange={(val) => setScheduleConfig((prev) => ({ ...prev, cron: val }))}
+              options={[
+                { value: '0 8 * * *', label: 'Daily at 8:00 AM (0 8 * * *)' },
+                { value: '0 * * * *', label: 'Hourly (0 * * * *)' },
+                { value: '0 9 * * 1-5', label: 'Weekdays at 9:00 AM (0 9 * * 1-5)' },
+                { value: '0 8 * * 1', label: 'Weekly Monday 8:00 AM (0 8 * * 1)' },
+              ]}
+            />
+          </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <div className="dab-modal-row">
-                <label>Cron Cadence</label>
-                <StudioSelect
-                  testId="scheduler-cron-select"
-                  value={scheduleConfig.cron}
-                  onChange={(val) => setScheduleConfig((prev) => ({ ...prev, cron: val }))}
-                  options={[
-                    { value: '0 8 * * *', label: 'Daily at 8:00 AM (0 8 * * *)' },
-                    { value: '0 * * * *', label: 'Hourly (0 * * * *)' },
-                    { value: '0 9 * * 1-5', label: 'Weekdays at 9:00 AM (0 9 * * 1-5)' },
-                    { value: '0 8 * * 1', label: 'Weekly Monday 8:00 AM (0 8 * * 1)' },
-                  ]}
-                />
-              </div>
-
-              <div className="dab-modal-row">
-                <label>Script Execution Mode (`vars.mode`)</label>
-                <StudioSelect
-                  testId="scheduler-mode-select"
-                  value={scheduleConfig.mode}
-                  onChange={(val) => setScheduleConfig((prev) => ({ ...prev, mode: val }))}
-                  options={[
-                    { value: 'summary', label: 'summary (Executive Rollup)' },
-                    { value: 'detailed_audit', label: 'detailed_audit (Full Row Audit)' },
-                    { value: 'anomaly_alert', label: 'anomaly_alert (Threshold Check)' },
-                  ]}
-                />
-              </div>
-            </div>
-
-            <div className="dab-modal-row">
-              <label>Custom Controls / Non-Query Variables (`vars.custom_controls` JSON)</label>
-              <input
-                type="text"
-                value={scheduleConfig.customVarsJson}
-                onChange={(e) =>
-                  setScheduleConfig((prev) => ({ ...prev, customVarsJson: e.target.value }))
-                }
-                style={{ fontFamily: 'monospace' }}
-              />
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <div className="dab-modal-row">
-                <label>Delivery Action</label>
-                <StudioSelect
-                  testId="scheduler-destination-select"
-                  value={scheduleConfig.destination}
-                  onChange={(val) =>
-                    setScheduleConfig((prev) => ({
-                      ...prev,
-                      destination: val as any,
-                    }))
-                  }
-                  options={[
-                    {
-                      value: 'artifact_snapshot',
-                      label: `Persist Snapshot Artifact (obj_script_run_${scriptId})`,
-                    },
-                    { value: 'webhook', label: 'Webhook POST (JSON / Markdown)' },
-                    {
-                      value: 'looker_scheduled_plan',
-                      label: 'Looker Scheduled Plan Bridge (create_scheduled_plan)',
-                    },
-                  ]}
-                />
-              </div>
-
-              <div className="dab-modal-row">
-                <label>Webhook URL / Recipient</label>
-                <input
-                  type="text"
-                  value={scheduleConfig.targetUrlOrEmail}
-                  onChange={(e) =>
-                    setScheduleConfig((prev) => ({
-                      ...prev,
-                      targetUrlOrEmail: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
-              <button
-                type="button"
-                className="dab-btn-secondary"
-                onClick={() => setSchedulerOpen(false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="dab-btn-gemini"
-                onClick={() => {
-                  setSavedScheduleBadge(`${scheduleConfig.cron} · ${scheduleConfig.mode}`)
-                  setScriptMode(scheduleConfig.mode)
-                  setSchedulerOpen(false)
-                }}
-              >
-                ✨ Save Script Schedule
-              </button>
-            </div>
+          <div className="dab-modal-row">
+            <label>Script Execution Mode (`vars.mode`)</label>
+            <StudioSelect
+              testId="scheduler-mode-select"
+              value={scheduleConfig.mode}
+              onChange={(val) => setScheduleConfig((prev) => ({ ...prev, mode: val }))}
+              options={[
+                { value: 'summary', label: 'summary (Executive Rollup)' },
+                { value: 'detailed_audit', label: 'detailed_audit (Full Row Audit)' },
+                { value: 'anomaly_alert', label: 'anomaly_alert (Threshold Check)' },
+              ]}
+            />
           </div>
         </div>
-      )}
+
+        <div className="dab-modal-row">
+          <label>Custom Controls / Non-Query Variables (`vars.custom_controls` JSON)</label>
+          <input
+            type="text"
+            value={scheduleConfig.customVarsJson}
+            onChange={(e) =>
+              setScheduleConfig((prev) => ({ ...prev, customVarsJson: e.target.value }))
+            }
+            style={{ fontFamily: 'monospace' }}
+          />
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div className="dab-modal-row">
+            <label>Delivery Action</label>
+            <StudioSelect
+              testId="scheduler-destination-select"
+              value={scheduleConfig.destination}
+              onChange={(val) =>
+                setScheduleConfig((prev) => ({
+                  ...prev,
+                  destination: val as any,
+                }))
+              }
+              options={[
+                {
+                  value: 'artifact_snapshot',
+                  label: `Persist Snapshot Artifact (obj_script_run_${scriptId})`,
+                },
+                { value: 'webhook', label: 'Webhook POST (JSON / Markdown)' },
+                {
+                  value: 'looker_scheduled_plan',
+                  label: 'Looker Scheduled Plan Bridge (create_scheduled_plan)',
+                },
+              ]}
+            />
+          </div>
+
+          <div className="dab-modal-row">
+            <label>Webhook URL / Recipient</label>
+            <input
+              type="text"
+              value={scheduleConfig.targetUrlOrEmail}
+              onChange={(e) =>
+                setScheduleConfig((prev) => ({
+                  ...prev,
+                  targetUrlOrEmail: e.target.value,
+                }))
+              }
+            />
+          </div>
+        </div>
+      </StudioModal>
     </>
   )
 }

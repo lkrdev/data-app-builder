@@ -8,6 +8,7 @@ import {
   saveUserArtifact,
 } from './lookerApi'
 import { LKR_DEV_CLI_SPEC } from './lkrCliBridge'
+import { StudioBadge, StudioCard } from './components/StudioDesignSystem'
 export { getArtifactNamespace } from './lookerApi'
 export * from './lkrCliBridge'
 
@@ -286,13 +287,6 @@ export const LookmlPreviewPane: React.FC<{
   const passedTests = tests.filter((t) => t.success).length
   const queries = bundle.queries || []
   const cleanHost = hostUrl.replace(/\/$/, '')
-  const cardStyle: React.CSSProperties = {
-    background: 'var(--dab-surface, #fff)',
-    color: 'var(--dab-text, #1f2937)',
-    padding: 12,
-    borderRadius: 8,
-    border: '1px solid var(--dab-border, #e2e8f0)',
-  }
 
   const openLink = (pathOrUrl: string) => {
     const target = pathOrUrl.startsWith('http')
@@ -304,7 +298,7 @@ export const LookmlPreviewPane: React.FC<{
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'auto', padding: 16, gap: 12 }}>
-      <div className="dab-controls" style={cardStyle}>
+      <StudioCard className="dab-controls">
         <div>
           <strong>Project:</strong> <code>{bundle.project_id || 'default'}</code>
         </div>
@@ -313,35 +307,31 @@ export const LookmlPreviewPane: React.FC<{
             <strong>Model:</strong> <code>{bundle.model_name}</code>
           </div>
         )}
-        <span className="dab-badge" title="Uses whatever branch is active in the user's Looker Dev Mode">
+        <StudioBadge title="Uses whatever branch is active in the user's Looker Dev Mode">
           ⎇ {bundle.branch_name || 'user dev mode'}
-        </span>
-        <span className="dab-msg-pill" style={valPassed ? undefined : { background: '#fee2e2', color: '#991b1b' }}>
+        </StudioBadge>
+        <StudioBadge pill tone={valPassed ? undefined : 'danger'}>
           {valPassed
             ? '✓ LookML Validator Passed'
             : `✗ LookML Validator (${valErrors.length} error${valErrors.length === 1 ? '' : 's'})`}
-        </span>
+        </StudioBadge>
         {tests.length > 0 && (
-          <span
-            className="dab-msg-pill"
-            style={passedTests === tests.length ? undefined : { background: '#fee2e2', color: '#991b1b' }}
-          >
+          <StudioBadge pill tone={passedTests === tests.length ? undefined : 'danger'}>
             {passedTests === tests.length ? '✓' : '✗'} run_lookml_test ({passedTests}/{tests.length} passed)
-          </span>
+          </StudioBadge>
         )}
         {!canDeploy && (
-          <span
-            className="dab-badge"
-            style={{ background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }}
+          <StudioBadge
+            tone="warning"
             title="Requires Looker 'deploy' or 'admin' permission to run deploy_to_production"
           >
             🔒 deploy_to_production disabled (missing deploy)
-          </span>
+          </StudioBadge>
         )}
-      </div>
+      </StudioCard>
 
       {queries.length > 0 && (
-        <div style={cardStyle}>
+        <StudioCard>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>
             SQL-to-LookML Parity Queries (<code>/sql/:slug</code> &amp; <code>/x/:slug</code>)
           </div>
@@ -352,7 +342,7 @@ export const LookmlPreviewPane: React.FC<{
               <div key={i} className="dab-inspector-bar" style={{ padding: '4px 0' }}>
                 <div className="dab-controls">
                   <strong>{q.label || `Query #${(q.query_index ?? i) + 1}`}</strong>
-                  {q.parity_status && <span className="dab-msg-pill">{q.parity_status}</span>}
+                  {q.parity_status && <StudioBadge pill>{q.parity_status}</StudioBadge>}
                 </div>
                 <div className="dab-controls">
                   {sqlPath && (
@@ -369,13 +359,13 @@ export const LookmlPreviewPane: React.FC<{
               </div>
             )
           })}
-        </div>
+        </StudioCard>
       )}
 
       {(valErrors.length > 0 || tests.length > 0) && (
-        <div style={cardStyle}>
+        <StudioCard>
           {valErrors.map((e, i) => (
-            <div key={i} style={{ fontFamily: 'monospace', fontSize: 11, color: '#991b1b' }}>
+            <div key={i} style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--dab-danger-text)' }}>
               {e.file_path ? `${e.file_path}${e.line_number ? `:${e.line_number}` : ''} — ` : ''}
               {e.message}
             </div>
@@ -383,21 +373,17 @@ export const LookmlPreviewPane: React.FC<{
           {tests.length > 0 && (
             <div className="dab-controls" style={{ marginTop: valErrors.length ? 6 : 0 }}>
               {tests.map((t, i) => (
-                <span
-                  key={i}
-                  className="dab-msg-pill"
-                  style={t.success ? undefined : { background: '#fee2e2', color: '#991b1b' }}
-                >
+                <StudioBadge key={i} pill tone={t.success ? undefined : 'danger'}>
                   {t.success ? '✓' : '✗'} {t.test_name}
                   {t.file_id ? ` (${t.file_id})` : ''}
-                </span>
+                </StudioBadge>
               ))}
             </div>
           )}
-        </div>
+        </StudioCard>
       )}
 
-      <div style={{ ...cardStyle, padding: 0, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 240, overflow: 'hidden' }}>
+      <StudioCard style={{ padding: 0, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 240, overflow: 'hidden' }}>
         <div className="dab-inspector-bar" style={{ padding: '8px 12px', borderBottom: '1px solid var(--dab-border, #e2e8f0)', background: 'var(--dab-surface-muted, #f8fafc)' }}>
           <div className="dab-controls">
             {files.length === 0 ? (
@@ -456,10 +442,10 @@ export const LookmlPreviewPane: React.FC<{
                 })
             : 'No .lkml file selected.'}
         </pre>
-      </div>
+      </StudioCard>
 
       {bundle.summary_markdown && (
-        <details open style={cardStyle}>
+        <details open className="dab-ds-card">
           <summary style={{ fontWeight: 700, cursor: 'pointer' }}>
             Agentic LookML Diagnostic Summary (<code>summary.md</code>)
           </summary>
