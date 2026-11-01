@@ -9,32 +9,21 @@ import { STUDIO_MODES } from './App'
 export const FullScreenToggleButton: React.FC = () => {
   const { extensionSDK, lookerHostData } = useLookerExtension()
   const location = useLocation()
-
-  const isStandalone = !lookerHostData?.mountPoint || lookerHostData.mountPoint === 'standalone'
+  if (lookerHostData?.mountPoint && lookerHostData.mountPoint !== 'standalone') return null
   const isSpartan = lookerHostData?.hostType === 'spartan'
   const extensionId = lookerHostData?.extensionId || 'data_app_builder::data_app_builder'
-
   const handleToggleFullScreen = () => {
     if (!extensionSDK) return
     const subRoute = `${location.pathname === '/' ? '' : location.pathname}${location.search || ''}${location.hash || ''}`
-    const targetPrefix = isSpartan ? '/extensions' : '/spartan'
-    const targetUrl = `${targetPrefix}/${extensionId}${subRoute}`
-    extensionSDK.updateLocation(targetUrl, undefined, '_top')
+    extensionSDK.updateLocation(`${isSpartan ? '/extensions' : '/spartan'}/${extensionId}${subRoute}`, undefined, '_top')
   }
-
-  if (!isStandalone) return null
-
   return (
     <button
       type="button"
       data-testid="topbar-fullscreen-toggle"
       className="dab-btn dab-btn-secondary"
       onClick={handleToggleFullScreen}
-      title={
-        isSpartan
-          ? `Switch from /spartan/${extensionId} back to /extensions/${extensionId}`
-          : `Switch from /extensions/${extensionId} to full-screen /spartan/${extensionId}`
-      }
+      title={`Switch between /extensions/${extensionId} and /spartan/${extensionId}`}
     >
       {isSpartan ? '⤡ Exit Full Screen' : '⤢ Full Screen'}
     </button>

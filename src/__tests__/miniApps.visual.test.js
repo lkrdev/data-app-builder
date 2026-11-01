@@ -1783,110 +1783,67 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
   }, 15000)
 
   test('toggles Full Screen between /extensions/* and /spartan/* via lookerHostData while preserving internal route', async () => {
-    // 1. Standard host mode at /config -> shows "Full Screen" and navigates to /spartan/.../config
-    const configUrl = `http://127.0.0.1:${port}/?scenario=config_page`
-    await chrome.send('Page.navigate', { url: configUrl })
-
-    const deadline1 = Date.now() + 8000
-    while (Date.now() < deadline1) {
-      const r = await chrome.send('Runtime.evaluate', {
-        expression: `Boolean(document.querySelector('[data-testid="topbar-fullscreen-toggle"]'))`,
-        returnByValue: true
-      })
-      if (r.result && r.result.value) break
-      await new Promise((res) => setTimeout(res, 100))
+    const waitForToggle = async (scenario) => {
+      await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=${scenario}` })
+      const deadline = Date.now() + 8000
+      while (Date.now() < deadline) {
+        const r = await chrome.send('Runtime.evaluate', {
+          expression: `Boolean(document.querySelector('[data-testid="topbar-fullscreen-toggle"]'))`,
+          returnByValue: true
+        })
+        if (r.result?.value) break
+        await new Promise((res) => setTimeout(res, 80))
+      }
     }
 
+    await waitForToggle('config_page')
     const standardRes = await chrome.send('Runtime.evaluate', {
       expression: `(async () => {
         window.__UPDATED_LOCATIONS__ = [];
         const btn = document.querySelector('[data-testid="topbar-fullscreen-toggle"]');
-        const configLabel = btn ? (btn.textContent || '').trim() : '';
-        if (btn) btn.click();
-
-        // Navigate to StudioTopbar route /app/42 and click Full Screen
+        const configLabel = (btn?.textContent || '').trim();
+        btn?.click();
         window.__DAB_STUDIO__.history.push('/app/42');
         await new Promise((r) => setTimeout(r, 80));
-        const appBtn = document.querySelector('[data-testid="topbar-fullscreen-toggle"]');
-        if (appBtn) appBtn.click();
-
+        document.querySelector('[data-testid="topbar-fullscreen-toggle"]')?.click();
+        const r = document.querySelector('.dab-topbar').getBoundingClientRect();
         return {
           configLabel,
-          calls: window.__UPDATED_LOCATIONS__
+          calls: window.__UPDATED_LOCATIONS__,
+          clip: { x: Math.max(0, Math.floor(r.left)), y: Math.max(0, Math.floor(r.top)), width: Math.min(1440, Math.ceil(r.width)), height: Math.min(900, Math.ceil(r.height) + 8), scale: 1 }
         };
       })()`,
       awaitPromise: true,
       returnByValue: true
     })
 
-    expect(standardRes.result.value).toEqual({
-      configLabel: '⤢ Full Screen',
-      calls: [
-        {
-          url: '/spartan/data_app_builder::data_app_builder/config',
-          state: undefined,
-          target: '_top'
-        },
-        {
-          url: '/spartan/data_app_builder::data_app_builder/app/42',
-          state: undefined,
-          target: '_top'
-        }
-      ]
-    })
+    expect(standardRes.result.value.configLabel).toBe('⤢ Full Screen')
+    expect(standardRes.result.value.calls).toEqual([
+      { url: '/spartan/data_app_builder::data_app_builder/config', state: undefined, target: '_top' },
+      { url: '/spartan/data_app_builder::data_app_builder/app/42', state: undefined, target: '_top' }
+    ])
 
-    // Save cropped component snapshot of topbar actions (including Full Screen toggle)
-    const clipRes = await chrome.send('Runtime.evaluate', {
-      expression: `(() => {
-        const el = document.querySelector('.dab-topbar');
-        if (!el) return null;
-        const r = el.getBoundingClientRect();
-        return { x: Math.max(0, Math.floor(r.left)), y: Math.max(0, Math.floor(r.top)), width: Math.min(1440, Math.ceil(r.width)), height: Math.min(900, Math.ceil(r.height) + 8), scale: 1 };
-      })()`,
-      returnByValue: true
-    })
-    const clip = clipRes.result?.value
-    expect(clip).toBeTruthy()
-    const { data } = await chrome.send('Page.captureScreenshot', { format: 'png', clip })
-    const pngBuffer = Buffer.from(data, 'base64')
-    const scratchDir =
-      '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
+    const { data } = await chrome.send('Page.captureScreenshot', { format: 'png', clip: standardRes.result.value.clip })
+    const scratchDir = '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
     mkdirSync(scratchDir, { recursive: true })
     const scratchSnap = path.join(scratchDir, 'issue-48-fullscreen-toggle.png')
-    writeFileSync(scratchSnap, pngBuffer)
+    writeFileSync(scratchSnap, Buffer.from(data, 'base64'))
     expect(existsSync(scratchSnap)).toBe(true)
 
-    // 2. Spartan host mode -> shows "Exit Full Screen" and navigates back to /extensions/...
-    const spartanUrl = `http://127.0.0.1:${port}/?scenario=spartan_fullscreen`
-    await chrome.send('Page.navigate', { url: spartanUrl })
-
-    const deadline2 = Date.now() + 8000
-    while (Date.now() < deadline2) {
-      const r = await chrome.send('Runtime.evaluate', {
-        expression: `Boolean(document.querySelector('[data-testid="topbar-fullscreen-toggle"]'))`,
-        returnByValue: true
-      })
-      if (r.result && r.result.value) break
-      await new Promise((res) => setTimeout(res, 100))
-    }
-
+    await waitForToggle('spartan_fullscreen')
     const spartanRes = await chrome.send('Runtime.evaluate', {
       expression: `(async () => {
         window.__UPDATED_LOCATIONS__ = [];
         const btn = document.querySelector('[data-testid="topbar-fullscreen-toggle"]');
-        const spartanLabel = btn ? (btn.textContent || '').trim() : '';
-        if (btn) btn.click();
-
-        // Hide when mounted inside a dashboard tile (mountPoint = 'dashboard-tile')
+        const spartanLabel = (btn?.textContent || '').trim();
+        btn?.click();
         window.__MOCK_LOOKER_EXTENSION__.lookerHostData.mountPoint = 'dashboard-tile';
         window.__DAB_STUDIO__.history.push('/dashboard/7');
         await new Promise((r) => setTimeout(r, 80));
-        const hiddenInTile = !document.querySelector('[data-testid="topbar-fullscreen-toggle"]');
-
         return {
           spartanLabel,
           calls: window.__UPDATED_LOCATIONS__,
-          hiddenInTile
+          hiddenInTile: !document.querySelector('[data-testid="topbar-fullscreen-toggle"]')
         };
       })()`,
       awaitPromise: true,
@@ -1895,13 +1852,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
 
     expect(spartanRes.result.value).toEqual({
       spartanLabel: '⤡ Exit Full Screen',
-      calls: [
-        {
-          url: '/extensions/data_app_builder::data_app_builder/app/42',
-          state: undefined,
-          target: '_top'
-        }
-      ],
+      calls: [{ url: '/extensions/data_app_builder::data_app_builder/app/42', state: undefined, target: '_top' }],
       hiddenInTile: true
     })
   }, 15000)
