@@ -1,6 +1,7 @@
 import React from 'react'
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import type { StudioController } from '../useStudioController'
+import { StudioSelect } from './StudioSelect'
 
 // ponytail: reuse shared zero-dependency Markdown renderer from healthCheck.ts
 export function renderMarkdownOrHtmlString(input: string): string {
@@ -137,33 +138,34 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         </div>
         <div className="dab-preview-actions">
           {savedScripts.length > 0 && (
-            <select
-              data-testid="tile-saved-scripts-select"
+            <StudioSelect
+              testId="tile-saved-scripts-select"
               className="dab-select"
               value={savedScripts.some((s) => s.id === scriptId) ? scriptId : ''}
-              onChange={(e) => {
-                if (e.target.value) loadScriptById(e.target.value, true)
+              onChange={(val) => {
+                if (val) loadScriptById(val, true)
               }}
-            >
-              <option value="">-- Select Saved Script --</option>
-              {savedScripts.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.title} ({s.id})
-                </option>
-              ))}
-            </select>
+              options={[
+                { value: '', label: '-- Select Saved Script --' },
+                ...savedScripts.map((s) => ({
+                  value: s.id,
+                  label: `${s.title} (${s.id})`,
+                })),
+              ]}
+            />
           )}
-          <select
-            data-testid="tile-mode-select"
+          <StudioSelect
+            testId="tile-mode-select"
             className="dab-select"
             value={scriptMode}
-            onChange={(e) => setScriptMode(e.target.value)}
+            onChange={setScriptMode}
             title="Custom script mode injected as vars.mode and dashboard_filters.script_mode"
-          >
-            <option value="summary">summary</option>
-            <option value="detailed_audit">detailed_audit</option>
-            <option value="anomaly_alert">anomaly_alert</option>
-          </select>
+            options={[
+              { value: 'summary', label: 'summary' },
+              { value: 'detailed_audit', label: 'detailed_audit' },
+              { value: 'anomaly_alert', label: 'anomaly_alert' },
+            ]}
+          />
           <button
             type="button"
             className="dab-btn-secondary"
@@ -332,31 +334,31 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
               <div className="dab-modal-row">
                 <label>Cron Cadence</label>
-                <select
+                <StudioSelect
+                  testId="scheduler-cron-select"
                   value={scheduleConfig.cron}
-                  onChange={(e) =>
-                    setScheduleConfig((prev) => ({ ...prev, cron: e.target.value }))
-                  }
-                >
-                  <option value="0 8 * * *">Daily at 8:00 AM (0 8 * * *)</option>
-                  <option value="0 * * * *">Hourly (0 * * * *)</option>
-                  <option value="0 9 * * 1-5">Weekdays at 9:00 AM (0 9 * * 1-5)</option>
-                  <option value="0 8 * * 1">Weekly Monday 8:00 AM (0 8 * * 1)</option>
-                </select>
+                  onChange={(val) => setScheduleConfig((prev) => ({ ...prev, cron: val }))}
+                  options={[
+                    { value: '0 8 * * *', label: 'Daily at 8:00 AM (0 8 * * *)' },
+                    { value: '0 * * * *', label: 'Hourly (0 * * * *)' },
+                    { value: '0 9 * * 1-5', label: 'Weekdays at 9:00 AM (0 9 * * 1-5)' },
+                    { value: '0 8 * * 1', label: 'Weekly Monday 8:00 AM (0 8 * * 1)' },
+                  ]}
+                />
               </div>
 
               <div className="dab-modal-row">
                 <label>Script Execution Mode (`vars.mode`)</label>
-                <select
+                <StudioSelect
+                  testId="scheduler-mode-select"
                   value={scheduleConfig.mode}
-                  onChange={(e) =>
-                    setScheduleConfig((prev) => ({ ...prev, mode: e.target.value }))
-                  }
-                >
-                  <option value="summary">summary (Executive Rollup)</option>
-                  <option value="detailed_audit">detailed_audit (Full Row Audit)</option>
-                  <option value="anomaly_alert">anomaly_alert (Threshold Check)</option>
-                </select>
+                  onChange={(val) => setScheduleConfig((prev) => ({ ...prev, mode: val }))}
+                  options={[
+                    { value: 'summary', label: 'summary (Executive Rollup)' },
+                    { value: 'detailed_audit', label: 'detailed_audit (Full Row Audit)' },
+                    { value: 'anomaly_alert', label: 'anomaly_alert (Threshold Check)' },
+                  ]}
+                />
               </div>
             </div>
 
@@ -375,23 +377,27 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
               <div className="dab-modal-row">
                 <label>Delivery Action</label>
-                <select
+                <StudioSelect
+                  testId="scheduler-destination-select"
                   value={scheduleConfig.destination}
-                  onChange={(e) =>
+                  onChange={(val) =>
                     setScheduleConfig((prev) => ({
                       ...prev,
-                      destination: e.target.value as any,
+                      destination: val as any,
                     }))
                   }
-                >
-                  <option value="artifact_snapshot">
-                    Persist Snapshot Artifact (obj_script_run_{scriptId})
-                  </option>
-                  <option value="webhook">Webhook POST (JSON / Markdown)</option>
-                  <option value="looker_scheduled_plan">
-                    Looker Scheduled Plan Bridge (create_scheduled_plan)
-                  </option>
-                </select>
+                  options={[
+                    {
+                      value: 'artifact_snapshot',
+                      label: `Persist Snapshot Artifact (obj_script_run_${scriptId})`,
+                    },
+                    { value: 'webhook', label: 'Webhook POST (JSON / Markdown)' },
+                    {
+                      value: 'looker_scheduled_plan',
+                      label: 'Looker Scheduled Plan Bridge (create_scheduled_plan)',
+                    },
+                  ]}
+                />
               </div>
 
               <div className="dab-modal-row">

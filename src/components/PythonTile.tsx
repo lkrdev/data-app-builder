@@ -12,6 +12,7 @@ import {
 } from '../lookerApi'
 import { LkrCodeMode } from '../antigravity'
 import { ScriptOutputRenderer, renderMarkdownOrHtmlString } from './ScriptStudioView'
+import { StudioSelect } from './StudioSelect'
 export { ScriptOutputRenderer, renderMarkdownOrHtmlString }
 
 export const PYTHON_TILE_SKILL_GUIDE = [
@@ -199,20 +200,21 @@ export const PythonTile: React.FC = () => {
           <strong>CodeMode Python Tile Configuration</strong>
           <span className="dab-badge">Tile #{elementId || 'unsaved'}</span>
         </div>
-        <label className="dab-tile-select-row">
+        <div className="dab-tile-select-row">
           <span>Saved Script (`search_artifacts`):</span>
-          <select
+          <StudioSelect
+            testId="tile-edit-script-select"
             value={selectedScriptId}
-            onChange={(e) => handleBindScript(e.target.value)}
-          >
-            <option value="">-- Select a saved Python script --</option>
-            {scripts.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.title} ({s.id})
-              </option>
-            ))}
-          </select>
-        </label>
+            onChange={(val) => handleBindScript(val)}
+            options={[
+              { value: '', label: '-- Select a saved Python script --' },
+              ...scripts.map((s) => ({
+                value: s.id,
+                label: `${s.title} (${s.id})`,
+              })),
+            ]}
+          />
+        </div>
         {statusMsg && <div className="dab-muted">{statusMsg}</div>}
         {binding?.code && (
           <pre className="dab-py-pre" style={{ maxHeight: 200 }}>

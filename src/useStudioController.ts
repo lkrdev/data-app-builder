@@ -1644,8 +1644,13 @@ export function useStudioController() {
     await openArtifactByMode(isHealthCheckMode ? 'health' : isCaMode ? 'conversational-analytics' : builderMode, loadDashInput, true)
   }
 
-  const handleResetNewApp = (resetToDefaultRoute?: boolean | React.MouseEvent) => {
+  const handleResetNewApp = (
+    resetToDefaultRoute?: boolean | React.MouseEvent,
+    presetUseCase?: StudioUseCase
+  ) => {
     const forceDefaultRoute = resetToDefaultRoute === true
+    const nextUseCase: StudioUseCase =
+      typeof presetUseCase === 'string' && presetUseCase ? presetUseCase : 'auto'
     lastPublishedIdRef.current = ''
     lastNativeIdRef.current = ''
     lastLookmlIdRef.current = ''
@@ -1670,15 +1675,21 @@ export function useStudioController() {
       conversationId: `conv_${Date.now().toString(36)}`,
     })
     setMessages([])
-    if (forceDefaultRoute) setMessages([], 'app')
+    if (forceDefaultRoute) {
+      setMessages([], 'app')
+      if (nextUseCase !== 'auto') {
+        setMessages([], useCaseToStudioMode(nextUseCase))
+      }
+    }
     setPastedImages([])
     setPrompt('')
     setLockedByTurn(false)
-    setSelectedUseCase('auto')
+    setSelectedUseCase(nextUseCase)
     if (location.pathname !== '/') history.push('/')
   }
 
-  const handleNewConversation = () => handleResetNewApp(true)
+  const handleNewConversation = (presetUseCase?: StudioUseCase | React.MouseEvent) =>
+    handleResetNewApp(true, typeof presetUseCase === 'string' ? presetUseCase : 'auto')
 
   const handleSelectConversation = async (conv: ConversationRecord) => {
     const useCase = studioModeToUseCase(conv.type)
