@@ -298,28 +298,86 @@ export async function ensureGeminiApiKeyUserAttribute(
   }
 }
 
+export interface GoogleOAuthOptions {
+  signal?: AbortSignal
+  timeoutMs?: number
+  focusReturnDelayMs?: number
+}
+
+export function resolveLookerOAuthRedirectUri(
+  hostUrl?: string | null,
+  fallbackOrigin?: string
+): string {
+  const base =
+    (hostUrl && hostUrl.trim()) ||
+    fallbackOrigin ||
+    (typeof window !== 'undefined' && window.location?.origin) ||
+    'https://looker.example.com'
+  return `${base.replace(/\/+$/, '')}/extensions/oauth2_redirect`
+}
+
+export function computeIsAuthenticated(
+  authMode: 'oauth' | 'apikey',
+  oauthToken: string,
+  apiKey: string
+): boolean {
+  return authMode === 'apikey' ? Boolean(apiKey.trim()) : Boolean(oauthToken.trim())
+}
+
 export async function loginWithGoogleOAuth(
   extensionSDK: any,
-  clientId: string
+  clientId: string,
+  options?: GoogleOAuthOptions
 ): Promise<string> {
-  const res = await extensionSDK.oauth2Authenticate(
-    'https://accounts.google.com/o/oauth2/v2/auth',
-    {
-      client_id: clientId.trim(),
-      scope:
-        'https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/generative-language.retriever',
-      response_type: 'token',
-    },
-    'GET'
-  )
-  const token = res?.access_token || res?.id_token
-  if (!token) {
-    throw new Error(
-      `Google OAuth response did not include an access_token: ${JSON.stringify(res)}`
+  const focusReturnDelayMs = options?.focusReturnDelayMs ?? 1500
+  const timeoutMs = options?.timeoutMs ?? 120000
+  let cleanup = () => {}
+  try {
+    const authPromise = Promise.resolve(
+      extensionSDK.oauth2Authenticate(
+        'https://accounts.google.com/o/oauth2/v2/auth',
+        {
+          client_id: clientId.trim(),
+          scope:
+            'https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/generative-language.retriever',
+          response_type: 'token',
+        },
+        'GET'
+      )
     )
+    const guardPromise = new Promise<never>((_resolve, reject) => {
+      let focusTimer: ReturnType<typeof setTimeout> | null = null
+      const timeoutTimer = setTimeout(() => reject(new Error('Google OAuth sign-in timed out.')), timeoutMs)
+      const onFocus = () => {
+        if (focusTimer) clearTimeout(focusTimer)
+        focusTimer = setTimeout(
+          () => reject(new Error('Google OAuth popup closed or failed before completing (check Authorized redirect URIs in /config if you saw Error 400: redirect_uri_mismatch).')),
+          focusReturnDelayMs
+        )
+      }
+      const onAbort = () => reject(new Error('Google OAuth sign-in cancelled.'))
+      if (options?.signal?.aborted) return onAbort()
+      options?.signal?.addEventListener('abort', onAbort, { once: true })
+      if (typeof window !== 'undefined') window.addEventListener?.('focus', onFocus)
+      cleanup = () => {
+        clearTimeout(timeoutTimer)
+        if (focusTimer) clearTimeout(focusTimer)
+        options?.signal?.removeEventListener('abort', onAbort)
+        if (typeof window !== 'undefined') window.removeEventListener?.('focus', onFocus)
+      }
+    })
+    const res = await Promise.race([authPromise, guardPromise])
+    const token = res?.access_token || res?.id_token
+    if (!token) {
+      throw new Error(`Google OAuth response did not include an access_token: ${JSON.stringify(res)}`)
+    }
+    return String(token)
+  } finally {
+    cleanup()
   }
-  return String(token)
 }
+
+export const authenticateGoogleOAuth = loginWithGoogleOAuth
 
 export async function callInteractionsApi(
   extensionSDK: any,
@@ -331,12 +389,12 @@ export async function callInteractionsApi(
   const url = `https://generativelanguage.googleapis.com/v1beta/${path.replace(/^\//, '')}`
   const serializedBody = body ? JSON.stringify(body) : undefined
 
-  if (auth.mode === 'apikey' && extensionSDK?.serverProxy && !auth.apiKey?.trim()) {
+  if (auth.mode === 'apikey' && extensionSDK?.serverProxy) {
     const proxyResp = await extensionSDK.serverProxy(url, {
       method,
       headers: {
         'Content-Type': 'application/json',
-        'x-goog-api-key': getGeminiSecretKeyTag(extensionSDK),
+        'x-goog-api-key': auth.apiKey?.trim() || getGeminiSecretKeyTag(extensionSDK),
       },
       body: serializedBody,
     })
@@ -361,25 +419,25 @@ export async function callInteractionsApi(
     'Content-Type': 'application/json',
   }
   if (auth.mode === 'oauth') {
-    if (!auth.oauthToken) {
-      if (typeof window !== 'undefined' && (window as any).__MOCK_LOOKER_EXTENSION__) {
-        const promptText = String(body?.input?.[0]?.text || '')
-        if (promptText.includes(CONVERSATION_LABEL_REQUEST_TAG)) {
-          return {
-            id: 'int_mock_label',
-            status: 'completed',
-            output_text: sanitizeConversationLabel('', promptText),
-          }
-        }
-        const inferred = extractResolvedUseCase(undefined, promptText)
+    if (!auth.oauthToken?.trim()) {
+      throw new Error('Please sign in with Google OAuth first.')
+    }
+    if (typeof window !== 'undefined' && (window as any).__MOCK_LOOKER_EXTENSION__) {
+      const promptText = String(body?.input?.[0]?.text || '')
+      if (promptText.includes(CONVERSATION_LABEL_REQUEST_TAG)) {
         return {
-          id: `int_mock_${Date.now().toString(36).slice(-5)}`,
-          environment_id: `env_${inferred}_mock`,
+          id: 'int_mock_label',
           status: 'completed',
-          output_text: `<USE_CASE>${inferred}</USE_CASE>\nRouted Turn 1 via AGENTS.md to ${inferred}.`,
+          output_text: sanitizeConversationLabel('', promptText),
         }
       }
-      throw new Error('Please sign in with Google OAuth first.')
+      const inferred = extractResolvedUseCase(undefined, promptText)
+      return {
+        id: `int_mock_${Date.now().toString(36).slice(-5)}`,
+        environment_id: `env_${inferred}_mock`,
+        status: 'completed',
+        output_text: `<USE_CASE>${inferred}</USE_CASE>\nRouted Turn 1 via AGENTS.md to ${inferred}.`,
+      }
     }
     headers['Authorization'] = `Bearer ${auth.oauthToken.trim()}`
     if (auth.projectId?.trim()) {

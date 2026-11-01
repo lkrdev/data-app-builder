@@ -1328,3 +1328,40 @@ body {
   color: #fde68a;
 }
 
+.dab-inline-signin-btn {
+  background: transparent;
+  border: none;
+  padding: 4px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dab-accent-text, #1d4ed8);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dab-inline-signin-btn:hover {
+  opacity: 0.85;
+}
+
+.dab-oauth-redirect-helper {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--dab-surface-muted, #f8fafc);
+  border: 1px solid var(--dab-border, #e2e8f0);
+  font-size: 11.5px;
+}
+
+.dab-oauth-redirect-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+
