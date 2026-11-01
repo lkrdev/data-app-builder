@@ -1298,4 +1298,95 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
 
     spyCodeMode.mockRestore()
   })
+
+  test('15. runs concurrent multi-conversation turns (Data App Stream A + Content Studio Stream B) in a single shared environment_id with isolated per-turn Looker HTTP telemetry', async () => {
+    const sharedEnvId = 'env_shared'
+    const originalRawRequest = async (method: string, reqPath: string) => ({
+      ok: true,
+      statusCode: 200,
+      body: JSON.stringify({ method, path: reqPath }),
+    })
+    const mockSdk: any = {
+      ok: async (p: any) => p,
+      authSession: { transport: { rawRequest: originalRawRequest } },
+    }
+    const spyCodeMode = jest.spyOn(LkrCodeMode, 'runPythonCode').mockImplementation(async (opts: any) => {
+      const count = String(opts.code || '').includes('stream_b') ? 3 : 1
+      for (let i = 0; i < count; i += 1) await opts.sdk.authSession.transport.rawRequest('GET', `/api/4.0/test_${i}`)
+      return JSON.stringify({ NATIVE_CONTENT_BUNDLE: { id: '101', content_type: 'dashboard', title: 'Executive Commerce Pulse' } })
+    })
+
+    const postedBodies: any[] = []
+    const appStep = (title: string) => [
+      { type: 'code_execution', output: `<DATA_APP_BUNDLE>${JSON.stringify({ title, source_code: 'export class App {}', prod_code: 'export class App {}', widgets: [] })}</DATA_APP_BUNDLE>` },
+    ]
+    const fnCallStep = (id: string, code: string) => [
+      { type: 'function_call', id, name: 'run_looker_codemode', arguments: { code } },
+    ]
+    const mockExtSDK = {
+      serverProxy: async (_url: string, init: any) => {
+        const body = init?.body ? JSON.parse(init.body) : undefined
+        if (init?.method !== 'POST') return { ok: true, status: 200, body: '{}' }
+        postedBodies.push(body)
+        const text = String(body?.input?.[0]?.text || '')
+        const isFnResult = body?.input?.[0]?.type === 'function_result'
+        const isB1 = body?.previous_interaction_id === 'int_B1_call'
+        const payload = isFnResult
+          ? {
+              id: isB1 ? 'int_B1' : 'int_A1',
+              environment_id: sharedEnvId,
+              status: 'completed',
+              steps: isB1 ? [] : appStep('Executive Revenue Command Center'),
+              output_text: isB1
+                ? '<NATIVE_CONTENT_BUNDLE>{"id":"101","content_type":"dashboard","title":"Executive Commerce Pulse"}</NATIVE_CONTENT_BUNDLE>'
+                : 'Built Data App.',
+            }
+          : text.includes('Stream A Turn 1')
+          ? { id: 'int_A1_call', environment_id: sharedEnvId, status: 'requires_action', steps: fnCallStep('fc_a1', 'return "stream_a"') }
+          : text.includes('Stream A Turn 2')
+          ? { id: 'int_A2', environment_id: sharedEnvId, status: 'completed', steps: appStep('Executive Revenue Command Center v2'), output_text: 'Updated Data App.' }
+          : text.includes('Stream B Turn 1')
+          ? { id: 'int_B1_call', environment_id: sharedEnvId, status: 'requires_action', steps: fnCallStep('fc_b1', 'return "stream_b"') }
+          : {
+              id: 'int_B2',
+              environment_id: sharedEnvId,
+              status: 'completed',
+              output_text: '<NATIVE_CONTENT_BUNDLE>{"id":"thelook::executive_pulse","content_type":"lookml_dashboard","title":"Executive Pulse (LookML)"}</NATIVE_CONTENT_BUNDLE>',
+            }
+        return { ok: true, status: 200, body: JSON.stringify(payload) }
+      },
+    }
+
+    const baseOpts = {
+      sdk: mockSdk,
+      extensionSDK: mockExtSDK,
+      auth: { mode: 'apikey' as const },
+      environmentId: sharedEnvId,
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      onStatus: () => {},
+    }
+    const [convAResults, convBResults] = await Promise.all([
+      (async () => {
+        const t1a = await runAntigravityTurn({ ...baseOpts, conversationId: 'conv_a_data_app', session: { toolType: 'app', environmentId: sharedEnvId, conversationId: 'conv_a_data_app' }, mode: 'app', userPrompt: 'Stream A Turn 1' })
+        const t2a = await runAntigravityTurn({ ...baseOpts, conversationId: 'conv_a_data_app', session: t1a.session, mode: 'app', existingAppCode: t1a.bundle?.source_code, userPrompt: 'Stream A Turn 2' })
+        return [t1a, t2a]
+      })(),
+      (async () => {
+        const t1b = await runAntigravityTurn({ ...baseOpts, conversationId: 'conv_b_dashboard', session: { toolType: 'dashboard', environmentId: sharedEnvId, conversationId: 'conv_b_dashboard' }, mode: 'dashboard', userPrompt: 'Stream B Turn 1' })
+        const t2b = await runAntigravityTurn({ ...baseOpts, conversationId: 'conv_b_dashboard', session: t1b.session, mode: 'dashboard', activeContent: { id: '101', type: 'dashboard', title: 'Executive Commerce Pulse', embedPath: '/embed/dashboards/101' }, userPrompt: 'Stream B Turn 2' })
+        return [t1b, t2b]
+      })(),
+    ])
+
+    expect(mockSdk.authSession.transport.rawRequest).toBe(originalRawRequest)
+    expect(postedBodies.every((b) => b.environment === sharedEnvId)).toBe(true)
+    expect(convAResults[0].session.environmentId).toBe(sharedEnvId)
+    expect(convAResults[1].session.lastInteractionId).toBe('int_A2')
+    expect(convBResults[0].session.environmentId).toBe(sharedEnvId)
+    expect(convBResults[1].session.lastInteractionId).toBe('int_B2')
+    expect(convAResults[0].telemetry.tool_calls.looker_http).toBe(1)
+    expect(convBResults[0].telemetry.tool_calls.looker_http).toBe(3)
+    spyCodeMode.mockRestore()
+  })
 })

@@ -547,6 +547,37 @@ chmod +x "${fakeBinDir}/uv"
       appTsx.includes('data-testid="ca-embed-preview"'),
     'Issues #25, #26, #27 & #32: AGENTS.md routing + labeling + CA sub-agent selection + uv/lkr-dev-cli bootstrap, /workspace/AGENTS.md seeding, use-case-selector, locked-use-case-badge, ca-embed-preview, and user_conversations:${me.id} persistence must be present'
   )
+
+  // Issue #39: Self-evaluating concurrent multi-conversation benchmark harness in a single shared environment_id
+  assert(
+    antigravityTs.includes('const turnSdk') &&
+      antigravityTs.includes('sdk: turnSdk'),
+    'Issue #39: runAntigravityTurn must isolate per-turn Looker HTTP telemetry via turnSdk without mutating shared sdk.authSession.transport.rawRequest in place'
+  )
+  execFileSync(
+    process.execPath,
+    [path.join(repoRoot, 'scripts/bench-concurrent-convs.mjs'), '--iter=1'],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    }
+  )
+  const iter1JsonPath = path.join(repoRoot, 'tmp/bench-concurrent/iter-1.json')
+  const iter1Report = JSON.parse(readFileSync(iter1JsonPath, 'utf8'))
+  assert.equal(iter1Report.iteration, 1, 'Expected iteration 1 in tmp/bench-concurrent/iter-1.json')
+  assert.equal(iter1Report.functional_score, '8/8', 'Expected 8/8 functional_score in iter-1.json')
+  assert.equal(iter1Report.single_env_invariant?.passed, true, 'Expected single_env_invariant.passed === true')
+  assert.equal(iter1Report.single_env_invariant?.environments_created, 1, 'Expected exactly 1 environment created')
+  assert.equal(iter1Report.single_env_invariant?.source_update_400_errors, 0, 'Expected 0 source update 400 errors')
+  assert.equal(iter1Report.filesystem_isolation_ok, true, 'Expected filesystem_isolation_ok === true')
+  assert.equal(iter1Report.cleanup_ok, true, 'Expected cleanup_ok === true')
+  for (const tid of ['T1A', 'T2A', 'T3A', 'T4A', 'T1B', 'T2B', 'T3B', 'T4B']) {
+    const turnEntry = iter1Report.turns?.[tid]
+    assert(turnEntry, `Expected turn ${tid} in iter-1.json`)
+    assert.equal(turnEntry.environment_id, iter1Report.shared_environment_id, `Expected ${tid} on shared environment_id`)
+    assert.equal(turnEntry.self_eval?.passed, true, `Expected ${tid} self_eval.passed === true`)
+  }
+
   console.log('✓ test-bundle.mjs: all assertions passed!')
 } finally {
   rmSync(workDir, { recursive: true, force: true })
