@@ -9,7 +9,8 @@ import {
   TileScriptBinding,
 } from '../lookerApi'
 import { LkrCodeMode } from '../antigravity'
-import { renderTddMarkdownToHtml } from '../healthCheck'
+import { ScriptOutputRenderer, renderMarkdownOrHtmlString } from './ScriptStudioView'
+export { ScriptOutputRenderer, renderMarkdownOrHtmlString }
 
 export const PYTHON_TILE_SKILL_GUIDE = [
   `# Skill: codemode-script-tile (Scriptable CodeMode Python Tiles, Custom Controls & Scheduling)`,
@@ -47,86 +48,6 @@ for m in (models or [])[:8]:
     })
 return rows
 `
-
-// ponytail: reuse shared zero-dependency Markdown renderer from healthCheck.ts
-export function renderMarkdownOrHtmlString(input: string): string {
-  const trimmed = input.trim()
-  if (/^<[a-zA-Z][^>]*>[\s\S]*<\/[a-zA-Z0-9]+>\s*$/.test(trimmed)) {
-    return trimmed
-  }
-  return renderTddMarkdownToHtml(trimmed)
-}
-
-export const ScriptOutputRenderer: React.FC<{ output: string }> = ({ output }) => {
-  const parsed = (() => {
-    const trimmed = String(output ?? '').trim()
-    if (!trimmed) return ''
-    try {
-      return JSON.parse(trimmed)
-    } catch {
-      return output
-    }
-  })()
-
-  if (
-    Array.isArray(parsed) &&
-    (parsed.length === 0 ||
-      (typeof parsed[0] === 'object' &&
-        parsed[0] !== null &&
-        !Array.isArray(parsed[0])))
-  ) {
-    if (parsed.length === 0) {
-      return <div className="dab-py-empty">0 rows returned.</div>
-    }
-    const colSet = new Set<string>()
-    for (const row of parsed) {
-      if (row && typeof row === 'object') {
-        Object.keys(row).forEach((k) => colSet.add(k))
-      }
-    }
-    const columns: string[] = Array.from(colSet)
-    return (
-      <div className="dab-py-table-wrap">
-        <table className="dab-py-table dab-tile-table">
-          <thead>
-            <tr>
-              {columns.map((col) => (
-                <th key={col}>{col}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {parsed.map((row: Record<string, any>, rIdx: number) => (
-              <tr key={rIdx}>
-                {columns.map((col) => {
-                  const v = row?.[col]
-                  const cellText =
-                    v === null || v === undefined
-                      ? ''
-                      : typeof v === 'object'
-                      ? JSON.stringify(v)
-                      : String(v)
-                  return <td key={col}>{cellText}</td>
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    )
-  }
-
-  if (typeof parsed === 'string') {
-    return (
-      <div
-        className="dab-py-markdown"
-        dangerouslySetInnerHTML={{ __html: renderMarkdownOrHtmlString(parsed) }}
-      />
-    )
-  }
-
-  return <pre className="dab-py-pre">{JSON.stringify(parsed, null, 2)}</pre>
-}
 
 export const PythonTile: React.FC = () => {
   const { extensionSDK, core40SDK, tileHostData } = useLookerExtension()

@@ -120,6 +120,74 @@ export function studioModeToUseCase(mode?: string): ResolvedStudioUseCase {
   return USE_CASE_ALIAS_MAP[token] || 'app'
 }
 
+export type StudioMode = StudioCapabilityMode
+
+export const STUDIO_MODES: Array<{ mode: StudioMode; label: string; prefix: string }> = [
+  { mode: 'app', label: 'Data App', prefix: '/app' },
+  { mode: 'dashboard', label: 'Content Studio', prefix: '/dashboard' },
+  { mode: 'lookml', label: 'LookML', prefix: '/lookml' },
+  { mode: 'health', label: 'Health Check', prefix: '/health-check' },
+  { mode: 'tile', label: 'Python Tile', prefix: '/tile' },
+]
+
+const CONV_PREFIX_USE_CASES: Array<[RegExp, ResolvedStudioUseCase]> = [
+  [/^ca_conv_/i, 'conversational-analytics'],
+  [/^lookml_/i, 'lookml'],
+  [/^(?:hc|health)_/i, 'health-check'],
+  [/^(?:dash_native|look|board)_/i, 'dashboard'],
+  [/^script_/i, 'tile'],
+]
+
+const LEGACY_ROUTE_PATTERNS: Array<[RegExp, StudioUseCase]> = [
+  [/^\/(?:conversational-analytics|ca)(?:\/(.*))?$/i, 'conversational-analytics'],
+  [/^\/health(?:-check)?(?:\/(.*))?$/i, 'health-check'],
+  [/^\/(?:script|tile)(?:\/(.*))?$/i, 'tile'],
+  [/^\/dashboard(?:\/(.*))?$/i, 'dashboard'],
+  [/^\/lookml(?:\/(.*))?$/i, 'lookml'],
+  [/^\/app(?:\/(.*))?$/i, 'app'],
+]
+
+export function parseStudioRoute(pathname: string): {
+  mode: StudioMode
+  objectId: string
+  conversationId: string
+  useCase?: StudioUseCase
+  isCaRoute?: boolean
+  isLegacyRoute?: boolean
+} {
+  const clean = (pathname || '/').trim()
+  const mk = (useCase: StudioUseCase, objectId = '', conversationId = objectId, isLegacyRoute?: boolean) => ({
+    mode: useCaseToStudioMode(useCase),
+    objectId,
+    conversationId,
+    useCase,
+    ...(useCase === 'conversational-analytics' ? { isCaRoute: true } : {}),
+    ...(isLegacyRoute ? { isLegacyRoute: true } : {}),
+  })
+  if (clean === '/' || clean === '/config') return mk('auto')
+  if (clean === '/c' || clean === '/c/') return mk('auto', '', '', true)
+  if (clean.startsWith('/c/')) {
+    const convId = decodeURIComponent(clean.slice(3).replace(/^\/+|\/+$/g, ''))
+    const convMatch = convId.match(
+      /^conv_(app|data_app|dashboard|lookml|health-check|health_check|health|tile|script|conversational-analytics)_(.+)$/i
+    )
+    if (convMatch) return mk(studioModeToUseCase(convMatch[1]), convMatch[2], convId)
+    for (const [re, uc] of CONV_PREFIX_USE_CASES) {
+      if (re.test(convId)) return mk(uc, convId, convId)
+    }
+    return mk('auto', convId, convId)
+  }
+  for (const [re, uc] of LEGACY_ROUTE_PATTERNS) {
+    const m = clean.match(re)
+    if (m) {
+      const rest = decodeURIComponent((m[1] || '').replace(/^\/+|\/+$/g, ''))
+      return mk(uc === 'app' && !rest ? 'auto' : uc, rest, rest, true)
+    }
+  }
+  const fallbackId = decodeURIComponent(clean.replace(/^\/+|\/+$/g, ''))
+  return mk(fallbackId ? 'app' : 'auto', fallbackId, fallbackId, Boolean(fallbackId))
+}
+
 export function getAllowedUseCases(
   capabilities?: UserCapabilities | null,
   disabledModes: StudioCapabilityMode[] = []

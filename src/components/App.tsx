@@ -6,7 +6,8 @@ import {
   MockLookerExtensionProvider,
 } from '../contexts/LookerExtensionContext'
 import { useStudioController } from '../useStudioController'
-import { PythonTile, ScriptStudioView } from './PythonTile'
+import { parseStudioRoute, STUDIO_MODES, type StudioMode } from '../lookerApi'
+import { PythonTile } from './PythonTile'
 import { ConfigSetupView, StudioTopbar } from './StudioHeader'
 import {
   StudioCenteredEmptyStage,
@@ -16,52 +17,8 @@ import {
 } from './StudioWorkspace'
 import '../styles/index.css'
 
-export type StudioMode = 'app' | 'dashboard' | 'lookml' | 'health' | 'tile'
-
-export const STUDIO_MODES: Array<{
-  mode: StudioMode
-  label: string
-  prefix: string
-}> = [
-  { mode: 'app', label: 'Data App', prefix: '/app' },
-  { mode: 'dashboard', label: 'Content Studio', prefix: '/dashboard' },
-  { mode: 'lookml', label: 'LookML', prefix: '/lookml' },
-  { mode: 'health', label: 'Health Check', prefix: '/health-check' },
-  { mode: 'tile', label: 'Python Tile', prefix: '/tile' },
-]
-
-export function parseStudioRoute(pathname: string): {
-  mode: StudioMode
-  objectId: string
-  isCaRoute?: boolean
-} {
-  const clean = (pathname || '/').trim()
-  if (clean === '/' || clean === '/config') return { mode: 'app', objectId: '' }
-  if (clean.startsWith('/conversational-analytics') || clean === '/ca' || clean.startsWith('/ca/')) {
-    const rest = clean.replace(/^\/(?:conversational-analytics|ca)\/?/, '')
-    return { mode: 'app', objectId: decodeURIComponent(rest), isCaRoute: true }
-  }
-  if (clean.startsWith('/health')) {
-    const rest = clean.replace(/^\/health(?:-check)?\/?/, '')
-    return { mode: 'health', objectId: decodeURIComponent(rest) }
-  }
-  if (clean.startsWith('/script')) {
-    const rest = clean.replace(/^\/script\/?/, '')
-    return { mode: 'tile', objectId: decodeURIComponent(rest) }
-  }
-  for (const m of STUDIO_MODES) {
-    if (clean === m.prefix || clean.startsWith(`${m.prefix}/`)) {
-      return {
-        mode: m.mode,
-        objectId: decodeURIComponent(clean.slice(m.prefix.length).replace(/^\/+/, '')),
-      }
-    }
-  }
-  return {
-    mode: 'app',
-    objectId: decodeURIComponent(clean.replace(/^\/+/, '')),
-  }
-}
+export { parseStudioRoute, STUDIO_MODES }
+export type { StudioMode }
 
 const PythonTileMount: React.FC = () => <PythonTile />
 
@@ -78,35 +35,6 @@ const StudioMain: React.FC = () => {
   const ctl = useStudioController()
 
   if (ctl.isTileMount) return <PythonTileMount />
-
-  if (ctl.activeMode === 'tile' && !ctl.disabledModes.includes('tile')) {
-    return (
-      <ScriptStudioView
-        auth={{
-          mode: ctl.authMode,
-          oauthToken: ctl.oauthToken,
-          clientId: ctl.clientId,
-          projectId: ctl.projectId,
-          apiKey: ctl.apiKey,
-        }}
-        themeMode={ctl.themeMode}
-        resolvedTheme={ctl.resolvedTheme}
-        onChangeThemeMode={ctl.setThemeMode}
-        selectedModel={ctl.selectedModel}
-        availableModels={ctl.availableModels}
-        onChangeModel={ctl.setSelectedModel}
-        schemaMarkdown={ctl.schemaMarkdown}
-        selectedExplores={ctl.selectedExplores}
-        selectedFolderId={ctl.selectedFolderId}
-        folders={ctl.folders}
-        onChangeFolder={ctl.setSelectedFolderId}
-        disabledModes={ctl.disabledModes}
-        capabilities={ctl.capabilities}
-        sharedEnvironmentId={ctl.sharedEnvironmentId}
-        onEnvironmentUpdated={ctl.syncSharedEnvironmentId}
-      />
-    )
-  }
 
   if (ctl.location.pathname === '/config') {
     return <ConfigSetupView ctl={ctl} />
@@ -137,7 +65,7 @@ export const App = () => {
     typeof window !== 'undefined' ? (window as any).__MOCK_LOOKER_EXTENSION__ : undefined
   if (mockCtx) {
     return (
-      <MemoryRouter initialEntries={[mockCtx.initialRoute || '/app']}>
+      <MemoryRouter initialEntries={[mockCtx.initialRoute || '/']}>
         <MockLookerExtensionProvider value={mockCtx}>
           <StudioMain />
         </MockLookerExtensionProvider>

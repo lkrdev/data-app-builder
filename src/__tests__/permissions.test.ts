@@ -22,6 +22,7 @@ import {
   loadUserEnvironmentId,
   normalizeStudioThemeMode,
   parseCaAgentSelectionResponse,
+  parseStudioRoute,
   rawLookerRequest,
   resolveStudioTheme,
   resolveSystemTheme,
@@ -1681,5 +1682,86 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(resolveStudioTheme('dark', 'light')).toBe('dark')
     expect(resolveStudioTheme('system', 'dark')).toBe('dark')
     expect(resolveStudioTheme('system', 'light')).toBe('light')
+  })
+
+  test('19. parses central conversation routes (/, /c/:conversationId, /config) and flags legacy per-use-case routes for redirect (Issue #47)', () => {
+    expect(parseStudioRoute('/')).toEqual({
+      mode: 'app',
+      objectId: '',
+      conversationId: '',
+      useCase: 'auto',
+    })
+    expect(parseStudioRoute('/config')).toEqual({
+      mode: 'app',
+      objectId: '',
+      conversationId: '',
+      useCase: 'auto',
+    })
+    expect(parseStudioRoute('/c/42')).toEqual({
+      mode: 'app',
+      objectId: '42',
+      conversationId: '42',
+      useCase: 'auto',
+    })
+    expect(parseStudioRoute('/c/conv_dashboard_7')).toEqual({
+      mode: 'dashboard',
+      objectId: '7',
+      conversationId: 'conv_dashboard_7',
+      useCase: 'dashboard',
+    })
+    expect(parseStudioRoute('/c/lookml_1')).toEqual({
+      mode: 'lookml',
+      objectId: 'lookml_1',
+      conversationId: 'lookml_1',
+      useCase: 'lookml',
+    })
+    expect(parseStudioRoute('/c/hc_thelook_1')).toEqual({
+      mode: 'health',
+      objectId: 'hc_thelook_1',
+      conversationId: 'hc_thelook_1',
+      useCase: 'health-check',
+    })
+    expect(parseStudioRoute('/c/ca_conv_streaming_1')).toEqual({
+      mode: 'app',
+      objectId: 'ca_conv_streaming_1',
+      conversationId: 'ca_conv_streaming_1',
+      useCase: 'conversational-analytics',
+      isCaRoute: true,
+    })
+    expect(parseStudioRoute('/c/conv_tile_demo1')).toEqual({
+      mode: 'tile',
+      objectId: 'demo1',
+      conversationId: 'conv_tile_demo1',
+      useCase: 'tile',
+    })
+    expect(parseStudioRoute('/app/42')).toEqual({
+      mode: 'app',
+      objectId: '42',
+      conversationId: '42',
+      useCase: 'app',
+      isLegacyRoute: true,
+    })
+    expect(parseStudioRoute('/dashboard/7')).toEqual({
+      mode: 'dashboard',
+      objectId: '7',
+      conversationId: '7',
+      useCase: 'dashboard',
+      isLegacyRoute: true,
+    })
+    expect(parseStudioRoute('/tile/demo1')).toEqual({
+      mode: 'tile',
+      objectId: 'demo1',
+      conversationId: 'demo1',
+      useCase: 'tile',
+      isLegacyRoute: true,
+    })
+    expect(parseStudioRoute('/conversational-analytics/ca_conv_streaming_1')).toEqual({
+      mode: 'app',
+      objectId: 'ca_conv_streaming_1',
+      conversationId: 'ca_conv_streaming_1',
+      useCase: 'conversational-analytics',
+      isCaRoute: true,
+      isLegacyRoute: true,
+    })
   })
 })

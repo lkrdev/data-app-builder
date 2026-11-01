@@ -42,7 +42,7 @@
     "snapshotName": "05-mode-python-tile-studio-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "tile_mount_view",
@@ -69,7 +69,7 @@
     "snapshotName": "08-config-page-setup-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "explore_dropdown_open_top",
@@ -83,7 +83,7 @@
       ".dab-dropdown"
     ],
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "explore_dropdown_scrolled",
@@ -97,7 +97,7 @@
       ".dab-dropdown"
     ],
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "chatbar_lookml_skills",
@@ -108,7 +108,7 @@
     "height": 265,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "chatbar_pasted_image_inspector",
@@ -119,7 +119,7 @@
     "height": 450,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "chatbar_busy_running",
@@ -127,7 +127,7 @@
     "title": "13. Chat Bar State — Busy / Running Spinner Banner",
     "snapshotName": "13-chatbar-state-busy-running-snap.png",
     "width": 427,
-    "height": 480,
+    "height": 482,
     "clipSelector": [
       ".dab-status-banner",
       ".dab-composer"
@@ -141,13 +141,13 @@
     "title": "14. Chat Bar State — Error Diagnostic Banner",
     "snapshotName": "14-chatbar-state-error-banner-snap.png",
     "width": 427,
-    "height": 698,
+    "height": 700,
     "clipSelector": [
       ".dab-msg-error",
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "python_tile_scheduler_modal",
@@ -158,7 +158,7 @@
     "height": 418,
     "clipSelector": ".dab-modal",
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "conversational_analytics",
@@ -178,7 +178,7 @@
     "height": 459,
     "clipSelector": ".dab-empty-prompt-card",
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "studio_dark_theme",

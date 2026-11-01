@@ -3,28 +3,7 @@
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders centered_empty_prompt (17. Centered New-Conversation Empty Prompt Box (Use-Case Selector, Input & Actions)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,
-  "modeTabs": [
-    {
-      "active": true,
-      "label": "Data App",
-    },
-    {
-      "active": false,
-      "label": "Content Studio",
-    },
-    {
-      "active": false,
-      "label": "LookML",
-    },
-    {
-      "active": false,
-      "label": "Health Check",
-    },
-    {
-      "active": false,
-      "label": "Python Tile",
-    },
-  ],
+  "modeTabs": [],
   "scenario": "centered_empty_prompt",
   "verifiedVisibleText": [
     "New Conversation",
@@ -39,28 +18,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders chatbar_busy_running (13. Chat Bar State — Busy / Running Spinner Banner) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,
-  "modeTabs": [
-    {
-      "active": true,
-      "label": "Data App",
-    },
-    {
-      "active": false,
-      "label": "Content Studio",
-    },
-    {
-      "active": false,
-      "label": "LookML",
-    },
-    {
-      "active": false,
-      "label": "Health Check",
-    },
-    {
-      "active": false,
-      "label": "Python Tile",
-    },
-  ],
+  "modeTabs": [],
   "scenario": "chatbar_busy_running",
   "verifiedVisibleText": [
     "Executing LkrCodeMode Monty Python & validating Looker queries...",
@@ -72,28 +30,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders chatbar_error_banner (14. Chat Bar State — Error Diagnostic Banner) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,
-  "modeTabs": [
-    {
-      "active": true,
-      "label": "Data App",
-    },
-    {
-      "active": false,
-      "label": "Content Studio",
-    },
-    {
-      "active": false,
-      "label": "LookML",
-    },
-    {
-      "active": false,
-      "label": "Health Check",
-    },
-    {
-      "active": false,
-      "label": "Python Tile",
-    },
-  ],
+  "modeTabs": [],
   "scenario": "chatbar_error_banner",
   "verifiedVisibleText": [
     "Error",
@@ -105,28 +42,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders chatbar_lookml_skills (11. Chat Bar State — LookML Activated Turn Skills & Prompt) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,
-  "modeTabs": [
-    {
-      "active": false,
-      "label": "Data App",
-    },
-    {
-      "active": false,
-      "label": "Content Studio",
-    },
-    {
-      "active": true,
-      "label": "LookML",
-    },
-    {
-      "active": false,
-      "label": "Health Check",
-    },
-    {
-      "active": false,
-      "label": "Python Tile",
-    },
-  ],
+  "modeTabs": [],
   "scenario": "chatbar_lookml_skills",
   "verifiedVisibleText": [
     "TURN SKILLS:",
@@ -142,28 +58,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders chatbar_pasted_image_inspector (12. Chat Bar State — Pasted Screenshot Thumbnail & Code/Schema Inspector Open) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,
-  "modeTabs": [
-    {
-      "active": true,
-      "label": "Data App",
-    },
-    {
-      "active": false,
-      "label": "Content Studio",
-    },
-    {
-      "active": false,
-      "label": "LookML",
-    },
-    {
-      "active": false,
-      "label": "Health Check",
-    },
-    {
-      "active": false,
-      "label": "Python Tile",
-    },
-  ],
+  "modeTabs": [],
   "scenario": "chatbar_pasted_image_inspector",
   "verifiedVisibleText": [
     "Inspect Code / Schema",
@@ -193,28 +88,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders conversational_analytics (16. Conversational Analytics Mode (Isolated Sub-Agent Selection & Embedded CA Chat)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,
-  "modeTabs": [
-    {
-      "active": true,
-      "label": "Data App",
-    },
-    {
-      "active": false,
-      "label": "Content Studio",
-    },
-    {
-      "active": false,
-      "label": "LookML",
-    },
-    {
-      "active": false,
-      "label": "Health Check",
-    },
-    {
-      "active": false,
-      "label": "Python Tile",
-    },
-  ],
+  "modeTabs": [],
   "scenario": "conversational_analytics",
   "verifiedVisibleText": [
     "🔒 Conversational Analytics",
@@ -230,28 +104,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders dashboard (2. Content Studio Mode (Create & Update UDDs, Looks, Boards, Schedules)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,
-  "modeTabs": [
-    {
-      "active": false,
-      "label": "Data App",
-    },
-    {
-      "active": true,
-      "label": "Content Studio",
-    },
-    {
-      "active": false,
-      "label": "LookML",
-    },
-    {
-      "active": false,
-      "label": "Health Check",
-    },
-    {
-      "active": false,
-      "label": "Python Tile",
-    },
-  ],
+  "modeTabs": [],
   "scenario": "dashboard",
   "verifiedVisibleText": [
     "Content Studio",
@@ -265,37 +118,12 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders data_app (1. Data App Mode + Inline Mutation Permission Gate) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,
-  "modeTabs": [
-    {
-      "active": true,
-      "label": "Data App",
-    },
-    {
-      "active": false,
-      "label": "Content Studio",
-    },
-    {
-      "active": false,
-      "label": "LookML",
-    },
-    {
-      "active": false,
-      "label": "Health Check",
-    },
-    {
-      "active": false,
-      "label": "Python Tile",
-    },
-  ],
+  "modeTabs": [],
   "scenario": "data_app",
   "verifiedVisibleText": [
     "Agent",
     "Agentic LookML",
-    "Data App",
-    "Content Studio",
-    "LookML",
-    "Health Check",
-    "Python Tile",
+    "🔒 Data App",
     "Safe Mode (Ask)",
     "My Creations (5)",
     "Approve Looker State Mutation?",
@@ -309,28 +137,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders explore_dropdown_open_top (9. Explore Combobox Dropdown — Open (Top Scroll State)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": 0,
-  "modeTabs": [
-    {
-      "active": true,
-      "label": "Data App",
-    },
-    {
-      "active": false,
-      "label": "Content Studio",
-    },
-    {
-      "active": false,
-      "label": "LookML",
-    },
-    {
-      "active": false,
-      "label": "Health Check",
-    },
-    {
-      "active": false,
-      "label": "Python Tile",
-    },
-  ],
+  "modeTabs": [],
   "scenario": "explore_dropdown_open_top",
   "verifiedVisibleText": [
     "Clear selection (let agent decide)",
@@ -346,28 +153,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders explore_dropdown_scrolled (10. Explore Combobox Dropdown — Scrolled State (Retail Ops & System Activity)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": 127,
-  "modeTabs": [
-    {
-      "active": true,
-      "label": "Data App",
-    },
-    {
-      "active": false,
-      "label": "Content Studio",
-    },
-    {
-      "active": false,
-      "label": "LookML",
-    },
-    {
-      "active": false,
-      "label": "Health Check",
-    },
-    {
-      "active": false,
-      "label": "Python Tile",
-    },
-  ],
+  "modeTabs": [],
   "scenario": "explore_dropdown_scrolled",
   "verifiedVisibleText": [
     "RETAIL OPERATIONS",
@@ -382,28 +168,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders health_check (4. 3-Pillar Health Check Mode (Rendered Markdown Viewer & Top-Right Gemini Button)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,
-  "modeTabs": [
-    {
-      "active": false,
-      "label": "Data App",
-    },
-    {
-      "active": false,
-      "label": "Content Studio",
-    },
-    {
-      "active": false,
-      "label": "LookML",
-    },
-    {
-      "active": true,
-      "label": "Health Check",
-    },
-    {
-      "active": false,
-      "label": "Python Tile",
-    },
-  ],
+  "modeTabs": [],
   "scenario": "health_check",
   "verifiedVisibleText": [
     "✨ Run 3-Pillar Audit",
@@ -421,28 +186,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders lookml (3. Agentic LookML Mode (Turn Skills, Active User Dev Mode & .lkml Diffs)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,
-  "modeTabs": [
-    {
-      "active": false,
-      "label": "Data App",
-    },
-    {
-      "active": false,
-      "label": "Content Studio",
-    },
-    {
-      "active": true,
-      "label": "LookML",
-    },
-    {
-      "active": false,
-      "label": "Health Check",
-    },
-    {
-      "active": false,
-      "label": "Python Tile",
-    },
-  ],
+  "modeTabs": [],
   "scenario": "lookml",
   "verifiedVisibleText": [
     "Add total_revenue & gross_margin to order_items",
@@ -462,28 +206,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders python_tile_scheduler_modal (15. Custom CodeMode Script Scheduler Modal (Cron, vars.mode & Custom Controls)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,
-  "modeTabs": [
-    {
-      "active": false,
-      "label": "Data App",
-    },
-    {
-      "active": false,
-      "label": "Content Studio",
-    },
-    {
-      "active": false,
-      "label": "LookML",
-    },
-    {
-      "active": false,
-      "label": "Health Check",
-    },
-    {
-      "active": true,
-      "label": "Python Tile",
-    },
-  ],
+  "modeTabs": [],
   "scenario": "python_tile_scheduler_modal",
   "verifiedVisibleText": [
     "⏰ Custom CodeMode Script Scheduler",
@@ -499,28 +222,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders python_tile_studio (5. Python Tile Studio Mode (Mode Selector, Schedule Script & Live Grid)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,
-  "modeTabs": [
-    {
-      "active": false,
-      "label": "Data App",
-    },
-    {
-      "active": false,
-      "label": "Content Studio",
-    },
-    {
-      "active": false,
-      "label": "LookML",
-    },
-    {
-      "active": false,
-      "label": "Health Check",
-    },
-    {
-      "active": true,
-      "label": "Python Tile",
-    },
-  ],
+  "modeTabs": [],
   "scenario": "python_tile_studio",
   "verifiedVisibleText": [
     "Looker Explore & Filter Summary",
@@ -537,28 +239,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders studio_dark_theme (18. Studio Dark Theme Mode (Semantic Dark Surface & Text Tokens)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,
-  "modeTabs": [
-    {
-      "active": true,
-      "label": "Data App",
-    },
-    {
-      "active": false,
-      "label": "Content Studio",
-    },
-    {
-      "active": false,
-      "label": "LookML",
-    },
-    {
-      "active": false,
-      "label": "Health Check",
-    },
-    {
-      "active": false,
-      "label": "Python Tile",
-    },
-  ],
+  "modeTabs": [],
   "scenario": "studio_dark_theme",
   "verifiedVisibleText": [
     "Agent",
