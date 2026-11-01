@@ -148,6 +148,33 @@ export interface PastedImage {
   dataUrl: string
 }
 
+export function handleImageClipboardPaste(
+  e: { clipboardData?: DataTransfer | null; preventDefault: () => void },
+  setPastedImages: (updater: (prev: PastedImage[]) => PastedImage[]) => void
+): void {
+  const items = Array.from(e.clipboardData?.items || []).filter((item) =>
+    item.type.startsWith('image/')
+  )
+  if (items.length === 0) return
+  e.preventDefault()
+  for (const item of items) {
+    const file = item.getAsFile()
+    if (!file) continue
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '')
+      const base64 = dataUrl.split(',')[1]
+      if (base64) {
+        setPastedImages((prev) => [
+          ...prev,
+          { mimeType: file.type || 'image/png', data: base64, dataUrl },
+        ])
+      }
+    }
+    reader.readAsDataURL(file)
+  }
+}
+
 export interface AntigravityTurnTelemetry {
   agent_wall_ms: number
   poll_wait_ms: number

@@ -33,6 +33,7 @@ import {
   PYTHON_TILE_SKILL_GUIDE,
   ScriptOutputRenderer,
 } from './PythonTile'
+import { STUDIO_MODES } from './App'
 
 export const ScriptStudioView: React.FC<{
   auth: AntigravityAuth
@@ -391,21 +392,12 @@ export const ScriptStudioView: React.FC<{
             🟢 Env [tile]: {agentSession.environmentId || 'env_tile_isolated'}
           </span>
           {(() => {
-            const enabledModes = (
-              [
-                { mode: 'app', label: 'Data App', prefix: '/app' },
-                { mode: 'dashboard', label: 'Content Studio', prefix: '/dashboard' },
-                { mode: 'lookml', label: 'LookML', prefix: '/lookml' },
-                { mode: 'health', label: 'Health Check', prefix: '/health-check' },
-                { mode: 'tile', label: 'Python Tile', prefix: '/tile' },
-              ] as const
-            ).filter((m) => !disabledModes.includes(m.mode))
+            const enabledModes = STUDIO_MODES.filter((m) => !disabledModes.includes(m.mode))
             return enabledModes.length > 1 ? (
               <div className="dab-mode-switcher" role="tablist" aria-label="Tool Mode">
                 {enabledModes.map((m) => {
                   const tc = capabilities?.rolesLoaded ? capabilities.tools?.[m.mode] : undefined
-                  const locked = Boolean(tc && !tc.enabled)
-                  const ro = Boolean(tc?.readOnly)
+                  const label = tc && !tc.enabled ? `🔒 ${m.label}` : tc?.readOnly ? `${m.label} 🔒` : m.label
                   return (
                     <button
                       key={m.mode}
@@ -416,7 +408,7 @@ export const ScriptStudioView: React.FC<{
                       className={`dab-mode-tab ${m.mode === 'tile' ? 'active' : ''}`}
                       onClick={() => history.push(m.prefix)}
                     >
-                      {locked ? `🔒 ${m.label}` : ro ? `${m.label} 🔒` : m.label}
+                      {label}
                     </button>
                   )
                 })}
