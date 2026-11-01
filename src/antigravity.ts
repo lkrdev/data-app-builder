@@ -997,26 +997,39 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           codemodeCalls += pendingLookerCalls.length
           const rawTransport = (sdk as any)?.authSession?.transport
           const origRawReq = rawTransport?.rawRequest
-          if (typeof origRawReq === 'function') {
-            rawTransport.rawRequest = (...reqArgs: any[]) => {
-              lookerHttpCalls += 1
-              const reqStart = Date.now()
-              return Promise.resolve(origRawReq.apply(rawTransport, reqArgs)).then(
-                (res: any) => {
-                  lookerHttpMs += Date.now() - reqStart
-                  if (res && (res.ok === false || Number(res.statusCode) >= 400)) {
-                    apiRetries += 1
+          const turnSdk =
+            typeof origRawReq === 'function'
+              ? Object.assign(
+                  Object.create(Object.getPrototypeOf(sdk) || Object.prototype),
+                  sdk,
+                  {
+                    authSession: {
+                      ...(sdk as any).authSession,
+                      transport: {
+                        ...rawTransport,
+                        rawRequest: (...reqArgs: any[]) => {
+                          lookerHttpCalls += 1
+                          const reqStart = Date.now()
+                          return Promise.resolve(origRawReq.apply(rawTransport, reqArgs)).then(
+                            (res: any) => {
+                              lookerHttpMs += Date.now() - reqStart
+                              if (res && (res.ok === false || Number(res.statusCode) >= 400)) {
+                                apiRetries += 1
+                              }
+                              return res
+                            },
+                            (err: any) => {
+                              lookerHttpMs += Date.now() - reqStart
+                              apiRetries += 1
+                              throw err
+                            }
+                          )
+                        },
+                      },
+                    },
                   }
-                  return res
-                },
-                (err: any) => {
-                  lookerHttpMs += Date.now() - reqStart
-                  apiRetries += 1
-                  throw err
-                }
-              )
-            }
-          }
+                )
+              : sdk
           let resultsInput: any[]
           try {
             resultsInput = await Promise.all(
@@ -1026,7 +1039,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                 try {
                   if (call.name === 'lkr_cli_extension_bridge') {
                     const bridged = await executeLkrExtensionToolRequest({
-                      sdk,
+                      sdk: turnSdk,
                       req: args,
                       defaultVars: defaultCodeModeVars,
                       extensionSDK,
@@ -1049,7 +1062,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                     const rawCode = String(args.code || '')
                     codeModeOutput = await LkrCodeMode.runPythonCode({
                       code: isDashboardMode ? wrapDashboardCodeMode(rawCode) : rawCode,
-                      sdk,
+                      sdk: turnSdk,
                       extensionSDK,
                       allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard',
                       requirePermission,
@@ -1077,9 +1090,6 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
               })
             )
           } finally {
-            if (typeof origRawReq === 'function') {
-              rawTransport.rawRequest = origRawReq
-            }
             codemodeExecMs += Date.now() - cmStart
           }
 

@@ -1298,4 +1298,223 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
 
     spyCodeMode.mockRestore()
   })
+
+  test('15. runs concurrent multi-conversation turns (Data App Stream A + Content Studio Stream B) in a single shared environment_id with isolated per-turn Looker HTTP telemetry', async () => {
+    const sharedEnvId = 'env_shared'
+    const originalRawRequest = async (method: string, reqPath: string) => ({
+      ok: true,
+      statusCode: 200,
+      body: JSON.stringify({ method, path: reqPath }),
+    })
+    const mockSdk: any = {
+      ok: async (p: any) => p,
+      authSession: {
+        transport: {
+          rawRequest: originalRawRequest,
+        },
+      },
+    }
+
+    const spyCodeMode = jest
+      .spyOn(LkrCodeMode, 'runPythonCode')
+      .mockImplementation(async (opts: any) => {
+        const count = String(opts.code || '').includes('stream_b') ? 3 : 1
+        for (let i = 0; i < count; i += 1) {
+          await opts.sdk.authSession.transport.rawRequest('GET', `/api/4.0/test_${i}`)
+        }
+        return JSON.stringify({
+          NATIVE_CONTENT_BUNDLE: {
+            id: '101',
+            content_type: 'dashboard',
+            title: 'Executive Commerce Pulse',
+          },
+        })
+      })
+
+    const postedBodies: any[] = []
+    const mockExtSDK = {
+      serverProxy: async (_url: string, init: any) => {
+        const body = init?.body ? JSON.parse(init.body) : undefined
+        if (init?.method === 'POST') {
+          postedBodies.push(body)
+          const text = String(body?.input?.[0]?.text || '')
+          const isFunctionResult = body?.input?.[0]?.type === 'function_result'
+          if (isFunctionResult) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: body.previous_interaction_id === 'int_B1_call' ? 'int_B1' : 'int_A1',
+                environment_id: sharedEnvId,
+                status: 'completed',
+                steps:
+                  body.previous_interaction_id === 'int_B1_call'
+                    ? []
+                    : [
+                        {
+                          type: 'code_execution',
+                          output:
+                            '<DATA_APP_BUNDLE>{"title":"Executive Revenue Command Center","source_code":"export class App {}","prod_code":"export class App {}","widgets":[]}</DATA_APP_BUNDLE>',
+                        },
+                      ],
+                output_text:
+                  body.previous_interaction_id === 'int_B1_call'
+                    ? '<NATIVE_CONTENT_BUNDLE>{"id":"101","content_type":"dashboard","title":"Executive Commerce Pulse"}</NATIVE_CONTENT_BUNDLE>'
+                    : 'Built Data App.',
+              }),
+            }
+          }
+          if (text.includes('Stream A Turn 1')) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_A1_call',
+                environment_id: sharedEnvId,
+                status: 'requires_action',
+                steps: [
+                  {
+                    type: 'function_call',
+                    id: 'fc_a1',
+                    name: 'run_looker_codemode',
+                    arguments: { code: 'return "stream_a"' },
+                  },
+                ],
+              }),
+            }
+          }
+          if (text.includes('Stream A Turn 2')) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_A2',
+                environment_id: sharedEnvId,
+                status: 'completed',
+                steps: [
+                  {
+                    type: 'code_execution',
+                    output:
+                      '<DATA_APP_BUNDLE>{"title":"Executive Revenue Command Center v2","source_code":"export class App {}","prod_code":"export class App {}","widgets":[]}</DATA_APP_BUNDLE>',
+                  },
+                ],
+                output_text: 'Updated Data App.',
+              }),
+            }
+          }
+          if (text.includes('Stream B Turn 1')) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_B1_call',
+                environment_id: sharedEnvId,
+                status: 'requires_action',
+                steps: [
+                  {
+                    type: 'function_call',
+                    id: 'fc_b1',
+                    name: 'run_looker_codemode',
+                    arguments: { code: 'return "stream_b"' },
+                  },
+                ],
+              }),
+            }
+          }
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_B2',
+              environment_id: sharedEnvId,
+              status: 'completed',
+              output_text:
+                '<NATIVE_CONTENT_BUNDLE>{"id":"thelook::executive_pulse","content_type":"lookml_dashboard","title":"Executive Pulse (LookML)"}</NATIVE_CONTENT_BUNDLE>',
+            }),
+          }
+        }
+        return { ok: true, status: 200, body: '{}' }
+      },
+    }
+
+    const [convAResults, convBResults] = await Promise.all([
+      (async () => {
+        const t1a = await runAntigravityTurn({
+          sdk: mockSdk,
+          extensionSDK: mockExtSDK,
+          auth: { mode: 'apikey' },
+          environmentId: sharedEnvId,
+          conversationId: 'conv_a_data_app',
+          session: { toolType: 'app', environmentId: sharedEnvId, conversationId: 'conv_a_data_app' },
+          mode: 'app',
+          selectedExplores: ['thelook::order_items'],
+          schemaMarkdown: '# Schema',
+          userPrompt: 'Stream A Turn 1',
+          onStatus: () => {},
+        })
+        const t2a = await runAntigravityTurn({
+          sdk: mockSdk,
+          extensionSDK: mockExtSDK,
+          auth: { mode: 'apikey' },
+          environmentId: sharedEnvId,
+          conversationId: 'conv_a_data_app',
+          session: t1a.session,
+          mode: 'app',
+          selectedExplores: ['thelook::order_items'],
+          schemaMarkdown: '# Schema',
+          existingAppCode: t1a.bundle?.source_code,
+          userPrompt: 'Stream A Turn 2',
+          onStatus: () => {},
+        })
+        return [t1a, t2a]
+      })(),
+      (async () => {
+        const t1b = await runAntigravityTurn({
+          sdk: mockSdk,
+          extensionSDK: mockExtSDK,
+          auth: { mode: 'apikey' },
+          environmentId: sharedEnvId,
+          conversationId: 'conv_b_dashboard',
+          session: { toolType: 'dashboard', environmentId: sharedEnvId, conversationId: 'conv_b_dashboard' },
+          mode: 'dashboard',
+          selectedExplores: ['thelook::order_items'],
+          schemaMarkdown: '# Schema',
+          userPrompt: 'Stream B Turn 1',
+          onStatus: () => {},
+        })
+        const t2b = await runAntigravityTurn({
+          sdk: mockSdk,
+          extensionSDK: mockExtSDK,
+          auth: { mode: 'apikey' },
+          environmentId: sharedEnvId,
+          conversationId: 'conv_b_dashboard',
+          session: t1b.session,
+          mode: 'dashboard',
+          selectedExplores: ['thelook::order_items'],
+          schemaMarkdown: '# Schema',
+          activeContent: {
+            id: '101',
+            type: 'dashboard',
+            title: 'Executive Commerce Pulse',
+            embedPath: '/embed/dashboards/101',
+          },
+          userPrompt: 'Stream B Turn 2',
+          onStatus: () => {},
+        })
+        return [t1b, t2b]
+      })(),
+    ])
+
+    expect(mockSdk.authSession.transport.rawRequest).toBe(originalRawRequest)
+    expect( postedBodies.every((b) => b.environment === sharedEnvId) ).toBe(true)
+    expect(convAResults[0].session.environmentId).toBe(sharedEnvId)
+    expect(convAResults[1].session.lastInteractionId).toBe('int_A2')
+    expect(convBResults[0].session.environmentId).toBe(sharedEnvId)
+    expect(convBResults[1].session.lastInteractionId).toBe('int_B2')
+    // Per-turn HTTP call count must be isolated between concurrent Stream A (1 call) and Stream B (3 calls)
+    expect(convAResults[0].telemetry.tool_calls.looker_http).toBe(1)
+    expect(convBResults[0].telemetry.tool_calls.looker_http).toBe(3)
+
+    spyCodeMode.mockRestore()
+  })
 })
