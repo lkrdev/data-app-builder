@@ -6,7 +6,7 @@
     "snapshotName": "01-mode-data-app-and-permission-gate-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "dashboard",
@@ -83,7 +83,7 @@
       ".dab-dropdown"
     ],
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "explore_dropdown_scrolled",
@@ -97,7 +97,7 @@
       ".dab-dropdown"
     ],
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_lookml_skills",
@@ -108,7 +108,7 @@
     "height": 265,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_pasted_image_inspector",
@@ -119,7 +119,7 @@
     "height": 450,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_busy_running",
@@ -147,7 +147,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "python_tile_scheduler_modal",
@@ -158,7 +158,7 @@
     "height": 418,
     "clipSelector": ".dab-modal",
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "conversational_analytics",
@@ -178,6 +178,6 @@
     "height": 459,
     "clipSelector": ".dab-empty-prompt-card",
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   }
 ]
