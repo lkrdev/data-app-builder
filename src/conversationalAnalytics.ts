@@ -1,3 +1,4 @@
+import { mutate, SWRConfig, unstable_serialize } from 'swr'
 import type { Looker40SDK } from '@looker/sdk'
 import {
   AntigravityAuth,
@@ -158,19 +159,23 @@ export async function fetchLookerCaAgentsCatalog(
   const normalized = rawList
     .map(normalizeCaAgent)
     .filter((a): a is LookerCaAgentSummary => Boolean(a))
-  return normalized.length > 0
-    ? normalized
-    : [
-        {
-          id: 'ad69f74cd9e2494090e9e9e9c50190c8',
-          name: 'eCommerce',
-          description: 'eCommerce Order Items & Fulfillment Analytics Agent',
-          instructions:
-            'Answer eCommerce revenue, order status, and customer questions on thelook::order_items.',
-          explores: ['thelook::order_items'],
-          goldenQueries: [{ questions: ['what are our shipping statuses?'] }],
-        },
-      ]
+  const result =
+    normalized.length > 0
+      ? normalized
+      : [
+          {
+            id: 'ad69f74cd9e2494090e9e9e9c50190c8',
+            name: 'eCommerce',
+            description: 'eCommerce Order Items & Fulfillment Analytics Agent',
+            instructions:
+              'Answer eCommerce revenue, order status, and customer questions on thelook::order_items.',
+            explores: ['thelook::order_items'],
+            goldenQueries: [{ questions: ['what are our shipping statuses?'] }],
+          },
+        ]
+  ;(SWRConfig as any).default?.cache?.set?.(unstable_serialize(['looker:ca_agents']), result)
+  void mutate(['looker:ca_agents'], result, false).catch(() => {})
+  return result
 }
 
 export function scoreCaAgentLocally(
