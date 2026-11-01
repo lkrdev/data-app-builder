@@ -141,12 +141,10 @@ export const PythonTile: React.FC = () => {
   const [selectedScriptId, setSelectedScriptId] = useState('')
   const [output, setOutput] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
-  const [completedRunCount, setCompletedRunCount] = useState(0)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
   const runningRef = useRef(false)
-  const initialRunCompletedRef = useRef(false)
   const lastRunStateRef = useRef<string | undefined>(dashboardRunState)
-  const lastFiltersJsonRef = useRef<string>(filtersJson)
+  const lastExecutedFiltersRef = useRef<string | null>(null)
 
   useEffect(() => {
     extensionSDK?.updateTitle?.('')
@@ -156,7 +154,7 @@ export const PythonTile: React.FC = () => {
   useEffect(() => {
     let mounted = true
     setBindingLoaded(false)
-    initialRunCompletedRef.current = false
+    lastExecutedFiltersRef.current = null
     const load = async () => {
       const loadedBinding = elementId
         ? await loadTileScriptArtifact(core40SDK, elementId).catch(() => null)
@@ -179,20 +177,14 @@ export const PythonTile: React.FC = () => {
       overrideBinding?: TileScriptBinding | null,
       overrideFilters?: Record<string, any>
     ) => {
-      const activeBinding =
-        overrideBinding && typeof (overrideBinding as any).code === 'string'
-          ? overrideBinding
-          : binding
-      if (!activeBinding?.code || runningRef.current) return
-      const dashboardFilters =
-        overrideFilters && typeof overrideFilters === 'object'
-          ? overrideFilters
-          : tileHostData?.dashboardFilters || {}
+      const code = (overrideBinding ?? binding)?.code
+      if (!code || runningRef.current) return
+      const dashboardFilters = overrideFilters ?? tileHostData?.dashboardFilters ?? {}
       runningRef.current = true
       setRunning(true)
       try {
         const out = await LkrCodeMode.runPythonCode({
-          code: activeBinding.code,
+          code,
           sdk: core40SDK,
           extensionSDK,
           vars: {
@@ -203,7 +195,6 @@ export const PythonTile: React.FC = () => {
       } catch (err: any) {
         setOutput(JSON.stringify({ error: err?.message || String(err) }))
       } finally {
-        setCompletedRunCount((c) => c + 1)
         runningRef.current = false
         setRunning(false)
       }
@@ -211,26 +202,16 @@ export const PythonTile: React.FC = () => {
     [binding, core40SDK, extensionSDK, tileHostData?.dashboardFilters]
   )
 
-  // Auto-execute once on initial load when binding.code resolves, and re-execute on dashboardRunState -> 'RUNNING' or dashboardFilters change
+  // Auto-execute on initial load when binding.code resolves, and re-execute on dashboardRunState -> 'RUNNING' or dashboardFilters change
   useEffect(() => {
     const prevRunState = lastRunStateRef.current
     lastRunStateRef.current = dashboardRunState
     if (isEditing || !bindingLoaded || !binding?.code) return
-
-    if (!initialRunCompletedRef.current) {
-      initialRunCompletedRef.current = true
-      lastFiltersJsonRef.current = filtersJson
-      executeBoundScript(binding, tileHostData?.dashboardFilters)
-      return
-    }
-
-    const runStateTriggered =
-      dashboardRunState === 'RUNNING' && prevRunState !== 'RUNNING'
-    const filtersChanged = filtersJson !== lastFiltersJsonRef.current
-    if (filtersChanged) {
-      lastFiltersJsonRef.current = filtersJson
-    }
-    if (runStateTriggered || filtersChanged) {
+    if (
+      lastExecutedFiltersRef.current !== filtersJson ||
+      (dashboardRunState === 'RUNNING' && prevRunState !== 'RUNNING')
+    ) {
+      lastExecutedFiltersRef.current = filtersJson
       executeBoundScript(binding, tileHostData?.dashboardFilters)
     }
   }, [
@@ -249,35 +230,20 @@ export const PythonTile: React.FC = () => {
     const readyWithoutRun = bindingLoaded && (!binding?.code || isEditing)
     if (!readyAfterRun && !readyWithoutRun) return
 
-    const fireRendered = () => {
-      extensionSDK?.rendered?.()
+    const fire = () => extensionSDK?.rendered?.()
+    if (typeof requestAnimationFrame !== 'function') {
+      const timer = setTimeout(fire, 0)
+      return () => clearTimeout(timer)
     }
-    if (
-      typeof window !== 'undefined' &&
-      typeof window.requestAnimationFrame === 'function'
-    ) {
-      let raf2 = 0
-      const raf1 = window.requestAnimationFrame(() => {
-        raf2 = window.requestAnimationFrame(fireRendered)
-      })
-      return () => {
-        if (typeof window.cancelAnimationFrame === 'function') {
-          window.cancelAnimationFrame(raf1)
-          if (raf2) window.cancelAnimationFrame(raf2)
-        }
-      }
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(fire)
+    })
+    return () => {
+      cancelAnimationFrame(raf1)
+      cancelAnimationFrame(raf2)
     }
-    const timer = setTimeout(fireRendered, 0)
-    return () => clearTimeout(timer)
-  }, [
-    binding?.code,
-    bindingLoaded,
-    completedRunCount,
-    extensionSDK,
-    isEditing,
-    output,
-    running,
-  ])
+  }, [binding?.code, bindingLoaded, extensionSDK, isEditing, output, running])
 
   const handleBindScript = async (scriptId: string) => {
     setSelectedScriptId(scriptId)
