@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import {
+  archiveUserConversation,
   ARTIFACT_NAMESPACE,
   ArtifactService,
   buildDenseExploreSchema,
@@ -32,6 +33,7 @@ import {
   parseStudioRoute,
   rawLookerRequest,
   readSwrCache,
+  resolveConversationRelatedContent,
   resolveStudioTheme,
   resolveSystemTheme,
   resolveUserCapabilities,
@@ -2396,5 +2398,195 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       expect(preview.props['aria-hidden']).toBe('true')
       expect(preview.props.tabIndex).toBe(-1)
     }
+  })
+
+  test('25. Issue #61: archives/unarchives conversations, resolves related content across all 6 modes, deletes user_${userId}_${type}_${id} index artifacts + optional related content, and never resurrects deleted items', async () => {
+    clearArtifactServiceCache()
+    const store = new Map<string, { key: string; version: number; value: string }>()
+    const deletedDashboards: string[] = []
+    const deletedLooks: string[] = []
+    const deletedArtifactKeys: string[] = []
+
+    const mockSdk: any = {
+      ok: async (p: any) => p,
+      artifact: async ({ key }: { key: string }) =>
+        String(key || '')
+          .split(',')
+          .map((k) => store.get(k.trim()))
+          .filter(Boolean),
+      search_artifacts: async ({ key }: { key: string }) => {
+        const prefix = String(key || '').replace(/%/g, '')
+        return Array.from(store.values()).filter((r) => r.key.startsWith(prefix))
+      },
+      update_artifacts: async (_ns: string, updates: any[]) => {
+        for (const u of updates) {
+          store.set(u.key, {
+            key: u.key,
+            version: (u.version ?? 0) + 1,
+            value: u.value,
+          })
+        }
+        return updates
+      },
+      delete_artifact: async (_ns: string, key: string) => {
+        for (const k of String(key || '').split(',')) {
+          const clean = k.trim()
+          if (clean) {
+            deletedArtifactKeys.push(clean)
+            store.delete(clean)
+          }
+        }
+        return ''
+      },
+      delete_dashboard: async (id: string) => {
+        deletedDashboards.push(String(id))
+        return ''
+      },
+      delete_look: async (id: string) => {
+        deletedLooks.push(String(id))
+        return ''
+      },
+    }
+
+    // 1. Verify resolveConversationRelatedContent across all 6 Studio modes
+    expect(
+      resolveConversationRelatedContent(
+        { id: 'conv_app_42', type: 'app', content: { dashboardId: '42', appArtifactId: 'obj_app_42' } },
+        '1'
+      )
+    ).toMatchObject({
+      mode: 'app',
+      objectId: '42',
+      dashboardId: '42',
+      userIndexKeys: expect.arrayContaining(['user_1_app_42']),
+      sharedObjectKeys: ['obj_app_42'],
+    })
+
+    expect(
+      resolveConversationRelatedContent(
+        { id: 'conv_dashboard_7', type: 'dashboard', content: { dashboardId: '7', lookId: '15' } },
+        '1'
+      )
+    ).toMatchObject({
+      mode: 'dashboard',
+      objectId: '7',
+      dashboardId: '7',
+      lookId: '15',
+      userIndexKeys: expect.arrayContaining(['user_1_dashboard_7']),
+      sharedObjectKeys: ['obj_dashboard_7'],
+    })
+
+    expect(
+      resolveConversationRelatedContent(
+        { id: 'conv_tile_demo1', type: 'tile', content: { scriptId: 'demo1', dashboardId: '8' } },
+        '1'
+      )
+    ).toMatchObject({
+      mode: 'tile',
+      objectId: 'demo1',
+      dashboardId: '8',
+      userIndexKeys: expect.arrayContaining(['user_1_script_demo1', 'user_1_tile_demo1']),
+      sharedObjectKeys: ['obj_script_demo1', 'obj_schedule_demo1'],
+    })
+
+    expect(
+      resolveConversationRelatedContent(
+        { id: 'conv_health_demo', type: 'health-check', content: { reportId: 'demo' } },
+        '1'
+      )
+    ).toMatchObject({
+      mode: 'health',
+      objectId: 'demo',
+      userIndexKeys: expect.arrayContaining(['user_1_health_check_demo']),
+      sharedObjectKeys: expect.arrayContaining(['obj_health_demo']),
+    })
+
+    expect(
+      resolveConversationRelatedContent(
+        { id: 'conv_lookml_s1', type: 'lookml', content: { sessionId: 's1' } },
+        '1'
+      )
+    ).toMatchObject({
+      mode: 'lookml',
+      objectId: 's1',
+      userIndexKeys: ['user_1_lookml_s1'],
+      sharedObjectKeys: ['obj_lookml_s1'],
+    })
+
+    expect(
+      resolveConversationRelatedContent(
+        { id: 'conv_ca_c1', type: 'conversational-analytics', content: { caConversationId: 'c1' } },
+        '1'
+      )
+    ).toMatchObject({
+      mode: 'conversational-analytics',
+      objectId: 'c1',
+      userIndexKeys: expect.arrayContaining(['user_1_conversational-analytics_c1']),
+      sharedObjectKeys: expect.arrayContaining(['obj_ca_c1']),
+    })
+
+    // 2. Seed two conversations + user index artifacts + shared obj artifacts
+    await saveUserArtifact({
+      sdk: mockSdk,
+      userId: '1',
+      id: '42',
+      type: 'app',
+      title: 'Executive Revenue App',
+      objectPayload: { id: '42', type: 'app', title: 'Executive Revenue App', code: 'export default 1' },
+    })
+    await saveUserArtifact({
+      sdk: mockSdk,
+      userId: '1',
+      id: '7',
+      type: 'dashboard',
+      title: 'Quarterly UDD',
+      objectPayload: { id: '7', type: 'dashboard', title: 'Quarterly UDD' },
+    })
+    await saveUserConversation(mockSdk, '1', {
+      id: 'conv_app_42',
+      type: 'app',
+      label: 'Executive Revenue App',
+      content: { dashboardId: '42', appArtifactId: 'obj_app_42' },
+      updatedAt: '2026-11-01T10:00:00Z',
+    })
+    await saveUserConversation(mockSdk, '1', {
+      id: 'conv_dashboard_7',
+      type: 'dashboard',
+      label: 'Quarterly UDD',
+      content: { dashboardId: '7', lookId: '15' },
+      updatedAt: '2026-11-01T11:00:00Z',
+    })
+
+    // 3. Archive & Unarchive conv_app_42 without deleting any artifacts
+    const afterArchive = await archiveUserConversation(mockSdk, '1', 'conv_app_42', true)
+    expect(afterArchive.find((c) => c.id === 'conv_app_42')?.archived).toBe(true)
+    expect(store.has('obj_app_42')).toBe(true)
+    expect(deletedDashboards).toHaveLength(0)
+
+    const afterUnarchive = await archiveUserConversation(mockSdk, '1', 'conv_app_42', false)
+    expect(afterUnarchive.find((c) => c.id === 'conv_app_42')?.archived).toBe(false)
+
+    // 4. Delete conv_app_42 with deleteRelatedContent=false -> removes conversation + user_1_app_42 index, keeps obj_app_42 & dashboard #42
+    const afterDeleteConvOnly = await deleteUserConversation(mockSdk, '1', 'conv_app_42', {
+      deleteRelatedContent: false,
+    })
+    expect(afterDeleteConvOnly.map((c) => c.id)).toEqual(['conv_dashboard_7'])
+    expect(store.has('user_1_app_42')).toBe(false)
+    expect(store.has('obj_app_42')).toBe(true)
+    expect(deletedDashboards).toEqual([])
+
+    // 5. Delete conv_dashboard_7 with deleteRelatedContent=true -> removes conversation + user_1_dashboard_7 + obj_dashboard_7 + deletes dashboard #7 & look #15
+    const afterDeleteWithContent = await deleteUserConversation(mockSdk, '1', 'conv_dashboard_7', {
+      deleteRelatedContent: true,
+    })
+    expect(afterDeleteWithContent).toEqual([])
+    expect(store.has('user_1_dashboard_7')).toBe(false)
+    expect(store.has('obj_dashboard_7')).toBe(false)
+    expect(deletedDashboards).toEqual(['7'])
+    expect(deletedLooks).toEqual(['15'])
+
+    // 6. Verify empty user_conversations:1 stays [] even after cache clear
+    clearArtifactServiceCache()
+    expect(await loadUserConversations(mockSdk, '1')).toEqual([])
   })
 })

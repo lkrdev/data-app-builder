@@ -480,7 +480,28 @@ function buildHtmlPage(scenario) {
           }
           return [];
         },
-        delete_artifact: async () => ({}),
+        delete_artifact: async (_ns, keys) => {
+          window.__DELETED_ARTIFACTS__ = window.__DELETED_ARTIFACTS__ || [];
+          for (const k of String(keys || '').split(',')) {
+            const clean = k.trim();
+            if (!clean) continue;
+            window.__DELETED_ARTIFACTS__.push(clean);
+            delete artifactObjects[clean];
+            const idx = catalogEntries.findIndex((e) => e.key === clean);
+            if (idx >= 0) catalogEntries.splice(idx, 1);
+          }
+          return {};
+        },
+        delete_dashboard: async (id) => {
+          window.__DELETED_DASHBOARDS__ = window.__DELETED_DASHBOARDS__ || [];
+          window.__DELETED_DASHBOARDS__.push(String(id));
+          return {};
+        },
+        delete_look: async (id) => {
+          window.__DELETED_LOOKS__ = window.__DELETED_LOOKS__ || [];
+          window.__DELETED_LOOKS__.push(String(id));
+          return {};
+        },
         dashboard: async (id) => {
           if (String(id) === '7') {
             return {
@@ -957,7 +978,6 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         'Agentic LookML',
         '🔒 Data App',
         'Safe Mode (Ask)',
-        'My Creations (5)',
         'Approve Looker State Mutation?',
         'create_dashboard',
         'Executive Revenue App',
@@ -1173,8 +1193,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         'New Conversation',
         'Build a Looker Data App with Antigravity',
         'Use Case:',
-        '✨ Build App',
-        'My Creations (5)'
+        '✨ Build App'
       ]
     },
     {
@@ -1353,7 +1372,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         return {
           savedDisabledModes: window.__LAST_SAVED_CONTEXT_DATA__?.disabledModes || [],
           useCaseOptionsAfterSave,
-          hasFilteredCatalogCount: text.includes('My Creations (2)'),
+          hasFilteredCatalogCount: text.includes('Conversations (2)') && !document.querySelector('.dab-catalog-bar'),
           routeAfterDisabledPush,
           noTopbarModeSwitcher
         };
@@ -1510,7 +1529,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           savedConvLabel: latestConvList[0] ? latestConvList[0].label : null,
           routeAfterTurn1: window.__DAB_STUDIO__.history.location.pathname,
           sidebarShowsGeneratedLabel:
-            bodyText.includes('[dashboard] Quarterly Order Margin Analysis (#99)') &&
+            !document.querySelector('.dab-catalog-bar') &&
             Boolean(sidebarEl && (sidebarEl.innerText || '').includes('Quarterly Order Margin Analysis'))
         };
       })()`,
@@ -2072,7 +2091,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     const deadline = Date.now() + 8000
     while (Date.now() < deadline) {
       const r = await chrome.send('Runtime.evaluate', {
-        expression: `Boolean(window.__DAB_STUDIO__ && window.__LOOKER_EMBED_STATE__ && document.querySelector('[data-testid="looker-embed-container"] iframe'))`,
+        expression: `Boolean(window.__DAB_STUDIO__ && window.__LOOKER_EMBED_STATE__ && document.querySelector('[data-testid="looker-embed-container"] iframe') && document.querySelector('[data-testid="conversation-item-conv_app_42"]'))`,
         returnByValue: true
       })
       if (r.result && r.result.value) break
@@ -3082,4 +3101,197 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       modalClosed: true
     })
   }, 15000)
+
+  test('Issue #61: removes My Creations bar, archives/unarchives conversations, opens Delete Confirmation Modal with related content, deletes index + related artifacts, and never resurrects deleted items', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    const url = `http://127.0.0.1:${port}/?scenario=data_app`
+    await chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(document.querySelector('[data-testid="archive-conv-conv_app_42"]'))`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    // Step 1: Archive conv_lookml_20261030_dev_branch, reveal Show Archived (1), and open Delete modal on conv_app_42
+    const modalOpenRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        window.__DELETED_ARTIFACTS__ = [];
+        window.__DELETED_DASHBOARDS__ = [];
+        const hasCatalogBar = Boolean(document.querySelector('.dab-catalog-bar'));
+        const bodyTextBefore = document.body?.innerText || '';
+        const hasMyCreationsText = bodyTextBefore.includes('My Creations');
+
+        // Archive LookML conversation
+        const archiveLookmlBtn = document.querySelector('[data-testid="archive-conv-conv_lookml_20261030_dev_branch"]');
+        if (archiveLookmlBtn) archiveLookmlBtn.click();
+        await new Promise((r) => setTimeout(r, 120));
+
+        const toggleArchivedBtn = document.querySelector('[data-testid="toggle-archived-convs"]');
+        const toggleTextBeforeExpand = toggleArchivedBtn?.textContent?.trim() || '';
+        const lookmlHiddenBeforeExpand = !document.querySelector('[data-testid="conversation-item-conv_lookml_20261030_dev_branch"]');
+
+        // Expand archived section so archived item is visible
+        if (toggleArchivedBtn) toggleArchivedBtn.click();
+        await new Promise((r) => setTimeout(r, 100));
+        const toggleTextAfterExpand = toggleArchivedBtn?.textContent?.trim() || '';
+        const archivedListEl = document.querySelector('[data-testid="archived-conversations-list"]');
+        const lookmlVisibleInArchived = Boolean(
+          archivedListEl?.querySelector('[data-testid="conversation-item-conv_lookml_20261030_dev_branch"]')
+        );
+
+        // Click Delete on conv_app_42 to open the confirmation modal
+        const deleteAppBtn = document.querySelector('[data-testid="delete-conv-conv_app_42"]');
+        if (deleteAppBtn) deleteAppBtn.click();
+        await new Promise((r) => setTimeout(r, 100));
+
+        const modalEl = document.querySelector('[data-testid="delete-conv-modal"]');
+        const checkboxEl = document.querySelector('[data-testid="delete-related-content-checkbox"]');
+        if (checkboxEl && !checkboxEl.checked) {
+          checkboxEl.click();
+        }
+        await new Promise((r) => setTimeout(r, 60));
+
+        return {
+          hasCatalogBar,
+          hasMyCreationsText,
+          toggleTextBeforeExpand,
+          lookmlHiddenBeforeExpand,
+          toggleTextAfterExpand,
+          lookmlVisibleInArchived,
+          hasDeleteModal: Boolean(modalEl),
+          modalText: modalEl?.innerText || '',
+          checkboxChecked: Boolean(checkboxEl?.checked),
+          hasCancelBtn: Boolean(document.querySelector('[data-testid="cancel-delete-conv-btn"]')),
+          hasConvOnlyBtn: Boolean(document.querySelector('[data-testid="confirm-delete-conv-only-btn"]')),
+          hasConvAndContentBtn: Boolean(document.querySelector('[data-testid="confirm-delete-conv-and-content-btn"]')),
+          hasConfirmBtn: Boolean(document.querySelector('[data-testid="confirm-delete-conv-btn"]'))
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(modalOpenRes.result.value).toMatchObject({
+      hasCatalogBar: false,
+      hasMyCreationsText: false,
+      toggleTextBeforeExpand: 'Show Archived (1)',
+      lookmlHiddenBeforeExpand: true,
+      toggleTextAfterExpand: 'Hide Archived (1)',
+      lookmlVisibleInArchived: true,
+      hasDeleteModal: true,
+      checkboxChecked: true,
+      hasCancelBtn: true,
+      hasConvOnlyBtn: true,
+      hasConvAndContentBtn: true,
+      hasConfirmBtn: true
+    })
+    expect(modalOpenRes.result.value.modalText).toContain('Executive Revenue App')
+    expect(modalOpenRes.result.value.modalText).toContain('Looker Dashboard #42 (sdk.delete_dashboard)')
+    expect(modalOpenRes.result.value.modalText).toContain('Shared app artifact (obj_app_42)')
+
+    // Capture cropped screenshot of sidebar archive controls + delete confirmation modal
+    const clipRes = await chrome.send('Runtime.evaluate', {
+      expression: `(() => {
+        const selectors = [
+          '[data-testid="conversations-sidebar"]',
+          '[data-testid="delete-conv-modal"]'
+        ];
+        const rects = selectors
+          .flatMap((s) => Array.from(document.querySelectorAll(s)))
+          .map((el) => el.getBoundingClientRect())
+          .filter((r) => r.width > 0 && r.height > 0);
+        if (!rects.length) return null;
+        const margin = 16;
+        const x = Math.max(0, Math.floor(Math.min(...rects.map((r) => r.left)) - margin));
+        const y = Math.max(0, Math.floor(Math.min(...rects.map((r) => r.top)) - margin));
+        const right = Math.min(1440, Math.ceil(Math.max(...rects.map((r) => r.right)) + margin));
+        const bottom = Math.min(900, Math.ceil(Math.max(...rects.map((r) => r.bottom)) + margin));
+        return { x, y, width: right - x, height: bottom - y, scale: 1 };
+      })()`,
+      returnByValue: true
+    })
+    const clip = clipRes.result?.value
+    expect(clip).toBeTruthy()
+
+    const { data } = await chrome.send('Page.captureScreenshot', {
+      format: 'png',
+      clip
+    })
+    const pngBuffer = Buffer.from(data, 'base64')
+    expect(pngBuffer.length).toBeGreaterThan(1000)
+
+    const scratchDir =
+      '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
+    mkdirSync(scratchDir, { recursive: true })
+    const scratchSnapPath = path.join(scratchDir, 'issue-61-archive-delete-modal.png')
+    writeFileSync(scratchSnapPath, pngBuffer)
+    expect(existsSync(scratchSnapPath)).toBe(true)
+
+    // Step 2: Confirm deletion (with related content checked), unarchive LookML, then delete remaining items and verify no resurrection
+    const afterConfirmRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const confirmBtn = document.querySelector('[data-testid="confirm-delete-conv-btn"]');
+        if (confirmBtn) confirmBtn.click();
+        await new Promise((r) => setTimeout(r, 150));
+
+        const deletedArtifactsAfterApp42 = [...(window.__DELETED_ARTIFACTS__ || [])];
+        const deletedDashboardsAfterApp42 = [...(window.__DELETED_DASHBOARDS__ || [])];
+
+        // Unarchive conv_lookml_20261030_dev_branch
+        const unarchiveLookmlBtn = document.querySelector('[data-testid="archive-conv-conv_lookml_20261030_dev_branch"]');
+        if (unarchiveLookmlBtn) unarchiveLookmlBtn.click();
+        await new Promise((r) => setTimeout(r, 120));
+
+        // Delete all remaining conversations (conversation-only button)
+        const remainingIds = [
+          'conv_dashboard_7',
+          'conv_lookml_20261030_dev_branch',
+          'conv_health_demo',
+          'conv_tile_demo1'
+        ];
+        for (const id of remainingIds) {
+          const delBtn = document.querySelector('[data-testid="delete-conv-' + id + '"]');
+          if (delBtn) delBtn.click();
+          await new Promise((r) => setTimeout(r, 60));
+          const onlyBtn = document.querySelector('[data-testid="confirm-delete-conv-only-btn"]');
+          if (onlyBtn) onlyBtn.click();
+          await new Promise((r) => setTimeout(r, 100));
+        }
+
+        const sidebarText = document.querySelector('[data-testid="conversations-sidebar"]')?.innerText || '';
+        const remainingItemsCount = document.querySelectorAll('[data-testid^="conversation-item-"]').length;
+        return {
+          deletedArtifactsAfterApp42,
+          deletedDashboardsAfterApp42,
+          allDeletedArtifacts: [...(window.__DELETED_ARTIFACTS__ || [])],
+          remainingItemsCount,
+          showsEmptyMessage: sidebarText.includes('No previous conversations yet.')
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(afterConfirmRes.result.value.deletedArtifactsAfterApp42).toEqual(
+      expect.arrayContaining(['user_1_app_42', 'obj_app_42'])
+    )
+    expect(afterConfirmRes.result.value.deletedDashboardsAfterApp42).toEqual(['42'])
+    expect(afterConfirmRes.result.value.allDeletedArtifacts).toEqual(
+      expect.arrayContaining([
+        'user_1_app_42',
+        'user_1_dashboard_7',
+        'user_1_lookml_20261030_dev_branch',
+        'user_1_health_check_demo',
+        'user_1_script_demo1'
+      ])
+    )
+    expect(afterConfirmRes.result.value.remainingItemsCount).toBe(0)
+    expect(afterConfirmRes.result.value.showsEmptyMessage).toBe(true)
+  }, 20000)
 })

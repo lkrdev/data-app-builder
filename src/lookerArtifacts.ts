@@ -106,20 +106,200 @@ export interface TileScriptBinding {
   updatedAt?: string
 }
 
+export interface UserConversationContent {
+  dashboardId?: string
+  lookId?: string
+  lookmlDashboardId?: string
+  appArtifactId?: string
+  scriptId?: string
+  scheduleId?: string
+  reportId?: string
+  sessionId?: string
+  caConversationId?: string
+  id?: string
+  contentType?: string
+  embedPath?: string
+  [key: string]: any
+}
+
 export interface UserConversationEntry {
   id: string
   type: string
+  use_case?: string
+  objectId?: string
   label: string
+  archived?: boolean
   interactionId?: string
   environmentId?: string
-  content?: Record<string, any>
+  content?: UserConversationContent
   messages?: PersistedChatTurn[]
   explores?: string[]
   createdAt?: string
   updatedAt: string
 }
 
+export type UserConversationSummary = UserConversationEntry
 export type ConversationRecord = UserConversationEntry
+
+export interface ConversationRelatedContentInfo {
+  mode: string
+  objectId: string
+  userIndexKeys: string[]
+  sharedObjectKeys: string[]
+  dashboardId?: string
+  lookId?: string
+  summary: string
+  items: string[]
+}
+
+export function resolveConversationRelatedContent(
+  conv: Partial<UserConversationEntry> & { id: string },
+  userId = '1'
+): ConversationRelatedContentInfo {
+  const uid = String(userId || '1').trim()
+  const c = conv.content || {}
+  const prefixMatch = String(conv.id || '').match(
+    /^conv_(app|data_app|dashboard|tile|script|health_check|health-check|health|lookml|ca|conversational-analytics)_(.+)$/
+  )
+  const rawType = String(conv.type || conv.use_case || prefixMatch?.[1] || 'app').trim()
+  const stripPrefix = (s: string) =>
+    s
+      .replace(
+        /^conv_(?:app|data_app|dashboard|tile|script|health_check|health-check|health|lookml|ca|conversational-analytics)_/,
+        ''
+      )
+      .replace(/^obj_script_/, '')
+      .trim()
+  const uniq = (...vals: Array<string | undefined | false>) =>
+    Array.from(new Set(vals.filter((v): v is string => Boolean(v))))
+
+  if (rawType === 'dashboard') {
+    const contentType =
+      c.contentType || (c.lookId ? 'look' : c.lookmlDashboardId ? 'lookml_dashboard' : 'dashboard')
+    const objectId = stripPrefix(
+      String(conv.objectId || c.dashboardId || c.lookId || c.lookmlDashboardId || c.id || conv.id || '')
+    )
+    const dashboardId = c.dashboardId
+      ? String(c.dashboardId).trim()
+      : contentType === 'dashboard' && objectId
+      ? objectId
+      : undefined
+    const lookId = c.lookId
+      ? String(c.lookId).trim()
+      : contentType === 'look' && objectId
+      ? objectId
+      : undefined
+    const items = uniq(
+      dashboardId && `Native Looker Dashboard #${dashboardId} (sdk.delete_dashboard)`,
+      lookId && `Saved Look #${lookId} (sdk.delete_look)`,
+      objectId && `Content Studio artifact (obj_dashboard_${objectId})`
+    )
+    return {
+      mode: 'dashboard',
+      objectId,
+      userIndexKeys: uniq(
+        objectId && `user_${uid}_dashboard_${objectId}`,
+        conv.id && conv.id !== objectId && `user_${uid}_dashboard_${conv.id}`
+      ),
+      sharedObjectKeys: uniq(objectId && `obj_dashboard_${objectId}`),
+      dashboardId,
+      lookId,
+      summary: items.join(' + ') || 'Content Studio artifact',
+      items,
+    }
+  }
+
+  if (rawType === 'tile' || rawType === 'script') {
+    const objectId = stripPrefix(String(conv.objectId || c.scriptId || c.id || conv.id || ''))
+    const dashboardId = c.dashboardId ? String(c.dashboardId).trim() : undefined
+    const items = uniq(
+      objectId && `Shared script artifact (obj_script_${objectId})`,
+      objectId && `Script schedule (obj_schedule_${objectId})`,
+      dashboardId && `Published wrapper Dashboard #${dashboardId} (sdk.delete_dashboard)`
+    )
+    return {
+      mode: 'tile',
+      objectId,
+      userIndexKeys: uniq(
+        objectId && `user_${uid}_script_${objectId}`,
+        objectId && `user_${uid}_tile_${objectId}`
+      ),
+      sharedObjectKeys: uniq(objectId && `obj_script_${objectId}`, objectId && `obj_schedule_${objectId}`),
+      dashboardId,
+      summary: items.join(' + ') || 'Python script & schedule artifacts',
+      items,
+    }
+  }
+
+  if (rawType === 'health' || rawType === 'health_check' || rawType === 'health-check') {
+    const objectId = stripPrefix(String(conv.objectId || c.reportId || c.id || conv.id || ''))
+    const items = uniq(objectId && `Health Check report artifact (obj_health_${objectId})`)
+    return {
+      mode: 'health',
+      objectId,
+      userIndexKeys: uniq(
+        objectId && `user_${uid}_health_check_${objectId}`,
+        objectId && `user_${uid}_health_${objectId}`
+      ),
+      sharedObjectKeys: uniq(objectId && `obj_health_${objectId}`, objectId && `obj_health_check_${objectId}`),
+      summary: items.join(' + ') || 'Health Check report artifact',
+      items,
+    }
+  }
+
+  if (rawType === 'lookml') {
+    const objectId = stripPrefix(String(conv.objectId || c.sessionId || c.id || conv.id || ''))
+    const items = uniq(objectId && `LookML session artifact (obj_lookml_${objectId})`)
+    return {
+      mode: 'lookml',
+      objectId,
+      userIndexKeys: uniq(objectId && `user_${uid}_lookml_${objectId}`),
+      sharedObjectKeys: uniq(objectId && `obj_lookml_${objectId}`),
+      summary: items.join(' + ') || 'LookML session artifact',
+      items,
+    }
+  }
+
+  if (rawType === 'conversational-analytics' || rawType === 'ca') {
+    const objectId = stripPrefix(String(conv.objectId || c.caConversationId || c.id || conv.id || ''))
+    const items = uniq(objectId && `CA conversation artifact (obj_ca_${objectId})`)
+    return {
+      mode: 'conversational-analytics',
+      objectId,
+      userIndexKeys: uniq(
+        objectId && `user_${uid}_conversational-analytics_${objectId}`,
+        objectId && `user_${uid}_ca_${objectId}`
+      ),
+      sharedObjectKeys: uniq(
+        objectId && `obj_ca_${objectId}`,
+        objectId && `obj_conversational-analytics_${objectId}`
+      ),
+      summary: items.join(' + ') || 'CA conversation artifact',
+      items,
+    }
+  }
+
+  const objectId = stripPrefix(String(conv.objectId || c.dashboardId || c.id || conv.id || ''))
+  const dashboardId = String(c.dashboardId || objectId || '').trim() || undefined
+  const appKey = String(c.appArtifactId || (objectId ? `obj_app_${objectId}` : '')).trim()
+  const items = uniq(
+    dashboardId && `Looker Dashboard #${dashboardId} (sdk.delete_dashboard)`,
+    appKey && `Shared app artifact (${appKey})`
+  )
+  return {
+    mode: 'app',
+    objectId,
+    userIndexKeys: uniq(
+      objectId && `user_${uid}_app_${objectId}`,
+      objectId && `user_${uid}_data_app_${objectId}`,
+      conv.id && conv.id !== objectId && `user_${uid}_app_${conv.id}`
+    ),
+    sharedObjectKeys: uniq(appKey),
+    dashboardId,
+    summary: items.join(' + ') || 'Data App dashboard & artifact',
+    items,
+  }
+}
 
 export function formatUserEnvArtifactKey(userId: string): string {
   return `user_env:${String(userId || '1').trim()}`
@@ -562,17 +742,20 @@ export class ArtifactService {
       .filter(Boolean)
     if (keyList.length === 0) return
     const joined = keyList.join(',')
-    if (typeof (this.sdk as any).delete_artifact === 'function') {
-      await this.sdk.ok(this.sdk.delete_artifact(this.namespace, joined))
-    } else {
-      await rawLookerRequest(
-        this.sdk,
-        'DELETE',
-        `/artifacts/${encodeURIComponent(this.namespace)}/${encodeURIComponent(joined)}`
-      )
-    }
-    for (const k of keyList) {
-      this.syncInPlaceCachesOnDelete(k)
+    try {
+      if (typeof (this.sdk as any).delete_artifact === 'function') {
+        await this.sdk.ok(this.sdk.delete_artifact(this.namespace, joined))
+      } else {
+        await rawLookerRequest(
+          this.sdk,
+          'DELETE',
+          `/artifacts/${encodeURIComponent(this.namespace)}/${encodeURIComponent(joined)}`
+        )
+      }
+    } finally {
+      for (const k of keyList) {
+        this.syncInPlaceCachesOnDelete(k)
+      }
     }
   }
 
@@ -652,16 +835,74 @@ export class ArtifactService {
     return nextList
   }
 
-  async deleteConversation(
+  async archiveConversation(
     userId: string,
-    conversationId: string
+    conversationId: string,
+    archived = true
   ): Promise<UserConversationEntry[]> {
     const uid = String(userId || '1').trim()
+    const cleanId = String(conversationId || '').trim()
     const existing = this.conversationsCache.has(uid)
       ? this.conversationsCache.get(uid)!
       : await this.listConversations(uid)
-    const next = existing.filter((c) => c.id !== conversationId)
+    const nextList = existing.map((c) => (c.id === cleanId ? { ...c, archived } : c))
+    await this.put([{ key: formatUserConversationsKey(uid), value: nextList }])
+    return nextList
+  }
+
+  async deleteConversation(
+    userId: string,
+    conversationId: string,
+    options?: boolean | { deleteRelatedContent?: boolean; conversation?: Partial<UserConversationEntry> & { id: string } }
+  ): Promise<UserConversationEntry[]> {
+    const uid = String(userId || '1').trim()
+    const cleanId = String(conversationId || '').trim()
+    const deleteRelatedContent =
+      typeof options === 'boolean' ? options : Boolean(options?.deleteRelatedContent)
+    const existing = this.conversationsCache.has(uid)
+      ? this.conversationsCache.get(uid)!
+      : await this.listConversations(uid)
+    const targetConv =
+      (typeof options === 'object' && options?.conversation) ||
+      existing.find((c) => c.id === cleanId) || { id: cleanId }
+    const next = existing.filter((c) => c.id !== cleanId)
     await this.put([{ key: formatUserConversationsKey(uid), value: next }])
+
+    // ponytail: always delete matching `user_${userId}_${type}_${id}` index artifact(s) so stale index entries never linger or resurrect.
+    const related = resolveConversationRelatedContent(targetConv, uid)
+    const cachedUserEntries = this.userListCache.get(uid) || []
+    for (const entry of cachedUserEntries) {
+      if (entry.id === cleanId || (related.objectId && entry.id === related.objectId)) {
+        const k = formatUserArtifactKey(uid, entry.type, entry.id)
+        if (!related.userIndexKeys.includes(k)) related.userIndexKeys.push(k)
+      }
+    }
+    const keysToDelete = [
+      ...related.userIndexKeys,
+      ...(deleteRelatedContent ? related.sharedObjectKeys : []),
+    ]
+    if (keysToDelete.length > 0) {
+      try {
+        await this.delete(keysToDelete)
+      } catch {}
+    }
+
+    if (deleteRelatedContent) {
+      for (const [fnName, pathPrefix, targetId] of [
+        ['delete_dashboard', '/dashboards', related.dashboardId],
+        ['delete_look', '/looks', related.lookId],
+      ] as const) {
+        if (!targetId) continue
+        try {
+          if (typeof (this.sdk as any)[fnName] === 'function') {
+            await this.sdk.ok((this.sdk as any)[fnName](String(targetId)))
+          } else {
+            await rawLookerRequest(this.sdk, 'DELETE', `${pathPrefix}/${encodeURIComponent(String(targetId))}`)
+          }
+        } catch {}
+      }
+    }
+
     return next
   }
 
@@ -1517,13 +1758,35 @@ export async function saveUserConversation(
 
 export const saveConversationArtifact = saveUserConversation
 
+export async function archiveUserConversation(
+  sdk: Looker40SDK,
+  userId: string,
+  conversationId: string,
+  archived = true,
+  namespace = ARTIFACT_NAMESPACE
+): Promise<UserConversationEntry[]> {
+  return getArtifactService(sdk, namespace).archiveConversation(userId, conversationId, archived)
+}
+
+export const archiveConversationArtifact = archiveUserConversation
+
 export async function deleteUserConversation(
   sdk: Looker40SDK,
   userId: string,
   conversationId: string,
-  namespace = ARTIFACT_NAMESPACE
+  optionsOrNamespace?:
+    | string
+    | boolean
+    | { deleteRelatedContent?: boolean; conversation?: Partial<UserConversationEntry> & { id: string } },
+  maybeNamespace?: string
 ): Promise<UserConversationEntry[]> {
-  return getArtifactService(sdk, namespace).deleteConversation(userId, conversationId)
+  const namespace =
+    typeof optionsOrNamespace === 'string'
+      ? optionsOrNamespace
+      : maybeNamespace || ARTIFACT_NAMESPACE
+  const options =
+    typeof optionsOrNamespace === 'string' ? undefined : optionsOrNamespace
+  return getArtifactService(sdk, namespace).deleteConversation(userId, conversationId, options)
 }
 
 export const deleteConversationArtifact = deleteUserConversation
