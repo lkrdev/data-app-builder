@@ -1,8 +1,34 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { getGeminiUserAttributeName, LkrCodeMode, studioModeToUseCase } from '../antigravity'
+import { useLookerExtension } from '../contexts/LookerExtensionContext'
 import { formatExploreId } from '../lookerApi'
 import { StudioController } from '../useStudioController'
 import { STUDIO_MODES } from './App'
+
+export const FullScreenToggleButton: React.FC = () => {
+  const { extensionSDK, lookerHostData } = useLookerExtension()
+  const location = useLocation()
+  if (lookerHostData?.mountPoint && lookerHostData.mountPoint !== 'standalone') return null
+  const isSpartan = lookerHostData?.hostType === 'spartan'
+  const extensionId = lookerHostData?.extensionId || 'data_app_builder::data_app_builder'
+  const handleToggleFullScreen = () => {
+    if (!extensionSDK) return
+    const subRoute = `${location.pathname === '/' ? '' : location.pathname}${location.search || ''}${location.hash || ''}`
+    extensionSDK.updateLocation(`${isSpartan ? '/extensions' : '/spartan'}/${extensionId}${subRoute}`, undefined, '_top')
+  }
+  return (
+    <button
+      type="button"
+      data-testid="topbar-fullscreen-toggle"
+      className="dab-btn dab-btn-secondary"
+      onClick={handleToggleFullScreen}
+      title={`Switch between /extensions/${extensionId} and /spartan/${extensionId}`}
+    >
+      {isSpartan ? '⤡ Exit Full Screen' : '⤢ Full Screen'}
+    </button>
+  )
+}
 
 export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
@@ -39,6 +65,9 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           <strong>Agent</strong>
           <span className="dab-badge">Agentic LookML</span>
           <span className="dab-badge">Configuration</span>
+        </div>
+        <div className="dab-controls">
+          <FullScreenToggleButton />
         </div>
       </header>
       <div className="dab-placeholder">
@@ -742,6 +771,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
               </button>
             </>
           )}
+          <FullScreenToggleButton />
         </div>
       </div>
     </header>

@@ -542,7 +542,9 @@ function buildHtmlPage(scenario) {
         lookerHostData: {
           hostUrl: 'https://dev-argolis.looker.com',
           extensionId: 'data_app_builder::data_app_builder',
-          mountType: isTile ? 'dashboard_tile' : 'standalone'
+          hostType: scenario === 'spartan_fullscreen' ? 'spartan' : 'standard',
+          mountPoint: isTile ? 'dashboard-tile' : 'standalone',
+          mountType: isTile ? 'dashboard_tile' : scenario === 'spartan_fullscreen' ? 'fullscreen' : 'standalone'
         },
         getContextData: () => savedContextData,
         saveContextData: async (ctx) => {
@@ -551,6 +553,10 @@ function buildHtmlPage(scenario) {
           return savedContextData;
         },
         openBrowserWindow: () => {},
+        updateLocation: (url, state, target) => {
+          window.__UPDATED_LOCATIONS__ = window.__UPDATED_LOCATIONS__ || [];
+          window.__UPDATED_LOCATIONS__.push({ url, state, target });
+        },
         rendered: () => {},
         updateTitle: () => {},
         serverProxy: async (url, init) => {
@@ -1773,6 +1779,81 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       persistedType: 'conversational-analytics',
       persistedCaId: 'ca_conv_live_77',
       persistedAgentId: 'ca_agent_ecommerce'
+    })
+  }, 15000)
+
+  test('toggles Full Screen between /extensions/* and /spartan/* via lookerHostData while preserving internal route', async () => {
+    const waitForToggle = async (scenario) => {
+      await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=${scenario}` })
+      const deadline = Date.now() + 8000
+      while (Date.now() < deadline) {
+        const r = await chrome.send('Runtime.evaluate', {
+          expression: `Boolean(document.querySelector('[data-testid="topbar-fullscreen-toggle"]'))`,
+          returnByValue: true
+        })
+        if (r.result?.value) break
+        await new Promise((res) => setTimeout(res, 80))
+      }
+    }
+
+    await waitForToggle('config_page')
+    const standardRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        window.__UPDATED_LOCATIONS__ = [];
+        const btn = document.querySelector('[data-testid="topbar-fullscreen-toggle"]');
+        const configLabel = (btn?.textContent || '').trim();
+        btn?.click();
+        window.__DAB_STUDIO__.history.push('/app/42');
+        await new Promise((r) => setTimeout(r, 80));
+        document.querySelector('[data-testid="topbar-fullscreen-toggle"]')?.click();
+        const r = document.querySelector('.dab-topbar').getBoundingClientRect();
+        return {
+          configLabel,
+          calls: window.__UPDATED_LOCATIONS__,
+          clip: { x: Math.max(0, Math.floor(r.left)), y: Math.max(0, Math.floor(r.top)), width: Math.min(1440, Math.ceil(r.width)), height: Math.min(900, Math.ceil(r.height) + 8), scale: 1 }
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(standardRes.result.value.configLabel).toBe('⤢ Full Screen')
+    expect(standardRes.result.value.calls).toEqual([
+      { url: '/spartan/data_app_builder::data_app_builder/config', state: undefined, target: '_top' },
+      { url: '/spartan/data_app_builder::data_app_builder/app/42', state: undefined, target: '_top' }
+    ])
+
+    const { data } = await chrome.send('Page.captureScreenshot', { format: 'png', clip: standardRes.result.value.clip })
+    const scratchDir = '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
+    mkdirSync(scratchDir, { recursive: true })
+    const scratchSnap = path.join(scratchDir, 'issue-48-fullscreen-toggle.png')
+    writeFileSync(scratchSnap, Buffer.from(data, 'base64'))
+    expect(existsSync(scratchSnap)).toBe(true)
+
+    await waitForToggle('spartan_fullscreen')
+    const spartanRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        window.__UPDATED_LOCATIONS__ = [];
+        const btn = document.querySelector('[data-testid="topbar-fullscreen-toggle"]');
+        const spartanLabel = (btn?.textContent || '').trim();
+        btn?.click();
+        window.__MOCK_LOOKER_EXTENSION__.lookerHostData.mountPoint = 'dashboard-tile';
+        window.__DAB_STUDIO__.history.push('/dashboard/7');
+        await new Promise((r) => setTimeout(r, 80));
+        return {
+          spartanLabel,
+          calls: window.__UPDATED_LOCATIONS__,
+          hiddenInTile: !document.querySelector('[data-testid="topbar-fullscreen-toggle"]')
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(spartanRes.result.value).toEqual({
+      spartanLabel: '⤡ Exit Full Screen',
+      calls: [{ url: '/extensions/data_app_builder::data_app_builder/app/42', state: undefined, target: '_top' }],
+      hiddenInTile: true
     })
   }, 15000)
 })
