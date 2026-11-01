@@ -335,3 +335,80 @@ export async function buildDenseExploreSchema(
     }
   )
 }
+
+export type StudioThemeMode = 'light' | 'dark' | 'system'
+export type ResolvedStudioTheme = 'light' | 'dark'
+
+export const STUDIO_THEME_STORAGE_KEY = 'dab_theme_mode'
+
+export function normalizeStudioThemeMode(raw: unknown): StudioThemeMode {
+  return raw === 'light' || raw === 'dark' || raw === 'system' ? raw : 'system'
+}
+
+export function resolveSystemTheme(
+  mediaQueryList?: { matches?: boolean } | null
+): ResolvedStudioTheme {
+  try {
+    const mql =
+      mediaQueryList !== undefined
+        ? mediaQueryList
+        : typeof window !== 'undefined'
+        ? window.matchMedia?.('(prefers-color-scheme: dark)')
+        : null
+    return mql?.matches ? 'dark' : 'light'
+  } catch {
+    return 'light'
+  }
+}
+
+export function resolveStudioTheme(
+  mode: StudioThemeMode,
+  systemTheme: ResolvedStudioTheme = resolveSystemTheme()
+): ResolvedStudioTheme {
+  return mode === 'system' ? systemTheme : mode
+}
+
+export function applyStudioDocumentTheme(
+  resolved: ResolvedStudioTheme,
+  mode?: StudioThemeMode
+): void {
+  if (typeof document === 'undefined' || !document.documentElement) return
+  document.documentElement.setAttribute('data-theme', resolved)
+  if (mode) document.documentElement.setAttribute('data-theme-mode', mode)
+  document.documentElement.style.colorScheme = resolved
+}
+
+export function readInitialStudioThemeMode(): StudioThemeMode {
+  try {
+    const w = typeof window !== 'undefined' ? (window as any) : undefined
+    return normalizeStudioThemeMode(
+      w?.__MOCK_LOOKER_EXTENSION__?.initialThemeMode ??
+        w?.localStorage?.getItem?.(STUDIO_THEME_STORAGE_KEY)
+    )
+  } catch {
+    return 'system'
+  }
+}
+
+export async function loadStoredStudioThemeMode(
+  extensionSDK?: any
+): Promise<StudioThemeMode | null> {
+  try {
+    const w = typeof window !== 'undefined' ? (window as any) : undefined
+    const raw =
+      (await extensionSDK?.localStorageGetItem?.(STUDIO_THEME_STORAGE_KEY)) ??
+      w?.localStorage?.getItem?.(STUDIO_THEME_STORAGE_KEY)
+    return raw === 'light' || raw === 'dark' || raw === 'system' ? raw : null
+  } catch {
+    return null
+  }
+}
+
+export function persistStudioThemeMode(extensionSDK: any, mode: StudioThemeMode): void {
+  try {
+    ;(window as any)?.localStorage?.setItem?.(STUDIO_THEME_STORAGE_KEY, mode)
+  } catch {}
+  try {
+    void extensionSDK?.localStorageSetItem?.(STUDIO_THEME_STORAGE_KEY, mode)
+  } catch {}
+}

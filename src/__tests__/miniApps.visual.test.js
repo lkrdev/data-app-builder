@@ -328,8 +328,17 @@ function buildHtmlPage(scenario) {
         chatbar_error_banner: '/app',
         python_tile_scheduler_modal: '/tile/demo1',
         conversational_analytics: '/conversational-analytics/ca_conv_streaming_1',
-        centered_empty_prompt: '/app'
+        centered_empty_prompt: '/app',
+        studio_dark_theme: '/app/42'
       };
+
+      try {
+        if (scenario === 'studio_dark_theme') {
+          window.localStorage.setItem('dab_theme_mode', 'dark');
+        } else if (!window.location.search.includes('preserveTheme=1')) {
+          window.localStorage.removeItem('dab_theme_mode');
+        }
+      } catch {}
 
       const isTile =
         scenario === 'tile_mount_view' ||
@@ -556,6 +565,20 @@ function buildHtmlPage(scenario) {
           window.__LAST_SAVED_CONTEXT_DATA__ = savedContextData;
           return savedContextData;
         },
+        localStorageGetItem: async (key) => {
+          try {
+            return window.localStorage.getItem(key);
+          } catch {
+            return null;
+          }
+        },
+        localStorageSetItem: async (key, value) => {
+          window.__LOCAL_STORAGE_UPDATES__ = window.__LOCAL_STORAGE_UPDATES__ || [];
+          window.__LOCAL_STORAGE_UPDATES__.push({ key, value });
+          try {
+            window.localStorage.setItem(key, value);
+          } catch {}
+        },
         openBrowserWindow: () => {},
         updateLocation: (url, state, target) => {
           window.__UPDATED_LOCATIONS__ = window.__UPDATED_LOCATIONS__ || [];
@@ -620,6 +643,7 @@ function buildHtmlPage(scenario) {
 
       window.__MOCK_LOOKER_EXTENSION__ = {
         initialRoute: routeMap[scenario] || '/app/42',
+        initialThemeMode: scenario === 'studio_dark_theme' ? 'dark' : undefined,
         initialPendingPerm: scenario === 'data_app' ? {
           operation: 'create_dashboard',
           httpMethod: 'POST',
@@ -1132,6 +1156,18 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         'Use Case:',
         '✨ Build App',
         'My Creations (5)'
+      ]
+    },
+    {
+      id: 'studio_dark_theme',
+      category: 'Mini-App Modes',
+      title: '18. Studio Dark Theme Mode (Semantic Dark Surface & Text Tokens)',
+      snapshotName: '18-studio-dark-theme.png',
+      expectText: [
+        'Agent',
+        'Agentic LookML',
+        'Executive Revenue App',
+        '✨ Update App'
       ]
     }
   ]
@@ -2118,5 +2154,136 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         hasCenteredPrompt: true
       }
     })
+  }, 15000)
+
+  test('supports Light, Dark, and System theme modes in topbar, reacts to matchMedia changes, persists to localStorage, and renders dark mode UI (Issue #49)', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    await chrome.send('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-color-scheme', value: 'light' }]
+    })
+    const url = `http://127.0.0.1:${port}/?scenario=data_app`
+    await chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(document.querySelector('[data-testid="topbar-theme-select"]'))`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    // 1. Default mode is 'system' and resolves to 'light' when prefers-color-scheme is light
+    const initialCheck = await chrome.send('Runtime.evaluate', {
+      expression: `(() => {
+        const sel = document.querySelector('[data-testid="topbar-theme-select"]');
+        return {
+          mode: sel ? sel.value : null,
+          options: sel ? Array.from(sel.options).map((o) => o.value) : [],
+          attrTheme: document.documentElement.getAttribute('data-theme'),
+          attrMode: document.documentElement.getAttribute('data-theme-mode')
+        };
+      })()`,
+      returnByValue: true
+    })
+    expect(initialCheck.result.value).toEqual({
+      mode: 'system',
+      options: ['light', 'dark', 'system'],
+      attrTheme: 'light',
+      attrMode: 'system'
+    })
+
+    // 2. Live OS matchMedia('prefers-color-scheme: dark') change while in 'system' mode updates data-theme to 'dark'
+    await chrome.send('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-color-scheme', value: 'dark' }]
+    })
+    await new Promise((r) => setTimeout(r, 120))
+    const systemDarkCheck = await chrome.send('Runtime.evaluate', {
+      expression: `({
+        attrTheme: document.documentElement.getAttribute('data-theme'),
+        attrMode: document.documentElement.getAttribute('data-theme-mode'),
+        selectResolved: document.querySelector('[data-testid="topbar-theme-select"]')?.getAttribute('data-resolved-theme')
+      })`,
+      returnByValue: true
+    })
+    expect(systemDarkCheck.result.value).toEqual({
+      attrTheme: 'dark',
+      attrMode: 'system',
+      selectResolved: 'dark'
+    })
+
+    // Restore emulated media to light so we can test explicit Dark and Light selection
+    await chrome.send('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-color-scheme', value: 'light' }]
+    })
+    await new Promise((r) => setTimeout(r, 100))
+
+    // 3. Switch topbar theme selector to 'dark', verify persistence & dark computed styles, and switch to 'light'
+    const switchRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const sel = document.querySelector('[data-testid="topbar-theme-select"]');
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+        setter.call(sel, 'dark');
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 120));
+
+        const darkThemeAttr = document.documentElement.getAttribute('data-theme');
+        const darkModeAttr = document.documentElement.getAttribute('data-theme-mode');
+        const storedDark = window.localStorage.getItem('dab_theme_mode');
+        const extStoredDark = (window.__LOCAL_STORAGE_UPDATES__ || []).find((u) => u.key === 'dab_theme_mode' && u.value === 'dark');
+        const shellStyle = window.getComputedStyle(document.querySelector('.dab-shell'));
+        const topbarStyle = window.getComputedStyle(document.querySelector('.dab-topbar'));
+        const shellBgDark = shellStyle.backgroundColor;
+        const shellColorDark = shellStyle.color;
+        const topbarBgDark = topbarStyle.backgroundColor;
+
+        setter.call(sel, 'light');
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 120));
+
+        const lightThemeAttr = document.documentElement.getAttribute('data-theme');
+        const storedLight = window.localStorage.getItem('dab_theme_mode');
+        const shellBgLight = window.getComputedStyle(document.querySelector('.dab-shell')).backgroundColor;
+
+        return {
+          darkThemeAttr,
+          darkModeAttr,
+          storedDark,
+          hasExtStorageCall: Boolean(extStoredDark),
+          shellBgDark,
+          shellColorDark,
+          topbarBgDark,
+          lightThemeAttr,
+          storedLight,
+          shellBgLight
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(switchRes.result.value).toEqual({
+      darkThemeAttr: 'dark',
+      darkModeAttr: 'dark',
+      storedDark: 'dark',
+      hasExtStorageCall: true,
+      shellBgDark: 'rgb(11, 17, 32)',
+      shellColorDark: 'rgb(226, 232, 240)',
+      topbarBgDark: 'rgb(17, 24, 39)',
+      lightThemeAttr: 'light',
+      storedLight: 'light',
+      shellBgLight: 'rgb(248, 250, 252)'
+    })
+
+    // Copy 18-studio-dark-theme.png to scratch directory for inspection
+    const darkSnapPath = path.join(imageSnapshotsDir, '18-studio-dark-theme.png')
+    const scratchDir =
+      '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
+    mkdirSync(scratchDir, { recursive: true })
+    const scratchDarkPath = path.join(scratchDir, 'issue-49-dark-theme.png')
+    writeFileSync(scratchDarkPath, readFileSync(darkSnapPath))
+    expect(existsSync(scratchDarkPath)).toBe(true)
   }, 15000)
 })
