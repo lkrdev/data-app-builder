@@ -35,6 +35,87 @@ export function extractExploreIdsFromCode(code: string): string[] {
   return Array.from(found)
 }
 
+const inFlightMetadataRequests = new Map<string, Promise<any>>()
+const recentMetadataCache = new Map<string, { expiresAt: number; value: any }>()
+export const LOOKER_METADATA_CACHE_TTL_MS = 15_000
+
+export function clearLookerMetadataCache(): void {
+  inFlightMetadataRequests.clear()
+  recentMetadataCache.clear()
+}
+
+// ponytail: coalesce concurrent in-flight + short-TTL Looker metadata/explore GET requests across
+// simultaneous conversations so concurrent turns never fire duplicate HTTP calls for the same schema.
+export async function coalesceLookerMetadataRequest<T>(
+  cacheKey: string,
+  fn: () => Promise<T>,
+  ttlMs = LOOKER_METADATA_CACHE_TTL_MS
+): Promise<T> {
+  const now = Date.now()
+  const hit = recentMetadataCache.get(cacheKey)
+  if (hit && now < hit.expiresAt) return hit.value as T
+  const inFlight = inFlightMetadataRequests.get(cacheKey)
+  if (inFlight) return inFlight as Promise<T>
+  const p = (async () => {
+    try {
+      const val = await fn()
+      if (ttlMs > 0) recentMetadataCache.set(cacheKey, { expiresAt: Date.now() + ttlMs, value: val })
+      return val
+    } finally {
+      inFlightMetadataRequests.delete(cacheKey)
+    }
+  })()
+  inFlightMetadataRequests.set(cacheKey, p)
+  return p
+}
+
+export function createDeduplicatedLookerSdkProxy(
+  sdk: Looker40SDK,
+  onRawRequest?: (res: any, elapsedMs: number, err?: unknown) => void
+): Looker40SDK {
+  if (!sdk || typeof sdk !== 'object') return sdk
+  const rawTransport = (sdk as any)?.authSession?.transport
+  const origRawReq = rawTransport?.rawRequest
+  const wrappedsdk: any = Object.create(sdk)
+  for (const method of ['lookml_model_explore', 'all_lookml_models', 'search_content', 'me', 'all_folders']) {
+    if (typeof (sdk as any)[method] === 'function') {
+      const origFn = (sdk as any)[method].bind(sdk)
+      wrappedSdkMethod(wrappedsdk, method, origFn)
+    }
+  }
+  if (typeof origRawReq === 'function') {
+    wrappedsdk.authSession = {
+      ...(sdk as any).authSession,
+      transport: {
+        ...rawTransport,
+        rawRequest: async (method: string, path: string, queryParams?: any, body?: any, ...rest: any[]) => {
+          const reqStart = Date.now()
+          const upper = String(method || 'GET').toUpperCase()
+          const isMetaGet =
+            upper === 'GET' && /\/(?:lookml_models|content_search|user|folders)(?:\/|$|\?)/i.test(String(path || ''))
+          const execRaw = () => origRawReq.call(rawTransport, method, path, queryParams, body, ...rest)
+          try {
+            const res = isMetaGet
+              ? await coalesceLookerMetadataRequest(`raw:GET:${path}:${JSON.stringify(queryParams || {})}`, execRaw)
+              : await execRaw()
+            onRawRequest?.(res, Date.now() - reqStart)
+            return res
+          } catch (err) {
+            onRawRequest?.(undefined, Date.now() - reqStart, err)
+            throw err
+          }
+        },
+      },
+    }
+  }
+  return wrappedsdk as Looker40SDK
+}
+
+function wrappedSdkMethod(target: any, method: string, origFn: (...args: any[]) => any): void {
+  target[method] = (...args: any[]) =>
+    coalesceLookerMetadataRequest(`sdk:${method}:${JSON.stringify(args)}`, () => Promise.resolve(origFn(...args)))
+}
+
 // ponytail: use SDK's underlying transport.rawRequest (requires raw_api_request: yes in manifest.lkml)
 // instead of generating custom SDK bindings for /data_app_extension and /inline_extension.
 export async function rawLookerRequest<T = any>(
@@ -77,18 +158,20 @@ export async function rawLookerRequest<T = any>(
 
 export async function fetchInitialLookerMetadata(sdk: Looker40SDK) {
   const [me, models, folders] = await Promise.all([
-    sdk.ok(
-      sdk.me(
-        'id,display_name,email,personal_folder_id,home_folder_id,is_iam_admin,can'
+    coalesceLookerMetadataRequest('meta:me', () =>
+      sdk.ok(sdk.me('id,display_name,email,personal_folder_id,home_folder_id,is_iam_admin,can'))
+    ),
+    coalesceLookerMetadataRequest('meta:all_lookml_models', () =>
+      sdk.ok(
+        sdk.all_lookml_models({
+          fields:
+            'name,label,project_name,allowed_db_connection_names,can,explores(name,label,description,group_label,hidden)',
+        })
       )
     ),
-    sdk.ok(
-      sdk.all_lookml_models({
-        fields:
-          'name,label,project_name,allowed_db_connection_names,can,explores(name,label,description,group_label,hidden)',
-      })
+    coalesceLookerMetadataRequest('meta:all_folders', () =>
+      sdk.ok(sdk.all_folders('id,name,parent_id,is_personal,can'))
     ),
-    sdk.ok(sdk.all_folders('id,name,parent_id,is_personal,can')),
   ])
   let roles: any[] | null = null
   if (me?.id && typeof (sdk as any).user_roles === 'function') {
@@ -163,87 +246,92 @@ export async function buildDenseExploreSchema(
   modelName: string,
   exploreName: string
 ): Promise<string> {
-  const exp = await sdk.ok(
-    sdk.lookml_model_explore({
-      lookml_model_name: modelName,
-      explore_name: exploreName,
-    })
-  )
-  const lines: string[] = [
-    `# Explore: \`${modelName}::${exploreName}\``,
-    exp.label ? `**Label:** ${exp.label}` : '',
-    exp.description ? `**Description:** ${exp.description}` : '',
-    '',
-  ].filter(Boolean)
-
-  if (exp.joins && exp.joins.length > 0) {
-    lines.push('## Joins')
-    for (const j of exp.joins) {
-      lines.push(`- \`${j.name}\` (${j.relationship || 'many_to_one'}, ${j.type || 'left_outer'})`)
-    }
-    lines.push('')
-  }
-
-  const fields = exp.fields || {}
-  const measures = (fields.measures || []).filter((f) => !f.hidden)
-  const dimensions = (fields.dimensions || []).filter((f) => !f.hidden)
-
-  lines.push(`## Measures (${measures.length})`)
-  for (const m of measures) {
-    const meta = [m.type, m.label ? `"${m.label}"` : ''].filter(Boolean).join(', ')
-    let line = `- \`${m.name}\` (${meta})`
-    if (m.description) line += ` — ${m.description}`
-    const sql = cleanSql(m.sql)
-    if (sql) line += ` [SQL: \`${sql}\`]`
-    lines.push(line)
-  }
-  lines.push('')
-
-  lines.push(`## Dimensions (${dimensions.length})`)
-  for (const d of dimensions) {
-    const meta = [d.type, d.label ? `"${d.label}"` : ''].filter(Boolean).join(', ')
-    let line = `- \`${d.name}\` (${meta})`
-    if (d.description) line += ` — ${d.description}`
-    const sql = cleanSql(d.sql)
-    if (sql) line += ` [SQL: \`${sql}\`]`
-    lines.push(line)
-  }
-  lines.push('')
-
-  const baseView = exp.view_name || exploreName
-  const sampleDims = dimensions
-    .filter((d) => d.name?.startsWith(`${baseView}.`))
-    .slice(0, 2)
-    .map((d) => d.name!)
-  const sampleMeas = measures
-    .filter((m) => m.name?.startsWith(`${baseView}.`))
-    .slice(0, 2)
-    .map((m) => m.name!)
-  const sampleFields = [...sampleDims, ...sampleMeas]
-
-  if (sampleFields.length > 0) {
-    try {
-      const rows = (await sdk.ok(
-        sdk.run_inline_query({
-          result_format: 'json',
-          body: {
-            model: modelName,
-            view: exploreName,
-            fields: sampleFields,
-            limit: '5',
-          },
+  return coalesceLookerMetadataRequest(
+    `dense_explore_schema:${formatExploreId(modelName, exploreName)}`,
+    async () => {
+      const exp = await sdk.ok(
+        sdk.lookml_model_explore({
+          lookml_model_name: modelName,
+          explore_name: exploreName,
         })
-      )) as unknown as Record<string, any>[]
-      if (Array.isArray(rows) && rows.length > 0) {
-        lines.push(`## Sample Rows (${sampleFields.join(', ')})`)
-        lines.push('```json')
-        lines.push(JSON.stringify(rows, null, 2))
-        lines.push('```')
-      }
-    } catch {
-      // Non-fatal if sample query fails
-    }
-  }
+      )
+      const lines: string[] = [
+        `# Explore: \`${modelName}::${exploreName}\``,
+        exp.label ? `**Label:** ${exp.label}` : '',
+        exp.description ? `**Description:** ${exp.description}` : '',
+        '',
+      ].filter(Boolean)
 
-  return lines.join('\n')
+      if (exp.joins && exp.joins.length > 0) {
+        lines.push('## Joins')
+        for (const j of exp.joins) {
+          lines.push(`- \`${j.name}\` (${j.relationship || 'many_to_one'}, ${j.type || 'left_outer'})`)
+        }
+        lines.push('')
+      }
+
+      const fields = exp.fields || {}
+      const measures = (fields.measures || []).filter((f) => !f.hidden)
+      const dimensions = (fields.dimensions || []).filter((f) => !f.hidden)
+
+      lines.push(`## Measures (${measures.length})`)
+      for (const m of measures) {
+        const meta = [m.type, m.label ? `"${m.label}"` : ''].filter(Boolean).join(', ')
+        let line = `- \`${m.name}\` (${meta})`
+        if (m.description) line += ` — ${m.description}`
+        const sql = cleanSql(m.sql)
+        if (sql) line += ` [SQL: \`${sql}\`]`
+        lines.push(line)
+      }
+      lines.push('')
+
+      lines.push(`## Dimensions (${dimensions.length})`)
+      for (const d of dimensions) {
+        const meta = [d.type, d.label ? `"${d.label}"` : ''].filter(Boolean).join(', ')
+        let line = `- \`${d.name}\` (${meta})`
+        if (d.description) line += ` — ${d.description}`
+        const sql = cleanSql(d.sql)
+        if (sql) line += ` [SQL: \`${sql}\`]`
+        lines.push(line)
+      }
+      lines.push('')
+
+      const baseView = exp.view_name || exploreName
+      const sampleDims = dimensions
+        .filter((d) => d.name?.startsWith(`${baseView}.`))
+        .slice(0, 2)
+        .map((d) => d.name!)
+      const sampleMeas = measures
+        .filter((m) => m.name?.startsWith(`${baseView}.`))
+        .slice(0, 2)
+        .map((m) => m.name!)
+      const sampleFields = [...sampleDims, ...sampleMeas]
+
+      if (sampleFields.length > 0) {
+        try {
+          const rows = (await sdk.ok(
+            sdk.run_inline_query({
+              result_format: 'json',
+              body: {
+                model: modelName,
+                view: exploreName,
+                fields: sampleFields,
+                limit: '5',
+              },
+            })
+          )) as unknown as Record<string, any>[]
+          if (Array.isArray(rows) && rows.length > 0) {
+            lines.push(`## Sample Rows (${sampleFields.join(', ')})`)
+            lines.push('```json')
+            lines.push(JSON.stringify(rows, null, 2))
+            lines.push('```')
+          }
+        } catch {
+          // Non-fatal if sample query fails
+        }
+      }
+
+      return lines.join('\n')
+    }
+  )
 }

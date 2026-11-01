@@ -1195,11 +1195,12 @@ export function useStudioController() {
     if (conv.messages?.length) {
       setMessages(conv.messages as ChatMessage[], mode)
     }
-    if (conv.interactionId || conv.environmentId) {
+    if (conv.interactionId || conv.environmentId || sharedEnvIdRef.current) {
       setAgentSession(
         {
           lastInteractionId: conv.interactionId,
-          environmentId: conv.environmentId || `env_${mode}_isolated`,
+          environmentId: sharedEnvIdRef.current || conv.environmentId || `env_${mode}_isolated`,
+          conversationId: conv.id,
           explores: conv.explores,
           toolType: mode,
         },
