@@ -56,6 +56,11 @@ import {
   runAntigravityTurn,
   sanitizeConversationLabel,
 } from '../antigravity'
+import {
+  createLookerEmbedPreloadController,
+  normalizeLookerEmbedUrl,
+  resolveLookerEmbedTarget,
+} from '../components/StudioWorkspace'
 
 describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics', () => {
   test('1. evaluates Role = PermissionSet x ModelSet per role without cross-role model bleeding', () => {
@@ -1516,5 +1521,146 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     const stringEnvPosts = postedBodies.filter((b) => b.environment === sharedEnvId)
     expect(remoteSpecPosts.length).toBe(1)
     expect(stringEnvPosts.length).toBe(1)
+  })
+
+  test('17. preloads @looker/embed-sdk immediately on mount and reuses a single ILookerConnection across loadDashboard, asDashboardConnection().run(), loadLook, loadUrl, and /preload reset (Issue #45)', async () => {
+    expect(normalizeLookerEmbedUrl('/preload')).toBe('/preload')
+    expect(normalizeLookerEmbedUrl('/dashboards/42')).toBe('/embed/dashboards/42')
+    expect(
+      normalizeLookerEmbedUrl(
+        'https://dev-argolis.looker.com/embed/conversations/ca_1?agent_id=a1',
+        'https://dev-argolis.looker.com'
+      )
+    ).toBe('/embed/conversations/ca_1?agent_id=a1')
+
+    const attrs: Record<string, string> = {}
+    const fakeIframe: any = {
+      className: '',
+      title: '',
+      src: '',
+      srcdoc: '',
+      setAttribute: (k: string, v: string) => {
+        attrs[`iframe:${k}`] = v
+        if (k === 'src') fakeIframe.src = v
+      },
+      getAttribute: (k: string) => attrs[`iframe:${k}`] || '',
+      removeAttribute: (k: string) => {
+        delete attrs[`iframe:${k}`]
+      },
+    }
+    const fakeContainer: any = {
+      setAttribute: (k: string, v: string) => {
+        attrs[k] = v
+      },
+      querySelector: (sel: string) => (sel === 'iframe' ? fakeIframe : null),
+    }
+
+    const ctl = createLookerEmbedPreloadController({
+      hostUrl: 'https://dev-argolis.looker.com',
+      container: fakeContainer,
+      mockPreviewHtml: (mode, objectId) => `<html><body>${mode}:${objectId}</body></html>`,
+    })
+
+    const conn0 = await ctl.connectionPromise
+    expect(ctl.getTelemetry().state).toBe('preloaded')
+    expect(ctl.getTelemetry().target).toBe('/preload')
+    expect(ctl.getTelemetry().calls).toEqual([
+      { method: 'init', arg: 'https://dev-argolis.looker.com' },
+      { method: 'preload', arg: '/embed/preload' },
+    ])
+
+    // 1. Initial empty conversation stays on preloaded connection without extra loadUrl call
+    const tEmpty = resolveLookerEmbedTarget({ isEmptyConversation: true, nonce: 0 })
+    const connEmpty = await ctl.syncTarget(tEmpty)
+    expect(connEmpty).toBe(conn0)
+    expect(ctl.getTelemetry().loadCount).toBe(0)
+
+    // 2. Load Data App Dashboard #42 via connection.loadDashboard
+    const tApp42 = resolveLookerEmbedTarget({
+      builderMode: 'data_app',
+      publishedApp: { dashboardId: '42' },
+      nonce: 1,
+    })
+    const connApp42 = await ctl.syncTarget(tApp42)
+    expect(connApp42).toBe(conn0)
+    expect(attrs['data-embed-state']).toBe('dashboard')
+    expect(attrs['data-embed-target']).toBe('42')
+    expect(fakeIframe.srcdoc).toContain('data_app:42')
+
+    // 3. Warm-turn update on same Dashboard #42 triggers connection.asDashboardConnection().run()
+    const tApp42Warm = resolveLookerEmbedTarget({
+      builderMode: 'data_app',
+      publishedApp: { dashboardId: '42' },
+      nonce: 2,
+    })
+    const connApp42Warm = await ctl.syncTarget(tApp42Warm)
+    expect(connApp42Warm).toBe(conn0)
+    expect(ctl.getTelemetry().calls).toContainEqual({
+      method: 'asDashboardConnection.run',
+      arg: '42',
+    })
+    expect(ctl.getTelemetry().runCount).toBeGreaterThanOrEqual(2)
+
+    // 4. Switch to Saved Look #15 via connection.loadLook
+    const tLook15 = resolveLookerEmbedTarget({
+      builderMode: 'dashboard',
+      nativeContent: {
+        id: '15',
+        lookId: '15',
+        contentType: 'look',
+        embedPath: '/embed/looks/15',
+      },
+      nonce: 2,
+    })
+    const connLook15 = await ctl.syncTarget(tLook15)
+    expect(connLook15).toBe(conn0)
+    expect(attrs['data-embed-state']).toBe('look')
+    expect(attrs['data-embed-target']).toBe('15')
+
+    // 5. Switch to LookML Dashboard via connection.loadUrl
+    const tLookmlDash = resolveLookerEmbedTarget({
+      builderMode: 'dashboard',
+      nativeContent: {
+        id: 'thelook::executive_pulse',
+        lookmlDashboardId: 'thelook::executive_pulse',
+        contentType: 'lookml_dashboard',
+        embedPath: '/embed/dashboards/thelook::executive_pulse',
+      },
+      nonce: 2,
+    })
+    await ctl.syncTarget(tLookmlDash)
+    expect(attrs['data-embed-state']).toBe('url')
+    expect(attrs['data-embed-target']).toBe('/embed/dashboards/thelook::executive_pulse')
+
+    // 6. Switch to Conversational Analytics via connection.loadUrl
+    const tCa = resolveLookerEmbedTarget({
+      isCaMode: true,
+      caConversation: {
+        caConversationId: 'ca_conv_streaming_1',
+        embedPath: '/embed/conversations/ca_conv_streaming_1?agent_id=ca_agent_ecommerce',
+      },
+      nonce: 3,
+    })
+    await ctl.syncTarget(tCa)
+    expect(attrs['data-embed-state']).toBe('url')
+    expect(attrs['iframe:data-testid']).toBe('ca-embed-iframe')
+    expect(fakeIframe.srcdoc).toContain('conversational-analytics:ca_conv_streaming_1')
+
+    // 7. Reset to New Conversation -> resets connection to /preload in-place
+    const tReset = resolveLookerEmbedTarget({ isEmptyConversation: true, nonce: 4 })
+    await ctl.syncTarget(tReset)
+    expect(attrs['data-embed-state']).toBe('preloaded')
+    expect(attrs['data-embed-target']).toBe('/preload')
+    expect(attrs['iframe:data-testid']).toBeUndefined()
+    expect(ctl.getTelemetry().calls.map((c) => c.method)).toEqual([
+      'init',
+      'preload',
+      'loadDashboard',
+      'asDashboardConnection.run',
+      'loadLook',
+      'loadUrl',
+      'loadUrl',
+      'loadUrl',
+    ])
   })
 })

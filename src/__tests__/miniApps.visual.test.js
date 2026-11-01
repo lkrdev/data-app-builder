@@ -1966,4 +1966,157 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       showsUnboundMessage: true
     })
   }, 15000)
+
+  test('preloads @looker/embed-sdk immediately on empty centered stage and reuses the single iframe DOM node across loadDashboard, asDashboardConnection().run(), loadLook, loadUrl, and + New Conversation (Issue #45)', async () => {
+    const url = `http://127.0.0.1:${port}/?scenario=centered_empty_prompt`
+    await chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && window.__LOOKER_EMBED_STATE__ && document.querySelector('[data-testid="looker-embed-container"] iframe'))`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    const res = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const container = document.querySelector('[data-testid="looker-embed-container"]');
+        const iframe0 = container ? container.querySelector('iframe') : null;
+        const initialEmbedState = {
+          state: container ? container.getAttribute('data-embed-state') : null,
+          target: container ? container.getAttribute('data-embed-target') : null,
+          hasCenteredPrompt: Boolean(document.querySelector('[data-testid="centered-empty-prompt"]'))
+        };
+
+        // 1. Select Data App #42 from sidebar -> connection.loadDashboard({ id: '42' })
+        const convApp42 = document.querySelector('[data-testid="conversation-item-conv_app_42"]');
+        if (convApp42) convApp42.click();
+        await new Promise((r) => setTimeout(r, 180));
+        const afterApp42 = {
+          state: container.getAttribute('data-embed-state'),
+          target: container.getAttribute('data-embed-target'),
+          sameIframe: container.querySelector('iframe') === iframe0
+        };
+
+        // 2. Click Reload Preview on same Dashboard #42 -> connection.asDashboardConnection().run()
+        const reloadBtn = Array.from(document.querySelectorAll('.dab-preview-actions button')).find(
+          (b) => (b.textContent || '').includes('Reload Preview')
+        );
+        if (reloadBtn) reloadBtn.click();
+        await new Promise((r) => setTimeout(r, 120));
+        const afterWarmRun = {
+          hasDashboardRunCall: (window.__LOOKER_EMBED_STATE__?.calls || []).some(
+            (c) => c.method === 'asDashboardConnection.run' && c.arg === '42'
+          ),
+          sameIframe: container.querySelector('iframe') === iframe0
+        };
+
+        // 3. Switch to Native UDD #7 from sidebar -> connection.loadDashboard({ id: '7' })
+        const convDash7 = document.querySelector('[data-testid="conversation-item-conv_dashboard_7"]');
+        if (convDash7) convDash7.click();
+        await new Promise((r) => setTimeout(r, 180));
+        const afterDash7 = {
+          state: container.getAttribute('data-embed-state'),
+          target: container.getAttribute('data-embed-target'),
+          sameIframe: container.querySelector('iframe') === iframe0
+        };
+
+        // 4. Switch to Saved Look #15 in Content Studio -> connection.loadLook({ id: '15' })
+        window.__DAB_STUDIO__.setNativeContent({
+          id: '15',
+          lookId: '15',
+          contentType: 'look',
+          title: 'Top Customers Look',
+          embedPath: '/embed/looks/15',
+          folderId: '5'
+        });
+        await new Promise((r) => setTimeout(r, 120));
+        const afterLook15 = {
+          state: container.getAttribute('data-embed-state'),
+          target: container.getAttribute('data-embed-target'),
+          sameIframe: container.querySelector('iframe') === iframe0
+        };
+
+        // 5. Switch to LookML Dashboard -> connection.loadUrl({ url: '/embed/dashboards/thelook::executive_pulse' })
+        window.__DAB_STUDIO__.setNativeContent({
+          id: 'thelook::executive_pulse',
+          lookmlDashboardId: 'thelook::executive_pulse',
+          contentType: 'lookml_dashboard',
+          title: 'Executive Pulse (LookML)',
+          embedPath: '/embed/dashboards/thelook::executive_pulse',
+          folderId: '5'
+        });
+        await new Promise((r) => setTimeout(r, 120));
+        const afterLookmlDash = {
+          state: container.getAttribute('data-embed-state'),
+          target: container.getAttribute('data-embed-target'),
+          sameIframe: container.querySelector('iframe') === iframe0
+        };
+
+        // 6. Click + New Conversation -> connection.loadUrl({ url: '/preload' }) while keeping same iframe warm
+        const newBtn = document.querySelector('[data-testid="new-conversation-btn"]');
+        if (newBtn) newBtn.click();
+        await new Promise((r) => setTimeout(r, 140));
+        const afterReset = {
+          state: container.getAttribute('data-embed-state'),
+          target: container.getAttribute('data-embed-target'),
+          sameIframe: container.querySelector('iframe') === iframe0,
+          hasCenteredPrompt: Boolean(document.querySelector('[data-testid="centered-empty-prompt"]'))
+        };
+
+        return {
+          initialEmbedState,
+          afterApp42,
+          afterWarmRun,
+          afterDash7,
+          afterLook15,
+          afterLookmlDash,
+          afterReset
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(res.result.value).toEqual({
+      initialEmbedState: {
+        state: 'preloaded',
+        target: '/preload',
+        hasCenteredPrompt: true
+      },
+      afterApp42: {
+        state: 'dashboard',
+        target: '42',
+        sameIframe: true
+      },
+      afterWarmRun: {
+        hasDashboardRunCall: true,
+        sameIframe: true
+      },
+      afterDash7: {
+        state: 'dashboard',
+        target: '7',
+        sameIframe: true
+      },
+      afterLook15: {
+        state: 'look',
+        target: '15',
+        sameIframe: true
+      },
+      afterLookmlDash: {
+        state: 'url',
+        target: '/embed/dashboards/thelook::executive_pulse',
+        sameIframe: true
+      },
+      afterReset: {
+        state: 'preloaded',
+        target: '/preload',
+        sameIframe: true,
+        hasCenteredPrompt: true
+      }
+    })
+  }, 15000)
 })
