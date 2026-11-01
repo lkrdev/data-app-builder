@@ -318,6 +318,7 @@ function buildHtmlPage(scenario) {
         python_tile_studio: '/tile/demo1',
         tile_mount_view: '/app',
         tile_mount_edit: '/app',
+        tile_mount_unbound: '/app',
         config_page: '/config',
         explore_dropdown_open_top: '/app/42',
         explore_dropdown_scrolled: '/app/42',
@@ -330,7 +331,10 @@ function buildHtmlPage(scenario) {
         centered_empty_prompt: '/app'
       };
 
-      const isTile = scenario === 'tile_mount_view' || scenario === 'tile_mount_edit';
+      const isTile =
+        scenario === 'tile_mount_view' ||
+        scenario === 'tile_mount_edit' ||
+        scenario === 'tile_mount_unbound';
 
       const mockCore40SDK = {
         ok: async (p) => p,
@@ -557,7 +561,22 @@ function buildHtmlPage(scenario) {
           window.__UPDATED_LOCATIONS__ = window.__UPDATED_LOCATIONS__ || [];
           window.__UPDATED_LOCATIONS__.push({ url, state, target });
         },
-        rendered: () => {},
+        rendered: () => {
+          window.__RENDERED_CALLS__ = window.__RENDERED_CALLS__ || [];
+          const tableEl = document.querySelector('.dab-tile-table, .dab-py-table');
+          const markdownEl = document.querySelector('.dab-py-markdown');
+          const idleEl = document.querySelector('.dab-tile-idle');
+          const editEl = document.querySelector('.dab-tile-edit');
+          window.__RENDERED_CALLS__.push({
+            hasTableInDom: Boolean(tableEl),
+            tableRowCount: tableEl ? tableEl.querySelectorAll('tbody tr').length : 0,
+            tableText: tableEl ? (tableEl.innerText || '').trim() : '',
+            hasMarkdownInDom: Boolean(markdownEl),
+            hasIdleInDom: Boolean(idleEl),
+            hasEditInDom: Boolean(editEl),
+            bodyText: document.body ? (document.body.innerText || '').trim() : ''
+          });
+        },
         updateTitle: () => {},
         serverProxy: async (url, init) => {
           window.__INTERACTION_CALLS__ = window.__INTERACTION_CALLS__ || [];
@@ -640,10 +659,10 @@ function buildHtmlPage(scenario) {
         core40SDK: mockCore40SDK,
         lookerHostData: mockExtensionSDK.lookerHostData,
         tileHostData: isTile ? {
-          elementId: '57',
+          elementId: scenario === 'tile_mount_unbound' ? '999' : '57',
           dashboardId: '8',
           isDashboardEditing: scenario === 'tile_mount_edit',
-          dashboardRunState: 'RUNNING',
+          dashboardRunState: 'NOT_RUNNING',
           dashboardFilters: { status: 'Complete', model: 'thelook' }
         } : undefined,
         getMockPreviewHtml: (mode, objectId) => {
@@ -1854,6 +1873,97 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       spartanLabel: '⤡ Exit Full Screen',
       calls: [{ url: '/extensions/data_app_builder::data_app_builder/app/42', state: undefined, target: '_top' }],
       hiddenInTile: true
+    })
+  }, 15000)
+
+  test('auto-executes bound Python script on initial tile mount (when dashboardRunState is NOT_RUNNING), fires extensionSDK.rendered() only after DOM paint, re-executes on dashboardFilters and dashboardRunState -> RUNNING changes, and fires rendered() on unbound tile fallback', async () => {
+    const waitForRenderedCount = async (minCount) => {
+      const deadline = Date.now() + 8000
+      while (Date.now() < deadline) {
+        const r = await chrome.send('Runtime.evaluate', {
+          expression: `Boolean(window.__RENDERED_CALLS__ && window.__RENDERED_CALLS__.length >= ${minCount})`,
+          returnByValue: true
+        })
+        if (r.result?.value) break
+        await new Promise((res) => setTimeout(res, 50))
+      }
+    }
+
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=tile_mount_view` })
+    await waitForRenderedCount(1)
+
+    const boundRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const waitCalls = async (n) => {
+          const d = Date.now() + 4000;
+          while (Date.now() < d && window.__RENDERED_CALLS__.length < n) {
+            await new Promise((r) => setTimeout(r, 40));
+          }
+        };
+        const initialCall = window.__RENDERED_CALLS__[0];
+
+        window.__MOCK_LOOKER_EXTENSION__.setTileHostData((prev) => ({
+          ...prev,
+          dashboardRunState: 'NOT_RUNNING',
+          dashboardFilters: { status: 'Cancelled', model: 'thelook' }
+        }));
+        await waitCalls(2);
+        const afterFilterCall = window.__RENDERED_CALLS__[1];
+
+        window.__MOCK_LOOKER_EXTENSION__.setTileHostData((prev) => ({
+          ...prev,
+          dashboardRunState: 'RUNNING'
+        }));
+        await waitCalls(3);
+        const afterRunStateCall = window.__RENDERED_CALLS__[2];
+
+        return {
+          totalRenderedCalls: window.__RENDERED_CALLS__.length,
+          initialHasTable: initialCall?.hasTableInDom,
+          initialRowCount: initialCall?.tableRowCount,
+          initialHasComplete: (initialCall?.tableText || '').includes('Complete'),
+          filterHasTable: afterFilterCall?.hasTableInDom,
+          filterHasCancelled: (afterFilterCall?.tableText || '').includes('Cancelled'),
+          runStateHasTable: afterRunStateCall?.hasTableInDom,
+          runStateHasCancelled: (afterRunStateCall?.tableText || '').includes('Cancelled')
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(boundRes.result.value).toEqual({
+      totalRenderedCalls: 3,
+      initialHasTable: true,
+      initialRowCount: 2,
+      initialHasComplete: true,
+      filterHasTable: true,
+      filterHasCancelled: true,
+      runStateHasTable: true,
+      runStateHasCancelled: true
+    })
+
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=tile_mount_unbound` })
+    await waitForRenderedCount(1)
+
+    const unboundRes = await chrome.send('Runtime.evaluate', {
+      expression: `(() => {
+        const call = (window.__RENDERED_CALLS__ || [])[0];
+        return {
+          renderedCount: (window.__RENDERED_CALLS__ || []).length,
+          hasTableInDom: Boolean(call?.hasTableInDom),
+          hasIdleInDom: Boolean(call?.hasIdleInDom),
+          showsUnboundMessage: (call?.bodyText || '').includes('No script bound to tile #999')
+        };
+      })()`,
+      returnByValue: true
+    })
+
+    expect(unboundRes.result.value).toEqual({
+      renderedCount: 1,
+      hasTableInDom: false,
+      hasIdleInDom: true,
+      showsUnboundMessage: true
     })
   }, 15000)
 })

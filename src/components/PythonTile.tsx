@@ -87,7 +87,7 @@ export const ScriptOutputRenderer: React.FC<{ output: string }> = ({ output }) =
     const columns: string[] = Array.from(colSet)
     return (
       <div className="dab-py-table-wrap">
-        <table className="dab-py-table">
+        <table className="dab-py-table dab-tile-table">
           <thead>
             <tr>
               {columns.map((col) => (
@@ -132,16 +132,21 @@ export const PythonTile: React.FC = () => {
   const { extensionSDK, core40SDK, tileHostData } = useLookerExtension()
   const elementId = String(tileHostData?.elementId || '')
   const isEditing = Boolean(tileHostData?.isDashboardEditing)
-  const dashboardFilters = tileHostData?.dashboardFilters || {}
   const dashboardRunState = tileHostData?.dashboardRunState
+  const filtersJson = JSON.stringify(tileHostData?.dashboardFilters || {})
 
   const [scripts, setScripts] = useState<SavedScript[]>([])
   const [binding, setBinding] = useState<TileScriptBinding | null>(null)
+  const [bindingLoaded, setBindingLoaded] = useState(false)
   const [selectedScriptId, setSelectedScriptId] = useState('')
   const [output, setOutput] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
+  const [completedRunCount, setCompletedRunCount] = useState(0)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
-  const lastRunStateRef = useRef<string | undefined>(undefined)
+  const runningRef = useRef(false)
+  const initialRunCompletedRef = useRef(false)
+  const lastRunStateRef = useRef<string | undefined>(dashboardRunState)
+  const lastFiltersJsonRef = useRef<string>(filtersJson)
 
   useEffect(() => {
     extensionSDK?.updateTitle?.('')
@@ -150,18 +155,18 @@ export const PythonTile: React.FC = () => {
   // Load tile binding and (when in edit mode) available scripts
   useEffect(() => {
     let mounted = true
+    setBindingLoaded(false)
+    initialRunCompletedRef.current = false
     const load = async () => {
-      if (elementId) {
-        const loadedBinding = await loadTileScriptArtifact(core40SDK, elementId)
-        if (mounted && loadedBinding) {
-          setBinding(loadedBinding)
-          setSelectedScriptId(loadedBinding.scriptId)
-        }
-      }
-      if (isEditing) {
-        const list = await listSavedScripts(core40SDK)
-        if (mounted) setScripts(list)
-      }
+      const loadedBinding = elementId
+        ? await loadTileScriptArtifact(core40SDK, elementId).catch(() => null)
+        : null
+      const list = isEditing ? await listSavedScripts(core40SDK).catch(() => []) : null
+      if (!mounted) return
+      setBinding(loadedBinding)
+      setSelectedScriptId(loadedBinding?.scriptId || '')
+      if (list) setScripts(list)
+      setBindingLoaded(true)
     }
     load()
     return () => {
@@ -169,36 +174,110 @@ export const PythonTile: React.FC = () => {
     }
   }, [core40SDK, elementId, isEditing])
 
-  const executeBoundScript = useCallback(async () => {
-    if (!binding?.code || running) return
-    setRunning(true)
-    try {
-      const out = await LkrCodeMode.runPythonCode({
-        code: binding.code,
-        sdk: core40SDK,
-        extensionSDK,
-        vars: {
-          dashboard_filters: dashboardFilters,
-        },
-      })
-      setOutput(out)
-    } catch (err: any) {
-      setOutput(JSON.stringify({ error: err?.message || String(err) }))
-    } finally {
-      setRunning(false)
+  const executeBoundScript = useCallback(
+    async (
+      overrideBinding?: TileScriptBinding | null,
+      overrideFilters?: Record<string, any>
+    ) => {
+      const activeBinding =
+        overrideBinding && typeof (overrideBinding as any).code === 'string'
+          ? overrideBinding
+          : binding
+      if (!activeBinding?.code || runningRef.current) return
+      const dashboardFilters =
+        overrideFilters && typeof overrideFilters === 'object'
+          ? overrideFilters
+          : tileHostData?.dashboardFilters || {}
+      runningRef.current = true
+      setRunning(true)
+      try {
+        const out = await LkrCodeMode.runPythonCode({
+          code: activeBinding.code,
+          sdk: core40SDK,
+          extensionSDK,
+          vars: {
+            dashboard_filters: dashboardFilters,
+          },
+        })
+        setOutput(out)
+      } catch (err: any) {
+        setOutput(JSON.stringify({ error: err?.message || String(err) }))
+      } finally {
+        setCompletedRunCount((c) => c + 1)
+        runningRef.current = false
+        setRunning(false)
+      }
+    },
+    [binding, core40SDK, extensionSDK, tileHostData?.dashboardFilters]
+  )
+
+  // Auto-execute once on initial load when binding.code resolves, and re-execute on dashboardRunState -> 'RUNNING' or dashboardFilters change
+  useEffect(() => {
+    const prevRunState = lastRunStateRef.current
+    lastRunStateRef.current = dashboardRunState
+    if (isEditing || !bindingLoaded || !binding?.code) return
+
+    if (!initialRunCompletedRef.current) {
+      initialRunCompletedRef.current = true
+      lastFiltersJsonRef.current = filtersJson
+      executeBoundScript(binding, tileHostData?.dashboardFilters)
+      return
+    }
+
+    const runStateTriggered =
+      dashboardRunState === 'RUNNING' && prevRunState !== 'RUNNING'
+    const filtersChanged = filtersJson !== lastFiltersJsonRef.current
+    if (filtersChanged) {
+      lastFiltersJsonRef.current = filtersJson
+    }
+    if (runStateTriggered || filtersChanged) {
+      executeBoundScript(binding, tileHostData?.dashboardFilters)
+    }
+  }, [
+    binding,
+    bindingLoaded,
+    dashboardRunState,
+    executeBoundScript,
+    filtersJson,
+    isEditing,
+    tileHostData?.dashboardFilters,
+  ])
+
+  // Notify Looker host (PDF/PNG renderer & Scheduled Plans) only after React commits and browser paints DOM
+  useEffect(() => {
+    const readyAfterRun = !isEditing && !running && output !== null
+    const readyWithoutRun = bindingLoaded && (!binding?.code || isEditing)
+    if (!readyAfterRun && !readyWithoutRun) return
+
+    const fireRendered = () => {
       extensionSDK?.rendered?.()
     }
-  }, [binding?.code, core40SDK, dashboardFilters, extensionSDK, running])
-
-  // Trigger script execution when Looker's native dashboard Run button fires
-  useEffect(() => {
-    if (isEditing || !binding?.code) return
-    const prev = lastRunStateRef.current
-    lastRunStateRef.current = dashboardRunState
-    if (dashboardRunState === 'RUNNING' && prev !== 'RUNNING') {
-      executeBoundScript()
+    if (
+      typeof window !== 'undefined' &&
+      typeof window.requestAnimationFrame === 'function'
+    ) {
+      let raf2 = 0
+      const raf1 = window.requestAnimationFrame(() => {
+        raf2 = window.requestAnimationFrame(fireRendered)
+      })
+      return () => {
+        if (typeof window.cancelAnimationFrame === 'function') {
+          window.cancelAnimationFrame(raf1)
+          if (raf2) window.cancelAnimationFrame(raf2)
+        }
+      }
     }
-  }, [dashboardRunState, isEditing, binding?.code, executeBoundScript])
+    const timer = setTimeout(fireRendered, 0)
+    return () => clearTimeout(timer)
+  }, [
+    binding?.code,
+    bindingLoaded,
+    completedRunCount,
+    extensionSDK,
+    isEditing,
+    output,
+    running,
+  ])
 
   const handleBindScript = async (scriptId: string) => {
     setSelectedScriptId(scriptId)
@@ -255,7 +334,7 @@ export const PythonTile: React.FC = () => {
           <button
             type="button"
             className="dab-tile-run-floating"
-            onClick={executeBoundScript}
+            onClick={() => executeBoundScript()}
             disabled={running || !binding?.code}
             title="Re-run Python script with current dashboard_filters"
           >
@@ -269,7 +348,7 @@ export const PythonTile: React.FC = () => {
             <button
               type="button"
               className="dab-btn-primary"
-              onClick={executeBoundScript}
+              onClick={() => executeBoundScript()}
               disabled={running}
             >
               {running ? 'Running Python…' : '▶ Run Script'}
