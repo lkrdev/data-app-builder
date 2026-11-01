@@ -67,14 +67,19 @@ export * from './antigravityPrompts'
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 export const LkrCodeMode = require('./vendor/codemode.js')
 
-// Expose optional `vars: { type: "object" }` on RUN_LOOKER_CODEMODE_TOOL so Antigravity can pass
-// script variables (project_id, ts_utc, raw_sql, inline_queries_json, test_queries_json, commit_message, etc.)
+// Expose optional `vars: { type: "object" }` and required `thought: { type: "string" }` on RUN_LOOKER_CODEMODE_TOOL
 if (LkrCodeMode?.RUN_LOOKER_CODEMODE_TOOL?.parameters?.properties) {
   LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.properties.vars = {
     type: 'object',
     description:
       'Optional dictionary of top-level variables to inject into the Monty Python sandbox (e.g. project_id, ts_utc, raw_sql, inline_queries_json, test_queries_json, file_ids, test_names, commit_message).',
   }
+  LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.properties.thought = {
+    type: 'string',
+    description:
+      'Required concise 1-sentence summary of what this Code Mode snippet is doing with the Looker API calls (e.g. "Querying monthly revenue and brand share from thelook::order_items" or "Creating executive KPI dashboard with 4 tiles").',
+  }
+  LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.required = ['code', 'thought']
 }
 
 export interface AntigravityModelOption {
@@ -141,6 +146,16 @@ export interface CodeModePermissionRequest {
   httpMethod: string
   path: string
   args: { params?: any; body?: any }
+  thought?: string
+}
+
+export interface AntigravityActivityStep {
+  id: string
+  kind: 'thought' | 'codemode' | 'cli_bridge' | 'code_execution' | 'file' | 'skill'
+  title: string
+  detail?: string
+  language?: string
+  status?: 'running' | 'done'
 }
 
 export interface PastedImage {
@@ -553,15 +568,385 @@ export function extractNativeContentFromInteraction(
   return null
 }
 
+const KNOWN_LOOKER_SDK_CALL_RE =
+  /\b(?:sdk\.([a-z_][a-z0-9_]*)|(run_inline_query|lookml_model_explore|lookml_model|all_lookml_models|search_content|search_dashboards|search_looks|create_dashboard|update_dashboard|dashboard_dashboard_layouts|update_dashboard_layout_component|create_dashboard_element|update_dashboard_element|create_dashboard_filter|update_dashboard_filter|create_query|create_look|create_board|update_board|create_board_section|create_board_item|create_scheduled_plan|upsert_udd|upsert_lookml_dashboard|reflow_24col|pin_to_board|schedule_dashboard|emit_native_bundle|validate_project|run_lookml_test|create_sql_query|run_sql_query|all_project_files|get_file_content|create_file|update_file|delete_file|create_project_directory|update_session|git_branch|import_lookml_dashboard|sync_lookml_dashboard|me|user_roles|all_folders))\s*\(/gi
+
+const CODEMODE_MACROS = new Set([
+  'upsert_udd',
+  'upsert_lookml_dashboard',
+  'reflow_24col',
+  'pin_to_board',
+  'schedule_dashboard',
+  'emit_native_bundle',
+])
+
+function extractLookerSdkMethodPreview(code: string): string {
+  const src = String(code || '')
+  if (!src) return ''
+  const seen = new Set<string>()
+  for (const m of src.matchAll(KNOWN_LOOKER_SDK_CALL_RE)) {
+    const rawName = m[1] || m[2]
+    if (!rawName) continue
+    const formatted = m[1]
+      ? `sdk.${m[1]}`
+      : CODEMODE_MACROS.has(rawName)
+      ? rawName
+      : `sdk.${rawName}`
+    seen.add(formatted)
+  }
+  return Array.from(seen).join(', ')
+}
+
+function parseStepArguments(raw: any): Record<string, any> {
+  if (!raw) return {}
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw)
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+  return {}
+}
+
+export function extractInteractionActivitySteps(interaction: any): AntigravityActivityStep[] {
+  const rawSteps: any[] = Array.isArray(interaction?.steps) ? interaction.steps : []
+  const rawOutputs: any[] = Array.isArray(interaction?.outputs) ? interaction.outputs : []
+  const completedCallIds = new Set<string>(
+    rawSteps
+      .filter((s) => s?.type === 'function_result' || s?.type === 'tool_result')
+      .map((s) => String(s?.call_id || s?.id || '').trim())
+      .filter(Boolean)
+  )
+  const interactionDone =
+    interaction?.status === 'completed' ||
+    interaction?.status === 'failed' ||
+    interaction?.status === 'cancelled'
+
+  const byKey = new Map<string, AntigravityActivityStep>()
+  const seenContent = new Set<string>()
+  const seenKindTitle = new Set<string>()
+  let autoIdx = 0
+
+  const upsertStep = (step: AntigravityActivityStep, explicitId?: string) => {
+    const contentKey = `${step.kind}:${step.title}:${step.detail || ''}`
+    const kindTitleKey = `${step.kind}:${step.title}`
+    const mapKey = explicitId || contentKey
+    const existing = byKey.get(mapKey)
+    if (existing) {
+      if (step.status === 'done') existing.status = 'done'
+      if (step.detail && !existing.detail) existing.detail = step.detail
+      return
+    }
+    if (seenContent.has(contentKey) || (!step.detail && seenKindTitle.has(kindTitleKey))) return
+    seenContent.add(contentKey)
+    seenKindTitle.add(kindTitleKey)
+    byKey.set(mapKey, step)
+  }
+
+  for (let i = 0; i < rawSteps.length; i++) {
+    const step = rawSteps[i]
+    if (!step || typeof step !== 'object') continue
+    const sType = String(step.type || '').trim()
+    if (sType === 'function_result' || sType === 'tool_result') continue
+
+    const explicitId = step.id ? String(step.id).trim() : undefined
+    const stepId = explicitId || `step_${++autoIdx}`
+    const isLastStep = i === rawSteps.length - 1
+    const fnName = String(step.name || step.function_call?.name || '').trim()
+
+    const resolveStatus = (isFunctionCall = false): 'running' | 'done' => {
+      if (step.status === 'running' || step.status === 'in_progress') return 'running'
+      if (step.status === 'done' || step.status === 'completed') return 'done'
+      if (interactionDone) return 'done'
+      if (isFunctionCall && explicitId) {
+        if (completedCallIds.has(explicitId)) return 'done'
+        if (interaction?.status === 'requires_action' || isLastStep) return 'running'
+      }
+      if (interaction?.status === 'in_progress' && isLastStep) return 'running'
+      return 'done'
+    }
+
+    // 1. Thought steps
+    if (
+      sType === 'thought' ||
+      sType === 'thinking' ||
+      (step.thought &&
+        sType !== 'function_call' &&
+        sType !== 'run_looker_codemode' &&
+        sType !== 'lkr_cli_extension_bridge')
+    ) {
+      const tObj = typeof step.thought === 'object' && step.thought !== null ? step.thought : null
+      const summary = String(tObj?.summary ?? step.summary ?? '').trim()
+      const text = String(
+        tObj?.text ?? (typeof step.thought === 'string' ? step.thought : '') ?? step.text ?? ''
+      ).trim()
+      const title = summary || text
+      if (title) {
+        const detail = summary && text && text !== summary ? text : undefined
+        upsertStep(
+          {
+            id: stepId,
+            kind: 'thought',
+            title,
+            ...(detail ? { detail } : {}),
+            status: resolveStatus(false),
+          },
+          explicitId
+        )
+      }
+      continue
+    }
+
+    // 2. File steps (view_file_call, edit_file_call)
+    if (
+      sType === 'view_file_call' ||
+      sType === 'edit_file_call' ||
+      step.view_file_call ||
+      step.edit_file_call ||
+      (sType === 'function_call' && /^(?:view_file|edit_file|read_file|write_file)(?:_call)?$/.test(fnName))
+    ) {
+      const nested = step.view_file_call || step.edit_file_call || step.function_call || {}
+      const args = parseStepArguments(step.arguments ?? step.args ?? nested.arguments ?? nested.args)
+      const targetPath = String(
+        step.path ||
+          step.file_path ||
+          step.target ||
+          nested.path ||
+          nested.file_path ||
+          nested.target ||
+          args.path ||
+          args.file_path ||
+          args.target ||
+          ''
+      ).trim()
+      const desc = String(step.description || nested.description || args.description || '').trim()
+      const isEdit = sType.includes('edit') || fnName.includes('edit') || fnName.includes('write')
+      const title =
+        targetPath && desc
+          ? `${targetPath} — ${desc}`
+          : targetPath || desc || (isEdit ? 'Editing file' : 'Viewing file')
+      const detail = desc || targetPath || undefined
+      upsertStep(
+        {
+          id: stepId,
+          kind: 'file',
+          title,
+          ...(detail ? { detail } : {}),
+          status: resolveStatus(true),
+        },
+        explicitId
+      )
+      continue
+    }
+
+    // 3. Skill steps (skill_lookup_call, lookup_skill)
+    if (
+      sType === 'skill_lookup_call' ||
+      sType === 'lookup_skill' ||
+      step.skill_lookup_call ||
+      (sType === 'function_call' && /^(?:skill_lookup|lookup_skill)(?:_call)?$/.test(fnName))
+    ) {
+      const nested = step.skill_lookup_call || step.function_call || {}
+      const args = parseStepArguments(step.arguments ?? step.args ?? nested.arguments ?? nested.args)
+      const rawSkill =
+        step.skill ||
+        step.skill_name ||
+        nested.skill ||
+        nested.skill_name ||
+        (nested.name && !/^(?:skill_lookup|lookup_skill)(?:_call)?$/.test(nested.name) ? nested.name : '') ||
+        args.skill ||
+        args.skill_name ||
+        (args.name && !/^(?:skill_lookup|lookup_skill)(?:_call)?$/.test(args.name) ? args.name : '') ||
+        (step.name && !/^(?:skill_lookup|lookup_skill)(?:_call)?$/.test(step.name) ? step.name : '') ||
+        step.target ||
+        args.target ||
+        ''
+      const skillName = String(rawSkill).trim()
+      const desc = String(step.description || nested.description || args.description || '').trim()
+      const title =
+        skillName && desc ? `${skillName} — ${desc}` : skillName || desc || 'Skill lookup'
+      const detail = desc || skillName || undefined
+      upsertStep(
+        {
+          id: stepId,
+          kind: 'skill',
+          title,
+          ...(detail ? { detail } : {}),
+          status: resolveStatus(true),
+        },
+        explicitId
+      )
+      continue
+    }
+
+    // 4. Function call steps: run_looker_codemode / lkr_cli_extension_bridge
+    if (
+      fnName === 'run_looker_codemode' ||
+      sType === 'run_looker_codemode' ||
+      fnName === 'lkr_cli_extension_bridge' ||
+      sType === 'lkr_cli_extension_bridge'
+    ) {
+      const isBridge = fnName === 'lkr_cli_extension_bridge' || sType === 'lkr_cli_extension_bridge'
+      const args = parseStepArguments(
+        step.arguments ?? step.args ?? step.function_call?.arguments ?? step.function_call?.args ?? step
+      )
+      const thought = String(args.thought || step.thought || '').trim()
+      const codeStr = String(args.code || step.code || '').trim()
+      const sdkPreview = extractLookerSdkMethodPreview(codeStr)
+      if (isBridge) {
+        const method = String(args.method || step.method || '').trim().toUpperCase()
+        const pathStr = String(args.path || step.path || '').trim()
+        const methodPath = method || pathStr ? `${method || 'GET'} ${pathStr || '/'}` : ''
+        const title =
+          thought ||
+          methodPath ||
+          (sdkPreview ? `Looker CLI Bridge (${sdkPreview})` : 'Executing bridged Looker CLI request')
+        const detail =
+          methodPath ||
+          sdkPreview ||
+          (codeStr ? codeStr.split('\n')[0].trim().slice(0, 140) : undefined)
+        upsertStep(
+          {
+            id: stepId,
+            kind: 'cli_bridge',
+            title,
+            ...(detail ? { detail } : {}),
+            ...(codeStr ? { language: 'PYTHON' } : {}),
+            status: resolveStatus(true),
+          },
+          explicitId
+        )
+      } else {
+        const firstCodeLine =
+          codeStr
+            .split('\n')
+            .map((l) => l.trim())
+            .find((l) => l && !l.startsWith('#')) || ''
+        const title =
+          thought || (sdkPreview ? `Looker Code Mode (${sdkPreview})` : 'Running Looker Code Mode')
+        const detail = sdkPreview || (firstCodeLine ? firstCodeLine.slice(0, 140) : undefined)
+        upsertStep(
+          {
+            id: stepId,
+            kind: 'codemode',
+            title,
+            ...(detail ? { detail } : {}),
+            language: 'PYTHON',
+            status: resolveStatus(true),
+          },
+          explicitId
+        )
+      }
+      continue
+    }
+
+    // 5. Code execution steps (code_execution, code_execution_call, executable_code)
+    if (
+      sType === 'code_execution' ||
+      sType === 'code_execution_call' ||
+      sType === 'executable_code' ||
+      step.code_execution ||
+      step.code_execution_call ||
+      step.executable_code ||
+      (sType === 'function_call' && /^(?:code_execution|bash|sh|python)(?:_call)?$/.test(fnName))
+    ) {
+      const nested =
+        step.code_execution ||
+        step.code_execution_call ||
+        step.executable_code ||
+        step.function_call ||
+        {}
+      const args = parseStepArguments(step.arguments ?? step.args ?? nested.arguments ?? nested.args)
+      const rawCode = String(
+        step.code ??
+          step.command ??
+          nested.code ??
+          nested.command ??
+          args.code ??
+          args.command ??
+          step.input ??
+          ''
+      ).trim()
+      const rawLang = String(step.language ?? nested.language ?? args.language ?? '')
+        .trim()
+        .toUpperCase()
+      const language =
+        rawLang.includes('PYTHON') || rawLang === 'PY' || fnName === 'python'
+          ? 'PYTHON'
+          : rawLang.includes('BASH') || rawLang.includes('SH') || fnName === 'bash'
+          ? 'BASH'
+          : /^(?:import\s+\w|from\s+\w+\s+import\s+|def\s+\w)/m.test(rawCode) &&
+            !/^(?:python3?|uv|lkr|bash|sh)\b/.test(rawCode)
+          ? 'PYTHON'
+          : 'BASH'
+      const firstLine =
+        rawCode
+          .split('\n')
+          .map((l) => l.trim())
+          .find((l) => l && !l.startsWith('#')) || rawCode
+      const conciseCmd =
+        firstLine.replace(/\s*<<\s*['"]?\w+['"]?.*$/, '').trim().slice(0, 140) ||
+        (language === 'PYTHON' ? 'Running Python script' : 'Running sandbox command')
+      const detail = rawCode ? rawCode.split('\n').slice(0, 3).join('\n').slice(0, 200) : undefined
+      upsertStep(
+        {
+          id: stepId,
+          kind: 'code_execution',
+          title: conciseCmd,
+          ...(detail ? { detail } : {}),
+          language,
+          status: resolveStatus(false),
+        },
+        explicitId
+      )
+    }
+  }
+
+  for (const out of rawOutputs) {
+    if (!out || typeof out !== 'object') continue
+    if (out.type === 'thought' || out.type === 'thinking' || out.thought) {
+      const tObj = typeof out.thought === 'object' && out.thought !== null ? out.thought : null
+      const summary = String(tObj?.summary ?? out.summary ?? '').trim()
+      const text = String(
+        tObj?.text ?? (typeof out.thought === 'string' ? out.thought : '') ?? out.text ?? ''
+      ).trim()
+      const title = summary || text
+      if (title) {
+        const detail = summary && text && text !== summary ? text : undefined
+        upsertStep(
+          {
+            id: out.id ? String(out.id) : `step_${++autoIdx}`,
+            kind: 'thought',
+            title,
+            ...(detail ? { detail } : {}),
+            status: interactionDone ? 'done' : 'running',
+          },
+          out.id ? String(out.id) : undefined
+        )
+      }
+    }
+  }
+
+  return Array.from(byKey.values())
+}
+
 function summarizeProgress(interaction: any): string {
   const steps = interaction?.steps || []
   if (steps.length === 0) return `Status: ${interaction?.status || 'starting'}...`
   const last = steps[steps.length - 1]
   if (last.type === 'function_call') {
+    const args = parseStepArguments(last.arguments ?? last.args)
+    const thought = String(args.thought || '').trim()
+    if (thought) return thought
     return `Running tool: ${last.name || 'sandbox command'}...`
   }
-  if (last.type === 'thought' || last.type === 'thinking') {
-    return 'Agent is reasoning...'
+  if (last.type === 'thought' || last.type === 'thinking' || last.thought) {
+    const tObj = typeof last.thought === 'object' && last.thought !== null ? last.thought : null
+    const summary = String(tObj?.summary ?? last.summary ?? tObj?.text ?? last.text ?? '').trim()
+    return summary || 'Agent is reasoning...'
   }
   return `Step ${steps.length} (${last.type || interaction.status})...`
 }
@@ -667,7 +1052,7 @@ async function persistUserEnvIfChanged(params: {
   }
 }
 
-export async function runAntigravityTurn(params: {
+export interface RunAntigravityTurnOptions {
   sdk: Looker40SDK
   extensionSDK?: any
   userId?: string
@@ -700,9 +1085,15 @@ export async function runAntigravityTurn(params: {
   onPermissionRequest?: (
     req: CodeModePermissionRequest
   ) => Promise<CodeModePermissionDecision>
+  onRequestWritePermission?: (
+    req: CodeModePermissionRequest
+  ) => Promise<CodeModePermissionDecision>
+  onProgressSteps?: (steps: AntigravityActivityStep[]) => void
   pollScheduleMs?: number[]
   onStatus: (statusText: string) => void
-}): Promise<{
+}
+
+export interface AntigravityTurnResult {
   bundle: DataAppBundle | null
   nativeBundle: NativeContentBundle | null
   lookmlBundle?: LookmlBundle | null
@@ -711,7 +1102,13 @@ export async function runAntigravityTurn(params: {
   resolvedUseCase: ResolvedStudioUseCase
   session: AgentSession
   telemetry: AntigravityTurnTelemetry
-}> {
+  activitySteps?: AntigravityActivityStep[]
+  thinkingDurationSec?: number
+}
+
+export async function runAntigravityTurn(
+  params: RunAntigravityTurnOptions
+): Promise<AntigravityTurnResult> {
   const turnStartMs = Date.now()
   let pollWaitMs = 0
   let pollCount = 0
@@ -752,9 +1149,13 @@ export async function runAntigravityTurn(params: {
     requirePermission = true,
     approvedOperations,
     onPermissionRequest,
+    onRequestWritePermission,
+    onProgressSteps,
     pollScheduleMs = DEFAULT_POLL_SCHEDULE_MS,
     onStatus,
   } = params
+
+  const effectivePermissionHandler = onPermissionRequest || onRequestWritePermission
 
   const firstParsed = selectedExplores[0] ? parseExploreId(selectedExplores[0]) : null
   const primaryModel = firstParsed?.modelName || ''
@@ -806,8 +1207,8 @@ export async function runAntigravityTurn(params: {
 
   const step2Directive =
     selectedExplores.length > 0
-      ? `2. Read /workspace/schema.md for the compiled Looker Explore schema(s) and sample rows. You also have \`run_looker_codemode\` (WASM Monty Python sandbox with \`target_explores\`=${JSON.stringify(selectedExplores)}, \`target_model\`="${primaryModel}", and \`target_explore\`="${primaryExplore}" pre-injected, plus Looker 4.0 SDK globals \`lookml_model_explore\`, \`run_inline_query\`, \`search_content\`) if you need additional sample queries.`
-      : `2. Pick the best \`model_id::explore_id\` from /workspace/schema.md and run ONE \`run_looker_codemode\` Python snippet that resolves discovery + schema + 5-row sample in a single call:
+      ? `2. Read /workspace/schema.md for the compiled Looker Explore schema(s) and sample rows. You also have \`run_looker_codemode\` (WASM Monty Python sandbox with \`target_explores\`=${JSON.stringify(selectedExplores)}, \`target_model\`="${primaryModel}", and \`target_explore\`="${primaryExplore}" pre-injected, plus Looker 4.0 SDK globals \`lookml_model_explore\`, \`run_inline_query\`, \`search_content\`; always pass a concise 1-sentence \`thought\` string) if you need additional sample queries.`
+      : `2. Pick the best \`model_id::explore_id\` from /workspace/schema.md and run ONE \`run_looker_codemode\` Python snippet (always passing a concise 1-sentence \`thought\` description) that resolves discovery + schema + 5-row sample in a single call:
 \`\`\`python
 m, e = "thelook", "order_items"  # or best model/explore from /workspace/schema.md matching search_content(terms="...")
 exp = lookml_model_explore(m, e, fields="name,label,fields(dimensions(name,label,type),measures(name,label,type))")
@@ -1057,6 +1458,18 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const envConcurrencySlot = activeInteractionsByEnv.get(envSlotKey) || 0
   activeInteractionsByEnv.set(envSlotKey, envConcurrencySlot + 1)
 
+  const emitProgressSteps = (currInteraction: any): AntigravityActivityStep[] => {
+    const merged =
+      accumulatedSteps.length > 0
+        ? { ...currInteraction, steps: [...accumulatedSteps, ...(currInteraction?.steps || [])] }
+        : currInteraction
+    const steps = extractInteractionActivitySteps(merged)
+    if (steps.length > 0) {
+      onProgressSteps?.(steps)
+    }
+    return steps
+  }
+
   try {
     for (;;) {
       while (
@@ -1067,6 +1480,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         if (interaction.environment_id) {
           trackedEnvId = interaction.environment_id
         }
+        emitProgressSteps(interaction)
         if (interaction.status === 'requires_action') {
           const steps = interaction.steps || []
           const executedIds = new Set(
@@ -1080,23 +1494,46 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           )
 
           if (pendingLookerCalls.length > 0) {
-            onStatus('Running Looker Code Mode (WASM Monty sandbox) in extension...')
+            const firstThought = pendingLookerCalls
+              .map((c: any) => {
+                const a = parseStepArguments(c.arguments ?? c.args)
+                return String(a.thought || '').trim()
+              })
+              .find(Boolean)
+            onStatus(
+              firstThought || 'Running Looker Code Mode (WASM Monty sandbox) in extension...'
+            )
             const cmStart = Date.now()
             codemodeCalls += pendingLookerCalls.length
             const resultsInput = await Promise.all(
               pendingLookerCalls.map(async (call: any) => {
-                const args = call.arguments || call.args || {}
+                const args = parseStepArguments(call.arguments ?? call.args)
+                const callThought =
+                  typeof args.thought === 'string' && args.thought.trim()
+                    ? args.thought.trim()
+                    : call.name === 'lkr_cli_extension_bridge' && (args.method || args.path)
+                    ? `${String(args.method || 'GET').toUpperCase()} ${String(args.path || '/')}`
+                    : undefined
+                const wrappedPermissionRequest = effectivePermissionHandler
+                  ? (permReq: CodeModePermissionRequest) =>
+                      effectivePermissionHandler({
+                        ...permReq,
+                        ...(permReq.thought || callThought
+                          ? { thought: permReq.thought || callThought }
+                          : {}),
+                      })
+                  : undefined
                 let codeModeOutput: string
                 try {
                   if (call.name === 'lkr_cli_extension_bridge') {
                     const bridged = await executeLkrExtensionToolRequest({
                       sdk: turnSdk,
-                      req: args,
+                      req: args as any,
                       defaultVars: defaultCodeModeVars,
                       extensionSDK,
                       requirePermission,
                       approvedOperations,
-                      onPermissionRequest,
+                      onPermissionRequest: wrappedPermissionRequest,
                     })
                     resolvedBridgeCacheKeys.add(bridged.cacheKey)
                     codeModeOutput = JSON.stringify({
@@ -1118,7 +1555,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                       allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard',
                       requirePermission,
                       approvedOperations,
-                      onPermissionRequest,
+                      onPermissionRequest: wrappedPermissionRequest,
                       vars: {
                         ...defaultCodeModeVars,
                         ...customVars,
@@ -1214,7 +1651,10 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       if (!hasFinalBundle && pendingBridgeReqs.length > 0 && bridgeRound < 8) {
         bridgeRound += 1
         accumulatedSteps.push(...(interaction.steps || []))
-        onStatus('Executing bridged lkr-dev-cli request(s) in Looker extension...')
+        const firstBridgeThought = pendingBridgeReqs.map((r) => r.thought).find(Boolean)
+        onStatus(
+          firstBridgeThought || 'Executing bridged lkr-dev-cli request(s) in Looker extension...'
+        )
         const bridgeStart = Date.now()
         const bridgedLines: string[] = []
         for (const req of pendingBridgeReqs) {
@@ -1226,7 +1666,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
             extensionSDK,
             requirePermission,
             approvedOperations,
-            onPermissionRequest,
+            onPermissionRequest: effectivePermissionHandler,
           })
           resolvedBridgeCacheKeys.add(cacheKey)
           bridgedLines.push(`/workspace/.lkr_extension_cache/${cacheKey}.json\n\`\`\`json\n${JSON.stringify(result)}\n\`\`\``)
@@ -1277,6 +1717,15 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       steps: [...accumulatedSteps, ...(interaction.steps || [])],
     }
   }
+
+  const activitySteps = extractInteractionActivitySteps({
+    ...interaction,
+    status: 'completed',
+  }).map((s) => ({ ...s, status: 'done' as const }))
+  if (activitySteps.length > 0) {
+    onProgressSteps?.(activitySteps)
+  }
+  const thinkingDurationSec = Math.max(1, Math.round((Date.now() - turnStartMs) / 1000))
 
   const bundle =
     (mode === 'data_app' || useCase === 'auto') && toolMode !== 'lookml'
@@ -1363,6 +1812,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       toolType: effectiveToolType,
     },
     telemetry,
+    activitySteps,
+    thinkingDurationSec,
   }
 }
 

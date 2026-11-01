@@ -2304,4 +2304,172 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     writeFileSync(scratchDarkPath, readFileSync(darkSnapPath))
     expect(existsSync(scratchDarkPath)).toBe(true)
   }, 15000)
+
+  test('renders collapsible live & completed Thinking & Activity blocks and write-permission thought banner (Issue #56)', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    const url = `http://127.0.0.1:${port}/?scenario=data_app`
+    await chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('.dab-chat-log'))`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    const domRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const s = window.__DAB_STUDIO__;
+        s.setMessages([
+          {
+            role: 'user',
+            text: 'Build an Executive Revenue Data App with brand share breakdown'
+          },
+          {
+            role: 'assistant',
+            text: 'Built Executive Revenue Data App with 4 KPI cards and brand breakdown.',
+            dashboardId: '42',
+            widgetCount: 5,
+            thinkingDurationSec: 4,
+            activitySteps: [
+              {
+                id: 'step_1',
+                kind: 'thought',
+                title: 'Analyzing thelook::order_items schema & planning 4 KPI tiles',
+                status: 'done'
+              },
+              {
+                id: 'step_2',
+                kind: 'codemode',
+                title: 'Querying monthly revenue and brand share from thelook::order_items',
+                detail: 'sdk.lookml_model_explore, sdk.run_inline_query',
+                language: 'PYTHON',
+                status: 'done'
+              },
+              {
+                id: 'step_3',
+                kind: 'code_execution',
+                title: 'python3 /workspace/bundle_app.py --app-dir /workspace/apps/42 --stdin "Executive Revenue App"',
+                language: 'BASH',
+                status: 'done'
+              }
+            ]
+          }
+        ]);
+        s.setLiveActivitySteps([
+          {
+            id: 'live_1',
+            kind: 'thought',
+            title: 'Preparing dashboard tile layout mutation',
+            status: 'done'
+          },
+          {
+            id: 'live_2',
+            kind: 'codemode',
+            title: 'Creating executive KPI dashboard with 4 tiles',
+            detail: 'sdk.create_dashboard, sdk.create_dashboard_element',
+            language: 'PYTHON',
+            status: 'running'
+          }
+        ]);
+        s.setBusyStatus('Creating executive KPI dashboard with 4 tiles');
+        void s.requestCodeModePermission({
+          operation: 'create_dashboard_element',
+          httpMethod: 'POST',
+          path: '/api/4.0/dashboard_elements',
+          args: { body: { dashboard_id: '42', title: 'Brand Revenue Share' } },
+          thought: 'Creating executive KPI dashboard with 4 tiles'
+        });
+        await new Promise((r) => setTimeout(r, 120));
+
+        const completedEl = document.querySelector('[data-testid="completed-thinking-block"]');
+        const liveEl = document.querySelector('[data-testid="live-thinking-block"]');
+        const permThoughtEl = document.querySelector('[data-testid="permission-request-thought"]');
+
+        const initiallyCollapsed = completedEl ? !completedEl.open : false;
+        const completedSummary = completedEl?.querySelector('summary')?.textContent?.trim() || '';
+
+        // Expand completed thinking block on click so both blocks and step details are visible
+        if (completedEl) {
+          completedEl.querySelector('summary')?.click();
+        }
+        await new Promise((r) => setTimeout(r, 80));
+
+        return {
+          hasCompletedBlock: Boolean(completedEl),
+          initiallyCollapsed,
+          expandedAfterClick: Boolean(completedEl?.open),
+          completedSummary,
+          completedText: completedEl?.textContent || '',
+          hasLiveBlock: Boolean(liveEl),
+          liveOpenByDefault: Boolean(liveEl?.open),
+          liveClassName: liveEl?.className || '',
+          liveText: liveEl?.textContent || '',
+          permThoughtText: permThoughtEl?.textContent?.trim() || ''
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(domRes.result.value).toMatchObject({
+      hasCompletedBlock: true,
+      initiallyCollapsed: true,
+      expandedAfterClick: true,
+      completedSummary: 'Thought for 4s · 3 steps',
+      hasLiveBlock: true,
+      liveOpenByDefault: true,
+      liveClassName: 'dab-thinking-block dab-thinking-live',
+      permThoughtText: 'Creating executive KPI dashboard with 4 tiles'
+    })
+    expect(domRes.result.value.completedText).toContain(
+      'Querying monthly revenue and brand share from thelook::order_items'
+    )
+    expect(domRes.result.value.completedText).toContain('sdk.run_inline_query')
+    expect(domRes.result.value.completedText).toContain('bundle_app.py')
+    expect(domRes.result.value.liveText).toContain('Thinking & Activity')
+    expect(domRes.result.value.liveText).toContain('sdk.create_dashboard')
+
+    const clipRes = await chrome.send('Runtime.evaluate', {
+      expression: `(() => {
+        const selectors = [
+          '[data-testid="completed-thinking-block"]',
+          '[data-testid="live-thinking-block"]',
+          '.dab-permission-bar'
+        ];
+        const rects = selectors
+          .flatMap((s) => Array.from(document.querySelectorAll(s)))
+          .map((el) => el.getBoundingClientRect())
+          .filter((r) => r.width > 0 && r.height > 0);
+        if (!rects.length) return null;
+        const margin = 16;
+        const x = Math.max(0, Math.floor(Math.min(...rects.map((r) => r.left)) - margin));
+        const y = Math.max(0, Math.floor(Math.min(...rects.map((r) => r.top)) - margin));
+        const right = Math.min(1440, Math.ceil(Math.max(...rects.map((r) => r.right)) + margin));
+        const bottom = Math.min(900, Math.ceil(Math.max(...rects.map((r) => r.bottom)) + margin));
+        return { x, y, width: right - x, height: bottom - y, scale: 1 };
+      })()`,
+      returnByValue: true
+    })
+    const clip = clipRes.result?.value
+    expect(clip).toBeTruthy()
+
+    const { data } = await chrome.send('Page.captureScreenshot', {
+      format: 'png',
+      clip
+    })
+    const pngBuffer = Buffer.from(data, 'base64')
+    expect(pngBuffer.length).toBeGreaterThan(1000)
+
+    const scratchDir =
+      '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
+    mkdirSync(scratchDir, { recursive: true })
+    const scratchSnapPath = path.join(scratchDir, 'issue-56-thinking-activity-block.png')
+    writeFileSync(scratchSnapPath, pngBuffer)
+    expect(existsSync(scratchSnapPath)).toBe(true)
+  }, 15000)
 })

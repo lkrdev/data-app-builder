@@ -460,7 +460,7 @@ export function buildNativeContentGuide(params: {
     `You are operating in Native Looker Content Studio mode (/dashboard/:id?) ${exploreDirective}`,
     existingNativeDirective,
     NATIVE_CONTENT_GUIDE_MD,
-    `Follow these exact steps in ONE \`run_looker_codemode\` call per turn (remote bash \`code_execution\` is disabled in /dashboard mode):`,
+    `Follow these exact steps in ONE \`run_looker_codemode\` call per turn (remote bash \`code_execution\` is disabled in /dashboard mode; always pass a concise 1-sentence \`thought\` string describing the Looker API action):`,
     `1. On cold start, discover fields via \`lookml_model_explore(m, e, fields="name,label,fields(dimensions(name,label,type),measures(name,label,type))")\` (or \`search_content(terms="...")\`), then build/update the UDD (\`upsert_udd\` or \`create_dashboard\` + \`create_dashboard_filter\` + \`create_dashboard_element\` + \`update_dashboard_layout_component\`), LookML Dashboard (\`upsert_lookml_dashboard\` in \`"dev"\` workspace + \`import_lookml_dashboard\` / \`sync_lookml_dashboard\`), Saved Look (\`create_look\`), Board (\`pin_to_board\` / \`create_board_item\`), or Schedule (\`schedule_dashboard\` / \`create_scheduled_plan\`) in the SAME \`run_looker_codemode\` script.`,
     `2. End your Python script with \`return emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", summary="...")\` (with \`target_folder_id\`="${folderId}", \`target_explores\`=${JSON.stringify(selectedExplores)}, \`target_model\`="${primaryModel}", \`target_explore\`="${primaryExplore}", \`target_project_id\`="${lookmlProjectId}").`,
     `3. CRITICAL: The host extracts \`<NATIVE_CONTENT_BUNDLE>\` / \`NATIVE_CONTENT_BUNDLE\` directly from your \`run_looker_codemode\` return value. Do NOT echo or repeat \`<NATIVE_CONTENT_BUNDLE>...</NATIVE_CONTENT_BUNDLE>\` in your final text response — reply with a concise 1–2 sentence summary only.`,
@@ -474,6 +474,10 @@ export const AGENTS_MD = `# Looker Data Apps
 This directory is an installed Looker Data Apps environment. A **Data App** is a
 code-first application for Looker, authored as a single self-contained ES module
 in \`apps/<name>/app.js\` and published directly into Looker dashboard tiles.
+
+## Looker Code Mode Tool Contract (\`run_looker_codemode\`)
+
+Whenever calling \`run_looker_codemode\`, you **must** always pass both \`code\` and a concise 1-sentence \`thought\` string summarizing what the Code Mode snippet is doing with the Looker API calls (e.g. \`"Querying monthly revenue and brand share from thelook::order_items"\` or \`"Creating executive KPI dashboard with 4 tiles"\`).
 
 ## Sandbox CLI Bootstrap (\`uv\` + \`lkr-dev-cli\`)
 

@@ -1,6 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { getEmbedSDK, ILookerConnection, LookerEmbedExSDK } from '@looker/embed-sdk'
-import { handleImageClipboardPaste, LkrCodeMode, StudioUseCase } from '../antigravity'
+import {
+  AntigravityActivityStep,
+  handleImageClipboardPaste,
+  LkrCodeMode,
+  StudioUseCase,
+} from '../antigravity'
 import { ConversationRecord, parseExploreId } from '../lookerApi'
 import { LOOKML_TURN_SKILLS, LookmlPreviewPane } from '../lookmlTool'
 import { renderTddMarkdownToHtml } from '../healthCheck'
@@ -898,6 +903,51 @@ export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ 
   )
 }
 
+function formatActivityStepBadge(step: AntigravityActivityStep): string {
+  switch (step.kind) {
+    case 'thought':
+      return '💭 Thought'
+    case 'codemode':
+      return '🐍 Code Mode'
+    case 'cli_bridge':
+      return '🌉 CLI Bridge'
+    case 'code_execution':
+      return step.language === 'PYTHON' ? '🐍 Sandbox Python' : '💻 Sandbox Bash'
+    case 'file':
+      return '📄 File'
+    case 'skill':
+      return '📚 Skill'
+    default:
+      return '⚡ Activity'
+  }
+}
+
+function renderActivityStepsList(steps: AntigravityActivityStep[]) {
+  return (
+    <div className="dab-thinking-steps">
+      {steps.map((step, sIdx) => (
+        <div
+          key={step.id || sIdx}
+          className={`dab-thinking-step dab-thinking-step-${step.kind}`}
+          data-step-kind={step.kind}
+          data-step-status={step.status || 'done'}
+        >
+          <div className="dab-thinking-step-header">
+            <span className="dab-thinking-kind-badge">{formatActivityStepBadge(step)}</span>
+            <span className="dab-thinking-step-title">{step.title}</span>
+            {step.status === 'running' && (
+              <span className="dab-thinking-step-status">Running…</span>
+            )}
+          </div>
+          {step.detail && step.detail !== step.title && (
+            <code className="dab-thinking-step-detail">{step.detail}</code>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
     messages,
@@ -907,6 +957,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     loadingSchema,
     schemaMarkdown,
     busyStatus,
+    liveActivitySteps,
     pendingPerm,
     resolvePermDecision,
   } = ctl
@@ -961,6 +1012,20 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 </span>
               )}
             </div>
+            {m.role === 'assistant' && m.activitySteps && m.activitySteps.length > 0 && (
+              <details
+                className="dab-thinking-block"
+                data-testid="completed-thinking-block"
+              >
+                <summary className="dab-thinking-summary">
+                  <span className="dab-thinking-summary-label">
+                    Thought for {m.thinkingDurationSec ?? 1}s · {m.activitySteps.length}{' '}
+                    {m.activitySteps.length === 1 ? 'step' : 'steps'}
+                  </span>
+                </summary>
+                {renderActivityStepsList(m.activitySteps)}
+              </details>
+            )}
             <div className="dab-msg-body">{m.text}</div>
             {m.images && m.images.length > 0 && (
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
@@ -976,6 +1041,28 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
             )}
           </div>
         ))}
+
+        {liveActivitySteps && liveActivitySteps.length > 0 && (
+          <details
+            className="dab-thinking-block dab-thinking-live"
+            data-testid="live-thinking-block"
+            open
+          >
+            <summary className="dab-thinking-summary">
+              <span className="dab-spinner" />
+              <span className="dab-thinking-summary-label">
+                Thinking &amp; Activity ·{' '}
+                {liveActivitySteps[liveActivitySteps.length - 1]?.title ||
+                  busyStatus ||
+                  'Working...'}
+              </span>
+              <span className="dab-thinking-step-count">
+                {liveActivitySteps.length} {liveActivitySteps.length === 1 ? 'step' : 'steps'}
+              </span>
+            </summary>
+            {renderActivityStepsList(liveActivitySteps)}
+          </details>
+        )}
 
         {busyStatus && (
           <div className="dab-status-banner">
@@ -994,6 +1081,14 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               {pendingPerm.req.httpMethod} {pendingPerm.req.path}
             </code>
             )
+            {pendingPerm.req.thought && (
+              <div
+                className="dab-permission-thought"
+                data-testid="permission-request-thought"
+              >
+                {pendingPerm.req.thought}
+              </div>
+            )}
           </div>
           <div className="dab-permission-actions">
             <button

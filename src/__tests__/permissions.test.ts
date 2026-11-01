@@ -53,6 +53,7 @@ import {
   DASHBOARD_CODEMODE_PREAMBLE_PY,
   DEFAULT_ANTIGRAVITY_MODEL,
   executeLkrExtensionToolRequest,
+  extractInteractionActivitySteps,
   extractLkrExtensionToolRequests,
   generateConversationLabel,
   getSharedEnvExploreSchemas,
@@ -1948,5 +1949,277 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(await loadUserConversations(mockSdk, '7')).toEqual([])
     expect(readSwrCache<any[]>(['artifact:conversations', ARTIFACT_NAMESPACE, '7'])).toEqual([])
     expect(searchArtifactsCount).toBe(0)
+  })
+
+  test('21. requires thought on RUN_LOOKER_CODEMODE_TOOL & LKR_CLI_BRIDGE_TOOL, extracts structured activity steps, and surfaces thought in onStatus, onProgressSteps, and write-permission requests (Issue #56)', async () => {
+    // 1. Tool schema definitions
+    expect(LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.required).toEqual(
+      expect.arrayContaining(['code', 'thought'])
+    )
+    expect(LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.properties.thought).toMatchObject({
+      type: 'string',
+    })
+    expect(LKR_CLI_BRIDGE_TOOL.parameters.properties.thought).toMatchObject({
+      type: 'string',
+    })
+    expect(AGENTS_MD).toContain('thought')
+
+    // 2. extractInteractionActivitySteps across thought, codemode, cli_bridge, code_execution, file, and skill steps
+    const sampleSteps = extractInteractionActivitySteps({
+      status: 'in_progress',
+      steps: [
+        {
+          id: 's_thought_1',
+          type: 'thought',
+          thought: {
+            summary: 'Planning 24-column Executive KPI dashboard layout',
+            text: 'Checking order_items dimensions and measures before building tiles.',
+          },
+        },
+        {
+          id: 's_cm_1',
+          type: 'function_call',
+          name: 'run_looker_codemode',
+          arguments: {
+            thought: 'Querying monthly revenue and brand share from thelook::order_items',
+            code: 'res = sdk.run_inline_query("json", {"model": "thelook", "view": "order_items", "fields": ["order_items.total_sale_price"]})\nd = sdk.create_dashboard({"title": "Exec KPI"})',
+          },
+        },
+        {
+          id: 's_bridge_1',
+          type: 'function_call',
+          name: 'lkr_cli_extension_bridge',
+          arguments: {
+            kind: 'sdk_request',
+            method: 'GET',
+            path: '/projects/thelook/files',
+          },
+        },
+        {
+          id: 's_exec_1',
+          type: 'code_execution_call',
+          language: 'BASH',
+          code: 'python3 /workspace/bundle_app.py --app-dir /workspace/apps/conv_1 --stdin "Exec App" << \'EOF\'\nimport os\nEOF',
+        },
+        {
+          id: 's_file_1',
+          type: 'view_file_call',
+          path: '/workspace/schema.md',
+          description: 'Reading compiled Explore schema',
+        },
+        {
+          id: 's_skill_1',
+          type: 'skill_lookup_call',
+          skill: 'lookml-field-curation',
+          description: 'Loading field curation rubric',
+        },
+      ],
+      outputs: [
+        {
+          type: 'thought',
+          summary: 'Planning 24-column Executive KPI dashboard layout',
+        },
+      ],
+    })
+
+    expect(sampleSteps).toHaveLength(6)
+    expect(sampleSteps[0]).toMatchObject({
+      id: 's_thought_1',
+      kind: 'thought',
+      title: 'Planning 24-column Executive KPI dashboard layout',
+      detail: 'Checking order_items dimensions and measures before building tiles.',
+    })
+    expect(sampleSteps[1]).toMatchObject({
+      id: 's_cm_1',
+      kind: 'codemode',
+      title: 'Querying monthly revenue and brand share from thelook::order_items',
+      language: 'PYTHON',
+    })
+    expect(sampleSteps[1].detail).toContain('sdk.run_inline_query')
+    expect(sampleSteps[1].detail).toContain('sdk.create_dashboard')
+    expect(sampleSteps[2]).toMatchObject({
+      id: 's_bridge_1',
+      kind: 'cli_bridge',
+      title: 'GET /projects/thelook/files',
+      detail: 'GET /projects/thelook/files',
+    })
+    expect(sampleSteps[3]).toMatchObject({
+      id: 's_exec_1',
+      kind: 'code_execution',
+      language: 'BASH',
+    })
+    expect(sampleSteps[3].title).toContain('bundle_app.py')
+    expect(sampleSteps[4]).toMatchObject({
+      id: 's_file_1',
+      kind: 'file',
+    })
+    expect(sampleSteps[4].title).toContain('/workspace/schema.md')
+    expect(sampleSteps[4].title).toContain('Reading compiled Explore schema')
+    expect(sampleSteps[5]).toMatchObject({
+      id: 's_skill_1',
+      kind: 'skill',
+    })
+    expect(sampleSteps[5].title).toContain('lookml-field-curation')
+    expect(sampleSteps[5].title).toContain('Loading field curation rubric')
+
+    // 3. runAntigravityTurn invokes onProgressSteps, surfaces call.arguments.thought via onStatus and onRequestWritePermission (req.thought), and returns activitySteps
+    const statusHistory: string[] = []
+    const progressSnapshots: any[][] = []
+    const permissionRequests: any[] = []
+    let interactionCallIdx = 0
+
+    const mockExtensionSDK = {
+      lookerHostData: { extensionId: 'dab::test' },
+      serverProxy: async () => {
+        interactionCallIdx += 1
+        if (interactionCallIdx === 1) {
+          return {
+            ok: true,
+            status: 200,
+            body: {
+              id: 'int_issue56_1',
+              environment_id: 'env_issue56',
+              status: 'requires_action',
+              steps: [
+                {
+                  id: 'step_thought_1',
+                  type: 'thought',
+                  summary: 'Designing Executive KPI dashboard in Looker',
+                },
+                {
+                  id: 'call_cm_56',
+                  type: 'function_call',
+                  name: 'run_looker_codemode',
+                  arguments: {
+                    thought: 'Creating executive KPI dashboard with 4 tiles',
+                    code: 'd = create_dashboard({"title": "Executive KPI", "folder_id": "1"})\nreturn emit_native_bundle(d, content_type="dashboard", id=d["id"], title="Executive KPI")',
+                  },
+                },
+              ],
+            },
+          }
+        }
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            id: 'int_issue56_2',
+            environment_id: 'env_issue56',
+            status: 'completed',
+            steps: [
+              {
+                id: 'step_thought_1',
+                type: 'thought',
+                summary: 'Designing Executive KPI dashboard in Looker',
+              },
+              {
+                id: 'call_cm_56',
+                type: 'function_call',
+                name: 'run_looker_codemode',
+                arguments: {
+                  thought: 'Creating executive KPI dashboard with 4 tiles',
+                  code: 'd = create_dashboard({"title": "Executive KPI", "folder_id": "1"})\nreturn emit_native_bundle(d, content_type="dashboard", id=d["id"], title="Executive KPI")',
+                },
+              },
+              {
+                type: 'function_result',
+                name: 'run_looker_codemode',
+                call_id: 'call_cm_56',
+                result: JSON.stringify({
+                  NATIVE_CONTENT_BUNDLE: {
+                    id: '99',
+                    content_type: 'dashboard',
+                    title: 'Executive KPI',
+                    folder_id: '1',
+                  },
+                }),
+              },
+            ],
+            output_text: 'Created Executive KPI dashboard #99.',
+          },
+        }
+      },
+    }
+
+    const mockSdk: any = {
+      ok: async (p: any) => p,
+      authSession: {
+        transport: {
+          request: async (method: string, pathStr: string, _qp?: any, body?: any) => ({
+            ok: true,
+            value: { id: '99', title: body?.title || 'Executive KPI', method, path: pathStr },
+          }),
+        },
+      },
+    }
+
+    const spyCodeMode = jest
+      .spyOn(LkrCodeMode, 'runPythonCode')
+      .mockImplementationOnce(async (opts: any) => {
+        if (opts?.onPermissionRequest) {
+          await opts.onPermissionRequest({
+            operation: 'create_dashboard',
+            httpMethod: 'POST',
+            path: '/api/4.0/dashboards',
+            args: { body: { title: 'Executive KPI' } },
+          })
+        }
+        return JSON.stringify({
+          NATIVE_CONTENT_BUNDLE: {
+            id: '99',
+            content_type: 'dashboard',
+            title: 'Executive KPI',
+            folder_id: '1',
+          },
+        })
+      })
+
+    const turnResult = await runAntigravityTurn({
+      sdk: mockSdk,
+      extensionSDK: mockExtensionSDK,
+      userId: '1',
+      auth: { mode: 'apikey', apiKey: '' },
+      session: { environmentId: 'env_issue56', conversationId: 'conv_56' },
+      mode: 'dashboard',
+      useCase: 'dashboard',
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      userPrompt: 'Create an Executive KPI dashboard',
+      requirePermission: true,
+      onRequestWritePermission: async (req) => {
+        permissionRequests.push(req)
+        return 'allow_once'
+      },
+      onProgressSteps: (steps) => {
+        progressSnapshots.push(steps)
+      },
+      pollScheduleMs: [0],
+      onStatus: (s) => statusHistory.push(s),
+    })
+    spyCodeMode.mockRestore()
+
+    expect(statusHistory).toContain('Creating executive KPI dashboard with 4 tiles')
+    expect(permissionRequests.length).toBeGreaterThanOrEqual(1)
+    expect(permissionRequests[0]).toMatchObject({
+      operation: 'create_dashboard',
+      thought: 'Creating executive KPI dashboard with 4 tiles',
+    })
+    expect(progressSnapshots.length).toBeGreaterThanOrEqual(1)
+    expect(turnResult.activitySteps).toBeDefined()
+    expect(turnResult.activitySteps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'thought',
+          title: 'Designing Executive KPI dashboard in Looker',
+          status: 'done',
+        }),
+        expect.objectContaining({
+          kind: 'codemode',
+          title: 'Creating executive KPI dashboard with 4 tiles',
+          status: 'done',
+        }),
+      ])
+    )
+    expect(typeof turnResult.thinkingDurationSec).toBe('number')
   })
 })
