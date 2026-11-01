@@ -3525,4 +3525,173 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     writeFileSync(scratchSnapPath, pngBuffer)
     expect(existsSync(scratchSnapPath)).toBe(true)
   }, 15000)
+
+  test('renders StudioSelect styled dropdowns, split + New Conversation use-case action menu, and SVG icon theme menu (Issue #60)', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    const url = `http://127.0.0.1:${port}/?scenario=data_app`
+    await chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="new-conversation-menu-trigger"]') && document.querySelector('[data-testid="topbar-theme-select"]'))`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    // Open both the split + New Conversation use-case menu and the SVG theme menu to inspect and screenshot
+    const openMenusRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const splitTrigger = document.querySelector('[data-testid="new-conversation-menu-trigger"]');
+        if (splitTrigger) splitTrigger.click();
+        const themeTrigger = document.querySelector('[data-testid="topbar-theme-select"] .dab-studio-select-trigger');
+        if (themeTrigger) themeTrigger.click();
+        await new Promise((r) => setTimeout(r, 100));
+
+        const newConvMenu = document.querySelector('[data-testid="new-conversation-use-case-menu"]');
+        const newConvOptionValues = newConvMenu
+          ? Array.from(newConvMenu.querySelectorAll('[role="menuitem"]')).map((el) => el.getAttribute('data-value'))
+          : [];
+
+        const themeSelect = document.querySelector('[data-testid="topbar-theme-select"]');
+        const themeTriggerSvg = themeSelect?.querySelector('.dab-studio-select-trigger svg')?.getAttribute('data-theme-icon') || null;
+        const themeMenu = document.querySelector('[data-testid="topbar-theme-select-menu"]');
+        const themeMenuIcons = themeMenu
+          ? Array.from(themeMenu.querySelectorAll('svg[data-theme-icon]')).map((el) => el.getAttribute('data-theme-icon'))
+          : [];
+        const themeHasEmoji = /[☀️🌙🖥️]/u.test(themeSelect?.textContent || '');
+
+        const studioSelectCount = document.querySelectorAll('.dab-studio-select').length;
+        const unstyledVisibleSelectCount = Array.from(document.querySelectorAll('select')).filter(
+          (s) => !s.classList.contains('dab-studio-select-native')
+        ).length;
+
+        const rects = [
+          document.querySelector('.dab-topbar'),
+          document.querySelector('.dab-conv-new-split-group'),
+          newConvMenu,
+          themeMenu
+        ]
+          .filter(Boolean)
+          .map((el) => el.getBoundingClientRect())
+          .filter((r) => r.width > 0 && r.height > 0);
+        const margin = 12;
+        const x = Math.max(0, Math.floor(Math.min(...rects.map((r) => r.left)) - margin));
+        const y = Math.max(0, Math.floor(Math.min(...rects.map((r) => r.top)) - margin));
+        const right = Math.min(1440, Math.ceil(Math.max(...rects.map((r) => r.right)) + margin));
+        const bottom = Math.min(900, Math.ceil(Math.max(...rects.map((r) => r.bottom)) + margin));
+
+        return {
+          hasNewConvMenu: Boolean(newConvMenu),
+          newConvOptionValues,
+          themeTriggerSvg,
+          themeMenuIcons,
+          themeHasEmoji,
+          studioSelectCount,
+          unstyledVisibleSelectCount,
+          clip: { x, y, width: right - x, height: bottom - y, scale: 1 }
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(openMenusRes.result.value).toMatchObject({
+      hasNewConvMenu: true,
+      newConvOptionValues: [
+        'auto',
+        'dashboard',
+        'conversational-analytics',
+        'app',
+        'health-check',
+        'lookml',
+        'tile'
+      ],
+      themeTriggerSvg: 'system',
+      themeMenuIcons: ['light', 'dark', 'system'],
+      themeHasEmoji: false,
+      unstyledVisibleSelectCount: 0
+    })
+    expect(openMenusRes.result.value.studioSelectCount).toBeGreaterThanOrEqual(2)
+
+    const { data } = await chrome.send('Page.captureScreenshot', {
+      format: 'png',
+      clip: openMenusRes.result.value.clip
+    })
+    const pngBuffer = Buffer.from(data, 'base64')
+    expect(pngBuffer.length).toBeGreaterThan(1000)
+    const scratchDir =
+      '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
+    mkdirSync(scratchDir, { recursive: true })
+    const scratchSnapPath = path.join(scratchDir, 'issue-60-dropdown-menus.png')
+    writeFileSync(scratchSnapPath, pngBuffer)
+    expect(existsSync(scratchSnapPath)).toBe(true)
+
+    // Test interactive selection on SVG theme menu, split + New Conversation use-case menu, and StudioSelect use-case-selector
+    const interactionRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        // 1. Click Dark in the SVG theme menu
+        const darkOpt = document.querySelector('[data-testid="topbar-theme-option-dark"]');
+        if (darkOpt) darkOpt.click();
+        await new Promise((r) => setTimeout(r, 80));
+        const themeAfterDarkClick = document.documentElement.getAttribute('data-theme');
+        const iconAfterDarkClick = document
+          .querySelector('[data-testid="topbar-theme-select"] .dab-studio-select-trigger svg')
+          ?.getAttribute('data-theme-icon');
+
+        // Switch back to Light via SVG theme menu
+        document.querySelector('[data-testid="topbar-theme-select"] .dab-studio-select-trigger')?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        document.querySelector('[data-testid="topbar-theme-option-light"]')?.click();
+        await new Promise((r) => setTimeout(r, 80));
+        const themeAfterLightClick = document.documentElement.getAttribute('data-theme');
+        const iconAfterLightClick = document
+          .querySelector('[data-testid="topbar-theme-select"] .dab-studio-select-trigger svg')
+          ?.getAttribute('data-theme-icon');
+
+        // 2. Click LookML in the split + New Conversation menu -> routes to '/' with LookML pre-selected
+        const lookmlSplitOpt = document.querySelector('[data-testid="new-conversation-use-case-option-lookml"]');
+        if (lookmlSplitOpt) lookmlSplitOpt.click();
+        await new Promise((r) => setTimeout(r, 120));
+        const routeAfterSplitSelect = window.__DAB_STUDIO__.history.location.pathname;
+        const hasCenteredPrompt = Boolean(document.querySelector('[data-testid="centered-empty-prompt"]'));
+        const useCaseSel = document.querySelector('[data-testid="use-case-selector"]');
+        const presetUseCase = useCaseSel ? useCaseSel.value : null;
+
+        // 3. Click Use Case StudioSelect trigger and pick Content Studio ('dashboard')
+        useCaseSel?.querySelector('.dab-studio-select-trigger')?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        document.querySelector('[data-testid="use-case-selector-option-dashboard"]')?.click();
+        await new Promise((r) => setTimeout(r, 80));
+        const afterCustomMenuSelect = useCaseSel ? useCaseSel.value : null;
+
+        return {
+          themeAfterDarkClick,
+          iconAfterDarkClick,
+          themeAfterLightClick,
+          iconAfterLightClick,
+          routeAfterSplitSelect,
+          hasCenteredPrompt,
+          presetUseCase,
+          afterCustomMenuSelect
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(interactionRes.result.value).toEqual({
+      themeAfterDarkClick: 'dark',
+      iconAfterDarkClick: 'dark',
+      themeAfterLightClick: 'light',
+      iconAfterLightClick: 'light',
+      routeAfterSplitSelect: '/',
+      hasCenteredPrompt: true,
+      presetUseCase: 'lookml',
+      afterCustomMenuSelect: 'dashboard'
+    })
+  }, 15000)
 })

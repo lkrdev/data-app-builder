@@ -1004,7 +1004,7 @@ body {
   background: var(--dab-surface-muted, #f8fafc);
   border-right: 1px solid var(--dab-border, #e2e8f0);
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .dab-conv-sidebar-header {
@@ -1051,22 +1051,13 @@ body {
   padding: 8px 6px;
 }
 
-.dab-conv-new-btn {
-  width: 100%;
-  height: 30px;
-  border: 1px dashed var(--dab-accent-border, #93c5fd);
-  border-radius: 6px;
-  background: var(--dab-accent-subtle, #eff6ff);
-  color: var(--dab-accent-text, #1d4ed8);
-  font-weight: 600;
-  font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.dab-conv-new-btn:hover {
-  background: var(--dab-badge-bg, #dbeafe);
-}
+.dab-conv-new-split-group { position: relative; display: flex; align-items: stretch; width: 100%; }
+.dab-conv-new-btn { flex: 1; min-width: 0; height: 30px; border: 1px dashed var(--dab-accent-border, #93c5fd); border-right: none; border-radius: 6px 0 0 6px; background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-accent-text, #1d4ed8); font-weight: 600; font-size: 12px; cursor: pointer; white-space: nowrap; padding: 0 8px; }
+.dab-conv-sidebar.collapsed .dab-conv-new-btn { border-right: 1px dashed var(--dab-accent-border, #93c5fd); border-radius: 6px; }
+.dab-conv-new-btn:hover:not(:disabled), .dab-conv-new-split-trigger:hover:not(:disabled) { background: var(--dab-badge-bg, #dbeafe); }
+.dab-conv-new-btn:disabled, .dab-conv-new-split-trigger:disabled { opacity: 0.55; cursor: not-allowed; }
+.dab-conv-new-split-trigger { width: 26px; height: 30px; border: 1px dashed var(--dab-accent-border, #93c5fd); border-radius: 0 6px 6px 0; background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-accent-text, #1d4ed8); font-weight: 700; font-size: 12px; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.dab-conv-new-menu { left: 0; top: calc(100% + 4px); min-width: 240px; }
 
 .dab-conv-list {
   flex: 1;
@@ -1320,7 +1311,7 @@ body {
   border: 1px solid var(--dab-border-strong, #cbd5e1);
   border-radius: 14px;
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
-  overflow: hidden;
+  overflow: visible;
   display: flex;
   flex-direction: column;
 }
@@ -1542,5 +1533,31 @@ body {
 .dab-folder-search-result-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; border: 1px solid var(--dab-border, #e2e8f0); border-radius: 6px; background: var(--dab-surface, #ffffff); color: var(--dab-text, #1f2937); font-size: 12px; cursor: pointer; text-align: left; }
 .dab-folder-search-result-row:hover { border-color: var(--dab-accent-border, #93c5fd); background: var(--dab-accent-subtle, #eff6ff); }
 .dab-folder-search-result-row.selected { border-color: var(--dab-accent, #2563eb); background: var(--dab-accent-subtle, #eff6ff); }
+
+/* Issue #60: Reusable Styled Dropdown / Menu (StudioSelect) */
+.dab-studio-select { position: relative; display: inline-flex; align-items: center; vertical-align: middle; }
+.dab-tile-select-row .dab-studio-select, .dab-modal-row .dab-studio-select { width: 100%; flex: 1; }
+.dab-studio-select-native { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; overflow: hidden; border: 0; padding: 0; margin: 0; }
+.dab-studio-select-trigger { height: 28px; min-width: 84px; width: 100%; padding: 0 8px; border: 1px solid var(--dab-border-strong, #cbd5e1); border-radius: 6px; background: var(--dab-input-bg, #ffffff); color: var(--dab-text, #1f2937); font-size: 12px; font-weight: 500; font-family: inherit; display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; cursor: pointer; text-align: left; }
+.dab-studio-select-trigger:hover:not(:disabled) { border-color: var(--dab-accent-border, #93c5fd); background: var(--dab-surface-muted, #f8fafc); }
+.dab-studio-select.open .dab-studio-select-trigger, .dab-studio-select-trigger:focus-visible { outline: none; border-color: var(--dab-accent, #2563eb); box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15); }
+.dab-studio-select-trigger:disabled { opacity: 0.55; cursor: not-allowed; }
+.dab-studio-select-trigger.icon-only { min-width: 38px; width: auto; padding: 0 7px; gap: 4px; justify-content: center; }
+.dab-studio-select-icon { display: inline-flex; align-items: center; justify-content: center; color: var(--dab-text-secondary, #334155); flex-shrink: 0; }
+.dab-studio-select-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dab-studio-select-chevron { font-size: 11px; line-height: 1; color: var(--dab-text-muted, #64748b); flex-shrink: 0; }
+.dab-studio-menu { position: absolute; top: calc(100% + 4px); left: 0; min-width: 100%; width: max-content; max-width: 340px; max-height: 280px; overflow-y: auto; z-index: 600; background: var(--dab-surface-elevated, #ffffff); border: 1px solid var(--dab-border-strong, #cbd5e1); border-radius: 8px; box-shadow: 0 10px 25px rgba(15, 23, 42, 0.16); padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+:root[data-theme="dark"] .dab-studio-menu, .dab-shell[data-theme="dark"] .dab-studio-menu { box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45); }
+.dab-studio-menu.align-right { left: auto; right: 0; }
+.dab-studio-menu-item { width: 100%; border: none; border-radius: 6px; background: transparent; color: var(--dab-text, #1e293b); font-size: 12px; font-weight: 500; font-family: inherit; padding: 6px 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; text-align: left; }
+.dab-studio-menu-item:hover:not(:disabled) { background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-text-strong, #0f172a); }
+.dab-studio-menu-item.active, .dab-studio-menu-item.selected { background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-accent-text, #1d4ed8); font-weight: 600; }
+.dab-studio-menu-item.disabled, .dab-studio-menu-item:disabled { opacity: 0.55; cursor: not-allowed; }
+.dab-studio-menu-item-main { display: inline-flex; align-items: center; gap: 7px; min-width: 0; flex: 1; }
+.dab-studio-menu-icon { display: inline-flex; align-items: center; justify-content: center; color: currentColor; flex-shrink: 0; }
+.dab-studio-menu-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dab-studio-menu-badge { font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 4px; background: var(--dab-surface-subtle, #f1f5f9); color: var(--dab-text-secondary, #475569); flex-shrink: 0; }
+.dab-studio-menu-check { font-size: 11px; font-weight: 700; color: var(--dab-accent, #2563eb); flex-shrink: 0; }
+
 
 

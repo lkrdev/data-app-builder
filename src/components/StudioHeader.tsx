@@ -34,25 +34,35 @@ export const FullScreenToggleButton: React.FC = () => {
   )
 }
 
+import { StudioSelect, ThemeModeIcon } from './StudioSelect'
+export { StudioSelect, ThemeModeIcon }
+export type { StudioSelectOption, StudioSelectProps } from './StudioSelect'
+
 export const ThemeModeSelect: React.FC<{
   themeMode: StudioThemeMode
   resolvedTheme: ResolvedStudioTheme
   onChange: (mode: StudioThemeMode) => void
 }> = ({ themeMode, resolvedTheme, onChange }) => (
-  <select
-    data-testid="topbar-theme-select"
-    data-theme-mode={themeMode}
-    data-resolved-theme={resolvedTheme}
+  <StudioSelect
+    testId="topbar-theme-select"
+    optionTestIdPrefix="topbar-theme"
     value={themeMode}
-    onChange={(e) => onChange(e.target.value as StudioThemeMode)}
-    aria-label="Theme Mode"
+    onChange={(val) => onChange(val as StudioThemeMode)}
+    ariaLabel="Theme Mode"
     title={`Theme mode: ${themeMode} (active: ${resolvedTheme})`}
-    style={{ height: 26, fontSize: 11.5, padding: '0 6px', borderRadius: 6, border: '1px solid var(--dab-border-strong, #cbd5e1)', background: 'var(--dab-surface-muted, #f8fafc)', color: 'var(--dab-text-strong, #0f172a)', fontWeight: 500 }}
-  >
-    <option value="light">☀️ Light</option>
-    <option value="dark">🌙 Dark</option>
-    <option value="system">💻 System</option>
-  </select>
+    iconOnly
+    align="right"
+    triggerIcon={<ThemeModeIcon mode={themeMode} />}
+    extraAttrs={{
+      'data-theme-mode': themeMode,
+      'data-resolved-theme': resolvedTheme,
+    }}
+    options={[
+      { value: 'light', label: 'Light', icon: <ThemeModeIcon mode="light" /> },
+      { value: 'dark', label: 'Dark', icon: <ThemeModeIcon mode="dark" /> },
+      { value: 'system', label: 'System', icon: <ThemeModeIcon mode="system" /> },
+    ]}
+  />
 )
 
 export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
@@ -127,13 +137,15 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             </div>
           </div>
           <div className="dab-controls">
-            <select
+            <StudioSelect
+              testId="config-auth-mode-select"
               value={authMode}
-              onChange={(e) => setAuthMode(e.target.value as 'oauth' | 'apikey')}
-            >
-              <option value="oauth">Google OAuth</option>
-              <option value="apikey">Gemini API Key (User Attr)</option>
-            </select>
+              onChange={(val) => setAuthMode(val as 'oauth' | 'apikey')}
+              options={[
+                { value: 'oauth', label: 'Google OAuth' },
+                { value: 'apikey', label: 'Gemini API Key (User Attr)' },
+              ]}
+            />
 
             {authMode === 'oauth' ? (
               <>
@@ -224,17 +236,16 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             }}
           >
             <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Default Model:</strong>
-            <select
-              data-testid="config-default-model-select"
+            <StudioSelect
+              testId="config-default-model-select"
               value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-            >
-              {availableModels.map((m) => (
-                <option key={m.id} value={m.id} title={m.description}>
-                  {m.label} ({m.id})
-                </option>
-              ))}
-            </select>
+              onChange={setSelectedModel}
+              options={availableModels.map((m) => ({
+                value: m.id,
+                label: `${m.label} (${m.id})`,
+                title: m.description,
+              }))}
+            />
           </div>
           <div
             style={{
@@ -781,20 +792,21 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                 <div className="dab-divider" />
                 <div className="dab-load-box">
                   {lookmlSessions.length > 0 && (
-                    <select
+                    <StudioSelect
+                      testId="topbar-lookml-sessions-select"
                       className="dab-folder-trigger-fixed"
                       value=""
-                      onChange={(e) => {
-                        if (e.target.value) loadLookmlSessionById(e.target.value, true)
+                      onChange={(val) => {
+                        if (val) loadLookmlSessionById(val, true)
                       }}
-                    >
-                      <option value="">Saved LookML ({lookmlSessions.length})...</option>
-                      {lookmlSessions.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.title} ({s.id})
-                        </option>
-                      ))}
-                    </select>
+                      options={[
+                        { value: '', label: `Saved LookML (${lookmlSessions.length})...` },
+                        ...lookmlSessions.map((s) => ({
+                          value: s.id,
+                          label: `${s.title} (${s.id})`,
+                        })),
+                      ]}
+                    />
                   )}
                   {lookmlBundle && (
                     <button
@@ -963,15 +975,16 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                       </div>
                       <div className="dab-modal-row">
                         <label>Personal Scope (is_personal)</label>
-                        <select
-                          data-testid="folder-search-select-personal"
+                        <StudioSelect
+                          testId="folder-search-select-personal"
                           value={advPersonal}
-                          onChange={(e) => setAdvPersonal(e.target.value as any)}
-                        >
-                          <option value="any">Any Folder</option>
-                          <option value="false">Shared Folders Only (is_personal=false)</option>
-                          <option value="true">Personal Folders Only (is_personal=true)</option>
-                        </select>
+                          onChange={(val) => setAdvPersonal(val as any)}
+                          options={[
+                            { value: 'any', label: 'Any Folder' },
+                            { value: 'false', label: 'Shared Folders Only (is_personal=false)' },
+                            { value: 'true', label: 'Personal Folders Only (is_personal=true)' },
+                          ]}
+                        />
                       </div>
                       <div className="dab-modal-row">
                         <label>Creator User ID (creator_id)</label>
@@ -1105,25 +1118,25 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                   ⚠️ Missing: {capabilities.tools.health.missingPermissions.join(', ')}
                 </span>
               )}
-              <select
+              <StudioSelect
+                testId="topbar-health-scope-select"
                 value={healthScope}
-                onChange={(e) => setHealthScope(e.target.value as any)}
+                onChange={(val) => setHealthScope(val as any)}
                 title="Select Looker Health Check, BigQuery Health Check, or Combined 3-Pillar Audit"
-              >
-                <option
-                  value="all"
-                  disabled={Boolean(capabilities?.rolesLoaded && capabilities.sqlRunnerConnections.size === 0)}
-                >
-                  All 3 Pillars (Looker + BQ)
-                </option>
-                <option value="looker">Looker Only (Pillars 1 &amp; 2)</option>
-                <option
-                  value="bq"
-                  disabled={Boolean(capabilities?.rolesLoaded && capabilities.sqlRunnerConnections.size === 0)}
-                >
-                  BigQuery Only (Pillar 3)
-                </option>
-              </select>
+                options={[
+                  {
+                    value: 'all',
+                    label: 'All 3 Pillars (Looker + BQ)',
+                    disabled: Boolean(capabilities?.rolesLoaded && capabilities.sqlRunnerConnections.size === 0),
+                  },
+                  { value: 'looker', label: 'Looker Only (Pillars 1 & 2)' },
+                  {
+                    value: 'bq',
+                    label: 'BigQuery Only (Pillar 3)',
+                    disabled: Boolean(capabilities?.rolesLoaded && capabilities.sqlRunnerConnections.size === 0),
+                  },
+                ]}
+              />
               <button
                 type="button"
                 className="dab-btn-gemini"

@@ -13,6 +13,24 @@ import { LOOKML_TURN_SKILLS, LookmlPreviewPane } from '../lookmlTool'
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import { StudioController } from '../useStudioController'
 import { TilePreviewPane } from './ScriptStudioView'
+import { StudioSelect, StudioSelectOption } from './StudioSelect'
+
+function buildUseCaseMenuOptions(ctl: StudioController): StudioSelectOption[] {
+  const { useCaseOptions, allowedUseCases, capabilities } = ctl
+  return useCaseOptions.map((opt) => {
+    const isAllowed = opt.value === 'auto' || allowedUseCases.includes(opt.value as any)
+    const toolReason =
+      opt.capabilityMode && capabilities?.rolesLoaded
+        ? capabilities.tools?.[opt.capabilityMode]?.reason
+        : undefined
+    return {
+      value: opt.value,
+      label: !isAllowed ? `🔒 ${opt.label} (Locked)` : opt.label,
+      disabled: !isAllowed,
+      title: !isAllowed ? toolReason || 'Missing Looker permissions' : undefined,
+    }
+  })
+}
 
 export interface LookerEmbedTarget {
   kind: 'preload' | 'dashboard' | 'look' | 'url'
@@ -384,11 +402,16 @@ export const DOC_UI_COMPONENTS: Record<string, () => React.ReactElement> = {
   SaveScriptButton: () => <button type="button" className="dab-btn-secondary" tabIndex={-1}>Save Script</button>,
   RunPythonButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>✨ Run Python</button>,
   ScriptModeSelect: () => (
-    <select className="dab-select" defaultValue="summary" tabIndex={-1}>
-      <option value="summary">summary</option>
-      <option value="detailed_audit">detailed_audit</option>
-      <option value="anomaly_alert">anomaly_alert</option>
-    </select>
+    <StudioSelect
+      className="dab-select"
+      value="summary"
+      onChange={() => {}}
+      options={[
+        { value: 'summary', label: 'summary' },
+        { value: 'detailed_audit', label: 'detailed_audit' },
+        { value: 'anomaly_alert', label: 'anomaly_alert' },
+      ]}
+    />
   ),
   ReloadPreviewButton: () => <button type="button" className="dab-btn-secondary" tabIndex={-1}>Reload Preview</button>,
   OpenInLookerButton: () => <button type="button" className="dab-btn-secondary" tabIndex={-1}>Open in Looker ↗</button>,
@@ -689,9 +712,31 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
     handleCancelDeleteConversation,
     handleConfirmDeleteConversation,
     handleNewConversation,
+    selectedUseCase,
     busyStatus,
     userId,
   } = ctl
+  const [newConvMenuOpen, setNewConvMenuOpen] = useState(false)
+  const newConvGroupRef = useRef<HTMLDivElement>(null)
+  const useCaseMenuItems = buildUseCaseMenuOptions(ctl)
+
+  useEffect(() => {
+    if (!newConvMenuOpen) return
+    const onDocDown = (e: MouseEvent) => {
+      if (newConvGroupRef.current && !newConvGroupRef.current.contains(e.target as Node)) {
+        setNewConvMenuOpen(false)
+      }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setNewConvMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDocDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [newConvMenuOpen])
 
   const renderConversationRow = (conv: ConversationRecord, isArchived = false) => {
     const contentBadge = formatConversationContentTag(conv)
@@ -762,16 +807,75 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
       </div>
 
       <div className="dab-conv-sidebar-actions">
-        <button
-          type="button"
-          className="dab-conv-new-btn"
-          data-testid="new-conversation-btn"
-          onClick={handleNewConversation}
-          disabled={!!busyStatus}
-          title="Start a new conversation"
-        >
-          {sidebarCollapsed ? '+' : '+ New Conversation'}
-        </button>
+        <div className="dab-conv-new-split-group" ref={newConvGroupRef}>
+          <button
+            type="button"
+            className="dab-conv-new-btn"
+            data-testid="new-conversation-btn"
+            onClick={() => {
+              setNewConvMenuOpen(false)
+              handleNewConversation('auto')
+            }}
+            disabled={!!busyStatus}
+            title="Start a new conversation"
+          >
+            {sidebarCollapsed ? '+' : '+ New Conversation'}
+          </button>
+          {!sidebarCollapsed && (
+            <button
+              type="button"
+              className={`dab-conv-new-split-trigger ${newConvMenuOpen ? 'open' : ''}`}
+              data-testid="new-conversation-menu-trigger"
+              aria-haspopup="menu"
+              aria-expanded={newConvMenuOpen}
+              disabled={!!busyStatus}
+              title="Start a new conversation with a specific use case"
+              onClick={(e) => {
+                e.stopPropagation()
+                if (!busyStatus) setNewConvMenuOpen((o) => !o)
+              }}
+            >
+              ⌄
+            </button>
+          )}
+          {newConvMenuOpen && (
+            <div
+              className="dab-studio-menu dab-conv-new-menu"
+              role="menu"
+              data-testid="new-conversation-use-case-menu"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {useCaseMenuItems.map((opt) => {
+                const isSelected = selectedUseCase === opt.value
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    role="menuitem"
+                    disabled={opt.disabled}
+                    title={opt.title}
+                    data-value={opt.value}
+                    data-testid={`new-conversation-use-case-option-${opt.value}`}
+                    className={`dab-studio-menu-item ${isSelected ? 'active' : ''} ${opt.disabled ? 'disabled' : ''}`}
+                    onClick={() => {
+                      if (opt.disabled) return
+                      setNewConvMenuOpen(false)
+                      handleNewConversation(opt.value as StudioUseCase)
+                    }}
+                  >
+                    <span
+                      className="dab-studio-menu-item-main"
+                      data-testid={`new-conversation-option-${opt.value}`}
+                    >
+                      <span className="dab-studio-menu-text">{opt.label}</span>
+                    </span>
+                    {isSelected && <span className="dab-studio-menu-check" aria-hidden="true">✓</span>}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {!sidebarCollapsed && (
@@ -1035,41 +1139,14 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
           <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Use Case:</strong>
           {!isUseCaseLocked ? (
-            <select
+            <StudioSelect
               data-testid="use-case-selector"
+              testId="use-case-selector"
               value={selectedUseCase}
-              onChange={(e) => setSelectedUseCase(e.target.value as StudioUseCase)}
+              onChange={(val) => setSelectedUseCase(val as StudioUseCase)}
               disabled={!!busyStatus}
-              style={{
-                height: 26,
-                fontSize: 12,
-                padding: '0 8px',
-                borderRadius: 6,
-                border: '1px solid var(--dab-border-strong, #cbd5e1)',
-                background: 'var(--dab-surface-muted, #f8fafc)',
-                color: 'var(--dab-text-strong, #0f172a)',
-                fontWeight: 500,
-              }}
-            >
-              {useCaseOptions.map((opt) => {
-                const isAllowed =
-                  opt.value === 'auto' || allowedUseCases.includes(opt.value as any)
-                const toolReason =
-                  opt.capabilityMode && capabilities?.rolesLoaded
-                    ? capabilities.tools?.[opt.capabilityMode]?.reason
-                    : undefined
-                return (
-                  <option
-                    key={opt.value}
-                    value={opt.value}
-                    disabled={!isAllowed}
-                    title={!isAllowed ? toolReason || 'Missing Looker permissions' : undefined}
-                  >
-                    {!isAllowed ? `🔒 ${opt.label} (Locked)` : opt.label}
-                  </option>
-                )
-              })}
-            </select>
+              options={buildUseCaseMenuOptions(ctl)}
+            />
           ) : (
             <span
               data-testid="locked-use-case-badge"
@@ -1186,21 +1263,21 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       />
 
       <div className="dab-composer-actions">
-        <select
+        <StudioSelect
           data-testid="composer-model-select"
+          testId="composer-model-select"
           className="dab-composer-model-select"
           value={selectedModel}
-          onChange={(e) => setSelectedModel(e.target.value)}
+          onChange={setSelectedModel}
           disabled={!!busyStatus}
-          aria-label="Select Antigravity model"
+          ariaLabel="Select Antigravity model"
           title="Select Antigravity model for this turn (/v1beta/models)"
-        >
-          {availableModels.map((m) => (
-            <option key={m.id} value={m.id} title={m.description}>
-              {m.label}
-            </option>
-          ))}
-        </select>
+          options={availableModels.map((m) => ({
+            value: m.id,
+            label: m.label,
+            title: m.description,
+          }))}
+        />
 
         <div
           className="dab-composer-send-group"
