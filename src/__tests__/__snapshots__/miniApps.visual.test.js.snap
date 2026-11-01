@@ -534,6 +534,41 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 }
 `;
 
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders studio_dark_theme (18. Studio Dark Theme Mode (Semantic Dark Surface & Text Tokens)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "dropdownScrollTop": null,
+  "modeTabs": [
+    {
+      "active": true,
+      "label": "Data App",
+    },
+    {
+      "active": false,
+      "label": "Content Studio",
+    },
+    {
+      "active": false,
+      "label": "LookML",
+    },
+    {
+      "active": false,
+      "label": "Health Check",
+    },
+    {
+      "active": false,
+      "label": "Python Tile",
+    },
+  ],
+  "scenario": "studio_dark_theme",
+  "verifiedVisibleText": [
+    "Agent",
+    "Agentic LookML",
+    "Executive Revenue App",
+    "✨ Update App",
+  ],
+}
+`;
+
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders tile_mount_edit (7. Dashboard Tile Mount — Edit Mode) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,

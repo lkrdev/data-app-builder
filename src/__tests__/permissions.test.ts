@@ -20,12 +20,16 @@ import {
   getAllowedUseCases,
   loadUserConversations,
   loadUserEnvironmentId,
+  normalizeStudioThemeMode,
   parseCaAgentSelectionResponse,
   rawLookerRequest,
+  resolveStudioTheme,
+  resolveSystemTheme,
   resolveUserCapabilities,
   saveUserConversation,
   saveUserEnvironmentId,
   selectCaAgentViaIsolatedSubagent,
+  STUDIO_THEME_STORAGE_KEY,
 } from '../lookerApi'
 import {
   AGENTS_MD,
@@ -1662,5 +1666,20 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       'loadUrl',
       'loadUrl',
     ])
+  })
+
+  test('18. normalizes and resolves Light, Dark, and System theme modes (Issue #49)', () => {
+    expect(STUDIO_THEME_STORAGE_KEY).toBe('dab_theme_mode')
+    expect(normalizeStudioThemeMode('light')).toBe('light')
+    expect(normalizeStudioThemeMode('dark')).toBe('dark')
+    expect(normalizeStudioThemeMode('system')).toBe('system')
+    expect(normalizeStudioThemeMode('invalid')).toBe('system')
+    expect(normalizeStudioThemeMode(null)).toBe('system')
+    expect(resolveSystemTheme({ matches: true })).toBe('dark')
+    expect(resolveSystemTheme({ matches: false })).toBe('light')
+    expect(resolveStudioTheme('light', 'dark')).toBe('light')
+    expect(resolveStudioTheme('dark', 'light')).toBe('dark')
+    expect(resolveStudioTheme('system', 'dark')).toBe('dark')
+    expect(resolveStudioTheme('system', 'light')).toBe('light')
   })
 })

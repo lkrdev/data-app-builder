@@ -782,7 +782,7 @@ export function renderTddMarkdownToHtml(markdown: string): string {
     }
 
     if (/^---\s*$/.test(line.trim())) {
-      out.push('<hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0;" />');
+      out.push('<hr style="border:none;border-top:1px solid var(--dab-border, #e2e8f0);margin:16px 0;" />');
       i++;
       continue;
     }

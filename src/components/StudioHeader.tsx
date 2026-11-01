@@ -3,7 +3,11 @@ import { useLocation } from 'react-router-dom'
 import { getGeminiUserAttributeName, LkrCodeMode, studioModeToUseCase } from '../antigravity'
 import { useLookerExtension } from '../contexts/LookerExtensionContext'
 import { formatExploreId } from '../lookerApi'
-import { StudioController } from '../useStudioController'
+import {
+  ResolvedStudioTheme,
+  StudioController,
+  StudioThemeMode,
+} from '../useStudioController'
 import { STUDIO_MODES } from './App'
 
 export const FullScreenToggleButton: React.FC = () => {
@@ -30,8 +34,32 @@ export const FullScreenToggleButton: React.FC = () => {
   )
 }
 
+export const ThemeModeSelect: React.FC<{
+  themeMode: StudioThemeMode
+  resolvedTheme: ResolvedStudioTheme
+  onChange: (mode: StudioThemeMode) => void
+}> = ({ themeMode, resolvedTheme, onChange }) => (
+  <select
+    data-testid="topbar-theme-select"
+    data-theme-mode={themeMode}
+    data-resolved-theme={resolvedTheme}
+    value={themeMode}
+    onChange={(e) => onChange(e.target.value as StudioThemeMode)}
+    aria-label="Theme Mode"
+    title={`Theme mode: ${themeMode} (active: ${resolvedTheme})`}
+    style={{ height: 26, fontSize: 11.5, padding: '0 6px', borderRadius: 6, border: '1px solid var(--dab-border-strong, #cbd5e1)', background: 'var(--dab-surface-muted, #f8fafc)', color: 'var(--dab-text-strong, #0f172a)', fontWeight: 500 }}
+  >
+    <option value="light">☀️ Light</option>
+    <option value="dark">🌙 Dark</option>
+    <option value="system">💻 System</option>
+  </select>
+)
+
 export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
+    themeMode,
+    resolvedTheme,
+    setThemeMode,
     authMode,
     setAuthMode,
     clientId,
@@ -59,7 +87,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     !!busyStatus || !canSaveContext || (authMode === 'apikey' && !canManageAttrs)
 
   return (
-    <div className="dab-shell">
+    <div className="dab-shell" data-theme={resolvedTheme} data-theme-mode={themeMode}>
       <header className="dab-topbar">
         <div className="dab-brand">
           <strong>Agent</strong>
@@ -67,16 +95,22 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           <span className="dab-badge">Configuration</span>
         </div>
         <div className="dab-controls">
+          <ThemeModeSelect
+            themeMode={themeMode}
+            resolvedTheme={resolvedTheme}
+            onChange={setThemeMode}
+          />
           <FullScreenToggleButton />
         </div>
       </header>
       <div className="dab-placeholder">
         <div
           style={{
-            background: '#fff',
+            background: 'var(--dab-surface, #fff)',
+            color: 'var(--dab-text, #1f2937)',
             padding: '22px 26px',
             borderRadius: 12,
-            border: '1px solid #cbd5e1',
+            border: '1px solid var(--dab-border-strong, #cbd5e1)',
             boxShadow: '0 10px 25px rgba(15,23,42,0.08)',
             display: 'flex',
             flexDirection: 'column',
@@ -151,7 +185,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           </div>
           <div
             style={{
-              borderTop: '1px solid #e2e8f0',
+              borderTop: '1px solid var(--dab-border, #e2e8f0)',
               paddingTop: 10,
               display: 'flex',
               alignItems: 'center',
@@ -160,7 +194,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               fontSize: 12,
             }}
           >
-            <strong style={{ color: '#475569' }}>Default Model:</strong>
+            <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Default Model:</strong>
             <select
               data-testid="config-default-model-select"
               value={selectedModel}
@@ -175,7 +209,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           </div>
           <div
             style={{
-              borderTop: '1px solid #e2e8f0',
+              borderTop: '1px solid var(--dab-border, #e2e8f0)',
               paddingTop: 10,
               display: 'flex',
               alignItems: 'center',
@@ -184,7 +218,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               fontSize: 12,
             }}
           >
-            <strong style={{ color: '#475569' }}>Enabled Studio Apps:</strong>
+            <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Enabled Studio Apps:</strong>
             {STUDIO_MODES.map((m) => {
               const enabled = !disabledModes.includes(m.mode)
               return (
@@ -197,9 +231,13 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                     cursor: 'pointer',
                     padding: '4px 8px',
                     borderRadius: 6,
-                    border: '1px solid #cbd5e1',
-                    background: enabled ? '#eff6ff' : '#f8fafc',
-                    color: enabled ? '#1d4ed8' : '#64748b',
+                    border: '1px solid var(--dab-border-strong, #cbd5e1)',
+                    background: enabled
+                      ? 'var(--dab-accent-subtle, #eff6ff)'
+                      : 'var(--dab-surface-muted, #f8fafc)',
+                    color: enabled
+                      ? 'var(--dab-accent-text, #1d4ed8)'
+                      : 'var(--dab-text-muted, #64748b)',
                   }}
                 >
                   <input
@@ -251,6 +289,9 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
 
 export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
+    themeMode,
+    resolvedTheme,
+    setThemeMode,
     activeMode,
     enabledModes,
     selectedModel,
@@ -457,7 +498,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
           value={selectedModel}
           onChange={(e) => setSelectedModel(e.target.value)}
           title="Select Antigravity model (/v1beta/models)"
-          style={{ height: 26, fontSize: 11.5, padding: '0 6px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#f8fafc', color: '#0f172a', fontWeight: 500 }}
+          style={{ height: 26, fontSize: 11.5, padding: '0 6px', borderRadius: 6, border: '1px solid var(--dab-border-strong, #cbd5e1)', background: 'var(--dab-surface-muted, #f8fafc)', color: 'var(--dab-text-strong, #0f172a)', fontWeight: 500 }}
         >
           {availableModels.map((m) => (
             <option key={m.id} value={m.id} title={m.description}>
@@ -465,6 +506,11 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
             </option>
           ))}
         </select>
+        <ThemeModeSelect
+          themeMode={themeMode}
+          resolvedTheme={resolvedTheme}
+          onChange={setThemeMode}
+        />
       </div>
 
       <div className="dab-controls">

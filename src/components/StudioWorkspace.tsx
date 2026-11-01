@@ -472,7 +472,7 @@ export const StudioCatalogBar: React.FC<{ ctl: StudioController }> = ({ ctl }) =
   return (
     <div className="dab-catalog-bar">
       <div className="dab-catalog-search">
-        <strong style={{ fontSize: 12, color: '#334155', whiteSpace: 'nowrap' }}>
+        <strong style={{ fontSize: 12, color: 'var(--dab-text-secondary, #334155)', whiteSpace: 'nowrap' }}>
           My Creations ({filteredCatalog.length})
         </strong>
         <input
@@ -484,8 +484,10 @@ export const StudioCatalogBar: React.FC<{ ctl: StudioController }> = ({ ctl }) =
             flex: 1,
             padding: '3px 8px',
             fontSize: 12,
-            border: '1px solid #cbd5e1',
+            border: '1px solid var(--dab-border-strong, #cbd5e1)',
             borderRadius: 4,
+            background: 'var(--dab-input-bg, #ffffff)',
+            color: 'var(--dab-text, #1f2937)',
           }}
         />
       </div>
@@ -510,7 +512,7 @@ export const StudioCatalogBar: React.FC<{ ctl: StudioController }> = ({ ctl }) =
                   cursor: 'pointer',
                   padding: 0,
                   fontSize: 11,
-                  color: '#94a3b8',
+                  color: 'var(--dab-text-muted, #94a3b8)',
                 }}
                 title="Delete artifact"
               >
@@ -583,7 +585,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-          <strong style={{ color: '#475569' }}>Use Case:</strong>
+          <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Use Case:</strong>
           {!isUseCaseLocked ? (
             <select
               data-testid="use-case-selector"
@@ -595,9 +597,9 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 fontSize: 12,
                 padding: '0 8px',
                 borderRadius: 6,
-                border: '1px solid #cbd5e1',
-                background: '#f8fafc',
-                color: '#0f172a',
+                border: '1px solid var(--dab-border-strong, #cbd5e1)',
+                background: 'var(--dab-surface-muted, #f8fafc)',
+                color: 'var(--dab-text-strong, #0f172a)',
                 fontWeight: 500,
               }}
             >
@@ -626,9 +628,9 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               data-testid="locked-use-case-badge"
               className="dab-badge dab-locked-use-case-badge"
               style={{
-                background: '#eff6ff',
-                color: '#1d4ed8',
-                borderColor: '#bfdbfe',
+                background: 'var(--dab-badge-bg, #eff6ff)',
+                color: 'var(--dab-accent-text, #1d4ed8)',
+                borderColor: 'var(--dab-accent-border, #bfdbfe)',
                 fontWeight: 600,
               }}
               title="Use case is locked after Turn 1 — start a new conversation to switch use cases"
@@ -1246,14 +1248,14 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               style={{
                 padding: '6px 12px',
                 fontSize: 12,
-                background: '#f8fafc',
-                borderBottom: '1px solid #e2e8f0',
-                color: '#334155',
+                background: 'var(--dab-surface-muted, #f8fafc)',
+                borderBottom: '1px solid var(--dab-border, #e2e8f0)',
+                color: 'var(--dab-text-secondary, #334155)',
               }}
             >
               <strong>Isolated Sub-Agent Selection:</strong> {caConversation.selectionRationale}
               {caConversation.explores?.length > 0 && (
-                <span style={{ marginLeft: 8, color: '#64748b' }}>
+                <span style={{ marginLeft: 8, color: 'var(--dab-text-muted, #64748b)' }}>
                   · Explores: <code>{caConversation.explores.join(', ')}</code>
                 </span>
               )}

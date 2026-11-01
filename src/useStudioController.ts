@@ -2,16 +2,20 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useHistory, useLocation } from 'react-router-dom'
 import { useLookerExtension } from './contexts/LookerExtensionContext'
 import {
-  buildAvailableExploresCatalog, buildDenseExploreSchema, CaConversationState, ConversationRecord,
-  createLookerCaConversation, deleteUserArtifact, deleteUserConversation, extractExploreIdsFromCode,
-  extractResolvedUseCase, fetchInitialLookerMetadata, formatExploreId, getAllowedUseCases,
-  getArtifactNamespace, getUseCaseLabel, listUserArtifacts, listUserDashboardArtifacts,
-  loadExistingDashboardApp, loadNativeContentById, loadObjectArtifact, loadUserConversations,
-  loadUserEnvironmentId, NativeContentState, NativeContentType, parseExploreId, PublishedAppState,
-  resolveCaEmbedPath, ResolvedStudioUseCase, resolveUserCapabilities, saveDashboardStudioMetadata,
+  applyStudioDocumentTheme, buildAvailableExploresCatalog, buildDenseExploreSchema,
+  CaConversationState, ConversationRecord, createLookerCaConversation, deleteUserArtifact,
+  deleteUserConversation, extractExploreIdsFromCode, extractResolvedUseCase,
+  fetchInitialLookerMetadata, formatExploreId, getAllowedUseCases, getArtifactNamespace,
+  getUseCaseLabel, listUserArtifacts, listUserDashboardArtifacts, loadExistingDashboardApp,
+  loadNativeContentById, loadObjectArtifact, loadStoredStudioThemeMode, loadUserConversations,
+  loadUserEnvironmentId, NativeContentState, NativeContentType, normalizeStudioThemeMode,
+  parseExploreId, persistStudioThemeMode, PublishedAppState, readInitialStudioThemeMode,
+  resolveCaEmbedPath, ResolvedStudioTheme, ResolvedStudioUseCase, resolveStudioTheme,
+  resolveSystemTheme, resolveUserCapabilities, saveDashboardStudioMetadata,
   saveNativeContentArtifact, saveUserArtifact, saveUserConversation, selectCaAgentViaIsolatedSubagent,
-  STUDIO_USE_CASE_OPTIONS, studioModeToUseCase, StudioUseCase, upsertPublishedDataApp,
-  useCaseToStudioMode, UserArtifactIndex, UserCapabilities, UserConversationEntry,
+  STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS, studioModeToUseCase, StudioThemeMode,
+  StudioUseCase, upsertPublishedDataApp, useCaseToStudioMode, UserArtifactIndex, UserCapabilities,
+  UserConversationEntry,
 } from './lookerApi'
 import {
   AgentSession, ANTIGRAVITY_ALLOWED_MODELS, AntigravityAuth, AntigravityModelOption,
@@ -28,6 +32,14 @@ import {
   runThreePillarHealthCheckViaCodeMode, saveHealthCheckArtifact, THREE_PILLAR_CODEMODE_PY,
 } from './healthCheck'
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
+
+export {
+  normalizeStudioThemeMode,
+  resolveStudioTheme,
+  resolveSystemTheme,
+  STUDIO_THEME_STORAGE_KEY,
+}
+export type { ResolvedStudioTheme, StudioThemeMode }
 
 export function useStudioController() {
   const { extensionSDK, core40SDK, tileHostData, lookerHostData } = useLookerExtension()
@@ -74,6 +86,52 @@ export function useStudioController() {
 
   const mockExt =
     typeof window !== 'undefined' ? (window as any).__MOCK_LOOKER_EXTENSION__ : undefined
+  const [themeMode, setThemeModeState] = useState<StudioThemeMode>(() =>
+    readInitialStudioThemeMode()
+  )
+  const [systemTheme, setSystemTheme] = useState<ResolvedStudioTheme>(() => resolveSystemTheme())
+  const resolvedTheme: ResolvedStudioTheme = resolveStudioTheme(themeMode, systemTheme)
+
+  applyStudioDocumentTheme(resolvedTheme, themeMode)
+
+  useEffect(() => {
+    applyStudioDocumentTheme(resolvedTheme, themeMode)
+  }, [resolvedTheme, themeMode])
+
+  useEffect(() => {
+    let mounted = true
+    void loadStoredStudioThemeMode(extensionSDK).then((stored) => {
+      if (mounted && stored) setThemeModeState(stored)
+    })
+    return () => {
+      mounted = false
+    }
+  }, [extensionSDK])
+
+  useEffect(() => {
+    const mql = typeof window !== 'undefined' ? window.matchMedia?.('(prefers-color-scheme: dark)') : null
+    if (!mql) return
+    setSystemTheme(mql.matches ? 'dark' : 'light')
+    const onChange = (e?: MediaQueryListEvent | { matches?: boolean }) => {
+      const nextSys: ResolvedStudioTheme = (typeof e?.matches === 'boolean' ? e.matches : mql.matches) ? 'dark' : 'light'
+      setSystemTheme(nextSys)
+      if (themeMode === 'system') applyStudioDocumentTheme(nextSys, 'system')
+    }
+    mql.addEventListener?.('change', onChange)
+    return () => mql.removeEventListener?.('change', onChange)
+  }, [themeMode])
+
+  const setThemeMode = useCallback(
+    (next: StudioThemeMode) => {
+      const mode = normalizeStudioThemeMode(next)
+      const nextSys = resolveSystemTheme()
+      setThemeModeState(mode)
+      setSystemTheme(nextSys)
+      applyStudioDocumentTheme(resolveStudioTheme(mode, nextSys), mode)
+      persistStudioThemeMode(extensionSDK, mode)
+    },
+    [extensionSDK]
+  )
   const [userId, setUserId] = useState('1')
   const [capabilities, setCapabilities] = useState<UserCapabilities>(() =>
     resolveUserCapabilities()
@@ -1638,15 +1696,17 @@ export function useStudioController() {
       ;(window as any).__DAB_STUDIO__ = {
         history, requestCodeModePermission, setRequirePermission, setDisabledModes,
         setSelectedModel, setAuthMode, setApiKey, setSidebarCollapsed,
+        themeMode, resolvedTheme, setThemeMode,
         setSelectedUseCase: handleChangeUseCase, setCapabilities,
         handleResetNewApp, handleNewConversation, handleSelectConversation,
         setNativeContent, setPublishedApp, bumpEmbedNonce,
       }
     }
-  }, [history, requestCodeModePermission, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce])
+  }, [history, requestCodeModePermission, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce])
 
   return {
     extensionSDK, core40SDK, history, location, isTileMount,
+    themeMode, resolvedTheme, setThemeMode,
     authMode, setAuthMode, clientId, setClientId, projectId, setProjectId,
     disabledModes, setDisabledModes, selectedModel, setSelectedModel,
     availableModels, enabledModes, oauthToken, apiKey, setApiKey,

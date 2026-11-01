@@ -287,10 +287,11 @@ export const LookmlPreviewPane: React.FC<{
   const queries = bundle.queries || []
   const cleanHost = hostUrl.replace(/\/$/, '')
   const cardStyle: React.CSSProperties = {
-    background: '#fff',
+    background: 'var(--dab-surface, #fff)',
+    color: 'var(--dab-text, #1f2937)',
     padding: 12,
     borderRadius: 8,
-    border: '1px solid #e2e8f0',
+    border: '1px solid var(--dab-border, #e2e8f0)',
   }
 
   const openLink = (pathOrUrl: string) => {
@@ -397,7 +398,7 @@ export const LookmlPreviewPane: React.FC<{
       )}
 
       <div style={{ ...cardStyle, padding: 0, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 240, overflow: 'hidden' }}>
-        <div className="dab-inspector-bar" style={{ padding: '8px 12px', borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+        <div className="dab-inspector-bar" style={{ padding: '8px 12px', borderBottom: '1px solid var(--dab-border, #e2e8f0)', background: 'var(--dab-surface-muted, #f8fafc)' }}>
           <div className="dab-controls">
             {files.length === 0 ? (
               <span className="dab-muted">No modified .lkml files recorded</span>

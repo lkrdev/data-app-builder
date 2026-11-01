@@ -89,6 +89,9 @@ const StudioMain: React.FC = () => {
           projectId: ctl.projectId,
           apiKey: ctl.apiKey,
         }}
+        themeMode={ctl.themeMode}
+        resolvedTheme={ctl.resolvedTheme}
+        onChangeThemeMode={ctl.setThemeMode}
         selectedModel={ctl.selectedModel}
         availableModels={ctl.availableModels}
         onChangeModel={ctl.setSelectedModel}
@@ -110,7 +113,7 @@ const StudioMain: React.FC = () => {
   }
 
   return (
-    <div className="dab-shell">
+    <div className="dab-shell" data-theme={ctl.resolvedTheme} data-theme-mode={ctl.themeMode}>
       <StudioTopbar ctl={ctl} />
       <div
         className={`dab-workspace dab-workspace-with-sidebar ${

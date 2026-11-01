@@ -34,9 +34,14 @@ import {
   ScriptOutputRenderer,
 } from './PythonTile'
 import { STUDIO_MODES } from './App'
+import { ThemeModeSelect } from './StudioHeader'
+import { ResolvedStudioTheme, StudioThemeMode } from '../useStudioController'
 
 export const ScriptStudioView: React.FC<{
   auth: AntigravityAuth
+  themeMode?: StudioThemeMode
+  resolvedTheme?: ResolvedStudioTheme
+  onChangeThemeMode?: (mode: StudioThemeMode) => void
   selectedModel?: string
   availableModels?: AntigravityModelOption[]
   onChangeModel?: (model: string) => void
@@ -51,6 +56,9 @@ export const ScriptStudioView: React.FC<{
   onEnvironmentUpdated?: (environmentId: string) => void
 }> = ({
   auth,
+  themeMode = 'system',
+  resolvedTheme = 'light',
+  onChangeThemeMode,
   selectedModel = DEFAULT_ANTIGRAVITY_MODEL,
   availableModels = ANTIGRAVITY_ALLOWED_MODELS,
   onChangeModel,
@@ -372,7 +380,7 @@ export const ScriptStudioView: React.FC<{
   }
 
   return (
-    <div className="dab-shell">
+    <div className="dab-shell" data-theme={resolvedTheme} data-theme-mode={themeMode}>
       <header className="dab-topbar">
         <div className="dab-brand">
           <strong>Agent</strong>
@@ -420,7 +428,7 @@ export const ScriptStudioView: React.FC<{
             value={selectedModel}
             onChange={(e) => onChangeModel?.(e.target.value)}
             title="Select Antigravity model (/v1beta/models)"
-            style={{ height: 26, fontSize: 11.5, padding: '0 6px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#f8fafc', color: '#0f172a', fontWeight: 500 }}
+            style={{ height: 26, fontSize: 11.5, padding: '0 6px', borderRadius: 6, border: '1px solid var(--dab-border-strong, #cbd5e1)', background: 'var(--dab-surface-muted, #f8fafc)', color: 'var(--dab-text-strong, #0f172a)', fontWeight: 500 }}
           >
             {availableModels.map((m) => (
               <option key={m.id} value={m.id} title={m.description}>
@@ -428,6 +436,13 @@ export const ScriptStudioView: React.FC<{
               </option>
             ))}
           </select>
+          {onChangeThemeMode && (
+            <ThemeModeSelect
+              themeMode={themeMode}
+              resolvedTheme={resolvedTheme}
+              onChange={onChangeThemeMode}
+            />
+          )}
         </div>
 
         <div className="dab-controls">
@@ -575,7 +590,7 @@ export const ScriptStudioView: React.FC<{
 
           <div className="dab-composer dab-chatbar">
             <div className="dab-use-case-bar" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, marginBottom: 4 }}>
-              <strong style={{ color: '#475569' }}>Use Case:</strong>
+              <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Use Case:</strong>
               {messages.length === 0 && !publishedDash ? (
                 <select
                   data-testid="use-case-selector"
@@ -625,7 +640,7 @@ export const ScriptStudioView: React.FC<{
               style={{
                 fontFamily: 'monospace',
                 fontSize: 12,
-                background: '#0f172a',
+                background: 'var(--dab-code-bg, #0f172a)',
                 color: '#f8fafc',
               }}
             />
@@ -654,8 +669,10 @@ export const ScriptStudioView: React.FC<{
                   flex: 1,
                   height: 30,
                   padding: '0 8px',
-                  border: '1px solid #cbd5e1',
+                  border: '1px solid var(--dab-border-strong, #cbd5e1)',
                   borderRadius: 6,
+                  background: 'var(--dab-input-bg, #ffffff)',
+                  color: 'var(--dab-text, #1f2937)',
                 }}
               />
               <button
