@@ -4,6 +4,8 @@
     "category": "Mini-App Modes",
     "title": "1. Data App Mode + Inline Mutation Permission Gate",
     "snapshotName": "01-mode-data-app-and-permission-gate-snap.png",
+    "width": 1440,
+    "height": 900,
     "changedInGit": true
   },
   {
@@ -11,6 +13,8 @@
     "category": "Mini-App Modes",
     "title": "2. Content Studio Mode (Create & Update UDDs, Looks, Boards, Schedules)",
     "snapshotName": "02-mode-native-dashboard-builder-snap.png",
+    "width": 1440,
+    "height": 900,
     "changedInGit": false
   },
   {
@@ -18,6 +22,8 @@
     "category": "Mini-App Modes",
     "title": "3. Agentic LookML Mode (Turn Skills, Active User Dev Mode & .lkml Diffs)",
     "snapshotName": "03-mode-agentic-lookml-snap.png",
+    "width": 1440,
+    "height": 900,
     "changedInGit": false
   },
   {
@@ -25,6 +31,8 @@
     "category": "Mini-App Modes",
     "title": "4. 3-Pillar Health Check Mode (Rendered Markdown Viewer & Top-Right Gemini Button)",
     "snapshotName": "04-mode-3-pillar-health-check-snap.png",
+    "width": 1440,
+    "height": 900,
     "changedInGit": false
   },
   {
@@ -32,6 +40,8 @@
     "category": "Mini-App Modes",
     "title": "5. Python Tile Studio Mode (Mode Selector, Schedule Script & Live Grid)",
     "snapshotName": "05-mode-python-tile-studio-snap.png",
+    "width": 1440,
+    "height": 900,
     "changedInGit": false
   },
   {
@@ -39,6 +49,8 @@
     "category": "Tile & Scheduler Modal",
     "title": "6. Dashboard Tile Mount — View Mode",
     "snapshotName": "06-dashboard-tile-mount-view-mode-snap.png",
+    "width": 1440,
+    "height": 900,
     "changedInGit": false
   },
   {
@@ -46,6 +58,8 @@
     "category": "Tile & Scheduler Modal",
     "title": "7. Dashboard Tile Mount — Edit Mode",
     "snapshotName": "07-dashboard-tile-mount-edit-mode-snap.png",
+    "width": 1440,
+    "height": 900,
     "changedInGit": false
   },
   {
@@ -53,6 +67,8 @@
     "category": "Config & Explore Dropdown",
     "title": "8. Extension Auth & Vertex Setup Page (/config)",
     "snapshotName": "08-config-page-setup-snap.png",
+    "width": 1440,
+    "height": 900,
     "changedInGit": false
   },
   {
@@ -60,55 +76,108 @@
     "category": "Config & Explore Dropdown",
     "title": "9. Explore Combobox Dropdown — Open (Top Scroll State)",
     "snapshotName": "09-explore-dropdown-open-top-snap.png",
-    "changedInGit": false
+    "width": 410,
+    "height": 399,
+    "clipSelector": [
+      ".dab-combobox",
+      ".dab-dropdown"
+    ],
+    "clipMargin": 24,
+    "changedInGit": true
   },
   {
     "id": "explore_dropdown_scrolled",
     "category": "Config & Explore Dropdown",
     "title": "10. Explore Combobox Dropdown — Scrolled State (Retail Ops & System Activity)",
     "snapshotName": "10-explore-dropdown-scrolled-snap.png",
-    "changedInGit": false
+    "width": 410,
+    "height": 399,
+    "clipSelector": [
+      ".dab-combobox",
+      ".dab-dropdown"
+    ],
+    "clipMargin": 24,
+    "changedInGit": true
   },
   {
     "id": "chatbar_lookml_skills",
     "category": "Chat Bar States",
     "title": "11. Chat Bar State — LookML Activated Turn Skills & Prompt",
     "snapshotName": "11-chatbar-state-lookml-activated-skills-snap.png",
-    "changedInGit": false
+    "width": 766,
+    "height": 265,
+    "clipSelector": ".dab-composer",
+    "clipMargin": 24,
+    "changedInGit": true
   },
   {
     "id": "chatbar_pasted_image_inspector",
     "category": "Chat Bar States",
     "title": "12. Chat Bar State — Pasted Screenshot Thumbnail & Code/Schema Inspector Open",
     "snapshotName": "12-chatbar-state-pasted-image-and-inspector-snap.png",
-    "changedInGit": false
+    "width": 427,
+    "height": 450,
+    "clipSelector": ".dab-composer",
+    "clipMargin": 24,
+    "changedInGit": true
   },
   {
     "id": "chatbar_busy_running",
     "category": "Chat Bar States",
     "title": "13. Chat Bar State — Busy / Running Spinner Banner",
     "snapshotName": "13-chatbar-state-busy-running-snap.png",
-    "changedInGit": false
+    "width": 427,
+    "height": 480,
+    "clipSelector": [
+      ".dab-status-banner",
+      ".dab-composer"
+    ],
+    "clipMargin": 24,
+    "changedInGit": true
   },
   {
     "id": "chatbar_error_banner",
     "category": "Chat Bar States",
     "title": "14. Chat Bar State — Error Diagnostic Banner",
     "snapshotName": "14-chatbar-state-error-banner-snap.png",
-    "changedInGit": false
+    "width": 427,
+    "height": 698,
+    "clipSelector": [
+      ".dab-msg-error",
+      ".dab-composer"
+    ],
+    "clipMargin": 24,
+    "changedInGit": true
   },
   {
     "id": "python_tile_scheduler_modal",
     "category": "Tile & Scheduler Modal",
     "title": "15. Custom CodeMode Script Scheduler Modal (Cron, vars.mode & Custom Controls)",
     "snapshotName": "15-python-tile-scheduler-modal-snap.png",
-    "changedInGit": false
+    "width": 588,
+    "height": 418,
+    "clipSelector": ".dab-modal",
+    "clipMargin": 24,
+    "changedInGit": true
   },
   {
     "id": "conversational_analytics",
     "category": "Mini-App Modes",
     "title": "16. Conversational Analytics Mode (Isolated Sub-Agent Selection & Embedded CA Chat)",
     "snapshotName": "16-mode-conversational-analytics-snap.png",
+    "width": 1440,
+    "height": 900,
+    "changedInGit": true
+  },
+  {
+    "id": "centered_empty_prompt",
+    "category": "Chat Bar States",
+    "title": "17. Centered New-Conversation Empty Prompt Box (Use-Case Selector, Input & Actions)",
+    "snapshotName": "17-centered-empty-prompt-snap.png",
+    "width": 768,
+    "height": 459,
+    "clipSelector": ".dab-empty-prompt-card",
+    "clipMargin": 24,
     "changedInGit": true
   }
 ]

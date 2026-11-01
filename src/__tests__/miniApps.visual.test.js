@@ -326,7 +326,8 @@ function buildHtmlPage(scenario) {
         chatbar_busy_running: '/app/42',
         chatbar_error_banner: '/app',
         python_tile_scheduler_modal: '/tile/demo1',
-        conversational_analytics: '/conversational-analytics/ca_conv_streaming_1'
+        conversational_analytics: '/conversational-analytics/ca_conv_streaming_1',
+        centered_empty_prompt: '/app'
       };
 
       const isTile = scenario === 'tile_mount_view' || scenario === 'tile_mount_edit';
@@ -826,6 +827,50 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     chrome = await startHeadlessChrome()
   }, 20000)
 
+  const snapshotDimensions = new Map()
+
+  function writeSnapshotManifest() {
+    const gitOut = execFileSync(
+      'git',
+      ['status', '--porcelain', 'src/__tests__/__image_snapshots__'],
+      { cwd: repoRoot, encoding: 'utf8' }
+    )
+    const changedFiles = new Set(
+      gitOut
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((line) => path.basename(line.slice(3).trim()))
+    )
+    const manifest = scenarios.map((s) => {
+      const snapFile = path.join(imageSnapshotsDir, s.snapshotName)
+      const buf = existsSync(snapFile) ? readFileSync(snapFile) : null
+      const dims =
+        buf && buf.length >= 24
+          ? { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) }
+          : snapshotDimensions.get(s.id) || { width: 1440, height: 900 }
+      return {
+        id: s.id,
+        category: s.category,
+        title: s.title,
+        snapshotName: s.snapshotName,
+        width: dims.width,
+        height: dims.height,
+        ...(s.clipSelector
+          ? {
+              clipSelector: s.clipSelector,
+              clipMargin: typeof s.clipMargin === 'number' ? s.clipMargin : 24
+            }
+          : {}),
+        changedInGit: changedFiles.has(s.snapshotName)
+      }
+    })
+    writeFileSync(
+      path.join(imageSnapshotsDir, 'manifest.json'),
+      JSON.stringify(manifest, null, 2)
+    )
+    return manifest
+  }
+
   afterAll(async () => {
     if (chrome) chrome.close()
     if (server) {
@@ -833,30 +878,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       await new Promise((resolve) => server.close(resolve))
     }
 
-    // Write manifest.json recording which image snapshots are modified/untracked in git vs committed
+    // Write manifest.json recording snapshot dimensions, crop selectors, and git status
     try {
-      const gitOut = execFileSync(
-        'git',
-        ['status', '--porcelain', 'src/__tests__/__image_snapshots__'],
-        { cwd: repoRoot, encoding: 'utf8' }
-      )
-      const changedFiles = new Set(
-        gitOut
-          .split(/\r?\n/)
-          .filter(Boolean)
-          .map((line) => path.basename(line.slice(3).trim()))
-      )
-      const manifest = scenarios.map((s) => ({
-        id: s.id,
-        category: s.category,
-        title: s.title,
-        snapshotName: s.snapshotName,
-        changedInGit: changedFiles.has(s.snapshotName)
-      }))
-      writeFileSync(
-        path.join(imageSnapshotsDir, 'manifest.json'),
-        JSON.stringify(manifest, null, 2)
-      )
+      writeSnapshotManifest()
     } catch {}
   })
 
@@ -980,6 +1004,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Config & Explore Dropdown',
       title: '9. Explore Combobox Dropdown — Open (Top Scroll State)',
       snapshotName: '09-explore-dropdown-open-top-snap.png',
+      clipSelector: ['.dab-combobox', '.dab-dropdown'],
+      clipMargin: 24,
       expectText: [
         'Clear selection (let agent decide)',
         'BIGQUERY INFORMATION SCHEMA (BLOCK)',
@@ -994,6 +1020,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Config & Explore Dropdown',
       title: '10. Explore Combobox Dropdown — Scrolled State (Retail Ops & System Activity)',
       snapshotName: '10-explore-dropdown-scrolled-snap.png',
+      clipSelector: ['.dab-combobox', '.dab-dropdown'],
+      clipMargin: 24,
       expectText: [
         'RETAIL OPERATIONS',
         'Store Transactions',
@@ -1007,6 +1035,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Chat Bar States',
       title: '11. Chat Bar State — LookML Activated Turn Skills & Prompt',
       snapshotName: '11-chatbar-state-lookml-activated-skills-snap.png',
+      clipSelector: '.dab-composer',
+      clipMargin: 24,
       expectText: [
         'TURN SKILLS:',
         '✓ 📝 Descriptions & Curation',
@@ -1021,6 +1051,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Chat Bar States',
       title: '12. Chat Bar State — Pasted Screenshot Thumbnail & Code/Schema Inspector Open',
       snapshotName: '12-chatbar-state-pasted-image-and-inspector-snap.png',
+      clipSelector: '.dab-composer',
+      clipMargin: 24,
       expectText: [
         'Inspect Code / Schema',
         'Compiled Explore Schema (/workspace/schema.md)',
@@ -1033,6 +1065,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Chat Bar States',
       title: '13. Chat Bar State — Busy / Running Spinner Banner',
       snapshotName: '13-chatbar-state-busy-running-snap.png',
+      clipSelector: ['.dab-status-banner', '.dab-composer'],
+      clipMargin: 24,
       expectText: [
         'Executing LkrCodeMode Monty Python & validating Looker queries...',
         'Executive Revenue App'
@@ -1043,6 +1077,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Chat Bar States',
       title: '14. Chat Bar State — Error Diagnostic Banner',
       snapshotName: '14-chatbar-state-error-banner-snap.png',
+      clipSelector: ['.dab-msg-error', '.dab-composer'],
+      clipMargin: 24,
       expectText: [
         'Error',
         'Looker API Error (422): Field "order_items.unknown_metric" not found in explore "thelook::order_items".'
@@ -1053,6 +1089,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Tile & Scheduler Modal',
       title: '15. Custom CodeMode Script Scheduler Modal (Cron, vars.mode & Custom Controls)',
       snapshotName: '15-python-tile-scheduler-modal-snap.png',
+      clipSelector: '.dab-modal',
+      clipMargin: 24,
       expectText: [
         '⏰ Custom CodeMode Script Scheduler',
         'obj_schedule_demo1',
@@ -1075,13 +1113,28 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         '/embed/conversations/ca_conv_streaming_1',
         '✨ Ask CA Agent'
       ]
+    },
+    {
+      id: 'centered_empty_prompt',
+      category: 'Chat Bar States',
+      title: '17. Centered New-Conversation Empty Prompt Box (Use-Case Selector, Input & Actions)',
+      snapshotName: '17-centered-empty-prompt-snap.png',
+      clipSelector: '.dab-empty-prompt-card',
+      clipMargin: 24,
+      expectText: [
+        'New Conversation',
+        'Build a Looker Data App with Antigravity',
+        'Use Case:',
+        '✨ Build App',
+        'My Creations (5)'
+      ]
     }
   ]
 
   let testCount = 0
   test.each(scenarios)(
     'renders $id ($title) with MockLookerExtensionProvider and matches DOM & image snapshots',
-    async ({ id, snapshotName, expectText }) => {
+    async ({ id, snapshotName, expectText, clipSelector, clipMargin }) => {
       testCount += 1
       if (testCount % 7 === 0) {
         chrome.close()
@@ -1144,9 +1197,50 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       }).toMatchSnapshot()
 
       // 2. Visual PNG snapshot stored in src/__tests__/__image_snapshots__/<snapshotName>
-      const { data } = await chrome.send('Page.captureScreenshot', { format: 'png' })
+      let clip
+      if (clipSelector) {
+        const selectors = Array.isArray(clipSelector) ? clipSelector : [clipSelector]
+        const margin = typeof clipMargin === 'number' ? clipMargin : 24
+        const clipRes = await chrome.send('Runtime.evaluate', {
+          expression: `(() => {
+            const selectors = ${JSON.stringify(selectors)};
+            const margin = ${JSON.stringify(margin)};
+            const rects = selectors
+              .flatMap((sel) => Array.from(document.querySelectorAll(sel)))
+              .map((el) => el.getBoundingClientRect())
+              .filter((r) => r.width > 0 && r.height > 0);
+            if (rects.length === 0) return null;
+            const x = Math.max(0, Math.floor(Math.min(...rects.map((r) => r.left)) - margin));
+            const y = Math.max(0, Math.floor(Math.min(...rects.map((r) => r.top)) - margin));
+            const right = Math.min(1440, Math.ceil(Math.max(...rects.map((r) => r.right)) + margin));
+            const bottom = Math.min(900, Math.ceil(Math.max(...rects.map((r) => r.bottom)) + margin));
+            return { x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y), scale: 1 };
+          })()`,
+          returnByValue: true
+        })
+        clip = clipRes.result && clipRes.result.value
+        expect(clip).toBeTruthy()
+        expect(clip.width < 1440 || clip.height < 900).toBe(true)
+      }
+
+      const { data } = await chrome.send(
+        'Page.captureScreenshot',
+        clip ? { format: 'png', clip } : { format: 'png' }
+      )
       const pngBuffer = Buffer.from(data, 'base64')
-      expect(pngBuffer.length).toBeGreaterThan(5000)
+      expect(pngBuffer.length).toBeGreaterThan(1000)
+
+      const width = pngBuffer.readUInt32BE(16)
+      const height = pngBuffer.readUInt32BE(20)
+      if (clip) {
+        expect(width).toBe(clip.width)
+        expect(height).toBe(clip.height)
+        expect(width < 1440 && height < 900).toBe(true)
+      } else {
+        expect(width).toBe(1440)
+        expect(height).toBe(900)
+      }
+      snapshotDimensions.set(id, { width, height })
 
       const snapshotPath = path.join(imageSnapshotsDir, snapshotName)
       writeFileSync(snapshotPath, pngBuffer)
@@ -1154,6 +1248,33 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     },
     15000
   )
+
+  test('records cropped component dimensions and clipSelector metadata in manifest.json', () => {
+    const manifest = writeSnapshotManifest()
+    const croppedIds = [
+      'explore_dropdown_open_top',
+      'explore_dropdown_scrolled',
+      'chatbar_lookml_skills',
+      'chatbar_pasted_image_inspector',
+      'chatbar_busy_running',
+      'chatbar_error_banner',
+      'python_tile_scheduler_modal',
+      'centered_empty_prompt'
+    ]
+    for (const id of croppedIds) {
+      const entry = manifest.find((m) => m.id === id)
+      expect(entry).toBeDefined()
+      expect(entry.clipSelector).toBeDefined()
+      expect(entry.clipMargin).toBe(24)
+      expect(entry.width).toBeGreaterThan(100)
+      expect(entry.height).toBeGreaterThan(80)
+      expect(entry.width).toBeLessThan(1440)
+      expect(entry.height).toBeLessThan(900)
+    }
+    const fullPageEntry = manifest.find((m) => m.id === 'data_app')
+    expect(fullPageEntry).toMatchObject({ width: 1440, height: 900 })
+    expect(fullPageEntry.clipSelector).toBeUndefined()
+  })
 
   test('enables/disables individual tool modes via /config and filters topbar tabs, catalog & routes', async () => {
     chrome.close()
