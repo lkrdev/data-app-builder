@@ -61,9 +61,14 @@ export function resolveLookerEmbedTarget(opts: {
   nonce?: number
 }): LookerEmbedTarget {
   const nonce = opts.nonce || 0
-  if (opts.isEmptyConversation || opts.isHealthCheckMode || opts.isLookmlMode) {
-    return { kind: 'preload', target: '/preload', previewMode: 'preload', previewObjectId: '', nonce }
+  const preload: LookerEmbedTarget = {
+    kind: 'preload',
+    target: '/preload',
+    previewMode: 'preload',
+    previewObjectId: '',
+    nonce,
   }
+  if (opts.isEmptyConversation || opts.isHealthCheckMode || opts.isLookmlMode) return preload
   if ((opts.isCaMode || opts.caConversation) && opts.caConversation?.embedPath) {
     return {
       kind: 'url',
@@ -75,9 +80,7 @@ export function resolveLookerEmbedTarget(opts: {
   }
   if (opts.builderMode === 'dashboard') {
     const nc = opts.nativeContent
-    if (!nc) {
-      return { kind: 'preload', target: '/preload', previewMode: 'preload', previewObjectId: '', nonce }
-    }
+    if (!nc) return preload
     if (nc.contentType === 'dashboard') {
       const id = String(nc.dashboardId || nc.id)
       return { kind: 'dashboard', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
@@ -86,14 +89,13 @@ export function resolveLookerEmbedTarget(opts: {
       const id = String(nc.lookId || nc.id)
       return { kind: 'look', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
     }
-    const rawUrl =
-      nc.embedPath ||
-      `/embed/dashboards/${encodeURIComponent(String(nc.lookmlDashboardId || nc.id))}`
+    const id = String(nc.lookmlDashboardId || nc.id)
+    const rawUrl = nc.embedPath || `/embed/dashboards/${encodeURIComponent(id)}`
     return {
       kind: 'url',
       target: normalizeLookerEmbedUrl(rawUrl, opts.hostUrl),
       previewMode: 'dashboard',
-      previewObjectId: String(nc.lookmlDashboardId || nc.id),
+      previewObjectId: id,
       nonce,
     }
   }
@@ -101,14 +103,13 @@ export function resolveLookerEmbedTarget(opts: {
     const id = String(opts.publishedApp.dashboardId)
     return { kind: 'dashboard', target: id, previewMode: 'data_app', previewObjectId: id, nonce }
   }
-  return { kind: 'preload', target: '/preload', previewMode: 'preload', previewObjectId: '', nonce }
+  return preload
 }
 
 export function createLookerEmbedPreloadController(opts: {
   hostUrl: string
   container: HTMLElement
   mockPreviewHtml?: (mode: string, objectId: string) => string | undefined
-  onStateChange?: (telemetry: LookerEmbedSessionTelemetry) => void
 }) {
   const telemetry: LookerEmbedSessionTelemetry = {
     hostUrl: opts.hostUrl,
@@ -135,7 +136,6 @@ export function createLookerEmbedPreloadController(opts: {
         calls: [...telemetry.calls],
       }
     }
-    opts.onStateChange?.(telemetry)
   }
 
   if (typeof window === 'undefined') {
@@ -151,33 +151,25 @@ export function createLookerEmbedPreloadController(opts: {
   const chattyHostCreator = (initialUrl: string) => {
     const handlers: Record<string, Array<(...args: any[]) => void>> = {}
     let targetEl: any = opts.container
-    const classNames: string[] = []
-    const frameAttrs: Array<[string, string]> = []
-    const emit = (evt: string, payload: any) => {
-      ;(handlers[evt] || []).forEach((fn) => fn(payload))
-    }
+    const emit = (evt: string, payload: any = {}) =>
+      (handlers[evt] || []).forEach((fn) => fn(payload))
+    const noop = () => builder
     const builder: any = {
       on: (evt: string, fn: (...args: any[]) => void) => {
         ;(handlers[evt] = handlers[evt] || []).push(fn)
         return builder
       },
-      frameBorder: () => builder,
-      withTargetOrigin: () => builder,
-      withAriaLabel: () => builder,
-      withAllowAttribute: () => builder,
+      frameBorder: noop,
+      withTargetOrigin: noop,
+      withAriaLabel: noop,
+      withAllowAttribute: noop,
+      withClassName: noop,
+      withFrameAttribute: noop,
+      withSandboxAttribute: noop,
       appendTo: (el: HTMLElement) => {
         targetEl = el
         return builder
       },
-      withClassName: (cls: string) => {
-        if (cls) classNames.push(cls)
-        return builder
-      },
-      withFrameAttribute: (name: string, value: string) => {
-        frameAttrs.push([name, value])
-        return builder
-      },
-      withSandboxAttribute: () => builder,
       build: () => {
         const doc = targetEl?.ownerDocument || (typeof document !== 'undefined' ? document : null)
         const iframe: any =
@@ -194,21 +186,10 @@ export function createLookerEmbedPreloadController(opts: {
                 src: '',
                 srcdoc: '',
               })
-        if (!iframe.classList) {
-          iframe.classList = {
-            add: (...cls: string[]) => {
-              iframe.className = Array.from(new Set([...(iframe.className || '').split(/\s+/), ...cls]))
-                .filter(Boolean)
-                .join(' ')
-            },
-          }
-        }
-        if (classNames.length) iframe.classList.add(...classNames)
+        if (!iframe.classList) iframe.classList = { add: () => {} }
         iframe.title = 'Looker Live Preview'
-        frameAttrs.forEach(([k, v]) => iframe.setAttribute?.(k, v))
         const syncIframe = (rawUrl: string) => {
-          const isPreload = rawUrl.includes('/preload')
-          if (isPreload) {
+          if (rawUrl.includes('/preload')) {
             iframe.srcdoc = '<!doctype html><html><body data-preload="true" style="margin:0"></body></html>'
             iframe.removeAttribute?.('data-testid')
           } else {
@@ -224,15 +205,13 @@ export function createLookerEmbedPreloadController(opts: {
           iframe.setAttribute?.('src', rawUrl)
         }
         syncIframe(initialUrl)
-        if (doc && targetEl && iframe.parentNode !== targetEl) {
-          targetEl.appendChild(iframe)
-        }
+        if (doc && targetEl && iframe.parentNode !== targetEl) targetEl.appendChild(iframe)
         const connectedHost = {
           send: (event: string) => {
             if (event === 'dashboard:run') {
               syncIframe(iframe.getAttribute?.('src') || initialUrl)
-              emit('dashboard:run:start', {})
-              emit('dashboard:run:complete', {})
+              emit('dashboard:run:start')
+              emit('dashboard:run:complete')
             }
           },
           sendAndReceive: async (event: string, payload?: any) => {
@@ -240,18 +219,17 @@ export function createLookerEmbedPreloadController(opts: {
               const nextUrl = String(payload.url)
               syncIframe(nextUrl)
               setTimeout(() => {
-                if (nextUrl.includes('/dashboards/')) {
-                  emit('dashboard:loaded', { dashboard: { url: nextUrl } })
-                  emit('dashboard:run:start', {})
-                  emit('dashboard:run:complete', {})
-                } else if (nextUrl.includes('/looks/')) {
-                  emit('look:ready', { look: { url: nextUrl } })
-                  emit('look:run:start', {})
-                  emit('look:run:complete', {})
-                } else if (nextUrl.includes('/explore/')) {
-                  emit('explore:ready', {})
-                  emit('explore:run:start', {})
-                  emit('explore:run:complete', {})
+                const pair = nextUrl.includes('/dashboards/')
+                  ? ['dashboard:loaded', 'dashboard']
+                  : nextUrl.includes('/looks/')
+                  ? ['look:ready', 'look']
+                  : nextUrl.includes('/explore/')
+                  ? ['explore:ready', 'explore']
+                  : null
+                if (pair) {
+                  emit(pair[0], { url: nextUrl })
+                  emit(`${pair[1]}:run:start`)
+                  emit(`${pair[1]}:run:complete`)
                 }
                 emit('page:changed', { page: { url: nextUrl, lookerVersion: '25.20.0' } })
               }, 0)
@@ -263,9 +241,10 @@ export function createLookerEmbedPreloadController(opts: {
           iframe,
           connect: () =>
             Promise.resolve(connectedHost).then((host) => {
-              setTimeout(() => {
-                emit('page:changed', { page: { url: initialUrl, lookerVersion: '25.20.0' } })
-              }, 0)
+              setTimeout(
+                () => emit('page:changed', { page: { url: initialUrl, lookerVersion: '25.20.0' } }),
+                0
+              )
               return host
             }),
         }
@@ -278,15 +257,12 @@ export function createLookerEmbedPreloadController(opts: {
     ? getEmbedSDK(new LookerEmbedExSDK(chattyHostCreator as any))
     : getEmbedSDK()
   sdk.init(opts.hostUrl)
-  telemetry.calls.push({ method: 'init', arg: opts.hostUrl })
-  telemetry.calls.push({ method: 'preload', arg: '/embed/preload' })
+  telemetry.calls.push({ method: 'init', arg: opts.hostUrl }, { method: 'preload', arg: '/embed/preload' })
 
   const recordEvent = (name: string, running?: boolean) => {
     telemetry.events.push(name)
     if (typeof running === 'boolean') telemetry.running = running
-    if (name === 'dashboard:run:start' || name === 'look:run:start' || name === 'explore:run:start') {
-      telemetry.runCount += 1
-    }
+    if (name.endsWith(':run:start')) telemetry.runCount += 1
     notify()
   }
 
@@ -322,25 +298,15 @@ export function createLookerEmbedPreloadController(opts: {
       activePreviewMeta = { mode: next.previewMode, objectId: next.previewObjectId }
       const prev = lastTarget
       const isSameTarget = prev && prev.kind === next.kind && prev.target === next.target
-      if (!prev && next.kind === 'preload') {
-        lastTarget = next
-        telemetry.state = 'preloaded'
-        telemetry.target = '/preload'
-        notify()
-        return connection
-      }
-      if (isSameTarget && prev.nonce === next.nonce) {
-        return connection
-      }
+      if (isSameTarget && prev.nonce === next.nonce) return connection
       lastTarget = next
+      const options = { waitUntilLoaded: true }
       if (next.kind === 'preload') {
         if (prev && prev.kind !== 'preload') {
           telemetry.calls.push({ method: 'loadUrl', arg: '/preload' })
           telemetry.loadCount += 1
-          await connection.loadUrl({ url: '/preload', options: { waitUntilLoaded: true } })
+          await connection.loadUrl({ url: '/preload', options })
         }
-        telemetry.state = 'preloaded'
-        telemetry.target = '/preload'
       } else if (next.kind === 'dashboard') {
         if (isSameTarget && prev.nonce !== next.nonce) {
           try {
@@ -349,28 +315,24 @@ export function createLookerEmbedPreloadController(opts: {
           } catch {
             telemetry.calls.push({ method: 'loadDashboard', arg: next.target })
             telemetry.loadCount += 1
-            await connection.loadDashboard({ id: next.target, options: { waitUntilLoaded: true } })
+            await connection.loadDashboard({ id: next.target, options })
           }
         } else {
           telemetry.calls.push({ method: 'loadDashboard', arg: next.target })
           telemetry.loadCount += 1
-          await connection.loadDashboard({ id: next.target, options: { waitUntilLoaded: true } })
+          await connection.loadDashboard({ id: next.target, options })
         }
-        telemetry.state = 'dashboard'
-        telemetry.target = next.target
       } else if (next.kind === 'look') {
         telemetry.calls.push({ method: 'loadLook', arg: next.target })
         telemetry.loadCount += 1
-        await connection.loadLook({ id: next.target, options: { waitUntilLoaded: true } })
-        telemetry.state = 'look'
-        telemetry.target = next.target
+        await connection.loadLook({ id: next.target, options })
       } else {
         telemetry.calls.push({ method: 'loadUrl', arg: next.target })
         telemetry.loadCount += 1
-        await connection.loadUrl({ url: next.target, options: { waitUntilLoaded: true } })
-        telemetry.state = 'url'
-        telemetry.target = next.target
+        await connection.loadUrl({ url: next.target, options })
       }
+      telemetry.state = next.kind === 'preload' ? 'preloaded' : next.kind
+      telemetry.target = next.target
       const iframeEl = opts.container?.querySelector?.('iframe')
       if (iframeEl) {
         if (next.previewMode === 'conversational-analytics') {
