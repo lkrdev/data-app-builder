@@ -2906,4 +2906,180 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     writeFileSync(scratchSnapPath, pngBuffer)
     expect(existsSync(scratchSnapPath)).toBe(true)
   }, 15000)
+
+  test('renders contextual ? use-case info buttons across StudioComposer and preview toolbars, opens use-case-info-modal with Markdown + non-actionable live React UI previews, and switches across all 7 use-case tabs (Issue #64)', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    const url = `http://127.0.0.1:${port}/?scenario=python_tile_studio`
+    await chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `document.querySelectorAll('[data-testid="use-case-info-btn"]').length >= 2`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    const openRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const btns = Array.from(document.querySelectorAll('[data-testid="use-case-info-btn"]'));
+        const composerBtn = document.querySelector('.dab-use-case-bar [data-testid="use-case-info-btn"]');
+        const toolbarBtn = document.querySelector('[data-testid="tile-preview-toolbar"] [data-testid="use-case-info-btn"]');
+        if (toolbarBtn) toolbarBtn.click();
+        await new Promise((r) => setTimeout(r, 120));
+
+        const modal = document.querySelector('[data-testid="use-case-info-modal"]');
+        const previews = modal
+          ? Array.from(modal.querySelectorAll('[data-testid="doc-ui-preview"]')).map((el) => ({
+              component: el.getAttribute('data-component'),
+              pointerEvents: window.getComputedStyle(el).pointerEvents,
+              userSelect: window.getComputedStyle(el).userSelect,
+              ariaHidden: el.getAttribute('aria-hidden'),
+              tabIndex: el.getAttribute('tabindex'),
+              text: (el.textContent || '').trim()
+            }))
+          : [];
+        const tabs = modal
+          ? Array.from(modal.querySelectorAll('[role="tab"]')).map((t) => ({
+              label: (t.textContent || '').trim(),
+              selected: t.getAttribute('aria-selected') === 'true'
+            }))
+          : [];
+        return {
+          btnCount: btns.length,
+          hasComposerBtn: Boolean(composerBtn),
+          hasToolbarBtn: Boolean(toolbarBtn),
+          btnTitle: toolbarBtn?.getAttribute('title') || '',
+          btnClassName: toolbarBtn?.className || '',
+          modalOpen: Boolean(modal),
+          modalText: modal?.innerText || '',
+          previews,
+          tabs
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(openRes.result.value.btnCount).toBeGreaterThanOrEqual(2)
+    expect(openRes.result.value.hasComposerBtn).toBe(true)
+    expect(openRes.result.value.hasToolbarBtn).toBe(true)
+    expect(openRes.result.value.btnTitle).toBe('Use case guide & controls reference')
+    expect(openRes.result.value.btnClassName).toContain('dab-info-trigger')
+    expect(openRes.result.value.modalOpen).toBe(true)
+    expect(openRes.result.value.modalText).toContain('Publish As Dashboard')
+    expect(openRes.result.value.modalText).toContain('Execute & Test Script Mode')
+    expect(openRes.result.value.tabs).toEqual([
+      { label: 'Auto', selected: false },
+      { label: 'Data App', selected: false },
+      { label: 'Content Studio', selected: false },
+      { label: 'Conversational Analytics', selected: false },
+      { label: 'LookML', selected: false },
+      { label: 'Health Check', selected: false },
+      { label: 'Script', selected: true }
+    ])
+    expect(openRes.result.value.previews).toEqual([
+      expect.objectContaining({
+        component: 'PublishDashboardButton',
+        pointerEvents: 'none',
+        ariaHidden: 'true',
+        tabIndex: '-1',
+        text: '✨ Publish Dashboard'
+      }),
+      expect.objectContaining({
+        component: 'RunPythonButton',
+        pointerEvents: 'none',
+        ariaHidden: 'true',
+        tabIndex: '-1',
+        text: '✨ Run Python'
+      }),
+      expect.objectContaining({
+        component: 'ScriptModeSelect',
+        pointerEvents: 'none',
+        ariaHidden: 'true',
+        tabIndex: '-1'
+      }),
+      expect.objectContaining({
+        component: 'SaveScriptButton',
+        pointerEvents: 'none',
+        ariaHidden: 'true',
+        tabIndex: '-1',
+        text: 'Save Script'
+      }),
+      expect.objectContaining({
+        component: 'ScheduleScriptButton',
+        pointerEvents: 'none',
+        ariaHidden: 'true',
+        tabIndex: '-1',
+        text: '⏰ Schedule Script'
+      })
+    ])
+
+    // Capture cropped screenshot of the open Use Case Guide modal
+    const clipRes = await chrome.send('Runtime.evaluate', {
+      expression: `(() => {
+        const el = document.querySelector('.dab-use-case-info-modal');
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        const margin = 20;
+        const x = Math.max(0, Math.floor(r.left - margin));
+        const y = Math.max(0, Math.floor(r.top - margin));
+        const right = Math.min(1440, Math.ceil(r.right + margin));
+        const bottom = Math.min(900, Math.ceil(r.bottom + margin));
+        return { x, y, width: right - x, height: bottom - y, scale: 1 };
+      })()`,
+      returnByValue: true
+    })
+    const clip = clipRes.result?.value
+    expect(clip).toBeTruthy()
+    const { data } = await chrome.send('Page.captureScreenshot', { format: 'png', clip })
+    const pngBuffer = Buffer.from(data, 'base64')
+    expect(pngBuffer.length).toBeGreaterThan(1000)
+
+    const scratchDir =
+      '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
+    mkdirSync(scratchDir, { recursive: true })
+    const scratchModalPath = path.join(scratchDir, 'issue-64-use-case-docs-modal.png')
+    writeFileSync(scratchModalPath, pngBuffer)
+    expect(existsSync(scratchModalPath)).toBe(true)
+
+    // Switch across LookML, Health Check, and Auto tabs inside the modal, then close
+    const tabSwitchRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const clickTab = async (uc) => {
+          const btn = document.querySelector('[data-testid="use-case-guide-tab-' + uc + '"]');
+          if (btn) btn.click();
+          await new Promise((r) => setTimeout(r, 80));
+          const modal = document.querySelector('[data-testid="use-case-info-modal"]');
+          return Array.from(modal?.querySelectorAll('[data-testid="doc-ui-preview"]') || []).map((el) =>
+            el.getAttribute('data-component')
+          );
+        };
+        const lookmlComponents = await clickTab('lookml');
+        const healthComponents = await clickTab('health-check');
+        const autoComponents = await clickTab('auto');
+        const closeBtn = document.querySelector('[data-testid="use-case-info-close-btn"]');
+        if (closeBtn) closeBtn.click();
+        await new Promise((r) => setTimeout(r, 80));
+        return {
+          lookmlComponents,
+          healthComponents,
+          autoComponents,
+          modalClosed: !document.querySelector('[data-testid="use-case-info-modal"]')
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(tabSwitchRes.result.value).toEqual({
+      lookmlComponents: ['LookmlTurnSkills', 'PushLookmlButton'],
+      healthComponents: ['ExportHealthTddButton'],
+      autoComponents: ['UseCaseBadge'],
+      modalClosed: true
+    })
+  }, 15000)
 })

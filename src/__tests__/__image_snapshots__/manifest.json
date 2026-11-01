@@ -69,7 +69,7 @@
     "snapshotName": "08-config-page-setup-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "explore_dropdown_open_top",
@@ -116,7 +116,7 @@
     "title": "12. Chat Bar State — Pasted Screenshot Thumbnail & Composer Model Selector",
     "snapshotName": "12-chatbar-state-pasted-image-and-inspector-snap.png",
     "width": 427,
-    "height": 240,
+    "height": 245,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
     "changedInGit": true

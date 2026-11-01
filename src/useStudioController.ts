@@ -340,6 +340,9 @@ export function useStudioController() {
   const [schedulerOpen, setSchedulerOpen] = useState(() =>
     Boolean(mockExt?.openSchedulerModal)
   )
+  const [infoModalUseCase, setInfoModalUseCase] = useState<StudioUseCase | null>(() =>
+    (mockExt?.initialInfoModalUseCase as StudioUseCase) || null
+  )
   const [scheduleConfig, setScheduleConfig] = useState<{
     name: string
     cron: string
@@ -2090,9 +2093,10 @@ export function useStudioController() {
         handleResetNewApp, handleNewConversation, handleSelectConversation,
         setNativeContent, setPublishedApp, bumpEmbedNonce,
         setMessages, setBusyStatus, setLiveActivitySteps,
+        infoModalUseCase, setInfoModalUseCase,
       }
     }
-  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce, setMessages])
+  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce, setMessages, infoModalUseCase])
 
   return {
     extensionSDK, core40SDK, lookerHostData, history, location, isTileMount,
@@ -2115,6 +2119,7 @@ export function useStudioController() {
     scriptCode, setScriptCode, filtersJson, setFiltersJson,
     scriptOutput, setScriptOutput, scriptMode, setScriptMode,
     publishedTileDash, setPublishedTileDash, schedulerOpen, setSchedulerOpen,
+    infoModalUseCase, setInfoModalUseCase,
     scheduleConfig, setScheduleConfig, savedScheduleBadge, setSavedScheduleBadge,
     handleRunPython, handleSaveScript, handlePublishTileDashboard, loadScriptById,
     currentAppCode, loadDashInput, setLoadDashInput,
