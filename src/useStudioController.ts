@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useHistory, useLocation } from 'react-router-dom'
+import useSWR from 'swr'
 import { useLookerExtension } from './contexts/LookerExtensionContext'
 import {
   applyStudioDocumentTheme, buildAvailableExploresCatalog, buildDenseExploreSchema,
   CaConversationState, ConversationRecord, createLookerCaConversation, deleteUserArtifact,
   deleteUserConversation, extractExploreIdsFromCode, extractResolvedUseCase,
   fetchInitialLookerMetadata, formatExploreId, getAllowedUseCases, getArtifactNamespace,
-  getUseCaseLabel, listSavedScripts, listUserArtifacts, listUserDashboardArtifacts,
+  getArtifactService, getUseCaseLabel, listSavedScripts, listUserArtifacts, listUserDashboardArtifacts,
   loadExistingDashboardApp, loadNativeContentById, loadObjectArtifact, loadScriptArtifact,
   loadStoredStudioThemeMode, loadUserConversations, loadUserEnvironmentId, NativeContentState,
   NativeContentType, normalizeStudioThemeMode, parseExploreId, persistStudioThemeMode,
@@ -152,6 +153,37 @@ export function useStudioController() {
   const [activeObjectId, setActiveObjectId] = useState('')
   const [conversations, setConversations] = useState<UserConversationEntry[]>([])
   const conversationLabelsRef = useRef<Record<string, string>>({})
+  const artifactNamespace = getArtifactNamespace(extensionSDK)
+  const artifactService = useMemo(
+    () => getArtifactService(core40SDK, artifactNamespace),
+    [core40SDK, artifactNamespace]
+  )
+  const { data: swrUserArtifacts } = useSWR<UserArtifactIndex[]>(
+    !isTileMount && userId ? ['artifact:user_list', artifactNamespace, userId, 'all'] : null,
+    () => artifactService.listUserArtifacts(userId)
+  )
+  const { data: swrConversations } = useSWR<UserConversationEntry[]>(
+    !isTileMount && userId ? ['artifact:conversations', artifactNamespace, userId] : null,
+    () => artifactService.listConversations(userId)
+  )
+  useEffect(() => {
+    if (!swrUserArtifacts) return
+    const labels = conversationLabelsRef.current
+    setCatalogItems(
+      swrUserArtifacts.map((item) =>
+        labels[item.id]
+          ? { ...item, label: labels[item.id], title: labels[item.id] }
+          : item.label
+          ? { ...item, title: item.label }
+          : item
+      )
+    )
+  }, [swrUserArtifacts])
+  useEffect(() => {
+    if (swrConversations && swrConversations.length > 0) {
+      setConversations(swrConversations)
+    }
+  }, [swrConversations])
   const [activeConversationId, setActiveConversationId] = useState<string>(
     () => `conv_${Date.now()}`
   )

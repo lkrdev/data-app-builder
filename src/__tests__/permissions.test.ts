@@ -1,15 +1,19 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import {
+  ARTIFACT_NAMESPACE,
+  ArtifactService,
   buildDenseExploreSchema,
   CA_AGENT_SELECTION_REQUEST_TAG,
   classifyLooker404Error,
   classifyStudioUseCase,
+  clearArtifactServiceCache,
   clearLookerMetadataCache,
   coalesceLookerMetadataRequest,
   ConversationRecord,
   createDeduplicatedLookerSdkProxy,
   createLookerCaConversation,
+  deleteUserArtifact,
   deleteUserConversation,
   extractResolvedUseCase,
   fetchInitialLookerMetadata,
@@ -18,15 +22,19 @@ import {
   formatUserConversationsKey,
   formatUserEnvArtifactKey,
   getAllowedUseCases,
+  getArtifactService,
+  listUserArtifacts,
   loadUserConversations,
   loadUserEnvironmentId,
   normalizeStudioThemeMode,
   parseCaAgentSelectionResponse,
   parseStudioRoute,
   rawLookerRequest,
+  readSwrCache,
   resolveStudioTheme,
   resolveSystemTheme,
   resolveUserCapabilities,
+  saveUserArtifact,
   saveUserConversation,
   saveUserEnvironmentId,
   selectCaAgentViaIsolatedSubagent,
@@ -1763,5 +1771,182 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       isCaRoute: true,
       isLegacyRoute: true,
     })
+  })
+
+  test('20. ArtifactService caches versionByKey to skip redundant sdk.artifact GET calls on subsequent saves, retries once on version conflict, and mutates SWR list caches in place without extra sdk.search_artifacts calls (Issue #55)', async () => {
+    clearArtifactServiceCache()
+    clearLookerMetadataCache()
+
+    const store = new Map<string, { key: string; version: number; value: string }>()
+    let artifactGetCount = 0
+    let searchArtifactsCount = 0
+    let updateArtifactsCount = 0
+    let deleteArtifactCount = 0
+    let simulateVersionConflictOnce = false
+
+    const mockSdk: any = {
+      ok: async (p: any) => p,
+      artifact: async ({ key }: { namespace: string; key: string }) => {
+        artifactGetCount += 1
+        const keys = String(key || '')
+          .split(',')
+          .map((k) => k.trim())
+          .filter(Boolean)
+        return keys.map((k) => store.get(k)).filter(Boolean)
+      },
+      search_artifacts: async ({ key }: { namespace: string; key: string }) => {
+        searchArtifactsCount += 1
+        const prefix = String(key || '').replace(/%/g, '')
+        return Array.from(store.values()).filter((r) => r.key.startsWith(prefix))
+      },
+      update_artifacts: async (
+        _ns: string,
+        updates: Array<{ key: string; value: string; version?: number }>
+      ) => {
+        updateArtifactsCount += 1
+        if (simulateVersionConflictOnce) {
+          simulateVersionConflictOnce = false
+          for (const u of updates) {
+            const cur = store.get(u.key)
+            if (cur) store.set(u.key, { ...cur, version: cur.version + 5 })
+          }
+          throw new Error('409 Conflict: artifact version mismatch')
+        }
+        const saved: Array<{ key: string; version: number; value: string }> = []
+        for (const u of updates) {
+          const prev = store.get(u.key)
+          if (prev && u.version !== prev.version) {
+            throw new Error(
+              `Version conflict for ${u.key}: expected ${prev.version}, got ${u.version}`
+            )
+          }
+          const next = {
+            key: u.key,
+            version: (prev?.version ?? 0) + 1,
+            value: u.value,
+          }
+          store.set(u.key, next)
+          saved.push(next)
+        }
+        return saved
+      },
+      delete_artifact: async (_ns: string, key: string) => {
+        deleteArtifactCount += 1
+        for (const k of String(key || '').split(',')) {
+          store.delete(k.trim())
+        }
+        return ''
+      },
+    }
+
+    const svc = getArtifactService(mockSdk, ARTIFACT_NAMESPACE)
+    expect(svc).toBeInstanceOf(ArtifactService)
+    expect(getArtifactService(mockSdk, ARTIFACT_NAMESPACE)).toBe(svc)
+
+    // 1. Initial saveUserArtifact fetches missing versions once; subsequent updates use cached versionByKey with 0 sdk.artifact calls
+    await saveUserArtifact(
+      mockSdk,
+      '7',
+      {
+        id: '42',
+        type: 'app',
+        title: 'Revenue App v1',
+        updatedAt: '2026-11-01T10:00:00Z',
+        createdBy: '7',
+      },
+      { id: '42', type: 'app', title: 'Revenue App v1', code: 'v1' }
+    )
+    expect(svc.getCachedVersion('user_7_app_42')).toBe(1)
+    expect(svc.getCachedVersion('obj_app_42')).toBe(1)
+    const getCountAfterFirstArtifactSave = artifactGetCount
+    const updateCountAfterFirstArtifactSave = updateArtifactsCount
+
+    await saveUserArtifact(
+      mockSdk,
+      '7',
+      {
+        id: '42',
+        type: 'app',
+        title: 'Revenue App v2',
+        updatedAt: '2026-11-01T10:05:00Z',
+        createdBy: '7',
+      },
+      { id: '42', type: 'app', title: 'Revenue App v2', code: 'v2' }
+    )
+    // Subsequent save to existing keys makes 0 sdk.artifact GET calls and 1 sdk.update_artifacts call
+    expect(artifactGetCount - getCountAfterFirstArtifactSave).toBe(0)
+    expect(updateArtifactsCount - updateCountAfterFirstArtifactSave).toBe(1)
+    expect(svc.getCachedVersion('user_7_app_42')).toBe(2)
+    expect(svc.getCachedVersion('obj_app_42')).toBe(2)
+
+    // Repeated saveUserConversation calls also make 0 sdk.artifact GET calls on subsequent saves
+    await saveUserConversation(mockSdk, '7', {
+      id: 'conv_42',
+      type: 'app',
+      label: 'Conv Turn 1',
+      updatedAt: '2026-11-01T10:00:00Z',
+    })
+    const getCountAfterFirstConvSave = artifactGetCount
+    const updateCountAfterFirstConvSave = updateArtifactsCount
+
+    await saveUserConversation(mockSdk, '7', {
+      id: 'conv_42',
+      type: 'app',
+      label: 'Conv Turn 2',
+      updatedAt: '2026-11-01T10:06:00Z',
+    })
+    expect(artifactGetCount - getCountAfterFirstConvSave).toBe(0)
+    expect(updateArtifactsCount - updateCountAfterFirstConvSave).toBe(1)
+    expect(svc.getCachedVersion('user_conversations:7')).toBe(2)
+
+    // 2. Version conflict on cached key automatically refreshes version via sdk.artifact and retries update_artifacts once
+    simulateVersionConflictOnce = true
+    const getCountBeforeConflict = artifactGetCount
+    const updateCountBeforeConflict = updateArtifactsCount
+    await svc.put([{ key: 'obj_app_42', value: { id: '42', title: 'Revenue App v3' } }])
+    expect(artifactGetCount - getCountBeforeConflict).toBe(1)
+    expect(updateArtifactsCount - updateCountBeforeConflict).toBe(2)
+    expect(svc.getCachedVersion('obj_app_42')).toBe(8)
+
+    // 3. Saving and deleting artifacts/conversations updates SWR cache & list in-place without extra sdk.search_artifacts calls
+    expect(searchArtifactsCount).toBe(0)
+    const cachedArtifactsAfterSave = await listUserArtifacts(mockSdk, '7')
+    expect(searchArtifactsCount).toBe(0)
+    expect(cachedArtifactsAfterSave.map((a) => `${a.id}:${a.title}`)).toEqual([
+      '42:Revenue App v2',
+    ])
+    expect(
+      readSwrCache<any[]>(['artifact:user_list', ARTIFACT_NAMESPACE, '7', 'all'])?.map(
+        (a) => a.title
+      )
+    ).toEqual(['Revenue App v2'])
+
+    await saveUserArtifact(mockSdk, '7', {
+      id: '99',
+      type: 'dashboard',
+      title: 'Executive UDD #99',
+      updatedAt: '2026-11-01T10:10:00Z',
+      createdBy: '7',
+    })
+    expect(searchArtifactsCount).toBe(0)
+    expect((await listUserArtifacts(mockSdk, '7')).map((a) => a.id)).toEqual(['99', '42'])
+    expect(
+      readSwrCache<any[]>(['artifact:user_list', ARTIFACT_NAMESPACE, '7', 'all'])?.map((a) => a.id)
+    ).toEqual(['99', '42'])
+
+    await deleteUserArtifact(mockSdk, '7', 'app', '42', true)
+    expect(deleteArtifactCount).toBe(1)
+    expect(searchArtifactsCount).toBe(0)
+    expect(svc.getCachedVersion('user_7_app_42')).toBeUndefined()
+    expect(svc.getCachedVersion('obj_app_42')).toBeUndefined()
+    expect((await listUserArtifacts(mockSdk, '7')).map((a) => a.id)).toEqual(['99'])
+    expect(
+      readSwrCache<any[]>(['artifact:user_list', ARTIFACT_NAMESPACE, '7', 'all'])?.map((a) => a.id)
+    ).toEqual(['99'])
+
+    await deleteUserConversation(mockSdk, '7', 'conv_42')
+    expect(await loadUserConversations(mockSdk, '7')).toEqual([])
+    expect(readSwrCache<any[]>(['artifact:conversations', ARTIFACT_NAMESPACE, '7'])).toEqual([])
+    expect(searchArtifactsCount).toBe(0)
   })
 })

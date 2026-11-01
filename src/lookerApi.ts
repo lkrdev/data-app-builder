@@ -1,5 +1,7 @@
+import useSWR, { mutate, SWRConfig, unstable_serialize } from 'swr'
 import type { Looker40SDK } from '@looker/sdk'
 import { classifyLooker404Error, resolveUserCapabilities } from './lookerPermissions'
+import { fetchLookerCaAgentsCatalog } from './conversationalAnalytics'
 
 export * from './lookerPermissions'
 export * from './dataAppPublisher'
@@ -38,18 +40,37 @@ export function extractExploreIdsFromCode(code: string): string[] {
 const inFlightMetadataRequests = new Map<string, Promise<any>>()
 const recentMetadataCache = new Map<string, { expiresAt: number; value: any }>()
 export const LOOKER_METADATA_CACHE_TTL_MS = 15_000
+export const LOOKER_SWR_CONFIG = {
+  revalidateOnFocus: false,
+  dedupingInterval: LOOKER_METADATA_CACHE_TTL_MS,
+}
+
+function syncSwrKey(swrKey: any, val: any): void {
+  if (!swrKey) return
+  try {
+    ;(SWRConfig as any).default?.cache?.set(unstable_serialize(swrKey), val)
+  } catch {}
+  void mutate(swrKey, val, false).catch(() => {})
+}
 
 export function clearLookerMetadataCache(): void {
   inFlightMetadataRequests.clear()
   recentMetadataCache.clear()
+  try {
+    const cache = (SWRConfig as any).default?.cache
+    if (cache && typeof cache.clear === 'function') cache.clear()
+  } catch {}
 }
+
+export const clearLookerMetadataRequestCache = clearLookerMetadataCache
 
 // ponytail: coalesce concurrent in-flight + short-TTL Looker metadata/explore GET requests across
 // simultaneous conversations so concurrent turns never fire duplicate HTTP calls for the same schema.
 export async function coalesceLookerMetadataRequest<T>(
   cacheKey: string,
   fn: () => Promise<T>,
-  ttlMs = LOOKER_METADATA_CACHE_TTL_MS
+  ttlMs = LOOKER_METADATA_CACHE_TTL_MS,
+  swrKey?: any
 ): Promise<T> {
   const now = Date.now()
   const hit = recentMetadataCache.get(cacheKey)
@@ -60,6 +81,7 @@ export async function coalesceLookerMetadataRequest<T>(
     try {
       const val = await fn()
       if (ttlMs > 0) recentMetadataCache.set(cacheKey, { expiresAt: Date.now() + ttlMs, value: val })
+      syncSwrKey(swrKey || cacheKey, val)
       return val
     } finally {
       inFlightMetadataRequests.delete(cacheKey)
@@ -77,6 +99,7 @@ export function createDeduplicatedLookerSdkProxy(
   const rawTransport = (sdk as any)?.authSession?.transport
   const origRawReq = rawTransport?.rawRequest
   const wrappedsdk: any = Object.create(sdk)
+  wrappedsdk.__rawSdk = (sdk as any).__rawSdk || sdk
   for (const method of ['lookml_model_explore', 'all_lookml_models', 'search_content', 'me', 'all_folders']) {
     if (typeof (sdk as any)[method] === 'function') {
       const origFn = (sdk as any)[method].bind(sdk)
@@ -158,26 +181,41 @@ export async function rawLookerRequest<T = any>(
 
 export async function fetchInitialLookerMetadata(sdk: Looker40SDK) {
   const [me, models, folders] = await Promise.all([
-    coalesceLookerMetadataRequest('meta:me', () =>
-      sdk.ok(sdk.me('id,display_name,email,personal_folder_id,home_folder_id,is_iam_admin,can'))
+    coalesceLookerMetadataRequest(
+      'meta:me',
+      () =>
+        sdk.ok(sdk.me('id,display_name,email,personal_folder_id,home_folder_id,is_iam_admin,can')),
+      LOOKER_METADATA_CACHE_TTL_MS,
+      ['looker:me']
     ),
-    coalesceLookerMetadataRequest('meta:all_lookml_models', () =>
-      sdk.ok(
-        sdk.all_lookml_models({
-          fields:
-            'name,label,project_name,allowed_db_connection_names,can,explores(name,label,description,group_label,hidden)',
-        })
-      )
+    coalesceLookerMetadataRequest(
+      'meta:all_lookml_models',
+      () =>
+        sdk.ok(
+          sdk.all_lookml_models({
+            fields:
+              'name,label,project_name,allowed_db_connection_names,can,explores(name,label,description,group_label,hidden)',
+          })
+        ),
+      LOOKER_METADATA_CACHE_TTL_MS,
+      ['looker:models']
     ),
-    coalesceLookerMetadataRequest('meta:all_folders', () =>
-      sdk.ok(sdk.all_folders('id,name,parent_id,is_personal,can'))
+    coalesceLookerMetadataRequest(
+      'meta:all_folders',
+      () => sdk.ok(sdk.all_folders('id,name,parent_id,is_personal,can')),
+      LOOKER_METADATA_CACHE_TTL_MS,
+      ['looker:folders']
     ),
   ])
   let roles: any[] | null = null
   if (me?.id && typeof (sdk as any).user_roles === 'function') {
     try {
-      const fetchedRoles = await sdk.ok(
-        (sdk as any).user_roles({ user_id: String(me.id) })
+      const uid = String(me.id)
+      const fetchedRoles = await coalesceLookerMetadataRequest(
+        `meta:user_roles:${uid}`,
+        () => sdk.ok((sdk as any).user_roles({ user_id: uid })),
+        LOOKER_METADATA_CACHE_TTL_MS,
+        ['looker:user_roles', uid]
       )
       if (Array.isArray(fetchedRoles)) roles = fetchedRoles
     } catch {
@@ -332,7 +370,53 @@ export async function buildDenseExploreSchema(
       }
 
       return lines.join('\n')
-    }
+    },
+    LOOKER_METADATA_CACHE_TTL_MS,
+    ['looker:explore_schema', modelName, exploreName]
+  )
+}
+
+export const fetchExploreSchemaAndSample = buildDenseExploreSchema
+
+export function useLookerMetadata(sdk?: Looker40SDK | null, enabled = true) {
+  return useSWR(
+    sdk && enabled ? ['looker:me'] : null,
+    () => fetchInitialLookerMetadata(sdk!),
+    LOOKER_SWR_CONFIG
+  )
+}
+
+export function useExploreSchema(
+  sdk: Looker40SDK | null | undefined,
+  modelName?: string,
+  exploreName?: string
+) {
+  return useSWR<string>(
+    sdk && modelName && exploreName ? ['looker:explore_schema', modelName, exploreName] : null,
+    () => buildDenseExploreSchema(sdk!, modelName!, exploreName!),
+    LOOKER_SWR_CONFIG
+  )
+}
+
+export function useLookerDashboard(sdk: Looker40SDK | null | undefined, dashboardId?: string) {
+  return useSWR(
+    sdk && dashboardId ? ['looker:dashboard', dashboardId] : null,
+    () =>
+      coalesceLookerMetadataRequest(
+        `dashboard:${dashboardId}`,
+        () => sdk!.ok(sdk!.dashboard(dashboardId!)),
+        LOOKER_METADATA_CACHE_TTL_MS,
+        ['looker:dashboard', dashboardId]
+      ),
+    LOOKER_SWR_CONFIG
+  )
+}
+
+export function useLookerCaAgents(sdk: Looker40SDK | null | undefined) {
+  return useSWR(
+    sdk ? ['looker:ca_agents'] : null,
+    () => fetchLookerCaAgentsCatalog(sdk!),
+    LOOKER_SWR_CONFIG
   )
 }
 

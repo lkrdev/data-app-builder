@@ -1,7 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import useSWR from 'swr'
 import { useLookerExtension } from '../contexts/LookerExtensionContext'
 import {
   bindTileScriptArtifact,
+  getArtifactNamespace,
+  getArtifactService,
   listSavedScripts,
   loadScriptArtifact,
   loadTileScriptArtifact,
@@ -56,9 +59,21 @@ export const PythonTile: React.FC = () => {
   const dashboardRunState = tileHostData?.dashboardRunState
   const filtersJson = JSON.stringify(tileHostData?.dashboardFilters || {})
 
-  const [scripts, setScripts] = useState<SavedScript[]>([])
-  const [binding, setBinding] = useState<TileScriptBinding | null>(null)
-  const [bindingLoaded, setBindingLoaded] = useState(false)
+  const namespace = getArtifactNamespace(extensionSDK)
+  const artifactService = useMemo(
+    () => getArtifactService(core40SDK, namespace),
+    [core40SDK, namespace]
+  )
+  const { data: swrBinding, error: bindingError } = useSWR<TileScriptBinding | null>(
+    elementId ? ['artifact:tile_script', namespace, elementId] : null,
+    () => loadTileScriptArtifact(core40SDK, elementId, namespace).catch(() => null)
+  )
+  const { data: swrScripts } = useSWR<SavedScript[]>(
+    isEditing ? ['artifact:scripts', namespace, undefined] : null,
+    () => listSavedScripts(core40SDK, undefined, namespace).catch(() => [])
+  )
+
+  const [localBinding, setLocalBinding] = useState<TileScriptBinding | null | undefined>(undefined)
   const [selectedScriptId, setSelectedScriptId] = useState('')
   const [output, setOutput] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
@@ -67,31 +82,25 @@ export const PythonTile: React.FC = () => {
   const lastRunStateRef = useRef<string | undefined>(dashboardRunState)
   const lastExecutedFiltersRef = useRef<string | null>(null)
 
+  const binding = localBinding !== undefined ? localBinding : swrBinding ?? null
+  const scripts = swrScripts || []
+  const bindingLoaded =
+    !elementId || swrBinding !== undefined || Boolean(bindingError) || localBinding !== undefined
+
   useEffect(() => {
     extensionSDK?.updateTitle?.('')
   }, [extensionSDK])
 
-  // Load tile binding and (when in edit mode) available scripts
   useEffect(() => {
-    let mounted = true
-    setBindingLoaded(false)
+    setLocalBinding(undefined)
     lastExecutedFiltersRef.current = null
-    const load = async () => {
-      const loadedBinding = elementId
-        ? await loadTileScriptArtifact(core40SDK, elementId).catch(() => null)
-        : null
-      const list = isEditing ? await listSavedScripts(core40SDK).catch(() => []) : null
-      if (!mounted) return
-      setBinding(loadedBinding)
-      setSelectedScriptId(loadedBinding?.scriptId || '')
-      if (list) setScripts(list)
-      setBindingLoaded(true)
+  }, [core40SDK, elementId])
+
+  useEffect(() => {
+    if (binding?.scriptId) {
+      setSelectedScriptId((prev) => prev || binding.scriptId)
     }
-    load()
-    return () => {
-      mounted = false
-    }
-  }, [core40SDK, elementId, isEditing])
+  }, [binding?.scriptId])
 
   const executeBoundScript = useCallback(
     async (
@@ -148,7 +157,8 @@ export const PythonTile: React.FC = () => {
   // Notify Looker host (PDF/PNG renderer & Scheduled Plans) only after React commits and browser paints DOM
   useEffect(() => {
     const readyAfterRun = !isEditing && !running && output !== null
-    const readyWithoutRun = bindingLoaded && (!binding?.code || isEditing)
+    const readyWithoutRun =
+      bindingLoaded && (!isEditing || swrScripts !== undefined) && (!binding?.code || isEditing)
     if (!readyAfterRun && !readyWithoutRun) return
 
     const fire = () => extensionSDK?.rendered?.()
@@ -164,21 +174,27 @@ export const PythonTile: React.FC = () => {
       cancelAnimationFrame(raf1)
       cancelAnimationFrame(raf2)
     }
-  }, [binding?.code, bindingLoaded, extensionSDK, isEditing, output, running])
+  }, [binding?.code, bindingLoaded, extensionSDK, isEditing, output, running, swrScripts])
 
   const handleBindScript = async (scriptId: string) => {
     setSelectedScriptId(scriptId)
     const chosen =
       scripts.find((s) => s.id === scriptId) ||
-      (scriptId ? await loadScriptArtifact(core40SDK, scriptId) : null)
+      (scriptId ? await loadScriptArtifact(core40SDK, scriptId, namespace) : null)
     if (!chosen || !elementId) return
     setStatusMsg('Saving tile script binding...')
-    const nextBinding = await bindTileScriptArtifact(core40SDK, elementId, {
-      scriptId: chosen.id,
-      code: chosen.code,
-      title: chosen.title,
-    })
-    setBinding(nextBinding)
+    const nextBinding = await bindTileScriptArtifact(
+      core40SDK,
+      elementId,
+      {
+        scriptId: chosen.id,
+        code: chosen.code,
+        title: chosen.title,
+      },
+      namespace
+    )
+    void artifactService
+    setLocalBinding(nextBinding)
     setStatusMsg(`Bound "${chosen.title}" to tile #${elementId}`)
   }
 
