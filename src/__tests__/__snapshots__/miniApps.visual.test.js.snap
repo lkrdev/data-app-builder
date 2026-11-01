@@ -1,5 +1,41 @@
 // Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
 
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders centered_empty_prompt (17. Centered New-Conversation Empty Prompt Box (Use-Case Selector, Input & Actions)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+{
+  "dropdownScrollTop": null,
+  "modeTabs": [
+    {
+      "active": true,
+      "label": "Data App",
+    },
+    {
+      "active": false,
+      "label": "Content Studio",
+    },
+    {
+      "active": false,
+      "label": "LookML",
+    },
+    {
+      "active": false,
+      "label": "Health Check",
+    },
+    {
+      "active": false,
+      "label": "Python Tile",
+    },
+  ],
+  "scenario": "centered_empty_prompt",
+  "verifiedVisibleText": [
+    "New Conversation",
+    "Build a Looker Data App with Antigravity",
+    "Use Case:",
+    "✨ Build App",
+    "My Creations (5)",
+  ],
+}
+`;
+
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders chatbar_busy_running (13. Chat Bar State — Busy / Running Spinner Banner) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,

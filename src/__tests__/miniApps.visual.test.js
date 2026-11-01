@@ -326,7 +326,8 @@ function buildHtmlPage(scenario) {
         chatbar_busy_running: '/app/42',
         chatbar_error_banner: '/app',
         python_tile_scheduler_modal: '/tile/demo1',
-        conversational_analytics: '/conversational-analytics/ca_conv_streaming_1'
+        conversational_analytics: '/conversational-analytics/ca_conv_streaming_1',
+        centered_empty_prompt: '/app'
       };
 
       const isTile = scenario === 'tile_mount_view' || scenario === 'tile_mount_edit';
@@ -826,6 +827,38 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     chrome = await startHeadlessChrome()
   }, 20000)
 
+  function writeSnapshotManifest() {
+    const gitOut = execFileSync(
+      'git',
+      ['status', '--porcelain', 'src/__tests__/__image_snapshots__'],
+      { cwd: repoRoot, encoding: 'utf8' }
+    )
+    const changedFiles = new Set(
+      gitOut
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((line) => path.basename(line.slice(3).trim()))
+    )
+    const manifest = scenarios.map((s) => {
+      const snapFile = path.join(imageSnapshotsDir, s.snapshotName)
+      const buf = existsSync(snapFile) ? readFileSync(snapFile) : null
+      const width = buf && buf.length >= 24 ? buf.readUInt32BE(16) : 1440
+      const height = buf && buf.length >= 24 ? buf.readUInt32BE(20) : 900
+      return {
+        id: s.id,
+        category: s.category,
+        title: s.title,
+        snapshotName: s.snapshotName,
+        width,
+        height,
+        ...(s.clipSelector ? { clipSelector: s.clipSelector, clipMargin: s.clipMargin ?? 24 } : {}),
+        changedInGit: changedFiles.has(s.snapshotName)
+      }
+    })
+    writeFileSync(path.join(imageSnapshotsDir, 'manifest.json'), JSON.stringify(manifest, null, 2))
+    return manifest
+  }
+
   afterAll(async () => {
     if (chrome) chrome.close()
     if (server) {
@@ -833,30 +866,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       await new Promise((resolve) => server.close(resolve))
     }
 
-    // Write manifest.json recording which image snapshots are modified/untracked in git vs committed
+    // Write manifest.json recording snapshot dimensions, crop selectors, and git status
     try {
-      const gitOut = execFileSync(
-        'git',
-        ['status', '--porcelain', 'src/__tests__/__image_snapshots__'],
-        { cwd: repoRoot, encoding: 'utf8' }
-      )
-      const changedFiles = new Set(
-        gitOut
-          .split(/\r?\n/)
-          .filter(Boolean)
-          .map((line) => path.basename(line.slice(3).trim()))
-      )
-      const manifest = scenarios.map((s) => ({
-        id: s.id,
-        category: s.category,
-        title: s.title,
-        snapshotName: s.snapshotName,
-        changedInGit: changedFiles.has(s.snapshotName)
-      }))
-      writeFileSync(
-        path.join(imageSnapshotsDir, 'manifest.json'),
-        JSON.stringify(manifest, null, 2)
-      )
+      writeSnapshotManifest()
     } catch {}
   })
 
@@ -980,6 +992,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Config & Explore Dropdown',
       title: '9. Explore Combobox Dropdown — Open (Top Scroll State)',
       snapshotName: '09-explore-dropdown-open-top-snap.png',
+      clipSelector: ['.dab-combobox', '.dab-dropdown'],
       expectText: [
         'Clear selection (let agent decide)',
         'BIGQUERY INFORMATION SCHEMA (BLOCK)',
@@ -994,6 +1007,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Config & Explore Dropdown',
       title: '10. Explore Combobox Dropdown — Scrolled State (Retail Ops & System Activity)',
       snapshotName: '10-explore-dropdown-scrolled-snap.png',
+      clipSelector: ['.dab-combobox', '.dab-dropdown'],
       expectText: [
         'RETAIL OPERATIONS',
         'Store Transactions',
@@ -1007,6 +1021,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Chat Bar States',
       title: '11. Chat Bar State — LookML Activated Turn Skills & Prompt',
       snapshotName: '11-chatbar-state-lookml-activated-skills-snap.png',
+      clipSelector: '.dab-composer',
       expectText: [
         'TURN SKILLS:',
         '✓ 📝 Descriptions & Curation',
@@ -1021,6 +1036,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Chat Bar States',
       title: '12. Chat Bar State — Pasted Screenshot Thumbnail & Code/Schema Inspector Open',
       snapshotName: '12-chatbar-state-pasted-image-and-inspector-snap.png',
+      clipSelector: '.dab-composer',
       expectText: [
         'Inspect Code / Schema',
         'Compiled Explore Schema (/workspace/schema.md)',
@@ -1033,6 +1049,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Chat Bar States',
       title: '13. Chat Bar State — Busy / Running Spinner Banner',
       snapshotName: '13-chatbar-state-busy-running-snap.png',
+      clipSelector: ['.dab-status-banner', '.dab-composer'],
       expectText: [
         'Executing LkrCodeMode Monty Python & validating Looker queries...',
         'Executive Revenue App'
@@ -1043,6 +1060,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Chat Bar States',
       title: '14. Chat Bar State — Error Diagnostic Banner',
       snapshotName: '14-chatbar-state-error-banner-snap.png',
+      clipSelector: ['.dab-msg-error', '.dab-composer'],
       expectText: [
         'Error',
         'Looker API Error (422): Field "order_items.unknown_metric" not found in explore "thelook::order_items".'
@@ -1053,6 +1071,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Tile & Scheduler Modal',
       title: '15. Custom CodeMode Script Scheduler Modal (Cron, vars.mode & Custom Controls)',
       snapshotName: '15-python-tile-scheduler-modal-snap.png',
+      clipSelector: '.dab-modal',
       expectText: [
         '⏰ Custom CodeMode Script Scheduler',
         'obj_schedule_demo1',
@@ -1075,13 +1094,27 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         '/embed/conversations/ca_conv_streaming_1',
         '✨ Ask CA Agent'
       ]
+    },
+    {
+      id: 'centered_empty_prompt',
+      category: 'Chat Bar States',
+      title: '17. Centered New-Conversation Empty Prompt Box (Use-Case Selector, Input & Actions)',
+      snapshotName: '17-centered-empty-prompt-snap.png',
+      clipSelector: '.dab-empty-prompt-card',
+      expectText: [
+        'New Conversation',
+        'Build a Looker Data App with Antigravity',
+        'Use Case:',
+        '✨ Build App',
+        'My Creations (5)'
+      ]
     }
   ]
 
   let testCount = 0
   test.each(scenarios)(
     'renders $id ($title) with MockLookerExtensionProvider and matches DOM & image snapshots',
-    async ({ id, snapshotName, expectText }) => {
+    async ({ id, snapshotName, expectText, clipSelector, clipMargin = 24 }) => {
       testCount += 1
       if (testCount % 7 === 0) {
         chrome.close()
@@ -1144,9 +1177,39 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       }).toMatchSnapshot()
 
       // 2. Visual PNG snapshot stored in src/__tests__/__image_snapshots__/<snapshotName>
-      const { data } = await chrome.send('Page.captureScreenshot', { format: 'png' })
+      let clip
+      if (clipSelector) {
+        const selectors = [clipSelector].flat()
+        const clipRes = await chrome.send('Runtime.evaluate', {
+          expression: `(() => {
+            const rects = ${JSON.stringify(selectors)}
+              .flatMap((s) => Array.from(document.querySelectorAll(s)))
+              .map((el) => el.getBoundingClientRect())
+              .filter((r) => r.width > 0 && r.height > 0);
+            if (!rects.length) return null;
+            const x = Math.max(0, Math.floor(Math.min(...rects.map((r) => r.left)) - ${clipMargin}));
+            const y = Math.max(0, Math.floor(Math.min(...rects.map((r) => r.top)) - ${clipMargin}));
+            const right = Math.min(1440, Math.ceil(Math.max(...rects.map((r) => r.right)) + ${clipMargin}));
+            const bottom = Math.min(900, Math.ceil(Math.max(...rects.map((r) => r.bottom)) + ${clipMargin}));
+            return { x, y, width: right - x, height: bottom - y, scale: 1 };
+          })()`,
+          returnByValue: true
+        })
+        clip = clipRes.result?.value
+        expect(clip).toBeTruthy()
+      }
+
+      const { data } = await chrome.send('Page.captureScreenshot', {
+        format: 'png',
+        ...(clip ? { clip } : {})
+      })
       const pngBuffer = Buffer.from(data, 'base64')
-      expect(pngBuffer.length).toBeGreaterThan(5000)
+      expect(pngBuffer.length).toBeGreaterThan(1000)
+
+      const width = pngBuffer.readUInt32BE(16)
+      const height = pngBuffer.readUInt32BE(20)
+      expect(width).toBe(clip ? clip.width : 1440)
+      expect(height).toBe(clip ? clip.height : 900)
 
       const snapshotPath = path.join(imageSnapshotsDir, snapshotName)
       writeFileSync(snapshotPath, pngBuffer)
@@ -1154,6 +1217,21 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     },
     15000
   )
+
+  test('records cropped component dimensions and clipSelector metadata in manifest.json', () => {
+    const manifest = writeSnapshotManifest()
+    for (const { id, clipSelector } of scenarios.filter((s) => s.clipSelector)) {
+      const entry = manifest.find((m) => m.id === id)
+      expect(entry).toMatchObject({ clipSelector, clipMargin: 24 })
+      expect(entry.width).toBeGreaterThan(100)
+      expect(entry.height).toBeGreaterThan(80)
+      expect(entry.width).toBeLessThan(1440)
+      expect(entry.height).toBeLessThan(900)
+    }
+    const fullPageEntry = manifest.find((m) => m.id === 'data_app')
+    expect(fullPageEntry).toMatchObject({ width: 1440, height: 900 })
+    expect(fullPageEntry.clipSelector).toBeUndefined()
+  })
 
   test('enables/disables individual tool modes via /config and filters topbar tabs, catalog & routes', async () => {
     chrome.close()
