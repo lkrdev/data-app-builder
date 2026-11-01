@@ -1,8 +1,45 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { getGeminiUserAttributeName, LkrCodeMode, studioModeToUseCase } from '../antigravity'
+import { useLookerExtension } from '../contexts/LookerExtensionContext'
 import { formatExploreId } from '../lookerApi'
 import { StudioController } from '../useStudioController'
 import { STUDIO_MODES } from './App'
+
+export const FullScreenToggleButton: React.FC = () => {
+  const { extensionSDK, lookerHostData } = useLookerExtension()
+  const location = useLocation()
+
+  const isStandalone = !lookerHostData?.mountPoint || lookerHostData.mountPoint === 'standalone'
+  const isSpartan = lookerHostData?.hostType === 'spartan'
+  const extensionId = lookerHostData?.extensionId || 'data_app_builder::data_app_builder'
+
+  const handleToggleFullScreen = () => {
+    if (!extensionSDK) return
+    const subRoute = `${location.pathname === '/' ? '' : location.pathname}${location.search || ''}${location.hash || ''}`
+    const targetPrefix = isSpartan ? '/extensions' : '/spartan'
+    const targetUrl = `${targetPrefix}/${extensionId}${subRoute}`
+    extensionSDK.updateLocation(targetUrl, undefined, '_top')
+  }
+
+  if (!isStandalone) return null
+
+  return (
+    <button
+      type="button"
+      data-testid="topbar-fullscreen-toggle"
+      className="dab-btn dab-btn-secondary"
+      onClick={handleToggleFullScreen}
+      title={
+        isSpartan
+          ? `Switch from /spartan/${extensionId} back to /extensions/${extensionId}`
+          : `Switch from /extensions/${extensionId} to full-screen /spartan/${extensionId}`
+      }
+    >
+      {isSpartan ? '⤡ Exit Full Screen' : '⤢ Full Screen'}
+    </button>
+  )
+}
 
 export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
@@ -39,6 +76,9 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           <strong>Agent</strong>
           <span className="dab-badge">Agentic LookML</span>
           <span className="dab-badge">Configuration</span>
+        </div>
+        <div className="dab-controls">
+          <FullScreenToggleButton />
         </div>
       </header>
       <div className="dab-placeholder">
@@ -742,6 +782,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
               </button>
             </>
           )}
+          <FullScreenToggleButton />
         </div>
       </div>
     </header>
