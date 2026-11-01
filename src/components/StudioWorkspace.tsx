@@ -5,7 +5,10 @@ import {
   handleImageClipboardPaste,
   StudioUseCase,
 } from '../antigravity'
-import { ConversationRecord } from '../lookerApi'
+import {
+  ConversationRecord,
+  resolveConversationRelatedContent,
+} from '../lookerApi'
 import { LOOKML_TURN_SKILLS, LookmlPreviewPane } from '../lookmlTool'
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import { StudioController } from '../useStudioController'
@@ -671,14 +674,68 @@ export const UseCaseInfoModal: React.FC<{
 export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
     conversations,
+    archivedConversations,
+    showArchivedConversations,
+    setShowArchivedConversations,
+    pendingDeleteConv,
+    deleteRelatedContent,
+    setDeleteRelatedContent,
     activeConversationId,
     sidebarCollapsed,
     setSidebarCollapsed,
     handleSelectConversation,
-    handleDeleteConversation,
+    handleToggleArchiveConversation,
+    handleRequestDeleteConversation,
+    handleCancelDeleteConversation,
+    handleConfirmDeleteConversation,
     handleNewConversation,
     busyStatus,
+    userId,
   } = ctl
+
+  const renderConversationRow = (conv: ConversationRecord, isArchived = false) => {
+    const contentBadge = formatConversationContentTag(conv)
+    const isActive = activeConversationId === conv.id
+    return (
+      <div
+        key={conv.id}
+        data-testid={`conversation-item-${conv.id}`}
+        className={`dab-conv-item ${isActive ? 'active' : ''} ${isArchived ? 'archived' : ''}`}
+        onClick={() => handleSelectConversation(conv)}
+        title={`${conv.label} (${conv.type}${conv.interactionId ? ` · ${conv.interactionId}` : ''})`}
+      >
+        <div className="dab-conv-item-top">
+          <span className="dab-conv-type-badge">{conv.type}</span>
+          {contentBadge && <span className="dab-conv-content-tag">{contentBadge}</span>}
+          <div className="dab-conv-item-actions">
+            <button
+              type="button"
+              className="dab-conv-action-btn dab-conv-archive-btn"
+              data-testid={`archive-conv-${conv.id}`}
+              onClick={(e) => handleToggleArchiveConversation(e, conv.id, !isArchived)}
+              title={isArchived ? 'Unarchive conversation' : 'Archive conversation'}
+            >
+              {isArchived ? '↩' : '📥'}
+            </button>
+            <button
+              type="button"
+              className="dab-conv-action-btn dab-conv-delete-btn"
+              data-testid={`delete-conv-${conv.id}`}
+              onClick={(e) => handleRequestDeleteConversation(e, conv)}
+              title="Delete conversation"
+            >
+              🗑
+            </button>
+          </div>
+        </div>
+        <div className="dab-conv-item-label">{conv.label}</div>
+      </div>
+    )
+  }
+
+  const relatedInfo = pendingDeleteConv
+    ? resolveConversationRelatedContent(pendingDeleteConv, userId)
+    : null
 
   return (
     <nav
@@ -722,107 +779,123 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
           {conversations.length === 0 ? (
             <div className="dab-conv-empty">No previous conversations yet.</div>
           ) : (
-            conversations.map((conv) => {
-              const contentBadge = formatConversationContentTag(conv)
-              const isActive = activeConversationId === conv.id
-              return (
-                <div
-                  key={conv.id}
-                  data-testid={`conversation-item-${conv.id}`}
-                  className={`dab-conv-item ${isActive ? 'active' : ''}`}
-                  onClick={() => handleSelectConversation(conv)}
-                  title={`${conv.label} (${conv.type}${conv.interactionId ? ` · ${conv.interactionId}` : ''})`}
-                >
-                  <div className="dab-conv-item-top">
-                    <span className="dab-conv-type-badge">{conv.type}</span>
-                    {contentBadge && (
-                      <span className="dab-conv-content-tag">{contentBadge}</span>
-                    )}
-                    <button
-                      type="button"
-                      className="dab-conv-delete-btn"
-                      data-testid={`delete-conversation-${conv.id}`}
-                      onClick={(e) => handleDeleteConversation(e, conv.id)}
-                      title="Delete conversation"
-                    >
-                      ×
-                    </button>
-                  </div>
-                  <div className="dab-conv-item-label">{conv.label}</div>
-                </div>
-              )
-            })
+            conversations.map((conv) => renderConversationRow(conv, false))
           )}
+
+          <div className="dab-conv-archived-section">
+            <button
+              type="button"
+              className="dab-conv-archived-toggle"
+              data-testid="toggle-archived-convs"
+              onClick={() => setShowArchivedConversations((prev) => !prev)}
+            >
+              {showArchivedConversations
+                ? `Hide Archived (${archivedConversations.length})`
+                : `Show Archived (${archivedConversations.length})`}
+            </button>
+            {showArchivedConversations && (
+              <div className="dab-conv-archived-list" data-testid="archived-conversations-list">
+                {archivedConversations.length === 0 ? (
+                  <div className="dab-conv-empty">No archived conversations.</div>
+                ) : (
+                  archivedConversations.map((conv) => renderConversationRow(conv, true))
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
-    </nav>
-  )
-}
 
-export const StudioCatalogBar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
-  const {
-    filteredCatalog,
-    catalogSearch,
-    setCatalogSearch,
-    activeObjectId,
-    handleSelectCatalogItem,
-    handleDeleteCatalogItem,
-  } = ctl
-
-  return (
-    <div className="dab-catalog-bar">
-      <div className="dab-catalog-search">
-        <strong style={{ fontSize: 12, color: 'var(--dab-text-secondary, #334155)', whiteSpace: 'nowrap' }}>
-          My Creations ({filteredCatalog.length})
-        </strong>
-        <input
-          type="text"
-          placeholder="Search by title, ID, type, or explore..."
-          value={catalogSearch}
-          onChange={(e) => setCatalogSearch(e.target.value)}
-          style={{
-            flex: 1,
-            padding: '3px 8px',
-            fontSize: 12,
-            border: '1px solid var(--dab-border-strong, #cbd5e1)',
-            borderRadius: 4,
-            background: 'var(--dab-input-bg, #ffffff)',
-            color: 'var(--dab-text, #1f2937)',
-          }}
-        />
-      </div>
-      {filteredCatalog.length > 0 && (
-        <div className="dab-catalog-list">
-          {filteredCatalog.map((item) => (
-            <span
-              key={`${item.type}:${item.id}`}
-              className={`dab-catalog-chip ${activeObjectId === item.id ? 'active' : ''}`}
-              onClick={() => handleSelectCatalogItem(item)}
-              title={`${item.type.toUpperCase()} #${item.id} · ${(item.explores || []).join(', ')}`}
-            >
-              <span>
-                [{item.type}] {item.label || item.title} (#{item.id})
-              </span>
+      {pendingDeleteConv && relatedInfo && (
+        <div
+          className="dab-modal-backdrop"
+          onClick={handleCancelDeleteConversation}
+        >
+          <div
+            className="dab-modal"
+            data-testid="delete-conv-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="dab-delete-conv-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="dab-modal-header">
+              <strong id="dab-delete-conv-modal-title">Delete Conversation?</strong>
               <button
                 type="button"
-                onClick={(e) => handleDeleteCatalogItem(e, item)}
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                  cursor: 'pointer',
-                  padding: 0,
-                  fontSize: 11,
-                  color: 'var(--dab-text-muted, #94a3b8)',
-                }}
-                title="Delete artifact"
+                className="dab-conv-action-btn"
+                onClick={handleCancelDeleteConversation}
+                aria-label="Close modal"
               >
                 ×
               </button>
-            </span>
-          ))}
+            </div>
+            <div className="dab-modal-body">
+              <p style={{ margin: '0 0 8px' }}>
+                Remove <strong>{pendingDeleteConv.label}</strong> (<code>{pendingDeleteConv.type}</code>)
+                from your conversation history (<code>user_conversations:{userId || '1'}</code>
+                {relatedInfo.userIndexKeys[0] ? ` and ${relatedInfo.userIndexKeys[0]}` : ''})?
+              </p>
+              {relatedInfo.items.length > 0 && (
+                <div className="dab-modal-related-box" data-testid="delete-conv-related-summary">
+                  <strong>Linked Looker &amp; Shared Artifact Content:</strong>
+                  <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                    {relatedInfo.items.map((item, idx) => (
+                      <li key={idx}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <label className="dab-modal-checkbox-row">
+                <input
+                  type="checkbox"
+                  data-testid="delete-related-content-checkbox"
+                  checked={deleteRelatedContent}
+                  onChange={(e) => setDeleteRelatedContent(e.target.checked)}
+                />
+                <span>
+                  Also delete related Looker content &amp; shared artifacts ({relatedInfo.summary})
+                </span>
+              </label>
+            </div>
+            <div className="dab-modal-actions">
+              <button
+                type="button"
+                className="dab-btn-secondary"
+                data-testid="cancel-delete-conv-btn"
+                onClick={handleCancelDeleteConversation}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="dab-btn-secondary"
+                data-testid="confirm-delete-conv-only-btn"
+                onClick={() => handleConfirmDeleteConversation(false)}
+              >
+                Delete Conversation Only
+              </button>
+              <button
+                type="button"
+                className="dab-btn-danger"
+                data-testid="confirm-delete-conv-and-content-btn"
+                onClick={() => handleConfirmDeleteConversation(true)}
+              >
+                Delete Conversation &amp; Related Content
+              </button>
+              <button
+                type="button"
+                className="dab-btn-primary"
+                data-testid="confirm-delete-conv-btn"
+                onClick={() => handleConfirmDeleteConversation()}
+              >
+                Confirm Delete
+              </button>
+            </div>
+          </div>
         </div>
       )}
-    </div>
+    </nav>
   )
 }
 
@@ -1219,7 +1292,6 @@ export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ 
         </div>
 
         <StudioComposer ctl={ctl} />
-        <StudioCatalogBar ctl={ctl} />
       </div>
     </main>
   )
@@ -1281,8 +1353,6 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 
   return (
     <aside className="dab-left-pane">
-      <StudioCatalogBar ctl={ctl} />
-
       <div className="dab-chat-log">
         {messages.length === 0 && (
           <div className="dab-empty-chat">

@@ -1138,15 +1138,156 @@ body {
   text-overflow: ellipsis;
 }
 
-.dab-conv-delete-btn {
+.dab-conv-item-actions {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.dab-conv-action-btn,
+.dab-conv-delete-btn {
   border: none;
   background: transparent;
   color: var(--dab-text-muted, #94a3b8);
-  font-size: 12px;
+  font-size: 11px;
   cursor: pointer;
-  padding: 0 2px;
+  padding: 2px 4px;
+  border-radius: 4px;
   line-height: 1;
+}
+
+.dab-conv-action-btn:hover,
+.dab-conv-delete-btn:hover {
+  background: var(--dab-surface-subtle, #e2e8f0);
+  color: var(--dab-text-strong, #0f172a);
+}
+
+.dab-conv-delete-btn:hover {
+  color: #dc2626;
+}
+
+.dab-conv-item.archived {
+  opacity: 0.78;
+  border-style: dashed;
+}
+
+.dab-conv-archived-section {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--dab-border, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dab-conv-archived-toggle {
+  width: 100%;
+  border: 1px solid var(--dab-border, #cbd5e1);
+  background: var(--dab-surface-muted, #f8fafc);
+  color: var(--dab-text-secondary, #475569);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.dab-conv-archived-toggle:hover {
+  background: var(--dab-surface-subtle, #f1f5f9);
+}
+
+.dab-conv-archived-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dab-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 16px;
+}
+
+.dab-modal {
+  width: 100%;
+  max-width: 520px;
+  background: var(--dab-surface, #ffffff);
+  color: var(--dab-text, #1e293b);
+  border: 1px solid var(--dab-border-strong, #cbd5e1);
+  border-radius: 12px;
+  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.28);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dab-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--dab-border, #e2e8f0);
+  background: var(--dab-surface-muted, #f8fafc);
+  font-size: 14px;
+}
+
+.dab-modal-body {
+  padding: 14px 16px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dab-modal-related-box {
+  background: var(--dab-surface-muted, #f8fafc);
+  border: 1px solid var(--dab-border, #cbd5e1);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+.dab-modal-checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.dab-modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  border-top: 1px solid var(--dab-border, #e2e8f0);
+  background: var(--dab-surface-muted, #f8fafc);
+}
+
+.dab-btn-danger {
+  background: #dc2626;
+  color: #ffffff;
+  border: 1px solid #b91c1c;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dab-btn-danger:hover {
+  background: #b91c1c;
 }
 
 .dab-conv-item-label {

@@ -3,7 +3,7 @@ import { useHistory, useLocation } from 'react-router-dom'
 import useSWR from 'swr'
 import { useLookerExtension } from './contexts/LookerExtensionContext'
 import {
-  applyStudioDocumentTheme, buildAvailableExploresCatalog, buildDenseExploreSchema,
+  applyStudioDocumentTheme, archiveUserConversation, buildAvailableExploresCatalog, buildDenseExploreSchema,
   CaConversationState, ConversationRecord, createLookerCaConversation, deleteUserArtifact,
   deleteUserConversation, extractExploreIdsFromCode, extractResolvedUseCase,
   fetchInitialLookerMetadata, formatExploreId, getAllowedUseCases, getArtifactNamespace,
@@ -12,7 +12,7 @@ import {
   loadStoredStudioThemeMode, loadUserConversations, loadUserEnvironmentId, NativeContentState,
   NativeContentType, normalizeStudioThemeMode, parseExploreId, persistStudioThemeMode,
   PublishedAppState, publishScriptDashboard, readInitialStudioThemeMode, resolveCaEmbedPath,
-  ResolvedStudioTheme, ResolvedStudioUseCase, resolveStudioTheme, resolveSystemTheme,
+  resolveConversationRelatedContent, ResolvedStudioTheme, ResolvedStudioUseCase, resolveStudioTheme, resolveSystemTheme,
   resolveUserCapabilities, saveDashboardStudioMetadata, SavedScript, saveNativeContentArtifact,
   saveScriptArtifact, saveUserArtifact, saveUserConversation, selectCaAgentViaIsolatedSubagent,
   STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS, studioModeToUseCase, StudioThemeMode,
@@ -161,7 +161,6 @@ export function useStudioController() {
   const [loadingSchema, setLoadingSchema] = useState(false)
 
   const [catalogItems, setCatalogItems] = useState<UserArtifactIndex[]>([])
-  const [catalogSearch, setCatalogSearch] = useState('')
   const [activeObjectId, setActiveObjectId] = useState('')
   const [conversations, setConversations] = useState<UserConversationEntry[]>([])
   const conversationLabelsRef = useRef<Record<string, string>>({})
@@ -192,10 +191,19 @@ export function useStudioController() {
     )
   }, [swrUserArtifacts])
   useEffect(() => {
-    if (swrConversations && swrConversations.length > 0) {
+    if (swrConversations) {
       setConversations(swrConversations)
     }
   }, [swrConversations])
+  const [showArchivedConversations, setShowArchivedConversations] = useState<boolean>(
+    () => Boolean(mockExt?.initialShowArchived)
+  )
+  const [pendingDeleteConv, setPendingDeleteConv] = useState<ConversationRecord | null>(
+    () => mockExt?.initialPendingDeleteConv || null
+  )
+  const [deleteRelatedContent, setDeleteRelatedContent] = useState<boolean>(
+    () => Boolean(mockExt?.initialDeleteRelatedContent)
+  )
   const [activeConversationId, setActiveConversationId] = useState<string>(
     () => `conv_${Date.now()}`
   )
@@ -318,9 +326,6 @@ export function useStudioController() {
   const [nativeContent, setNativeContent] = useState<NativeContentState | null>(null)
   const [embedNonce, setEmbedNonce] = useState<number>(0)
   const bumpEmbedNonce = useCallback(() => setEmbedNonce((n) => n + 1), [])
-  const [myCreations, setMyCreations] = useState<
-    Array<{ id: string; title: string; contentType: NativeContentType; embedPath: string }>
-  >([])
   const lastPublishedIdRef = useRef<string>('')
   const lastNativeIdRef = useRef<string>('')
   const [healthReport, setHealthReport] = useState<HealthCheckReportPayload | null>(null)
@@ -585,23 +590,22 @@ export function useStudioController() {
     (t as StudioMode) ||
     'app'
 
-  const filteredCatalog = useMemo(() => {
-    const q = catalogSearch.trim().toLowerCase()
-    return catalogItems.filter((item) => {
-      if (disabledModes.includes(normalizeCatalogMode(item.type))) return false
-      if (!q) return true
-      return `${item.label || ''} ${item.title} ${item.id} ${item.type} ${(item.explores || []).join(' ')}`
-        .toLowerCase()
-        .includes(q)
-    })
-  }, [catalogItems, catalogSearch, disabledModes])
-
-  const filteredConversations = useMemo(
+  const modeAllowedConversations = useMemo(
     () =>
       conversations.filter(
         (conv) => !disabledModes.includes(normalizeCatalogMode(conv.type))
       ),
     [conversations, disabledModes]
+  )
+
+  const filteredConversations = useMemo(
+    () => modeAllowedConversations.filter((conv) => !conv.archived),
+    [modeAllowedConversations]
+  )
+
+  const archivedConversations = useMemo(
+    () => modeAllowedConversations.filter((conv) => Boolean(conv.archived)),
+    [modeAllowedConversations]
   )
 
   const handleSaveAuthSetup = async () => {
@@ -697,47 +701,13 @@ export function useStudioController() {
           }))
         )
         setSelectedFolderId((prev) => (prev === '1' ? meta.defaultFolderId : prev))
-        listUserDashboardArtifacts(core40SDK, extensionSDK, resolvedUserId).then((items) => {
-          if (mounted) setMyCreations(items)
-        })
         refreshCatalog(resolvedUserId)
         loadUserConversations(
           core40SDK,
           resolvedUserId,
           getArtifactNamespace(extensionSDK)
-        ).then(async (loadedConvs) => {
-          if (!mounted) return
-          if (loadedConvs.length > 0) {
-            setConversations(loadedConvs)
-          } else {
-            const legacyItems = await listUserArtifacts(core40SDK, resolvedUserId)
-            if (!mounted) return
-            setCatalogItems(legacyItems)
-            if (legacyItems.length > 0) {
-              setConversations(
-                legacyItems.map((item) => ({
-                  id: `conv_${item.type}_${item.id}`,
-                  type: item.type,
-                  interactionId: item.lastInteractionId,
-                  environmentId: item.environmentId,
-                  label: item.label || item.title,
-                  createdAt: item.updatedAt || new Date().toISOString(),
-                  updatedAt: item.updatedAt || new Date().toISOString(),
-                  explores: item.explores,
-                  content:
-                    item.type === 'app' || item.type === 'data_app'
-                      ? { dashboardId: item.id, appArtifactId: `obj_app_${item.id}` }
-                      : item.type === 'dashboard'
-                      ? { dashboardId: item.id }
-                      : item.type === 'lookml'
-                      ? { sessionId: item.id }
-                      : item.type === 'health' || item.type === 'health_check'
-                      ? { reportId: item.id }
-                      : { scriptId: item.id },
-                }))
-              )
-            }
-          }
+        ).then((loadedConvs) => {
+          if (mounted) setConversations(loadedConvs)
         })
       })
       .catch((err) => {
@@ -913,7 +883,6 @@ export function useStudioController() {
             conversationLabelsRef.current[opts.id] = label
             setCaConversation((prev) => (prev && prev.id === opts.id ? { ...prev, label } : prev))
             setCatalogItems((prev) => prev.map((it) => (it.id === opts.id ? { ...it, label, title: label } : it)))
-            setMyCreations((prev) => prev.map((c) => (c.id === opts.id ? { ...c, title: label } : c)))
             setLookmlSessions((prev) => prev.map((s) => (s.id === opts.id ? { ...s, title: label } : s)))
             const updatedAt = new Date().toISOString()
             await saveUserConversation(core40SDK, userId, { ...baseConv, label, updatedAt }, namespace)
@@ -1608,40 +1577,85 @@ export function useStudioController() {
     }
   }
 
-  const handleDeleteConversation = async (e: React.MouseEvent, conversationId: string) => {
-    e.stopPropagation()
+  const handleToggleArchiveConversation = async (
+    e: React.MouseEvent | undefined,
+    conversationId: string,
+    nextArchived?: boolean
+  ) => {
+    e?.stopPropagation()
+    const current = conversations.find((c) => c.id === conversationId)
+    const archived = typeof nextArchived === 'boolean' ? nextArchived : !current?.archived
+    setConversations((prev) =>
+      prev.map((c) => (c.id === conversationId ? { ...c, archived } : c))
+    )
+    try {
+      const next = await archiveUserConversation(
+        core40SDK,
+        userIdRef.current || userId,
+        conversationId,
+        archived,
+        getArtifactNamespace(extensionSDK)
+      )
+      setConversations(next)
+    } catch {}
+  }
+
+  const handleRequestDeleteConversation = (
+    e: React.MouseEvent | undefined,
+    convOrId: ConversationRecord | string
+  ) => {
+    e?.stopPropagation()
+    const target =
+      typeof convOrId === 'string'
+        ? conversations.find((c) => c.id === convOrId) || {
+            id: convOrId,
+            type: 'app',
+            label: convOrId,
+            updatedAt: '',
+          }
+        : convOrId
+    setDeleteRelatedContent(false)
+    setPendingDeleteConv(target)
+  }
+
+  const handleCancelDeleteConversation = () => {
+    setPendingDeleteConv(null)
+    setDeleteRelatedContent(false)
+  }
+
+  const handleDeleteConversation = async (
+    e: React.MouseEvent | undefined,
+    conversationId: string,
+    deleteRelated = false,
+    explicitTarget?: ConversationRecord
+  ) => {
+    e?.stopPropagation()
+    const target = explicitTarget || conversations.find((c) => c.id === conversationId)
     setConversations((prev) => prev.filter((c) => c.id !== conversationId))
     try {
       const next = await deleteUserConversation(
         core40SDK,
-        userId,
+        userIdRef.current || userId,
         conversationId,
+        { deleteRelatedContent: deleteRelated, conversation: target },
         getArtifactNamespace(extensionSDK)
       )
       setConversations(next)
+      await refreshCatalog(userIdRef.current || userId)
     } catch {}
     if (activeConversationId === conversationId) {
       handleResetNewApp()
     }
   }
 
-  const handleSelectCatalogItem = async (item: UserArtifactIndex) => {
-    const useCase = studioModeToUseCase(item.type)
-    resolvedUseCaseByIdRef.current[item.id] = useCase
-    setSelectedUseCase(useCase)
-    setLockedByTurn(true)
-    const targetPath = `/c/${encodeURIComponent(item.id)}`
-    setActiveObjectId(item.id)
-    if (location.pathname !== targetPath) history.push(targetPath)
-    await openArtifactByMode(item.type, item.id, false)
-  }
-
-  const handleDeleteCatalogItem = async (e: React.MouseEvent, item: UserArtifactIndex) => {
-    e.stopPropagation()
-    try {
-      await deleteUserArtifact(core40SDK, userId, item.type, item.id, true)
-      await refreshCatalog()
-    } catch {}
+  const handleConfirmDeleteConversation = async (overrideDeleteRelated?: boolean) => {
+    if (!pendingDeleteConv) return
+    const target = pendingDeleteConv
+    const shouldDeleteRelated =
+      typeof overrideDeleteRelated === 'boolean' ? overrideDeleteRelated : deleteRelatedContent
+    setPendingDeleteConv(null)
+    setDeleteRelatedContent(false)
+    await handleDeleteConversation(undefined, target.id, shouldDeleteRelated, target)
   }
 
   const handleSendPrompt = async () => {
@@ -1887,7 +1901,6 @@ export function useStudioController() {
           setLoadDashInput(savedNative.id)
           const targetRoute = `/c/${encodeURIComponent(savedNative.id)}`
           if (location.pathname !== targetRoute) history.replace(targetRoute)
-          listUserDashboardArtifacts(core40SDK, extensionSDK, userId).then(setMyCreations)
           await refreshCatalog()
           finalMsgs = [
             ...messagesWithUser,
@@ -2113,7 +2126,7 @@ export function useStudioController() {
     isUseCaseLocked, allowedUseCases, useCaseOptions, getUseCaseLabel,
     lookmlProjectId, setLookmlProjectId, activatedLookmlSkills, setActivatedLookmlSkills,
     lookmlBundle, lookmlSessions, loadLookmlInput, setLoadLookmlInput,
-    publishedApp, nativeContent, embedNonce, bumpEmbedNonce, myCreations,
+    publishedApp, nativeContent, embedNonce, bumpEmbedNonce,
     healthReport, healthScope, setHealthScope, caConversation,
     savedScripts, scriptId, setScriptId, scriptTitle, setScriptTitle,
     scriptCode, setScriptCode, filtersJson, setFiltersJson,
@@ -2126,16 +2139,23 @@ export function useStudioController() {
     sharedEnvironmentId, syncSharedEnvironmentId,
     agentSession, messages, setMessages, prompt, setPrompt, pastedImages, setPastedImages,
     busyStatus, loading: Boolean(busyStatus), liveActivitySteps, setLiveActivitySteps,
-    handleWakeModeEnv, filteredCatalog, catalogSearch, setCatalogSearch,
-    activeObjectId, conversations: filteredConversations, activeConversationId,
+    handleWakeModeEnv,
+    activeObjectId, conversations: filteredConversations, allConversations: modeAllowedConversations,
+    archivedConversations, showArchivedConversations, setShowArchivedConversations,
+    pendingDeleteConv, setPendingDeleteConv, deleteRelatedContent, setDeleteRelatedContent,
+    activeConversationId,
     sidebarCollapsed, setSidebarCollapsed, isEmptyConversation,
     requirePermission, setRequirePermission, pendingPerm, resolvePermDecision,
     handleSaveAuthSetup, handleOAuthLogin, handleCancelOAuthLogin,
     loadNativeById, loadLookmlSessionById, loadCaConversationById,
     handleRunHealthCheck, handleRunConversationalAnalytics, handleLoadExistingDashboard,
     handleResetNewApp, handleNewConversation, handleSelectConversation,
-    handleDeleteConversation, handleSelectCatalogItem, handleDeleteCatalogItem,
+    handleToggleArchiveConversation, handleRequestDeleteConversation,
+    handleCancelDeleteConversation, handleConfirmDeleteConversation,
+    handleDeleteConversation,
     handleSendPrompt, handleSend: handleSendPrompt,
+    userId,
+    resolveConversationRelatedContent,
   }
 }
 

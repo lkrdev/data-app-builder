@@ -10,7 +10,6 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
     "Build a Looker Data App with Antigravity",
     "Use Case:",
     "✨ Build App",
-    "My Creations (5)",
   ],
 }
 `;
@@ -123,7 +122,6 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
     "Agentic LookML",
     "🔒 Data App",
     "Safe Mode (Ask)",
-    "My Creations (5)",
     "Approve Looker State Mutation?",
     "create_dashboard",
     "Executive Revenue App",

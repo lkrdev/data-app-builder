@@ -348,13 +348,11 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     folders,
     selectedFolderId,
     setSelectedFolderId,
-    myCreations,
     nativeContent,
     publishedApp,
     loadDashInput,
     setLoadDashInput,
     handleLoadExistingDashboard,
-    loadNativeById,
     handleResetNewApp,
     authMode,
     oauthToken,
@@ -697,22 +695,6 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
             </label>
             <div className="dab-divider" />
             <div className="dab-load-box">
-              {builderMode === 'dashboard' && myCreations.length > 0 && (
-                <select
-                  value={nativeContent?.id || ''}
-                  onChange={(e) => {
-                    if (e.target.value) loadNativeById(e.target.value, true)
-                  }}
-                  title="My Creations (indexed under user_${userId}_dashboard_${id})"
-                >
-                  <option value="">My Creations ({myCreations.length})...</option>
-                  {myCreations.map((c) => (
-                    <option key={`${c.contentType}:${c.id}`} value={c.id}>
-                      [{c.contentType}] {c.title} (#{c.id})
-                    </option>
-                  ))}
-                </select>
-              )}
               <input
                 type="text"
                 placeholder={builderMode === 'dashboard' ? 'ID or look:ID...' : 'Dashboard ID...'}
