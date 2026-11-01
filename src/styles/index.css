@@ -1236,20 +1236,9 @@ body {
   white-space: nowrap;
 }
 
-.dab-thinking-step-codemode .dab-thinking-kind-badge {
-  background: #dbeafe;
-  color: #1e40af;
-}
-
-.dab-thinking-step-thought .dab-thinking-kind-badge {
-  background: #f3e8ff;
-  color: #6b21a8;
-}
-
-.dab-thinking-step-code_execution .dab-thinking-kind-badge {
-  background: #dcfce7;
-  color: #166534;
-}
+.dab-thinking-step-codemode .dab-thinking-kind-badge { background: #dbeafe; color: #1e40af; }
+.dab-thinking-step-thought .dab-thinking-kind-badge { background: #f3e8ff; color: #6b21a8; }
+.dab-thinking-step-code_execution .dab-thinking-kind-badge { background: #dcfce7; color: #166534; }
 
 .dab-thinking-step-title {
   font-size: 12px;

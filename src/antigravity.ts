@@ -581,34 +581,19 @@ const CODEMODE_MACROS = new Set([
 ])
 
 function extractLookerSdkMethodPreview(code: string): string {
-  const src = String(code || '')
-  if (!src) return ''
   const seen = new Set<string>()
-  for (const m of src.matchAll(KNOWN_LOOKER_SDK_CALL_RE)) {
-    const rawName = m[1] || m[2]
-    if (!rawName) continue
-    const formatted = m[1]
-      ? `sdk.${m[1]}`
-      : CODEMODE_MACROS.has(rawName)
-      ? rawName
-      : `sdk.${rawName}`
-    seen.add(formatted)
+  for (const m of String(code || '').matchAll(KNOWN_LOOKER_SDK_CALL_RE)) {
+    const name = m[1] || m[2]
+    if (name) seen.add(m[1] || !CODEMODE_MACROS.has(name) ? `sdk.${name}` : name)
   }
   return Array.from(seen).join(', ')
 }
 
 function parseStepArguments(raw: any): Record<string, any> {
-  if (!raw) return {}
-  if (typeof raw === 'object' && !Array.isArray(raw)) return raw
   if (typeof raw === 'string') {
-    try {
-      const parsed = JSON.parse(raw)
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
-    } catch {
-      return {}
-    }
+    try { raw = JSON.parse(raw) } catch { return {} }
   }
-  return {}
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
 }
 
 export function extractInteractionActivitySteps(interaction: any): AntigravityActivityStep[] {
@@ -620,11 +605,7 @@ export function extractInteractionActivitySteps(interaction: any): AntigravityAc
       .map((s) => String(s?.call_id || s?.id || '').trim())
       .filter(Boolean)
   )
-  const interactionDone =
-    interaction?.status === 'completed' ||
-    interaction?.status === 'failed' ||
-    interaction?.status === 'cancelled'
-
+  const interactionDone = /^(?:completed|failed|cancelled)$/.test(String(interaction?.status || ''))
   const byKey = new Map<string, AntigravityActivityStep>()
   const seenContent = new Set<string>()
   const seenKindTitle = new Set<string>()
@@ -646,6 +627,16 @@ export function extractInteractionActivitySteps(interaction: any): AntigravityAc
     byKey.set(mapKey, step)
   }
 
+  const addThought = (item: any, stepId: string, explicitId: string | undefined, status: 'running' | 'done') => {
+    const tObj = typeof item.thought === 'object' && item.thought !== null ? item.thought : null
+    const summary = String(tObj?.summary ?? item.summary ?? '').trim()
+    const text = String(tObj?.text ?? (typeof item.thought === 'string' ? item.thought : '') ?? item.text ?? '').trim()
+    const title = summary || text
+    if (!title) return
+    const detail = summary && text && text !== summary ? text : undefined
+    upsertStep({ id: stepId, kind: 'thought', title, ...(detail ? { detail } : {}), status }, explicitId)
+  }
+
   for (let i = 0; i < rawSteps.length; i++) {
     const step = rawSteps[i]
     if (!step || typeof step !== 'object') continue
@@ -659,48 +650,23 @@ export function extractInteractionActivitySteps(interaction: any): AntigravityAc
 
     const resolveStatus = (isFunctionCall = false): 'running' | 'done' => {
       if (step.status === 'running' || step.status === 'in_progress') return 'running'
-      if (step.status === 'done' || step.status === 'completed') return 'done'
-      if (interactionDone) return 'done'
+      if (step.status === 'done' || step.status === 'completed' || interactionDone) return 'done'
       if (isFunctionCall && explicitId) {
         if (completedCallIds.has(explicitId)) return 'done'
         if (interaction?.status === 'requires_action' || isLastStep) return 'running'
       }
-      if (interaction?.status === 'in_progress' && isLastStep) return 'running'
-      return 'done'
+      return interaction?.status === 'in_progress' && isLastStep ? 'running' : 'done'
     }
 
-    // 1. Thought steps
     if (
       sType === 'thought' ||
       sType === 'thinking' ||
-      (step.thought &&
-        sType !== 'function_call' &&
-        sType !== 'run_looker_codemode' &&
-        sType !== 'lkr_cli_extension_bridge')
+      (step.thought && !/^(?:function_call|run_looker_codemode|lkr_cli_extension_bridge)$/.test(sType))
     ) {
-      const tObj = typeof step.thought === 'object' && step.thought !== null ? step.thought : null
-      const summary = String(tObj?.summary ?? step.summary ?? '').trim()
-      const text = String(
-        tObj?.text ?? (typeof step.thought === 'string' ? step.thought : '') ?? step.text ?? ''
-      ).trim()
-      const title = summary || text
-      if (title) {
-        const detail = summary && text && text !== summary ? text : undefined
-        upsertStep(
-          {
-            id: stepId,
-            kind: 'thought',
-            title,
-            ...(detail ? { detail } : {}),
-            status: resolveStatus(false),
-          },
-          explicitId
-        )
-      }
+      addThought(step, stepId, explicitId, resolveStatus(false))
       continue
     }
 
-    // 2. File steps (view_file_call, edit_file_call)
     if (
       sType === 'view_file_call' ||
       sType === 'edit_file_call' ||
@@ -711,222 +677,94 @@ export function extractInteractionActivitySteps(interaction: any): AntigravityAc
       const nested = step.view_file_call || step.edit_file_call || step.function_call || {}
       const args = parseStepArguments(step.arguments ?? step.args ?? nested.arguments ?? nested.args)
       const targetPath = String(
-        step.path ||
-          step.file_path ||
-          step.target ||
-          nested.path ||
-          nested.file_path ||
-          nested.target ||
-          args.path ||
-          args.file_path ||
-          args.target ||
-          ''
+        step.path || step.file_path || step.target || nested.path || nested.file_path || nested.target || args.path || args.file_path || args.target || ''
       ).trim()
       const desc = String(step.description || nested.description || args.description || '').trim()
-      const isEdit = sType.includes('edit') || fnName.includes('edit') || fnName.includes('write')
-      const title =
-        targetPath && desc
-          ? `${targetPath} — ${desc}`
-          : targetPath || desc || (isEdit ? 'Editing file' : 'Viewing file')
+      const isEdit = /edit|write/.test(`${sType}:${fnName}`)
+      const title = targetPath && desc ? `${targetPath} — ${desc}` : targetPath || desc || (isEdit ? 'Editing file' : 'Viewing file')
       const detail = desc || targetPath || undefined
-      upsertStep(
-        {
-          id: stepId,
-          kind: 'file',
-          title,
-          ...(detail ? { detail } : {}),
-          status: resolveStatus(true),
-        },
-        explicitId
-      )
+      upsertStep({ id: stepId, kind: 'file', title, ...(detail ? { detail } : {}), status: resolveStatus(true) }, explicitId)
       continue
     }
 
-    // 3. Skill steps (skill_lookup_call, lookup_skill)
-    if (
-      sType === 'skill_lookup_call' ||
-      sType === 'lookup_skill' ||
-      step.skill_lookup_call ||
-      (sType === 'function_call' && /^(?:skill_lookup|lookup_skill)(?:_call)?$/.test(fnName))
-    ) {
+    const skillCallRe = /^(?:skill_lookup|lookup_skill)(?:_call)?$/
+    if (skillCallRe.test(sType) || step.skill_lookup_call || (sType === 'function_call' && skillCallRe.test(fnName))) {
       const nested = step.skill_lookup_call || step.function_call || {}
       const args = parseStepArguments(step.arguments ?? step.args ?? nested.arguments ?? nested.args)
-      const rawSkill =
-        step.skill ||
-        step.skill_name ||
-        nested.skill ||
-        nested.skill_name ||
-        (nested.name && !/^(?:skill_lookup|lookup_skill)(?:_call)?$/.test(nested.name) ? nested.name : '') ||
-        args.skill ||
-        args.skill_name ||
-        (args.name && !/^(?:skill_lookup|lookup_skill)(?:_call)?$/.test(args.name) ? args.name : '') ||
-        (step.name && !/^(?:skill_lookup|lookup_skill)(?:_call)?$/.test(step.name) ? step.name : '') ||
-        step.target ||
-        args.target ||
-        ''
-      const skillName = String(rawSkill).trim()
+      const pickName = (v: any) => (v && !skillCallRe.test(String(v)) ? String(v) : '')
+      const skillName = String(
+        step.skill || step.skill_name || nested.skill || nested.skill_name || pickName(nested.name) || args.skill || args.skill_name || pickName(args.name) || pickName(step.name) || step.target || args.target || ''
+      ).trim()
       const desc = String(step.description || nested.description || args.description || '').trim()
-      const title =
-        skillName && desc ? `${skillName} — ${desc}` : skillName || desc || 'Skill lookup'
+      const title = skillName && desc ? `${skillName} — ${desc}` : skillName || desc || 'Skill lookup'
       const detail = desc || skillName || undefined
-      upsertStep(
-        {
-          id: stepId,
-          kind: 'skill',
-          title,
-          ...(detail ? { detail } : {}),
-          status: resolveStatus(true),
-        },
-        explicitId
-      )
+      upsertStep({ id: stepId, kind: 'skill', title, ...(detail ? { detail } : {}), status: resolveStatus(true) }, explicitId)
       continue
     }
 
-    // 4. Function call steps: run_looker_codemode / lkr_cli_extension_bridge
-    if (
-      fnName === 'run_looker_codemode' ||
-      sType === 'run_looker_codemode' ||
-      fnName === 'lkr_cli_extension_bridge' ||
-      sType === 'lkr_cli_extension_bridge'
-    ) {
+    if (/^(?:run_looker_codemode|lkr_cli_extension_bridge)$/.test(fnName) || /^(?:run_looker_codemode|lkr_cli_extension_bridge)$/.test(sType)) {
       const isBridge = fnName === 'lkr_cli_extension_bridge' || sType === 'lkr_cli_extension_bridge'
-      const args = parseStepArguments(
-        step.arguments ?? step.args ?? step.function_call?.arguments ?? step.function_call?.args ?? step
-      )
+      const args = parseStepArguments(step.arguments ?? step.args ?? step.function_call?.arguments ?? step.function_call?.args ?? step)
       const thought = String(args.thought || step.thought || '').trim()
       const codeStr = String(args.code || step.code || '').trim()
       const sdkPreview = extractLookerSdkMethodPreview(codeStr)
+      const firstCodeLine = codeStr.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('#')) || ''
       if (isBridge) {
         const method = String(args.method || step.method || '').trim().toUpperCase()
         const pathStr = String(args.path || step.path || '').trim()
         const methodPath = method || pathStr ? `${method || 'GET'} ${pathStr || '/'}` : ''
-        const title =
-          thought ||
-          methodPath ||
-          (sdkPreview ? `Looker CLI Bridge (${sdkPreview})` : 'Executing bridged Looker CLI request')
-        const detail =
-          methodPath ||
-          sdkPreview ||
-          (codeStr ? codeStr.split('\n')[0].trim().slice(0, 140) : undefined)
+        const title = thought || methodPath || (sdkPreview ? `Looker CLI Bridge (${sdkPreview})` : 'Executing bridged Looker CLI request')
+        const detail = methodPath || sdkPreview || (codeStr ? codeStr.split('\n')[0].trim().slice(0, 140) : undefined)
         upsertStep(
-          {
-            id: stepId,
-            kind: 'cli_bridge',
-            title,
-            ...(detail ? { detail } : {}),
-            ...(codeStr ? { language: 'PYTHON' } : {}),
-            status: resolveStatus(true),
-          },
+          { id: stepId, kind: 'cli_bridge', title, ...(detail ? { detail } : {}), ...(codeStr ? { language: 'PYTHON' } : {}), status: resolveStatus(true) },
           explicitId
         )
       } else {
-        const firstCodeLine =
-          codeStr
-            .split('\n')
-            .map((l) => l.trim())
-            .find((l) => l && !l.startsWith('#')) || ''
-        const title =
-          thought || (sdkPreview ? `Looker Code Mode (${sdkPreview})` : 'Running Looker Code Mode')
+        const title = thought || (sdkPreview ? `Looker Code Mode (${sdkPreview})` : 'Running Looker Code Mode')
         const detail = sdkPreview || (firstCodeLine ? firstCodeLine.slice(0, 140) : undefined)
         upsertStep(
-          {
-            id: stepId,
-            kind: 'codemode',
-            title,
-            ...(detail ? { detail } : {}),
-            language: 'PYTHON',
-            status: resolveStatus(true),
-          },
+          { id: stepId, kind: 'codemode', title, ...(detail ? { detail } : {}), language: 'PYTHON', status: resolveStatus(true) },
           explicitId
         )
       }
       continue
     }
 
-    // 5. Code execution steps (code_execution, code_execution_call, executable_code)
     if (
-      sType === 'code_execution' ||
-      sType === 'code_execution_call' ||
-      sType === 'executable_code' ||
+      /^(?:code_execution|code_execution_call|executable_code)$/.test(sType) ||
       step.code_execution ||
       step.code_execution_call ||
       step.executable_code ||
       (sType === 'function_call' && /^(?:code_execution|bash|sh|python)(?:_call)?$/.test(fnName))
     ) {
-      const nested =
-        step.code_execution ||
-        step.code_execution_call ||
-        step.executable_code ||
-        step.function_call ||
-        {}
+      const nested = step.code_execution || step.code_execution_call || step.executable_code || step.function_call || {}
       const args = parseStepArguments(step.arguments ?? step.args ?? nested.arguments ?? nested.args)
-      const rawCode = String(
-        step.code ??
-          step.command ??
-          nested.code ??
-          nested.command ??
-          args.code ??
-          args.command ??
-          step.input ??
-          ''
-      ).trim()
-      const rawLang = String(step.language ?? nested.language ?? args.language ?? '')
-        .trim()
-        .toUpperCase()
+      const rawCode = String(step.code ?? step.command ?? nested.code ?? nested.command ?? args.code ?? args.command ?? step.input ?? '').trim()
+      const rawLang = String(step.language ?? nested.language ?? args.language ?? '').trim().toUpperCase()
       const language =
         rawLang.includes('PYTHON') || rawLang === 'PY' || fnName === 'python'
           ? 'PYTHON'
           : rawLang.includes('BASH') || rawLang.includes('SH') || fnName === 'bash'
           ? 'BASH'
-          : /^(?:import\s+\w|from\s+\w+\s+import\s+|def\s+\w)/m.test(rawCode) &&
-            !/^(?:python3?|uv|lkr|bash|sh)\b/.test(rawCode)
+          : /^(?:import\s+\w|from\s+\w+\s+import\s+|def\s+\w)/m.test(rawCode) && !/^(?:python3?|uv|lkr|bash|sh)\b/.test(rawCode)
           ? 'PYTHON'
           : 'BASH'
-      const firstLine =
-        rawCode
-          .split('\n')
-          .map((l) => l.trim())
-          .find((l) => l && !l.startsWith('#')) || rawCode
+      const firstLine = rawCode.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('#')) || rawCode
       const conciseCmd =
         firstLine.replace(/\s*<<\s*['"]?\w+['"]?.*$/, '').trim().slice(0, 140) ||
         (language === 'PYTHON' ? 'Running Python script' : 'Running sandbox command')
       const detail = rawCode ? rawCode.split('\n').slice(0, 3).join('\n').slice(0, 200) : undefined
       upsertStep(
-        {
-          id: stepId,
-          kind: 'code_execution',
-          title: conciseCmd,
-          ...(detail ? { detail } : {}),
-          language,
-          status: resolveStatus(false),
-        },
+        { id: stepId, kind: 'code_execution', title: conciseCmd, ...(detail ? { detail } : {}), language, status: resolveStatus(false) },
         explicitId
       )
     }
   }
 
   for (const out of rawOutputs) {
-    if (!out || typeof out !== 'object') continue
-    if (out.type === 'thought' || out.type === 'thinking' || out.thought) {
-      const tObj = typeof out.thought === 'object' && out.thought !== null ? out.thought : null
-      const summary = String(tObj?.summary ?? out.summary ?? '').trim()
-      const text = String(
-        tObj?.text ?? (typeof out.thought === 'string' ? out.thought : '') ?? out.text ?? ''
-      ).trim()
-      const title = summary || text
-      if (title) {
-        const detail = summary && text && text !== summary ? text : undefined
-        upsertStep(
-          {
-            id: out.id ? String(out.id) : `step_${++autoIdx}`,
-            kind: 'thought',
-            title,
-            ...(detail ? { detail } : {}),
-            status: interactionDone ? 'done' : 'running',
-          },
-          out.id ? String(out.id) : undefined
-        )
-      }
+    if (out && typeof out === 'object' && (out.type === 'thought' || out.type === 'thinking' || out.thought)) {
+      const outId = out.id ? String(out.id) : undefined
+      addThought(out, outId || `step_${++autoIdx}`, outId, interactionDone ? 'done' : 'running')
     }
   }
 
@@ -1495,32 +1333,24 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
           if (pendingLookerCalls.length > 0) {
             const firstThought = pendingLookerCalls
-              .map((c: any) => {
-                const a = parseStepArguments(c.arguments ?? c.args)
-                return String(a.thought || '').trim()
-              })
+              .map((c: any) => String(parseStepArguments(c.arguments ?? c.args).thought || '').trim())
               .find(Boolean)
-            onStatus(
-              firstThought || 'Running Looker Code Mode (WASM Monty sandbox) in extension...'
-            )
+            onStatus(firstThought || 'Running Looker Code Mode (WASM Monty sandbox) in extension...')
             const cmStart = Date.now()
             codemodeCalls += pendingLookerCalls.length
             const resultsInput = await Promise.all(
               pendingLookerCalls.map(async (call: any) => {
                 const args = parseStepArguments(call.arguments ?? call.args)
                 const callThought =
-                  typeof args.thought === 'string' && args.thought.trim()
-                    ? args.thought.trim()
-                    : call.name === 'lkr_cli_extension_bridge' && (args.method || args.path)
+                  (typeof args.thought === 'string' && args.thought.trim()) ||
+                  (call.name === 'lkr_cli_extension_bridge' && (args.method || args.path)
                     ? `${String(args.method || 'GET').toUpperCase()} ${String(args.path || '/')}`
-                    : undefined
+                    : undefined)
                 const wrappedPermissionRequest = effectivePermissionHandler
                   ? (permReq: CodeModePermissionRequest) =>
                       effectivePermissionHandler({
                         ...permReq,
-                        ...(permReq.thought || callThought
-                          ? { thought: permReq.thought || callThought }
-                          : {}),
+                        ...(permReq.thought || callThought ? { thought: permReq.thought || callThought } : {}),
                       })
                   : undefined
                 let codeModeOutput: string

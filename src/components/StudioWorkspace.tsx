@@ -903,23 +903,19 @@ export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ 
   )
 }
 
+const STEP_BADGES: Record<string, string> = {
+  thought: '💭 Thought',
+  codemode: '🐍 Code Mode',
+  cli_bridge: '🌉 CLI Bridge',
+  file: '📄 File',
+  skill: '📚 Skill',
+}
+
 function formatActivityStepBadge(step: AntigravityActivityStep): string {
-  switch (step.kind) {
-    case 'thought':
-      return '💭 Thought'
-    case 'codemode':
-      return '🐍 Code Mode'
-    case 'cli_bridge':
-      return '🌉 CLI Bridge'
-    case 'code_execution':
-      return step.language === 'PYTHON' ? '🐍 Sandbox Python' : '💻 Sandbox Bash'
-    case 'file':
-      return '📄 File'
-    case 'skill':
-      return '📚 Skill'
-    default:
-      return '⚡ Activity'
+  if (step.kind === 'code_execution') {
+    return step.language === 'PYTHON' ? '🐍 Sandbox Python' : '💻 Sandbox Bash'
   }
+  return STEP_BADGES[step.kind] || '⚡ Activity'
 }
 
 function renderActivityStepsList(steps: AntigravityActivityStep[]) {

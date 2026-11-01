@@ -706,6 +706,8 @@ export function extractLkrExtensionToolRequests(interactionOrText: any): LkrExte
     try {
       const parsed = JSON.parse(m[1].trim())
       if (!parsed || (parsed.kind !== 'codemode' && parsed.kind !== 'sdk_request')) continue
+      const thoughtProp =
+        typeof parsed.thought === 'string' && parsed.thought.trim() ? { thought: parsed.thought.trim() } : {}
       const normalized: LkrExtensionToolRequest =
         parsed.kind === 'sdk_request'
           ? {
@@ -716,9 +718,7 @@ export function extractLkrExtensionToolRequests(interactionOrText: any): LkrExte
               body: parsed.body ?? null,
               dev_mode: Boolean(parsed.dev_mode),
               cache_key: parsed.cache_key || computeLkrExtensionCacheKey(parsed),
-              ...(typeof parsed.thought === 'string' && parsed.thought.trim()
-                ? { thought: parsed.thought.trim() }
-                : {}),
+              ...thoughtProp,
             }
           : {
               kind: 'codemode',
@@ -726,9 +726,7 @@ export function extractLkrExtensionToolRequests(interactionOrText: any): LkrExte
               vars: parsed.vars && typeof parsed.vars === 'object' ? parsed.vars : {},
               dev_mode: Boolean(parsed.dev_mode),
               cache_key: parsed.cache_key || computeLkrExtensionCacheKey(parsed),
-              ...(typeof parsed.thought === 'string' && parsed.thought.trim()
-                ? { thought: parsed.thought.trim() }
-                : {}),
+              ...thoughtProp,
             }
       const key = normalized.cache_key!
       if (!seen.has(key)) {
@@ -778,11 +776,7 @@ export async function executeLkrExtensionToolRequest(params: {
     return { cacheKey, result }
   }
 
-  const effectiveThought =
-    (typeof req.thought === 'string' && req.thought.trim() ? req.thought.trim() : undefined) ||
-    (req.kind === 'sdk_request'
-      ? `${String(req.method || 'GET').toUpperCase()} ${cleanPath}`
-      : undefined)
+  const effectiveThought = typeof req.thought === 'string' && req.thought.trim() ? req.thought.trim() : undefined
 
   const rawOut = await LkrCodeMode.runPythonCode({
     code: String(req.code || ''),
