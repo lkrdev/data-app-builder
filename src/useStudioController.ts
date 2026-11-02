@@ -37,7 +37,7 @@ import {
   publishScriptDashboard, readInitialStudioThemeMode, resolveCaEmbedPath,
   resolveConversationRelatedContent, ResolvedStudioTheme, ResolvedStudioUseCase, resolveStudioTheme, resolveSystemTheme,
   resolveUserCapabilities, saveDashboardStudioMetadata, SavedScript, saveNativeContentArtifact,
-  saveScriptArtifact, saveUserArtifact, saveUserConversation, searchGlobalContentV2, searchLookerFolders, SearchLookerFoldersParams,
+  saveScriptArtifact, saveUserArtifact, saveUserConversation, saveUserEnvironmentId, searchGlobalContentV2, searchLookerFolders, SearchLookerFoldersParams,
   selectCaAgentViaIsolatedSubagent, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
   StudioContentItem, StudioContentItemType, StudioContextCategory, StudioContextMention, studioModeToUseCase, StudioThemeMode, StudioToolMode, StudioUseCase, studioUseCaseToMode, upsertPublishedDataApp, upsertStudioContentItem,
   UserArtifactIndex, UserCapabilities, UserConversationEntry,
@@ -62,6 +62,15 @@ export type {
   StudioContextMention,
   StudioThemeMode,
 }
+
+export interface QueuedPromptItem {
+  id: string
+  text: string
+  images: PastedImage[]
+  mentions: StudioContextMention[]
+}
+
+export type StudioEnvironmentStatus = 'active' | 'stopped'
 
 type HostDataWithMount = {
   mountType?: string
@@ -574,6 +583,23 @@ export function useStudioController() {
   const [sharedEnvironmentId, setSharedEnvironmentId] = useState('')
   const sharedEnvIdRef = useRef<string>('')
   const userIdRef = useRef<string>('1')
+  const [environmentStatus, setEnvironmentStatus] = useState<StudioEnvironmentStatus>('active')
+  const environmentStatusRef = useRef<StudioEnvironmentStatus>('active')
+  environmentStatusRef.current = environmentStatus
+  const turnAbortControllerRef = useRef<AbortController | null>(null)
+  const [queuedPrompts, setQueuedPrompts] = useState<QueuedPromptItem[]>([])
+  const queuedPromptsRef = useRef<QueuedPromptItem[]>([])
+  queuedPromptsRef.current = queuedPrompts
+
+  const updateQueuedPrompts = useCallback(
+    (updater: QueuedPromptItem[] | ((prev: QueuedPromptItem[]) => QueuedPromptItem[])) => {
+      const next =
+        typeof updater === 'function' ? updater(queuedPromptsRef.current) : updater
+      queuedPromptsRef.current = next
+      setQueuedPrompts(next)
+    },
+    []
+  )
 
   // Per-mode isolated Antigravity conversation histories sharing a single per-user environmentId
   const [sessionsByMode, setSessionsByMode] = useState<Record<StudioMode, AgentSession>>({
@@ -583,6 +609,9 @@ export function useStudioController() {
     health: { toolType: 'health', environmentId: 'env_health_isolated' },
     tile: { toolType: 'tile', environmentId: 'env_tile_isolated' },
   })
+  const sessionsByModeRef = useRef<Record<StudioMode, AgentSession>>(sessionsByMode)
+  sessionsByModeRef.current = sessionsByMode
+
   const [messagesByMode, setMessagesByMode] = useState<Record<StudioMode, ChatMessage[]>>(() => {
     if (Array.isArray(mockExt?.initialMessages)) {
       return {
@@ -598,19 +627,25 @@ export function useStudioController() {
       : []
     return { app: initialErr, dashboard: [], lookml: [], health: [], tile: [] }
   })
+  const messagesByModeRef = useRef<Record<StudioMode, ChatMessage[]>>(messagesByMode)
+  messagesByModeRef.current = messagesByMode
 
   const syncSharedEnvironmentId = useCallback((envId?: string) => {
     const clean = normalizeEnvironmentId(envId)
     if (!clean) return
     sharedEnvIdRef.current = clean
     setSharedEnvironmentId(clean)
-    setSessionsByMode((prev) => ({
-      app: { ...prev.app, toolType: 'app', environmentId: clean },
-      dashboard: { ...prev.dashboard, toolType: 'dashboard', environmentId: clean },
-      lookml: { ...prev.lookml, toolType: 'lookml', environmentId: clean },
-      health: { ...prev.health, toolType: 'health', environmentId: clean },
-      tile: { ...prev.tile, toolType: 'tile', environmentId: clean },
-    }))
+    setSessionsByMode((prev) => {
+      const updated = {
+        app: { ...prev.app, toolType: 'app' as const, environmentId: clean },
+        dashboard: { ...prev.dashboard, toolType: 'dashboard' as const, environmentId: clean },
+        lookml: { ...prev.lookml, toolType: 'lookml' as const, environmentId: clean },
+        health: { ...prev.health, toolType: 'health' as const, environmentId: clean },
+        tile: { ...prev.tile, toolType: 'tile' as const, environmentId: clean },
+      }
+      sessionsByModeRef.current = updated
+      return updated
+    })
   }, [])
 
   const activeModeRef = useRef<StudioMode>(activeMode)
@@ -624,18 +659,22 @@ export function useStudioController() {
         sharedEnvIdRef.current = nextShared
         setSharedEnvironmentId(nextShared)
       }
-      setSessionsByMode((prev) => ({
-        ...prev,
-        [targetMode]: {
-          ...next,
-          toolType: targetMode,
-          environmentId:
-            sharedEnvIdRef.current ||
-            next.environmentId ||
-            prev[targetMode]?.environmentId ||
-            `env_${targetMode}_isolated`,
-        },
-      }))
+      setSessionsByMode((prev) => {
+        const updated = {
+          ...prev,
+          [targetMode]: {
+            ...next,
+            toolType: targetMode,
+            environmentId:
+              sharedEnvIdRef.current ||
+              next.environmentId ||
+              prev[targetMode]?.environmentId ||
+              `env_${targetMode}_isolated`,
+          },
+        }
+        sessionsByModeRef.current = updated
+        return updated
+      })
     },
     []
   )
@@ -650,11 +689,11 @@ export function useStudioController() {
       targetMode?: StudioMode
     ) => {
       const mode = targetMode ?? activeModeRef.current
-      setMessagesByMode((prev) => {
-        const cur = prev[mode] || []
-        const next = typeof updater === 'function' ? updater(cur) : updater
-        return { ...prev, [mode]: next }
-      })
+      const cur = messagesByModeRef.current[mode] || []
+      const next = typeof updater === 'function' ? updater(cur) : updater
+      const updated = { ...messagesByModeRef.current, [mode]: next }
+      messagesByModeRef.current = updated
+      setMessagesByMode(updated)
     },
     []
   )
@@ -672,6 +711,8 @@ export function useStudioController() {
         ? (mockExt.initialLiveActivitySteps as AntigravityActivityStep[])
         : []
   )
+  const liveActivityStepsRef = useRef<AntigravityActivityStep[]>(liveActivitySteps)
+  liveActivityStepsRef.current = liveActivitySteps
 
   const isUseCaseLocked = false
 
@@ -708,10 +749,10 @@ export function useStudioController() {
   }
 
   const handleWakeModeEnv = useCallback(
-    async (modeToWake: StudioMode = activeModeRef.current) => {
+    async (modeToWake: StudioMode = activeModeRef.current, forceFresh = false) => {
       try {
         const ctx = wakeContextRef.current
-        const existingSession = ctx.sessionsByMode[modeToWake]
+        const existingSession = forceFresh ? { toolType: modeToWake } : ctx.sessionsByMode[modeToWake]
         const res = await prewarmOrWakeAntigravityEnvironment({
           sdk: core40SDK,
           userId: userIdRef.current || userId,
@@ -719,17 +760,21 @@ export function useStudioController() {
           auth: { mode: authMode, oauthToken, clientId, projectId, apiKey },
           toolType: modeToWake,
           model: selectedModel,
-          environmentId: sharedEnvIdRef.current || existingSession?.environmentId,
+          environmentId: forceFresh
+            ? undefined
+            : sharedEnvIdRef.current || existingSession?.environmentId,
           existingSession,
           selectedExplores: ctx.selectedExplores,
           schemaMarkdown: ctx.schemaMarkdown,
           existingAppCode: modeToWake === 'app' ? ctx.currentAppCode : undefined,
+          forceFresh,
           onEnvironmentUpdated: syncSharedEnvironmentId,
         })
         setSessionsByMode((prev) => {
           const nextEnvId = sharedEnvIdRef.current || res.session.environmentId
           const cur = prev[modeToWake]
           if (
+            !forceFresh &&
             cur &&
             cur.environmentId === nextEnvId &&
             cur.lastInteractionId === res.session.lastInteractionId &&
@@ -737,13 +782,15 @@ export function useStudioController() {
           ) {
             return prev
           }
-          return {
+          const updated = {
             ...prev,
             [modeToWake]: {
               ...res.session,
               environmentId: nextEnvId,
             },
           }
+          sessionsByModeRef.current = updated
+          return updated
         })
       } catch {
         // Ignore prewarm errors
@@ -765,9 +812,10 @@ export function useStudioController() {
 
   useEffect(() => {
     if (disabledModes.includes(activeMode)) return
+    if (environmentStatus === 'stopped') return
     if (sharedEnvIdRef.current) return
     void handleWakeModeEnv(activeMode)
-  }, [activeMode, disabledModes, handleWakeModeEnv])
+  }, [activeMode, disabledModes, environmentStatus, handleWakeModeEnv])
 
   const [requirePermission, setRequirePermission] = useState(true)
   const approvedOpsRef = useRef<Set<string>>(new Set())
@@ -779,6 +827,8 @@ export function useStudioController() {
       ? { req: mockExt.initialPendingPerm as CodeModePermissionRequest, resolve: () => {} }
       : null
   )
+  const pendingPermRef = useRef<typeof pendingPerm>(pendingPerm)
+  pendingPermRef.current = pendingPerm
 
   const requestCodeModePermission = useCallback(
     (req: CodeModePermissionRequest): Promise<CodeModePermissionDecision> =>
@@ -2261,23 +2311,150 @@ export function useStudioController() {
     await handleDeleteConversation(undefined, target.id, shouldDeleteRelated, target)
   }
 
-  const handleSendPrompt = async () => {
+  const abortActiveTurn = useCallback(
+    (reasonText: string) => {
+      turnAbortControllerRef.current?.abort()
+      turnAbortControllerRef.current = null
+      if (pendingPermRef.current) {
+        const { resolve } = pendingPermRef.current
+        pendingPermRef.current = null
+        setPendingPerm(null)
+        resolve('deny')
+      }
+      const partialSteps = liveActivityStepsRef.current
+      if (partialSteps.length > 0) {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'assistant', text: reasonText, activitySteps: partialSteps },
+        ])
+      }
+      liveActivityStepsRef.current = []
+      setLiveActivitySteps([])
+    },
+    [setMessages]
+  )
+
+  const handleStopTurn = useCallback(() => {
+    abortActiveTurn('Stopped by user.')
+    setBusyStatus(null)
+  }, [abortActiveTurn])
+
+  const handleQueuePrompt = useCallback(() => {
+    if (!busyStatus) return
     const text = prompt.trim()
-    if (!isAuthenticated || (!text && pastedImages.length === 0) || busyStatus) return
+    if (!text && pastedImages.length === 0) return
+    updateQueuedPrompts((prev) => [
+      ...prev,
+      {
+        id: `q_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        text,
+        images: pastedImages,
+        mentions: mentionedItems,
+      },
+    ])
+    setPrompt('')
+    setPastedImages([])
+    setMentionedItems([])
+  }, [busyStatus, prompt, pastedImages, mentionedItems, updateQueuedPrompts])
+
+  const handleRemoveQueuedPrompt = useCallback(
+    (id: string) => {
+      updateQueuedPrompts((prev) => prev.filter((q) => q.id !== id))
+    },
+    [updateQueuedPrompts]
+  )
+
+  const clearAllEnvSessions = useCallback(
+    (nextStatus: StudioEnvironmentStatus) => {
+      handleStopTurn()
+      sharedEnvIdRef.current = ''
+      setSharedEnvironmentId('')
+      const cleared: Record<StudioMode, AgentSession> = {
+        app: { toolType: 'app', environmentId: '' },
+        dashboard: { toolType: 'dashboard', environmentId: '' },
+        lookml: { toolType: 'lookml', environmentId: '' },
+        health: { toolType: 'health', environmentId: '' },
+        tile: { toolType: 'tile', environmentId: '' },
+      }
+      sessionsByModeRef.current = cleared
+      setSessionsByMode(cleared)
+      environmentStatusRef.current = nextStatus
+      setEnvironmentStatus(nextStatus)
+    },
+    [handleStopTurn]
+  )
+
+  const handleResetEnvironment = useCallback(async () => {
+    clearAllEnvSessions('active')
+    try {
+      await saveUserEnvironmentId(
+        core40SDK,
+        userIdRef.current || userId,
+        '',
+        getArtifactNamespace(extensionSDK)
+      )
+    } catch {
+      // Ignore clear environment artifact errors
+    }
+    await handleWakeModeEnv(activeModeRef.current, true)
+  }, [clearAllEnvSessions, core40SDK, userId, extensionSDK, handleWakeModeEnv])
+
+  const handleStopEnvironment = useCallback(() => {
+    clearAllEnvSessions('stopped')
+  }, [clearAllEnvSessions])
+
+  const handleSendPrompt = async (
+    overrideItem?:
+      | {
+          text: string
+          images?: PastedImage[]
+          mentions?: StudioContextMention[]
+          bypassBusy?: boolean
+        }
+      | React.SyntheticEvent
+  ) => {
+    const isOverride =
+      Boolean(overrideItem) &&
+      typeof overrideItem === 'object' &&
+      !('nativeEvent' in (overrideItem as object)) &&
+      typeof (overrideItem as { text?: unknown }).text === 'string'
+    const typedOverride = isOverride
+      ? (overrideItem as {
+          text: string
+          images?: PastedImage[]
+          mentions?: StudioContextMention[]
+          bypassBusy?: boolean
+        })
+      : undefined
+    const text = typedOverride ? typedOverride.text.trim() : prompt.trim()
+    const attachedImages = typedOverride ? typedOverride.images || [] : pastedImages
+    const activeMentions = typedOverride ? typedOverride.mentions || [] : mentionedItems
+    if (
+      !isAuthenticated ||
+      (!text && attachedImages.length === 0) ||
+      (busyStatus && !typedOverride?.bypassBusy)
+    ) {
+      return
+    }
+    if (environmentStatusRef.current === 'stopped') {
+      environmentStatusRef.current = 'active'
+      setEnvironmentStatus('active')
+    }
     const auth: AntigravityAuth = { mode: authMode, oauthToken, clientId, projectId, apiKey }
-    const attachedImages = pastedImages
-    const activeMentions = mentionedItems
     const effectivePrompt = text || 'See the attached screenshot.'
-    const isFirstTurn = messages.filter((m) => m.role === 'user').length === 0
+    const currentMessages = messagesByModeRef.current[activeModeRef.current] || messages
+    const isFirstTurn = currentMessages.filter((m) => m.role === 'user').length === 0
     const userMsg: ChatMessage = {
       role: 'user',
       text: effectivePrompt,
       images: attachedImages.map((img) => img.dataUrl),
     }
-    const messagesWithUser = [...messages, userMsg]
-    setPrompt('')
-    setPastedImages([])
-    setMentionedItems([])
+    const messagesWithUser = [...currentMessages, userMsg]
+    if (!typedOverride) {
+      setPrompt('')
+      setPastedImages([])
+      setMentionedItems([])
+    }
     setMessages(messagesWithUser)
 
     const explicitUseCase = explicitUseCaseRef.current
@@ -2303,10 +2480,11 @@ export function useStudioController() {
       return
     }
 
+    const currentSession = sessionsByModeRef.current[activeModeRef.current] || agentSession
     const activeConvId =
       parsedRoute.objectId ||
       activeObjectId ||
-      agentSession.conversationId ||
+      currentSession.conversationId ||
       (activeMode === 'app'
         ? publishedApp?.dashboardId
         : activeMode === 'dashboard'
@@ -2318,7 +2496,10 @@ export function useStudioController() {
         : healthReport?.id) ||
       'current'
 
+    const abortController = new AbortController()
+    turnAbortControllerRef.current = abortController
     setBusyStatus('Connecting to Antigravity...')
+    liveActivityStepsRef.current = []
     setLiveActivitySteps([])
     try {
       let turnExplores = selectedExplores
@@ -2398,11 +2579,11 @@ export function useStudioController() {
         sdk: core40SDK,
         extensionSDK,
         userId,
-        environmentId: sharedEnvIdRef.current || agentSession.environmentId,
+        environmentId: sharedEnvIdRef.current || currentSession.environmentId,
         conversationId: activeConvId,
         onEnvironmentUpdated: syncSharedEnvironmentId,
         auth,
-        session: agentSession,
+        session: currentSession,
         model: selectedModel,
         mode: effectiveBuilderMode,
         useCase: explicitUseCase,
@@ -2423,11 +2604,15 @@ export function useStudioController() {
         existingAppCode: currentAppCode || undefined,
         existingNativeContent: nativeContent,
         extraSources: turnExtraSources,
-        priorMessages: messages,
+        priorMessages: currentMessages,
         requirePermission,
         approvedOperations: approvedOpsRef.current,
         onPermissionRequest: requestCodeModePermission,
-        onProgressSteps: setLiveActivitySteps,
+        onProgressSteps: (steps) => {
+          liveActivityStepsRef.current = steps
+          setLiveActivitySteps(steps)
+        },
+        signal: abortController.signal,
         onStatus: setBusyStatus,
       })
 
@@ -2765,18 +2950,70 @@ export function useStudioController() {
         updateArtifactIndex: true,
       })
     } catch (err: unknown) {
+      if ((err instanceof Error && err.name === 'AbortError') || abortController.signal.aborted) {
+        return
+      }
       const msg = resetOAuthOnUnauthorized(err)
       setMessages((prev) => [...prev, { role: 'error', text: msg }])
     } finally {
-      setPendingPerm(null)
-      setBusyStatus(null)
-      setLiveActivitySteps(
-        Array.isArray(mockExt?.initialLiveActivitySteps)
+      if (!abortController.signal.aborted) {
+        if (turnAbortControllerRef.current === abortController) {
+          turnAbortControllerRef.current = null
+        }
+        setPendingPerm(null)
+        setBusyStatus(null)
+        const nextSteps = Array.isArray(mockExt?.initialLiveActivitySteps)
           ? (mockExt.initialLiveActivitySteps as AntigravityActivityStep[])
           : []
-      )
+        liveActivityStepsRef.current = nextSteps
+        setLiveActivitySteps(nextSteps)
+        const nextQueued = queuedPromptsRef.current[0]
+        if (nextQueued) {
+          updateQueuedPrompts((prev) => prev.slice(1))
+          void handleSendPrompt({
+            text: nextQueued.text,
+            images: nextQueued.images,
+            mentions: nextQueued.mentions,
+            bypassBusy: true,
+          })
+        }
+      }
     }
   }
+
+  const sendPromptRef = useRef(handleSendPrompt)
+  sendPromptRef.current = handleSendPrompt
+
+  const handleInterjectPrompt = useCallback(
+    (queuedId?: string | React.MouseEvent) => {
+      const targetId = typeof queuedId === 'string' ? queuedId : undefined
+      const queuedItem = targetId
+        ? queuedPromptsRef.current.find((q) => q.id === targetId)
+        : undefined
+      const textToSend = queuedItem ? queuedItem.text : prompt.trim()
+      const imagesToSend = queuedItem ? queuedItem.images : pastedImages
+      const mentionsToSend = queuedItem ? queuedItem.mentions : mentionedItems
+      if (!isAuthenticated || (!textToSend && imagesToSend.length === 0)) return
+
+      if (queuedItem) {
+        updateQueuedPrompts((prev) => prev.filter((q) => q.id !== queuedItem.id))
+      } else {
+        setPrompt('')
+        setPastedImages([])
+        setMentionedItems([])
+      }
+
+      abortActiveTurn('Interjected by user.')
+
+      void sendPromptRef.current({
+        text: textToSend,
+        images: imagesToSend,
+        mentions: mentionsToSend,
+        bypassBusy: true,
+      })
+    },
+    [abortActiveTurn, isAuthenticated, mentionedItems, pastedImages, prompt, setMentionedItems, updateQueuedPrompts]
+  )
 
   const isEmptyConversation =
     !isTileMount && location.pathname !== '/config' &&
@@ -2800,6 +3037,9 @@ export function useStudioController() {
         contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey,
         activeContentItem, upsertContentItem, handleSelectContentTab,
         setMessages, setBusyStatus, setLiveActivitySteps,
+        queuedPrompts, setQueuedPrompts: updateQueuedPrompts,
+        handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt,
+        environmentStatus, setEnvironmentStatus, handleResetEnvironment, handleStopEnvironment,
         infoModalUseCase, setInfoModalUseCase,
         loadingMetadata, setLoadingMetadata,
         starterPrompts, setStarterPrompts, starterPromptsLoading, setStarterPromptsLoading,
@@ -2808,7 +3048,7 @@ export function useStudioController() {
         preloadedContent, setPreloadedContent, mentionedItems, setMentionedItems,
       }
     }
-  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems])
+  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, queuedPrompts, updateQueuedPrompts, handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, environmentStatus, handleResetEnvironment, handleStopEnvironment, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems])
 
   return {
     extensionSDK, core40SDK, lookerHostData, history, location, isTileMount,
@@ -2846,8 +3086,11 @@ export function useStudioController() {
     handleRunPython, handleSaveScript, handlePublishTileDashboard, loadScriptById,
     currentAppCode, loadDashInput, setLoadDashInput,
     sharedEnvironmentId, syncSharedEnvironmentId,
+    environmentStatus, setEnvironmentStatus, handleResetEnvironment, handleStopEnvironment,
     agentSession, messages, setMessages, prompt, setPrompt, pastedImages, setPastedImages,
     busyStatus, loading: Boolean(busyStatus), liveActivitySteps, setLiveActivitySteps,
+    queuedPrompts, setQueuedPrompts: updateQueuedPrompts,
+    handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt,
     handleWakeModeEnv,
     activeObjectId, conversations: filteredConversations, allConversations: modeAllowedConversations,
     archivedConversations, showArchivedConversations, setShowArchivedConversations,

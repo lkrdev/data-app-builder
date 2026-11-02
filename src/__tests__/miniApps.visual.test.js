@@ -4287,4 +4287,200 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       ])
     )
   }, 15000)
+
+  test('Issue #105: provides in-flight Stop, Queue & Interject composer controls and topbar Environment Reset/Stop popover menu', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    await chrome.send('Page.navigate', {
+      url: `http://127.0.0.1:${port}/?scenario=chatbar_busy_running`
+    })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(document.querySelector('[data-testid="studio-stop-btn"]') && document.querySelector('[data-testid="topbar-environment-btn"]'))`,
+        returnByValue: true
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 80))
+    }
+
+    const res = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const s = window.__DAB_STUDIO__;
+        s.setOauthToken('mock_oauth_token');
+        await new Promise((r) => setTimeout(r, 40));
+        const ta = document.querySelector('[data-testid="studio-prompt-input"]');
+        const addBtn = document.querySelector('[data-testid="composer-add-context-btn"]');
+        const queueBtn = document.querySelector('[data-testid="studio-queue-btn"]');
+        const interjectBtn = document.querySelector('[data-testid="studio-interject-btn"]');
+        const stopBtn = document.querySelector('[data-testid="studio-stop-btn"]');
+        const sendBtnWhileBusy = document.querySelector('[data-testid="studio-send-btn"]');
+
+        const initialBusyCheck = {
+          textareaDisabled: Boolean(ta?.disabled),
+          addContextDisabled: Boolean(addBtn?.disabled),
+          hasQueueBtn: Boolean(queueBtn),
+          hasInterjectBtn: Boolean(interjectBtn),
+          hasStopBtn: Boolean(stopBtn),
+          hasSendBtnWhileBusy: Boolean(sendBtnWhileBusy)
+        };
+
+        // 1. Type a follow-up prompt while busy and click Queue
+        const taSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        taSetter.call(ta, 'Add a regional breakdown filter');
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        ta.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 60));
+
+        document.querySelector('[data-testid="studio-queue-btn"]').click();
+        await new Promise((r) => setTimeout(r, 60));
+
+        // 2. Type a second follow-up prompt while busy and press Cmd+Enter to queue it
+        taSetter.call(ta, 'Export summary table to CSV');
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        ta.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 60));
+        ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }));
+        await new Promise((r) => setTimeout(r, 60));
+
+        const queuedBar = document.querySelector('[data-testid="queued-prompts-bar"]');
+        const queuedItemsBeforeRemove = Array.from(document.querySelectorAll('[data-testid="queued-prompt-item"]')).map(
+          (el) => el.querySelector('.dab-queued-prompt-text')?.textContent?.trim() || ''
+        );
+
+        // Remove second queued prompt via its remove button
+        const removeBtns = Array.from(document.querySelectorAll('[data-testid^="queued-prompt-remove-"]'));
+        removeBtns[1]?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const queuedCountAfterRemove = document.querySelectorAll('[data-testid="queued-prompt-item"]').length;
+
+        // 3. Test Stop button: set liveActivitySteps and click Stop
+        s.setLiveActivitySteps([
+          { id: 'step_stop_1', kind: 'thought', title: 'Inspecting order_items', status: 'running' }
+        ]);
+        await new Promise((r) => setTimeout(r, 50));
+        document.querySelector('[data-testid="studio-stop-btn"]').click();
+        await new Promise((r) => setTimeout(r, 80));
+
+        const afterStop = {
+          hasStopBtn: Boolean(document.querySelector('[data-testid="studio-stop-btn"]')),
+          hasSendBtn: Boolean(document.querySelector('[data-testid="studio-send-btn"]')),
+          bodyContainsStoppedMsg: document.body.innerText.includes('Stopped by user.')
+        };
+
+        // 4. Test Interject from queued item while busy
+        s.setBusyStatus('Running Looker Code Mode...');
+        s.setLiveActivitySteps([
+          { id: 'step_int_1', kind: 'codemode', title: 'Querying brand revenue', status: 'running' }
+        ]);
+        await new Promise((r) => setTimeout(r, 60));
+        const interjectQueuedBtn = document.querySelector('[data-testid^="queued-prompt-interject-"]');
+        interjectQueuedBtn?.click();
+        await new Promise((r) => setTimeout(r, 200));
+
+        const afterQueuedInterject = {
+          queuedBarGone: !document.querySelector('[data-testid="queued-prompts-bar"]'),
+          bodyContainsInterjectedMsg: document.body.innerText.includes('Interjected by user.'),
+          bodyContainsQueuedPromptText: document.body.innerText.includes('Add a regional breakdown filter')
+        };
+
+        // 5. Verify topbar Environment button & popover menu (Reset Environment & Stop Environment)
+        const envBtn = document.querySelector('[data-testid="topbar-environment-btn"]');
+        const envBtnText = (envBtn?.textContent || '').trim();
+        const hasRawEnvLabel = /Env\\s*\\[/i.test(document.querySelector('.dab-topbar')?.innerText || '');
+
+        envBtn.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const envMenu = document.querySelector('[data-testid="topbar-environment-menu"]');
+        const resetBtn = document.querySelector('[data-testid="env-reset-btn"]');
+        const stopEnvBtn = document.querySelector('[data-testid="env-stop-btn"]');
+        const menuOpenCheck = {
+          hasMenu: Boolean(envMenu),
+          hasResetBtn: Boolean(resetBtn),
+          hasStopEnvBtn: Boolean(stopEnvBtn)
+        };
+
+        // Click Stop Environment -> closes menu and sets status to 'stopped' (neutral badge)
+        stopEnvBtn.click();
+        await new Promise((r) => setTimeout(r, 80));
+        const afterStopEnv = {
+          menuClosed: !document.querySelector('[data-testid="topbar-environment-menu"]'),
+          status: window.__DAB_STUDIO__.environmentStatus,
+          hasNeutralClass: envBtn.classList.contains('dab-badge-neutral')
+        };
+
+        // Re-open menu and click Reset Environment -> sets status to 'active' (success badge)
+        envBtn.click();
+        await new Promise((r) => setTimeout(r, 60));
+        document.querySelector('[data-testid="env-reset-btn"]').click();
+        await new Promise((r) => setTimeout(r, 120));
+        const afterResetEnv = {
+          menuClosed: !document.querySelector('[data-testid="topbar-environment-menu"]'),
+          status: window.__DAB_STUDIO__.environmentStatus,
+          hasSuccessClass: envBtn.classList.contains('dab-badge-success')
+        };
+
+        return {
+          initialBusyCheck,
+          hasQueuedBar: Boolean(queuedBar),
+          queuedItemsBeforeRemove,
+          queuedCountAfterRemove,
+          afterStop,
+          afterQueuedInterject,
+          envBtnText,
+          hasRawEnvLabel,
+          menuOpenCheck,
+          afterStopEnv,
+          afterResetEnv
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(res.result.value).toEqual({
+      initialBusyCheck: {
+        textareaDisabled: false,
+        addContextDisabled: false,
+        hasQueueBtn: true,
+        hasInterjectBtn: true,
+        hasStopBtn: true,
+        hasSendBtnWhileBusy: false
+      },
+      hasQueuedBar: true,
+      queuedItemsBeforeRemove: [
+        'Add a regional breakdown filter',
+        'Export summary table to CSV'
+      ],
+      queuedCountAfterRemove: 1,
+      afterStop: {
+        hasStopBtn: false,
+        hasSendBtn: true,
+        bodyContainsStoppedMsg: true
+      },
+      afterQueuedInterject: {
+        queuedBarGone: true,
+        bodyContainsInterjectedMsg: true,
+        bodyContainsQueuedPromptText: true
+      },
+      envBtnText: 'Environment',
+      hasRawEnvLabel: false,
+      menuOpenCheck: {
+        hasMenu: true,
+        hasResetBtn: true,
+        hasStopEnvBtn: true
+      },
+      afterStopEnv: {
+        menuClosed: true,
+        status: 'stopped',
+        hasNeutralClass: true
+      },
+      afterResetEnv: {
+        menuClosed: true,
+        status: 'active',
+        hasSuccessClass: true
+      }
+    })
+  }, 15000)
 })

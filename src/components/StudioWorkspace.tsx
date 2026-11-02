@@ -15,6 +15,7 @@ import {
   Brain,
   Check,
   Code2,
+  CornerDownRight,
   Database,
   Eye,
   FileText,
@@ -25,10 +26,12 @@ import {
   Paperclip,
   Plus,
   Sparkles,
+  Square,
   Terminal,
   Trash2,
   Wrench,
   X,
+  Zap,
 } from 'lucide-react'
 
 import {
@@ -1111,6 +1114,11 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     prompt,
     setPrompt,
     handleSendPrompt,
+    queuedPrompts,
+    handleStopTurn,
+    handleQueuePrompt,
+    handleRemoveQueuedPrompt,
+    handleInterjectPrompt,
     isAuthenticated,
     authMode,
     clientId,
@@ -1582,6 +1590,55 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
         </div>
       )}
 
+      {queuedPrompts.length > 0 && (
+        <div
+          className="dab-queued-prompts-bar"
+          data-testid="queued-prompts-bar"
+          role="region"
+          aria-label="Queued prompts"
+        >
+          {queuedPrompts.map((q) => (
+            <div
+              key={q.id}
+              className="dab-queued-prompt-item"
+              data-testid="queued-prompt-item"
+            >
+              <CornerDownRight
+                size={12}
+                strokeWidth={1.75}
+                aria-hidden="true"
+                className="dab-queued-prompt-icon"
+              />
+              <span className="dab-queued-prompt-text" title={q.text}>
+                {q.text || `${q.images.length} attachment(s)`}
+              </span>
+              <div className="dab-queued-prompt-actions">
+                <button
+                  type="button"
+                  className="dab-btn-secondary dab-queued-prompt-interject-btn"
+                  data-testid={`queued-prompt-interject-${q.id}`}
+                  onClick={() => handleInterjectPrompt(q.id)}
+                  title="Abort current turn and send this queued message immediately"
+                >
+                  <Zap size={11} strokeWidth={1.75} aria-hidden="true" />
+                  <span>Interject</span>
+                </button>
+                <button
+                  type="button"
+                  className="dab-queued-prompt-remove-btn"
+                  data-testid={`queued-prompt-remove-${q.id}`}
+                  onClick={() => handleRemoveQueuedPrompt(q.id)}
+                  aria-label="Remove queued message"
+                  title="Remove from queue"
+                >
+                  <X size={12} strokeWidth={2} aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="dab-composer-input-wrap" style={{ position: 'relative' }}>
         {detectedMention.open && (
           <div
@@ -1787,10 +1844,13 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
             }
             if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
               e.preventDefault()
-              handleSendPrompt()
+              if (busyStatus) {
+                handleQueuePrompt()
+              } else {
+                void handleSendPrompt()
+              }
             }
           }}
-          disabled={!!busyStatus}
         />
       </div>
 
@@ -1814,7 +1874,6 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
             data-testid="composer-add-context-btn"
             className="dab-btn-secondary dab-composer-add-btn"
             onClick={() => setAddContextOpen((prev) => !prev)}
-            disabled={!!busyStatus}
             title="Add files or @-mention Looker Explores, Dashboards, Looks, or Conversations"
             aria-label="Add Context"
             aria-expanded={addContextOpen}
@@ -1884,9 +1943,9 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 
         <div
           className="dab-composer-send-group"
-          style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}
+          style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginLeft: 'auto' }}
         >
-          {!isAuthenticated && (
+          {!isAuthenticated && !busyStatus && (
             <button
               type="button"
               data-testid="composer-signin-inline-btn"
@@ -1904,32 +1963,62 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 : 'Configure credentials to send'}
             </button>
           )}
-          <StudioButton
-            variant="gemini"
-            testId="studio-send-btn"
-            onClick={handleSendPrompt}
-            disabled={
-              !isAuthenticated || !!busyStatus || (!prompt.trim() && pastedImages.length === 0)
-            }
-          >
-            {busyStatus
-              ? 'Generating...'
-              : isCaMode || selectedUseCase === 'conversational-analytics'
-              ? caConversation
-                ? 'Ask CA Agent'
-                : 'Route & Start CA Chat'
-              : isLookmlMode
-              ? lookmlBundle
-                ? 'Update LookML'
-                : 'Run Agentic LookML'
-              : activeMode === 'tile'
-              ? 'Ask AI'
-              : builderMode === 'dashboard'
-              ? nativeContent
-                ? 'Update Content'
-                : 'Create / Update Content'
-              : 'Send Message'}
-          </StudioButton>
+          {busyStatus ? (
+            <>
+              <StudioButton
+                variant="secondary"
+                testId="studio-queue-btn"
+                onClick={handleQueuePrompt}
+                disabled={!prompt.trim() && pastedImages.length === 0}
+                title="Queue message to run automatically when the current turn finishes (Cmd/Ctrl+Enter)"
+              >
+                <CornerDownRight size={13} strokeWidth={1.75} aria-hidden="true" />
+                <span>Queue</span>
+              </StudioButton>
+              <StudioButton
+                variant="secondary"
+                testId="studio-interject-btn"
+                onClick={() => handleInterjectPrompt()}
+                disabled={!isAuthenticated || (!prompt.trim() && pastedImages.length === 0)}
+                title="Interrupt the running turn and send this message immediately"
+              >
+                <Zap size={13} strokeWidth={1.75} aria-hidden="true" />
+                <span>Interject</span>
+              </StudioButton>
+              <StudioButton
+                variant="danger"
+                testId="studio-stop-btn"
+                onClick={handleStopTurn}
+                title="Stop current turn"
+              >
+                <Square size={12} strokeWidth={2} aria-hidden="true" />
+                <span>Stop</span>
+              </StudioButton>
+            </>
+          ) : (
+            <StudioButton
+              variant="gemini"
+              testId="studio-send-btn"
+              onClick={handleSendPrompt}
+              disabled={!isAuthenticated || (!prompt.trim() && pastedImages.length === 0)}
+            >
+              {isCaMode || selectedUseCase === 'conversational-analytics'
+                ? caConversation
+                  ? 'Ask CA Agent'
+                  : 'Route & Start CA Chat'
+                : isLookmlMode
+                ? lookmlBundle
+                  ? 'Update LookML'
+                  : 'Run Agentic LookML'
+                : activeMode === 'tile'
+                ? 'Ask AI'
+                : builderMode === 'dashboard'
+                ? nativeContent
+                  ? 'Update Content'
+                  : 'Create / Update Content'
+                : 'Send Message'}
+            </StudioButton>
+          )}
         </div>
       </div>
     </div>

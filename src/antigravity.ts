@@ -717,6 +717,12 @@ export async function callInteractionsApi(
       throw new Error('Please sign in with Google OAuth first.')
     }
     if (typeof window !== 'undefined' && window.__MOCK_LOOKER_EXTENSION__) {
+      if (/:cancel$/i.test(path)) {
+        return {
+          id: path.replace(/^interactions\//i, '').replace(/:cancel$/i, ''),
+          status: 'cancelled',
+        }
+      }
       const inputArr = Array.isArray(body?.input)
         ? (body?.input as Array<{ text?: string }>)
         : []
@@ -1422,6 +1428,8 @@ export interface RunAntigravityTurnOptions {
   ) => Promise<CodeModePermissionDecision>
   onProgressSteps?: (steps: AntigravityActivityStep[]) => void
   pollScheduleMs?: number[]
+  signal?: AbortSignal
+  onInteractionCreated?: (interactionId: string) => void
   onStatus: (statusText: string) => void
 }
 
@@ -1484,8 +1492,28 @@ export async function runAntigravityTurn(
     onRequestWritePermission,
     onProgressSteps,
     pollScheduleMs = DEFAULT_POLL_SCHEDULE_MS,
+    signal,
+    onInteractionCreated,
     onStatus,
   } = params
+
+  const throwIfAborted = async (interactionId?: string): Promise<void> => {
+    if (!signal?.aborted) return
+    if (interactionId) {
+      try {
+        await callInteractionsApi(
+          extensionSDK,
+          auth,
+          `interactions/${encodeURIComponent(interactionId)}:cancel`,
+          'POST',
+          {}
+        )
+      } catch {
+        // Ignore best-effort cancel errors
+      }
+    }
+    throw Object.assign(new Error('Turn stopped by user'), { name: 'AbortError' })
+  }
 
   const effectivePermissionHandler = onPermissionRequest || onRequestWritePermission
 
@@ -1732,6 +1760,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     }
   }
 
+  if (signal?.aborted) await throwIfAborted()
   onStatus('Starting Antigravity sandbox interaction...')
   if (!activeEnvId && inFlightEnvProvisionByUser.has(userProvisionKey)) {
     try {
@@ -1741,6 +1770,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       // Ignore coalesced provisioning failure
     }
   }
+  if (signal?.aborted) await throwIfAborted()
 
   let interaction: AntigravityInteractionPayload
   if (activeEnvId || (!isFreshConversation && session.lastInteractionId)) {
@@ -1765,6 +1795,10 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   } else {
     interaction = await provisionFreshEnvironmentInteraction()
   }
+  if (interaction.id) {
+    onInteractionCreated?.(interaction.id)
+  }
+  await throwIfAborted(interaction.id)
   let trackedEnvId: string | undefined =
     normalizeEnvironmentId(interaction.environment_id) || activeEnvId
   if (trackedEnvId && schemaMarkdown && selectedExplores.length > 0) {
@@ -1856,6 +1890,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         interaction.status === 'requires_action' ||
         interaction.status === 'queued'
       ) {
+        await throwIfAborted(interaction.id)
         if (interaction.environment_id) {
           trackedEnvId = interaction.environment_id
         }
@@ -1875,6 +1910,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           )
 
           if (pendingLookerCalls.length > 0) {
+            await throwIfAborted(interaction.id)
             const firstThought = pendingLookerCalls
               .map((c: AntigravityInteractionStep) =>
                 String(parseStepArguments(c.arguments ?? c.args).thought || '').trim()
@@ -1954,6 +1990,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
               })
             )
             codemodeExecMs += Date.now() - cmStart
+            await throwIfAborted(interaction.id)
 
             interaction = await callInteractionsApi(
               extensionSDK,
@@ -1970,6 +2007,10 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                 input: resultsInput,
               }
             )
+            if (interaction.id) {
+              onInteractionCreated?.(interaction.id)
+            }
+            await throwIfAborted(interaction.id)
             if (interaction.environment_id) {
               trackedEnvId = interaction.environment_id
             }
@@ -1986,15 +2027,30 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         pollIdx += 1
         pollCount += 1
         pollWaitMs += sleepMs
+        await throwIfAborted(interaction.id)
         if (sleepMs > 0) {
-          await new Promise((r) => setTimeout(r, sleepMs))
+          await new Promise<void>((resolve) => {
+            let timer: ReturnType<typeof setTimeout> | null = null
+            const onAbort = () => {
+              if (timer !== null) clearTimeout(timer)
+              signal?.removeEventListener('abort', onAbort)
+              resolve()
+            }
+            signal?.addEventListener('abort', onAbort, { once: true })
+            timer = setTimeout(() => {
+              signal?.removeEventListener('abort', onAbort)
+              resolve()
+            }, sleepMs)
+          })
         }
+        await throwIfAborted(interaction.id)
         interaction = await callInteractionsApi(
           extensionSDK,
           auth,
           `interactions/${encodeURIComponent(interaction.id)}`,
           'GET'
         )
+        await throwIfAborted(interaction.id)
         if (interaction.environment_id) {
           trackedEnvId = interaction.environment_id
         }
@@ -2025,6 +2081,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       )
 
       if (!hasFinalBundle && pendingBridgeReqs.length > 0 && bridgeRound < 8) {
+        await throwIfAborted(interaction.id)
         bridgeRound += 1
         accumulatedSteps.push(...(interaction.steps || []))
         const firstBridgeThought = pendingBridgeReqs.map((r) => r.thought).find(Boolean)
@@ -2034,6 +2091,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         const bridgeStart = Date.now()
         const bridgedLines: string[] = []
         for (const req of pendingBridgeReqs) {
+          await throwIfAborted(interaction.id)
           if (req.kind !== 'sdk_request') codemodeCalls += 1
           try {
             const { cacheKey, result } = await executeLkrExtensionToolRequest({
@@ -2056,6 +2114,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           }
         }
         codemodeExecMs += Date.now() - bridgeStart
+        await throwIfAborted(interaction.id)
 
         const seedText = [
           '[LKR_EXTENSION_BRIDGE_RESULT] Executed online lkr-dev-cli request(s) in the host Looker Extension.',
@@ -2078,6 +2137,10 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
             input: [{ type: 'text', text: seedText }],
           }
         )
+        if (interaction.id) {
+          onInteractionCreated?.(interaction.id)
+        }
+        await throwIfAborted(interaction.id)
         if (interaction.environment_id) {
           trackedEnvId = interaction.environment_id
         }
@@ -2224,6 +2287,7 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
   schemaMarkdown?: string
   existingAppCode?: string
   extraSources?: Array<{ type: 'inline'; content: string; target: string }>
+  forceFresh?: boolean
   onEnvironmentUpdated?: (environmentId: string) => void | Promise<void>
 }): Promise<{
   session: AgentSession
@@ -2243,6 +2307,7 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
     schemaMarkdown = '',
     existingAppCode,
     extraSources = [],
+    forceFresh = false,
     onEnvironmentUpdated,
   } = params
 
@@ -2257,10 +2322,13 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
       .replace(/[^a-zA-Z0-9_-]/g, '_') || 'current'
   const appFilePath = `/workspace/apps/${conversationId}/app.js`
 
-  const initialEnvId = normalizeEnvironmentId(environmentId || existingSession?.environmentId)
+  const initialEnvId = forceFresh
+    ? undefined
+    : normalizeEnvironmentId(environmentId || existingSession?.environmentId)
   let activeEnvId = initialEnvId
 
   const hasValidExisting =
+    !forceFresh &&
     existingSession?.lastInteractionId &&
     (!existingSession.toolType || existingSession.toolType === toolType)
 
@@ -2331,7 +2399,7 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
     }
 
     const userProvisionKey = resolveUserProvisionKey(userId, auth)
-    if (!activeEnvId && inFlightEnvProvisionByUser.has(userProvisionKey)) {
+    if (!forceFresh && !activeEnvId && inFlightEnvProvisionByUser.has(userProvisionKey)) {
       try {
         const coalescedId = normalizeEnvironmentId(await inFlightEnvProvisionByUser.get(userProvisionKey)!)
         if (coalescedId) activeEnvId = coalescedId
@@ -2414,7 +2482,7 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
         session: {
           ...existingSession,
           environmentId: newEnvId,
-          lastInteractionId: existingSession?.lastInteractionId,
+          lastInteractionId: forceFresh ? undefined : existingSession?.lastInteractionId,
           explores: selectedExplores,
           toolType,
         },

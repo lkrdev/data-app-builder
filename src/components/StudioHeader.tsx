@@ -1,6 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 
-import { AlertTriangle, Folder, FolderOpen, Lock, Search, User } from 'lucide-react'
+import {
+  AlertTriangle,
+  ChevronDown,
+  Folder,
+  FolderOpen,
+  Lock,
+  RotateCcw,
+  Search,
+  Server,
+  Square,
+  User,
+} from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 
 import {
@@ -373,9 +384,9 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     themeMode,
     resolvedTheme,
     setThemeMode,
-    activeMode,
-    agentSession,
-    handleWakeModeEnv,
+    environmentStatus,
+    handleResetEnvironment,
+    handleStopEnvironment,
     requirePermission,
     setRequirePermission,
     capabilities,
@@ -433,6 +444,8 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const [advResults, setAdvResults] = useState<LookerFolderNode[]>([])
   const [advLoading, setAdvLoading] = useState(false)
   const folderPickerRef = useRef<HTMLDivElement | null>(null)
+  const [envMenuOpen, setEnvMenuOpen] = useState(false)
+  const envMenuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     const onDocMouseDown = (e: MouseEvent) => {
@@ -443,9 +456,21 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
       ) {
         setFolderPopoverOpen(false)
       }
+      if (envMenuRef.current && !envMenuRef.current.contains(e.target as Node)) {
+        setEnvMenuOpen(false)
+      }
+    }
+    const onDocKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setEnvMenuOpen(false)
+      }
     }
     document.addEventListener('mousedown', onDocMouseDown)
-    return () => document.removeEventListener('mousedown', onDocMouseDown)
+    document.addEventListener('keydown', onDocKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown)
+      document.removeEventListener('keydown', onDocKeyDown)
+    }
   }, [])
 
   const selectedFolderNode = folderTreeNodes[selectedFolderId]
@@ -568,14 +593,65 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
         <span className="dab-badge">
           {LkrCodeMode?.runPythonCode ? 'WASM CodeMode ✓' : 'WASM CodeMode (pending build)'}
         </span>
-        <StudioBadge
-          tone="success"
-          onClick={() => handleWakeModeEnv(activeMode)}
-          style={{ cursor: 'pointer' }}
-          title="Mode-isolated Antigravity sandbox environment (click to wake or reload)"
-        >
-          Env [{activeMode}]: {agentSession.environmentId || `env_${activeMode}_isolated`}
-        </StudioBadge>
+        <div className="dab-env-menu-wrap" ref={envMenuRef}>
+          <StudioBadge
+            tone={environmentStatus === 'stopped' ? 'neutral' : 'success'}
+            testId="topbar-environment-btn"
+            onClick={() => setEnvMenuOpen((prev) => !prev)}
+            style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+            title={
+              environmentStatus === 'stopped'
+                ? 'Antigravity sandbox environment stopped (click to reset or manage)'
+                : 'Antigravity sandbox environment active (click to reset or stop)'
+            }
+          >
+            <span
+              className={`dab-env-status-dot ${
+                environmentStatus === 'stopped' ? 'stopped' : 'active'
+              }`}
+              aria-hidden="true"
+            />
+            <Server size={12} strokeWidth={1.75} aria-hidden="true" />
+            <span>Environment</span>
+            <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
+          </StudioBadge>
+
+          {envMenuOpen && (
+            <div
+              className="dab-env-popover-menu"
+              data-testid="topbar-environment-menu"
+              role="menu"
+              aria-label="Environment actions"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="env-reset-btn"
+                className="dab-env-menu-item"
+                onClick={() => {
+                  setEnvMenuOpen(false)
+                  void handleResetEnvironment()
+                }}
+              >
+                <RotateCcw size={13} strokeWidth={1.75} aria-hidden="true" />
+                <span>Reset Environment</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="env-stop-btn"
+                className="dab-env-menu-item dab-env-menu-item-danger"
+                onClick={() => {
+                  setEnvMenuOpen(false)
+                  handleStopEnvironment()
+                }}
+              >
+                <Square size={12} strokeWidth={2} aria-hidden="true" />
+                <span>Stop Environment</span>
+              </button>
+            </div>
+          )}
+        </div>
         <ThemeModeSelect
           themeMode={themeMode}
           resolvedTheme={resolvedTheme}
