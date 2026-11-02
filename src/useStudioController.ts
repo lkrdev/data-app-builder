@@ -11,10 +11,10 @@ import {
   ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig, generateConversationLabel,
   generateDynamicStarterPrompts, getCachedStarterPrompts, getInitialStoredOAuthSession, getInitialStoredOAuthToken,
   inFlightEnvProvisionByUser, listAvailableAntigravityModels, LkrCodeMode, loadStoredOAuthSession, loginWithGoogleOAuth,
-  normalizeEnvironmentId, PastedImage, prewarmOrWakeAntigravityEnvironment, refreshOAuthSessionIfNeeded,
-  resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, resolveTargetExploreFromModels,
-  runAntigravityTurn, sanitizeConversationLabel, sharedEnvExploreSchemas, StarterPromptItem, StoredOAuthSession,
-  STUDIO_OAUTH_REFRESH_INTERVAL_MS, STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY,
+  normalizeEnvironmentId, parseValidOAuthSession, PastedImage, prewarmOrWakeAntigravityEnvironment,
+  refreshOAuthSessionIfNeeded, resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris,
+  resolveTargetExploreFromModels, runAntigravityTurn, sanitizeConversationLabel, sharedEnvExploreSchemas,
+  StarterPromptItem, STUDIO_OAUTH_REFRESH_INTERVAL_MS, STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY,
 } from './antigravity'
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
 import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
@@ -142,14 +142,10 @@ export function useStudioController() {
     () => initialOAuthSession?.token || getInitialStoredOAuthToken(initialClientId)
   )
   const [oauthExpiresAt, setOauthExpiresAt] = useState<number>(
-    () =>
-      initialOAuthSession?.expiresAt ||
-      (initialOAuthSession?.token ? Date.now() + STUDIO_OAUTH_REFRESH_INTERVAL_MS : 0)
+    () => initialOAuthSession?.expiresAt || (initialOAuthSession?.token ? Date.now() + STUDIO_OAUTH_REFRESH_INTERVAL_MS : 0)
   )
-  const oauthPendingRefreshRef = useRef<boolean>(false)
-  const tabIdRef = useRef<string>(
-    `tab_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`
-  )
+  const oauthPendingRefreshRef = useRef(false)
+  const tabIdRef = useRef(`tab_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`)
   const [apiKey, setApiKey] = useState(() => String(mockExt?.initialApiKey || ''))
   const [oauthSigningIn, setOauthSigningIn] = useState(false)
   const oauthAbortRef = useRef<AbortController | null>(null)
@@ -227,19 +223,11 @@ export function useStudioController() {
         setOauthExpiresAt(0)
         return
       }
-      try {
-        const parsed = JSON.parse(e.newValue) as Partial<StoredOAuthSession> | null
-        const tok = typeof parsed?.token === 'string' ? parsed.token.trim() : ''
-        const exp = Number(parsed?.expiresAt)
-        const cid = typeof parsed?.clientId === 'string' ? parsed.clientId.trim() : ''
-        if (cid && clientId.trim() && cid !== clientId.trim()) return
-        if (tok && Number.isFinite(exp) && exp > Date.now()) {
-          oauthPendingRefreshRef.current = false
-          setOauthToken(tok)
-          setOauthExpiresAt(exp)
-        }
-      } catch {
-        // Ignore malformed storage event payload
+      const { session } = parseValidOAuthSession(e.newValue, clientId)
+      if (session) {
+        oauthPendingRefreshRef.current = false
+        setOauthToken(session.token)
+        setOauthExpiresAt(session.expiresAt)
       }
     }
     window.addEventListener('storage', onStorage)
@@ -248,7 +236,7 @@ export function useStudioController() {
 
   useEffect(() => {
     if (authMode !== 'oauth' || !oauthToken.trim() || !clientId.trim() || !oauthExpiresAt) return
-    const checkOrRefresh = () => {
+    const maybeRefresh = () => {
       if (Date.now() < oauthExpiresAt && !oauthPendingRefreshRef.current) return
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
         oauthPendingRefreshRef.current = true
@@ -257,28 +245,13 @@ export function useStudioController() {
       oauthPendingRefreshRef.current = false
       void triggerSilentOAuthRefresh(false)
     }
-    const timer = setTimeout(checkOrRefresh, Math.max(0, oauthExpiresAt - Date.now()))
-    const onVisibilityOrFocus = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
-      if (oauthPendingRefreshRef.current || Date.now() >= oauthExpiresAt) {
-        oauthPendingRefreshRef.current = false
-        void triggerSilentOAuthRefresh(false)
-      }
-    }
-    if (typeof document !== 'undefined') {
-      document.addEventListener?.('visibilitychange', onVisibilityOrFocus)
-    }
-    if (typeof window !== 'undefined') {
-      window.addEventListener?.('focus', onVisibilityOrFocus)
-    }
+    const timer = setTimeout(maybeRefresh, Math.max(0, oauthExpiresAt - Date.now()))
+    if (typeof document !== 'undefined') document.addEventListener?.('visibilitychange', maybeRefresh)
+    if (typeof window !== 'undefined') window.addEventListener?.('focus', maybeRefresh)
     return () => {
       clearTimeout(timer)
-      if (typeof document !== 'undefined') {
-        document.removeEventListener?.('visibilitychange', onVisibilityOrFocus)
-      }
-      if (typeof window !== 'undefined') {
-        window.removeEventListener?.('focus', onVisibilityOrFocus)
-      }
+      if (typeof document !== 'undefined') document.removeEventListener?.('visibilitychange', maybeRefresh)
+      if (typeof window !== 'undefined') window.removeEventListener?.('focus', maybeRefresh)
     }
   }, [authMode, oauthToken, clientId, oauthExpiresAt, triggerSilentOAuthRefresh])
   const oauthRedirectUri = useMemo(
@@ -2512,24 +2485,13 @@ export function useStudioController() {
   )
 
   const handleResetEnvironment = useCallback(async () => {
-    if (envResetNoticeTimerRef.current) {
-      clearTimeout(envResetNoticeTimerRef.current)
-      envResetNoticeTimerRef.current = null
-    }
+    if (envResetNoticeTimerRef.current) clearTimeout(envResetNoticeTimerRef.current)
+    envResetNoticeTimerRef.current = null
     setEnvResetNotice(false)
     clearAllEnvSessions('resetting')
     sharedEnvExploreSchemas.clear()
     inFlightEnvProvisionByUser.clear()
-    try {
-      await saveUserEnvironmentId(
-        core40SDK,
-        userIdRef.current || userId,
-        '',
-        getArtifactNamespace(extensionSDK)
-      )
-    } catch {
-      // Ignore clear environment artifact errors
-    }
+    await saveUserEnvironmentId(core40SDK, userIdRef.current || userId, '', getArtifactNamespace(extensionSDK)).catch(() => {})
     try {
       await handleWakeModeEnv(activeModeRef.current, true)
     } finally {
@@ -2544,10 +2506,8 @@ export function useStudioController() {
   }, [clearAllEnvSessions, core40SDK, userId, extensionSDK, handleWakeModeEnv])
 
   const handleStopEnvironment = useCallback(() => {
-    if (envResetNoticeTimerRef.current) {
-      clearTimeout(envResetNoticeTimerRef.current)
-      envResetNoticeTimerRef.current = null
-    }
+    if (envResetNoticeTimerRef.current) clearTimeout(envResetNoticeTimerRef.current)
+    envResetNoticeTimerRef.current = null
     setEnvResetNotice(false)
     clearAllEnvSessions('stopped')
   }, [clearAllEnvSessions])

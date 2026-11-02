@@ -519,7 +519,7 @@ export interface OAuthRefreshResult {
   deferredUntilVisible?: boolean
 }
 
-function parseValidOAuthSession(
+export function parseValidOAuthSession(
   raw: string | null | undefined,
   clientId?: string
 ): { session: StoredOAuthSession | null; expired: boolean } {
@@ -585,18 +585,16 @@ export function persistOAuthSession(
 export function getInitialStoredOAuthSession(clientId?: string): StoredOAuthSession | null {
   try {
     const w = typeof window !== 'undefined' ? window : undefined
-    if (w?.__MOCK_LOOKER_EXTENSION__ && 'initialOauthToken' in w.__MOCK_LOOKER_EXTENSION__) {
-      const token = String(w.__MOCK_LOOKER_EXTENSION__.initialOauthToken || '').trim()
+    const mockExt = w?.__MOCK_LOOKER_EXTENSION__ as
+      | { initialOauthToken?: string; initialOauthExpiresAt?: number }
+      | undefined
+    if (mockExt && 'initialOauthToken' in mockExt) {
+      const token = String(mockExt.initialOauthToken || '').trim()
       if (!token) return null
-      const mockExp = Number(
-        (w.__MOCK_LOOKER_EXTENSION__ as { initialOauthExpiresAt?: number }).initialOauthExpiresAt
-      )
+      const exp = Number(mockExt.initialOauthExpiresAt)
       return {
         token,
-        expiresAt:
-          Number.isFinite(mockExp) && mockExp > 0
-            ? mockExp
-            : Date.now() + STUDIO_OAUTH_REFRESH_INTERVAL_MS,
+        expiresAt: Number.isFinite(exp) && exp > 0 ? exp : Date.now() + STUDIO_OAUTH_REFRESH_INTERVAL_MS,
         ...(clientId?.trim() ? { clientId: clientId.trim() } : {}),
       }
     }
@@ -724,84 +722,40 @@ export async function refreshOAuthSessionIfNeeded(opts: {
     stored.expiresAt > Date.now() &&
     (!force || (Boolean(currentToken?.trim()) && stored.token !== currentToken?.trim()))
   ) {
-    return {
-      token: stored.token,
-      expiresAt: stored.expiresAt,
-      refreshedByOtherTab: true,
-      deferredUntilVisible: false,
-    }
+    return { token: stored.token, expiresAt: stored.expiresAt, refreshedByOtherTab: true, deferredUntilVisible: false }
   }
+  const ls = typeof window !== 'undefined' ? window.localStorage : undefined
   const readLock = (): { tabId?: string; expiresAt?: number } | null => {
     try {
-      const raw =
-        typeof window !== 'undefined'
-          ? window.localStorage?.getItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY)
-          : null
+      const raw = ls?.getItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY)
       return raw ? (JSON.parse(raw) as { tabId?: string; expiresAt?: number }) : null
     } catch {
       return null
     }
   }
   const existingLock = readLock()
-  if (
-    existingLock &&
-    Number(existingLock.expiresAt) > Date.now() &&
-    existingLock.tabId &&
-    existingLock.tabId !== effectiveTabId
-  ) {
-    if (inFlightOAuthRefreshPromise) {
-      await inFlightOAuthRefreshPromise.catch(() => '')
-    } else if (lockWaitMs > 0) {
-      await new Promise((r) => setTimeout(r, lockWaitMs))
-    }
+  if (existingLock && Number(existingLock.expiresAt) > Date.now() && existingLock.tabId && existingLock.tabId !== effectiveTabId) {
+    if (inFlightOAuthRefreshPromise) await inFlightOAuthRefreshPromise.catch(() => '')
+    else if (lockWaitMs > 0) await new Promise((r) => setTimeout(r, lockWaitMs))
     const afterLock = await loadStoredOAuthSession(extensionSDK, clientId)
-    return {
-      token: afterLock?.token || '',
-      expiresAt: afterLock?.expiresAt || 0,
-      refreshedByOtherTab: true,
-      deferredUntilVisible: false,
-    }
+    return { token: afterLock?.token || '', expiresAt: afterLock?.expiresAt || 0, refreshedByOtherTab: true, deferredUntilVisible: false }
   }
-
   try {
-    if (typeof window !== 'undefined') {
-      window.localStorage?.setItem?.(
-        STUDIO_OAUTH_REFRESH_LOCK_KEY,
-        JSON.stringify({
-          tabId: effectiveTabId,
-          expiresAt: Date.now() + STUDIO_OAUTH_REFRESH_LOCK_TTL_MS,
-        })
-      )
-    }
-  } catch {
-    // ignore lock write failure
-  }
+    ls?.setItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY, JSON.stringify({ tabId: effectiveTabId, expiresAt: Date.now() + STUDIO_OAUTH_REFRESH_LOCK_TTL_MS }))
+  } catch { /* ignore lock write failure */ }
 
   const loginPromise = loginWithGoogleOAuth(extensionSDK, clientId, oauthOptions)
   inFlightOAuthRefreshPromise = loginPromise
   try {
     const token = await loginPromise
     const refreshed = await loadStoredOAuthSession(extensionSDK, clientId)
-    return {
-      token,
-      expiresAt: refreshed?.expiresAt || Date.now() + STUDIO_OAUTH_REFRESH_INTERVAL_MS,
-      refreshedByOtherTab: false,
-      deferredUntilVisible: false,
-    }
+    return { token, expiresAt: refreshed?.expiresAt || Date.now() + STUDIO_OAUTH_REFRESH_INTERVAL_MS, refreshedByOtherTab: false, deferredUntilVisible: false }
   } finally {
-    if (inFlightOAuthRefreshPromise === loginPromise) {
-      inFlightOAuthRefreshPromise = null
-    }
+    if (inFlightOAuthRefreshPromise === loginPromise) inFlightOAuthRefreshPromise = null
     try {
       const curLock = readLock()
-      if (!curLock || curLock.tabId === effectiveTabId) {
-        if (typeof window !== 'undefined') {
-          window.localStorage?.removeItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY)
-        }
-      }
-    } catch {
-      // ignore lock cleanup failure
-    }
+      if (!curLock || curLock.tabId === effectiveTabId) ls?.removeItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY)
+    } catch { /* ignore lock cleanup failure */ }
   }
 }
 
@@ -957,20 +911,17 @@ export async function callInteractionsApi(
     if (resp.status === 401) {
       clearStoredOAuthSession(extensionSDK)
       if (auth.mode === 'oauth' && typeof auth.onUnauthorizedRefresh === 'function') {
-        try {
-          const refreshedToken = (await auth.onUnauthorizedRefresh())?.trim()
-          if (refreshedToken) {
-            return await callInteractionsApi(
-              extensionSDK,
-              { ...auth, oauthToken: refreshedToken, onUnauthorizedRefresh: undefined },
-              path,
-              method,
-              body
-            )
-          }
-        } catch {
-          clearStoredOAuthSession(extensionSDK)
+        const refreshedToken = (await auth.onUnauthorizedRefresh().catch(() => null))?.trim()
+        if (refreshedToken) {
+          return await callInteractionsApi(
+            extensionSDK,
+            { ...auth, oauthToken: refreshedToken, onUnauthorizedRefresh: undefined },
+            path,
+            method,
+            body
+          )
         }
+        clearStoredOAuthSession(extensionSDK)
       }
     }
     const msg = parsed?.error?.message || text || `HTTP ${resp.status}`

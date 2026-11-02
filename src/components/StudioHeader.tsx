@@ -596,13 +596,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
         </span>
         <div className="dab-env-menu-wrap" ref={envMenuRef}>
           <StudioBadge
-            tone={
-              environmentStatus === 'stopped'
-                ? 'neutral'
-                : environmentStatus === 'resetting'
-                ? 'warning'
-                : 'success'
-            }
+            tone={environmentStatus === 'stopped' ? 'neutral' : environmentStatus === 'resetting' ? 'warning' : 'success'}
             testId="topbar-environment-btn"
             data-env-status={environmentStatus}
             data-env-reset-notice={envResetNotice ? 'true' : undefined}
@@ -620,12 +614,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
               <RotateCcw size={12} strokeWidth={1.75} className="dab-spin" aria-hidden="true" />
             ) : (
               <>
-                <span
-                  className={`dab-env-status-dot ${
-                    environmentStatus === 'stopped' ? 'stopped' : 'active'
-                  }`}
-                  aria-hidden="true"
-                />
+                <span className={`dab-env-status-dot ${environmentStatus === 'stopped' ? 'stopped' : 'active'}`} aria-hidden="true" />
                 <Server size={12} strokeWidth={1.75} aria-hidden="true" />
               </>
             )}

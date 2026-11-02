@@ -1810,48 +1810,19 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 
 /* Issue #110: Right-pane Thinking logo state */
 .dab-thinking-logo-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 28px 36px;
-  border-radius: 14px;
-  background: var(--dab-surface, #ffffff);
-  border: 1px solid var(--dab-border-strong, #cbd5e1);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 28px 36px; border-radius: 14px; max-width: 380px; text-align: center;
+  background: var(--dab-surface, #ffffff); border: 1px solid var(--dab-border-strong, #cbd5e1);
   box-shadow: 0 10px 25px rgba(15, 23, 42, 0.06);
-  text-align: center;
-  max-width: 380px;
 }
-
 .dab-thinking-logo-orb {
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--dab-accent-subtle, #eff6ff);
-  border: 1px solid var(--dab-accent-border, #bfdbfe);
-  color: var(--dab-accent, #2563eb);
-  animation: dab-thinking-pulse 1.8s ease-in-out infinite;
+  width: 52px; height: 52px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--dab-accent-subtle, #eff6ff); border: 1px solid var(--dab-accent-border, #bfdbfe);
+  color: var(--dab-accent, #2563eb); animation: dab-thinking-pulse 1.8s ease-in-out infinite;
 }
-
-.dab-thinking-logo-icon {
-  animation: dab-spin 4s linear infinite;
-}
-
-.dab-thinking-logo-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--dab-text-strong, #0f172a);
-}
-
-.dab-thinking-logo-subtitle {
-  font-size: 12px;
-  line-height: 1.45;
-}
-
+.dab-thinking-logo-icon { animation: dab-spin 4s linear infinite; }
+.dab-thinking-logo-title { font-size: 15px; font-weight: 600; color: var(--dab-text-strong, #0f172a); }
+.dab-thinking-logo-subtitle { font-size: 12px; line-height: 1.45; }
 @keyframes dab-thinking-pulse {
   0%, 100% { transform: scale(1); opacity: 0.92; }
   50% { transform: scale(1.08); opacity: 1; }

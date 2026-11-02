@@ -4759,192 +4759,107 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
   test('46. Issue #110: refreshes OAuth at 59m or on tab activation (whichever comes last) with multi-tab deduplication and rejects id_token-only responses', async () => {
     expect(STUDIO_OAUTH_REFRESH_INTERVAL_MS).toBe(59 * 60 * 1000)
 
-    const globalWithWindowAndDoc = globalThis as unknown as {
+    const g = globalThis as unknown as {
       window?: Record<string, unknown>
       document?: Record<string, unknown>
-      fetch?: (
-        url: string,
-        init?: { headers?: Record<string, string> }
-      ) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>
+      fetch?: (url: string, init?: { headers?: Record<string, string> }) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>
     }
-    const prevWindow = globalWithWindowAndDoc.window
-    const prevDocument = globalWithWindowAndDoc.document
-    const prevFetch = globalWithWindowAndDoc.fetch
-
+    const prev = { window: g.window, document: g.document, fetch: g.fetch }
     const winStorage = new Map<string, string>()
     const extStorage = new Map<string, string>()
     let visibilityState: 'visible' | 'hidden' = 'visible'
 
-    globalWithWindowAndDoc.window = {
-      ...(prevWindow || {}),
+    g.window = {
+      ...(prev.window || {}),
       addEventListener: () => {},
       removeEventListener: () => {},
       localStorage: {
         getItem: (k: string) => winStorage.get(k) ?? null,
-        setItem: (k: string, v: string) => {
-          winStorage.set(k, v)
-        },
-        removeItem: (k: string) => {
-          winStorage.delete(k)
-        },
+        setItem: (k: string, v: string) => void winStorage.set(k, v),
+        removeItem: (k: string) => void winStorage.delete(k),
       },
     }
-    globalWithWindowAndDoc.document = {
-      get visibilityState() {
-        return visibilityState
-      },
+    g.document = {
+      get visibilityState() { return visibilityState },
       addEventListener: () => {},
       removeEventListener: () => {},
     }
 
     try {
       // 1. Reject id_token-only responses (generativelanguage API requires an OAuth access_token)
-      const idTokenOnlySdk = {
-        oauth2Authenticate: async () => ({ id_token: 'mock_oidc_id_token_only' }),
-      }
-      await expect(loginWithGoogleOAuth(idTokenOnlySdk, 'client-110')).rejects.toThrow(
-        /did not include an access_token/
-      )
+      await expect(
+        loginWithGoogleOAuth({ oauth2Authenticate: async () => ({ id_token: 'mock_oidc_id_token_only' }) }, 'client-110')
+      ).rejects.toThrow(/did not include an access_token/)
 
       // 2. Standard 3600s token sets expiresAt at 59 minutes (3540s)
       let authCalls = 0
       const storageSdk = {
-        oauth2Authenticate: async () => {
-          authCalls += 1
-          return {
-            access_token: `oauth_fresh_tok_${authCalls}`,
-            expires_in: 3600,
-          }
-        },
+        oauth2Authenticate: async () => ({ access_token: `oauth_fresh_tok_${++authCalls}`, expires_in: 3600 }),
         localStorageGetItem: async (k: string) => extStorage.get(k) ?? null,
-        localStorageSetItem: async (k: string, v: string) => {
-          extStorage.set(k, v)
-        },
-        localStorageRemoveItem: async (k: string) => {
-          extStorage.delete(k)
-        },
+        localStorageSetItem: async (k: string, v: string) => void extStorage.set(k, v),
+        localStorageRemoveItem: async (k: string) => void extStorage.delete(k),
       }
 
       const t0 = Date.now()
-      const firstTok = await loginWithGoogleOAuth(storageSdk, 'client-110')
-      expect(firstTok).toBe('oauth_fresh_tok_1')
+      expect(await loginWithGoogleOAuth(storageSdk, 'client-110')).toBe('oauth_fresh_tok_1')
       expect(authCalls).toBe(1)
       const initialStored = await loadStoredOAuthSession(storageSdk, 'client-110')
       expect(initialStored?.expiresAt).toBeGreaterThanOrEqual(t0 + 59 * 60 * 1000 - 50)
       expect(initialStored?.expiresAt).toBeLessThanOrEqual(Date.now() + 59 * 60 * 1000 + 50)
 
-      // 3. Cross-tab deduplication via STUDIO_OAUTH_STORAGE_KEY: when session is still valid (> Date.now()),
-      // another tab calling refreshOAuthSessionIfNeeded adopts the stored token without calling oauth2Authenticate
-      const adopted = await refreshOAuthSessionIfNeeded({
-        extensionSDK: storageSdk,
-        clientId: 'client-110',
-        tabId: 'tab-b',
-      })
-      expect(adopted).toMatchObject({
-        token: 'oauth_fresh_tok_1',
-        refreshedByOtherTab: true,
-        deferredUntilVisible: false,
-      })
+      // 3. Cross-tab deduplication via STUDIO_OAUTH_STORAGE_KEY
+      const adopted = await refreshOAuthSessionIfNeeded({ extensionSDK: storageSdk, clientId: 'client-110', tabId: 'tab-b' })
+      expect(adopted).toMatchObject({ token: 'oauth_fresh_tok_1', refreshedByOtherTab: true, deferredUntilVisible: false })
       expect(authCalls).toBe(1)
 
-      // 4. "Whichever comes last": if token is past 59m (expired) while user is tabbed out (hidden at minute 59-65),
-      // defer refresh until tab becomes visible again (minute 66)
-      const expiredPayload = JSON.stringify({
-        token: 'oauth_expired_at_59m',
-        expiresAt: Date.now() - 60_000,
-        clientId: 'client-110',
-      })
+      // 4. "Whichever comes last": if past 59m while hidden, defer refresh until tab becomes visible
+      const expiredPayload = JSON.stringify({ token: 'oauth_expired_at_59m', expiresAt: Date.now() - 60_000, clientId: 'client-110' })
       extStorage.set(STUDIO_OAUTH_STORAGE_KEY, expiredPayload)
       winStorage.set(STUDIO_OAUTH_STORAGE_KEY, expiredPayload)
 
       visibilityState = 'hidden'
-      const whileHidden = await refreshOAuthSessionIfNeeded({
-        extensionSDK: storageSdk,
-        clientId: 'client-110',
-        tabId: 'tab-a',
-      })
-      expect(whileHidden).toEqual({
-        token: '',
-        expiresAt: 0,
-        refreshedByOtherTab: false,
-        deferredUntilVisible: true,
+      expect(await refreshOAuthSessionIfNeeded({ extensionSDK: storageSdk, clientId: 'client-110', tabId: 'tab-a' })).toEqual({
+        token: '', expiresAt: 0, refreshedByOtherTab: false, deferredUntilVisible: true,
       })
       expect(authCalls).toBe(1)
 
-      // User activates tab at minute 66 -> visibilityState = 'visible' -> refreshes immediately
       visibilityState = 'visible'
-      const onTabActive = await refreshOAuthSessionIfNeeded({
-        extensionSDK: storageSdk,
-        clientId: 'client-110',
-        tabId: 'tab-a',
-      })
-      expect(onTabActive.token).toBe('oauth_fresh_tok_2')
-      expect(onTabActive.refreshedByOtherTab).toBe(false)
-      expect(onTabActive.deferredUntilVisible).toBe(false)
+      const onTabActive = await refreshOAuthSessionIfNeeded({ extensionSDK: storageSdk, clientId: 'client-110', tabId: 'tab-a' })
+      expect(onTabActive).toMatchObject({ token: 'oauth_fresh_tok_2', refreshedByOtherTab: false, deferredUntilVisible: false })
       expect(authCalls).toBe(2)
       expect(winStorage.has(STUDIO_OAUTH_REFRESH_LOCK_KEY)).toBe(false)
 
-      // 5. Cross-tab lock deduplication (STUDIO_OAUTH_REFRESH_LOCK_KEY): concurrent refresh from two tabs only calls oauth2Authenticate once
+      // 5. Cross-tab lock deduplication (STUDIO_OAUTH_REFRESH_LOCK_KEY)
       extStorage.delete(STUDIO_OAUTH_STORAGE_KEY)
       winStorage.delete(STUDIO_OAUTH_STORAGE_KEY)
       const [tab1Res, tab2Res] = await Promise.all([
-        refreshOAuthSessionIfNeeded({
-          extensionSDK: storageSdk,
-          clientId: 'client-110',
-          tabId: 'tab-1',
-        }),
-        refreshOAuthSessionIfNeeded({
-          extensionSDK: storageSdk,
-          clientId: 'client-110',
-          tabId: 'tab-2',
-        }),
+        refreshOAuthSessionIfNeeded({ extensionSDK: storageSdk, clientId: 'client-110', tabId: 'tab-1' }),
+        refreshOAuthSessionIfNeeded({ extensionSDK: storageSdk, clientId: 'client-110', tabId: 'tab-2' }),
       ])
       expect(authCalls).toBe(3)
-      expect(tab1Res.token).toBe('oauth_fresh_tok_3')
-      expect(tab2Res.token).toBe('oauth_fresh_tok_3')
-      expect([tab1Res.refreshedByOtherTab, tab2Res.refreshedByOtherTab].sort()).toEqual([
-        false,
-        true,
-      ])
+      expect([tab1Res.token, tab2Res.token]).toEqual(['oauth_fresh_tok_3', 'oauth_fresh_tok_3'])
+      expect([tab1Res.refreshedByOtherTab, tab2Res.refreshedByOtherTab].sort()).toEqual([false, true])
 
       // 6. callInteractionsApi 401 with onUnauthorizedRefresh retries once with refreshed token
       const seenAuthHeaders: string[] = []
-      globalWithWindowAndDoc.fetch = async (_url, init) => {
-        const authHeader = init?.headers?.Authorization || ''
-        seenAuthHeaders.push(authHeader)
-        if (seenAuthHeaders.length === 1) {
-          return {
-            ok: false,
-            status: 401,
-            text: async () => JSON.stringify({ error: { message: 'Token expired' } }),
-          }
-        }
-        return {
-          ok: true,
-          status: 200,
-          text: async () => JSON.stringify({ models: [{ name: 'models/gemini-3.8-flash' }] }),
-        }
+      g.fetch = async (_url, init) => {
+        seenAuthHeaders.push(init?.headers?.Authorization || '')
+        return seenAuthHeaders.length === 1
+          ? { ok: false, status: 401, text: async () => JSON.stringify({ error: { message: 'Token expired' } }) }
+          : { ok: true, status: 200, text: async () => JSON.stringify({ models: [{ name: 'models/gemini-3.8-flash' }] }) }
       }
       const retryPayload = await callInteractionsApi(
         storageSdk,
-        {
-          mode: 'oauth',
-          oauthToken: 'oauth_stale_token',
-          clientId: 'client-110',
-          onUnauthorizedRefresh: async () => 'oauth_retried_fresh_token',
-        },
+        { mode: 'oauth', oauthToken: 'oauth_stale_token', clientId: 'client-110', onUnauthorizedRefresh: async () => 'oauth_retried_fresh_token' },
         'models',
         'GET'
       )
-      expect(seenAuthHeaders).toEqual([
-        'Bearer oauth_stale_token',
-        'Bearer oauth_retried_fresh_token',
-      ])
+      expect(seenAuthHeaders).toEqual(['Bearer oauth_stale_token', 'Bearer oauth_retried_fresh_token'])
       expect(retryPayload.models?.[0]?.name).toBe('models/gemini-3.8-flash')
     } finally {
-      globalWithWindowAndDoc.window = prevWindow
-      globalWithWindowAndDoc.document = prevDocument
-      globalWithWindowAndDoc.fetch = prevFetch
+      g.window = prev.window
+      g.document = prev.document
+      g.fetch = prev.fetch
     }
   })
 })
