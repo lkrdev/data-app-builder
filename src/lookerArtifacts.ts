@@ -1126,7 +1126,14 @@ export class ArtifactService {
 
   async saveUserEnvironmentId(userId: string, environmentId: string): Promise<void> {
     const envId = String(environmentId || '').trim()
-    if (!envId) return
+    if (!envId) {
+      try {
+        await this.clearUserEnvironmentId(userId)
+      } catch {
+        // Ignore clear errors
+      }
+      return
+    }
     await this.put([
       {
         key: formatUserEnvArtifactKey(userId),

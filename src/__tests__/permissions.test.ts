@@ -4413,4 +4413,138 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
     const manifestText = readFileSync(path.resolve(__dirname, '../../manifest.lkml'), 'utf8')
     expect(manifestText).toContain('"https://cdn.lkr.dev"')
   })
+
+  test('33. Issue #105: supports AbortSignal cancellation (:cancel) and onInteractionCreated in runAntigravityTurn, forceFresh environment reset in prewarmOrWakeAntigravityEnvironment, and clearing user_env artifact via saveUserEnvironmentId', async () => {
+    clearArtifactServiceCache()
+    const store = new Map<string, string>()
+    const mockSdk = asSdk({
+      ok: async <T>(p: T) => p,
+      artifact: async ({ key }: { key: string }) =>
+        key
+          .split(',')
+          .filter((k) => store.has(k))
+          .map((k) => ({ key: k, value: store.get(k)!, version: 1 })),
+      search_artifacts: async () => [],
+      update_artifacts: async (_ns: string, updates: Array<{ key: string; value: string }>) => {
+        for (const u of updates) store.set(u.key, u.value)
+        return updates.map((u) => ({ key: u.key, version: 1 }))
+      },
+      delete_artifact: async (_ns: string, key: string) => {
+        for (const k of key.split(',')) store.delete(k.trim())
+        return ''
+      },
+    })
+
+    // 1. Verify saveUserEnvironmentId with empty string clears persisted user_env:1 artifact
+    await saveUserEnvironmentId(mockSdk, '1', 'env_saved_before_reset')
+    expect(await loadUserEnvironmentId(mockSdk, '1')).toBe('env_saved_before_reset')
+    await saveUserEnvironmentId(mockSdk, '1', '')
+    expect(await loadUserEnvironmentId(mockSdk, '1')).toBeNull()
+
+    // 2. Verify runAntigravityTurn cancellation via AbortSignal throws AbortError and calls :cancel
+    const proxyRequests: Array<{ url: string; method: string }> = []
+    const createdIds: string[] = []
+    const abortController = new AbortController()
+    const mockCancelExt = {
+      serverProxy: async (url: string, init?: FetchCustomParameters) => {
+        const method = init?.method || 'GET'
+        proxyRequests.push({ url, method })
+        if (url.endsWith(':cancel')) {
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({ id: 'int_105_cancel_1', status: 'cancelled' }),
+          }
+        }
+        if (method === 'POST') {
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_105_cancel_1',
+              environment_id: 'env_105_active',
+              status: 'in_progress',
+              steps: [{ type: 'thought', thought: 'Planning query' }],
+            }),
+          }
+        }
+        abortController.abort()
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            id: 'int_105_cancel_1',
+            environment_id: 'env_105_active',
+            status: 'in_progress',
+          }),
+        }
+      },
+    }
+
+    await expect(
+      runAntigravityTurn({
+        sdk: mockSdk,
+        extensionSDK: mockCancelExt,
+        userId: '1',
+        auth: { mode: 'apikey', apiKey: 'key-105' },
+        session: {},
+        selectedExplores: ['thelook::order_items'],
+        schemaMarkdown: '# Schema',
+        userPrompt: 'Build revenue overview',
+        pollScheduleMs: [5],
+        signal: abortController.signal,
+        onInteractionCreated: (id) => createdIds.push(id),
+        onStatus: () => {},
+      })
+    ).rejects.toMatchObject({
+      name: 'AbortError',
+      message: 'Turn stopped by user',
+    })
+    expect(createdIds).toEqual(['int_105_cancel_1'])
+    expect(
+      proxyRequests.some(
+        (r) => r.method === 'POST' && r.url.endsWith('/interactions/int_105_cancel_1:cancel')
+      )
+    ).toBe(true)
+
+    // 3. Verify prewarmOrWakeAntigravityEnvironment with forceFresh: true provisions a fresh remote environment
+    const prewarmBodies: MockInteractionPostBody[] = []
+    const mockFreshExt = {
+      serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+        const body = init?.body ? (JSON.parse(init.body) as MockInteractionPostBody) : undefined
+        if (body) prewarmBodies.push(body)
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            id: 'int_105_fresh_prewarm',
+            environment_id: 'env_105_fresh_99',
+            status: 'completed',
+            output_text: 'READY',
+          }),
+        }
+      },
+    }
+    const freshRes = await prewarmOrWakeAntigravityEnvironment({
+      sdk: mockSdk,
+      userId: '1',
+      extensionSDK: mockFreshExt,
+      auth: { mode: 'apikey', apiKey: 'key-105' },
+      toolType: 'app',
+      environmentId: 'env_stale_old',
+      existingSession: {
+        toolType: 'app',
+        environmentId: 'env_stale_old',
+        lastInteractionId: 'int_stale_old',
+      },
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      forceFresh: true,
+    })
+    expect(freshRes.status).toBe('prelaunched')
+    expect(freshRes.session.environmentId).toBe('env_105_fresh_99')
+    expect(freshRes.session.lastInteractionId).toBeUndefined()
+    expect(prewarmBodies).toHaveLength(1)
+    expect(prewarmBodies[0].environment).toMatchObject({ type: 'remote' })
+  })
 })

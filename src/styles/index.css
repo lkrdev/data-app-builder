@@ -347,6 +347,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -1666,6 +1667,147 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Issue #105: In-Flight Turn Controls (Stop, Queue, Interject) & Topbar Environment Menu */
+.dab-queued-prompts-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--dab-surface-muted, #f8fafc);
+  border: 1px solid var(--dab-border, #e2e8f0);
+  border-radius: 6px;
+}
+
+.dab-queued-prompt-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--dab-text, #1f2937);
+  min-width: 0;
+}
+
+.dab-queued-prompt-icon {
+  color: var(--dab-accent, #2563eb);
+  flex-shrink: 0;
+}
+
+.dab-queued-prompt-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dab-queued-prompt-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.dab-queued-prompt-interject-btn {
+  height: 22px;
+  min-height: 22px;
+  padding: 0 7px;
+  font-size: 11px;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dab-queued-prompt-remove-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dab-text-muted, #64748b);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dab-queued-prompt-remove-btn:hover {
+  background: var(--dab-surface-subtle, #f1f5f9);
+  color: var(--dab-danger-text, #b91c1c);
+}
+
+.dab-env-menu-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.dab-env-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.dab-env-status-dot.active {
+  background: var(--dab-success-text, #15803d);
+}
+
+.dab-env-status-dot.stopped {
+  background: var(--dab-text-muted, #64748b);
+}
+
+.dab-env-popover-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 176px;
+  z-index: 650;
+  background: var(--dab-surface-elevated, #ffffff);
+  border: 1px solid var(--dab-border-strong, #cbd5e1);
+  border-radius: 8px;
+  box-shadow: 0 10px 25px rgba(15, 23, 42, 0.16);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+:root[data-theme="dark"] .dab-env-popover-menu,
+.dab-shell[data-theme="dark"] .dab-env-popover-menu {
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+}
+
+.dab-env-menu-item {
+  width: 100%;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dab-text, #1e293b);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  padding: 6px 9px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.dab-env-menu-item:hover {
+  background: var(--dab-accent-subtle, #eff6ff);
+  color: var(--dab-accent-text, #1d4ed8);
+}
+
+.dab-env-menu-item-danger:hover {
+  background: var(--dab-danger-bg, #fef2f2);
+  color: var(--dab-danger-text, #b91c1c);
+}
+
 
 
 

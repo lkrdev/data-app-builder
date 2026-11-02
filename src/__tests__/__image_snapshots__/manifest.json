@@ -6,7 +6,7 @@
     "snapshotName": "01-mode-data-app-and-permission-gate-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "dashboard",
@@ -15,7 +15,7 @@
     "snapshotName": "02-mode-native-dashboard-builder-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "lookml",
@@ -77,7 +77,7 @@
     "title": "9. Explore Combobox Dropdown — Open (Top Scroll State)",
     "snapshotName": "09-explore-dropdown-open-top-snap.png",
     "width": 427,
-    "height": 404,
+    "height": 440,
     "clipSelector": [
       "[data-testid=\"composer-at-mention-menu\"]",
       ".dab-composer"
@@ -91,7 +91,7 @@
     "title": "10. Explore Combobox Dropdown — Scrolled State (Retail Ops & System Activity)",
     "snapshotName": "10-explore-dropdown-scrolled-snap.png",
     "width": 427,
-    "height": 404,
+    "height": 440,
     "clipSelector": [
       "[data-testid=\"composer-at-mention-menu\"]",
       ".dab-composer"
@@ -116,7 +116,7 @@
     "title": "12. Chat Bar State — Pasted Screenshot Thumbnail & Composer Model Selector",
     "snapshotName": "12-chatbar-state-pasted-image-and-inspector-snap.png",
     "width": 427,
-    "height": 234,
+    "height": 270,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
     "changedInGit": false
@@ -167,7 +167,7 @@
     "snapshotName": "16-mode-conversational-analytics-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "centered_empty_prompt",
@@ -187,6 +187,6 @@
     "snapshotName": "18-studio-dark-theme.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   }
 ]
