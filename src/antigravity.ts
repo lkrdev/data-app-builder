@@ -40,7 +40,9 @@ import {
   BOOTSTRAP_SANDBOX_SH,
   buildLookmlSystemGuide,
   classifyLookerOperation,
+  CODEMODE_CDN_URL,
   computeLkrExtensionCacheKey,
+  ensureCodeModeLoaded,
   executeLkrExtensionToolRequest,
   extractLkrExtensionToolRequests,
   extractLookmlBundleFromInteraction,
@@ -48,6 +50,7 @@ import {
   LKR_CLI_SITECUSTOMIZE_PY,
   LKR_DEV_CLI_SPEC,
   LKR_DEV_CLI_VERSION,
+  LkrCodeMode,
   LkrExtensionToolRequest,
   LookmlBundle,
 } from './lookmlTool'
@@ -71,33 +74,18 @@ export {
   BOOTSTRAP_LOOKML_PY,
   BOOTSTRAP_SANDBOX_SH,
   classifyLookerOperation,
+  CODEMODE_CDN_URL,
   computeLkrExtensionCacheKey,
+  ensureCodeModeLoaded,
   executeLkrExtensionToolRequest,
   extractLkrExtensionToolRequests,
   LKR_CLI_BRIDGE_TOOL,
   LKR_CLI_SITECUSTOMIZE_PY,
   LKR_DEV_CLI_SPEC,
   LKR_DEV_CLI_VERSION,
+  LkrCodeMode,
 }
 export type { LkrExtensionToolRequest, LookmlBundle } from './lookmlTool'
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-export const LkrCodeMode = require('./vendor/codemode.js')
-
-// Expose optional `vars: { type: "object" }` and required `thought: { type: "string" }` on RUN_LOOKER_CODEMODE_TOOL
-if (LkrCodeMode?.RUN_LOOKER_CODEMODE_TOOL?.parameters?.properties) {
-  LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.properties.vars = {
-    type: 'object',
-    description:
-      'Optional dictionary of top-level variables to inject into the Monty Python sandbox (e.g. project_id, ts_utc, raw_sql, inline_queries_json, test_queries_json, file_ids, test_names, commit_message).',
-  }
-  LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.properties.thought = {
-    type: 'string',
-    description:
-      'Required concise 1-sentence summary of what this Code Mode snippet is doing with the Looker API calls (e.g. "Querying monthly revenue and brand share from thelook::order_items" or "Creating executive KPI dashboard with 4 tiles").',
-  }
-  LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.required = ['code', 'thought']
-}
 
 export interface AntigravityModelOption {
   id: string

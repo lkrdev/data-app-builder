@@ -3,8 +3,195 @@ import type { Looker40SDK } from '@looker/sdk'
 
 import { rawLookerRequest } from './lookerApi'
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const LkrCodeMode = require('./vendor/codemode.js')
+export const CODEMODE_CDN_URL = 'https://cdn.lkr.dev/cli/codemode/latest/codemode.js'
+
+export interface LkrCodeModeToolDefinition {
+  type: string
+  name: string
+  description: string
+  parameters: {
+    type: string
+    properties: Record<string, { type: string; description: string }>
+    required: string[]
+  }
+}
+
+export interface LkrCodeModeRunOptions {
+  code?: string
+  sdk?: unknown
+  core40SDK?: unknown
+  extensionSDK?: unknown
+  vars?: Record<string, unknown>
+  allowUpdateSession?: boolean
+  allow_update_session?: boolean
+  requirePermission?: boolean
+  approvedOperations?: Set<string>
+  onPermissionRequest?: (req: {
+    operation: string
+    httpMethod: string
+    path: string
+    args: { params?: unknown; body?: unknown }
+    thought?: string
+    [key: string]: unknown
+  }) => Promise<string> | string
+  requestHandler?: (
+    method: string,
+    path: string,
+    queryParams?: unknown,
+    body?: unknown,
+    options?: unknown
+  ) => Promise<unknown> | unknown
+  [key: string]: unknown
+}
+
+export interface LkrCodeModeRunFn {
+  (code: string, options?: LkrCodeModeRunOptions): Promise<string>
+  (params: LkrCodeModeRunOptions, options?: LkrCodeModeRunOptions): Promise<string>
+}
+
+export interface LkrCodeModeRuntime {
+  RUN_LOOKER_CODEMODE_TOOL: LkrCodeModeToolDefinition
+  getToolDefinition: (name?: string) => LkrCodeModeToolDefinition
+  getCodeModeRuntime: () => LkrCodeModeRuntime
+  classifyOperation: typeof classifyLookerOperation
+  init: () => Promise<LkrCodeModeRuntime>
+  connect: (options?: Record<string, unknown>) => Promise<unknown>
+  setExtensionSDK: (sdk: unknown) => Promise<unknown>
+  getHostData: () => Promise<unknown>
+  runPythonCode: LkrCodeModeRunFn
+  run_python_code: LkrCodeModeRunFn
+  executeLookerCodeMode: LkrCodeModeRunFn
+}
+
+const DATE_HELPER_PREAMBLE_PY = [
+  'def _dim(y, m): return 31 if m in (1,3,5,7,8,10,12) else (30 if m in (4,6,9,11) else (29 if (y%4==0 and y%100!=0) or y%400==0 else 28))',
+  "def _fymd(y, m, d): return str(y) + '-' + (('0'+str(m)) if m<10 else str(m)) + '-' + (('0'+str(d)) if d<10 else str(d))",
+  'def _add_d(y, m, d, n):',
+  '    d += n',
+  '    while d < 1: m, y = (12, y-1) if m == 1 else (m-1, y); d += _dim(y, m)',
+  '    while d > _dim(y, m): d -= _dim(y, m); m, y = (1, y+1) if m == 12 else (m+1, y)',
+  '    return (y, m, d)',
+  'def _add_m(y, m, d, n): t = y * 12 + (m - 1) + n; ny, nm = t // 12, (t % 12) + 1; mx = _dim(ny, nm); return (ny, nm, d if d <= mx else mx)',
+  'def to_fixed_date_range(expr, anchor_date=None):',
+  "    raw = str(expr or '').strip()",
+  "    if not raw or (' to ' in raw.lower() and len(raw) >= 20 and raw[4:5] in ('-', '/')): return ' to '.join(raw.replace('/', '-').split()[::2]) if raw else raw",
+  "    ap = str(anchor_date or INVESTIGATION_ANCHOR_DATE or '2026-03-30').strip()[:10].replace('/', '-').split('-')",
+  "    ay, am, ad = int(ap[0]), int(ap[1]), int(ap[2]); end_s = _fymd(ay, am, ad); low = ' '.join(raw.lower().split())",
+  "    if low == 'today': return end_s + ' to ' + end_s",
+  "    if low == 'yesterday': s = _fymd(*_add_d(ay, am, ad, -1)); return s + ' to ' + s",
+  "    if low in ('this month', 'mtd'): return _fymd(ay, am, 1) + ' to ' + end_s",
+  "    if low == 'last month': y1, m1, _ = _add_m(ay, am, 1, -1); return _fymd(y1, m1, 1) + ' to ' + _fymd(y1, m1, _dim(y1, m1))",
+  "    if low in ('this quarter', 'qtd'): return _fymd(ay, ((am-1)//3)*3+1, 1) + ' to ' + end_s",
+  "    if low == 'last quarter': y1, m1, _ = _add_m(ay, ((am-1)//3)*3+1, 1, -3); y2, m2, _ = _add_m(y1, m1, 1, 2); return _fymd(y1, m1, 1) + ' to ' + _fymd(y2, m2, _dim(y2, m2))",
+  "    if low in ('this year', 'ytd'): return str(ay) + '-01-01 to ' + end_s",
+  "    if low == 'last year': ly = str(ay - 1); return ly + '-01-01 to ' + ly + '-12-31'",
+  "    if low == 'last week': return _fymd(*_add_d(ay, am, ad, -7)) + ' to ' + end_s",
+  "    t = [x for x in low.split() if x not in ('last', 'past', 'previous', 'trailing')]; ago = len(t) >= 2 and t[-1] == 'ago'; t = t[:-1] if ago else t",
+  '    if len(t) == 2 and t[0].isdigit():',
+  "        n, u = int(t[0]), t[1]; ymd = _add_d(ay,am,ad,-n) if u.startswith('day') else (_add_d(ay,am,ad,-n*7) if u.startswith('week') else (_add_m(ay,am,ad,-n) if u.startswith('month') else (_add_m(ay,am,ad,-n*3) if u.startswith('quarter') else (_add_m(ay,am,ad,-n*12) if u.startswith('year') else None))))",
+  "        if ymd: s = _fymd(*ymd); return s + ' to ' + (s if ago else end_s)",
+  '    return raw',
+  '',
+].join('\n')
+
+function getCodeModeToolDefinition(name = 'run_looker_codemode'): LkrCodeModeToolDefinition {
+  return {
+    type: 'function',
+    name,
+    description:
+      'Execute Python code in the browser Looker Code Mode WASM (Monty) sandbox with direct access to all Looker 4.0 SDK methods (e.g. `lookml_model_explore(target_model, target_explore)`, `run_inline_query("json", {...})`, `run_key_driver_analysis({...})`, `to_fixed_date_range("last 30 days")`, `INVESTIGATION_ANCHOR_DATE`, `me()`, `search_dashboards()`, `help("*query*")`, `lookup("run_inline_query")`, `lookup_type("WriteQuery")`). Variables passed in `vars` (such as `target_model`, `target_explore`, `target_folder_id`, and `INVESTIGATION_ANCHOR_DATE`) are pre-injected. Return a compact dict/list instead of raw multi-MB responses.',
+    parameters: {
+      type: 'object',
+      properties: {
+        code: {
+          type: 'string',
+          description:
+            'Python snippet to execute in Monty sandbox. Use `return ...` to return the result (dicts/lists/strings). All Looker 4.0 SDK methods are available globally or on `sdk.<method>(...)`.',
+        },
+        vars: {
+          type: 'object',
+          description:
+            'Optional dictionary of top-level variables to inject into the Monty Python sandbox (e.g. project_id, ts_utc, raw_sql, inline_queries_json, test_queries_json, file_ids, test_names, commit_message).',
+        },
+        thought: {
+          type: 'string',
+          description:
+            'Required concise 1-sentence summary of what this Code Mode snippet is doing with the Looker API calls (e.g. "Querying monthly revenue and brand share from thelook::order_items" or "Creating executive KPI dashboard with 4 tiles").',
+        },
+      },
+      required: ['code', 'thought'],
+    },
+  }
+}
+
+let codeModeLoadPromise: Promise<LkrCodeModeRuntime> | null = null
+
+export async function ensureCodeModeLoaded(): Promise<LkrCodeModeRuntime> {
+  const g = globalThis as unknown as { LkrCodeMode?: LkrCodeModeRuntime }
+  const attach = (rt: LkrCodeModeRuntime) => ((rt.classifyOperation = classifyLookerOperation), (g.LkrCodeMode = rt))
+  if (g.LkrCodeMode && g.LkrCodeMode !== LkrCodeMode) return attach(g.LkrCodeMode)
+  if (
+    typeof document === 'undefined' &&
+    (typeof window === 'undefined' || (typeof process !== 'undefined' && Boolean(process.versions?.node)))
+  ) {
+    return attach((eval('require') as (id: string) => LkrCodeModeRuntime)('./vendor/codemode.js'))
+  }
+  if (!codeModeLoadPromise) {
+    codeModeLoadPromise = new Promise<LkrCodeModeRuntime>((resolve, reject) => {
+      if (typeof document === 'undefined' || !document.head) {
+        codeModeLoadPromise = null
+        return reject(new Error('LkrCodeMode cannot be loaded: document.head is unavailable'))
+      }
+      const script = document.createElement('script')
+      script.src = CODEMODE_CDN_URL
+      script.async = true
+      script.onload = () =>
+        g.LkrCodeMode && g.LkrCodeMode !== LkrCodeMode
+          ? resolve(attach(g.LkrCodeMode))
+          : ((codeModeLoadPromise = null), reject(new Error('codemode.js loaded from CDN without globalThis.LkrCodeMode')))
+      script.onerror = () => ((codeModeLoadPromise = null), reject(new Error(`Failed to load ${CODEMODE_CDN_URL}`)))
+      document.head.appendChild(script)
+    })
+  }
+  return codeModeLoadPromise
+}
+
+const runCodeMode: LkrCodeModeRunFn = async (
+  codeOrParams: LkrCodeModeRunOptions | string,
+  options?: LkrCodeModeRunOptions
+): Promise<string> => {
+  const runtime = await ensureCodeModeLoaded()
+  const isObj = Boolean(codeOrParams && typeof codeOrParams === 'object')
+  const baseOpts: LkrCodeModeRunOptions = isObj ? { ...(codeOrParams as LkrCodeModeRunOptions) } : { ...(options || {}) }
+  const rawCode = String(isObj ? baseOpts.code || '' : codeOrParams || '')
+  const code =
+    /\bto_fixed_date_range\b/.test(rawCode) && !/\bdef\s+to_fixed_date_range\b/.test(rawCode)
+      ? DATE_HELPER_PREAMBLE_PY + rawCode
+      : rawCode
+  const nextOpts: LkrCodeModeRunOptions = {
+    ...baseOpts,
+    code,
+    vars: { INVESTIGATION_ANCHOR_DATE: new Date().toISOString().slice(0, 10), ...(baseOpts.vars || {}) },
+    ...(!baseOpts.approvedOperations && /\b(run_key_driver_analysis|kda\/analyze)\b/.test(rawCode)
+      ? { approvedOperations: new Set(['read_internal_kda_analyze', 'create_internal']) }
+      : {}),
+  }
+  return isObj ? runtime.runPythonCode(nextOpts) : runtime.runPythonCode(code, nextOpts)
+}
+
+export const LkrCodeMode: LkrCodeModeRuntime = {
+  RUN_LOOKER_CODEMODE_TOOL: getCodeModeToolDefinition('run_looker_codemode'),
+  getToolDefinition: getCodeModeToolDefinition,
+  getCodeModeRuntime: () => LkrCodeMode,
+  classifyOperation: classifyLookerOperation,
+  init: async () => ensureCodeModeLoaded(),
+  connect: async (options?: Record<string, unknown>) => (await ensureCodeModeLoaded()).connect(options),
+  setExtensionSDK: async (sdk: unknown) => (await ensureCodeModeLoaded()).setExtensionSDK(sdk),
+  getHostData: async () => (await ensureCodeModeLoaded()).getHostData(),
+  runPythonCode: runCodeMode,
+  run_python_code: (a: LkrCodeModeRunOptions & string, b?: LkrCodeModeRunOptions) => LkrCodeMode.runPythonCode(a, b),
+  executeLookerCodeMode: (a: LkrCodeModeRunOptions & string, b?: LkrCodeModeRunOptions) => LkrCodeMode.runPythonCode(a, b),
+}
 
 export const LKR_DEV_CLI_VERSION = '0.0.61'
 export const LKR_DEV_CLI_SPEC = `lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}`
