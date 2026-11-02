@@ -24,14 +24,11 @@ Only a **Web application OAuth 2.0 Client ID** is needed — **no Client Secret 
    - **Authorized JavaScript origins**:
      ```text
      https://<your-looker-host>
-     https://<your-instance>.looker-ext.com
      ```
-     *(Include the `*.looker-ext.com` origin if **Enhanced Extension Loading** is enabled on your Looker instance.)*
    - **Authorized redirect URIs**:
      ```text
      https://<your-looker-host>/extensions/oauth2_redirect
      ```
-     *(Even when **Enhanced Extension Loading** (`*.looker-ext.com`) is enabled, `extensionSDK.oauth2Authenticate` delegates the OAuth popup to the parent Looker host window on `https://<your-looker-host>`, so the redirect URI is always on `<your-looker-host>`.)*
 3. **Save in Extension Context (Once)**:
    - Click **⚙ Setup** in the extension top bar, select **Google OAuth**, enter the **OAuth Client ID** and optional **GCP Project ID** (`x-goog-user-project`), and click **Save Setup**.
    - All users on the instance will then simply click **Sign In** in the top bar.
