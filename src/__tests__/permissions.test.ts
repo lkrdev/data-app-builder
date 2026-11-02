@@ -35,6 +35,7 @@ import {
   executeLkrExtensionToolRequest,
   extractInteractionActivitySteps,
   extractLkrExtensionToolRequests,
+  extractNativeContentFromInteraction,
   extractThoughtText,
   generateConversationLabel,
   generateDynamicStarterPrompts,
@@ -43,6 +44,8 @@ import {
   getSharedEnvExploreSchemas,
   isEnvironmentNotFoundError,
   isTextAttachmentFile,
+  KDA_SKILL_MD,
+  KDA_TOOLKIT_PY,
   LKR_DEV_CLI_SPEC,
   LKR_DEV_CLI_VERSION,
   listAvailableAntigravityModels,
@@ -122,9 +125,11 @@ import {
   getUseCaseLabel,
   hydrateConversationContentItems,
   hydrateMentionedContext,
+  isConversationalNoOpPrompt,
   listUserArtifacts,
   loadUserConversations,
   loadUserEnvironmentId,
+  matchExplicitUseCaseRule,
   normalizeQueryFiltersToFixedDates,
   normalizeStudioContentItem,
   normalizeStudioThemeMode,
@@ -4546,5 +4551,205 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
     expect(freshRes.session.lastInteractionId).toBeUndefined()
     expect(prewarmBodies).toHaveLength(1)
     expect(prewarmBodies[0].environment).toMatchObject({ type: 'remote' })
+  })
+
+  test('34. Issue #109: seeds skills/key-driver-analysis, expands investigate/find-out and tile/no-op routing, prevents false-positive Native dashboard #5 extraction, and preserves requires_action steps in activitySteps', async () => {
+    // 1. Verify KDA_SKILL_MD + KDA_TOOLKIT_PY seeding and AGENTS.md / AGENTS_MD references
+    const repoRoot = path.resolve(__dirname, '../..')
+    const diskSkillMd = readFileSync(
+      path.join(repoRoot, 'skills/key-driver-analysis/SKILL.md'),
+      'utf8'
+    )
+    const diskToolkitPy = readFileSync(
+      path.join(repoRoot, 'skills/key-driver-analysis/scripts/kda_toolkit.py'),
+      'utf8'
+    )
+    const rootAgentsMd = readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8')
+    expect(KDA_SKILL_MD).toBe(diskSkillMd)
+    expect(KDA_TOOLKIT_PY).toBe(diskToolkitPy)
+    expect(rootAgentsMd).toContain('skills/key-driver-analysis/SKILL.md')
+    expect(rootAgentsMd).toContain('skills/key-driver-analysis/scripts/kda_toolkit.py')
+    expect(AGENTS_MD).toContain('skills/key-driver-analysis/SKILL.md')
+    expect(AGENTS_MD).toContain('skills/key-driver-analysis/scripts/kda_toolkit.py')
+    expect(DATA_INVESTIGATOR_GUIDE_MD).toContain('/workspace/skills/key-driver-analysis/SKILL.md')
+    expect(DATA_INVESTIGATOR_GUIDE_MD).toContain('/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py')
+
+    const sources = buildWorkspaceSources({ schemaMarkdown: '# Schema' })
+    expect(sources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          target: '/workspace/skills/key-driver-analysis/SKILL.md',
+          content: KDA_SKILL_MD,
+        }),
+        expect.objectContaining({
+          target: '/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py',
+          content: KDA_TOOLKIT_PY,
+        }),
+      ])
+    )
+
+    // 2. Verify "investigate" / "find out" routing to 'data-investigator', personal space / folder / SDK queries to 'tile', and conversational no-ops
+    expect(matchExplicitUseCaseRule('Investigate our Q3 sales on the Business Pulse dashboard')).toBe(
+      'data-investigator'
+    )
+    expect(
+      extractResolvedUseCase('', 'Find out why gross margin dropped in the order_items explore')
+    ).toBe('data-investigator')
+    expect(
+      matchExplicitUseCaseRule('Can you figure out what drove the spike in returns on look 247?')
+    ).toBe('data-investigator')
+    expect(
+      matchExplicitUseCaseRule('Dig into what caused customer churn to increase last month')
+    ).toBe('data-investigator')
+
+    expect(matchExplicitUseCaseRule('tell me what my personal space is')).toBe('tile')
+    expect(
+      extractResolvedUseCase('', 'tell me what my personal space is')
+    ).toBe('tile')
+    expect(
+      matchExplicitUseCaseRule("can you find me all personal spaces that don't have dashboards")
+    ).toBe('tile')
+    expect(
+      extractResolvedUseCase('', "can you find me all personal spaces that don't have dashboards")
+    ).toBe('tile')
+
+    expect(isConversationalNoOpPrompt('hello')).toBe(true)
+    expect(isConversationalNoOpPrompt('what can you do?')).toBe(true)
+    expect(matchExplicitUseCaseRule('hello')).toBeNull()
+    expect(matchExplicitUseCaseRule('what can you do?')).toBeNull()
+
+    // 3. Verify extractNativeContentFromInteraction ignores generic Looker folder/user dicts with "id": "5" while extracting valid NATIVE_CONTENT_BUNDLE payloads
+    expect(
+      extractNativeContentFromInteraction({
+        id: 'int_folder_5',
+        status: 'completed',
+        steps: [
+          {
+            type: 'function_result',
+            name: 'run_looker_codemode',
+            call_id: 'call_folder_5',
+            result: JSON.stringify({
+              id: '5',
+              name: 'My folder',
+              is_personal: true,
+            }),
+          },
+        ],
+      })
+    ).toBeNull()
+
+    expect(
+      extractNativeContentFromInteraction({
+        id: 'int_valid_bundle',
+        status: 'completed',
+        steps: [
+          {
+            type: 'function_result',
+            name: 'run_looker_codemode',
+            call_id: 'call_valid_bundle',
+            result: JSON.stringify({
+              NATIVE_CONTENT_BUNDLE: {
+                id: '101',
+                content_type: 'dashboard',
+                title: 'Executive KPI Dashboard',
+                folder_id: '5',
+              },
+            }),
+          },
+        ],
+      })
+    ).toMatchObject({
+      id: '101',
+      contentType: 'dashboard',
+      title: 'Executive KPI Dashboard',
+      folderId: '5',
+      embed_path: '/embed/dashboards/101',
+    })
+
+    // 4. Verify runAntigravityTurn preserves run_looker_codemode steps in activitySteps across requires_action continuations
+    let postCallCount = 0
+    const mockExtRequiresAction = {
+      serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+        const method = init?.method || 'GET'
+        if (method === 'POST') {
+          postCallCount += 1
+          if (postCallCount === 1) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_109_step1',
+                environment_id: 'env_109',
+                status: 'requires_action',
+                steps: [
+                  {
+                    id: 'call_cm_109',
+                    type: 'function_call',
+                    name: 'run_looker_codemode',
+                    arguments: JSON.stringify({
+                      code: 'return {"id": "5", "name": "My folder", "is_personal": True}',
+                      thought: 'Inspecting personal folder via Looker SDK',
+                    }),
+                  },
+                ],
+              }),
+            }
+          }
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_109_step2',
+              environment_id: 'env_109',
+              status: 'completed',
+              steps: [
+                {
+                  id: 'thought_109_2',
+                  type: 'thought',
+                  thought: 'Summarizing personal folder details',
+                },
+              ],
+              output_text:
+                '<USE_CASE>tile</USE_CASE>\nYour personal space is folder #5 ("My folder").',
+            }),
+          }
+        }
+        return { ok: true, status: 200, body: '{}' }
+      },
+    }
+
+    const turnResult = await runAntigravityTurn({
+      sdk: asSdk({ ok: async <T>(p: T) => p }),
+      extensionSDK: mockExtRequiresAction,
+      userId: '1',
+      auth: { mode: 'apikey', apiKey: 'key-109' },
+      session: {},
+      useCase: 'auto',
+      selectedExplores: [],
+      schemaMarkdown: '# Schema',
+      userPrompt: 'tell me what my personal space is',
+      pollScheduleMs: [5],
+      onStatus: () => {},
+    })
+
+    expect(turnResult.resolvedUseCase).toBe('tile')
+    expect(turnResult.nativeBundle).toBeNull()
+    expect(turnResult.bundle).toBeNull()
+    expect(turnResult.activitySteps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'call_cm_109',
+          kind: 'codemode',
+          title: 'Inspecting personal folder via Looker SDK',
+          status: 'done',
+        }),
+        expect.objectContaining({
+          id: 'thought_109_2',
+          kind: 'thought',
+          title: 'Summarizing personal folder details',
+          status: 'done',
+        }),
+      ])
+    )
   })
 })
