@@ -433,9 +433,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   }, [])
 
   const selectedFolderNode = folderTreeNodes[selectedFolderId]
-  const selectedFolderLabel = selectedFolderNode
-    ? `${selectedFolderNode.name} (#${selectedFolderNode.id})`
-    : `Folder #${selectedFolderId}`
+  const selectedFolderLabel = selectedFolderNode ? selectedFolderNode.name : 'My folder'
 
   const selectedFolderPath = useMemo(() => {
     const parts: string[] = []
@@ -443,17 +441,18 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     const visited = new Set<string>()
     while (cur && !visited.has(cur.id)) {
       visited.add(cur.id)
-      parts.unshift(`${cur.name} (#${cur.id})`)
+      parts.unshift(cur.name)
+      if (rootFolderIds.includes(cur.id)) break
       cur = cur.parent_id ? folderTreeNodes[cur.parent_id] : undefined
     }
     return parts.length > 0 ? parts.join(' / ') : selectedFolderLabel
-  }, [folderTreeNodes, selectedFolderId, selectedFolderLabel])
+  }, [folderTreeNodes, rootFolderIds, selectedFolderId, selectedFolderLabel])
 
   const quickFilteredFolders = useMemo(() => {
     const q = folderQuickSearch.trim().toLowerCase()
     if (!q) return null
     return Object.values(folderTreeNodes).filter((node) =>
-      `${node.name} #${node.id} ${node.id}`.toLowerCase().includes(q)
+      `${node.name} ${node.id}`.toLowerCase().includes(q)
     )
   }, [folderTreeNodes, folderQuickSearch])
 
@@ -494,7 +493,9 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     nextVisited.add(folderId)
     const isExpanded = expandedFolderIds.includes(node.id)
     const isLoading = loadingFolderIds.includes(node.id)
-    const childIds = folderChildrenById[node.id] || []
+    const childIds = (folderChildrenById[node.id] || []).filter(
+      (cid) => !rootFolderIds.includes(cid)
+    )
     const canExpand = node.has_children !== false || childIds.length > 0
     const isSelected = String(selectedFolderId) === String(node.id)
 
@@ -523,11 +524,10 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
             data-testid={`folder-select-${node.id}`}
             className="dab-folder-select-btn"
             onClick={() => handleSelectFolderNode(node.id)}
-            title={`${node.name} (#${node.id})`}
+            title={node.name}
           >
             <span className="dab-folder-node-icon">{node.is_personal ? '👤' : '📁'}</span>
             <span className="dab-folder-node-name">{node.name}</span>
-            <span className="dab-folder-node-id">#{node.id}</span>
           </button>
         </div>
         {isExpanded && childIds.length > 0 && (
@@ -878,12 +878,12 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                                 data-testid={`folder-select-${node.id}`}
                                 className="dab-folder-select-btn"
                                 onClick={() => handleSelectFolderNode(node.id)}
+                                title={node.name}
                               >
                                 <span className="dab-folder-node-icon">
                                   {node.is_personal ? '👤' : '📁'}
                                 </span>
                                 <span className="dab-folder-node-name">{node.name}</span>
-                                <span className="dab-folder-node-id">#{node.id}</span>
                               </button>
                             </div>
                           )
@@ -895,7 +895,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                   </div>
                   <div className="dab-folder-popover-footer">
                     <span className="dab-muted" style={{ fontSize: 11 }}>
-                      Target: <strong>#{selectedFolderId}</strong>
+                      Target: <strong>{selectedFolderLabel}</strong>
                     </span>
                     <button
                       type="button"
@@ -1016,11 +1016,13 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                           onClick={() => handleSelectFolderNode(item.id, true)}
                         >
                           <span style={{ fontWeight: 600 }}>
-                            {item.is_personal ? '👤' : '📁'} {item.name} (#{item.id})
+                            {item.is_personal ? '👤' : '📁'} {item.name}
                           </span>
                           <span className="dab-muted" style={{ fontSize: 11 }}>
-                            {item.parent_id ? `parent: #${item.parent_id}` : 'root'} ·{' '}
-                            {item.is_personal ? 'Personal' : 'Shared'}
+                            {item.parent_id
+                              ? folderTreeNodes[item.parent_id]?.name || 'Subfolder'
+                              : 'Root'}{' '}
+                            · {item.is_personal ? 'Personal' : 'Shared'}
                           </span>
                         </button>
                       )

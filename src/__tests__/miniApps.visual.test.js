@@ -3470,6 +3470,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
 
         const hasHydratedParent501 = Boolean(document.querySelector('[data-testid="folder-select-501"]'));
         const hasHydratedLeaf502 = Boolean(document.querySelector('[data-testid="folder-select-502"]'));
+        const personalNodeCount = document.querySelectorAll('[data-testid="folder-select-5"]').length;
+        const treeText = document.querySelector('[data-testid="folder-tree-popover"]')?.textContent || '';
+        const hasNoHashIdsInTree = !treeText.includes('#5') && !treeText.includes('#1') && !treeText.includes('#502');
 
         const advBtn2 = document.querySelector('[data-testid="folder-advanced-search-btn"]');
         if (advBtn2) advBtn2.click();
@@ -3487,7 +3490,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           hasSearchResult502,
           selectedTriggerText,
           hasHydratedParent501,
-          hasHydratedLeaf502
+          hasHydratedLeaf502,
+          personalNodeCount,
+          hasNoHashIdsInTree
         };
       })()`,
       awaitPromise: true,
@@ -3504,9 +3509,11 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       hasPersonalChild: true,
       quickSearchMatchesExperiments: true,
       hasSearchResult502: true,
-      selectedTriggerText: '📁 subfolder test (#502)▾',
+      selectedTriggerText: '📁 subfolder test▾',
       hasHydratedParent501: true,
-      hasHydratedLeaf502: true
+      hasHydratedLeaf502: true,
+      personalNodeCount: 1,
+      hasNoHashIdsInTree: true
     })
 
     const clipRes = await chrome.send('Runtime.evaluate', {
