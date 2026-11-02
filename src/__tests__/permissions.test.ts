@@ -2469,24 +2469,8 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
   })
 
   test('24. renders contextual use-case Markdown guides with embedded non-actionable React UI preview components (Issue #64 & Issue #85)', () => {
-    expect(USE_CASE_GUIDE_ORDER.map((u) => u.useCase)).toEqual([
-      'auto',
-      'lookml',
-      'dashboard',
-      'conversational-analytics',
-      'app',
-      'health-check',
-      'tile',
-    ])
-    expect(USE_CASE_GUIDE_ORDER.map((u) => u.tabLabel)).toEqual([
-      'Auto',
-      'Agentic LookML',
-      'Content Studio',
-      'Conversational Analytics',
-      'Data App',
-      'Health Check',
-      'Script',
-    ])
+    expect(USE_CASE_GUIDE_ORDER.map((u) => u.useCase)).toEqual(['auto', 'lookml', 'dashboard', 'conversational-analytics', 'app', 'health-check', 'tile'])
+    expect(USE_CASE_GUIDE_ORDER.map((u) => u.tabLabel)).toEqual(['Auto', 'Agentic LookML', 'Content Studio', 'Conversational Analytics', 'Data App', 'Health Check', 'Script'])
 
     const expectedComponents = [
       'PublishDashboardButton',
@@ -2518,14 +2502,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(allGuideMarkdown).not.toContain('[CA_AGENT_SELECTION_REQUEST]')
     expect(allGuideMarkdown).not.toContain('obj_script_')
     expect(allGuideMarkdown).not.toContain('My Creations')
-    for (const label of [
-      'Agentic LookML',
-      'Content Studio',
-      'Conversational Analytics',
-      'Data App',
-      'Health Check',
-      'Python Tile',
-    ]) {
+    for (const label of ['Agentic LookML', 'Content Studio', 'Conversational Analytics', 'Data App', 'Health Check', 'Python Tile']) {
       expect(USE_CASE_GUIDES.auto.markdown).toContain(label)
     }
 
