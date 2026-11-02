@@ -39,6 +39,7 @@ import {
   getInitialStoredOAuthToken,
   getSharedEnvExploreSchemas,
   isEnvironmentNotFoundError,
+  isTextAttachmentFile,
   LKR_DEV_CLI_SPEC,
   LKR_DEV_CLI_VERSION,
   listAvailableAntigravityModels,
@@ -59,6 +60,7 @@ import {
   STARTER_PROMPTS_REQUEST_TAG,
   stripStarterPromptEmojis,
   STUDIO_OAUTH_STORAGE_KEY,
+  StudioAttachedFile,
 } from '../antigravity'
 import {
   StudioBadge,
@@ -103,12 +105,14 @@ import {
   fetchFolderWithAncestors,
   fetchInitialLookerMetadata,
   fetchLookerCaAgentsCatalog,
+  fetchPreloadedContentSummary,
   formatUserConversationsArtifactKey,
   formatUserConversationsKey,
   formatUserEnvArtifactKey,
   getAllowedUseCases,
   getArtifactService,
   getUseCaseLabel,
+  hydrateMentionedContext,
   listUserArtifacts,
   loadUserConversations,
   loadUserEnvironmentId,
@@ -124,11 +128,13 @@ import {
   saveUserArtifact,
   saveUserConversation,
   saveUserEnvironmentId,
+  searchGlobalContentV2,
   searchLookerFolders,
   selectCaAgentViaIsolatedSubagent,
   STUDIO_MODES,
   STUDIO_THEME_STORAGE_KEY,
   STUDIO_USE_CASE_OPTIONS,
+  SWR_DEDUPED_METHODS,
   UserArtifactIndexItem,
 } from '../lookerApi'
 
@@ -3575,5 +3581,248 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       onSelect: () => {},
     }) as Elem
     expect(loadedTree.props['data-testid']).toBe('studio-starter-prompts')
+  })
+
+  test('Issue #92: preloads content_summary, searches global_search_v2, hydrates @dashboard/@look/@conversation/@explore context, and seeds /workspace/uploads', async () => {
+    clearLookerMetadataCache()
+    expect(SWR_DEDUPED_METHODS).toContain('content_summary')
+    expect(isTextAttachmentFile('sales.csv', 'text/csv')).toBe(true)
+    expect(isTextAttachmentFile('orders.refinement.lkml', 'application/octet-stream')).toBe(true)
+    expect(isTextAttachmentFile('screenshot.png', 'image/png')).toBe(false)
+    expect(isTextAttachmentFile('report.pdf', 'application/pdf')).toBe(false)
+
+    const rawCalls: Array<{ method: string; path: string; queryParams?: Record<string, unknown> }> = []
+    const mockSdk = asSdk({
+      ok: async <T>(p: Promise<T> | T) => p,
+      content_summary: async () => [
+        {
+          id: 'cs_901',
+          content_type: 'dashboard',
+          content_id: '901',
+          title: 'Business Pulse',
+          description: 'Executive KPIs & brand breakdown',
+        },
+        {
+          id: 'cs_301',
+          content_type: 'look',
+          content_id: '301',
+          title: 'Monthly Gross Margin Look',
+          description: 'Margin trend by month',
+        },
+      ],
+      dashboard: async (idOrParams: unknown) => {
+        const id =
+          typeof idOrParams === 'object' && idOrParams !== null && 'dashboard_id' in idOrParams
+            ? String((idOrParams as { dashboard_id: unknown }).dashboard_id)
+            : String(idOrParams || '')
+        return {
+          id,
+          title: 'Business Pulse',
+          description: 'Executive KPIs & brand breakdown',
+          folder_id: '5',
+          dashboard_filters: [{ name: 'Date', field: 'order_items.created_date' }],
+          dashboard_layouts: [{ id: '10', type: 'newspaper', active: true }],
+          dashboard_elements: [
+            {
+              id: '501',
+              title: 'Revenue by Brand',
+              type: 'vis',
+              query: {
+                model: 'thelook',
+                view: 'order_items',
+                fields: ['products.brand', 'order_items.total_sale_price'],
+                sorts: ['order_items.total_sale_price desc'],
+                limit: '15',
+              },
+            },
+            {
+              id: '502',
+              title: 'Store Basket Count',
+              type: 'vis',
+              result_maker: {
+                query: {
+                  model: 'retail_ops',
+                  view: 'store_transactions',
+                  fields: ['store_transactions.store_region', 'store_transactions.basket_count'],
+                  limit: '10',
+                },
+              },
+            },
+          ],
+        }
+      },
+      look: async (idOrParams: unknown) => {
+        const id =
+          typeof idOrParams === 'object' && idOrParams !== null && 'look_id' in idOrParams
+            ? String((idOrParams as { look_id: unknown }).look_id)
+            : String(idOrParams || '')
+        return {
+          id,
+          title: 'Monthly Gross Margin Look',
+          folder_id: '5',
+          query: {
+            model: 'thelook',
+            view: 'inventory_items',
+            fields: ['inventory_items.cost'],
+            limit: '20',
+          },
+        }
+      },
+      authSession: {
+        transport: {
+          rawRequest: async (
+            method: string,
+            reqPath: string,
+            queryParams?: Record<string, unknown>
+          ) => {
+            rawCalls.push({ method, path: reqPath, queryParams })
+            if (reqPath.includes('global_search_v2')) {
+              return {
+                ok: true,
+                statusCode: 200,
+                body: JSON.stringify({
+                  sections: [
+                    {
+                      name: 'Dashboards',
+                      items: [
+                        {
+                          content_type: 'dashboard',
+                          content_id: '901',
+                          title: 'Business Pulse',
+                        },
+                      ],
+                    },
+                  ],
+                }),
+              }
+            }
+            return { ok: true, statusCode: 200, body: '[]' }
+          },
+        },
+      },
+    })
+
+    const preloaded = await fetchPreloadedContentSummary(mockSdk)
+    expect(preloaded).toEqual([
+      expect.objectContaining({ type: 'dashboard', id: '901', title: 'Business Pulse' }),
+      expect.objectContaining({ type: 'look', id: '301', title: 'Monthly Gross Margin Look' }),
+    ])
+
+    const searchDashboards = await searchGlobalContentV2(mockSdk, {
+      term: 'Business Pulse',
+      category: 'dashboard',
+      limit: 15,
+    })
+    expect(searchDashboards).toEqual([
+      expect.objectContaining({ type: 'dashboard', id: '901', title: 'Business Pulse' }),
+    ])
+    expect(rawCalls.some((c) => c.path === '/api/4.0/global_search_v2')).toBe(true)
+
+    const hydrated = await hydrateMentionedContext({
+      sdk: mockSdk,
+      mentions: [
+        { type: 'dashboard', id: '901', title: 'Business Pulse' },
+        { type: 'look', id: '301', title: 'Monthly Gross Margin Look' },
+        { type: 'explore', id: 'thelook::users', title: 'Users', model: 'thelook', explore: 'users' },
+        { type: 'conversation', id: 'conv_prev_1', title: 'Prior Revenue Thread' },
+      ],
+      conversations: [
+        {
+          id: 'conv_prev_1',
+          type: 'app',
+          label: 'Prior Revenue Thread',
+          updatedAt: '2026-11-02T00:00:00Z',
+          explores: ['thelook::events'],
+          messages: [{ role: 'user', text: 'Analyze event funnel conversion.' }],
+        },
+      ],
+      selectedExplores: [],
+    })
+
+    expect(hydrated.explores).toEqual([
+      'thelook::order_items',
+      'retail_ops::store_transactions',
+      'thelook::inventory_items',
+      'thelook::users',
+      'thelook::events',
+    ])
+    expect(hydrated.extraSources.map((s) => s.target)).toEqual([
+      '/workspace/context/dashboard_901.json',
+      '/workspace/context/look_301.json',
+      '/workspace/context/conversation_conv_prev_1.md',
+    ])
+    expect(hydrated.promptSummary).toContain('@dashboard:Business Pulse')
+    expect(hydrated.promptSummary).toContain('/workspace/context/dashboard_901.json')
+    expect(hydrated.promptSummary).toContain('@look:Monthly Gross Margin Look')
+    expect(hydrated.promptSummary).toContain('@conversation:Prior Revenue Thread')
+
+    // Verify StudioAttachedFile uploads (text/CSV + PDF + image) in runAntigravityTurn
+    const turnBodies: MockInteractionPostBody[] = []
+    const mockExt = {
+      serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+        const body = init?.body ? (JSON.parse(init.body) as MockInteractionPostBody) : undefined
+        if (body) turnBodies.push(body)
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            id: 'int_92_uploads',
+            environment_id: 'env_92',
+            status: 'completed',
+            output_text: '<USE_CASE>app</USE_CASE>Built Data App from Business Pulse & CSV.',
+          }),
+        }
+      },
+    }
+    const attachments: StudioAttachedFile[] = [
+      {
+        id: 'att_csv',
+        name: 'targets.csv',
+        mimeType: 'text/csv',
+        size: 32,
+        data: 'cmVnaW9uLHRhcmdldApXZXN0LDEwMAo=',
+        dataUrl: 'data:text/csv;base64,cmVnaW9uLHRhcmdldApXZXN0LDEwMAo=',
+        textContent: 'region,target\nWest,100\n',
+      },
+      {
+        id: 'att_pdf',
+        name: 'brief.pdf',
+        mimeType: 'application/pdf',
+        size: 128,
+        data: 'JVBERi0xLjQK',
+        dataUrl: 'data:application/pdf;base64,JVBERi0xLjQK',
+      },
+    ]
+    await runAntigravityTurn({
+      sdk: mockSdk,
+      extensionSDK: mockExt,
+      auth: { mode: 'apikey', apiKey: 'key-92' },
+      session: {},
+      selectedExplores: hydrated.explores,
+      schemaMarkdown: '# Schema',
+      userPrompt: `Turn @dashboard:Business Pulse into a Data App\n\n${hydrated.promptSummary}`,
+      images: attachments,
+      extraSources: hydrated.extraSources,
+      pollScheduleMs: [0],
+      onStatus: () => {},
+    })
+
+    expect(turnBodies).toHaveLength(1)
+    const envObj = turnBodies[0].environment as {
+      sources?: Array<{ target: string; content: string }>
+    }
+    const targets = (envObj.sources || []).map((s) => s.target)
+    expect(targets).toContain('/workspace/context/dashboard_901.json')
+    expect(targets).toContain('/workspace/uploads/targets.csv')
+    expect(targets).toContain('/workspace/uploads/brief.pdf')
+    const csvSource = (envObj.sources || []).find((s) => s.target === '/workspace/uploads/targets.csv')
+    expect(csvSource?.content).toBe('region,target\nWest,100\n')
+    const inputItems = turnBodies[0].input || []
+    expect(inputItems[0]?.text).toContain('/workspace/uploads/targets.csv')
+    expect(inputItems).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'document', mime_type: 'application/pdf', data: 'JVBERi0xLjQK' }),
+      ])
+    )
   })
 })

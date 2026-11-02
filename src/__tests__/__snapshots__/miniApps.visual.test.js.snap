@@ -147,7 +147,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders explore_dropdown_scrolled (10. Explore Combobox Dropdown — Scrolled State (Retail Ops & System Activity)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
-  "dropdownScrollTop": 127,
+  "dropdownScrollTop": 140,
   "modeTabs": [],
   "scenario": "explore_dropdown_scrolled",
   "verifiedVisibleText": [

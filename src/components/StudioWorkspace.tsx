@@ -10,19 +10,30 @@ import {
 import {
   Archive,
   ArchiveRestore,
+  AtSign,
   BookOpen,
   Brain,
+  Check,
   Code2,
+  Database,
+  Eye,
   FileText,
+  LayoutDashboard,
+  Loader2,
   Lock,
+  MessageSquare,
+  Paperclip,
+  Plus,
   Terminal,
   Trash2,
   Wrench,
+  X,
 } from 'lucide-react'
 
 import {
   AntigravityActivityStep,
   buildDynamicStarterPrompts,
+  handleFileInputSelection,
   handleImageClipboardPaste,
   StarterPromptItem,
   stripStarterPromptEmojis,
@@ -31,8 +42,11 @@ import {
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import {
   ConversationRecord,
+  formatExploreId,
   ResolvedStudioUseCase,
   resolveConversationRelatedContent,
+  StudioContextCategory,
+  StudioContextMention,
 } from '../lookerApi'
 import { LOOKML_TURN_SKILLS, LookmlPreviewPane } from '../lookmlTool'
 import { StudioController } from '../useStudioController'
@@ -1074,8 +1088,27 @@ export const StarterPromptButtons: React.FC<{
   )
 }
 
+const AT_MENTION_DETECT_RE = /(?:^|\s)@(?:(explore|dashboard|look|conversation):([^\n@]*)|([^\s@]*))$/i
+
+function renderMentionCategoryIcon(type: StudioContextCategory) {
+  if (type === 'explore') return <Database size={13} strokeWidth={1.75} aria-hidden="true" />
+  if (type === 'dashboard') return <LayoutDashboard size={13} strokeWidth={1.75} aria-hidden="true" />
+  if (type === 'look') return <Eye size={13} strokeWidth={1.75} aria-hidden="true" />
+  return <MessageSquare size={13} strokeWidth={1.75} aria-hidden="true" />
+}
+
 export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
+    core40SDK,
+    models,
+    selectedExplores,
+    setSelectedExplores,
+    preloadedContent,
+    mentionedItems,
+    setMentionedItems,
+    searchGlobalContentV2,
+    allConversations,
+    conversations,
     activeMode,
     builderMode,
     isLookmlMode,
@@ -1108,6 +1141,358 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     infoModalUseCase,
     setInfoModalUseCase,
   } = ctl
+
+  const mockExt =
+    typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const addMenuWrapRef = useRef<HTMLDivElement | null>(null)
+  const mentionMenuRef = useRef<HTMLDivElement | null>(null)
+
+  const [addContextOpen, setAddContextOpen] = useState(false)
+  const [cursorPos, setCursorPos] = useState<number>(() => prompt.length)
+  const [forceMentionCategory, setForceMentionCategory] = useState<StudioContextCategory | 'all' | null>(
+    () => (mockExt?.initialComboOpen ? 'explore' : null)
+  )
+  const [activeMentionIndex, setActiveMentionIndex] = useState(0)
+  const [remoteSearchResults, setRemoteSearchResults] = useState<StudioContextMention[]>([])
+  const [mentionLoading, setMentionLoading] = useState(false)
+
+  useEffect(() => {
+    setCursorPos((prev) => Math.min(prev, prompt.length))
+  }, [prompt.length])
+
+  const detectedMention = useMemo(() => {
+    const uptoCursor = prompt.slice(0, cursorPos || prompt.length)
+    const m = uptoCursor.match(AT_MENTION_DETECT_RE)
+    if (m) {
+      const category = (m[1]?.toLowerCase() as StudioContextCategory | undefined) || 'all'
+      const query = (m[1] ? m[2] || '' : m[3] || '').trim()
+      const atIdx = uptoCursor.lastIndexOf('@')
+      return {
+        open: true,
+        category,
+        query,
+        tokenStart: atIdx >= 0 ? atIdx : uptoCursor.length,
+        tokenEnd: uptoCursor.length,
+      }
+    }
+    if (forceMentionCategory !== null) {
+      return {
+        open: true,
+        category: forceMentionCategory,
+        query: '',
+        tokenStart: prompt.length,
+        tokenEnd: prompt.length,
+      }
+    }
+    return {
+      open: false,
+      category: 'all' as const,
+      query: '',
+      tokenStart: prompt.length,
+      tokenEnd: prompt.length,
+    }
+  }, [prompt, cursorPos, forceMentionCategory])
+
+  useEffect(() => {
+    if (
+      detectedMention.open &&
+      mentionMenuRef.current &&
+      typeof mockExt?.initialExploreScrollTop === 'number'
+    ) {
+      mentionMenuRef.current.scrollTop = mockExt.initialExploreScrollTop
+    }
+  }, [detectedMention.open, models.length, mockExt?.initialExploreScrollTop])
+
+  useEffect(() => {
+    const onDocMouseDown = (e: MouseEvent) => {
+      if (addMenuWrapRef.current && !addMenuWrapRef.current.contains(e.target as Node)) {
+        setAddContextOpen(false)
+      }
+      if (
+        mentionMenuRef.current &&
+        !mentionMenuRef.current.contains(e.target as Node) &&
+        textareaRef.current &&
+        !textareaRef.current.contains(e.target as Node)
+      ) {
+        setForceMentionCategory(null)
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [])
+
+  useEffect(() => {
+    if (!detectedMention.open || !detectedMention.query) {
+      setMentionLoading(false)
+      setRemoteSearchResults([])
+      return
+    }
+    let cancelled = false
+    setMentionLoading(true)
+    const timer = setTimeout(() => {
+      searchGlobalContentV2(core40SDK, {
+        term: detectedMention.query,
+        category: detectedMention.category,
+        limit: 15,
+      })
+        .then((items) => {
+          if (!cancelled) setRemoteSearchResults(items)
+        })
+        .catch(() => {
+          if (!cancelled) setRemoteSearchResults([])
+        })
+        .finally(() => {
+          if (!cancelled) setMentionLoading(false)
+        })
+    }, 250)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [core40SDK, detectedMention.open, detectedMention.query, detectedMention.category, searchGlobalContentV2])
+
+  const groupedExplores = useMemo(() => {
+    const tokens = detectedMention.query
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean)
+    return models
+      .reduce(
+        (
+          acc: Array<{
+            label: string
+            modelName: string
+            options: Array<{ label: string; value: string; mention: StudioContextMention }>
+          }>,
+          model
+        ) => {
+          if (model?.explores?.length) {
+            const matchingExplores = model.explores.filter((explore) => {
+              if (explore.hidden) return false
+              if (tokens.length === 0) return true
+              const expId = formatExploreId(model.name, String(explore.name))
+              const haystack = `${model.label} ${model.name} ${explore.label || ''} ${explore.name} ${expId}`.toLowerCase()
+              return tokens.every((tk) => haystack.includes(tk))
+            })
+            if (matchingExplores.length > 0) {
+              acc.push({
+                label: model.label || model.name,
+                modelName: model.name,
+                options: matchingExplores
+                  .map((explore) => {
+                    const value = formatExploreId(model.name, String(explore.name))
+                    const label = String(explore.label || explore.name)
+                    return {
+                      label,
+                      value,
+                      mention: {
+                        type: 'explore' as const,
+                        id: value,
+                        title: label,
+                        subtitle: String(model.label || model.name),
+                        model: model.name,
+                        explore: String(explore.name),
+                        description: explore.description ? String(explore.description) : undefined,
+                      },
+                    }
+                  })
+                  .sort((a, b) => a.label.localeCompare(b.label)),
+              })
+            }
+          }
+          return acc
+        },
+        []
+      )
+      .sort((a, b) => a.label.localeCompare(b.label))
+  }, [models, detectedMention.query])
+
+  const exploreLookup = useMemo(() => {
+    const map: Record<string, { id: string; label: string; modelLabel: string; model: string; explore: string }> = {}
+    for (const model of models) {
+      for (const explore of model.explores || []) {
+        if (explore.hidden) continue
+        const id = formatExploreId(model.name, String(explore.name))
+        map[id] = {
+          id,
+          label: String(explore.label || explore.name),
+          modelLabel: String(model.label || model.name),
+          model: model.name,
+          explore: String(explore.name),
+        }
+      }
+    }
+    return map
+  }, [models])
+
+  const mentionOptions = useMemo(() => {
+    const tokens = detectedMention.query
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean)
+    const matchTokens = (text: string) =>
+      tokens.length === 0 || tokens.every((tk) => text.toLowerCase().includes(tk))
+
+    const cat = detectedMention.category
+    const seen = new Set<string>()
+    const out: StudioContextMention[] = []
+    const pushItem = (item: StudioContextMention) => {
+      const key = `${item.type}:${item.id}`
+      if (seen.has(key)) return
+      seen.add(key)
+      out.push(item)
+    }
+
+    if (cat === 'all' || cat === 'explore') {
+      for (const group of groupedExplores) {
+        for (const opt of group.options) {
+          pushItem(opt.mention)
+        }
+      }
+      for (const r of remoteSearchResults) {
+        if (r.type === 'explore') pushItem(r)
+      }
+    }
+
+    if (cat === 'all' || cat === 'dashboard') {
+      for (const item of preloadedContent) {
+        if (
+          item.type === 'dashboard' &&
+          matchTokens(`${item.title} ${item.id} ${item.description || ''}`)
+        ) {
+          pushItem(item)
+        }
+      }
+      for (const r of remoteSearchResults) {
+        if (r.type === 'dashboard') pushItem(r)
+      }
+    }
+
+    if (cat === 'all' || cat === 'look') {
+      for (const item of preloadedContent) {
+        if (
+          item.type === 'look' &&
+          matchTokens(`${item.title} ${item.id} ${item.description || ''}`)
+        ) {
+          pushItem(item)
+        }
+      }
+      for (const r of remoteSearchResults) {
+        if (r.type === 'look') pushItem(r)
+      }
+    }
+
+    if (cat === 'all' || cat === 'conversation') {
+      const convList = allConversations || conversations || []
+      for (const c of convList) {
+        const label = c.label || c.id
+        if (matchTokens(`${label} ${c.id} ${c.type || ''}`)) {
+          pushItem({
+            type: 'conversation',
+            id: c.id,
+            title: label,
+            subtitle: c.use_case || c.type || 'conversation',
+          })
+        }
+      }
+      for (const r of remoteSearchResults) {
+        if (r.type === 'conversation') pushItem(r)
+      }
+    }
+
+    return out
+  }, [
+    detectedMention.category,
+    detectedMention.query,
+    groupedExplores,
+    preloadedContent,
+    remoteSearchResults,
+    allConversations,
+    conversations,
+  ])
+
+  useEffect(() => {
+    setActiveMentionIndex(0)
+  }, [detectedMention.category, detectedMention.query, mentionOptions.length])
+
+  const contextChips = useMemo(() => {
+    const seen = new Set<string>()
+    const chips: StudioContextMention[] = []
+    for (const item of mentionedItems) {
+      const key = `${item.type}:${item.id}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        chips.push(item)
+      }
+    }
+    for (const expId of selectedExplores) {
+      const key = `explore:${expId}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        const info = exploreLookup[expId]
+        chips.push({
+          type: 'explore',
+          id: expId,
+          title: info ? `${info.modelLabel}: ${info.label}` : expId,
+          model: info?.model,
+          explore: info?.explore,
+        })
+      }
+    }
+    return chips
+  }, [mentionedItems, selectedExplores, exploreLookup])
+
+  const handleSelectMentionOption = (item: StudioContextMention) => {
+    setMentionedItems((prev) => {
+      const exists = prev.some((x) => x.type === item.type && x.id === item.id)
+      return exists ? prev : [...prev, item]
+    })
+    if (item.type === 'explore') {
+      setSelectedExplores((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]))
+    }
+    const replacement = `@${item.type}:${item.title} `
+    const prefix = prompt.slice(0, detectedMention.tokenStart)
+    const suffix = prompt.slice(detectedMention.tokenEnd)
+    const needsLeadingSpace = prefix.length > 0 && !/\s$/.test(prefix)
+    const nextPrompt = `${prefix}${needsLeadingSpace ? ' ' : ''}${replacement}${suffix}`
+    setPrompt(nextPrompt)
+    const nextPos = (prefix + (needsLeadingSpace ? ' ' : '') + replacement).length
+    setCursorPos(nextPos)
+    setForceMentionCategory(null)
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus()
+        textareaRef.current.setSelectionRange(nextPos, nextPos)
+      }
+    })
+  }
+
+  const handleRemoveContextChip = (chip: StudioContextMention) => {
+    setMentionedItems((prev) =>
+      prev.filter((x) => !(x.type === chip.type && x.id === chip.id))
+    )
+    if (chip.type === 'explore') {
+      setSelectedExplores((prev) => prev.filter((id) => id !== chip.id))
+    }
+  }
+
+  const handleInsertScopedPrefix = (category: StudioContextCategory) => {
+    setAddContextOpen(false)
+    const token = `@${category}:`
+    const trimmed = prompt.replace(/\s+$/, '')
+    const nextPrompt = trimmed ? `${trimmed} ${token}` : token
+    setPrompt(nextPrompt)
+    setCursorPos(nextPrompt.length)
+    setForceMentionCategory(category)
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus()
+        textareaRef.current.setSelectionRange(nextPrompt.length, nextPrompt.length)
+      }
+    })
+  }
 
   const activeGuideUseCase: StudioUseCase = !isUseCaseLocked
     ? selectedUseCase
@@ -1197,70 +1582,397 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
         </div>
       )}
 
-      {pastedImages.length > 0 && (
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {pastedImages.map((img, i) => (
-            <div key={i} style={{ position: 'relative' }}>
-              <img
-                src={img.dataUrl}
-                alt="Pasted screenshot"
-                style={{ height: 52, borderRadius: 4, border: '1px solid #cbd5e1' }}
-              />
+      {contextChips.length > 0 && (
+        <div
+          className="dab-composer-context-chips"
+          data-testid="composer-context-chips"
+          style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}
+        >
+          {contextChips.map((chip) => (
+            <span
+              key={`${chip.type}:${chip.id}`}
+              className="dab-chip"
+              data-testid={`composer-context-chip-${chip.type}-${chip.id}`}
+              title={`${chip.type}: ${chip.id}`}
+            >
+              {renderMentionCategoryIcon(chip.type)}
+              <span>
+                @{chip.type}:{chip.title}
+              </span>
               <button
                 type="button"
-                onClick={() => setPastedImages((prev) => prev.filter((_, idx) => idx !== i))}
-                style={{
-                  position: 'absolute',
-                  top: -5,
-                  right: -5,
-                  width: 18,
-                  height: 18,
-                  borderRadius: '50%',
-                  border: 'none',
-                  background: '#0f172a',
-                  color: '#fff',
-                  fontSize: 10,
-                  cursor: 'pointer',
-                  lineHeight: '18px',
-                  padding: 0,
-                }}
+                aria-label={`Remove ${chip.title}`}
+                onClick={() => handleRemoveContextChip(chip)}
               >
-                ✕
+                <X size={11} strokeWidth={2} aria-hidden="true" />
               </button>
-            </div>
+            </span>
           ))}
         </div>
       )}
 
-      <textarea
-        rows={3}
-        data-testid="studio-prompt-input"
-        placeholder={
-          isHealthCheckMode
-            ? 'Optional custom focus for 3-Pillar Looker & BigQuery Health Check...'
-            : isCaMode || selectedUseCase === 'conversational-analytics'
-            ? 'Ask a natural-language data question for Looker Conversational Analytics...'
-            : isLookmlMode
-            ? 'Describe LookML changes, SQL query to model, or field descriptions/tests to run in your active dev mode...'
-            : activeMode === 'tile'
-            ? 'Describe the Script to generate or update (or paste a screenshot)...'
-            : builderMode === 'dashboard'
-            ? 'Describe a Looker UDD, Look, Board, or Schedule to create or update...'
-            : 'Ask your Looker Agent what you want to build, analyze, or automate, or pick a starter prompt above...'
-        }
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        onPaste={handlePaste}
-        onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-            e.preventDefault()
-            handleSendPrompt()
+      {pastedImages.length > 0 && (
+        <div
+          className="dab-composer-attached-files"
+          data-testid="composer-attached-files"
+          style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}
+        >
+          {pastedImages.map((img, i) => {
+            const isImage = img.mimeType.startsWith('image/')
+            return (
+              <div
+                key={img.id || i}
+                className="dab-attached-file-pill"
+                style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}
+              >
+                {isImage ? (
+                  <img
+                    src={img.dataUrl}
+                    alt={img.name || 'Attached image'}
+                    style={{ height: 52, borderRadius: 4, border: '1px solid var(--dab-border)' }}
+                  />
+                ) : (
+                  <span className="dab-chip" title={img.name || 'Attached file'}>
+                    <FileText size={13} strokeWidth={1.75} aria-hidden="true" />
+                    <span>{img.name || `Attachment ${i + 1}`}</span>
+                  </span>
+                )}
+                <button
+                  type="button"
+                  aria-label={`Remove ${img.name || 'attachment'}`}
+                  onClick={() => setPastedImages((prev) => prev.filter((_, idx) => idx !== i))}
+                  style={{
+                    position: isImage ? 'absolute' : 'static',
+                    top: -5,
+                    right: -5,
+                    width: 18,
+                    height: 18,
+                    borderRadius: '50%',
+                    border: 'none',
+                    background: '#0f172a',
+                    color: '#fff',
+                    fontSize: 10,
+                    cursor: 'pointer',
+                    lineHeight: '18px',
+                    padding: 0,
+                    marginLeft: isImage ? 0 : 4,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <X size={11} strokeWidth={2} aria-hidden="true" />
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <div className="dab-composer-input-wrap" style={{ position: 'relative' }}>
+        {detectedMention.open && (
+          <div
+            ref={mentionMenuRef}
+            className="dab-at-mention-menu dab-dropdown"
+            data-testid="composer-at-mention-menu"
+            role="listbox"
+            aria-label="Looker context mentions"
+          >
+            <div className="dab-at-mention-header">
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <AtSign size={12} strokeWidth={1.75} aria-hidden="true" />
+                <span>
+                  {detectedMention.category === 'all'
+                    ? 'Mention Looker Context (@explore:, @dashboard:, @look:, @conversation:)'
+                    : `Mention ${detectedMention.category} (@${detectedMention.category}:${detectedMention.query})`}
+                </span>
+              </span>
+              {mentionLoading && (
+                <span
+                  data-testid="composer-mention-loading"
+                  className="dab-at-mention-spinner"
+                  title="Searching Looker via global_search_v2..."
+                >
+                  <Loader2 size={13} strokeWidth={2} className="dab-spin" aria-hidden="true" />
+                </span>
+              )}
+            </div>
+
+            {selectedExplores.length > 0 &&
+              (detectedMention.category === 'all' || detectedMention.category === 'explore') && (
+                <div
+                  className="dab-option"
+                  style={{ color: 'var(--dab-accent)', fontWeight: 600 }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setSelectedExplores([])
+                    setMentionedItems((prev) => prev.filter((x) => x.type !== 'explore'))
+                  }}
+                >
+                  <span>Clear selection (let agent decide)</span>
+                </div>
+              )}
+
+            {detectedMention.category === 'explore' && !remoteSearchResults.length ? (
+              groupedExplores.length === 0 ? (
+                <div className="dab-option dab-muted">No matching explores</div>
+              ) : (
+                groupedExplores.map((group) => (
+                  <div key={group.modelName}>
+                    <div className="dab-group-header">{group.label}</div>
+                    {group.options.map((opt) => {
+                      const isSelected = selectedExplores.includes(opt.value)
+                      const flatIdx = mentionOptions.findIndex(
+                        (m) => m.type === 'explore' && m.id === opt.value
+                      )
+                      const isHighlighted = flatIdx === activeMentionIndex
+                      return (
+                        <div
+                          key={opt.value}
+                          role="option"
+                          aria-selected={isSelected || isHighlighted}
+                          data-testid={`composer-mention-option-explore-${opt.value}`}
+                          className={`dab-option ${
+                            isSelected || isHighlighted ? 'dab-option-selected' : ''
+                          }`}
+                          onMouseEnter={() => {
+                            if (flatIdx >= 0) setActiveMentionIndex(flatIdx)
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleSelectMentionOption(opt.mention)
+                          }}
+                          title={opt.value}
+                        >
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                            <Database size={13} strokeWidth={1.75} aria-hidden="true" />
+                            <span>{opt.label}</span>
+                          </span>
+                          {isSelected && <Check size={13} strokeWidth={2} aria-hidden="true" />}
+                        </div>
+                      )
+                    })}
+                  </div>
+                ))
+              )
+            ) : mentionOptions.length === 0 ? (
+              <div className="dab-option dab-muted">
+                {mentionLoading ? 'Searching Looker...' : 'No matching Looker items'}
+              </div>
+            ) : (
+              mentionOptions.map((item, idx) => {
+                const isSelected =
+                  (item.type === 'explore' && selectedExplores.includes(item.id)) ||
+                  mentionedItems.some((m) => m.type === item.type && m.id === item.id)
+                const isHighlighted = idx === activeMentionIndex
+                return (
+                  <div
+                    key={`${item.type}:${item.id}`}
+                    role="option"
+                    aria-selected={isSelected || isHighlighted}
+                    data-testid={`composer-mention-option-${item.type}-${item.id}`}
+                    className={`dab-option ${
+                      isSelected || isHighlighted ? 'dab-option-selected' : ''
+                    }`}
+                    onMouseEnter={() => setActiveMentionIndex(idx)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleSelectMentionOption(item)
+                    }}
+                    title={`${item.type}: ${item.title} (${item.id})`}
+                  >
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        minWidth: 0,
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {renderMentionCategoryIcon(item.type)}
+                      <span
+                        style={{
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {item.title}
+                      </span>
+                      {item.subtitle && (
+                        <span className="dab-muted" style={{ fontSize: 11 }}>
+                          · {item.subtitle}
+                        </span>
+                      )}
+                    </span>
+                    <span className="dab-muted" style={{ fontSize: 10, textTransform: 'uppercase' }}>
+                      {isSelected ? <Check size={13} strokeWidth={2} aria-hidden="true" /> : item.type}
+                    </span>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        )}
+
+        <textarea
+          ref={textareaRef}
+          rows={3}
+          data-testid="studio-prompt-input"
+          placeholder={
+            isHealthCheckMode
+              ? 'Optional custom focus for 3-Pillar Looker & BigQuery Health Check...'
+              : isCaMode || selectedUseCase === 'conversational-analytics'
+              ? 'Ask a natural-language data question for Looker Conversational Analytics...'
+              : isLookmlMode
+              ? 'Describe LookML changes, SQL query to model, or field descriptions/tests to run in your active dev mode...'
+              : activeMode === 'tile'
+              ? 'Describe the Script to generate or update (or paste a screenshot)...'
+              : builderMode === 'dashboard'
+              ? 'Describe a Looker UDD, Look, Board, or Schedule to create or update (type @ to mention context)...'
+              : 'Ask your Looker Agent what you want to build, analyze, or automate (type @ to mention Explores, Dashboards, Looks, or Conversations)...'
           }
+          value={prompt}
+          onChange={(e) => {
+            setPrompt(e.target.value)
+            setCursorPos(e.target.selectionStart ?? e.target.value.length)
+            if (forceMentionCategory !== null) setForceMentionCategory(null)
+          }}
+          onClick={(e) => {
+            setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? prompt.length)
+          }}
+          onKeyUp={(e) => {
+            setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? prompt.length)
+          }}
+          onPaste={handlePaste}
+          onKeyDown={(e) => {
+            if (detectedMention.open && mentionOptions.length > 0) {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setActiveMentionIndex((i) => (i + 1) % mentionOptions.length)
+                return
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setActiveMentionIndex((i) => (i - 1 + mentionOptions.length) % mentionOptions.length)
+                return
+              }
+              if (e.key === 'Enter' || e.key === 'Tab') {
+                if (!(e.metaKey || e.ctrlKey)) {
+                  e.preventDefault()
+                  const picked = mentionOptions[activeMentionIndex] || mentionOptions[0]
+                  if (picked) handleSelectMentionOption(picked)
+                  return
+                }
+              }
+            }
+            if (e.key === 'Escape' && detectedMention.open) {
+              e.preventDefault()
+              setForceMentionCategory(null)
+              return
+            }
+            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+              e.preventDefault()
+              handleSendPrompt()
+            }
+          }}
+          disabled={!!busyStatus}
+        />
+      </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        data-testid="composer-file-input"
+        accept="image/*,application/pdf,.csv,.tsv,.json,.sql,.lkml,.lookml,.md,.py,.js,.ts,.tsx,.txt"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          handleFileInputSelection(e.target.files, setPastedImages)
+          e.target.value = ''
         }}
-        disabled={!!busyStatus}
       />
 
       <div className="dab-composer-actions">
+        <div className="dab-composer-add-wrap" ref={addMenuWrapRef} style={{ position: 'relative' }}>
+          <button
+            type="button"
+            data-testid="composer-add-context-btn"
+            className="dab-btn-secondary dab-composer-add-btn"
+            onClick={() => setAddContextOpen((prev) => !prev)}
+            disabled={!!busyStatus}
+            title="Add files or @-mention Looker Explores, Dashboards, Looks, or Conversations"
+            aria-label="Add Context"
+            aria-expanded={addContextOpen}
+          >
+            <Plus size={14} strokeWidth={1.75} aria-hidden="true" />
+          </button>
+
+          {addContextOpen && (
+            <div
+              className="dab-composer-add-menu"
+              data-testid="composer-add-context-menu"
+              role="menu"
+              aria-label="Add Context"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="add-context-files"
+                className="dab-composer-add-item"
+                onClick={() => {
+                  setAddContextOpen(false)
+                  fileInputRef.current?.click()
+                }}
+              >
+                <Paperclip size={13} strokeWidth={1.75} aria-hidden="true" />
+                <span>Files</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="add-context-explores"
+                className="dab-composer-add-item"
+                onClick={() => handleInsertScopedPrefix('explore')}
+              >
+                <Database size={13} strokeWidth={1.75} aria-hidden="true" />
+                <span>Explores</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="add-context-dashboards"
+                className="dab-composer-add-item"
+                onClick={() => handleInsertScopedPrefix('dashboard')}
+              >
+                <LayoutDashboard size={13} strokeWidth={1.75} aria-hidden="true" />
+                <span>Dashboards</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="add-context-looks"
+                className="dab-composer-add-item"
+                onClick={() => handleInsertScopedPrefix('look')}
+              >
+                <Eye size={13} strokeWidth={1.75} aria-hidden="true" />
+                <span>Looks</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="add-context-conversations"
+                className="dab-composer-add-item"
+                onClick={() => handleInsertScopedPrefix('conversation')}
+              >
+                <MessageSquare size={13} strokeWidth={1.75} aria-hidden="true" />
+                <span>Conversations</span>
+              </button>
+            </div>
+          )}
+        </div>
+
         <StudioSelect
           data-testid="composer-model-select"
           testId="composer-model-select"

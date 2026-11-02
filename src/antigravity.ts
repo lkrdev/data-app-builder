@@ -211,10 +211,97 @@ export interface AntigravityActivityStep {
   status?: 'running' | 'done'
 }
 
-export interface PastedImage {
+export interface StudioAttachedFile {
+  id?: string
+  name?: string
   mimeType: string
+  size?: number
   data: string // base64 without data: prefix
   dataUrl: string
+  textContent?: string
+}
+
+export type PastedImage = StudioAttachedFile
+
+const TEXT_ATTACHMENT_EXT_RE = /\.(?:csv|tsv|json|sql|lkml|lookml|md|py|js|mjs|ts|tsx|txt|ya?ml|xml|html|css)$/i
+
+export function isTextAttachmentFile(name?: string, mimeType?: string): boolean {
+  const m = String(mimeType || '').toLowerCase()
+  const n = String(name || '').toLowerCase()
+  if (m.startsWith('image/') || m === 'application/pdf') return false
+  return (
+    m.startsWith('text/') ||
+    m === 'application/json' ||
+    m === 'application/sql' ||
+    m === 'application/javascript' ||
+    TEXT_ATTACHMENT_EXT_RE.test(n)
+  )
+}
+
+export function readAttachedFile(file: File, index = 0): Promise<StudioAttachedFile | null> {
+  return new Promise((resolve) => {
+    const name = file.name || `attachment_${index + 1}`
+    const mimeType = file.type || (TEXT_ATTACHMENT_EXT_RE.test(name) ? 'text/plain' : 'application/octet-stream')
+    const id = `att_${Date.now()}_${index}_${ name.replace(/[^a-zA-Z0-9._-]+/g, '_') }`
+    if (isTextAttachmentFile(name, mimeType)) {
+      const textReader = new FileReader()
+      textReader.onload = () => {
+        const textContent = String(textReader.result ?? '')
+        let base64 = ''
+        try {
+          base64 = typeof btoa === 'function' ? btoa(unescape(encodeURIComponent(textContent))) : ''
+        } catch {
+          base64 = ''
+        }
+        resolve({
+          id,
+          name,
+          mimeType,
+          size: file.size,
+          data: base64,
+          dataUrl: `data:${mimeType};base64,${base64}`,
+          textContent,
+        })
+      }
+      textReader.onerror = () => resolve(null)
+      textReader.readAsText(file)
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '')
+      const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] || '' : dataUrl
+      if (!base64) {
+        resolve(null)
+        return
+      }
+      resolve({
+        id,
+        name,
+        mimeType,
+        size: file.size,
+        data: base64,
+        dataUrl,
+      })
+    }
+    reader.onerror = () => resolve(null)
+    reader.readAsDataURL(file)
+  })
+}
+
+export function handleFileInputSelection(
+  files: FileList | File[] | null | undefined,
+  setAttachedFiles: (updater: (prev: StudioAttachedFile[]) => StudioAttachedFile[]) => void
+): void {
+  const list = Array.from(files || [])
+  if (list.length === 0) return
+  void Promise.all(list.map((file, idx) => readAttachedFile(file, idx))).then((resolved) => {
+    const valid = resolved.filter((item): item is StudioAttachedFile => Boolean(item))
+    if (valid.length > 0) {
+      setAttachedFiles((prev) => [...prev, ...valid])
+    }
+  })
 }
 
 export function handleImageClipboardPaste(
@@ -226,8 +313,8 @@ export function handleImageClipboardPaste(
   )
   if (items.length === 0) return
   e.preventDefault()
-  for (const item of items) {
-    const file = item.getAsFile()
+  for (let i = 0; i < items.length; i += 1) {
+    const file = items[i].getAsFile()
     if (!file) continue
     const reader = new FileReader()
     reader.onload = () => {
@@ -236,7 +323,14 @@ export function handleImageClipboardPaste(
       if (base64) {
         setPastedImages((prev) => [
           ...prev,
-          { mimeType: file.type || 'image/png', data: base64, dataUrl },
+          {
+            id: `paste_${Date.now()}_${i}`,
+            name: file.name || `screenshot_${prev.length + 1}.png`,
+            mimeType: file.type || 'image/png',
+            size: file.size,
+            data: base64,
+            dataUrl,
+          },
         ])
       }
     }
@@ -1512,12 +1606,34 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         })
       : dataAppOrNativeGuide)
 
+  const uploadSources: Array<{ type: 'inline'; content: string; target: string }> = []
+  const uploadedFileNotices: string[] = []
+  for (let i = 0; i < (images || []).length; i += 1) {
+    const file = images![i]
+    const fallbackExt = file.mimeType.startsWith('image/')
+      ? `.${file.mimeType.split('/')[1] || 'png'}`
+      : file.mimeType === 'application/pdf'
+      ? '.pdf'
+      : '.txt'
+    const rawName = file.name || `attachment_${i + 1}${fallbackExt}`
+    const safeName = rawName.replace(/[^a-zA-Z0-9._-]+/g, '_')
+    const targetPath = `/workspace/uploads/${safeName}`
+    uploadSources.push({
+      type: 'inline',
+      target: targetPath,
+      content: file.textContent !== undefined ? file.textContent : file.dataUrl || file.data,
+    })
+    uploadedFileNotices.push(
+      `- \`${targetPath}\` (${file.mimeType}${file.size ? `, ${file.size} bytes` : ''})`
+    )
+  }
+
   const sources = buildWorkspaceSources({
     schemaMarkdown,
     appFilePath,
     existingAppCode: mode === 'data_app' ? existingAppCode : undefined,
     cachedExploreSchemas: getSharedEnvExploreSchemas(activeEnvId),
-    extraSources,
+    extraSources: [...(extraSources || []), ...uploadSources],
   })
 
   // ponytail: disable remote container code_execution in /dashboard mode so all UDD + .dashboard.lookml
@@ -1551,18 +1667,25 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         )}. Start your response with <USE_CASE>...</USE_CASE> naming the single best allowed use case for this request, then execute that workflow.]`
       : ''
 
+  const uploadsSection =
+    uploadedFileNotices.length > 0
+      ? `\n\nAttached files in /workspace/uploads:\n${uploadedFileNotices.join('\n')}`
+      : ''
+
   const buildInputItems = (fresh: boolean): Array<Record<string, unknown>> => [
     {
       type: 'text',
       text: fresh
-        ? `${systemGuide}${autoRoutingDirective}${historyDigest}\n\nUser request:\n${userPrompt}`
-        : `${warmTurnDirective}${userPrompt}`,
+        ? `${systemGuide}${autoRoutingDirective}${historyDigest}\n\nUser request:\n${userPrompt}${uploadsSection}`
+        : `${warmTurnDirective}${userPrompt}${uploadsSection}`,
     },
-    ...(images || []).map((img) => ({
-      type: 'image',
-      mime_type: img.mimeType,
-      data: img.data,
-    })),
+    ...(images || [])
+      .filter((img) => img.mimeType.startsWith('image/') || img.mimeType === 'application/pdf')
+      .map((img) => ({
+        type: img.mimeType === 'application/pdf' ? 'document' : 'image',
+        mime_type: img.mimeType,
+        data: img.data,
+      })),
   ]
 
   const activeModel = model || DEFAULT_ANTIGRAVITY_MODEL

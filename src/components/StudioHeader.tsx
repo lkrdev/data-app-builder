@@ -8,7 +8,7 @@ import {
   resolveLookerOAuthRedirectUris,
 } from '../antigravity'
 import { useLookerExtension } from '../contexts/LookerExtensionContext'
-import { formatExploreId, LookerFolderNode } from '../lookerApi'
+import { LookerFolderNode } from '../lookerApi'
 import {
   ResolvedStudioTheme,
   StudioController,
@@ -381,9 +381,6 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     capabilities,
     availableLookmlProjects,
     canDeployLookml,
-    models,
-    selectedExplores,
-    setSelectedExplores,
     isLookmlMode,
     isHealthCheckMode,
     builderMode,
@@ -423,10 +420,6 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
 
   const mockExt =
     typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
-  const [exploreSearch, setExploreSearch] = useState('')
-  const [comboOpen, setComboOpen] = useState(() => Boolean(mockExt?.initialComboOpen))
-  const comboRef = useRef<HTMLDivElement | null>(null)
-  const dropdownRef = useRef<HTMLDivElement | null>(null)
 
   const [folderPopoverOpen, setFolderPopoverOpen] = useState(() =>
     Boolean(mockExt?.initialFolderPopoverOpen)
@@ -445,16 +438,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const folderPickerRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
-    if (comboOpen && dropdownRef.current && typeof mockExt?.initialExploreScrollTop === 'number') {
-      dropdownRef.current.scrollTop = mockExt.initialExploreScrollTop
-    }
-  }, [comboOpen, models.length, mockExt?.initialExploreScrollTop])
-
-  useEffect(() => {
     const onDocMouseDown = (e: MouseEvent) => {
-      if (comboRef.current && !comboRef.current.contains(e.target as Node)) {
-        setComboOpen(false)
-      }
       if (
         folderPickerRef.current &&
         !folderPickerRef.current.contains(e.target as Node) &&
@@ -579,69 +563,6 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     )
   }
 
-  const groupedExplores = useMemo(() => {
-    const q = exploreSearch.trim().toLowerCase()
-    return models
-      .reduce(
-        (
-          acc: Array<{
-            label: string
-            modelName: string
-            options: Array<{ label: string; value: string }>
-          }>,
-          model
-        ) => {
-          if (model?.explores?.length) {
-            const modelTerm = `${model.label} ${model.name}`.toLowerCase()
-            const matchingExplores = model.explores.filter((explore) => {
-              if (explore.hidden) return false
-              if (!q) return true
-              const exploreTerm = `${explore.label || ''} ${explore.name}`.toLowerCase()
-              return exploreTerm.includes(q) || modelTerm.includes(q)
-            })
-            if (matchingExplores.length > 0) {
-              acc.push({
-                label: model.label || model.name,
-                modelName: model.name,
-                options: matchingExplores
-                  .map((explore) => ({
-                    label: String(explore.label || explore.name),
-                    value: formatExploreId(model.name, String(explore.name)),
-                  }))
-                  .sort((a, b) => a.label.localeCompare(b.label)),
-              })
-            }
-          }
-          return acc
-        },
-        []
-      )
-      .sort((a, b) => a.label.localeCompare(b.label))
-  }, [models, exploreSearch])
-
-  const exploreLookup = useMemo(() => {
-    const map: Record<string, { id: string; label: string; modelLabel: string }> = {}
-    for (const model of models) {
-      for (const explore of model.explores || []) {
-        if (explore.hidden) continue
-        const id = formatExploreId(model.name, String(explore.name))
-        map[id] = {
-          id,
-          label: String(explore.label || explore.name),
-          modelLabel: String(model.label || model.name),
-        }
-      }
-    }
-    return map
-  }, [models])
-
-  const toggleExploreSelection = (exploreId: string) => {
-    setSelectedExplores((prev) =>
-      prev.includes(exploreId) ? prev.filter((id) => id !== exploreId) : [...prev, exploreId]
-    )
-    setExploreSearch('')
-  }
-
   return (
     <header className="dab-topbar">
       <div className="dab-brand">
@@ -687,100 +608,6 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
             {requirePermission ? 'Safe Mode (Ask)' : 'Auto-Approve (YOLO)'}
           </span>
         </button>
-
-        <div className="dab-field" ref={comboRef}>
-          <span>Explores</span>
-          <div className="dab-combobox" onClick={() => setComboOpen(true)}>
-            {selectedExplores.map((id) => {
-              const info = exploreLookup[id]
-              return (
-                <span key={id} className="dab-chip" title={id}>
-                  {info ? `${info.modelLabel}: ${info.label}` : id}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setSelectedExplores((prev) => prev.filter((x) => x !== id))
-                    }}
-                  >
-                    ×
-                  </button>
-                </span>
-              )
-            })}
-            <input
-              type="text"
-              className="dab-combo-input"
-              placeholder={
-                selectedExplores.length === 0
-                  ? 'Search explores (or leave empty to let agent decide)...'
-                  : 'Add explore...'
-              }
-              value={exploreSearch}
-              onFocus={() => setComboOpen(true)}
-              onChange={(e) => {
-                setExploreSearch(e.target.value)
-                setComboOpen(true)
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Backspace' && !exploreSearch && selectedExplores.length > 0) {
-                  setSelectedExplores((prev) => prev.slice(0, -1))
-                } else if (e.key === 'Escape') {
-                  setComboOpen(false)
-                }
-              }}
-            />
-            {comboOpen && (
-              <div className="dab-dropdown" ref={dropdownRef}>
-                {selectedExplores.length > 0 && (
-                  <div
-                    className="dab-option"
-                    style={{ color: '#2563eb', fontWeight: 600 }}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setSelectedExplores([])
-                      setExploreSearch('')
-                    }}
-                  >
-                    <span>Clear selection (let agent decide)</span>
-                  </div>
-                )}
-                {groupedExplores.length === 0 ? (
-                  <div className="dab-option" style={{ color: '#64748b' }}>
-                    No matching explores
-                  </div>
-                ) : (
-                  groupedExplores.map((group) => (
-                    <div key={group.modelName}>
-                      <div className="dab-group-header">{group.label}</div>
-                      {group.options.map((opt) => {
-                        const isSelected = selectedExplores.includes(opt.value)
-                        return (
-                          <div
-                            key={opt.value}
-                            className={`dab-option ${isSelected ? 'dab-option-selected' : ''}`}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              toggleExploreSelection(opt.value)
-                            }}
-                            title={opt.value}
-                          >
-                            <span>{opt.label}</span>
-                            {isSelected && (
-                              <span className="dab-muted" style={{ fontSize: 11 }}>
-                                ✓
-                              </span>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-        </div>
 
         {isLookmlMode ? (
           <>
