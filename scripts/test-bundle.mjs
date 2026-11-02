@@ -600,8 +600,11 @@ chmod +x "${fakeBinDir}/uv"
       appTsx.includes('export function StudioModal(') &&
       appTsx.includes('export function StudioToolbar(') &&
       studioDsSkillMd.includes('name: studio-design-system') &&
-      rootAgentsMd.includes('skills/studio-design-system/SKILL.md'),
-    'StudioDesignSystem primitives, semantic status CSS tokens, and skills/studio-design-system/SKILL.md must be present'
+      rootAgentsMd.includes('skills/studio-design-system/SKILL.md') &&
+      readFileSync(path.join(repoRoot, 'skills/issue-authoring/SKILL.md'), 'utf8').includes('name: issue-authoring') &&
+      rootAgentsMd.includes('skills/issue-authoring/SKILL.md') &&
+      upstreamAgentsMd.includes('skills/issue-authoring/SKILL.md'),
+    'StudioDesignSystem primitives, semantic status CSS tokens, skills/studio-design-system/SKILL.md, and skills/issue-authoring/SKILL.md must be present'
   )
 
   console.log('✓ test-bundle.mjs: all assertions passed!')

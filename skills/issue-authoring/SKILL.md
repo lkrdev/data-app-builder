@@ -1,0 +1,59 @@
+---
+name: issue-authoring
+description: Workflow, root-cause pre-analysis, grouping rules, canonical GitHub issue template, and pre-PR self-improvement loop for turning raw user feedback into 1-pass executable GitHub issues and PRs in data-app-builder.
+---
+
+# Looker Data App Studio — Issue Authoring & Issue-to-PR Acceleration
+
+Load when capturing feedback, filing GitHub issues (`gh issue create`), or evaluating Issue → PR efficiency before submitting a PR.
+
+## 1. Introspection of Issues #59–#65 & PRs #66–#73 (Intake & Grouping Rules)
+
+| Pattern / Friction Observed Across #59–#65 → #66–#73 | Mandatory Rule |
+| --- | --- |
+| **Live `file:line` + Root-Cause Intake (#59–#65)** — Resolving exact `file:line` symbols and root causes (`listUserArtifacts` resurrection in **#61/#70**, `oauth2Authenticate` locking `busyStatus` in **#65/#68**, `height: 28px` button overflow in **#63/#66**) during intake eliminated exploratory search during PRs. | Log each feedback item + screenshot in `feedback_log.md` and immediately run `git grep -n` to cite exact `path/to/file.tsx#Lstart-Lend`, state hooks, callers, and root cause. Never file a symptom-only issue. |
+| **Blast-Radius Grouping (#59–#65)** — Grouping 18 raw items into 7 component-scoped issues (`StudioComposer` **#59**, `<StudioSelect>` **#60**, `StudioConversationsSidebar` **#61**, Folder tree **#62**, `ScriptStudioView` **#63**, `UseCaseInfoModal` **#64**, OAuth **#65**) prevented merge conflicts across sequential PRs **#66–#72**. | Combine feedback items that touch the same component tree or state slice into one cohesive issue; keep independent subsystems separate. |
+| **Missing Design System Mandates → PR #73 (`+1123/-709`)** — Issues **#61, #62, #64** did not mandate shared UI primitives, so PRs **#69–#71** hand-rolled `.dab-modal` markup, inline card styles, and custom toolbars that PR **#73** had to refactor into `StudioDesignSystem.tsx`. | Specify which primitives from `src/components/StudioDesignSystem.tsx` (`<StudioButton>`, `<StudioBadge>`, `<StudioModal>`, `<StudioToolbar>`, `<StudioCard>`, `<StudioSkeleton>`, `<StudioDocPreview>`, `<StudioSelect>`) and `--dab-*` tokens to use. |
+| **Unspecified `data-testid` Contracts** — PRs **#67–#72** had to invent 20+ `data-testid` attributes mid-implementation before writing `permissions.test.ts` and `miniApps.visual.test.js`. | Name exact `data-testid` attributes in the issue body so JSX, unit tests, and headless Chrome DOM/visual tests are written in a single pass. |
+| **Unlisted SDK, SWR, Manifest & Mock Touchpoints (#61/#70, #62/#71)** — Adding `folder_children`, `folder_ancestors`, `search_folders`, or `delete_dashboard` required coordinated updates across `manifest.lkml`, `src/lookerApi.ts` (`SWR_DEDUPED_METHODS`), `src/lookerArtifacts.ts` (`ArtifactService`), and `createMockCore40SDK`. | Explicitly list required `manifest.lkml` `core_api_methods`, `lookerApi.ts` SWR/deduplication methods, `ArtifactService` methods, and test mock stubs in the issue. |
+| **Snapshot & Copy Collisions (#59/#67, #61/#70)** — Removing `My Creations` (**#61**) or renaming `Auto (Agent Decides)` / `Python Tile` (**#59**) broke existing string assertions in `miniApps.visual.test.js` and `.snap`. | Run `git grep -n "<old copy or testid>" src/__tests__/ scripts/` when drafting the issue and list exact test lines to update alongside `UPDATE_VISUAL_SNAPSHOTS=1`. |
+
+## 2. Canonical GitHub Issue Template
+
+```markdown
+## Summary
+
+<1–2 sentence overview of the problem/goal and which feedback items it covers.>
+
+## Requirements
+
+### 1. <Requirement Title>
+- **Current (`src/path/File.tsx#L10-L30`, `src/useStudioController.ts#L100-L120`)**: <Exact current behavior and root cause.>
+- **Change**: <Concrete target behavior, state/prop transitions, and edge-case handling.>
+- **Design System & `data-testid` Contract**:
+  - Primitives: `<StudioModal>`, `<StudioToolbar>`, `<StudioSelect>`, `<StudioButton>`, `<StudioBadge>`, `<StudioCard>`, `<StudioSkeleton>`, `<StudioDocPreview>` (`skills/studio-design-system/SKILL.md`).
+  - Tokens: `--dab-*` semantic variables (verify both `light` and `dark` themes).
+  - `data-testid`s: `<exact-test-ids-to-add-or-preserve>`.
+
+## Touchpoints & Verification Plan
+
+- **Files to Modify**: `src/...`
+- **Looker SDK / Artifacts / Manifest / Mocks**:
+  - `manifest.lkml` (`core_api_methods`): `<none | methods>`
+  - `src/lookerApi.ts` (`SWR_DEDUPED_METHODS` / helpers): `<none | functions>`
+  - `src/lookerArtifacts.ts` (`ArtifactService`): `<none | methods>`
+  - Test mocks (`createMockCore40SDK` in `src/__tests__/miniApps.visual.test.js` & `src/__tests__/permissions.test.ts`): `<methods to stub>`
+- **Existing Test Assertions Affected**: `<exact lines in miniApps.visual.test.js / .snap / test-bundle.mjs>`
+- **Verification**:
+  - `npx jest src/__tests__/permissions.test.ts && node scripts/test-bundle.mjs`
+  - `UPDATE_VISUAL_SNAPSHOTS=1 npx jest src/__tests__/miniApps.visual.test.js` (cropped `clipSelector` + `24px` margin)
+```
+
+## 3. Mandatory Pre-PR Self-Evaluation Loop
+
+Before submitting any PR, check whether implementing the issue required:
+1. Searching for files, callers, CSS rules, or mock helpers not cited in the issue.
+2. Fixing an unexpected test/snapshot collision, missing `createMockCore40SDK` stub, `manifest.lkml` entitlement, or dark-mode contrast failure not flagged in the issue.
+3. Introducing a new shared primitive, controller hook, `ArtifactService` method, or test helper that future issues should reference by default.
+
+If any of (1)–(3) occurred, update `skills/issue-authoring/SKILL.md` (and `skills/studio-design-system/SKILL.md` if UI-related) **in the same PR** so every subsequent Issue → PR cycle runs in fewer tool calls.
