@@ -40,6 +40,8 @@ application: data_app_builder {
       "look",
       "create_look",
       "update_look",
+      "content_summary",
+      "search_content",
       "board",
       "create_board",
       "create_board_section",

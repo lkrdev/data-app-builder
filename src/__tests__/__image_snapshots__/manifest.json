@@ -6,7 +6,7 @@
     "snapshotName": "01-mode-data-app-and-permission-gate-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "dashboard",
@@ -15,7 +15,7 @@
     "snapshotName": "02-mode-native-dashboard-builder-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "lookml",
@@ -24,7 +24,7 @@
     "snapshotName": "03-mode-agentic-lookml-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "health_check",
@@ -33,7 +33,7 @@
     "snapshotName": "04-mode-3-pillar-health-check-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "python_tile_studio",
@@ -42,7 +42,7 @@
     "snapshotName": "05-mode-python-tile-studio-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "tile_mount_view",
@@ -69,35 +69,35 @@
     "snapshotName": "08-config-page-setup-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "explore_dropdown_open_top",
     "category": "Config & Explore Dropdown",
     "title": "9. Explore Combobox Dropdown — Open (Top Scroll State)",
     "snapshotName": "09-explore-dropdown-open-top-snap.png",
-    "width": 410,
-    "height": 399,
+    "width": 427,
+    "height": 404,
     "clipSelector": [
-      ".dab-combobox",
-      ".dab-dropdown"
+      "[data-testid=\"composer-at-mention-menu\"]",
+      ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "explore_dropdown_scrolled",
     "category": "Config & Explore Dropdown",
     "title": "10. Explore Combobox Dropdown — Scrolled State (Retail Ops & System Activity)",
     "snapshotName": "10-explore-dropdown-scrolled-snap.png",
-    "width": 410,
-    "height": 399,
+    "width": 427,
+    "height": 404,
     "clipSelector": [
-      ".dab-combobox",
-      ".dab-dropdown"
+      "[data-testid=\"composer-at-mention-menu\"]",
+      ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_lookml_skills",
@@ -105,10 +105,10 @@
     "title": "11. Chat Bar State — LookML Activated Turn Skills & Prompt",
     "snapshotName": "11-chatbar-state-lookml-activated-skills-snap.png",
     "width": 766,
-    "height": 267,
+    "height": 270,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_pasted_image_inspector",
@@ -116,10 +116,10 @@
     "title": "12. Chat Bar State — Pasted Screenshot Thumbnail & Composer Model Selector",
     "snapshotName": "12-chatbar-state-pasted-image-and-inspector-snap.png",
     "width": 427,
-    "height": 245,
+    "height": 270,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_busy_running",
@@ -127,7 +127,7 @@
     "title": "13. Chat Bar State — Busy / Running Spinner Banner",
     "snapshotName": "13-chatbar-state-busy-running-snap.png",
     "width": 427,
-    "height": 609,
+    "height": 649,
     "clipSelector": [
       ".dab-status-banner",
       ".dab-composer"
@@ -141,13 +141,13 @@
     "title": "14. Chat Bar State — Error Diagnostic Banner",
     "snapshotName": "14-chatbar-state-error-banner-snap.png",
     "width": 427,
-    "height": 827,
+    "height": 867,
     "clipSelector": [
       ".dab-msg-error",
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "python_tile_scheduler_modal",
@@ -167,7 +167,7 @@
     "snapshotName": "16-mode-conversational-analytics-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "centered_empty_prompt",
@@ -175,7 +175,7 @@
     "title": "17. Centered New-Conversation Empty Prompt Box (Use-Case Selector, Input & Actions)",
     "snapshotName": "17-centered-empty-prompt-snap.png",
     "width": 768,
-    "height": 381,
+    "height": 383,
     "clipSelector": ".dab-empty-prompt-card",
     "clipMargin": 24,
     "changedInGit": false
@@ -187,6 +187,6 @@
     "snapshotName": "18-studio-dark-theme.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   }
 ]

@@ -608,8 +608,74 @@ function buildHtmlPage(scenario) {
           window.__DELETED_LOOKS__.push(String(id));
           return {};
         },
+        content_summary: async () => [
+          {
+            id: 'cs_1',
+            content_type: 'dashboard',
+            content_id: '901',
+            title: 'Business Pulse',
+            description: 'Executive KPIs and order margin breakdown',
+            view_count: 142
+          },
+          {
+            id: 'cs_2',
+            content_type: 'look',
+            content_id: '301',
+            title: 'Monthly Order Margin Look',
+            description: 'Monthly revenue and gross margin trend',
+            view_count: 64
+          }
+        ],
+        search_content: async (params) => {
+          const t = String((params && params.terms) || '').toLowerCase();
+          const all = [
+            { content_id: '901', type: 'dashboard', title: 'Business Pulse', description: 'Executive KPIs and order margin breakdown' },
+            { content_id: '301', type: 'look', title: 'Monthly Order Margin Look', description: 'Monthly revenue and gross margin trend' }
+          ];
+          return all.filter((item) => !t || item.title.toLowerCase().includes(t));
+        },
+        look: async (idOrParams) => {
+          const lid = String((idOrParams && idOrParams.look_id) || idOrParams || '301');
+          return {
+            id: lid,
+            title: 'Monthly Order Margin Look',
+            folder_id: '5',
+            query: {
+              model: 'thelook',
+              view: 'order_items',
+              fields: ['order_items.created_month', 'order_items.total_sale_price'],
+              sorts: ['order_items.created_month desc'],
+              limit: '12'
+            }
+          };
+        },
         dashboard: async (id) => {
-          if (String(id) === '7') {
+          const did = String((id && id.dashboard_id) || id || '');
+          if (did === '901') {
+            return {
+              id: '901',
+              title: 'Business Pulse',
+              description: 'Executive KPIs and order margin breakdown',
+              folder: { id: '5' },
+              dashboard_filters: [{ name: 'Created Date', field: 'order_items.created_date', default_value: '30 days' }],
+              dashboard_elements: [
+                {
+                  id: '9011',
+                  title: 'Revenue by Category',
+                  type: 'vis',
+                  query: {
+                    model: 'thelook',
+                    view: 'order_items',
+                    fields: ['products.category', 'order_items.total_sale_price'],
+                    sorts: ['order_items.total_sale_price desc'],
+                    limit: '10'
+                  }
+                }
+              ],
+              dashboard_layouts: [{ id: '9012', type: 'newspaper', active: true }]
+            };
+          }
+          if (did === '7') {
             return {
               id: '7',
               title: 'Executive Order Performance (Native UDD)',
@@ -643,6 +709,19 @@ function buildHtmlPage(scenario) {
         authSession: {
           transport: {
             rawRequest: async (method, reqPath, queryParams) => {
+              if (reqPath.includes('content_summary')) {
+                const items = await mockCore40SDK.content_summary(queryParams || {});
+                return { ok: true, statusCode: 200, body: JSON.stringify(items) };
+              }
+              if (reqPath.includes('global_search_v2')) {
+                const term = String((queryParams && queryParams.term) || '').toLowerCase();
+                const items = [
+                  { content_type: 'dashboard', content_id: '901', title: 'Business Pulse', description: 'Executive KPIs and order margin breakdown' },
+                  { content_type: 'look', content_id: '301', title: 'Monthly Order Margin Look', description: 'Monthly revenue and gross margin trend' },
+                  { content_type: 'explore', id: 'thelook::order_items', model_name: 'thelook', explore_name: 'order_items', title: 'Order Items' }
+                ].filter((it) => !term || it.title.toLowerCase().includes(term));
+                return { ok: true, statusCode: 200, body: JSON.stringify({ results: items }) };
+              }
               if (reqPath.includes('inline_extension')) {
                 return {
                   ok: true,
@@ -1194,7 +1273,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Config & Explore Dropdown',
       title: '9. Explore Combobox Dropdown — Open (Top Scroll State)',
       snapshotName: '09-explore-dropdown-open-top-snap.png',
-      clipSelector: ['.dab-combobox', '.dab-dropdown'],
+      clipSelector: ['[data-testid="composer-at-mention-menu"]', '.dab-composer'],
       expectText: [
         'Clear selection (let agent decide)',
         'BIGQUERY INFORMATION SCHEMA (BLOCK)',
@@ -1209,7 +1288,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Config & Explore Dropdown',
       title: '10. Explore Combobox Dropdown — Scrolled State (Retail Ops & System Activity)',
       snapshotName: '10-explore-dropdown-scrolled-snap.png',
-      clipSelector: ['.dab-combobox', '.dab-dropdown'],
+      clipSelector: ['[data-testid="composer-at-mention-menu"]', '.dab-composer'],
       expectText: [
         'RETAIL OPERATIONS',
         'Store Transactions',
@@ -1344,7 +1423,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
               label: (el.textContent || '').trim(),
               active: el.classList.contains('active')
             }));
-            const dd = document.querySelector('.dab-dropdown');
+            const dd =
+              document.querySelector('[data-testid="composer-at-mention-menu"]') ||
+              document.querySelector('.dab-dropdown');
             if (dd && window.__MOCK_LOOKER_EXTENSION__ && typeof window.__MOCK_LOOKER_EXTENSION__.initialExploreScrollTop === 'number') {
               dd.scrollTop = window.__MOCK_LOOKER_EXTENSION__.initialExploreScrollTop;
             }
@@ -3936,5 +4017,75 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       returnByValue: true
     })
     expect(escRes.result.value).toBe(false)
+  }, 15000)
+
+  test('Issue #92: removes topbar Explores combobox and provides composer + Add Context menu & @-mention popover with context chips', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    await chrome.send('Page.navigate', {
+      url: `http://127.0.0.1:${port}/?scenario=data_app`
+    })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(document.querySelector('[data-testid="composer-add-context-btn"]'))`,
+        returnByValue: true
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    const res = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const hasTopbarCombobox = Boolean(document.querySelector('.dab-topbar .dab-combobox'));
+        const addBtn = document.querySelector('[data-testid="composer-add-context-btn"]');
+        const fileInput = document.querySelector('[data-testid="composer-file-input"]');
+        addBtn.click();
+        await new Promise((r) => setTimeout(r, 80));
+        const addMenu = document.querySelector('[data-testid="composer-add-context-menu"]');
+        const menuItemIds = ['add-context-files', 'add-context-explores', 'add-context-dashboards', 'add-context-looks', 'add-context-conversations'];
+        const hasAllMenuItems = menuItemIds.every((id) => Boolean(document.querySelector('[data-testid="' + id + '"]')));
+
+        // Click Dashboards in Add Context menu -> inserts @dashboard: and opens @-mention menu
+        document.querySelector('[data-testid="add-context-dashboards"]').click();
+        await new Promise((r) => setTimeout(r, 120));
+        const mentionMenu = document.querySelector('[data-testid="composer-at-mention-menu"]');
+        const pulseOption = document.querySelector('[data-testid="composer-mention-option-dashboard-901"]');
+        const hasPulseOption = Boolean(pulseOption);
+        if (pulseOption) pulseOption.click();
+        await new Promise((r) => setTimeout(r, 100));
+
+        const chipsWrap = document.querySelector('[data-testid="composer-context-chips"]');
+        const pulseChip = document.querySelector('[data-testid="composer-context-chip-dashboard-901"]');
+        const promptValue = document.querySelector('[data-testid="studio-prompt-input"]')?.value || '';
+
+        return {
+          hasTopbarCombobox,
+          hasFileInput: Boolean(fileInput),
+          hasAddMenu: Boolean(addMenu),
+          hasAllMenuItems,
+          hasMentionMenu: Boolean(mentionMenu),
+          hasPulseOption,
+          hasChipsWrap: Boolean(chipsWrap),
+          hasPulseChip: Boolean(pulseChip),
+          promptValue
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(res.result.value).toMatchObject({
+      hasTopbarCombobox: false,
+      hasFileInput: true,
+      hasAddMenu: true,
+      hasAllMenuItems: true,
+      hasMentionMenu: true,
+      hasPulseOption: true,
+      hasChipsWrap: true,
+      hasPulseChip: true,
+      promptValue: '@dashboard:Business Pulse '
+    })
   }, 15000)
 })

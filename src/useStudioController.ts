@@ -26,8 +26,10 @@ import {
   applyStudioDocumentTheme, archiveUserConversation, buildAvailableExploresCatalog, buildDenseExploreSchema,
   buildRootLookerFolders, CaConversationState, ConversationRecord, createLookerCaConversation,
   deleteUserConversation, extractExploreIdsFromCode, extractResolvedUseCase,
-  fetchFolderChildren, fetchFolderWithAncestors, fetchInitialLookerMetadata, formatExploreId,
-  getAllowedUseCases, getArtifactNamespace, getArtifactService, getUseCaseLabel, listSavedScripts,
+  fetchFolderChildren, fetchFolderWithAncestors, fetchInitialLookerMetadata,
+  fetchPreloadedContentSummary, formatExploreId,
+  getAllowedUseCases, getArtifactNamespace, getArtifactService, getUseCaseLabel,
+  hydrateMentionedContext, listSavedScripts,
   listUserArtifacts, loadExistingDashboardApp, loadNativeContentById,
   loadObjectArtifact, loadScriptArtifact, loadStoredStudioThemeMode, loadUserConversations,
   loadUserEnvironmentId, LookerFolderNode, NativeContentState,
@@ -35,9 +37,9 @@ import {
   publishScriptDashboard, readInitialStudioThemeMode, resolveCaEmbedPath,
   resolveConversationRelatedContent, ResolvedStudioTheme, ResolvedStudioUseCase, resolveStudioTheme, resolveSystemTheme,
   resolveUserCapabilities, saveDashboardStudioMetadata, SavedScript, saveNativeContentArtifact,
-  saveScriptArtifact, saveUserArtifact, saveUserConversation, searchLookerFolders, SearchLookerFoldersParams,
+  saveScriptArtifact, saveUserArtifact, saveUserConversation, searchGlobalContentV2, searchLookerFolders, SearchLookerFoldersParams,
   selectCaAgentViaIsolatedSubagent, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
-  studioModeToUseCase, StudioThemeMode, StudioToolMode, StudioUseCase, studioUseCaseToMode, upsertPublishedDataApp,
+  StudioContextCategory, StudioContextMention, studioModeToUseCase, StudioThemeMode, StudioToolMode, StudioUseCase, studioUseCaseToMode, upsertPublishedDataApp,
   UserArtifactIndex, UserCapabilities, UserConversationEntry,
 } from './lookerApi'
 import {
@@ -54,7 +56,12 @@ export {
   resolveSystemTheme,
   STUDIO_THEME_STORAGE_KEY,
 }
-export type { ResolvedStudioTheme, StudioThemeMode }
+export type {
+  ResolvedStudioTheme,
+  StudioContextCategory,
+  StudioContextMention,
+  StudioThemeMode,
+}
 
 type HostDataWithMount = {
   mountType?: string
@@ -225,6 +232,8 @@ export function useStudioController() {
   const [expandedFolderIds, setExpandedFolderIds] = useState<string[]>([])
   const [loadingFolderIds, setLoadingFolderIds] = useState<string[]>([])
   const [selectedExplores, setSelectedExplores] = useState<string[]>([])
+  const [preloadedContent, setPreloadedContent] = useState<StudioContextMention[]>([])
+  const [mentionedItems, setMentionedItems] = useState<StudioContextMention[]>([])
   const [selectedFolderId, setSelectedFolderId] = useState<string>(() =>
     String(mockExt?.initialSelectedFolderId || '1')
   )
@@ -979,6 +988,11 @@ export function useStudioController() {
         void hydrateFolderAncestors(targetInitialFolder, initialRootIds)
         void loadFolderChildren(targetInitialFolder, initialRootIds).catch(() => {})
         void refreshCatalog(resolvedUserId)
+        fetchPreloadedContentSummary(core40SDK)
+          .then((items) => {
+            if (mounted) setPreloadedContent(items)
+          })
+          .catch(() => {})
         loadUserConversations(
           core40SDK,
           resolvedUserId,
@@ -1897,6 +1911,7 @@ export function useStudioController() {
       setLoadDashInput('')
       setLoadLookmlInput('')
       setSelectedExplores([])
+      setMentionedItems([])
       setAgentSession({
         environmentId: sharedEnvIdRef.current || undefined,
         lastInteractionId: undefined,
@@ -2063,6 +2078,7 @@ export function useStudioController() {
     if (!isAuthenticated || (!text && pastedImages.length === 0) || busyStatus) return
     const auth: AntigravityAuth = { mode: authMode, oauthToken, clientId, projectId, apiKey }
     const attachedImages = pastedImages
+    const activeMentions = mentionedItems
     const effectivePrompt = text || 'See the attached screenshot.'
     const isFirstTurn = messages.filter((m) => m.role === 'user').length === 0
     const userMsg: ChatMessage = {
@@ -2073,6 +2089,7 @@ export function useStudioController() {
     const messagesWithUser = [...messages, userMsg]
     setPrompt('')
     setPastedImages([])
+    setMentionedItems([])
     setMessages(messagesWithUser)
     setLockedByTurn(true)
 
@@ -2113,6 +2130,49 @@ export function useStudioController() {
     setBusyStatus('Connecting to Antigravity...')
     setLiveActivitySteps([])
     try {
+      let turnExplores = selectedExplores
+      let turnSchemaMarkdown = schemaMarkdown
+      let turnExtraSources: Array<{ type: 'inline'; content: string; target: string }> | undefined
+      let turnPromptWithContext = effectivePrompt
+
+      if (activeMentions.length > 0) {
+        setBusyStatus('Hydrating referenced Looker @-mention context...')
+        const hydrated = await hydrateMentionedContext({
+          sdk: core40SDK,
+          mentions: activeMentions,
+          conversations,
+          selectedExplores,
+        })
+        if (hydrated.explores.length > 0) {
+          turnExplores = hydrated.explores
+          if (JSON.stringify(turnExplores) !== JSON.stringify(selectedExplores)) {
+            setSelectedExplores(turnExplores)
+            const sections = await Promise.all(
+              turnExplores.map(async (id) => {
+                const parsed = parseExploreId(id)
+                if (!parsed) return ''
+                try {
+                  return await buildDenseExploreSchema(core40SDK, parsed.modelName, parsed.exploreName)
+                } catch {
+                  return ''
+                }
+              })
+            )
+            const joined = sections.filter(Boolean).join('\n\n---\n\n')
+            if (joined) {
+              turnSchemaMarkdown = joined
+              setSchemaMarkdown(joined)
+            }
+          }
+        }
+        if (hydrated.extraSources.length > 0) {
+          turnExtraSources = hydrated.extraSources
+        }
+        if (hydrated.promptSummary) {
+          turnPromptWithContext = `${effectivePrompt}\n\n${hydrated.promptSummary}`
+        }
+      }
+
       const effectiveLookmlTurn = isLookmlMode || selectedUseCase === 'lookml'
       const effectiveBuilderMode: 'data_app' | 'dashboard' =
         selectedUseCase === 'dashboard' ? 'dashboard' : builderMode
@@ -2129,21 +2189,22 @@ export function useStudioController() {
         mode: effectiveBuilderMode,
         useCase: selectedUseCase,
         allowedModes: allowedUseCases,
-        selectedExplores,
+        selectedExplores: turnExplores,
         folderId: selectedFolderId,
         toolMode: effectiveLookmlTurn ? 'lookml' : 'data_app',
         lookmlProjectId,
         activatedLookmlSkills,
         developableProjects: availableLookmlProjects,
         canDeploy: canDeployLookml,
-        schemaMarkdown,
+        schemaMarkdown: turnSchemaMarkdown,
         userPrompt:
           activeMode === 'tile' || selectedUseCase === 'tile'
-            ? `Write a LkrCodeMode Python script for the user's request. Return the Python snippet inside a \`\`\`python code block.\n\nCurrent script:\n\`\`\`python\n${scriptCode}\n\`\`\`\n\nUser request: ${effectivePrompt}`
-            : effectivePrompt,
+            ? `Write a LkrCodeMode Python script for the user's request. Return the Python snippet inside a \`\`\`python code block.\n\nCurrent script:\n\`\`\`python\n${scriptCode}\n\`\`\`\n\nUser request: ${turnPromptWithContext}`
+            : turnPromptWithContext,
         images: attachedImages,
         existingAppCode: currentAppCode || undefined,
         existingNativeContent: nativeContent,
+        extraSources: turnExtraSources,
         priorMessages: messages,
         requirePermission,
         approvedOperations: approvedOpsRef.current,
@@ -2167,7 +2228,7 @@ export function useStudioController() {
       let convId = activeObjectId || activeConversationId || result.session.lastInteractionId || 'conv_1'
       let convType: string = resolvedUseCase
       let convTitle = ''
-      let convExplores = selectedExplores
+      let convExplores = turnExplores
       let convContent: Record<string, unknown> | undefined
       let finalMsgs: ChatMessage[] = []
 
@@ -2195,7 +2256,7 @@ export function useStudioController() {
             userId,
             bundle: result.lookmlBundle,
             studio: {
-              explores: selectedExplores,
+              explores: turnExplores,
               lastInteractionId: result.session.lastInteractionId,
               environmentId: result.session.environmentId,
               messages: finalMsgs,
@@ -2224,7 +2285,7 @@ export function useStudioController() {
         } catch {
           // Ignore LookML artifact save failure
         }
-        setAgentSession({ ...result.session, explores: selectedExplores }, 'lookml')
+        setAgentSession({ ...result.session, explores: turnExplores }, 'lookml')
         setMessages(finalMsgs, 'lookml')
       } else if (resolvedUseCase === 'tile') {
         const pyMatch = (result.assistantText || '').match(/```(?:python|py)?\s*\n([\s\S]*?)```/i)
@@ -2242,7 +2303,7 @@ export function useStudioController() {
             thinkingDurationSec: result.thinkingDurationSec,
           },
         ]
-        setAgentSession({ ...result.session, explores: selectedExplores }, 'tile')
+        setAgentSession({ ...result.session, explores: turnExplores }, 'tile')
         setMessages(finalMsgs, 'tile')
         try {
           const saved = await handleSaveScript(nextCode, finalMsgs, publishedTileDash)
@@ -2266,9 +2327,9 @@ export function useStudioController() {
             )
           : result.nativeBundle?.explores || []
         const effectiveExplores =
-          selectedExplores.length > 0 ? selectedExplores : bundleExplores
+          turnExplores.length > 0 ? turnExplores : bundleExplores
         convExplores = effectiveExplores
-        if (selectedExplores.length === 0 && bundleExplores.length > 0) {
+        if (turnExplores.length === 0 && bundleExplores.length > 0) {
           setSelectedExplores(bundleExplores)
         }
         setAgentSession({ ...result.session, explores: effectiveExplores }, resolvedMode)
@@ -2520,9 +2581,10 @@ export function useStudioController() {
         starterPrompts, setStarterPrompts, starterPromptsLoading, setStarterPromptsLoading,
         selectedFolderId, setSelectedFolderId,
         hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders,
+        preloadedContent, setPreloadedContent, mentionedItems, setMentionedItems,
       }
     }
-  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce, setMessages, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders])
+  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce, setMessages, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems])
 
   return {
     extensionSDK, core40SDK, lookerHostData, history, location, isTileMount,
@@ -2538,6 +2600,8 @@ export function useStudioController() {
     expandedFolderIds, loadingFolderIds, toggleExpandFolder,
     hydrateFolderAncestors, handleSearchFolders,
     selectedExplores, setSelectedExplores,
+    preloadedContent, setPreloadedContent, mentionedItems, setMentionedItems,
+    searchGlobalContentV2,
     selectedFolderId, setSelectedFolderId, schemaMarkdown, loadingSchema,
     activeMode, isLookmlMode, isHealthCheckMode, isCaMode, builderMode,
     selectedUseCase, setSelectedUseCase: handleChangeUseCase,
