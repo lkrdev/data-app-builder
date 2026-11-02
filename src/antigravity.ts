@@ -23,8 +23,6 @@ import {
   getAllowedUseCases,
   getArtifactNamespace,
   getUseCaseLabel,
-  isConversationalNoOpPrompt,
-  matchExplicitUseCaseRule,
   NativeContentBundle,
   NativeContentState,
   normalizeNativeContent,
@@ -67,8 +65,6 @@ export {
   extractResolvedUseCase,
   getAllowedUseCases,
   getUseCaseLabel,
-  isConversationalNoOpPrompt,
-  matchExplicitUseCaseRule,
   normalizeQueryFiltersToFixedDates,
   STUDIO_USE_CASE_OPTIONS,
   studioModeToUseCase,
@@ -913,7 +909,10 @@ function extractTddFromInteraction(
 
 const VALID_NATIVE_CONTENT_TYPES = new Set(['dashboard', 'lookml_dashboard', 'look', 'board'])
 
-function normalizeNativeBundleCandidate(raw: unknown): NativeContentBundle | null {
+function normalizeNativeBundleCandidate(
+  raw: unknown,
+  allowUnwrapped = false
+): NativeContentBundle | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const rawObj = raw as Record<string, unknown>
   const hasBundleEnvelope = Boolean(
@@ -930,7 +929,7 @@ function normalizeNativeBundleCandidate(raw: unknown): NativeContentBundle | nul
       r.board_id ||
       (typeof r.embed_path === 'string' && r.embed_path.startsWith('/embed/'))
   )
-  if (!hasBundleEnvelope && !(VALID_NATIVE_CONTENT_TYPES.has(explicitType) && hasExplicitContentId)) {
+  if (!allowUnwrapped && !hasBundleEnvelope && !(VALID_NATIVE_CONTENT_TYPES.has(explicitType) && hasExplicitContentId)) {
     return null
   }
   const id =
@@ -1011,11 +1010,7 @@ export function extractNativeContentFromInteraction(
       if (tagMatches.length > 0) {
         try {
           const parsedTag = JSON.parse(tagMatches[tagMatches.length - 1][1].trim())
-          const norm = normalizeNativeBundleCandidate(
-            parsedTag && typeof parsedTag === 'object' && 'NATIVE_CONTENT_BUNDLE' in parsedTag
-              ? parsedTag
-              : { NATIVE_CONTENT_BUNDLE: parsedTag }
-          )
+          const norm = normalizeNativeBundleCandidate(parsedTag, true)
           if (norm) return norm
         } catch {
           // Ignore malformed tag JSON
@@ -1038,11 +1033,7 @@ export function extractNativeContentFromInteraction(
   if (matches.length > 0) {
     try {
       const parsed = JSON.parse(matches[matches.length - 1][1].trim())
-      const wrapped =
-        parsed && typeof parsed === 'object' && 'NATIVE_CONTENT_BUNDLE' in parsed
-          ? parsed
-          : { NATIVE_CONTENT_BUNDLE: parsed }
-      return normalizeNativeBundleCandidate(wrapped) || (parsed as NativeContentBundle)
+      return normalizeNativeBundleCandidate(parsed, true) || (parsed as NativeContentBundle)
     } catch {
       // Ignore malformed tag JSON
     }
@@ -1382,16 +1373,8 @@ export function buildWorkspaceSources(params: {
     { type: 'inline', content: BUNDLE_APP_PY, target: '/workspace/bundle_app.py' },
     { type: 'inline', content: DATA_APP_GUIDE_MD, target: '/workspace/DATA_APP_GUIDE.md' },
     { type: 'inline', content: DATA_INVESTIGATOR_GUIDE_MD, target: '/workspace/DATA_INVESTIGATOR_GUIDE.md' },
-    {
-      type: 'inline',
-      content: KDA_SKILL_MD,
-      target: '/workspace/skills/key-driver-analysis/SKILL.md',
-    },
-    {
-      type: 'inline',
-      content: KDA_TOOLKIT_PY,
-      target: '/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py',
-    },
+    { type: 'inline', content: KDA_SKILL_MD, target: '/workspace/skills/key-driver-analysis/SKILL.md' },
+    { type: 'inline', content: KDA_TOOLKIT_PY, target: '/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py' },
     { type: 'inline', content: BOOTSTRAP_LOOKML_PY, target: '/workspace/bootstrap_lookml.py' },
     { type: 'inline', content: LKR_CLI_SITECUSTOMIZE_PY, target: '/workspace/sitecustomize.py' },
     {

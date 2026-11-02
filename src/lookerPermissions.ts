@@ -238,7 +238,9 @@ const CONVERSATIONAL_NOOP_RE =
   /^\s*(?:(?:hi|hello|hey|howdy|greetings|good\s+(?:morning|afternoon|evening)|yo)(?:\s+(?:there|looker(?:\s+studio)?|studio|team|agent))?|help(?:\s+me)?|what\s+can\s+you\s+do|how\s+can\s+you\s+help(?:\s+me)?|what\s+do\s+you\s+do|who\s+are\s+you)[!?.]*\s*$/i
 
 export function isConversationalNoOpPrompt(text?: string): boolean {
-  return CONVERSATIONAL_NOOP_RE.test(String(text || '').trim())
+  return CONVERSATIONAL_NOOP_RE.test(
+    String(text || '').replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '').trim()
+  )
 }
 
 const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
@@ -288,8 +290,7 @@ export function matchExplicitUseCaseRule(
     const tagged = USE_CASE_ALIAS_MAP[token]
     if (tagged && allowedSet.has(tagged)) return tagged
   }
-  const stripped = rawText.replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '').trim()
-  if (isConversationalNoOpPrompt(stripped)) return null
+  if (isConversationalNoOpPrompt(rawText)) return null
   for (const [candidate, re] of USE_CASE_RULES) {
     if (allowedSet.has(candidate) && re.test(rawText)) return candidate
   }
