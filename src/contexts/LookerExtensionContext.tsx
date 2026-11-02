@@ -17,6 +17,7 @@ export interface MockLookerExtensionContextValue extends LookerExtensionContextS
   initialRoute?: string;
   initialSelectedFolderId?: string;
   forceFolderSkeleton?: boolean;
+  forceStarterPromptsSkeleton?: boolean;
   initialComboOpen?: boolean;
   initialFolderPopoverOpen?: boolean;
   initialFolderSearchModalOpen?: boolean;

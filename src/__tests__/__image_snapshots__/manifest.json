@@ -69,7 +69,7 @@
     "snapshotName": "08-config-page-setup-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "explore_dropdown_open_top",
@@ -108,7 +108,7 @@
     "height": 268,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "chatbar_pasted_image_inspector",
@@ -175,10 +175,10 @@
     "title": "17. Centered New-Conversation Empty Prompt Box (Use-Case Selector, Input & Actions)",
     "snapshotName": "17-centered-empty-prompt-snap.png",
     "width": 768,
-    "height": 377,
+    "height": 381,
     "clipSelector": ".dab-empty-prompt-card",
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "studio_dark_theme",

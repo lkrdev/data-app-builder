@@ -13,9 +13,11 @@ import {
   authenticateGoogleOAuth,
   BOOTSTRAP_LOOKML_PY,
   BOOTSTRAP_SANDBOX_SH,
+  buildDynamicStarterPrompts,
   buildWorkspaceSources,
   BUNDLE_APP_PY,
   classifyLookerOperation,
+  clearStarterPromptsCache,
   CodeModePermissionRequest,
   computeIsAuthenticated,
   computeLkrExtensionCacheKey,
@@ -23,11 +25,15 @@ import {
   CONVERSATION_LABEL_REQUEST_TAG,
   DASHBOARD_CODEMODE_PREAMBLE_PY,
   DEFAULT_ANTIGRAVITY_MODEL,
+  discoverStarterContentSummaries,
+  discoverStarterExploreContext,
   executeLkrExtensionToolRequest,
   extractInteractionActivitySteps,
   extractLkrExtensionToolRequests,
   extractThoughtText,
   generateConversationLabel,
+  generateDynamicStarterPrompts,
+  getCachedStarterPrompts,
   getSharedEnvExploreSchemas,
   isEnvironmentNotFoundError,
   LKR_DEV_CLI_SPEC,
@@ -37,6 +43,7 @@ import {
   LKR_CLI_SITECUSTOMIZE_PY,
   LkrCodeMode,
   loginWithGoogleOAuth,
+  parseStarterPromptsResponse,
   prewarmOrWakeAntigravityEnvironment,
   recordSharedEnvExploreSchema,
   resolveAdaptivePollScheduleMs,
@@ -44,6 +51,8 @@ import {
   resolveLookerOAuthRedirectUris,
   runAntigravityTurn,
   sanitizeConversationLabel,
+  STARTER_PROMPTS_REQUEST_TAG,
+  stripStarterPromptEmojis,
 } from '../antigravity'
 import {
   StudioBadge,
@@ -63,6 +72,7 @@ import {
   renderUseCaseGuideMarkdown,
   resolveLookerEmbedTarget,
   STARTER_PROMPTS_BY_USE_CASE,
+  StarterPromptButtons,
   USE_CASE_GUIDE_ORDER,
   USE_CASE_GUIDES,
 } from '../components/StudioWorkspace'
@@ -2986,7 +2996,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(agentsMd).toContain('.agents/skills/issue-authoring/SKILL.md')
   })
 
-  test('27. enforces requirePermission on mutating sdk_request calls while auto-executing read-only GET and query/validation POST calls, and documents /spartan/oauth2_redirect + Safe Mode matrix (Issue #83)', async () => {
+  test('28. enforces requirePermission on mutating sdk_request calls while auto-executing read-only GET and query/validation POST calls, and documents /spartan/oauth2_redirect + Safe Mode matrix (Issue #83)', async () => {
     // 1. Verify classifyLookerOperation across read-only vs mutating endpoints
     expect(classifyLookerOperation('GET', '/user')).toEqual({
       operation: 'read_user',
@@ -3214,5 +3224,246 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(permSkillMd).toContain('/spartan/oauth2_redirect')
     expect(permSkillMd).toContain('Safe Mode (Ask)')
     expect(permSkillMd).toContain('classifyLookerOperation')
+  })
+
+  test('29. Issue #84: removes hardcoded order_items starter prompts, strips emojis from starter labels, discovers explore fields via lookml_model_explore, and synthesizes dynamic starter prompts via [STARTER_PROMPTS_REQUEST] with skeleton loading state', async () => {
+    clearStarterPromptsCache()
+    const repoRoot = path.resolve(__dirname, '../..')
+    const workspaceTsx = readFileSync(
+      path.join(repoRoot, 'src/components/StudioWorkspace.tsx'),
+      'utf8'
+    )
+    expect(workspaceTsx).not.toMatch(/order_items/i)
+    expect(JSON.stringify(STARTER_PROMPTS_BY_USE_CASE)).not.toMatch(/order_items/i)
+
+    // 1. Emoji stripping on labels
+    expect(stripStarterPromptEmojis('📊 Build an Executive Revenue Data App')).toBe(
+      'Build an Executive Revenue Data App'
+    )
+    expect(stripStarterPromptEmojis('✨🐍 Explore & Filter Summary')).toBe(
+      'Explore & Filter Summary'
+    )
+    for (const list of Object.values(STARTER_PROMPTS_BY_USE_CASE)) {
+      for (const item of list) {
+        expect(item.label).toBe(stripStarterPromptEmojis(item.label))
+        expect(item.prompt).not.toMatch(/order_items/i)
+      }
+    }
+
+    // 2. Discover explore context + recent user content via Looker 4.0 SDK lookml_model_explore + content_summary (cached)
+    let exploreCalls = 0
+    let contentSummaryCalls = 0
+    const mockSdk = asSdk({
+      ok: async <T>(p: T) => p,
+      content_summary: async () => {
+        contentSummaryCalls += 1
+        return [
+          {
+            id: 42,
+            content_type: 'dashboard',
+            content_id: '101',
+            content_slug: 'store-executive-pulse',
+            title: 'Store Executive Pulse',
+            description: 'Weekly store revenue and basket size',
+            view_count: 85,
+            favorite_count: 12,
+            is_scheduled: true,
+          },
+          {
+            id: 43,
+            content_type: 'look',
+            content_id: '204',
+            title: 'Regional Basket Margin Look',
+            view_count: 19,
+            favorite_count: 3,
+            is_scheduled: false,
+          },
+        ]
+      },
+      lookml_model_explore: async (modelName: string, exploreName: string) => {
+        exploreCalls += 1
+        return {
+          id: `${modelName}::${exploreName}`,
+          name: exploreName,
+          label: 'Store Transactions',
+          model_name: modelName,
+          fields: {
+            dimensions: [
+              { name: 'store_transactions.store_region', label_short: 'Store Region', type: 'string' },
+              { name: 'store_transactions.transaction_month', label_short: 'Transaction Month', type: 'date_month' },
+            ],
+            measures: [
+              { name: 'store_transactions.net_sales', label_short: 'Net Sales', type: 'sum' },
+              { name: 'store_transactions.basket_count', label_short: 'Basket Count', type: 'count' },
+            ],
+          },
+        }
+      },
+    })
+
+    const availableModels = [
+      {
+        name: 'retail_ops',
+        label: 'Retail Operations',
+        explores: [{ name: 'store_transactions', label: 'Store Transactions', hidden: false }],
+      },
+    ]
+
+    const ctx1 = await discoverStarterExploreContext({
+      sdk: mockSdk,
+      selectedExplores: [],
+      availableModels,
+    })
+    expect(exploreCalls).toBe(1)
+    expect(contentSummaryCalls).toBe(1)
+    expect(ctx1).toMatchObject({
+      modelName: 'retail_ops',
+      exploreName: 'store_transactions',
+      exploreLabel: 'Store Transactions',
+      exploreKey: 'retail_ops::store_transactions',
+    })
+    expect(ctx1?.measures.map((m) => m.label)).toEqual(['Net Sales', 'Basket Count'])
+    expect(ctx1?.contentSummaries).toHaveLength(2)
+    expect(ctx1?.contentSummaries?.[0]).toMatchObject({
+      content_type: 'dashboard',
+      content_id: '101',
+      title: 'Store Executive Pulse',
+    })
+    expect(await discoverStarterContentSummaries(mockSdk)).toHaveLength(2)
+    expect(contentSummaryCalls).toBe(1)
+
+    // Second lookup for same explore hits in-memory cache
+    const ctx2 = await discoverStarterExploreContext({
+      sdk: mockSdk,
+      selectedExplores: ['retail_ops::store_transactions'],
+      availableModels,
+    })
+    expect(exploreCalls).toBe(1)
+    expect(ctx2?.exploreKey).toBe('retail_ops::store_transactions')
+
+    // 3. Deterministic dynamic prompts reflect discovered explore, content_summary, & permitted use cases
+    const localPrompts = buildDynamicStarterPrompts({
+      useCase: 'auto',
+      selectedExplores: ['retail_ops::store_transactions'],
+      permittedUseCases: ['app', 'dashboard', 'conversational-analytics'],
+      availableModels,
+      exploreContext: ctx1,
+    })
+    expect(localPrompts.length).toBe(3)
+    expect(localPrompts[0].label).toContain('Store Transactions')
+    expect(localPrompts[0].prompt).toContain('retail_ops::store_transactions')
+    expect(localPrompts[0].prompt).toContain('Net Sales')
+    expect(localPrompts.every((p) => ['app', 'dashboard', 'conversational-analytics'].includes(p.useCase || ''))).toBe(true)
+
+    const appPrompts = buildDynamicStarterPrompts({
+      useCase: 'app',
+      selectedExplores: ['retail_ops::store_transactions'],
+      availableModels,
+      exploreContext: ctx1,
+    })
+    expect(appPrompts[2].label).toBe('Upgrade Store Executive Pulse to Data App')
+    expect(appPrompts[2].prompt).toContain('"Store Executive Pulse" Looker dashboard (#101)')
+
+    const dashPrompts = buildDynamicStarterPrompts({
+      useCase: 'dashboard',
+      selectedExplores: ['retail_ops::store_transactions'],
+      availableModels,
+      exploreContext: ctx1,
+    })
+    expect(dashPrompts[2].label).toBe('Pin Store Executive Pulse & Schedule')
+    expect(dashPrompts[2].prompt).toContain('"Store Executive Pulse" (#101)')
+
+    // 4. Stateless [STARTER_PROMPTS_REQUEST] side-request when authenticated
+    const capturedBodies: Array<Record<string, unknown>> = []
+    const mockExtensionSDK = {
+      lookerHostData: { hostUrl: 'https://looker.example.com' },
+      serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+        const parsed = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {}
+        capturedBodies.push(parsed)
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            id: 'int_starter_84',
+            status: 'completed',
+            output_text: `<STARTER_PROMPTS>${JSON.stringify([
+              {
+                id: 'custom-1',
+                label: '📊 Net Sales Regional Scorecard',
+                prompt: 'Build a Store Transactions Data App on retail_ops::store_transactions with Net Sales and Basket Count by Store Region.',
+                useCase: 'app',
+              },
+              {
+                id: 'custom-2',
+                label: '📈 Store Transactions Executive UDD',
+                prompt: 'Create a native Looker UDD on retail_ops::store_transactions tracking Net Sales across Transaction Month.',
+                useCase: 'dashboard',
+              },
+              {
+                id: 'custom-3',
+                label: '💬 Top Store Regions by Net Sales',
+                prompt: 'Which Store Region in retail_ops::store_transactions had the highest Net Sales last quarter?',
+                useCase: 'conversational-analytics',
+              },
+            ])}</STARTER_PROMPTS>`,
+          },
+        }
+      },
+    }
+
+    const agentPrompts = await generateDynamicStarterPrompts({
+      sdk: mockSdk,
+      extensionSDK: mockExtensionSDK,
+      auth: { mode: 'apikey', apiKey: 'test-key-84' },
+      useCase: 'auto',
+      selectedExplores: ['retail_ops::store_transactions'],
+      permittedUseCases: ['app', 'dashboard', 'conversational-analytics'],
+      availableModels,
+      exploreContext: ctx1,
+      pollScheduleMs: [0],
+    })
+    expect(capturedBodies).toHaveLength(1)
+    expect(capturedBodies[0].tools).toEqual([])
+    expect(capturedBodies[0].previous_interaction_id).toBeUndefined()
+    const sentInput = (capturedBodies[0].input as Array<{ text?: string }>)[0]?.text || ''
+    expect(sentInput).toContain(STARTER_PROMPTS_REQUEST_TAG)
+    expect(sentInput).toContain('retail_ops::store_transactions')
+    expect(sentInput).toContain('Recent user content (content_summary):')
+    expect(sentInput).toContain('Store Executive Pulse')
+    expect(agentPrompts.map((p) => p.label)).toEqual([
+      'Net Sales Regional Scorecard',
+      'Store Transactions Executive UDD',
+      'Top Store Regions by Net Sales',
+    ])
+    expect(
+      getCachedStarterPrompts(
+        'auto',
+        'retail_ops::store_transactions',
+        ['app', 'dashboard', 'conversational-analytics'],
+        true
+      )
+    ).toEqual(agentPrompts)
+
+    // Parse fallback safety when malformed output is returned
+    expect(parseStarterPromptsResponse('invalid json', localPrompts)).toEqual(localPrompts)
+    expect(AGENTS_MD).toContain(STARTER_PROMPTS_REQUEST_TAG)
+
+    // 5. StarterPromptButtons skeleton & loaded states
+    type Elem = React.ReactElement<Record<string, unknown>>
+    const skelTree = StarterPromptButtons({
+      useCase: 'auto',
+      prompts: [],
+      loading: true,
+      onSelect: () => {},
+    }) as Elem
+    expect(skelTree.props['data-testid']).toBe('studio-starter-prompts-skeleton')
+
+    const loadedTree = StarterPromptButtons({
+      useCase: 'auto',
+      prompts: agentPrompts,
+      loading: false,
+      onSelect: () => {},
+    }) as Elem
+    expect(loadedTree.props['data-testid']).toBe('studio-starter-prompts')
   })
 })
