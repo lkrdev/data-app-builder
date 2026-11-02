@@ -9,7 +9,7 @@ import {
   authenticateGoogleOAuth, CodeModePermissionDecision, CodeModePermissionRequest, computeIsAuthenticated,
   DEFAULT_ANTIGRAVITY_MODEL, ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig, generateConversationLabel,
   listAvailableAntigravityModels, LkrCodeMode, loginWithGoogleOAuth, normalizeEnvironmentId,
-  PastedImage, prewarmOrWakeAntigravityEnvironment, resolveLookerOAuthRedirectUri, runAntigravityTurn, sanitizeConversationLabel,
+  PastedImage, prewarmOrWakeAntigravityEnvironment, resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, runAntigravityTurn, sanitizeConversationLabel,
 } from './antigravity'
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
 import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
@@ -45,6 +45,7 @@ export {
   computeIsAuthenticated,
   normalizeStudioThemeMode,
   resolveLookerOAuthRedirectUri,
+  resolveLookerOAuthRedirectUris,
   resolveStudioTheme,
   resolveSystemTheme,
   STUDIO_THEME_STORAGE_KEY,
@@ -116,13 +117,17 @@ export function useStudioController() {
   const [oauthSigningIn, setOauthSigningIn] = useState(false)
   const oauthAbortRef = useRef<AbortController | null>(null)
   const isAuthenticated = authMode === 'apikey' ? Boolean(apiKey.trim()) : Boolean(oauthToken.trim())
-  const oauthRedirectUri = useMemo(
+  const oauthRedirectUris = useMemo(
     () =>
-      resolveLookerOAuthRedirectUri(
-        lookerHostData?.hostUrl || extHostData?.hostUrl
+      resolveLookerOAuthRedirectUris(
+        lookerHostData?.hostUrl || extHostData?.hostUrl,
+        undefined,
+        lookerHostData?.hostType || extHostData?.hostType
       ),
-    [lookerHostData?.hostUrl, extHostData?.hostUrl]
+    [lookerHostData?.hostUrl, extHostData?.hostUrl, lookerHostData?.hostType, extHostData?.hostType]
   )
+  const oauthRedirectUri = oauthRedirectUris.extensionUri
+  const spartanOauthRedirectUri = oauthRedirectUris.spartanUri
   const [isConfigured, setIsConfigured] = useState(() =>
     Boolean(initialCtx?.authMode && (initialCtx.authMode === 'apikey' || initialCtx.clientId))
   )
@@ -2406,7 +2411,7 @@ export function useStudioController() {
     authMode, setAuthMode, clientId, setClientId, projectId, setProjectId,
     disabledModes, setDisabledModes, selectedModel, setSelectedModel,
     availableModels, enabledModes, oauthToken, setOauthToken, apiKey, setApiKey,
-    isAuthenticated, oauthSigningIn, oauthRedirectUri,
+    isAuthenticated, oauthSigningIn, oauthRedirectUri, spartanOauthRedirectUri, oauthRedirectUris,
     capabilities, setCapabilities, availableLookmlProjects, canDeployLookml,
     loadingMetadata, setLoadingMetadata,
     models, folders, folderTreeNodes, rootFolderIds, folderChildrenById,

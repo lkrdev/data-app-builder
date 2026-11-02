@@ -33,6 +33,7 @@ import {
   BOOTSTRAP_LOOKML_PY,
   BOOTSTRAP_SANDBOX_SH,
   buildLookmlSystemGuide,
+  classifyLookerOperation,
   computeLkrExtensionCacheKey,
   executeLkrExtensionToolRequest,
   extractLkrExtensionToolRequests,
@@ -59,6 +60,7 @@ export type { ResolvedStudioUseCase, StudioUseCase } from './lookerApi'
 export {
   BOOTSTRAP_LOOKML_PY,
   BOOTSTRAP_SANDBOX_SH,
+  classifyLookerOperation,
   computeLkrExtensionCacheKey,
   executeLkrExtensionToolRequest,
   extractLkrExtensionToolRequests,
@@ -357,16 +359,43 @@ export interface GoogleOAuthOptions {
   focusReturnDelayMs?: number
 }
 
-export function resolveLookerOAuthRedirectUri(
+export interface LookerOAuthRedirectUris {
+  extensionUri: string
+  spartanUri: string
+  activeUri: string
+}
+
+export function resolveLookerOAuthRedirectUris(
   hostUrl?: string | null,
-  fallbackOrigin?: string
-): string {
-  const base =
+  fallbackOrigin?: string,
+  hostTypeOrPathname?: string | null
+): LookerOAuthRedirectUris {
+  const base = (
     (hostUrl && hostUrl.trim()) ||
     fallbackOrigin ||
     (typeof window !== 'undefined' && window.location?.origin) ||
     'https://looker.example.com'
-  return `${base.replace(/\/+$/, '')}/extensions/oauth2_redirect`
+  ).replace(/\/+$/, '')
+  const extensionUri = `${base}/extensions/oauth2_redirect`
+  const spartanUri = `${base}/spartan/oauth2_redirect`
+  const pathOrHostType =
+    (hostTypeOrPathname && hostTypeOrPathname.trim()) ||
+    (typeof window !== 'undefined' && window.location?.pathname) ||
+    ''
+  const isSpartan =
+    pathOrHostType === 'spartan' || /^\/spartan(\/|$)/.test(pathOrHostType)
+  return {
+    extensionUri,
+    spartanUri,
+    activeUri: isSpartan ? spartanUri : extensionUri,
+  }
+}
+
+export function resolveLookerOAuthRedirectUri(
+  hostUrl?: string | null,
+  fallbackOrigin?: string
+): string {
+  return resolveLookerOAuthRedirectUris(hostUrl, fallbackOrigin).extensionUri
 }
 
 export function computeIsAuthenticated(
@@ -1701,17 +1730,25 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         const bridgedLines: string[] = []
         for (const req of pendingBridgeReqs) {
           if (req.kind !== 'sdk_request') codemodeCalls += 1
-          const { cacheKey, result } = await executeLkrExtensionToolRequest({
-            sdk: turnSdk,
-            req,
-            defaultVars: defaultCodeModeVars,
-            extensionSDK,
-            requirePermission,
-            approvedOperations,
-            onPermissionRequest: effectivePermissionHandler,
-          })
-          resolvedBridgeCacheKeys.add(cacheKey)
-          bridgedLines.push(`/workspace/.lkr_extension_cache/${cacheKey}.json\n\`\`\`json\n${JSON.stringify(result)}\n\`\`\``)
+          try {
+            const { cacheKey, result } = await executeLkrExtensionToolRequest({
+              sdk: turnSdk,
+              req,
+              defaultVars: defaultCodeModeVars,
+              extensionSDK,
+              requirePermission,
+              approvedOperations,
+              onPermissionRequest: effectivePermissionHandler,
+            })
+            resolvedBridgeCacheKeys.add(cacheKey)
+            bridgedLines.push(`/workspace/.lkr_extension_cache/${cacheKey}.json\n\`\`\`json\n${JSON.stringify(result)}\n\`\`\``)
+          } catch (err: unknown) {
+            apiRetries += 1
+            const cacheKey = req.cache_key || computeLkrExtensionCacheKey(req)
+            resolvedBridgeCacheKeys.add(cacheKey)
+            const errMsg = err instanceof Error ? err.message : String(err)
+            bridgedLines.push(`/workspace/.lkr_extension_cache/${cacheKey}.json\n\`\`\`json\n${JSON.stringify({ ok: false, error: errMsg })}\n\`\`\``)
+          }
         }
         codemodeExecMs += Date.now() - bridgeStart
 

@@ -18,6 +18,7 @@ than guessing or hand-crafting commands:
 | **Convert HTML dashboards** | `skills/data-app-upgrader/SKILL.md` | Converting legacy HTML Canvas Dashboards (`*.canvasdashboard.html`) into Data Apps |
 | **Check or run updates** | `skills/toolkit-updater/SKILL.md` | Checking for toolkit updates, changelog narration, backing up, upgrading, and upgrading existing Lit apps from `CHANGELOG.md` (tools in `skills/toolkit-updater/tools/`) |
 | **Studio UI, components, or theme** | `.agents/skills/studio-design-system/SKILL.md` | Design system tokens (`--dab-*`), React UI primitives (`StudioDesignSystem.tsx` & `StudioSelect.tsx`), layout/overflow invariants, Dark/Light theme rules, and cropped visual snapshot standards |
+| **Looker RBAC & Safe Mode permissions** | `.agents/skills/looker-permissions/SKILL.md` | 4-layer Looker RBAC mental model, model-to-project expansion, folder ACLs, role-denied 404 diagnostics, and `Safe Mode (Ask)` vs. `Auto-Approve (YOLO)` execution approval matrix |
 | **File issues or submit PRs** | `.agents/skills/issue-authoring/SKILL.md` | Feedback stream intake (`file:line` + root-cause pre-analysis), blast-radius grouping, canonical GitHub issue template (`StudioDesignSystem` + `data-testid` + SDK/mock contracts), and mandatory pre-PR evaluation loop |
 
 Detailed component properties, methods, and styling variables live in

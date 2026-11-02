@@ -15,6 +15,7 @@ import {
   BOOTSTRAP_SANDBOX_SH,
   buildWorkspaceSources,
   BUNDLE_APP_PY,
+  classifyLookerOperation,
   CodeModePermissionRequest,
   computeIsAuthenticated,
   computeLkrExtensionCacheKey,
@@ -40,6 +41,7 @@ import {
   recordSharedEnvExploreSchema,
   resolveAdaptivePollScheduleMs,
   resolveLookerOAuthRedirectUri,
+  resolveLookerOAuthRedirectUris,
   runAntigravityTurn,
   sanitizeConversationLabel,
 } from '../antigravity'
@@ -2423,6 +2425,29 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(resolveLookerOAuthRedirectUri('', 'https://looker.example.com/')).toBe(
       'https://looker.example.com/extensions/oauth2_redirect'
     )
+    expect(resolveLookerOAuthRedirectUris('https://dev-argolis.looker.com/')).toEqual({
+      extensionUri: 'https://dev-argolis.looker.com/extensions/oauth2_redirect',
+      spartanUri: 'https://dev-argolis.looker.com/spartan/oauth2_redirect',
+      activeUri: 'https://dev-argolis.looker.com/extensions/oauth2_redirect',
+    })
+    expect(
+      resolveLookerOAuthRedirectUris('https://dev-argolis.looker.com/', undefined, 'spartan')
+    ).toEqual({
+      extensionUri: 'https://dev-argolis.looker.com/extensions/oauth2_redirect',
+      spartanUri: 'https://dev-argolis.looker.com/spartan/oauth2_redirect',
+      activeUri: 'https://dev-argolis.looker.com/spartan/oauth2_redirect',
+    })
+    expect(
+      resolveLookerOAuthRedirectUris(
+        'https://dev-argolis.looker.com',
+        undefined,
+        '/spartan/data_app_builder::data_app_builder'
+      )
+    ).toEqual({
+      extensionUri: 'https://dev-argolis.looker.com/extensions/oauth2_redirect',
+      spartanUri: 'https://dev-argolis.looker.com/spartan/oauth2_redirect',
+      activeUri: 'https://dev-argolis.looker.com/spartan/oauth2_redirect',
+    })
 
     // 1. Successful OAuth sign-in resolves token cleanly
     const okSdk = {
@@ -2959,5 +2984,235 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     const agentsMd = readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8')
     expect(agentsMd).toContain('.agents/skills/studio-design-system/SKILL.md')
     expect(agentsMd).toContain('.agents/skills/issue-authoring/SKILL.md')
+  })
+
+  test('27. enforces requirePermission on mutating sdk_request calls while auto-executing read-only GET and query/validation POST calls, and documents /spartan/oauth2_redirect + Safe Mode matrix (Issue #83)', async () => {
+    // 1. Verify classifyLookerOperation across read-only vs mutating endpoints
+    expect(classifyLookerOperation('GET', '/user')).toEqual({
+      operation: 'read_user',
+      requiresPermission: false,
+    })
+    expect(classifyLookerOperation('POST', '/queries/run/json')).toEqual({
+      operation: 'read_queries_run_json',
+      requiresPermission: false,
+    })
+    expect(classifyLookerOperation('POST', '/sql_queries')).toEqual({
+      operation: 'read_sql_queries',
+      requiresPermission: false,
+    })
+    expect(classifyLookerOperation('POST', '/merge_queries')).toEqual({
+      operation: 'read_merge_queries',
+      requiresPermission: false,
+    })
+    expect(classifyLookerOperation('POST', '/content_validation')).toEqual({
+      operation: 'read_content_validation',
+      requiresPermission: false,
+    })
+    expect(classifyLookerOperation('POST', '/projects/thelook/validate')).toEqual({
+      operation: 'read_projects_thelook_validate',
+      requiresPermission: false,
+    })
+    expect(classifyLookerOperation('POST', '/projects/thelook/lookml_tests/run')).toEqual({
+      operation: 'read_projects_thelook_lookml_tests_run',
+      requiresPermission: false,
+    })
+    expect(classifyLookerOperation('POST', '/projects/thelook/git_connection_tests')).toEqual({
+      operation: 'read_projects_thelook_git_connection_tests',
+      requiresPermission: false,
+    })
+    expect(classifyLookerOperation('POST', '/dashboards')).toEqual({
+      operation: 'create_dashboard',
+      requiresPermission: true,
+    })
+    expect(classifyLookerOperation('PATCH', '/dashboards/42')).toEqual({
+      operation: 'update_dashboard',
+      requiresPermission: true,
+    })
+    expect(classifyLookerOperation('DELETE', '/dashboards/42')).toEqual({
+      operation: 'delete_dashboard',
+      requiresPermission: true,
+    })
+
+    // 2. Verify executeLkrExtensionToolRequest for sdk_request read-only bypass vs mutating permission gate
+    const transportCalls: Array<{ method: string; path: string; body?: unknown }> = []
+    const mockSdk = asSdk({
+      ok: async <T>(p: T) => p,
+      authSession: {
+        transport: {
+          rawRequest: async (method: string, reqPath: string, _qp?: unknown, body?: unknown) => {
+            transportCalls.push({ method, path: reqPath, body })
+            return {
+              ok: true,
+              statusCode: 200,
+              body: JSON.stringify({ ok: true, method, path: reqPath }),
+            }
+          },
+        },
+      },
+    })
+
+    let permPromptCount = 0
+    // Read-only GET and read-only POST (/queries/run/json, /projects/thelook/validate) auto-execute without prompting
+    await executeLkrExtensionToolRequest({
+      sdk: mockSdk,
+      req: { kind: 'sdk_request', method: 'GET', path: '/user' },
+      requirePermission: true,
+      onPermissionRequest: async () => {
+        permPromptCount += 1
+        return 'deny'
+      },
+    })
+    await executeLkrExtensionToolRequest({
+      sdk: mockSdk,
+      req: {
+        kind: 'sdk_request',
+        method: 'POST',
+        path: '/queries/run/json',
+        body: { model: 'thelook', view: 'order_items', fields: ['order_items.count'] },
+      },
+      requirePermission: true,
+      onPermissionRequest: async () => {
+        permPromptCount += 1
+        return 'deny'
+      },
+    })
+    await executeLkrExtensionToolRequest({
+      sdk: mockSdk,
+      req: { kind: 'sdk_request', method: 'POST', path: '/projects/thelook/validate' },
+      requirePermission: true,
+      onPermissionRequest: async () => {
+        permPromptCount += 1
+        return 'deny'
+      },
+    })
+    expect(permPromptCount).toBe(0)
+    expect(transportCalls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      'GET /user',
+      'POST /queries/run/json',
+      'POST /projects/thelook/validate',
+    ])
+
+    // Mutating sdk_request without onPermissionRequest or with 'deny' rejects before hitting transport
+    transportCalls.length = 0
+    await expect(
+      executeLkrExtensionToolRequest({
+        sdk: mockSdk,
+        req: {
+          kind: 'sdk_request',
+          method: 'POST',
+          path: '/dashboards',
+          body: { title: 'Blocked Dashboard' },
+          dev_mode: true,
+        },
+        requirePermission: true,
+      })
+    ).rejects.toThrow(/PermissionError: Operation 'create_dashboard' \(POST \/dashboards\)/)
+    expect(transportCalls).toHaveLength(0)
+
+    await expect(
+      executeLkrExtensionToolRequest({
+        sdk: mockSdk,
+        req: {
+          kind: 'sdk_request',
+          method: 'DELETE',
+          path: '/dashboards/42',
+          thought: 'Deleting test dashboard 42',
+        },
+        requirePermission: true,
+        onPermissionRequest: async (permReq) => {
+          permPromptCount += 1
+          expect(permReq).toMatchObject({
+            operation: 'delete_dashboard',
+            httpMethod: 'DELETE',
+            path: '/dashboards/42',
+            thought: 'Deleting test dashboard 42',
+          })
+          return 'deny'
+        },
+      })
+    ).rejects.toThrow(/PermissionError: Operation 'delete_dashboard' \(DELETE \/dashboards\/42\)/)
+    expect(permPromptCount).toBe(1)
+    expect(transportCalls).toHaveLength(0)
+
+    // 'allow_op' prompts only once across repeated mutating sdk_request calls of the same operation
+    const approvedOps = new Set<string>()
+    permPromptCount = 0
+    for (let i = 0; i < 3; i++) {
+      await executeLkrExtensionToolRequest({
+        sdk: mockSdk,
+        req: {
+          kind: 'sdk_request',
+          method: 'POST',
+          path: '/dashboards',
+          body: { title: `Dash ${i}` },
+        },
+        requirePermission: true,
+        approvedOperations: approvedOps,
+        onPermissionRequest: async (permReq) => {
+          permPromptCount += 1
+          expect(permReq.operation).toBe('create_dashboard')
+          return 'allow_op'
+        },
+      })
+    }
+    expect(permPromptCount).toBe(1)
+    expect(approvedOps.has('create_dashboard')).toBe(true)
+    expect(transportCalls).toHaveLength(3)
+
+    // 'allow_all' approves all subsequent mutating operations in the turn
+    const allowAllSet = new Set<string>()
+    permPromptCount = 0
+    await executeLkrExtensionToolRequest({
+      sdk: mockSdk,
+      req: { kind: 'sdk_request', method: 'PATCH', path: '/dashboards/42', body: { title: 'Updated' } },
+      requirePermission: true,
+      approvedOperations: allowAllSet,
+      onPermissionRequest: async () => {
+        permPromptCount += 1
+        return 'allow_all'
+      },
+    })
+    await executeLkrExtensionToolRequest({
+      sdk: mockSdk,
+      req: { kind: 'sdk_request', method: 'DELETE', path: '/dashboards/42' },
+      requirePermission: true,
+      approvedOperations: allowAllSet,
+      onPermissionRequest: async () => {
+        permPromptCount += 1
+        return 'deny'
+      },
+    })
+    expect(permPromptCount).toBe(1)
+    expect(allowAllSet.has('*')).toBe(true)
+
+    // Auto-Approve (YOLO: requirePermission: false) executes without prompting
+    permPromptCount = 0
+    await executeLkrExtensionToolRequest({
+      sdk: mockSdk,
+      req: { kind: 'sdk_request', method: 'POST', path: '/dashboards', body: { title: 'YOLO' } },
+      requirePermission: false,
+      onPermissionRequest: async () => {
+        permPromptCount += 1
+        return 'deny'
+      },
+    })
+    expect(permPromptCount).toBe(0)
+
+    // 3. Verify README.md and .agents/skills/looker-permissions/SKILL.md documentation
+    const repoRoot = path.resolve(__dirname, '../..')
+    const readmeMd = readFileSync(path.join(repoRoot, 'README.md'), 'utf8')
+    expect(readmeMd).toContain('/extensions/oauth2_redirect')
+    expect(readmeMd).toContain('/spartan/oauth2_redirect')
+    expect(readmeMd).toContain('Safe Mode (Ask)')
+    expect(readmeMd).toContain('Auto-Approve (YOLO)')
+
+    const permSkillMd = readFileSync(
+      path.join(repoRoot, '.agents/skills/looker-permissions/SKILL.md'),
+      'utf8'
+    )
+    expect(permSkillMd).toContain('name: looker-permissions')
+    expect(permSkillMd).toContain('/spartan/oauth2_redirect')
+    expect(permSkillMd).toContain('Safe Mode (Ask)')
+    expect(permSkillMd).toContain('classifyLookerOperation')
   })
 })

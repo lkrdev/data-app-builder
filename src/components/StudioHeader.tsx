@@ -2,7 +2,10 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import { useLocation } from 'react-router-dom'
 
-import { getGeminiUserAttributeName } from '../antigravity'
+import {
+   getGeminiUserAttributeName,
+  resolveLookerOAuthRedirectUris,
+} from '../antigravity'
 import { useLookerExtension } from '../contexts/LookerExtensionContext'
 import { formatExploreId, LookerFolderNode } from '../lookerApi'
 import {
@@ -13,6 +16,8 @@ import {
 import { STUDIO_MODES } from './App'
 import {
   StudioBadge,
+  StudioButton,
+  StudioCard,
   StudioModal,
   StudioSelect,
   StudioSkeleton,
@@ -91,6 +96,8 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     apiKey,
     setApiKey,
     oauthRedirectUri,
+    spartanOauthRedirectUri,
+    oauthRedirectUris,
     capabilities,
     extensionSDK,
     busyStatus,
@@ -98,6 +105,16 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     handleSaveAuthSetup,
   } = ctl
   const [copiedRedirectUri, setCopiedRedirectUri] = useState(false)
+  const [copiedSpartanRedirectUri, setCopiedSpartanRedirectUri] = useState(false)
+  const resolvedRedirectUris =
+    oauthRedirectUris ||
+    resolveLookerOAuthRedirectUris(
+      oauthRedirectUri
+        ? oauthRedirectUri.replace(/\/(extensions|spartan)\/oauth2_redirect\/?$/, '')
+        : undefined
+    )
+  const extensionRedirectUri = oauthRedirectUri || resolvedRedirectUris.extensionUri
+  const spartanRedirectUri = spartanOauthRedirectUri || resolvedRedirectUris.spartanUri
   const errorText = messages.filter((m) => m.role === 'error').slice(-1)[0]?.text
   const canSaveContext = capabilities?.canConfigureExtension !== false
   const canManageAttrs = capabilities?.canManageUserAttributes !== false
@@ -204,31 +221,53 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             </button>
           </div>
           {authMode === 'oauth' && (
-            <div className="dab-oauth-redirect-helper">
+            <StudioCard className="dab-oauth-redirect-helper" testId="config-oauth-redirect-card">
               <div className="dab-oauth-redirect-row">
                 <span>
-                  <strong>Authorized redirect URI:</strong>{' '}
-                  <code data-testid="config-oauth-redirect-uri">{oauthRedirectUri}</code>
+                  <strong>Authorized redirect URI (Standard):</strong>{' '}
+                  <code data-testid="config-oauth-redirect-uri">{extensionRedirectUri}</code>
                 </span>
-                <button
-                  type="button"
-                  data-testid="config-copy-redirect-uri-btn"
-                  className="dab-btn-secondary"
-                  style={{ height: 24, fontSize: 11, padding: '0 8px' }}
+                <StudioButton
+                  variant="secondary"
+                  testId="config-copy-redirect-uri-btn"
+                  style={{ minHeight: 24, fontSize: 11, padding: '0 8px' }}
                   onClick={() => {
-                    navigator.clipboard?.writeText?.(oauthRedirectUri)
+                    navigator.clipboard?.writeText?.(extensionRedirectUri)
                     setCopiedRedirectUri(true)
                     setTimeout(() => setCopiedRedirectUri(false), 1800)
                   }}
                 >
-                  {copiedRedirectUri ? '✓ Copied Redirect URI' : 'Copy Redirect URI'}
-                </button>
+                  <span data-testid="copy-redirect-uri-btn">
+                    {copiedRedirectUri ? '✓ Copied Redirect URI' : 'Copy Redirect URI'}
+                  </span>
+                </StudioButton>
+              </div>
+              <div className="dab-oauth-redirect-row">
+                <span>
+                  <strong>Authorized redirect URI (Full Screen / Spartan):</strong>{' '}
+                  <code data-testid="config-spartan-oauth-redirect-uri">{spartanRedirectUri}</code>
+                </span>
+                <StudioButton
+                  variant="secondary"
+                  testId="copy-spartan-redirect-uri-btn"
+                  style={{ minHeight: 24, fontSize: 11, padding: '0 8px' }}
+                  onClick={() => {
+                    navigator.clipboard?.writeText?.(spartanRedirectUri)
+                    setCopiedSpartanRedirectUri(true)
+                    setTimeout(() => setCopiedSpartanRedirectUri(false), 1800)
+                  }}
+                >
+                  <span data-testid="config-copy-spartan-redirect-uri-btn">
+                    {copiedSpartanRedirectUri ? '✓ Copied Spartan URI' : 'Copy Spartan URI'}
+                  </span>
+                </StudioButton>
               </div>
               <div className="dab-muted" style={{ fontSize: 11 }}>
-                Add this URI under <strong>Authorized redirect URIs</strong> on your GCP Web OAuth 2.0
-                Client ID to avoid <code>Error 400: redirect_uri_mismatch</code>.
+                Add <strong>both</strong> URIs under <strong>Authorized redirect URIs</strong> on your GCP Web OAuth 2.0
+                Client ID (Standard <code>/extensions/oauth2_redirect</code> and Full Screen{' '}
+                <code>/spartan/oauth2_redirect</code>) to avoid <code>Error 400: redirect_uri_mismatch</code>.
               </div>
-            </div>
+            </StudioCard>
           )}
           <div
             style={{
@@ -643,7 +682,9 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
           onClick={() => setRequirePermission((prev) => !prev)}
           title="Toggle whether mutating Looker SDK calls require interactive user approval or auto-approve"
         >
-          {requirePermission ? '🛡️ Safe Mode (Ask)' : '⚡ Auto-Approve (YOLO)'}
+          <span data-testid="studio-approval-policy-select">
+            {requirePermission ? '🛡️ Safe Mode (Ask)' : '⚡ Auto-Approve (YOLO)'}
+          </span>
         </button>
 
         <div className="dab-field" ref={comboRef}>
