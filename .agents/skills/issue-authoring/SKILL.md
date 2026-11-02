@@ -31,7 +31,7 @@ Load when capturing feedback, filing GitHub issues (`gh issue create`), or evalu
 - **Current (`src/path/File.tsx#L10-L30`, `src/useStudioController.ts#L100-L120`)**: <Exact current behavior and root cause.>
 - **Change**: <Concrete target behavior, state/prop transitions, and edge-case handling.>
 - **Design System & `data-testid` Contract**:
-  - Primitives: `<StudioModal>`, `<StudioToolbar>`, `<StudioSelect>`, `<StudioButton>`, `<StudioBadge>`, `<StudioCard>`, `<StudioSkeleton>`, `<StudioDocPreview>` (`skills/studio-design-system/SKILL.md`).
+  - Primitives: `<StudioModal>`, `<StudioToolbar>`, `<StudioSelect>`, `<StudioButton>`, `<StudioBadge>`, `<StudioCard>`, `<StudioSkeleton>`, `<StudioDocPreview>` (`.agents/skills/studio-design-system/SKILL.md`).
   - Tokens: `--dab-*` semantic variables (verify both `light` and `dark` themes).
   - `data-testid`s: `<exact-test-ids-to-add-or-preserve>`.
 
@@ -56,4 +56,4 @@ Before submitting any PR, check whether implementing the issue required:
 2. Fixing an unexpected test/snapshot collision, missing `createMockCore40SDK` stub, `manifest.lkml` entitlement, or dark-mode contrast failure not flagged in the issue.
 3. Introducing a new shared primitive, controller hook, `ArtifactService` method, or test helper that future issues should reference by default.
 
-If any of (1)–(3) occurred, update `skills/issue-authoring/SKILL.md` (and `skills/studio-design-system/SKILL.md` if UI-related) **in the same PR** so every subsequent Issue → PR cycle runs in fewer tool calls.
+If any of (1)–(3) occurred, update `.agents/skills/issue-authoring/SKILL.md` (and `.agents/skills/studio-design-system/SKILL.md` if UI-related) **in the same PR** so every subsequent Issue → PR cycle runs in fewer tool calls. Internal repository skills always live under `.agents/skills/` (never in `skills/` or `upstream/payload/AGENTS.md`, which are reserved for the customer Data Apps sandbox payload).

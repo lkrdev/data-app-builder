@@ -592,7 +592,7 @@ chmod +x "${fakeBinDir}/uv"
   }
 
   const indexCss = readFileSync(path.join(repoRoot, 'src/styles/index.css'), 'utf8')
-  const studioDsSkillMd = readFileSync(path.join(repoRoot, 'skills/studio-design-system/SKILL.md'), 'utf8')
+  const studioDsSkillMd = readFileSync(path.join(repoRoot, '.agents/skills/studio-design-system/SKILL.md'), 'utf8')
   assert(
     indexCss.includes('--dab-success-bg') &&
       indexCss.includes('--dab-warning-bg') &&
@@ -600,11 +600,11 @@ chmod +x "${fakeBinDir}/uv"
       appTsx.includes('export function StudioModal(') &&
       appTsx.includes('export function StudioToolbar(') &&
       studioDsSkillMd.includes('name: studio-design-system') &&
-      rootAgentsMd.includes('skills/studio-design-system/SKILL.md') &&
-      readFileSync(path.join(repoRoot, 'skills/issue-authoring/SKILL.md'), 'utf8').includes('name: issue-authoring') &&
-      rootAgentsMd.includes('skills/issue-authoring/SKILL.md') &&
-      upstreamAgentsMd.includes('skills/issue-authoring/SKILL.md'),
-    'StudioDesignSystem primitives, semantic status CSS tokens, skills/studio-design-system/SKILL.md, and skills/issue-authoring/SKILL.md must be present'
+      rootAgentsMd.includes('.agents/skills/studio-design-system/SKILL.md') &&
+      readFileSync(path.join(repoRoot, '.agents/skills/issue-authoring/SKILL.md'), 'utf8').includes('name: issue-authoring') &&
+      rootAgentsMd.includes('.agents/skills/issue-authoring/SKILL.md') &&
+      !upstreamAgentsMd.includes('issue-authoring'),
+    'StudioDesignSystem primitives, semantic status CSS tokens, .agents/skills/studio-design-system/SKILL.md, and .agents/skills/issue-authoring/SKILL.md must be present'
   )
 
   console.log('✓ test-bundle.mjs: all assertions passed!')

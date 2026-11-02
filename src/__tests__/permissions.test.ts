@@ -2793,13 +2793,14 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(docPrev.props.style).toEqual({ pointerEvents: 'none', userSelect: 'none' })
 
     const repoRoot = path.resolve(__dirname, '../..')
-    const skillMd = readFileSync(path.join(repoRoot, 'skills/studio-design-system/SKILL.md'), 'utf8')
+    const skillMd = readFileSync(path.join(repoRoot, '.agents/skills/studio-design-system/SKILL.md'), 'utf8')
     expect(skillMd).toContain('name: studio-design-system')
     expect(skillMd).toContain('StudioModal')
     expect(skillMd).toContain('StudioToolbar')
     expect(skillMd).toContain('--dab-success-bg')
 
     const agentsMd = readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8')
-    expect(agentsMd).toContain('skills/studio-design-system/SKILL.md')
+    expect(agentsMd).toContain('.agents/skills/studio-design-system/SKILL.md')
+    expect(agentsMd).toContain('.agents/skills/issue-authoring/SKILL.md')
   })
 })
