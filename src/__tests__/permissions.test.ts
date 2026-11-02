@@ -25,6 +25,7 @@ import {
   executeLkrExtensionToolRequest,
   extractInteractionActivitySteps,
   extractLkrExtensionToolRequests,
+  extractThoughtText,
   generateConversationLabel,
   getSharedEnvExploreSchemas,
   isEnvironmentNotFoundError,
@@ -2036,6 +2037,47 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(AGENTS_MD).toContain('thought')
 
     // 2. extractInteractionActivitySteps across thought, codemode, cli_bridge, code_execution, file, and skill steps
+    const multiPartSummary = [
+      { type: 'text', text: '**Inspecting Explore Schema**\nChecking fields and measures in thelook::order_items.' },
+      { type: 'text', text: 'Selecting top 4 executive KPIs.' },
+    ]
+    expect(extractThoughtText(multiPartSummary)).toBe(
+      '**Inspecting Explore Schema**\nChecking fields and measures in thelook::order_items.\n\nSelecting top 4 executive KPIs.'
+    )
+    expect(extractThoughtText({ foo: 'bar' })).toBe('')
+
+    const arrayThoughtSteps = extractInteractionActivitySteps({
+      status: 'in_progress',
+      steps: [
+        { id: 's_thought_arr', type: 'thought', summary: multiPartSummary },
+        { id: 's_thought_empty_obj', type: 'thought', summary: [{ type: 'unknown', opaque: { nested: true } }] },
+      ],
+      outputs: [
+        {
+          id: 'out_thought_arr',
+          type: 'thought',
+          thought: { content: [{ type: 'text', text: '**Validating LookML**\nRunning offline schema checks.' }] },
+        },
+      ],
+    })
+    expect(arrayThoughtSteps).toEqual([
+      {
+        id: 's_thought_arr',
+        kind: 'thought',
+        title: 'Inspecting Explore Schema',
+        detail: 'Checking fields and measures in thelook::order_items.\n\nSelecting top 4 executive KPIs.',
+        status: 'done',
+      },
+      {
+        id: 'out_thought_arr',
+        kind: 'thought',
+        title: 'Validating LookML',
+        detail: 'Running offline schema checks.',
+        status: 'running',
+      },
+    ])
+    expect(JSON.stringify(arrayThoughtSteps)).not.toContain('[object Object]')
+
     const sampleSteps = extractInteractionActivitySteps({
       status: 'in_progress',
       steps: [
@@ -2143,7 +2185,15 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       lookerHostData: { extensionId: 'dab::test' },
       serverProxy: async () => {
         interactionCallIdx += 1
+        const arrThoughtStep = { id: 'step_thought_arr', type: 'thought', summary: multiPartSummary }
         if (interactionCallIdx === 1) {
+          return {
+            ok: true,
+            status: 200,
+            body: { id: 'int_issue56_1', environment_id: 'env_issue56', status: 'in_progress', steps: [arrThoughtStep] },
+          }
+        }
+        if (interactionCallIdx === 2) {
           return {
             ok: true,
             status: 200,
@@ -2152,6 +2202,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
               environment_id: 'env_issue56',
               status: 'requires_action',
               steps: [
+                arrThoughtStep,
                 {
                   id: 'step_thought_1',
                   type: 'thought',
@@ -2178,6 +2229,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
             environment_id: 'env_issue56',
             status: 'completed',
             steps: [
+              arrThoughtStep,
               {
                 id: 'step_thought_1',
                 type: 'thought',
@@ -2274,7 +2326,9 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     })
     spyCodeMode.mockRestore()
 
+    expect(statusHistory).toContain('Inspecting Explore Schema')
     expect(statusHistory).toContain('Creating executive KPI dashboard with 4 tiles')
+    expect(statusHistory.join('\n')).not.toContain('[object Object]')
     expect(permissionRequests.length).toBeGreaterThanOrEqual(1)
     expect(permissionRequests[0]).toMatchObject({
       operation: 'create_dashboard',
@@ -2282,8 +2336,16 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     })
     expect(progressSnapshots.length).toBeGreaterThanOrEqual(1)
     expect(turnResult.activitySteps).toBeDefined()
+    expect(JSON.stringify(turnResult.activitySteps)).not.toContain('[object Object]')
     expect(turnResult.activitySteps).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          id: 'step_thought_arr',
+          kind: 'thought',
+          title: 'Inspecting Explore Schema',
+          detail: 'Checking fields and measures in thelook::order_items.\n\nSelecting top 4 executive KPIs.',
+          status: 'done',
+        }),
         expect.objectContaining({
           kind: 'thought',
           title: 'Designing Executive KPI dashboard in Looker',

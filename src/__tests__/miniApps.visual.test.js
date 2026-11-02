@@ -2473,7 +2473,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
               {
                 id: 'step_1',
                 kind: 'thought',
-                title: 'Analyzing thelook::order_items schema & planning 4 KPI tiles',
+                title: 'Inspecting Explore Schema',
+                detail: 'Analyzing thelook::order_items schema & planning 4 KPI tiles',
                 status: 'done'
               },
               {
@@ -2560,6 +2561,11 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       liveClassName: 'dab-thinking-block dab-thinking-live',
       permThoughtText: 'Creating executive KPI dashboard with 4 tiles'
     })
+    expect(domRes.result.value.completedText).toContain('Inspecting Explore Schema')
+    expect(domRes.result.value.completedText).toContain(
+      'Analyzing thelook::order_items schema & planning 4 KPI tiles'
+    )
+    expect(domRes.result.value.completedText).not.toContain('[object Object]')
     expect(domRes.result.value.completedText).toContain(
       'Querying monthly revenue and brand share from thelook::order_items'
     )

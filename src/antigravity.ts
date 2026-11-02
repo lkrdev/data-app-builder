@@ -147,7 +147,8 @@ export interface AntigravityNestedStepCall {
 export interface AntigravityInteractionStep extends AntigravityNestedStepCall {
   id?: string; call_id?: string; type?: string; status?: string
   output?: unknown; stdout?: unknown; stderr?: unknown; result?: unknown
-  text?: string; summary?: string; thought?: string | { summary?: string; text?: string } | null
+  text?: string; summary?: unknown; content?: unknown; parts?: unknown
+  thought?: unknown
   input?: string; method?: string
   function_call?: AntigravityNestedStepCall; view_file_call?: AntigravityNestedStepCall
   edit_file_call?: AntigravityNestedStepCall; skill_lookup_call?: AntigravityNestedStepCall
@@ -156,8 +157,8 @@ export interface AntigravityInteractionStep extends AntigravityNestedStepCall {
 }
 
 export interface AntigravityInteractionOutput {
-  id?: string; type?: string; text?: string; summary?: string
-  thought?: string | { summary?: string; text?: string } | null
+  id?: string; type?: string; text?: string; summary?: unknown; content?: unknown; parts?: unknown
+  thought?: unknown
 }
 
 export interface AntigravityUsageMetadata {
@@ -753,6 +754,22 @@ function parseStepArguments(raw: unknown): Record<string, unknown> {
     : {}
 }
 
+export function extractThoughtText(val: unknown): string {
+  if (typeof val === 'string') return val.trim()
+  if (Array.isArray(val)) return val.map(extractThoughtText).filter(Boolean).join('\n\n')
+  if (val && typeof val === 'object') {
+    const obj = val as Record<string, unknown>
+    for (const key of ['text', 'summary', 'content', 'parts']) {
+      const extracted = extractThoughtText(obj[key])
+      if (extracted) return extracted
+    }
+  }
+  return ''
+}
+
+const stripThoughtHeading = (line: string): string =>
+  line.trim().replace(/^#+\s*/, '').replace(/^\*\*(.+?)\*\*:?\s*$|^\*\*|\*\*$/g, '$1').trim()
+
 export function extractInteractionActivitySteps(
   interaction: AntigravityInteractionPayload | null | undefined
 ): AntigravityActivityStep[] {
@@ -791,18 +808,31 @@ export function extractInteractionActivitySteps(
   }
 
   const addThought = (
-    item: { summary?: string; text?: string; thought?: string | { summary?: string; text?: string } | null },
+    item: AntigravityInteractionStep | AntigravityInteractionOutput,
     stepId: string,
     explicitId: string | undefined,
     status: 'running' | 'done'
   ) => {
-    const tObj = typeof item.thought === 'object' && item.thought !== null ? item.thought : null
-    const summary = String(tObj?.summary ?? item.summary ?? '').trim()
-    const text = String(tObj?.text ?? (typeof item.thought === 'string' ? item.thought : '') ?? item.text ?? '').trim()
-    const title = summary || text
+    const tObj =
+      item.thought && typeof item.thought === 'object' && !Array.isArray(item.thought)
+        ? (item.thought as Record<string, unknown>)
+        : null
+    const summary = extractThoughtText(tObj?.summary ?? item.summary)
+    const text = extractThoughtText(
+      tObj?.text ??
+        (typeof item.thought === 'string' || Array.isArray(item.thought) ? item.thought : undefined) ??
+        item.text ??
+        tObj?.content ??
+        item.content ??
+        tObj?.parts ??
+        item.parts
+    )
+    const raw = summary && text && summary !== text ? `${summary}\n${text}` : summary || text
+    const [firstLine = '', ...restLines] = raw.split(/\r?\n/)
+    const title = stripThoughtHeading(firstLine)
     if (!title) return
-    const detail = summary && text && text !== summary ? text : undefined
-    upsertStep({ id: stepId, kind: 'thought', title, ...(detail ? { detail } : {}), status }, explicitId)
+    const rest = restLines.join('\n').trim()
+    upsertStep({ id: stepId, kind: 'thought', title, ...(rest && rest !== title ? { detail: rest } : {}), status }, explicitId)
   }
 
   for (let i = 0; i < rawSteps.length; i++) {
@@ -873,7 +903,7 @@ export function extractInteractionActivitySteps(
     if (/^(?:run_looker_codemode|lkr_cli_extension_bridge)$/.test(fnName) || /^(?:run_looker_codemode|lkr_cli_extension_bridge)$/.test(sType)) {
       const isBridge = fnName === 'lkr_cli_extension_bridge' || sType === 'lkr_cli_extension_bridge'
       const args = parseStepArguments(step.arguments ?? step.args ?? step.function_call?.arguments ?? step.function_call?.args ?? step)
-      const thought = String(args.thought || step.thought || '').trim()
+      const thought = extractThoughtText(args.thought ?? step.thought)
       const codeStr = String(args.code || step.code || '').trim()
       const sdkPreview = extractLookerSdkMethodPreview(codeStr)
       const firstCodeLine = codeStr.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('#')) || ''
@@ -945,14 +975,17 @@ function summarizeProgress(interaction: AntigravityInteractionPayload | null | u
   const last = steps[steps.length - 1]
   if (last.type === 'function_call') {
     const args = parseStepArguments(last.arguments ?? last.args)
-    const thought = String(args.thought || '').trim()
+    const thought = extractThoughtText(args.thought)
     if (thought) return thought
     return `Running tool: ${last.name || 'sandbox command'}...`
   }
   if (last.type === 'thought' || last.type === 'thinking' || last.thought) {
-    const tObj = typeof last.thought === 'object' && last.thought !== null ? last.thought : null
-    const summary = String(tObj?.summary ?? last.summary ?? tObj?.text ?? last.text ?? '').trim()
-    return summary || 'Agent is reasoning...'
+    const tObj =
+      last.thought && typeof last.thought === 'object' && !Array.isArray(last.thought)
+        ? (last.thought as Record<string, unknown>)
+        : null
+    const raw = extractThoughtText(tObj?.summary ?? last.summary ?? last.thought ?? last)
+    return stripThoughtHeading(raw.split(/\r?\n/)[0] || '') || 'Agent is reasoning...'
   }
   return `Step ${steps.length} (${last.type || interaction?.status})...`
 }
