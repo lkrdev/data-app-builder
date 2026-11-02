@@ -96,8 +96,6 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     apiKey,
     setApiKey,
     oauthRedirectUri,
-    spartanOauthRedirectUri,
-    oauthRedirectUris,
     capabilities,
     extensionSDK,
     busyStatus,
@@ -106,15 +104,10 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   } = ctl
   const [copiedRedirectUri, setCopiedRedirectUri] = useState(false)
   const [copiedSpartanRedirectUri, setCopiedSpartanRedirectUri] = useState(false)
-  const resolvedRedirectUris =
-    oauthRedirectUris ||
+  const { extensionUri: extensionRedirectUri, spartanUri: spartanRedirectUri } =
     resolveLookerOAuthRedirectUris(
-      oauthRedirectUri
-        ? oauthRedirectUri.replace(/\/(extensions|spartan)\/oauth2_redirect\/?$/, '')
-        : undefined
+      oauthRedirectUri?.replace(/\/(extensions|spartan)\/oauth2_redirect\/?$/, '')
     )
-  const extensionRedirectUri = oauthRedirectUri || resolvedRedirectUris.extensionUri
-  const spartanRedirectUri = spartanOauthRedirectUri || resolvedRedirectUris.spartanUri
   const errorText = messages.filter((m) => m.role === 'error').slice(-1)[0]?.text
   const canSaveContext = capabilities?.canConfigureExtension !== false
   const canManageAttrs = capabilities?.canManageUserAttributes !== false

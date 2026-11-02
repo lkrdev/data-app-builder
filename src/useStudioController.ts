@@ -117,17 +117,13 @@ export function useStudioController() {
   const [oauthSigningIn, setOauthSigningIn] = useState(false)
   const oauthAbortRef = useRef<AbortController | null>(null)
   const isAuthenticated = authMode === 'apikey' ? Boolean(apiKey.trim()) : Boolean(oauthToken.trim())
-  const oauthRedirectUris = useMemo(
+  const oauthRedirectUri = useMemo(
     () =>
-      resolveLookerOAuthRedirectUris(
-        lookerHostData?.hostUrl || extHostData?.hostUrl,
-        undefined,
-        lookerHostData?.hostType || extHostData?.hostType
+      resolveLookerOAuthRedirectUri(
+        lookerHostData?.hostUrl || extHostData?.hostUrl
       ),
-    [lookerHostData?.hostUrl, extHostData?.hostUrl, lookerHostData?.hostType, extHostData?.hostType]
+    [lookerHostData?.hostUrl, extHostData?.hostUrl]
   )
-  const oauthRedirectUri = oauthRedirectUris.extensionUri
-  const spartanOauthRedirectUri = oauthRedirectUris.spartanUri
   const [isConfigured, setIsConfigured] = useState(() =>
     Boolean(initialCtx?.authMode && (initialCtx.authMode === 'apikey' || initialCtx.clientId))
   )
@@ -2411,7 +2407,7 @@ export function useStudioController() {
     authMode, setAuthMode, clientId, setClientId, projectId, setProjectId,
     disabledModes, setDisabledModes, selectedModel, setSelectedModel,
     availableModels, enabledModes, oauthToken, setOauthToken, apiKey, setApiKey,
-    isAuthenticated, oauthSigningIn, oauthRedirectUri, spartanOauthRedirectUri, oauthRedirectUris,
+    isAuthenticated, oauthSigningIn, oauthRedirectUri,
     capabilities, setCapabilities, availableLookmlProjects, canDeployLookml,
     loadingMetadata, setLoadingMetadata,
     models, folders, folderTreeNodes, rootFolderIds, folderChildrenById,

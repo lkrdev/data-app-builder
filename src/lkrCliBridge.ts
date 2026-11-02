@@ -816,9 +816,7 @@ export async function executeLkrExtensionToolRequest(params: {
     const queryParams = cleanQueryParams(req.query_params) || undefined
     const body = req.body !== null && req.body !== undefined ? req.body : undefined
     const shouldRequirePermission =
-      requirePermission !== undefined
-        ? Boolean(requirePermission)
-        : typeof onPermissionRequest === 'function'
+      requirePermission !== undefined ? Boolean(requirePermission) : typeof onPermissionRequest === 'function'
     const info = classifyLookerOperation(method, cleanPath)
     if (
       shouldRequirePermission &&
@@ -827,9 +825,7 @@ export async function executeLkrExtensionToolRequest(params: {
       !approvedOperations?.has(info.operation)
     ) {
       const denyMsg = `PermissionError: Operation '${info.operation}' (${method} ${cleanPath}) mutates Looker state and was not approved.`
-      if (typeof onPermissionRequest !== 'function') {
-        throw new Error(denyMsg)
-      }
+      if (typeof onPermissionRequest !== 'function') throw new Error(denyMsg)
       const decision = await onPermissionRequest({
         operation: info.operation,
         httpMethod: method,
@@ -837,50 +833,40 @@ export async function executeLkrExtensionToolRequest(params: {
         args: { params: queryParams, body },
         thought: effectiveThought || `${method} ${cleanPath}`,
       })
-      if (decision === 'allow_op') {
-        approvedOperations?.add(info.operation)
-      } else if (decision === 'allow_all') {
-        approvedOperations?.add('*')
-      } else if (decision !== 'allow_once' && (decision as unknown) !== true) {
-        throw new Error(denyMsg)
-      }
+      if (decision === 'allow_op') approvedOperations?.add(info.operation)
+      else if (decision === 'allow_all') approvedOperations?.add('*')
+      else if (decision !== 'allow_once' && (decision as unknown) !== true) throw new Error(denyMsg)
     }
-
-    if (req.dev_mode && cleanPath !== '/session') {
-      try {
-        const sdkExt = sdk as unknown as {
-          update_session?: (b: { workspace_id: string }) => Promise<unknown>
-          ok?: (p: Promise<unknown>) => Promise<unknown>
-          authSession?: { transport?: { rawRequest?: unknown } }
-        }
-        if (typeof sdkExt?.update_session === 'function') {
-          const p = sdkExt.update_session({ workspace_id: 'dev' })
-          await (typeof sdkExt.ok === 'function' ? sdkExt.ok(p) : p)
-        } else if (sdkExt?.authSession?.transport?.rawRequest) {
-          await rawLookerRequest(sdk, 'PATCH', '/session', undefined, { workspace_id: 'dev' })
-        }
-      } catch {
-        // ignore dev session switch failure
-      }
-    }
-
-    const result = await rawLookerRequest(sdk, method, cleanPath, queryParams, body)
-    return { cacheKey, result }
   }
 
-  if (req.dev_mode) {
+  if (req.dev_mode && cleanPath !== '/session') {
     try {
       const sdkExt = sdk as unknown as {
         update_session?: (b: { workspace_id: string }) => Promise<unknown>
         ok?: (p: Promise<unknown>) => Promise<unknown>
+        authSession?: { transport?: { rawRequest?: unknown } }
       }
       if (typeof sdkExt?.update_session === 'function') {
         const p = sdkExt.update_session({ workspace_id: 'dev' })
         await (typeof sdkExt.ok === 'function' ? sdkExt.ok(p) : p)
+      } else if (req.kind === 'sdk_request' && sdkExt?.authSession?.transport?.rawRequest) {
+        await rawLookerRequest(sdk, 'PATCH', '/session', undefined, { workspace_id: 'dev' })
       }
     } catch {
       // ignore dev session switch failure
     }
+  }
+
+  if (req.kind === 'sdk_request') {
+    const method = String(req.method || 'GET').toUpperCase() as 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
+    const result = await rawLookerRequest(
+      sdk,
+      method,
+      cleanPath,
+      cleanQueryParams(req.query_params) || undefined,
+      req.body !== null && req.body !== undefined ? req.body : undefined
+    )
+    return { cacheKey, result }
   }
 
   const rawOut = await LkrCodeMode.runPythonCode({
@@ -897,18 +883,14 @@ export async function executeLkrExtensionToolRequest(params: {
             operation: String(permReq?.operation || 'mutate'),
             httpMethod: String(permReq?.httpMethod || 'POST'),
             path: String(permReq?.path || '/'),
-            args:
-              permReq?.args && typeof permReq.args === 'object'
-                ? (permReq.args as { params?: unknown; body?: unknown })
-                : {},
+            args: (permReq?.args as { params?: unknown; body?: unknown }) || {},
             ...permReq,
             ...(permReq?.thought || effectiveThought
               ? { thought: String(permReq?.thought || effectiveThought) }
               : {}),
           })
-          if (decision === 'allow_all') {
-            approvedOperations?.add('*')
-          } else if (decision === 'allow_op' && typeof permReq?.operation === 'string') {
+          if (decision === 'allow_all') approvedOperations?.add('*')
+          else if (decision === 'allow_op' && typeof permReq?.operation === 'string') {
             approvedOperations?.add(permReq.operation)
           }
           return decision
