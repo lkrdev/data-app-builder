@@ -106,16 +106,9 @@ export const ANTIGRAVITY_ALLOWED_MODELS: AntigravityModelOption[] = [
 ]
 
 export type StudioThinkingLevel = 'low' | 'medium' | 'high'
-
 export const DEFAULT_THINKING_LEVEL: StudioThinkingLevel = 'medium'
-
 export const STUDIO_THINKING_LEVEL_STORAGE_KEY = 'dab_thinking_level'
-
-export const STUDIO_THINKING_LEVEL_OPTIONS: Array<{
-  value: StudioThinkingLevel
-  label: string
-  testId: string
-}> = [
+export const STUDIO_THINKING_LEVEL_OPTIONS: Array<{ value: StudioThinkingLevel; label: string; testId: string }> = [
   { value: 'low', label: 'Low', testId: 'thinking-level-option-low' },
   { value: 'medium', label: 'Medium', testId: 'thinking-level-option-medium' },
   { value: 'high', label: 'High', testId: 'thinking-level-option-high' },
@@ -129,45 +122,28 @@ export function readInitialThinkingLevel(): StudioThinkingLevel {
   try {
     const w = typeof window !== 'undefined' ? window : undefined
     return normalizeThinkingLevel(
-      (w?.__MOCK_LOOKER_EXTENSION__ as { initialThinkingLevel?: string } | undefined)
-        ?.initialThinkingLevel ?? w?.localStorage?.getItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY)
+      (w?.__MOCK_LOOKER_EXTENSION__ as { initialThinkingLevel?: string } | undefined)?.initialThinkingLevel ??
+        w?.localStorage?.getItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY)
     )
   } catch {
     return DEFAULT_THINKING_LEVEL
   }
 }
 
-export async function loadStoredThinkingLevel(
-  extensionSDK?: AntigravityExtensionHostLike
-): Promise<StudioThinkingLevel | null> {
+export async function loadStoredThinkingLevel(extensionSDK?: AntigravityExtensionHostLike): Promise<StudioThinkingLevel | null> {
   try {
-    const w = typeof window !== 'undefined' ? window : undefined
-    const raw =
-      (await extensionSDK?.localStorageGetItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY)) ??
-      w?.localStorage?.getItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY)
+    const raw = (await extensionSDK?.localStorageGetItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY)) ??
+      (typeof window !== 'undefined' ? window.localStorage?.getItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY) : null)
     return raw === 'low' || raw === 'medium' || raw === 'high' ? raw : null
   } catch {
     return null
   }
 }
 
-export function persistThinkingLevel(
-  extensionSDK: AntigravityExtensionHostLike,
-  level: StudioThinkingLevel
-): void {
+export function persistThinkingLevel(extensionSDK: AntigravityExtensionHostLike, level: StudioThinkingLevel): void {
   const normalized = normalizeThinkingLevel(level)
-  try {
-    if (typeof window !== 'undefined') {
-      window.localStorage?.setItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY, normalized)
-    }
-  } catch {
-    // ignore storage write failure
-  }
-  try {
-    void extensionSDK?.localStorageSetItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY, normalized)
-  } catch {
-    // ignore extensionSDK storage write failure
-  }
+  try { if (typeof window !== 'undefined') window.localStorage?.setItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY, normalized) } catch { /* ignore */ }
+  try { void extensionSDK?.localStorageSetItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY, normalized) } catch { /* ignore */ }
 }
 
 export interface ExtensionAuthContextConfig {

@@ -33,19 +33,6 @@ if (typeof window !== 'undefined' && window.HTMLSelectElement) {
   }
 }
 
-export interface StudioSelectSubMenuOption {
-  value: string
-  label: string
-  testId?: string
-}
-
-export interface StudioSelectSubMenu {
-  value: string
-  options: StudioSelectSubMenuOption[]
-  onChange: (val: string) => void
-  testId?: string
-}
-
 export interface StudioSelectOption<T extends string = string> {
   value: T
   label: string
@@ -53,7 +40,12 @@ export interface StudioSelectOption<T extends string = string> {
   title?: string
   icon?: React.ReactNode
   badge?: string
-  subMenu?: StudioSelectSubMenu
+  subMenu?: {
+    value: string
+    options: Array<{ value: string; label: string; testId?: string }>
+    onChange: (val: string) => void
+    testId?: string
+  }
 }
 
 export interface StudioSelectProps<T extends string = string> {
@@ -139,10 +131,7 @@ export function StudioSelect<T extends string = string>({
   }, [])
 
   useEffect(() => {
-    if (!open) {
-      setActiveSubMenuValue(null)
-      return
-    }
+    if (!open) return setActiveSubMenuValue(null)
     const onMouseDown = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false)
     }
@@ -244,9 +233,7 @@ export function StudioSelect<T extends string = string>({
               <div
                 key={`${opt.value}:${idx}`}
                 className="dab-studio-menu-item-row"
-                onMouseEnter={() => {
-                  if (!opt.disabled) setActiveSubMenuValue(opt.subMenu ? opt.value : null)
-                }}
+                onMouseEnter={() => !opt.disabled && setActiveSubMenuValue(opt.subMenu ? opt.value : null)}
               >
                 <button
                   type="button"
@@ -257,14 +244,10 @@ export function StudioSelect<T extends string = string>({
                   disabled={opt.disabled}
                   title={opt.title}
                   className={`dab-studio-menu-item ${isSelected ? 'selected' : ''} ${opt.disabled ? 'disabled' : ''}`.trim()}
-                  onMouseOver={() => {
-                    if (!opt.disabled && opt.subMenu) setActiveSubMenuValue(opt.value)
-                  }}
+                  onMouseOver={() => !opt.disabled && opt.subMenu && setActiveSubMenuValue(opt.value)}
                   onClick={(e) => {
                     e.stopPropagation()
-                    if (opt.disabled) return
-                    onChange(opt.value)
-                    setOpen(false)
+                    if (!opt.disabled) { onChange(opt.value); setOpen(false) }
                   }}
                 >
                   <span className="dab-studio-menu-item-main" data-testid={secondaryTestId}>
@@ -280,13 +263,10 @@ export function StudioSelect<T extends string = string>({
                         data-testid={opt.subMenu.testId ? `${opt.subMenu.testId}-trigger-${opt.value}` : undefined}
                         onClick={(e) => {
                           e.stopPropagation()
-                          if (opt.disabled) return
-                          setActiveSubMenuValue((prev) => (prev === opt.value ? null : opt.value))
+                          if (!opt.disabled) setActiveSubMenuValue((prev) => (prev === opt.value ? null : opt.value))
                         }}
                       >
-                        <span className="dab-studio-menu-sublabel">
-                          {activeSubOption?.label || opt.subMenu.value}
-                        </span>
+                        <span className="dab-studio-menu-sublabel">{activeSubOption?.label || opt.subMenu.value}</span>
                         <span className="dab-studio-menu-subchevron" aria-hidden="true">›</span>
                       </span>
                     )}
@@ -318,9 +298,7 @@ export function StudioSelect<T extends string = string>({
                             setOpen(false)
                           }}
                         >
-                          <span className="dab-studio-menu-item-main">
-                            <span className="dab-studio-menu-text">{subOpt.label}</span>
-                          </span>
+                          <span className="dab-studio-menu-item-main"><span className="dab-studio-menu-text">{subOpt.label}</span></span>
                           {isSubSelected && <span className="dab-studio-menu-check" aria-hidden="true">✓</span>}
                         </button>
                       )

@@ -1672,22 +1672,13 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const menuEl = document.querySelector('[data-testid="composer-model-select-menu"]');
         const menuRect = menuEl ? menuEl.getBoundingClientRect() : null;
         const flyoutRect = flyoutMenu ? flyoutMenu.getBoundingClientRect() : null;
-        const unionClip =
-          menuRect && flyoutRect
-            ? {
-                x: Math.max(0, Math.floor(Math.min(menuRect.left, flyoutRect.left) - 24)),
-                y: Math.max(0, Math.floor(Math.min(menuRect.top, flyoutRect.top) - 24)),
-                width: Math.min(
-                  1440,
-                  Math.ceil(Math.max(menuRect.right, flyoutRect.right) - Math.min(menuRect.left, flyoutRect.left) + 48)
-                ),
-                height: Math.min(
-                  900,
-                  Math.ceil(Math.max(menuRect.bottom, flyoutRect.bottom) - Math.min(menuRect.top, flyoutRect.top) + 48)
-                ),
-                scale: 1
-              }
-            : null;
+        const unionClip = menuRect && flyoutRect ? {
+          x: Math.max(0, Math.floor(Math.min(menuRect.left, flyoutRect.left) - 24)),
+          y: Math.max(0, Math.floor(Math.min(menuRect.top, flyoutRect.top) - 24)),
+          width: Math.min(1440, Math.ceil(Math.max(menuRect.right, flyoutRect.right) - Math.min(menuRect.left, flyoutRect.left) + 48)),
+          height: Math.min(900, Math.ceil(Math.max(menuRect.bottom, flyoutRect.bottom) - Math.min(menuRect.top, flyoutRect.top) + 48)),
+          scale: 1
+        } : null;
 
         const highOption = document.querySelector('[data-testid="thinking-level-option-high"]');
         if (highOption) highOption.click();
