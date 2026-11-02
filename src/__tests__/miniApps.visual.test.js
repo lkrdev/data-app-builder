@@ -338,6 +338,9 @@ function buildHtmlPage(scenario) {
         } else if (!window.location.search.includes('preserveTheme=1')) {
           window.localStorage.removeItem('dab_theme_mode');
         }
+        if (!window.location.search.includes('preserveOAuth=1')) {
+          window.localStorage.removeItem('dab_oauth_session');
+        }
       } catch {}
 
       const isTile =
@@ -3070,6 +3073,40 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     const scratchSnapPath = path.join(scratchDir, 'issue-65-auth-gate-redirect-uri.png')
     writeFileSync(scratchSnapPath, pngBuffer)
     expect(existsSync(scratchSnapPath)).toBe(true)
+
+    // Issue #93: Verify persisted dab_oauth_session hydrates across full page refresh
+    await chrome.send('Page.navigate', {
+      url: `http://127.0.0.1:${port}/?scenario=centered_empty_prompt&preserveOAuth=1`
+    })
+    const reloadDeadline = Date.now() + 8000
+    while (Date.now() < reloadDeadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="topbar-oauth-signin-btn"]'))`,
+        returnByValue: true
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 80))
+    }
+    const persistedRes = await chrome.send('Runtime.evaluate', {
+      expression: `(() => {
+        const stored = JSON.parse(window.localStorage.getItem('dab_oauth_session') || '{}');
+        return {
+          storedToken: stored.token,
+          hasExpiresAt: typeof stored.expiresAt === 'number' && stored.expiresAt > Date.now(),
+          isAuthenticated: Boolean(window.__DAB_STUDIO__?.isAuthenticated),
+          topbarText: (document.querySelector('[data-testid="topbar-oauth-signin-btn"]')?.textContent || '').trim(),
+          hasInlineSignInBtn: Boolean(document.querySelector('[data-testid="composer-signin-inline-btn"]'))
+        };
+      })()`,
+      returnByValue: true
+    })
+    expect(persistedRes.result.value).toEqual({
+      storedToken: 'mock_oauth_token_123',
+      hasExpiresAt: true,
+      isAuthenticated: true,
+      topbarText: '✓ Signed In',
+      hasInlineSignInBtn: false
+    })
   }, 15000)
 
   test('renders contextual ? use-case info buttons across StudioComposer and preview toolbars, opens use-case-info-modal with Markdown + non-actionable live React UI previews, and switches across all 7 use-case tabs (Issue #64)', async () => {

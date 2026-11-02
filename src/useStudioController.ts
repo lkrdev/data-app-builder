@@ -6,12 +6,15 @@ import useSWR from 'swr'
 
 import {
   AgentSession, ANTIGRAVITY_ALLOWED_MODELS, AntigravityActivityStep, AntigravityAuth, AntigravityModelOption,
-  authenticateGoogleOAuth, buildDynamicStarterPrompts, CodeModePermissionDecision, CodeModePermissionRequest,
-  computeIsAuthenticated, DEFAULT_ANTIGRAVITY_MODEL, discoverStarterExploreContext, ensureGeminiApiKeyUserAttribute,
-  ExtensionAuthContextConfig, generateConversationLabel, generateDynamicStarterPrompts, getCachedStarterPrompts,
-  listAvailableAntigravityModels, LkrCodeMode, loginWithGoogleOAuth, normalizeEnvironmentId,
-  PastedImage, prewarmOrWakeAntigravityEnvironment, resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris,
-  resolveTargetExploreFromModels, runAntigravityTurn, sanitizeConversationLabel, StarterPromptItem,
+  authenticateGoogleOAuth, buildDynamicStarterPrompts, clearStoredOAuthSession, CodeModePermissionDecision,
+  CodeModePermissionRequest, computeIsAuthenticated, DEFAULT_ANTIGRAVITY_MODEL, discoverStarterExploreContext,
+  ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig, generateConversationLabel,
+  generateDynamicStarterPrompts, getCachedStarterPrompts, getInitialStoredOAuthToken,
+  listAvailableAntigravityModels, LkrCodeMode, loadStoredOAuthSession, loginWithGoogleOAuth,
+  normalizeEnvironmentId, PastedImage, persistOAuthSession, prewarmOrWakeAntigravityEnvironment,
+  resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, resolveTargetExploreFromModels,
+  runAntigravityTurn, sanitizeConversationLabel, StarterPromptItem, StoredOAuthSession,
+  STUDIO_OAUTH_STORAGE_KEY,
 } from './antigravity'
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
 import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
@@ -44,15 +47,20 @@ import {
 
 export {
   authenticateGoogleOAuth,
+  clearStoredOAuthSession,
   computeIsAuthenticated,
+  getInitialStoredOAuthToken,
+  loadStoredOAuthSession,
   normalizeStudioThemeMode,
+  persistOAuthSession,
   resolveLookerOAuthRedirectUri,
   resolveLookerOAuthRedirectUris,
   resolveStudioTheme,
   resolveSystemTheme,
+  STUDIO_OAUTH_STORAGE_KEY,
   STUDIO_THEME_STORAGE_KEY,
 }
-export type { ResolvedStudioTheme, StudioThemeMode }
+export type { ResolvedStudioTheme, StoredOAuthSession, StudioThemeMode }
 
 type HostDataWithMount = {
   mountType?: string
@@ -114,11 +122,39 @@ export function useStudioController() {
     const list = STUDIO_MODES.filter((m) => !disabledModes.includes(m.mode))
     return list.length > 0 ? list : [STUDIO_MODES[0]]
   }, [disabledModes])
-  const [oauthToken, setOauthToken] = useState(() => String(mockExt?.initialOauthToken || ''))
+  const initialClientId = initialCtx?.clientId || ''
+  const [oauthToken, setOauthToken] = useState(() =>
+    getInitialStoredOAuthToken(initialClientId)
+  )
   const [apiKey, setApiKey] = useState(() => String(mockExt?.initialApiKey || ''))
   const [oauthSigningIn, setOauthSigningIn] = useState(false)
   const oauthAbortRef = useRef<AbortController | null>(null)
   const isAuthenticated = authMode === 'apikey' ? Boolean(apiKey.trim()) : Boolean(oauthToken.trim())
+
+  const resetOAuthOnUnauthorized = useCallback(
+    (err: unknown): string => {
+      const msg = getErrorMessage(err)
+      if (authMode === 'oauth' && /\b401\b|UNAUTHENTICATED/i.test(msg)) {
+        clearStoredOAuthSession(extensionSDK)
+        setOauthToken('')
+      }
+      return msg
+    },
+    [authMode, extensionSDK]
+  )
+
+  useEffect(() => {
+    if (mockExt && 'initialOauthToken' in mockExt && mockExt.initialOauthToken) return
+    let mounted = true
+    void loadStoredOAuthSession(extensionSDK, initialClientId).then((stored) => {
+      if (mounted && stored?.token) {
+        setOauthToken((prev) => prev || stored.token)
+      }
+    })
+    return () => {
+      mounted = false
+    }
+  }, [extensionSDK, initialClientId, mockExt])
   const oauthRedirectUri = useMemo(
     () =>
       resolveLookerOAuthRedirectUri(
@@ -1649,7 +1685,8 @@ export function useStudioController() {
       })
       await refreshCatalog()
     } catch (err: unknown) {
-      setMessages((prev) => [...prev, { role: 'error', text: getErrorMessage(err) }], 'app')
+      const msg = resetOAuthOnUnauthorized(err)
+      setMessages((prev) => [...prev, { role: 'error', text: msg }], 'app')
     } finally {
       setBusyStatus(null)
     }
@@ -2457,7 +2494,8 @@ export function useStudioController() {
         updateArtifactIndex: true,
       })
     } catch (err: unknown) {
-      setMessages((prev) => [...prev, { role: 'error', text: getErrorMessage(err) }])
+      const msg = resetOAuthOnUnauthorized(err)
+      setMessages((prev) => [...prev, { role: 'error', text: msg }])
     } finally {
       setPendingPerm(null)
       setBusyStatus(null)

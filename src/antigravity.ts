@@ -407,6 +407,132 @@ export function computeIsAuthenticated(
   return authMode === 'apikey' ? Boolean(apiKey.trim()) : Boolean(oauthToken.trim())
 }
 
+export const STUDIO_OAUTH_STORAGE_KEY = 'dab_oauth_session'
+
+export interface StoredOAuthSession {
+  token: string
+  expiresAt: number
+  clientId?: string
+}
+
+function parseValidOAuthSession(
+  raw: string | null | undefined,
+  clientId?: string
+): { session: StoredOAuthSession | null; expired: boolean } {
+  if (!raw || !raw.trim()) return { session: null, expired: false }
+  try {
+    const parsed = JSON.parse(raw) as Partial<StoredOAuthSession> | null
+    const token = typeof parsed?.token === 'string' ? parsed.token.trim() : ''
+    const expiresAt = Number(parsed?.expiresAt)
+    if (!token || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      return { session: null, expired: true }
+    }
+    const storedClientId = typeof parsed?.clientId === 'string' ? parsed.clientId.trim() : ''
+    const expectedClientId = typeof clientId === 'string' ? clientId.trim() : ''
+    if (expectedClientId && storedClientId && storedClientId !== expectedClientId) {
+      return { session: null, expired: false }
+    }
+    return {
+      session: {
+        token,
+        expiresAt,
+        ...(storedClientId ? { clientId: storedClientId } : {}),
+      },
+      expired: false,
+    }
+  } catch {
+    return { session: null, expired: true }
+  }
+}
+
+export function clearStoredOAuthSession(extensionSDK?: AntigravityExtensionHostLike): void {
+  try {
+    if (typeof window !== 'undefined') {
+      window.localStorage?.removeItem?.(STUDIO_OAUTH_STORAGE_KEY)
+    }
+  } catch {
+    // ignore browser storage removal failure
+  }
+  try {
+    if (extensionSDK?.localStorageRemoveItem) {
+      void extensionSDK.localStorageRemoveItem(STUDIO_OAUTH_STORAGE_KEY)
+    }
+    if (extensionSDK?.localStorageSetItem) {
+      void extensionSDK.localStorageSetItem(STUDIO_OAUTH_STORAGE_KEY, '')
+    }
+  } catch {
+    // ignore extensionSDK storage removal failure
+  }
+}
+
+export function persistOAuthSession(
+  extensionSDK: AntigravityExtensionHostLike | undefined,
+  session: StoredOAuthSession
+): void {
+  const token = String(session?.token || '').trim()
+  const expiresAt = Number(session?.expiresAt)
+  if (!token || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) return
+  const payload: StoredOAuthSession = {
+    token,
+    expiresAt,
+    ...(session.clientId?.trim() ? { clientId: session.clientId.trim() } : {}),
+  }
+  const serialized = JSON.stringify(payload)
+  try {
+    if (typeof window !== 'undefined') {
+      window.localStorage?.setItem?.(STUDIO_OAUTH_STORAGE_KEY, serialized)
+    }
+  } catch {
+    // ignore browser storage write failure
+  }
+  try {
+    void extensionSDK?.localStorageSetItem?.(STUDIO_OAUTH_STORAGE_KEY, serialized)
+  } catch {
+    // ignore extensionSDK storage write failure
+  }
+}
+
+export function getInitialStoredOAuthToken(clientId?: string): string {
+  try {
+    const w = typeof window !== 'undefined' ? window : undefined
+    const mockExt = w?.__MOCK_LOOKER_EXTENSION__
+    if (mockExt && 'initialOauthToken' in mockExt) {
+      return String(mockExt.initialOauthToken || '')
+    }
+    const raw = w?.localStorage?.getItem?.(STUDIO_OAUTH_STORAGE_KEY)
+    const { session, expired } = parseValidOAuthSession(raw, clientId)
+    if (expired) {
+      clearStoredOAuthSession()
+      return ''
+    }
+    return session?.token || ''
+  } catch {
+    return ''
+  }
+}
+
+export async function loadStoredOAuthSession(
+  extensionSDK?: AntigravityExtensionHostLike,
+  clientId?: string
+): Promise<StoredOAuthSession | null> {
+  try {
+    const w = typeof window !== 'undefined' ? window : undefined
+    const extRaw = await extensionSDK?.localStorageGetItem?.(STUDIO_OAUTH_STORAGE_KEY)
+    const raw =
+      extRaw && extRaw.trim()
+        ? extRaw
+        : w?.localStorage?.getItem?.(STUDIO_OAUTH_STORAGE_KEY)
+    const { session, expired } = parseValidOAuthSession(raw, clientId)
+    if (expired) {
+      clearStoredOAuthSession(extensionSDK)
+      return null
+    }
+    return session
+  } catch {
+    return null
+  }
+}
+
 export async function loginWithGoogleOAuth(
   extensionSDK: AntigravityExtensionHostLike,
   clientId: string,
@@ -453,13 +579,21 @@ export async function loginWithGoogleOAuth(
       }
     })
     const res = (await Promise.race([authPromise, guardPromise])) as
-      | { access_token?: string; id_token?: string }
+      | { access_token?: string; id_token?: string; expires_in?: number | string }
       | undefined
-    const token = res?.access_token || res?.id_token
-    if (!token) {
+    const rawToken = res?.access_token || res?.id_token
+    if (!rawToken) {
       throw new Error(`Google OAuth response did not include an access_token: ${JSON.stringify(res)}`)
     }
-    return String(token)
+    const token = String(rawToken).trim()
+    const expiresAt =
+      Date.now() + Math.max(60, (Number(res?.expires_in) || 3600) - 60) * 1000
+    persistOAuthSession(extensionSDK, {
+      token,
+      expiresAt,
+      clientId: clientId.trim(),
+    })
+    return token
   } finally {
     cleanup()
   }
@@ -608,6 +742,9 @@ export async function callInteractionsApi(
     parsed = { raw: text }
   }
   if (!resp.ok) {
+    if (resp.status === 401) {
+      clearStoredOAuthSession(extensionSDK)
+    }
     const msg = parsed?.error?.message || text || `HTTP ${resp.status}`
     throw new Error(`Antigravity API error (${resp.status}): ${msg}`)
   }
