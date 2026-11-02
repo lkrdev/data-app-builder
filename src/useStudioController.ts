@@ -6,10 +6,12 @@ import useSWR from 'swr'
 
 import {
   AgentSession, ANTIGRAVITY_ALLOWED_MODELS, AntigravityActivityStep, AntigravityAuth, AntigravityModelOption,
-  authenticateGoogleOAuth, CodeModePermissionDecision, CodeModePermissionRequest, computeIsAuthenticated,
-  DEFAULT_ANTIGRAVITY_MODEL, ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig, generateConversationLabel,
+  authenticateGoogleOAuth, buildDynamicStarterPrompts, CodeModePermissionDecision, CodeModePermissionRequest,
+  computeIsAuthenticated, DEFAULT_ANTIGRAVITY_MODEL, discoverStarterExploreContext, ensureGeminiApiKeyUserAttribute,
+  ExtensionAuthContextConfig, generateConversationLabel, generateDynamicStarterPrompts, getCachedStarterPrompts,
   listAvailableAntigravityModels, LkrCodeMode, loginWithGoogleOAuth, normalizeEnvironmentId,
-  PastedImage, prewarmOrWakeAntigravityEnvironment, resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, runAntigravityTurn, sanitizeConversationLabel,
+  PastedImage, prewarmOrWakeAntigravityEnvironment, resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris,
+  resolveTargetExploreFromModels, runAntigravityTurn, sanitizeConversationLabel, StarterPromptItem,
 } from './antigravity'
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
 import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
@@ -202,6 +204,11 @@ export function useStudioController() {
   )
   const [schemaMarkdown, setSchemaMarkdown] = useState('')
   const [loadingSchema, setLoadingSchema] = useState(false)
+  const [starterPrompts, setStarterPrompts] = useState<StarterPromptItem[]>([])
+  const [starterPromptsLoading, setStarterPromptsLoading] = useState<boolean>(
+    () => Boolean(mockExt?.forceStarterPromptsSkeleton ?? true)
+  )
+  const oauthAccessToken = oauthToken.trim()
 
   const [catalogItems, setCatalogItems] = useState<UserArtifactIndex[]>([])
   const [activeObjectId, setActiveObjectId] = useState('')
@@ -997,6 +1004,93 @@ export function useStudioController() {
       mounted = false
     }
   }, [core40SDK, selectedExplores, models])
+
+  useEffect(() => {
+    let mounted = true
+    const targetExplore = resolveTargetExploreFromModels(selectedExplores, models)
+    const exploreKey =
+      selectedExplores.length > 0
+        ? selectedExplores.join(',')
+        : targetExplore?.exploreKey || 'none'
+    const hasOAuth = Boolean(oauthAccessToken)
+    const cached = getCachedStarterPrompts(selectedUseCase, exploreKey, allowedUseCases, hasOAuth)
+    if (cached && cached.length > 0 && !mockExt?.forceStarterPromptsSkeleton) {
+      setStarterPrompts(cached)
+      setStarterPromptsLoading(false)
+      return () => {
+        mounted = false
+      }
+    }
+    if (
+      (loadingMetadata && models.length === 0 && selectedExplores.length === 0) ||
+      mockExt?.forceStarterPromptsSkeleton
+    ) {
+      setStarterPromptsLoading(true)
+      return () => {
+        mounted = false
+      }
+    }
+
+    setStarterPrompts((prev) => {
+      if (prev.length === 0) setStarterPromptsLoading(true)
+      return prev
+    })
+
+    void (async () => {
+      const exploreContext = await discoverStarterExploreContext({
+        sdk: core40SDK,
+        selectedExplores,
+        availableModels: models,
+      })
+      if (!mounted) return
+      const immediate = buildDynamicStarterPrompts({
+        useCase: selectedUseCase,
+        selectedExplores,
+        permittedUseCases: allowedUseCases,
+        availableModels: models,
+        exploreContext,
+      })
+      setStarterPrompts(immediate)
+      setStarterPromptsLoading(false)
+
+      if (hasOAuth) {
+        const refined = await generateDynamicStarterPrompts({
+          sdk: core40SDK,
+          extensionSDK,
+          auth: { mode: 'oauth', oauthToken: oauthAccessToken, clientId, projectId, apiKey },
+          environmentId: sharedEnvIdRef.current || undefined,
+          useCase: selectedUseCase,
+          selectedExplores,
+          permittedUseCases: allowedUseCases,
+          availableModels: models,
+          exploreContext,
+          model: selectedModel,
+        })
+        if (mounted && refined.length > 0) {
+          setStarterPrompts(refined)
+        }
+      }
+    })()
+
+    return () => {
+      mounted = false
+    }
+  }, [
+    core40SDK,
+    extensionSDK,
+    selectedUseCase,
+    selectedExplores,
+    allowedUseCases,
+    models,
+    availableModels,
+    oauthAccessToken,
+    loadingMetadata,
+    clientId,
+    projectId,
+    apiKey,
+    selectedModel,
+    mockExt?.forceStarterPromptsSkeleton,
+  ])
 
   const handleCancelOAuthLogin = useCallback(() => {
     oauthAbortRef.current?.abort()
@@ -2395,21 +2489,23 @@ export function useStudioController() {
         setMessages, setBusyStatus, setLiveActivitySteps,
         infoModalUseCase, setInfoModalUseCase,
         loadingMetadata, setLoadingMetadata,
+        starterPrompts, setStarterPrompts, starterPromptsLoading, setStarterPromptsLoading,
         selectedFolderId, setSelectedFolderId,
         hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders,
       }
     }
-  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce, setMessages, infoModalUseCase, loadingMetadata, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders])
+  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce, setMessages, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders])
 
   return {
     extensionSDK, core40SDK, lookerHostData, history, location, isTileMount,
     themeMode, resolvedTheme, setThemeMode,
     authMode, setAuthMode, clientId, setClientId, projectId, setProjectId,
     disabledModes, setDisabledModes, selectedModel, setSelectedModel,
-    availableModels, enabledModes, oauthToken, setOauthToken, apiKey, setApiKey,
+    availableModels, enabledModes, oauthToken, oauthAccessToken, setOauthToken, apiKey, setApiKey,
     isAuthenticated, oauthSigningIn, oauthRedirectUri,
     capabilities, setCapabilities, availableLookmlProjects, canDeployLookml,
     loadingMetadata, setLoadingMetadata,
+    starterPrompts, setStarterPrompts, starterPromptsLoading, setStarterPromptsLoading,
     models, folders, folderTreeNodes, rootFolderIds, folderChildrenById,
     expandedFolderIds, loadingFolderIds, toggleExpandFolder,
     hydrateFolderAncestors, handleSearchFolders,

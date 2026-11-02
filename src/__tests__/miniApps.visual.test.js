@@ -388,23 +388,61 @@ function buildHtmlPage(scenario) {
             ]
           }
         ],
-        lookml_model_explore: async (modelName, exploreName) => ({
-          id: modelName + '::' + exploreName,
-          name: exploreName,
-          label: 'Order Items',
-          model_name: modelName,
-          fields: {
-            dimensions: [
-              { name: 'order_items.id', label_short: 'ID', type: 'number' },
-              { name: 'order_items.status', label_short: 'Status', type: 'string' },
-              { name: 'order_items.created_month', label_short: 'Created Month', type: 'date_month' }
-            ],
-            measures: [
-              { name: 'order_items.total_sale_price', label_short: 'Total Sale Price', type: 'sum' },
-              { name: 'order_items.count', label_short: 'Order Count', type: 'count' }
-            ]
+        lookml_model_explore: async (modelName, exploreName) => {
+          if (exploreName === 'jobs_timeline') {
+            return {
+              id: modelName + '::' + exploreName,
+              name: exploreName,
+              label: 'Jobs Timeline (By Period)',
+              model_name: modelName,
+              fields: {
+                dimensions: [
+                  { name: 'jobs_timeline.job_type', label_short: 'Job Type', type: 'string' },
+                  { name: 'jobs_timeline.creation_time', label_short: 'Creation Time', type: 'date_time' }
+                ],
+                measures: [
+                  { name: 'jobs_timeline.total_slot_ms', label_short: 'Total Slot Ms', type: 'sum' },
+                  { name: 'jobs_timeline.total_bytes_billed', label_short: 'Total Bytes Billed', type: 'sum' }
+                ]
+              }
+            };
           }
-        }),
+          if (exploreName === 'store_transactions') {
+            return {
+              id: modelName + '::' + exploreName,
+              name: exploreName,
+              label: 'Store Transactions',
+              model_name: modelName,
+              fields: {
+                dimensions: [
+                  { name: 'store_transactions.store_region', label_short: 'Store Region', type: 'string' },
+                  { name: 'store_transactions.transaction_month', label_short: 'Transaction Month', type: 'date_month' }
+                ],
+                measures: [
+                  { name: 'store_transactions.net_sales', label_short: 'Net Sales', type: 'sum' },
+                  { name: 'store_transactions.basket_count', label_short: 'Basket Count', type: 'count' }
+                ]
+              }
+            };
+          }
+          return {
+            id: modelName + '::' + exploreName,
+            name: exploreName,
+            label: 'Order Items',
+            model_name: modelName,
+            fields: {
+              dimensions: [
+                { name: 'order_items.id', label_short: 'ID', type: 'number' },
+                { name: 'order_items.status', label_short: 'Status', type: 'string' },
+                { name: 'order_items.created_month', label_short: 'Created Month', type: 'date_month' }
+              ],
+              measures: [
+                { name: 'order_items.total_sale_price', label_short: 'Total Sale Price', type: 'sum' },
+                { name: 'order_items.count', label_short: 'Order Count', type: 'count' }
+              ]
+            }
+          };
+        },
         all_folders: async () => [
           { id: '5', name: 'Bryan Weber (Personal)', parent_id: '2', is_personal: true, child_count: 1 },
           { id: '1', name: 'Shared', parent_id: null, is_personal: false, child_count: 1 },
@@ -2728,11 +2766,23 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       expression: `(async () => {
         const heroEl = document.querySelector('.dab-empty-hero');
         const hasJargon = /search_content|lookml_model_explore|Solr/i.test(heroEl ? heroEl.innerText : '');
+        const hasStudioStarterPrompts = Boolean(document.querySelector('[data-testid="studio-starter-prompts"]'));
+        const hasStarterPrompt0 = Boolean(document.querySelector('[data-testid="starter-prompt-0"]'));
         const starterBtns = Array.from(document.querySelectorAll('[data-testid="starter-prompt-list"] button[data-testid^="starter-prompt-"]'));
+        const noEmojiInLabels = starterBtns.every((b) => !/[📊📈💬🧩🧮🛒🔍📌📉🔁🩺📐⚡🧪🧱🐍🚨📋✨]/u.test(b.innerText || ''));
         starterBtns[0]?.click();
         await new Promise((r) => setTimeout(r, 60));
         const ta = document.querySelector('[data-testid="studio-prompt-input"]');
         const promptAfterClick = ta ? ta.value : '';
+
+        const savedPrompts = window.__DAB_STUDIO__?.starterPrompts || [];
+        window.__DAB_STUDIO__?.setStarterPrompts?.([]);
+        window.__DAB_STUDIO__?.setStarterPromptsLoading?.(true);
+        await new Promise((r) => setTimeout(r, 50));
+        const hasStarterSkeleton = Boolean(document.querySelector('[data-testid="studio-starter-prompts-skeleton"]'));
+        window.__DAB_STUDIO__?.setStarterPrompts?.(savedPrompts);
+        window.__DAB_STUDIO__?.setStarterPromptsLoading?.(false);
+        await new Promise((r) => setTimeout(r, 50));
 
         const ucSelect = document.querySelector('[data-testid="use-case-selector"]');
         const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
@@ -2748,13 +2798,17 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
 
         setter.call(ucSelect, 'auto');
         ucSelect.dispatchEvent(new Event('change', { bubbles: true }));
-        await new Promise((r) => setTimeout(r, 60));
+        await new Promise((r) => setTimeout(r, 80));
 
         const r = document.querySelector('.dab-empty-prompt-card')?.getBoundingClientRect();
         const clip = r ? { x: Math.max(0, Math.floor(r.left - 16)), y: Math.max(0, Math.floor(r.top - 16)), width: Math.min(1440, Math.ceil(r.width + 32)), height: Math.min(900, Math.ceil(r.height + 32)), scale: 1 } : null;
 
         return {
           hasJargon,
+          hasStudioStarterPrompts,
+          hasStarterPrompt0,
+          noEmojiInLabels,
+          hasStarterSkeleton,
           autoChipCount: starterBtns.length,
           promptAfterClick,
           tileChipCount: tileBtns.length,
@@ -2772,12 +2826,16 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
 
     expect(res.result.value).toMatchObject({
       hasJargon: false,
+      hasStudioStarterPrompts: true,
+      hasStarterPrompt0: true,
+      noEmojiInLabels: true,
+      hasStarterSkeleton: true,
       autoChipCount: 4,
       promptAfterClick:
-        'Build an Executive Revenue Data App on order_items with Total Revenue, Total Orders, Avg Order Value KPIs and a monthly trend chart.',
+        'Build an interactive Data App on bigquery_information_schema::jobs_timeline with Total Slot Ms and Total Bytes Billed KPI scorecards, a Job Type trend chart, and a Creation Time filter.',
       tileChipCount: 3,
       promptAfterTileClick:
-        'Write a Script summarizing visible LookML models, explores, and active dashboard filters as a table.',
+        'Write a Script summarizing bigquery_information_schema::jobs_timeline metrics by Creation Time and active dashboard filters as a table.',
       tilePlaceholder: 'Describe the Script to generate or update (or paste a screenshot)...',
       hasComposerModelSelect: true,
       noTopbarModelSelect: true,

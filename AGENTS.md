@@ -41,6 +41,13 @@ When a prompt starts with or contains `[CONVERSATION_LABEL_REQUEST]`, you are ha
 1. Return **only** a single-line concise title of **3–6 words** in plain text (no quotes, no markdown formatting, no trailing period, no tags).
 2. **Never** call `lookup_skill`, `code_execution`, `run_looker_codemode`, or read any `.agents/skills/*` file.
 
+## Dynamic Starter Prompts (Stateless Side-Request)
+
+When a prompt starts with or contains `[STARTER_PROMPTS_REQUEST]`, you are handling an out-of-band, stateless starter prompt synthesis request:
+1. Inspect the active `useCase`, permitted use cases, discovered LookML explore/field metadata (`model::explore`, dimensions, measures), and recent user content (`content_summary` dashboards and Looks).
+2. Do **not** call any tools (`lookup_skill`, `code_execution`, `run_looker_codemode`) or read any skill files.
+3. Reply with **only** 3–4 concise, tailored starter chips wrapped in `<STARTER_PROMPTS>[...]</STARTER_PROMPTS>` JSON (`[{"id":"...","label":"3-6 word plain text without emojis","prompt":"1-sentence actionable prompt","useCase":"app|dashboard|conversational-analytics|lookml|health-check|tile"}]`).
+
 ## Use Case Auto-Classification (Turn 1 Routing)
 
 When the Studio use-case selector is set to `Auto` (`useCase="auto"`), classify the user's Turn 1 prompt into **one** of the user's permitted Studio use cases and emit `<USE_CASE>...</USE_CASE>` at the start of your response before executing the matching workflow:

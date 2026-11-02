@@ -10,7 +10,10 @@ import {
 
 import {
   AntigravityActivityStep,
+  buildDynamicStarterPrompts,
   handleImageClipboardPaste,
+  StarterPromptItem,
+  stripStarterPromptEmojis,
   StudioUseCase,
 } from '../antigravity'
 import { renderTddMarkdownToHtml } from '../healthCheck'
@@ -29,6 +32,7 @@ import {
   StudioModal,
   StudioSelect,
   StudioSelectOption,
+  StudioSkeleton,
   StudioToolbar,
 } from './StudioDesignSystem'
 
@@ -977,70 +981,84 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
   )
 }
 
-export interface StarterPromptItem {
-  id: string
-  label: string
-  prompt: string
-}
+export { buildDynamicStarterPrompts, stripStarterPromptEmojis }
+export type { StarterPromptItem }
 
-export const STARTER_PROMPTS_BY_USE_CASE: Record<string, StarterPromptItem[]> = {
-  auto: [
-    { id: 'exec-app', label: '📊 Build an Executive Revenue Data App', prompt: 'Build an Executive Revenue Data App on order_items with Total Revenue, Total Orders, Avg Order Value KPIs and a monthly trend chart.' },
-    { id: 'native-udd', label: '📈 Create a Native Looker Dashboard', prompt: 'Create a native Looker UDD on order_items with a Total Revenue & Orders KPI, a Revenue by Status column chart, and an Order Status filter.' },
-    { id: 'ask-ca', label: '💬 Ask a Data Question', prompt: 'What are the top 3 product categories by gross margin in Q4?' },
-    { id: 'lookml-measure', label: '🧩 Add LookML Measures & Data Tests', prompt: 'Add total_revenue and gross_margin measures to orders, curate field descriptions, and add a LookML data test.' },
-  ],
-  app: [
-    { id: 'exec-kpi', label: '📊 Executive Revenue KPI App', prompt: 'Build an Executive Revenue Data App on order_items with Total Revenue, Total Orders, Avg Order Value KPIs and a monthly trend chart.' },
-    { id: 'cohort-grid', label: '🧮 Interactive Cohort & Margin Explorer', prompt: 'Build an interactive Data App with a metric switcher, category breakdown chart, and drillable order grid.' },
-    { id: 'funnel-app', label: '🛒 Customer Conversion Funnel App', prompt: 'Create a customer conversion and retention Data App with regional filters and YoY comparison cards.' },
-  ],
-  dashboard: [
-    { id: 'udd-exec', label: '📈 Executive Order Performance UDD', prompt: 'Create a native Looker UDD on order_items with a Total Revenue & Orders KPI, a Revenue by Status column chart, and an Order Status filter.' },
-    { id: 'saved-look', label: '🔍 Top Brands & Categories Saved Look', prompt: 'Create a Saved Look showing top 10 brands by revenue and gross margin with a 90-day date filter.' },
-    { id: 'board-schedule', label: '📌 Executive Board & Morning Schedule', prompt: 'Pin our key revenue dashboards to an Executive Pulse board and schedule a weekday 8 AM summary.' },
-  ],
-  'conversational-analytics': [
-    { id: 'ca-margin', label: '💬 Top Categories by Gross Margin', prompt: 'What are the top 3 product categories by gross margin in Q4?' },
-    { id: 'ca-spike', label: '📉 Q4 Revenue & Streaming Volume Q&A', prompt: 'Why did order revenue spike in Q4 and which BigQuery tables had the highest streaming buffer volume?' },
-    { id: 'ca-retention', label: '🔁 Repeat Customer Cohort Breakdown', prompt: 'Show me the monthly breakdown of repeat vs first-time customer orders over the past year.' },
-  ],
-  'health-check': [
-    { id: 'hc-full', label: '🩺 Full 3-Pillar Looker & BigQuery Audit', prompt: 'Run a full 3-pillar Looker & BigQuery health check and generate a prioritized Technical Design Document.' },
-    { id: 'hc-lookml', label: '📐 LookML Transcriber Rubric & PK Audit', prompt: 'Audit LookML views for missing primary keys, symmetric aggregate fanouts, and 0–4 Transcriber maturity score.' },
-    { id: 'hc-bq', label: '⚡ BigQuery Partitioning & Slot Cost Audit', prompt: 'Analyze BigQuery INFORMATION_SCHEMA for unpartitioned tables, high-byte scans, and clustering recommendations.' },
-  ],
-  lookml: [
-    { id: 'lkml-measures', label: '🧩 Add Revenue & Margin Measures', prompt: 'Add total_revenue and gross_margin measures to orders refinement, curate field descriptions, and verify SQL vs Explore parity.' },
-    { id: 'lkml-tests', label: '🧪 Generate LookML Assert Data Tests', prompt: 'Curate descriptions on order_items, generate assert data tests (.test.lkml), and capture a LookML parity snapshot.' },
-    { id: 'lkml-ndt', label: '🧱 Model a Native Derived Table Rollup', prompt: 'Create a customer lifetime value native derived table (NDT) view and join it into the order_items explore.' },
-  ],
-  tile: [
-    { id: 'script-summary', label: '🐍 Explore & Active Filter Summary', prompt: 'Write a Script summarizing visible LookML models, explores, and active dashboard filters as a table.' },
-    { id: 'script-anomaly', label: '🚨 Daily Revenue Anomaly Detector', prompt: 'Write a Script that queries daily order revenue, flags days outside 2 standard deviations, and outputs a markdown alert.' },
-    { id: 'script-audit', label: '📋 Unused Content & Schedule Audit', prompt: 'Write a Script that lists top scheduled plans and dashboard element counts across folders.' },
-  ],
-}
+export const STARTER_PROMPTS_BY_USE_CASE: Record<string, StarterPromptItem[]> = Object.fromEntries(
+  (['auto', 'app', 'dashboard', 'conversational-analytics', 'health-check', 'lookml', 'tile'] as const).map(
+    (uc) => [uc, buildDynamicStarterPrompts({ useCase: uc })]
+  )
+)
 STARTER_PROMPTS_BY_USE_CASE.health = STARTER_PROMPTS_BY_USE_CASE['health-check']
 
-export function getStarterPromptsForUseCase(useCase?: string): StarterPromptItem[] {
+export function getStarterPromptsForUseCase(
+  useCase?: string,
+  selectedExplores?: string[],
+  permittedUseCases?: StudioUseCase[]
+): StarterPromptItem[] {
+  if (
+    (selectedExplores && selectedExplores.length > 0) ||
+    (permittedUseCases && permittedUseCases.length > 0)
+  ) {
+    return buildDynamicStarterPrompts({
+      useCase,
+      selectedExplores,
+      permittedUseCases,
+    })
+  }
   const key = String(useCase || 'auto').trim().toLowerCase()
   return STARTER_PROMPTS_BY_USE_CASE[key] || STARTER_PROMPTS_BY_USE_CASE.auto
 }
 
 export const StarterPromptButtons: React.FC<{
   useCase?: string
+  prompts?: StarterPromptItem[]
+  loading?: boolean
   onSelect: (promptText: string) => void
   disabled?: boolean
-}> = ({ useCase, onSelect, disabled }) => (
-  <div className="dab-starter-prompts" data-testid="starter-prompt-list">
-    {getStarterPromptsForUseCase(useCase).map((item) => (
-      <button key={item.id} type="button" data-testid={`starter-prompt-${item.id}`} className="dab-starter-chip" disabled={disabled} onClick={() => onSelect(item.prompt)} title={item.prompt}>
-        {item.label}
-      </button>
-    ))}
-  </div>
-)
+}> = ({ useCase, prompts, loading, onSelect, disabled }) => {
+  const items = prompts && prompts.length > 0 ? prompts : getStarterPromptsForUseCase(useCase)
+  if (loading && (!prompts || prompts.length === 0)) {
+    return (
+      <div
+        className="dab-starter-prompts"
+        data-testid="studio-starter-prompts-skeleton"
+        aria-busy="true"
+      >
+        {[0, 1, 2].map((i) => (
+          <StudioSkeleton
+            key={i}
+            width={188}
+            height={28}
+            style={{ borderRadius: 999 }}
+            label="Loading starter prompt..."
+          />
+        ))}
+      </div>
+    )
+  }
+  return (
+    <div className="dab-starter-prompts" data-testid="studio-starter-prompts">
+      <div data-testid="starter-prompt-list" style={{ display: 'contents' }}>
+        {items.map((item, i) => (
+          <StudioButton
+            key={item.id || `starter-${i}`}
+            variant="secondary"
+            testId={`starter-prompt-${i}`}
+            data-prompt-id={item.id}
+            data-use-case={item.useCase || useCase || 'auto'}
+            className="dab-starter-chip"
+            disabled={disabled}
+            onClick={() => onSelect(item.prompt)}
+            title={item.prompt}
+          >
+            {stripStarterPromptEmojis(item.label)}
+          </StudioButton>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
@@ -1307,6 +1325,8 @@ export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ 
     isHealthCheckMode,
     selectedUseCase,
     selectedExplores,
+    starterPrompts,
+    starterPromptsLoading,
     setPrompt,
     busyStatus,
   } = ctl
@@ -1329,7 +1349,13 @@ export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ 
           <p className="dab-muted">
             {selectedExplores.length > 0 ? <>Exploring <code>{selectedExplores.join(', ')}</code> — pick a starter prompt below or describe what you want to build.</> : 'Pick a starter prompt below or describe what you want to build, analyze, or automate.'}
           </p>
-          <StarterPromptButtons useCase={selectedUseCase} onSelect={setPrompt} disabled={!!busyStatus} />
+          <StarterPromptButtons
+            useCase={selectedUseCase}
+            prompts={starterPrompts}
+            loading={starterPromptsLoading}
+            onSelect={setPrompt}
+            disabled={!!busyStatus}
+          />
         </div>
 
         <StudioComposer ctl={ctl} />
@@ -1385,6 +1411,8 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     builderMode,
     selectedUseCase,
     selectedExplores,
+    starterPrompts,
+    starterPromptsLoading,
     setPrompt,
     busyStatus,
     liveActivitySteps,
@@ -1407,7 +1435,13 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
             <p className="dab-muted">
               {selectedExplores.length > 0 ? <>Exploring <code>{selectedExplores.join(', ')}</code> — pick a starter prompt below or describe what you want to build.</> : 'Pick a starter prompt below or describe what you want to build, analyze, or automate.'}
             </p>
-            <StarterPromptButtons useCase={selectedUseCase} onSelect={setPrompt} disabled={!!busyStatus} />
+            <StarterPromptButtons
+              useCase={selectedUseCase}
+              prompts={starterPrompts}
+              loading={starterPromptsLoading}
+              onSelect={setPrompt}
+              disabled={!!busyStatus}
+            />
           </div>
         )}
 
