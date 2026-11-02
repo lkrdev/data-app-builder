@@ -21,7 +21,6 @@ import {
   Kanban,
   LayoutDashboard,
   Loader2,
-  Lock,
   MessageSquare,
   Paperclip,
   Plus,
@@ -45,7 +44,6 @@ import { renderTddMarkdownToHtml } from '../healthCheck'
 import {
   ConversationRecord,
   formatExploreId,
-  ResolvedStudioUseCase,
   resolveConversationRelatedContent,
   StudioContentItem,
   StudioContentItemType,
@@ -61,29 +59,9 @@ import {
   StudioDocPreview,
   StudioModal,
   StudioSelect,
-  StudioSelectOption,
   StudioSkeleton,
   StudioToolbar,
 } from './StudioDesignSystem'
-
-function buildUseCaseMenuOptions(ctl: StudioController): Array<StudioSelectOption<StudioUseCase>> {
-  const { useCaseOptions, allowedUseCases, capabilities } = ctl
-  return useCaseOptions.map((opt) => {
-    const isAllowed =
-      opt.value === 'auto' || allowedUseCases.includes(opt.value as ResolvedStudioUseCase)
-    const toolReason =
-      opt.capabilityMode && capabilities?.rolesLoaded
-        ? capabilities.tools?.[opt.capabilityMode]?.reason
-        : undefined
-    return {
-      value: opt.value,
-      label: !isAllowed ? `${opt.label} (Locked)` : opt.label,
-      icon: !isAllowed ? <Lock size={13} strokeWidth={1.75} aria-hidden="true" /> : undefined,
-      disabled: !isAllowed,
-      title: !isAllowed ? toolReason || 'Missing Looker permissions' : undefined,
-    }
-  })
-}
 
 export interface LookerEmbedTarget {
   kind: 'preload' | 'dashboard' | 'look' | 'explore' | 'extension' | 'report' | 'url'
@@ -812,31 +790,9 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
     handleCancelDeleteConversation,
     handleConfirmDeleteConversation,
     handleNewConversation,
-    selectedUseCase,
     busyStatus,
     userId,
   } = ctl
-  const [newConvMenuOpen, setNewConvMenuOpen] = useState(false)
-  const newConvGroupRef = useRef<HTMLDivElement>(null)
-  const useCaseMenuItems = buildUseCaseMenuOptions(ctl)
-
-  useEffect(() => {
-    if (!newConvMenuOpen) return
-    const onDocDown = (e: MouseEvent) => {
-      if (newConvGroupRef.current && !newConvGroupRef.current.contains(e.target as Node)) {
-        setNewConvMenuOpen(false)
-      }
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setNewConvMenuOpen(false)
-    }
-    document.addEventListener('mousedown', onDocDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDocDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [newConvMenuOpen])
 
   const renderConversationRow = (conv: ConversationRecord, isArchived = false) => {
     const contentBadge = formatConversationContentTag(conv)
@@ -907,76 +863,16 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
       </div>
 
       <div className="dab-conv-sidebar-actions">
-        <div className="dab-conv-new-split-group" ref={newConvGroupRef}>
-          <button
-            type="button"
-            className="dab-conv-new-btn"
-            data-testid="new-conversation-btn"
-            onClick={() => {
-              setNewConvMenuOpen(false)
-              handleNewConversation('auto')
-            }}
-            disabled={!!busyStatus}
-            title="Start a new conversation"
-          >
-            {sidebarCollapsed ? '+' : '+ New Conversation'}
-          </button>
-          {!sidebarCollapsed && (
-            <button
-              type="button"
-              className={`dab-conv-new-split-trigger ${newConvMenuOpen ? 'open' : ''}`}
-              data-testid="new-conversation-menu-trigger"
-              aria-haspopup="menu"
-              aria-expanded={newConvMenuOpen}
-              disabled={!!busyStatus}
-              title="Start a new conversation with a specific use case"
-              onClick={(e) => {
-                e.stopPropagation()
-                if (!busyStatus) setNewConvMenuOpen((o) => !o)
-              }}
-            >
-              ⌄
-            </button>
-          )}
-          {newConvMenuOpen && (
-            <div
-              className="dab-studio-menu dab-conv-new-menu"
-              role="menu"
-              data-testid="new-conversation-use-case-menu"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {useCaseMenuItems.map((opt) => {
-                const isSelected = selectedUseCase === opt.value
-                return (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    role="menuitem"
-                    disabled={opt.disabled}
-                    title={opt.title}
-                    data-value={opt.value}
-                    data-testid={`new-conversation-use-case-option-${opt.value}`}
-                    className={`dab-studio-menu-item ${isSelected ? 'active' : ''} ${opt.disabled ? 'disabled' : ''}`}
-                    onClick={() => {
-                      if (opt.disabled) return
-                      setNewConvMenuOpen(false)
-                      handleNewConversation(opt.value as StudioUseCase)
-                    }}
-                  >
-                    <span
-                      className="dab-studio-menu-item-main"
-                      data-testid={`new-conversation-option-${opt.value}`}
-                    >
-                      {opt.icon && <span className="dab-studio-menu-icon">{opt.icon}</span>}
-                      <span className="dab-studio-menu-text">{opt.label}</span>
-                    </span>
-                    {isSelected && <span className="dab-studio-menu-check" aria-hidden="true">✓</span>}
-                  </button>
-                )
-              })}
-            </div>
-          )}
-        </div>
+        <button
+          type="button"
+          className="dab-conv-new-btn"
+          data-testid="new-conversation-btn"
+          onClick={() => handleNewConversation('auto')}
+          disabled={!!busyStatus}
+          title="Start a new conversation"
+        >
+          {sidebarCollapsed ? '+' : '+ New Conversation'}
+        </button>
       </div>
 
       {!sidebarCollapsed && (
@@ -1204,9 +1100,6 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     isCaMode,
     caConversation,
     selectedUseCase,
-    setSelectedUseCase,
-    isUseCaseLocked,
-    getUseCaseLabel,
     selectedModel,
     setSelectedModel,
     availableModels,
@@ -1552,61 +1445,23 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     })
   }
 
-  const activeGuideUseCase: StudioUseCase = !isUseCaseLocked
-    ? selectedUseCase
-    : isCaMode || caConversation
-    ? 'conversational-analytics'
-    : isHealthCheckMode
-    ? 'health-check'
-    : isLookmlMode
-    ? 'lookml'
-    : activeMode === 'tile'
-    ? 'tile'
-    : builderMode === 'dashboard'
-    ? 'dashboard'
-    : selectedUseCase || 'app'
+  const activeGuideUseCase: StudioUseCase =
+    isCaMode || caConversation
+      ? 'conversational-analytics'
+      : isHealthCheckMode
+      ? 'health-check'
+      : isLookmlMode
+      ? 'lookml'
+      : activeMode === 'tile'
+      ? 'tile'
+      : builderMode === 'dashboard'
+      ? 'dashboard'
+      : selectedUseCase || 'auto'
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) =>
     handleImageClipboardPaste(e, setPastedImages)
 
   return (
     <div className="dab-composer dab-chatbar">
-      <div
-        className="dab-use-case-bar"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 8,
-          marginBottom: 4,
-          flexWrap: 'wrap',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-          <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Use Case:</strong>
-          {!isUseCaseLocked ? (
-            <StudioSelect
-              data-testid="use-case-selector"
-              testId="use-case-selector"
-              value={selectedUseCase}
-              onChange={(val) => setSelectedUseCase(val as StudioUseCase)}
-              disabled={!!busyStatus}
-              options={buildUseCaseMenuOptions(ctl)}
-            />
-          ) : (
-            <StudioBadge
-              data-testid="locked-use-case-badge"
-              testId="locked-use-case-badge"
-              tone="accent"
-              className="dab-locked-use-case-badge"
-              title="Use case is locked after Turn 1 — start a new conversation to switch use cases"
-            >
-              <Lock size={13} strokeWidth={1.75} aria-hidden="true" /> {getUseCaseLabel(selectedUseCase)}
-            </StudioBadge>
-          )}
-          <UseCaseInfoTrigger useCase={activeGuideUseCase} onOpen={setInfoModalUseCase} />
-        </div>
-      </div>
-
       <UseCaseInfoModal
         activeUseCase={infoModalUseCase}
         onSelectUseCase={setInfoModalUseCase}
@@ -2024,6 +1879,8 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
             title: m.description,
           }))}
         />
+
+        <UseCaseInfoTrigger useCase={activeGuideUseCase} onOpen={setInfoModalUseCase} />
 
         <div
           className="dab-composer-send-group"

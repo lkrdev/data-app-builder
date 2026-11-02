@@ -384,9 +384,6 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     isLookmlMode,
     isHealthCheckMode,
     builderMode,
-    isUseCaseLocked,
-    selectedUseCase,
-    getUseCaseLabel,
     lookmlProjectId,
     setLookmlProjectId,
     lookmlSessions,
@@ -579,16 +576,6 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
         >
           Env [{activeMode}]: {agentSession.environmentId || `env_${activeMode}_isolated`}
         </StudioBadge>
-        {isUseCaseLocked && (
-          <StudioBadge
-            testId="topbar-use-case-badge"
-            tone="accent"
-            className="dab-locked-use-case-badge"
-            title="Conversation use case is locked — click + New Conversation in the sidebar to start another use case"
-          >
-            <Lock size={13} strokeWidth={1.75} aria-hidden="true" /> {getUseCaseLabel(selectedUseCase)}
-          </StudioBadge>
-        )}
         <ThemeModeSelect
           themeMode={themeMode}
           resolvedTheme={resolvedTheme}

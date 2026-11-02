@@ -7,7 +7,6 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "scenario": "centered_empty_prompt",
   "verifiedVisibleText": [
     "Use your Looker Agent",
-    "Use Case:",
     "Send Message",
   ],
 }
@@ -103,7 +102,6 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "modeTabs": [],
   "scenario": "dashboard",
   "verifiedVisibleText": [
-    "Content Studio",
     "Executive Order Performance (Native UDD)",
     "/embed/dashboards/7",
     "Update Content",

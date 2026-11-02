@@ -705,9 +705,42 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       sentSources.some(
         (s) =>
           s.target === '/workspace/AGENTS.md' &&
-          String(s.content).includes('## Use Case Auto-Classification (Turn 1 Routing)')
+          String(s.content).includes('## Use Case Auto-Classification (Turn 1 Routing)') &&
+          !String(s.content).includes('lock the conversation to that resolved use case for all subsequent turns')
       )
     ).toBe(true)
+
+    const turn2MockExt = {
+      serverProxy: async (url: string, init?: FetchCustomParameters) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : undefined
+        capturedCalls.push({ url, body })
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            id: 'int_auto_2',
+            environment_id: 'env_auto_1',
+            status: 'completed',
+            output_text: '<USE_CASE>app</USE_CASE>\nBuilt interactive Lit Data App on Turn 2.',
+          }),
+        }
+      },
+    }
+    const turn2Res = await runAntigravityTurn({
+      sdk: asSdk({}),
+      extensionSDK: turn2MockExt,
+      auth: { mode: 'apikey' },
+      session: turnRes.session,
+      useCase: 'auto',
+      allowedModes: ['app', 'dashboard'],
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      userPrompt: 'Now build a custom interactive Lit Data App for executive KPIs',
+      onStatus: () => {},
+    })
+    expect(turn2Res.resolvedUseCase).toBe('app')
+    expect(turn2Res.assistantText).toBe('Built interactive Lit Data App on Turn 2.')
+    expect(capturedCalls[1]?.body?.input?.[0]?.text).toContain('[AUTO USE-CASE ROUTING:')
   })
 
   test('10. persists single per-user environment_id in Looker Artifacts (user_env:${me.id}), shares it across 2 concurrent conversations with isolated /workspace/apps/${conversationId}/app.js paths, and sends sources only once on creation', async () => {

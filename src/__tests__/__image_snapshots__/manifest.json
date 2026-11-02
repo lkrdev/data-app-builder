@@ -105,7 +105,7 @@
     "title": "11. Chat Bar State — LookML Activated Turn Skills & Prompt",
     "snapshotName": "11-chatbar-state-lookml-activated-skills-snap.png",
     "width": 766,
-    "height": 270,
+    "height": 230,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
     "changedInGit": false
@@ -116,7 +116,7 @@
     "title": "12. Chat Bar State — Pasted Screenshot Thumbnail & Composer Model Selector",
     "snapshotName": "12-chatbar-state-pasted-image-and-inspector-snap.png",
     "width": 427,
-    "height": 270,
+    "height": 234,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
     "changedInGit": false
@@ -175,7 +175,7 @@
     "title": "17. Centered New-Conversation Empty Prompt Box (Use-Case Selector, Input & Actions)",
     "snapshotName": "17-centered-empty-prompt-snap.png",
     "width": 768,
-    "height": 383,
+    "height": 343,
     "clipSelector": ".dab-empty-prompt-card",
     "clipMargin": 24,
     "changedInGit": false
