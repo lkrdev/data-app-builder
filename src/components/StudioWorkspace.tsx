@@ -1169,26 +1169,11 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       const category = (m[1]?.toLowerCase() as StudioContextCategory | undefined) || 'all'
       const query = (m[1] ? m[2] || '' : m[3] || '').trim()
       const atIdx = uptoCursor.lastIndexOf('@')
-      return {
-        open: true,
-        category,
-        query,
-        tokenStart: atIdx >= 0 ? atIdx : uptoCursor.length,
-        tokenEnd: uptoCursor.length,
-      }
-    }
-    if (forceMentionCategory !== null) {
-      return {
-        open: true,
-        category: forceMentionCategory,
-        query: '',
-        tokenStart: prompt.length,
-        tokenEnd: prompt.length,
-      }
+      return { open: true, category, query, tokenStart: atIdx >= 0 ? atIdx : uptoCursor.length, tokenEnd: uptoCursor.length }
     }
     return {
-      open: false,
-      category: 'all' as const,
+      open: forceMentionCategory !== null,
+      category: forceMentionCategory ?? ('all' as const),
       query: '',
       tokenStart: prompt.length,
       tokenEnd: prompt.length,
@@ -1356,31 +1341,16 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       }
     }
 
-    if (cat === 'all' || cat === 'dashboard') {
-      for (const item of preloadedContent) {
-        if (
-          item.type === 'dashboard' &&
-          matchTokens(`${item.title} ${item.id} ${item.description || ''}`)
-        ) {
-          pushItem(item)
+    for (const contentType of ['dashboard', 'look'] as const) {
+      if (cat === 'all' || cat === contentType) {
+        for (const item of preloadedContent) {
+          if (item.type === contentType && matchTokens(`${item.title} ${item.id} ${item.description || ''}`)) {
+            pushItem(item)
+          }
         }
-      }
-      for (const r of remoteSearchResults) {
-        if (r.type === 'dashboard') pushItem(r)
-      }
-    }
-
-    if (cat === 'all' || cat === 'look') {
-      for (const item of preloadedContent) {
-        if (
-          item.type === 'look' &&
-          matchTokens(`${item.title} ${item.id} ${item.description || ''}`)
-        ) {
-          pushItem(item)
+        for (const r of remoteSearchResults) {
+          if (r.type === contentType) pushItem(r)
         }
-      }
-      for (const r of remoteSearchResults) {
-        if (r.type === 'look') pushItem(r)
       }
     }
 
@@ -1929,46 +1899,24 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 <Paperclip size={13} strokeWidth={1.75} aria-hidden="true" />
                 <span>Files</span>
               </button>
-              <button
-                type="button"
-                role="menuitem"
-                data-testid="add-context-explores"
-                className="dab-composer-add-item"
-                onClick={() => handleInsertScopedPrefix('explore')}
-              >
-                <Database size={13} strokeWidth={1.75} aria-hidden="true" />
-                <span>Explores</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                data-testid="add-context-dashboards"
-                className="dab-composer-add-item"
-                onClick={() => handleInsertScopedPrefix('dashboard')}
-              >
-                <LayoutDashboard size={13} strokeWidth={1.75} aria-hidden="true" />
-                <span>Dashboards</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                data-testid="add-context-looks"
-                className="dab-composer-add-item"
-                onClick={() => handleInsertScopedPrefix('look')}
-              >
-                <Eye size={13} strokeWidth={1.75} aria-hidden="true" />
-                <span>Looks</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                data-testid="add-context-conversations"
-                className="dab-composer-add-item"
-                onClick={() => handleInsertScopedPrefix('conversation')}
-              >
-                <MessageSquare size={13} strokeWidth={1.75} aria-hidden="true" />
-                <span>Conversations</span>
-              </button>
+              {([
+                ['explore', 'Explores', 'add-context-explores'],
+                ['dashboard', 'Dashboards', 'add-context-dashboards'],
+                ['look', 'Looks', 'add-context-looks'],
+                ['conversation', 'Conversations', 'add-context-conversations'],
+              ] as const).map(([cat, label, testId]) => (
+                <button
+                  key={cat}
+                  type="button"
+                  role="menuitem"
+                  data-testid={testId}
+                  className="dab-composer-add-item"
+                  onClick={() => handleInsertScopedPrefix(cat)}
+                >
+                  {renderMentionCategoryIcon(cat)}
+                  <span>{label}</span>
+                </button>
+              ))}
             </div>
           )}
         </div>

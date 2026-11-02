@@ -985,20 +985,13 @@ function normalizeRawContentMention(
   if (!id) return null
   const title = String(raw.title || raw.name || raw.label || id).trim()
   const folderObj = raw.folder as Record<string, unknown> | undefined
-  const folderId = raw.folder_id
-    ? String(raw.folder_id)
-    : folderObj?.id
-    ? String(folderObj.id)
-    : undefined
+  const folderId = raw.folder_id ? String(raw.folder_id) : folderObj?.id ? String(folderObj.id) : undefined
+  const subtitle = folderObj?.name ? String(folderObj.name) : `${type === 'dashboard' ? 'Dashboard' : 'Look'} #${id}`
   return {
     type,
     id,
     title,
-    subtitle: folderObj?.name
-      ? String(folderObj.name)
-      : type === 'dashboard'
-      ? `Dashboard #${id}`
-      : `Look #${id}`,
+    subtitle,
     folderId,
     description: raw.description ? String(raw.description) : undefined,
     url: raw.content_url || raw.url ? String(raw.content_url || raw.url) : undefined,
@@ -1186,6 +1179,32 @@ function summarizeQuerySpec(q: Record<string, unknown> | null | undefined) {
   }
 }
 
+async function fetchLookerEntityRecord(
+  sdk: Looker40SDK,
+  method: 'dashboard' | 'look',
+  paramKey: 'dashboard_id' | 'look_id',
+  pathPrefix: '/dashboards' | '/looks',
+  id: string
+): Promise<Record<string, unknown> | null> {
+  try {
+    const fn = sdk[method] as unknown as (arg: unknown) => Promise<unknown>
+    let raw: unknown
+    try {
+      raw = await sdk.ok(fn.call(sdk, id))
+    } catch {
+      raw = await sdk.ok(fn.call(sdk, { [paramKey]: id }))
+    }
+    if (raw && typeof raw === 'object') return raw as Record<string, unknown>
+  } catch {
+    try {
+      return await rawLookerRequest<Record<string, unknown>>(sdk, 'GET', `${pathPrefix}/${encodeURIComponent(id)}`)
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
 export async function hydrateMentionedContext(params: {
   sdk: Looker40SDK
   mentions: StudioContextMention[]
@@ -1213,29 +1232,7 @@ export async function hydrateMentionedContext(params: {
     if (mention.type === 'dashboard') {
       const dashId = String(mention.id).trim()
       if (!dashId) continue
-      let dashObj: Record<string, unknown> | null = null
-      try {
-        const fn = sdk.dashboard as unknown as (arg: unknown) => Promise<unknown>
-        let rawDash: unknown
-        try {
-          rawDash = await sdk.ok(fn.call(sdk, dashId))
-        } catch {
-          rawDash = await sdk.ok(fn.call(sdk, { dashboard_id: dashId }))
-        }
-        if (rawDash && typeof rawDash === 'object') {
-          dashObj = rawDash as Record<string, unknown>
-        }
-      } catch {
-        try {
-          dashObj = await rawLookerRequest<Record<string, unknown>>(
-            sdk,
-            'GET',
-            `/dashboards/${encodeURIComponent(dashId)}`
-          )
-        } catch {
-          dashObj = null
-        }
-      }
+      const dashObj = await fetchLookerEntityRecord(sdk, 'dashboard', 'dashboard_id', '/dashboards', dashId)
 
       if (dashObj) {
         const elements = Array.isArray(dashObj.dashboard_elements)
@@ -1268,19 +1265,11 @@ export async function hydrateMentionedContext(params: {
           description: dashObj.description || undefined,
           folder_id: dashObj.folder_id || (dashObj.folder as Record<string, unknown> | undefined)?.id,
           explores: Array.from(dashExplores),
-          dashboard_filters: Array.isArray(dashObj.dashboard_filters)
-            ? dashObj.dashboard_filters
-            : [],
-          dashboard_layouts: Array.isArray(dashObj.dashboard_layouts)
-            ? dashObj.dashboard_layouts
-            : [],
+          dashboard_filters: Array.isArray(dashObj.dashboard_filters) ? dashObj.dashboard_filters : [],
+          dashboard_layouts: Array.isArray(dashObj.dashboard_layouts) ? dashObj.dashboard_layouts : [],
           tiles,
         }
-        extraSources.push({
-          type: 'inline',
-          target: targetPath,
-          content: JSON.stringify(payload, null, 2),
-        })
+        extraSources.push({ type: 'inline', target: targetPath, content: JSON.stringify(payload, null, 2) })
         summaryLines.push(
           `- **@dashboard:${payload.title}** (ID \`${payload.id}\`, saved to \`${targetPath}\`, ${tiles.length} tile(s), explores: ${
             payload.explores.length > 0 ? payload.explores.map((e) => `\`${e}\``).join(', ') : 'none'
@@ -1293,29 +1282,7 @@ export async function hydrateMentionedContext(params: {
     if (mention.type === 'look') {
       const lookId = String(mention.id).trim()
       if (!lookId) continue
-      let lookObj: Record<string, unknown> | null = null
-      try {
-        const fn = sdk.look as unknown as (arg: unknown) => Promise<unknown>
-        let rawLook: unknown
-        try {
-          rawLook = await sdk.ok(fn.call(sdk, lookId))
-        } catch {
-          rawLook = await sdk.ok(fn.call(sdk, { look_id: lookId }))
-        }
-        if (rawLook && typeof rawLook === 'object') {
-          lookObj = rawLook as Record<string, unknown>
-        }
-      } catch {
-        try {
-          lookObj = await rawLookerRequest<Record<string, unknown>>(
-            sdk,
-            'GET',
-            `/looks/${encodeURIComponent(lookId)}`
-          )
-        } catch {
-          lookObj = null
-        }
-      }
+      const lookObj = await fetchLookerEntityRecord(sdk, 'look', 'look_id', '/looks', lookId)
 
       if (lookObj) {
         const qSpec = summarizeQuerySpec(lookObj.query as Record<string, unknown> | undefined)
@@ -1331,11 +1298,7 @@ export async function hydrateMentionedContext(params: {
           explore: expId || undefined,
           query: qSpec,
         }
-        extraSources.push({
-          type: 'inline',
-          target: targetPath,
-          content: JSON.stringify(payload, null, 2),
-        })
+        extraSources.push({ type: 'inline', target: targetPath, content: JSON.stringify(payload, null, 2) })
         summaryLines.push(
           `- **@look:${payload.title}** (ID \`${payload.id}\`, saved to \`${targetPath}\`${
             expId ? `, explore: \`${expId}\`` : ''
