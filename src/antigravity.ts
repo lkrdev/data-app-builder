@@ -419,7 +419,7 @@ function parseValidOAuthSession(
   raw: string | null | undefined,
   clientId?: string
 ): { session: StoredOAuthSession | null; expired: boolean } {
-  if (!raw || !raw.trim()) return { session: null, expired: false }
+  if (!raw?.trim()) return { session: null, expired: false }
   try {
     const parsed = JSON.parse(raw) as Partial<StoredOAuthSession> | null
     const token = typeof parsed?.token === 'string' ? parsed.token.trim() : ''
@@ -428,16 +428,12 @@ function parseValidOAuthSession(
       return { session: null, expired: true }
     }
     const storedClientId = typeof parsed?.clientId === 'string' ? parsed.clientId.trim() : ''
-    const expectedClientId = typeof clientId === 'string' ? clientId.trim() : ''
+    const expectedClientId = clientId?.trim() || ''
     if (expectedClientId && storedClientId && storedClientId !== expectedClientId) {
       return { session: null, expired: false }
     }
     return {
-      session: {
-        token,
-        expiresAt,
-        ...(storedClientId ? { clientId: storedClientId } : {}),
-      },
+      session: { token, expiresAt, ...(storedClientId ? { clientId: storedClientId } : {}) },
       expired: false,
     }
   } catch {
@@ -447,19 +443,13 @@ function parseValidOAuthSession(
 
 export function clearStoredOAuthSession(extensionSDK?: AntigravityExtensionHostLike): void {
   try {
-    if (typeof window !== 'undefined') {
-      window.localStorage?.removeItem?.(STUDIO_OAUTH_STORAGE_KEY)
-    }
+    if (typeof window !== 'undefined') window.localStorage?.removeItem?.(STUDIO_OAUTH_STORAGE_KEY)
   } catch {
     // ignore browser storage removal failure
   }
   try {
-    if (extensionSDK?.localStorageRemoveItem) {
-      void extensionSDK.localStorageRemoveItem(STUDIO_OAUTH_STORAGE_KEY)
-    }
-    if (extensionSDK?.localStorageSetItem) {
-      void extensionSDK.localStorageSetItem(STUDIO_OAUTH_STORAGE_KEY, '')
-    }
+    void extensionSDK?.localStorageRemoveItem?.(STUDIO_OAUTH_STORAGE_KEY)
+    void extensionSDK?.localStorageSetItem?.(STUDIO_OAUTH_STORAGE_KEY, '')
   } catch {
     // ignore extensionSDK storage removal failure
   }
@@ -472,12 +462,8 @@ export function persistOAuthSession(
   const token = String(session?.token || '').trim()
   const expiresAt = Number(session?.expiresAt)
   if (!token || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) return
-  const payload: StoredOAuthSession = {
-    token,
-    expiresAt,
-    ...(session.clientId?.trim() ? { clientId: session.clientId.trim() } : {}),
-  }
-  const serialized = JSON.stringify(payload)
+  const cid = session.clientId?.trim()
+  const serialized = JSON.stringify({ token, expiresAt, ...(cid ? { clientId: cid } : {}) })
   try {
     if (typeof window !== 'undefined') {
       window.localStorage?.setItem?.(STUDIO_OAUTH_STORAGE_KEY, serialized)
@@ -495,16 +481,14 @@ export function persistOAuthSession(
 export function getInitialStoredOAuthToken(clientId?: string): string {
   try {
     const w = typeof window !== 'undefined' ? window : undefined
-    const mockExt = w?.__MOCK_LOOKER_EXTENSION__
-    if (mockExt && 'initialOauthToken' in mockExt) {
-      return String(mockExt.initialOauthToken || '')
+    if (w?.__MOCK_LOOKER_EXTENSION__ && 'initialOauthToken' in w.__MOCK_LOOKER_EXTENSION__) {
+      return String(w.__MOCK_LOOKER_EXTENSION__.initialOauthToken || '')
     }
-    const raw = w?.localStorage?.getItem?.(STUDIO_OAUTH_STORAGE_KEY)
-    const { session, expired } = parseValidOAuthSession(raw, clientId)
-    if (expired) {
-      clearStoredOAuthSession()
-      return ''
-    }
+    const { session, expired } = parseValidOAuthSession(
+      w?.localStorage?.getItem?.(STUDIO_OAUTH_STORAGE_KEY),
+      clientId
+    )
+    if (expired) clearStoredOAuthSession()
     return session?.token || ''
   } catch {
     return ''
@@ -516,17 +500,14 @@ export async function loadStoredOAuthSession(
   clientId?: string
 ): Promise<StoredOAuthSession | null> {
   try {
-    const w = typeof window !== 'undefined' ? window : undefined
     const extRaw = await extensionSDK?.localStorageGetItem?.(STUDIO_OAUTH_STORAGE_KEY)
     const raw =
-      extRaw && extRaw.trim()
-        ? extRaw
-        : w?.localStorage?.getItem?.(STUDIO_OAUTH_STORAGE_KEY)
+      extRaw?.trim() ||
+      (typeof window !== 'undefined'
+        ? window.localStorage?.getItem?.(STUDIO_OAUTH_STORAGE_KEY)
+        : null)
     const { session, expired } = parseValidOAuthSession(raw, clientId)
-    if (expired) {
-      clearStoredOAuthSession(extensionSDK)
-      return null
-    }
+    if (expired) clearStoredOAuthSession(extensionSDK)
     return session
   } catch {
     return null

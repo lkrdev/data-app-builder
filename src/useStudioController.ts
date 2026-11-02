@@ -11,10 +11,9 @@ import {
   ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig, generateConversationLabel,
   generateDynamicStarterPrompts, getCachedStarterPrompts, getInitialStoredOAuthToken,
   listAvailableAntigravityModels, LkrCodeMode, loadStoredOAuthSession, loginWithGoogleOAuth,
-  normalizeEnvironmentId, PastedImage, persistOAuthSession, prewarmOrWakeAntigravityEnvironment,
+  normalizeEnvironmentId, PastedImage, prewarmOrWakeAntigravityEnvironment,
   resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, resolveTargetExploreFromModels,
-  runAntigravityTurn, sanitizeConversationLabel, StarterPromptItem, StoredOAuthSession,
-  STUDIO_OAUTH_STORAGE_KEY,
+  runAntigravityTurn, sanitizeConversationLabel, StarterPromptItem,
 } from './antigravity'
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
 import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
@@ -47,20 +46,15 @@ import {
 
 export {
   authenticateGoogleOAuth,
-  clearStoredOAuthSession,
   computeIsAuthenticated,
-  getInitialStoredOAuthToken,
-  loadStoredOAuthSession,
   normalizeStudioThemeMode,
-  persistOAuthSession,
   resolveLookerOAuthRedirectUri,
   resolveLookerOAuthRedirectUris,
   resolveStudioTheme,
   resolveSystemTheme,
-  STUDIO_OAUTH_STORAGE_KEY,
   STUDIO_THEME_STORAGE_KEY,
 }
-export type { ResolvedStudioTheme, StoredOAuthSession, StudioThemeMode }
+export type { ResolvedStudioTheme, StudioThemeMode }
 
 type HostDataWithMount = {
   mountType?: string
@@ -123,9 +117,7 @@ export function useStudioController() {
     return list.length > 0 ? list : [STUDIO_MODES[0]]
   }, [disabledModes])
   const initialClientId = initialCtx?.clientId || ''
-  const [oauthToken, setOauthToken] = useState(() =>
-    getInitialStoredOAuthToken(initialClientId)
-  )
+  const [oauthToken, setOauthToken] = useState(() => getInitialStoredOAuthToken(initialClientId))
   const [apiKey, setApiKey] = useState(() => String(mockExt?.initialApiKey || ''))
   const [oauthSigningIn, setOauthSigningIn] = useState(false)
   const oauthAbortRef = useRef<AbortController | null>(null)
@@ -147,9 +139,7 @@ export function useStudioController() {
     if (mockExt && 'initialOauthToken' in mockExt && mockExt.initialOauthToken) return
     let mounted = true
     void loadStoredOAuthSession(extensionSDK, initialClientId).then((stored) => {
-      if (mounted && stored?.token) {
-        setOauthToken((prev) => prev || stored.token)
-      }
+      if (mounted && stored?.token) setOauthToken((prev) => prev || stored.token)
     })
     return () => {
       mounted = false
