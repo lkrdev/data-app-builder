@@ -33,9 +33,27 @@ const cmParsed = JSON.parse(cmOut)
 assert.equal(cmParsed.method, 'GET')
 assert.equal(cmParsed.path, '/lookml_models/thelook/explores/order_items')
 
-const antigravityTs = ['src/antigravity.ts', 'src/antigravityPrompts.ts']
+const antigravityTs = ['src/antigravity.ts', 'src/antigravityPrompts.ts', 'src/lkrCliBridge.ts']
   .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
   .join('\n')
+assert(
+  antigravityTs.includes('https://cdn.lkr.dev/cli/codemode/latest/codemode.js') &&
+    antigravityTs.includes('export async function ensureCodeModeLoaded()'),
+  'src/lkrCliBridge.ts must define CODEMODE_CDN_URL (https://cdn.lkr.dev/cli/codemode/latest/codemode.js) and ensureCodeModeLoaded()'
+)
+const distBundlePath = path.join(repoRoot, 'dist/bundle.js')
+if (statSync(distBundlePath, { throwIfNoEntry: false })) {
+  const bundleStat = statSync(distBundlePath)
+  assert(
+    bundleStat.size < 2 * 1024 * 1024,
+    `Expected dist/bundle.js to be < 2 MiB (got ${bundleStat.size} bytes)`
+  )
+  const distBundleText = readFileSync(distBundlePath, 'utf8')
+  assert(
+    distBundleText.includes('https://cdn.lkr.dev/cli/codemode/latest/codemode.js'),
+    'Expected dist/bundle.js to reference https://cdn.lkr.dev/cli/codemode/latest/codemode.js'
+  )
+}
 assert(
   antigravityTs.includes('https://www.googleapis.com/auth/generative-language.retriever'),
   'OAuth scope must use consent-page-allowed generative-language.retriever scope'
@@ -109,8 +127,9 @@ assert(
     manifestLkml.includes('"create_board"') &&
     manifestLkml.includes('"create_dashboard_filter"') &&
     manifestLkml.includes('"create_scheduled_plan"') &&
-    manifestLkml.includes('"update_artifacts"'),
-  'manifest.lkml must declare native content and artifact core_api_methods'
+    manifestLkml.includes('"update_artifacts"') &&
+    manifestLkml.includes('"https://cdn.lkr.dev"'),
+  'manifest.lkml must declare native content, artifact core_api_methods, and https://cdn.lkr.dev in external_api_urls'
 )
 const pythonTileTsx = [
   'src/components/PythonTile.tsx',
@@ -381,7 +400,7 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
   )
   assert(
     antigravityTs.includes("allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard'") &&
-      antigravityTs.includes('LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.properties.vars') &&
+      antigravityTs.includes("required: ['code', 'thought']") &&
       antigravityTs.includes('...customVars'),
     'runAntigravityTurn must expose vars: { type: "object" } on RUN_LOOKER_CODEMODE_TOOL and pass allowUpdateSession: true + customVars in LookML and dashboard modes'
   )

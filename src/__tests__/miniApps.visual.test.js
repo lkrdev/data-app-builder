@@ -8,6 +8,7 @@ const path = require('node:path')
 
 const repoRoot = path.resolve(__dirname, '../..')
 const bundlePath = path.join(repoRoot, 'dist/bundle.js')
+const codemodePath = path.join(repoRoot, 'src/vendor/codemode.js')
 const imageSnapshotsDir = path.join(__dirname, '__image_snapshots__')
 mkdirSync(imageSnapshotsDir, { recursive: true })
 
@@ -981,6 +982,7 @@ function buildHtmlPage(scenario) {
   </script>
 </head>
 <body>
+  <script src="/codemode.js"></script>
   <script src="/bundle.js"></script>
 </body>
 </html>`
@@ -1095,10 +1097,22 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
   beforeAll(async () => {
     expect(existsSync(bundlePath)).toBe(true)
     const bundleContent = readFileSync(bundlePath)
+    const codemodeContent = readFileSync(codemodePath)
     server = http.createServer((req, res) => {
       const url = new URL(req.url || '/', 'http://127.0.0.1')
+      if (url.pathname === '/codemode.js') {
+        res.writeHead(200, {
+          'Content-Type': 'application/javascript; charset=utf-8',
+          'Cache-Control': 'public, max-age=3600'
+        })
+        res.end(codemodeContent)
+        return
+      }
       if (url.pathname === '/bundle.js') {
-        res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' })
+        res.writeHead(200, {
+          'Content-Type': 'application/javascript; charset=utf-8',
+          'Cache-Control': 'public, max-age=3600'
+        })
         res.end(bundleContent)
         return
       }
@@ -1743,6 +1757,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
   }, 15000)
 
   test('renders collapsible left conversations sidebar, switches to centered empty-state prompt on + New Conversation, and restores conversation state on /c/:conversationId click', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
     const url = `http://127.0.0.1:${port}/?scenario=data_app`
     await chrome.send('Page.navigate', { url })
 

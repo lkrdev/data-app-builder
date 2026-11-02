@@ -20,6 +20,7 @@ import {
   classifyLookerOperation,
   clearStarterPromptsCache,
   clearStoredOAuthSession,
+  CODEMODE_CDN_URL,
   CodeModePermissionRequest,
   computeIsAuthenticated,
   computeLkrExtensionCacheKey,
@@ -30,6 +31,7 @@ import {
   DEFAULT_ANTIGRAVITY_MODEL,
   discoverStarterContentSummaries,
   discoverStarterExploreContext,
+  ensureCodeModeLoaded,
   executeLkrExtensionToolRequest,
   extractInteractionActivitySteps,
   extractLkrExtensionToolRequests,
@@ -4364,5 +4366,32 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
       { method: 'loadReport', arg: 'rep_101' },
       { method: 'loadUrl', arg: '/embed/boards/9' },
     ])
+  })
+
+  test('32. Issue #104: provides CODEMODE_CDN_URL, synchronous LkrCodeMode tool & operation classification, and ensureCodeModeLoaded() runtime loader', async () => {
+    expect(CODEMODE_CDN_URL).toBe('https://cdn.lkr.dev/cli/codemode/latest/codemode.js')
+    expect(LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.name).toBe('run_looker_codemode')
+    expect(LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.required).toEqual(['code', 'thought'])
+    expect(LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.properties.code).toBeDefined()
+    expect(LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.properties.vars).toBeDefined()
+    expect(LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.properties.thought).toBeDefined()
+    expect(LkrCodeMode.classifyOperation('GET', '/models')).toEqual({
+      operation: 'read_models',
+      requiresPermission: false,
+    })
+    expect(LkrCodeMode.classifyOperation('POST', '/dashboards')).toEqual({
+      operation: 'create_dashboard',
+      requiresPermission: true,
+    })
+
+    const runtime = await ensureCodeModeLoaded()
+    expect(typeof runtime.runPythonCode).toBe('function')
+    expect(runtime).not.toBe(LkrCodeMode)
+
+    const out = await LkrCodeMode.runPythonCode('return {"sum": 2 + 3}')
+    expect(JSON.parse(out)).toEqual({ sum: 5 })
+
+    const manifestText = readFileSync(path.resolve(__dirname, '../../manifest.lkml'), 'utf8')
+    expect(manifestText).toContain('"https://cdn.lkr.dev"')
   })
 })

@@ -80,7 +80,8 @@ application: data_app_builder {
     ]
     external_api_urls: [
       "https://generativelanguage.googleapis.com",
-      "https://oauth2.googleapis.com"
+      "https://oauth2.googleapis.com",
+      "https://cdn.lkr.dev"
     ]
   }
 }
