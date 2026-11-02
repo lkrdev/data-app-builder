@@ -178,42 +178,29 @@ export function formatStudioContentItemTitle(
 ): string {
   const cleanId = String(id || '').trim()
   const cleanTitle = String(rawTitle || '').trim()
-  if (cleanTitle && cleanTitle !== cleanId && !/^\d+$/.test(cleanTitle)) {
-    return cleanTitle
-  }
+  if (cleanTitle && cleanTitle !== cleanId && !/^\d+$/.test(cleanTitle)) return cleanTitle
   if (contentType === 'explore' && cleanId.includes('::')) {
-    const [model, explore] = cleanId.split('::')
     const humanize = (s: string) =>
       s
         .split(/[_-]+/)
         .filter(Boolean)
         .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
         .join(' ')
+    const [model, explore] = cleanId.split('::')
     return `${humanize(model)}: ${humanize(explore)}`
   }
-  if (cleanTitle && !/^\d+$/.test(cleanTitle)) return cleanTitle
-  switch (contentType) {
-    case 'look':
-      return `Look #${cleanId}`
-    case 'lookml_dashboard':
-      return `LookML Dashboard (${cleanId})`
-    case 'explore':
-      return `Explore (${cleanId})`
-    case 'board':
-      return `Board #${cleanId}`
-    case 'data_app':
-      return `Data App #${cleanId}`
-    case 'data-investigator':
-      return `Data Investigator #${cleanId}`
-    case 'conversational-analytics':
-      return `CA Chat (${cleanId})`
-    case 'extension':
-      return `Extension (${cleanId})`
-    case 'report':
-      return `Report (${cleanId})`
-    default:
-      return `Dashboard #${cleanId}`
+  const labels: Partial<Record<StudioContentItemType, string>> = {
+    look: `Look #${cleanId}`,
+    lookml_dashboard: `LookML Dashboard (${cleanId})`,
+    explore: `Explore (${cleanId})`,
+    board: `Board #${cleanId}`,
+    data_app: `Data App #${cleanId}`,
+    'data-investigator': `Data Investigator #${cleanId}`,
+    'conversational-analytics': `CA Chat (${cleanId})`,
+    extension: `Extension (${cleanId})`,
+    report: `Report (${cleanId})`,
   }
+  return labels[contentType] || `Dashboard #${cleanId}`
 }
 
 export function resolveStudioContentEmbedPath(
@@ -224,22 +211,16 @@ export function resolveStudioContentEmbedPath(
   const cleanExplicit = String(explicitPath || '').trim()
   if (cleanExplicit) return cleanExplicit
   const cleanId = String(id || '').trim()
-  switch (contentType) {
-    case 'look':
-      return `/embed/looks/${encodeURIComponent(cleanId)}`
-    case 'explore':
-      return `/embed/explore/${cleanId.replace('::', '/')}`
-    case 'board':
-      return `/embed/boards/${encodeURIComponent(cleanId)}`
-    case 'conversational-analytics':
-      return `/embed/conversations/${encodeURIComponent(cleanId)}`
-    case 'extension':
-      return `/embed/extensions/${cleanId}`
-    case 'report':
-      return `/embed/reporting/${cleanId}`
-    default:
-      return `/embed/dashboards/${encodeURIComponent(cleanId)}`
+  const enc = encodeURIComponent(cleanId)
+  const paths: Partial<Record<StudioContentItemType, string>> = {
+    look: `/embed/looks/${enc}`,
+    explore: `/embed/explore/${cleanId.replace('::', '/')}`,
+    board: `/embed/boards/${enc}`,
+    'conversational-analytics': `/embed/conversations/${enc}`,
+    extension: `/embed/extensions/${cleanId}`,
+    report: `/embed/reporting/${cleanId}`,
   }
+  return paths[contentType] || `/embed/dashboards/${enc}`
 }
 
 export function normalizeStudioContentItem(
@@ -367,74 +348,44 @@ export function hydrateConversationContentItems(
     return items
   }
 
+  const baseMeta = { title: fallbackTitle, embedPath: c.embedPath, updatedAt: conv.updatedAt }
   if (c.contentType === 'lookml_dashboard' || c.lookmlDashboardId) {
-    const lmlId = String(c.lookmlDashboardId || c.dashboardId || c.id || conv.objectId || '').trim()
-    if (lmlId) {
-      pushItem({
-        id: lmlId,
-        contentType: 'lookml_dashboard',
-        lookmlDashboardId: lmlId,
-        title: fallbackTitle,
-        embedPath: c.embedPath,
-        updatedAt: conv.updatedAt,
-      })
-    }
+    const id = String(c.lookmlDashboardId || c.dashboardId || c.id || conv.objectId || '').trim()
+    pushItem({ ...baseMeta, id, contentType: 'lookml_dashboard', lookmlDashboardId: id })
   } else if (c.contentType === 'board') {
-    const boardId = String(c.id || c.dashboardId || conv.objectId || '').trim()
-    if (boardId) {
-      pushItem({
-        id: boardId,
-        contentType: 'board',
-        title: fallbackTitle,
-        embedPath: c.embedPath,
-        updatedAt: conv.updatedAt,
-      })
-    }
+    const id = String(c.id || c.dashboardId || conv.objectId || '').trim()
+    pushItem({ ...baseMeta, id, contentType: 'board' })
   } else if (c.contentType === 'explore') {
-    const expId = String(c.id || conv.objectId || '').trim()
-    if (expId) {
-      pushItem({
-        id: expId,
-        contentType: 'explore',
-        exploreId: expId,
-        title: fallbackTitle,
-        embedPath: c.embedPath,
-        updatedAt: conv.updatedAt,
-      })
-    }
+    const id = String(c.id || conv.objectId || '').trim()
+    pushItem({ ...baseMeta, id, contentType: 'explore', exploreId: id })
   } else if (c.dashboardId || (c.contentType !== 'look' && (c.id || conv.objectId))) {
-    const dashId = String(c.dashboardId || c.id || conv.objectId || '').trim()
-    if (dashId) {
-      const ct: StudioContentItemType =
-        rawType === 'data-investigator' || rawType === 'data_investigator'
-          ? 'data-investigator'
-          : rawType === 'dashboard' || c.contentType === 'dashboard'
-          ? 'dashboard'
-          : 'data_app'
-      pushItem({
-        id: dashId,
-        contentType: ct,
-        dashboardId: dashId,
-        extensionId: typeof c.extensionId === 'string' ? c.extensionId : undefined,
-        title: fallbackTitle,
-        embedPath: c.embedPath,
-        updatedAt: conv.updatedAt,
-      })
-    }
+    const id = String(c.dashboardId || c.id || conv.objectId || '').trim()
+    const contentType: StudioContentItemType =
+      rawType === 'data-investigator' || rawType === 'data_investigator'
+        ? 'data-investigator'
+        : rawType === 'dashboard' || c.contentType === 'dashboard'
+        ? 'dashboard'
+        : 'data_app'
+    pushItem({
+      ...baseMeta,
+      id,
+      contentType,
+      dashboardId: id,
+      extensionId: typeof c.extensionId === 'string' ? c.extensionId : undefined,
+    })
   }
 
   if (c.lookId || c.contentType === 'look') {
     const lookId = String(c.lookId || c.id || conv.objectId || '').trim()
-    if (lookId) {
-      pushItem({
-        id: lookId,
-        contentType: 'look',
-        lookId,
-        title: c.dashboardId ? `Look #${lookId}` : fallbackTitle,
-        embedPath: c.contentType === 'look' ? c.embedPath : `/embed/looks/${encodeURIComponent(lookId)}`,
-        updatedAt: conv.updatedAt,
-      })
-    }
+    pushItem({
+      id: lookId,
+      contentType: 'look',
+      lookId,
+      title: c.dashboardId ? `Look #${lookId}` : fallbackTitle,
+      embedPath:
+        c.contentType === 'look' ? c.embedPath : `/embed/looks/${encodeURIComponent(lookId)}`,
+      updatedAt: conv.updatedAt,
+    })
   }
 
   return items

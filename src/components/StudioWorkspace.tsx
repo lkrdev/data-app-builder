@@ -152,49 +152,53 @@ export function resolveLookerEmbedTarget(opts: {
   if (opts.isEmptyConversation || opts.isHealthCheckMode || opts.isLookmlMode || opts.isTileMode)
     return preload
 
-  const item = opts.activeContentItem
-  if (item && item.id && item.contentType) {
-    if (item.contentType === 'dashboard' || item.contentType === 'lookml_dashboard') {
+  const item =
+    opts.activeContentItem?.id && opts.activeContentItem?.contentType
+      ? opts.activeContentItem
+      : opts.builderMode === 'dashboard' && opts.nativeContent
+      ? (opts.nativeContent as Partial<StudioContentItem> & { id: string; contentType: string })
+      : null
+  if (item) {
+    const ct = item.contentType
+    if (ct === 'dashboard' || ct === 'lookml_dashboard') {
       const id = String(item.lookmlDashboardId || item.dashboardId || item.id)
       return { kind: 'dashboard', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
     }
-    if (item.contentType === 'data_app' || item.contentType === 'data-investigator') {
+    if (ct === 'data_app' || ct === 'data-investigator') {
       const id = String(item.dashboardId || item.id)
       return { kind: 'dashboard', target: id, previewMode: 'data_app', previewObjectId: id, nonce }
     }
-    if (item.contentType === 'look') {
+    if (ct === 'look') {
       const id = String(item.lookId || item.id)
       return { kind: 'look', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
     }
-    if (item.contentType === 'explore') {
+    if (ct === 'explore') {
       const rawId = String(item.exploreId || item.id)
-      const target = rawId.replace('::', '/')
-      return { kind: 'explore', target, previewMode: 'dashboard', previewObjectId: rawId, nonce }
-    }
-    if (item.contentType === 'extension') {
-      const id = String(item.extensionId || item.id)
-      return { kind: 'extension', target: id, previewMode: 'data_app', previewObjectId: id, nonce }
-    }
-    if (item.contentType === 'report') {
-      const id = String(item.id)
-      return { kind: 'report', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
-    }
-    if (item.contentType === 'conversational-analytics') {
-      const rawUrl = item.embedPath || `/embed/conversations/${encodeURIComponent(item.id)}`
       return {
-        kind: 'url',
-        target: normalizeLookerEmbedUrl(rawUrl, opts.hostUrl),
-        previewMode: 'conversational-analytics',
-        previewObjectId: item.id,
+        kind: 'explore',
+        target: rawId.replace('::', '/'),
+        previewMode: 'dashboard',
+        previewObjectId: rawId,
         nonce,
       }
     }
-    const rawUrl = item.embedPath || `/embed/boards/${encodeURIComponent(item.id)}`
+    if (ct === 'extension') {
+      const id = String(item.extensionId || item.id)
+      return { kind: 'extension', target: id, previewMode: 'data_app', previewObjectId: id, nonce }
+    }
+    if (ct === 'report') {
+      const id = String(item.id)
+      return { kind: 'report', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
+    }
+    const isCa = ct === 'conversational-analytics'
+    const id = String(item.lookmlDashboardId || item.id)
+    const rawUrl =
+      item.embedPath || `/embed/${isCa ? 'conversations' : 'boards'}/${encodeURIComponent(id)}`
     return {
       kind: 'url',
       target: normalizeLookerEmbedUrl(rawUrl, opts.hostUrl),
-      previewMode: 'dashboard',
-      previewObjectId: item.id,
+      previewMode: isCa ? 'conversational-analytics' : 'dashboard',
+      previewObjectId: id,
       nonce,
     }
   }
@@ -208,45 +212,7 @@ export function resolveLookerEmbedTarget(opts: {
       nonce,
     }
   }
-  if (opts.builderMode === 'dashboard') {
-    const nc = opts.nativeContent
-    if (!nc) return preload
-    if (nc.contentType === 'dashboard' || nc.contentType === 'lookml_dashboard') {
-      const id = String(nc.lookmlDashboardId || nc.dashboardId || nc.id)
-      return { kind: 'dashboard', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
-    }
-    if (nc.contentType === 'look') {
-      const id = String(nc.lookId || nc.id)
-      return { kind: 'look', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
-    }
-    if (nc.contentType === 'explore') {
-      const rawId = String(nc.id)
-      return {
-        kind: 'explore',
-        target: rawId.replace('::', '/'),
-        previewMode: 'dashboard',
-        previewObjectId: rawId,
-        nonce,
-      }
-    }
-    if (nc.contentType === 'extension') {
-      const id = String(nc.id)
-      return { kind: 'extension', target: id, previewMode: 'data_app', previewObjectId: id, nonce }
-    }
-    if (nc.contentType === 'report') {
-      const id = String(nc.id)
-      return { kind: 'report', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
-    }
-    const id = String(nc.lookmlDashboardId || nc.id)
-    const rawUrl = nc.embedPath || `/embed/boards/${encodeURIComponent(id)}`
-    return {
-      kind: 'url',
-      target: normalizeLookerEmbedUrl(rawUrl, opts.hostUrl),
-      previewMode: 'dashboard',
-      previewObjectId: id,
-      nonce,
-    }
-  }
+  if (opts.builderMode === 'dashboard') return preload
   if (opts.publishedApp?.dashboardId) {
     const id = String(opts.publishedApp.dashboardId)
     return { kind: 'dashboard', target: id, previewMode: 'data_app', previewObjectId: id, nonce }
@@ -456,11 +422,14 @@ export function createLookerEmbedPreloadController(opts: {
       if (isSameTarget && prev.nonce === next.nonce) return connection
       lastTarget = next
       const options = { waitUntilLoaded: true }
+      const recordLoad = async (method: string, arg: string, p: Promise<unknown>) => {
+        telemetry.calls.push({ method, arg })
+        telemetry.loadCount += 1
+        await p
+      }
       if (next.kind === 'preload') {
         if (prev && prev.kind !== 'preload') {
-          telemetry.calls.push({ method: 'loadUrl', arg: '/preload' })
-          telemetry.loadCount += 1
-          await connection.loadUrl({ url: '/preload', options })
+          await recordLoad('loadUrl', '/preload', connection.loadUrl({ url: '/preload', options }))
         }
       } else if (next.kind === 'dashboard') {
         if (isSameTarget && prev.nonce !== next.nonce) {
@@ -468,36 +437,22 @@ export function createLookerEmbedPreloadController(opts: {
             telemetry.calls.push({ method: 'asDashboardConnection.run', arg: next.target })
             connection.asDashboardConnection().run()
           } catch {
-            telemetry.calls.push({ method: 'loadDashboard', arg: next.target })
-            telemetry.loadCount += 1
-            await connection.loadDashboard({ id: next.target, options })
+            await recordLoad('loadDashboard', next.target, connection.loadDashboard({ id: next.target, options }))
           }
         } else {
-          telemetry.calls.push({ method: 'loadDashboard', arg: next.target })
-          telemetry.loadCount += 1
-          await connection.loadDashboard({ id: next.target, options })
+          await recordLoad('loadDashboard', next.target, connection.loadDashboard({ id: next.target, options }))
         }
       } else if (next.kind === 'look') {
-        telemetry.calls.push({ method: 'loadLook', arg: next.target })
-        telemetry.loadCount += 1
-        await connection.loadLook({ id: next.target, options })
+        await recordLoad('loadLook', next.target, connection.loadLook({ id: next.target, options }))
       } else if (next.kind === 'explore') {
         const exploreId = next.target.replace('::', '/')
-        telemetry.calls.push({ method: 'loadExplore', arg: exploreId })
-        telemetry.loadCount += 1
-        await connection.loadExplore({ id: exploreId, options })
+        await recordLoad('loadExplore', exploreId, connection.loadExplore({ id: exploreId, options }))
       } else if (next.kind === 'extension') {
-        telemetry.calls.push({ method: 'loadExtension', arg: next.target })
-        telemetry.loadCount += 1
-        await connection.loadExtension({ id: next.target, options })
+        await recordLoad('loadExtension', next.target, connection.loadExtension({ id: next.target, options }))
       } else if (next.kind === 'report') {
-        telemetry.calls.push({ method: 'loadReport', arg: next.target })
-        telemetry.loadCount += 1
-        await connection.loadReport({ id: next.target, options })
+        await recordLoad('loadReport', next.target, connection.loadReport({ id: next.target, options }))
       } else {
-        telemetry.calls.push({ method: 'loadUrl', arg: next.target })
-        telemetry.loadCount += 1
-        await connection.loadUrl({ url: next.target, options })
+        await recordLoad('loadUrl', next.target, connection.loadUrl({ url: next.target, options }))
       }
       telemetry.state = next.kind === 'preload' ? 'preloaded' : next.kind
       telemetry.target = next.target
