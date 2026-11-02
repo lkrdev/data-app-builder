@@ -190,6 +190,8 @@ export function useStudioController() {
   const [rootFolderIds, setRootFolderIds] = useState<string[]>(() =>
     buildRootLookerFolders().map((r) => r.id)
   )
+  const rootFolderIdsRef = useRef<string[]>(rootFolderIds)
+  rootFolderIdsRef.current = rootFolderIds
   const [folderChildrenById, setFolderChildrenById] = useState<Record<string, string[]>>({})
   const [expandedFolderIds, setExpandedFolderIds] = useState<string[]>([])
   const [loadingFolderIds, setLoadingFolderIds] = useState<string[]>([])
@@ -743,96 +745,108 @@ export function useStudioController() {
     }
   }
 
+  const loadFolderChildren = useCallback(
+    async (fid: string, knownRootIds?: string[], markEmptyLeaf = false) => {
+      const children = await fetchFolderChildren(core40SDK, fid)
+      const activeRootIds = knownRootIds || rootFolderIdsRef.current
+      const visibleChildren = children.filter((c) => !activeRootIds.includes(c.id))
+      setFolderTreeNodes((prev) => {
+        const next = { ...prev }
+        for (const c of visibleChildren) next[c.id] = { ...next[c.id], ...c }
+        if (markEmptyLeaf && next[fid] && visibleChildren.length === 0) {
+          next[fid] = { ...next[fid], child_count: 0, has_children: false }
+        }
+        return next
+      })
+      if (visibleChildren.length > 0 || markEmptyLeaf) {
+        setFolderChildrenById((prev) => {
+          const existing = prev[fid] || []
+          const merged = Array.from(
+            new Set([...visibleChildren.map((c) => c.id), ...existing])
+          ).filter((id) => !activeRootIds.includes(id))
+          return { ...prev, [fid]: merged }
+        })
+      }
+    },
+    [core40SDK]
+  )
+
   const hydrateFolderAncestors = useCallback(
-    async (targetFolderId: string) => {
+    async (targetFolderId: string, knownRootIds?: string[]) => {
       const fid = String(targetFolderId || '').trim()
       if (!fid) return
+      const activeRootIds = knownRootIds || rootFolderIdsRef.current
       try {
         const res = await fetchFolderWithAncestors(core40SDK, fid)
         if (!res.folder && res.ancestors.length === 0) return
+        let anchorIdx = res.chain.length - 1
+        while (anchorIdx >= 0 && !activeRootIds.includes(res.chain[anchorIdx].id)) anchorIdx -= 1
+        const effectiveChain = anchorIdx >= 0 ? res.chain.slice(anchorIdx) : res.chain
+        const effectiveAncestors = effectiveChain.slice(0, -1)
+
         setFolderTreeNodes((prev) => {
           const next = { ...prev }
-          for (const node of res.chain) {
+          for (const node of effectiveChain) {
             const existing = next[node.id]
-            next[node.id] = existing ? { ...existing, ...node, name: existing.is_personal && existing.name === 'My folder' ? existing.name : node.name } : node
+            next[node.id] = {
+              ...existing,
+              ...node,
+              name:
+                existing?.is_personal && existing.name === 'My folder' ? existing.name : node.name,
+              parent_id: activeRootIds.includes(node.id) ? null : node.parent_id,
+            }
           }
           return next
         })
-        if (res.chain.length > 0) {
-          const topRootId = res.chain[0].id
+        if (effectiveChain.length > 0) {
+          const topRootId = effectiveChain[0].id
           setRootFolderIds((prev) => (prev.includes(topRootId) ? prev : [topRootId, ...prev]))
         }
-        if (res.chain.length > 1) {
+        if (effectiveChain.length > 1) {
           setFolderChildrenById((prev) => {
             const next = { ...prev }
-            for (let i = 0; i < res.chain.length - 1; i += 1) {
-              const parentId = res.chain[i].id
-              const childId = res.chain[i + 1].id
+            for (let i = 0; i < effectiveChain.length - 1; i += 1) {
+              const parentId = effectiveChain[i].id
+              const childId = effectiveChain[i + 1].id
+              if (activeRootIds.includes(childId)) continue
               const cur = next[parentId] || []
               if (!cur.includes(childId)) next[parentId] = [...cur, childId]
             }
             return next
           })
-          setExpandedFolderIds((prev) => Array.from(new Set([...prev, ...res.expandedIds])))
-          for (const anc of res.ancestors) {
-            void fetchFolderChildren(core40SDK, anc.id)
-              .then((children) => {
-                if (!children.length) return
-                setFolderTreeNodes((prev) => {
-                  const next = { ...prev }
-                  for (const c of children) next[c.id] = { ...next[c.id], ...c }
-                  return next
-                })
-                setFolderChildrenById((prev) => {
-                  const cur = prev[anc.id] || []
-                  const merged = Array.from(new Set([...children.map((c) => c.id), ...cur]))
-                  return { ...prev, [anc.id]: merged }
-                })
-              })
-              .catch(() => {})
+          setExpandedFolderIds((prev) =>
+            Array.from(new Set([...prev, ...effectiveAncestors.map((a) => a.id)]))
+          )
+          for (const anc of effectiveAncestors) {
+            void loadFolderChildren(anc.id, activeRootIds).catch(() => {})
           }
         }
       } catch {
         // Ignore ancestor hydration errors
       }
     },
-    [core40SDK]
+    [core40SDK, loadFolderChildren]
   )
 
   const toggleExpandFolder = useCallback(
     async (folderId: string) => {
       const fid = String(folderId || '').trim()
       if (!fid) return
-      let shouldFetch = false
-      setExpandedFolderIds((prev) => {
-        if (prev.includes(fid)) return prev.filter((id) => id !== fid)
-        shouldFetch = true
-        return [...prev, fid]
-      })
-      if (!shouldFetch) return
+      const isCurrentlyExpanded = expandedFolderIds.includes(fid)
+      setExpandedFolderIds((prev) =>
+        prev.includes(fid) ? prev.filter((id) => id !== fid) : [...prev, fid]
+      )
+      if (isCurrentlyExpanded || folderChildrenById[fid]?.length) return
       setLoadingFolderIds((prev) => (prev.includes(fid) ? prev : [...prev, fid]))
       try {
-        const children = await fetchFolderChildren(core40SDK, fid)
-        setFolderTreeNodes((prev) => {
-          const next = { ...prev }
-          for (const c of children) next[c.id] = { ...next[c.id], ...c }
-          if (next[fid] && children.length === 0) {
-            next[fid] = { ...next[fid], child_count: 0, has_children: false }
-          }
-          return next
-        })
-        setFolderChildrenById((prev) => {
-          const existing = prev[fid] || []
-          const merged = Array.from(new Set([...children.map((c) => c.id), ...existing]))
-          return { ...prev, [fid]: merged }
-        })
+        await loadFolderChildren(fid, undefined, true)
       } catch {
         // Ignore folder children fetch errors
       } finally {
         setLoadingFolderIds((prev) => prev.filter((id) => id !== fid))
       }
     },
-    [core40SDK]
+    [expandedFolderIds, folderChildrenById, loadFolderChildren]
   )
 
   const handleSearchFolders = useCallback(
@@ -853,7 +867,7 @@ export function useStudioController() {
   useEffect(() => {
     const list = Object.values(folderTreeNodes).map((f) => ({
       id: String(f.id),
-      name: `${f.name} (#${f.id})`,
+      name: f.name,
     }))
     if (list.length > 0) setFolders(list)
   }, [folderTreeNodes])
@@ -901,16 +915,18 @@ export function useStudioController() {
           }))
         )
         const rawFolders = (meta.folders || []) as LookerFolderNode[]
+        const initialRootIds = rawFolders.map((f) => String(f.id))
+        rootFolderIdsRef.current = initialRootIds
         setFolderTreeNodes((prev) => {
           const next = { ...prev }
           for (const f of rawFolders) next[f.id] = { ...next[f.id], ...f }
           return next
         })
-        setRootFolderIds(rawFolders.map((f) => String(f.id)))
+        setRootFolderIds(initialRootIds)
         setFolders(
           rawFolders.map((f) => ({
             id: String(f.id),
-            name: `${f.name} (#${f.id})`,
+            name: f.name,
           }))
         )
         const extMock =
@@ -926,7 +942,8 @@ export function useStudioController() {
             : prev
         )
         if (!extMock?.forceFolderSkeleton) setLoadingMetadata(false)
-        void hydrateFolderAncestors(targetInitialFolder)
+        void hydrateFolderAncestors(targetInitialFolder, initialRootIds)
+        void loadFolderChildren(targetInitialFolder, initialRootIds).catch(() => {})
         void refreshCatalog(resolvedUserId)
         loadUserConversations(
           core40SDK,
@@ -948,7 +965,7 @@ export function useStudioController() {
     return () => {
       mounted = false
     }
-  }, [core40SDK, extensionSDK, syncSharedEnvironmentId, hydrateFolderAncestors, refreshCatalog, setMessages])
+  }, [core40SDK, extensionSDK, syncSharedEnvironmentId, hydrateFolderAncestors, loadFolderChildren, refreshCatalog, setMessages])
 
   useEffect(() => {
     let mounted = true

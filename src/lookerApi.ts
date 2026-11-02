@@ -280,16 +280,24 @@ export type RawLookerFolderLike = Partial<IFolder> & {
 
 export function normalizeLookerFolderNode(
   raw: RawLookerFolderLike | null | undefined,
-  fallbackParentId?: string | null
+  fallbackParentId?: string | null,
+  allFoldersList?: RawLookerFolderLike[]
 ): LookerFolderNode {
-  const childCount = typeof raw?.child_count === 'number' ? raw.child_count : undefined
+  const fid = String(raw?.id ?? '')
+  const countedChildren = Array.isArray(allFoldersList)
+    ? allFoldersList.filter((c) => String(c?.parent_id ?? '') === fid).length
+    : undefined
+  const childCount =
+    typeof raw?.child_count === 'number'
+      ? Math.max(raw.child_count, countedChildren ?? 0)
+      : countedChildren
   const parentId =
     raw?.parent_id !== undefined && raw?.parent_id !== null && raw?.parent_id !== ''
       ? String(raw.parent_id)
       : fallbackParentId ?? null
   return {
-    id: String(raw?.id ?? ''),
-    name: String(raw?.name || `Folder #${raw?.id ?? ''}`),
+    id: fid,
+    name: String(raw?.name || `Folder #${fid}`),
     parent_id: parentId,
     ...(childCount !== undefined ? { child_count: childCount } : {}),
     is_personal: Boolean(raw?.is_personal),
@@ -344,23 +352,34 @@ export async function fetchFolderChildren(
     async () => {
       const s = sdk as unknown as LookerFolderSdkLike
       if (typeof s?.folder_children === 'function') {
-        const rows = await unwrapSdkCall(
-          s,
-          s.folder_children({
-            folder_id: fid,
-            fields: 'id,name,parent_id,child_count,is_personal,can',
-          })
-        )
-        return (Array.isArray(rows) ? rows : []).map((r) => normalizeLookerFolderNode(r, fid))
+        try {
+          const rows = await unwrapSdkCall(
+            s,
+            s.folder_children({
+              folder_id: fid,
+              fields: 'id,name,parent_id,child_count,is_personal,can',
+            })
+          )
+          if (Array.isArray(rows)) {
+            return rows.map((r) => normalizeLookerFolderNode(r, fid))
+          }
+        } catch {
+          // Fall back to all_folders when folder_children is not entitled or fails
+        }
       }
       if (typeof s?.all_folders === 'function') {
-        const all = await unwrapSdkCall(
-          s,
-          s.all_folders('id,name,parent_id,child_count,is_personal,can')
-        )
-        return (Array.isArray(all) ? all : [])
-          .filter((r) => String(r?.parent_id ?? '') === fid)
-          .map((r) => normalizeLookerFolderNode(r, fid))
+        try {
+          const all = await unwrapSdkCall(
+            s,
+            s.all_folders('id,name,parent_id,child_count,is_personal,can')
+          )
+          const list = Array.isArray(all) ? all : []
+          return list
+            .filter((r) => String(r?.parent_id ?? '') === fid)
+            .map((r) => normalizeLookerFolderNode(r, fid, list))
+        } catch {
+          // ignore all_folders fallback error
+        }
       }
       return []
     },
@@ -422,10 +441,12 @@ export async function fetchFolderWithAncestors(
         // ignore folder_ancestors lookup error
       }
 
+      let allFoldersFallbackList: RawLookerFolderLike[] | undefined
       if ((!rawFolder || !rawAncestors) && typeof s?.all_folders === 'function') {
         try {
           const all = await unwrapSdkCall(s, s.all_folders(LOOKER_FOLDER_FIELDS))
           const list = Array.isArray(all) ? all : []
+          allFoldersFallbackList = list
           const byId = new Map<string, RawLookerFolderLike>(
             list.map((f) => [String(f.id), f])
           )
@@ -446,8 +467,12 @@ export async function fetchFolderWithAncestors(
         }
       }
 
-      const folder = rawFolder ? normalizeLookerFolderNode(rawFolder) : null
-      const normAnc = (rawAncestors || []).map((a) => normalizeLookerFolderNode(a))
+      const folder = rawFolder
+        ? normalizeLookerFolderNode(rawFolder, undefined, allFoldersFallbackList)
+        : null
+      const normAnc = (rawAncestors || []).map((a) =>
+        normalizeLookerFolderNode(a, undefined, allFoldersFallbackList)
+      )
       const orderedAncestors =
         normAnc.length > 1 && normAnc[0].parent_id ? [...normAnc].reverse() : normAnc
       const chain = [...orderedAncestors, ...(folder ? [folder] : [])]
@@ -491,30 +516,41 @@ export async function searchLookerFolders(
     async () => {
       const s = sdk as unknown as LookerFolderSdkLike
       if (typeof s?.search_folders === 'function') {
-        const rows = await unwrapSdkCall(s, s.search_folders(req))
-        return (Array.isArray(rows) ? rows : []).map((r) => normalizeLookerFolderNode(r))
+        try {
+          const rows = await unwrapSdkCall(s, s.search_folders(req))
+          if (Array.isArray(rows)) {
+            return rows.map((r) => normalizeLookerFolderNode(r))
+          }
+        } catch {
+          // Fall back to all_folders when search_folders is not entitled or fails
+        }
       }
       if (typeof s?.all_folders === 'function') {
-        const rows = await unwrapSdkCall(s, s.all_folders(LOOKER_FOLDER_FIELDS))
-        const all = (Array.isArray(rows) ? rows : []).map((r) => normalizeLookerFolderNode(r))
-        const nameQ = String(req.name || '')
-          .replace(/%/g, '')
-          .trim()
-          .toLowerCase()
-        return all.filter((f) => {
-          if (nameQ && !f.name.toLowerCase().includes(nameQ)) return false
-          if (req.parent_id && String(f.parent_id || '') !== String(req.parent_id)) return false
-          if (req.id && String(f.id) !== String(req.id)) return false
-          if (req.creator_id && String(f.creator_id || '') !== String(req.creator_id)) return false
-          if (typeof req.is_personal === 'boolean' && Boolean(f.is_personal) !== req.is_personal)
-            return false
-          if (
-            typeof req.is_personal_descendant === 'boolean' &&
-            Boolean(f.is_personal_descendant) !== req.is_personal_descendant
-          )
-            return false
-          return true
-        })
+        try {
+          const rows = await unwrapSdkCall(s, s.all_folders(LOOKER_FOLDER_FIELDS))
+          const rawList = Array.isArray(rows) ? rows : []
+          const all = rawList.map((r) => normalizeLookerFolderNode(r, undefined, rawList))
+          const nameQ = String(req.name || '')
+            .replace(/%/g, '')
+            .trim()
+            .toLowerCase()
+          return all.filter((f) => {
+            if (nameQ && !f.name.toLowerCase().includes(nameQ)) return false
+            if (req.parent_id && String(f.parent_id || '') !== String(req.parent_id)) return false
+            if (req.id && String(f.id) !== String(req.id)) return false
+            if (req.creator_id && String(f.creator_id || '') !== String(req.creator_id)) return false
+            if (typeof req.is_personal === 'boolean' && Boolean(f.is_personal) !== req.is_personal)
+              return false
+            if (
+              typeof req.is_personal_descendant === 'boolean' &&
+              Boolean(f.is_personal_descendant) !== req.is_personal_descendant
+            )
+              return false
+            return true
+          })
+        } catch {
+          // ignore all_folders fallback error
+        }
       }
       return []
     },

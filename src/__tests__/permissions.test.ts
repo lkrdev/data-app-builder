@@ -2862,6 +2862,44 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(searchRes).toEqual([
       expect.objectContaining({ id: '502', name: 'subfolder test', parent_id: '501' }),
     ])
+
+    // 5. Issue #87: when sdk.folder_children or sdk.search_folders rejects with an entitlement/SDK error,
+    // falls back to sdk.all_folders and computes child_count / has_children for nested subfolders
+    clearLookerMetadataCache()
+    const fallbackSdk = asSdk({
+      ok: async <T>(p: T) => p,
+      folder_children: async () => {
+        throw new Error('Method folder_children is not entitled in manifest.lkml')
+      },
+      search_folders: async () => {
+        throw new Error('Method search_folders is not entitled in manifest.lkml')
+      },
+      all_folders: async () => [
+        { id: '5', name: 'My folder', parent_id: '2', is_personal: true },
+        { id: '502', name: 'subfolder test', parent_id: '5', is_personal: true },
+        { id: '504', name: 'nested leaf', parent_id: '502', is_personal: true },
+      ],
+    })
+    const fallbackChildren = await fetchFolderChildren(fallbackSdk, '5')
+    expect(fallbackChildren).toEqual([
+      expect.objectContaining({
+        id: '502',
+        name: 'subfolder test',
+        parent_id: '5',
+        child_count: 1,
+        has_children: true,
+      }),
+    ])
+    const fallbackSearch = await searchLookerFolders(fallbackSdk, { name: 'subfolder' })
+    expect(fallbackSearch).toEqual([
+      expect.objectContaining({
+        id: '502',
+        name: 'subfolder test',
+        parent_id: '5',
+        child_count: 1,
+        has_children: true,
+      }),
+    ])
   })
 
   test('27. provides StudioDesignSystem primitives (StudioButton, StudioBadge, StudioModal, StudioToolbar, StudioCard, StudioSkeleton, StudioDocPreview) and studio-design-system skill documentation', () => {
