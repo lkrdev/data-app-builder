@@ -7,6 +7,18 @@ import {
   LookerEmbedExSDK,
   PageChangedEvent,
 } from '@looker/embed-sdk'
+import {
+  Archive,
+  ArchiveRestore,
+  BookOpen,
+  Brain,
+  Code2,
+  FileText,
+  Lock,
+  Terminal,
+  Trash2,
+  Wrench,
+} from 'lucide-react'
 
 import {
   AntigravityActivityStep,
@@ -47,7 +59,8 @@ function buildUseCaseMenuOptions(ctl: StudioController): Array<StudioSelectOptio
         : undefined
     return {
       value: opt.value,
-      label: !isAllowed ? `🔒 ${opt.label} (Locked)` : opt.label,
+      label: !isAllowed ? `${opt.label} (Locked)` : opt.label,
+      icon: !isAllowed ? <Lock size={13} strokeWidth={1.75} aria-hidden="true" /> : undefined,
       disabled: !isAllowed,
       title: !isAllowed ? toolReason || 'Missing Looker permissions' : undefined,
     }
@@ -426,10 +439,10 @@ function formatConversationContentTag(conv: ConversationRecord): string {
 }
 
 export const DOC_UI_COMPONENTS: Record<string, () => React.ReactElement> = {
-  PublishDashboardButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>✨ Publish Dashboard</button>,
-  ScheduleScriptButton: () => <button type="button" className="dab-btn-secondary" tabIndex={-1}>⏰ Schedule Script</button>,
+  PublishDashboardButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>Publish Dashboard</button>,
+  ScheduleScriptButton: () => <button type="button" className="dab-btn-secondary" tabIndex={-1}>Schedule Script</button>,
   SaveScriptButton: () => <button type="button" className="dab-btn-secondary" tabIndex={-1}>Save Script</button>,
-  RunPythonButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>✨ Run Python</button>,
+  RunPythonButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>Run Python</button>,
   ScriptModeSelect: () => (
     <StudioSelect
       className="dab-select"
@@ -452,8 +465,8 @@ export const DOC_UI_COMPONENTS: Record<string, () => React.ReactElement> = {
       ))}
     </div>
   ),
-  PushLookmlButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>✨ Update LookML</button>,
-  ExportHealthTddButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>✨ Download Markdown (.md)</button>,
+  PushLookmlButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>Update LookML</button>,
+  ExportHealthTddButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>Download Markdown (.md)</button>,
 }
 
 export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: string; markdown: string }> = {
@@ -662,7 +675,7 @@ export const UseCaseInfoModal: React.FC<{
       closeTestId="use-case-info-close-btn"
       closeLabel="Close"
       className="dab-use-case-info-modal"
-      title={`📖 ${guide.title}`}
+      title={guide.title}
       subtitle="Interactive guide & live-themed UI controls reference (non-actionable preview)"
     >
       <div className="dab-use-case-guide-tabs" role="tablist" aria-label="Use Case Guides">
@@ -754,7 +767,7 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
               onClick={(e) => handleToggleArchiveConversation(e, conv.id, !isArchived)}
               title={isArchived ? 'Unarchive conversation' : 'Archive conversation'}
             >
-              {isArchived ? '↩' : '📥'}
+              {isArchived ? <ArchiveRestore size={14} strokeWidth={1.75} aria-hidden="true" /> : <Archive size={14} strokeWidth={1.75} aria-hidden="true" />}
             </button>
             <button
               type="button"
@@ -763,7 +776,7 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
               onClick={(e) => handleRequestDeleteConversation(e, conv)}
               title="Delete conversation"
             >
-              🗑
+              <Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -861,6 +874,7 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
                       className="dab-studio-menu-item-main"
                       data-testid={`new-conversation-option-${opt.value}`}
                     >
+                      {opt.icon && <span className="dab-studio-menu-icon">{opt.icon}</span>}
                       <span className="dab-studio-menu-text">{opt.label}</span>
                     </span>
                     {isSelected && <span className="dab-studio-menu-check" aria-hidden="true">✓</span>}
@@ -1143,7 +1157,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               className="dab-locked-use-case-badge"
               title="Use case is locked after Turn 1 — start a new conversation to switch use cases"
             >
-              🔒 {getUseCaseLabel(selectedUseCase)}
+              <Lock size={13} strokeWidth={1.75} aria-hidden="true" /> {getUseCaseLabel(selectedUseCase)}
             </StudioBadge>
           )}
           <UseCaseInfoTrigger useCase={activeGuideUseCase} onOpen={setInfoModalUseCase} />
@@ -1297,18 +1311,18 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               ? 'Generating...'
               : isCaMode || selectedUseCase === 'conversational-analytics'
               ? caConversation
-                ? '✨ Ask CA Agent'
-                : '✨ Route & Start CA Chat'
+                ? 'Ask CA Agent'
+                : 'Route & Start CA Chat'
               : isLookmlMode
               ? lookmlBundle
-                ? '✨ Update LookML'
-                : '✨ Run Agentic LookML'
+                ? 'Update LookML'
+                : 'Run Agentic LookML'
               : activeMode === 'tile'
-              ? '✨ Ask AI'
+              ? 'Ask AI'
               : builderMode === 'dashboard'
               ? nativeContent
-                ? '✨ Update Content'
-                : '✨ Create / Update Content'
+                ? 'Update Content'
+                : 'Create / Update Content'
               : 'Send Message'}
           </StudioButton>
         </div>
@@ -1364,19 +1378,21 @@ export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ 
   )
 }
 
-const STEP_BADGES: Record<string, string> = {
-  thought: '💭 Thought',
-  codemode: '🐍 Code Mode',
-  cli_bridge: '🌉 CLI Bridge',
-  file: '📄 File',
-  skill: '📚 Skill',
+const STEP_BADGES: Record<string, React.ReactNode> = {
+  thought: <><Brain size={13} strokeWidth={1.75} aria-hidden="true" /> Thought</>,
+  codemode: <><Code2 size={13} strokeWidth={1.75} aria-hidden="true" /> Code Mode</>,
+  cli_bridge: <><Terminal size={13} strokeWidth={1.75} aria-hidden="true" /> CLI Bridge</>,
+  file: <><FileText size={13} strokeWidth={1.75} aria-hidden="true" /> File</>,
+  skill: <><BookOpen size={13} strokeWidth={1.75} aria-hidden="true" /> Skill</>,
 }
 
-function formatActivityStepBadge(step: AntigravityActivityStep): string {
+function formatActivityStepBadge(step: AntigravityActivityStep): React.ReactNode {
   if (step.kind === 'code_execution') {
-    return step.language === 'PYTHON' ? '🐍 Sandbox Python' : '💻 Sandbox Bash'
+    return step.language === 'PYTHON'
+      ? <><Code2 size={13} strokeWidth={1.75} aria-hidden="true" /> Sandbox Python</>
+      : <><Terminal size={13} strokeWidth={1.75} aria-hidden="true" /> Sandbox Bash</>
   }
-  return STEP_BADGES[step.kind] || '⚡ Activity'
+  return STEP_BADGES[step.kind] || <><Wrench size={13} strokeWidth={1.75} aria-hidden="true" /> Activity</>
 }
 
 function renderActivityStepsList(steps: AntigravityActivityStep[]) {
@@ -1720,7 +1736,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                     className="dab-btn-secondary"
                     onClick={() => setTddViewMode((m) => (m === 'rendered' ? 'raw' : 'rendered'))}
                   >
-                    {tddViewMode === 'rendered' ? '{ } Raw Markdown' : '📖 Rendered Report'}
+                    {tddViewMode === 'rendered' ? '{ } Raw Markdown' : 'Rendered Report'}
                   </button>
                   <button
                     type="button"
@@ -1734,7 +1750,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                     className="dab-btn-gemini"
                     onClick={handleDownloadTddMarkdown}
                   >
-                    ✨ Download Markdown (.md)
+                    Download Markdown (.md)
                   </button>
                 </>
               )}
@@ -1771,7 +1787,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                 <>
                   <strong>{caConversation.title}</strong>{' '}
                   <StudioBadge testId="ca-selected-agent-badge">
-                    🤖 Agent: {caConversation.agentName} ({caConversation.agentId})
+                    Agent: {caConversation.agentName} ({caConversation.agentId})
                   </StudioBadge>{' '}
                   <span className="dab-muted">
                     (Conversation <code>{caConversation.caConversationId}</code> ·{' '}
@@ -1946,7 +1962,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             <div className="dab-placeholder">
               <p>No 3-Pillar Health Check report loaded yet.</p>
               <p className="dab-muted">
-                Click <strong>✨ Run 3-Pillar Audit</strong> in the top-right bar or enter a
+                Click <strong>Run 3-Pillar Audit</strong> in the top-right bar or enter a
                 prompt on the left to execute Pillar 1 (System Activity), Pillar 2 (LookML 0–4
                 Transcriber Rubric), and Pillar 3 (BigQuery INFORMATION_SCHEMA) in{' '}
                 <code>LkrCodeMode</code>.

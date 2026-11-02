@@ -2990,10 +2990,20 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(skillMd).toContain('StudioModal')
     expect(skillMd).toContain('StudioToolbar')
     expect(skillMd).toContain('--dab-success-bg')
+    expect(skillMd).toContain('lucide-react')
 
     const agentsMd = readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8')
     expect(agentsMd).toContain('.agents/skills/studio-design-system/SKILL.md')
     expect(agentsMd).toContain('.agents/skills/issue-authoring/SKILL.md')
+
+    // Issue #86: verify starter prompts, LookML turn skills, and DOC_UI_COMPONENTS contain zero decorative emojis
+    for (const items of Object.values(STARTER_PROMPTS_BY_USE_CASE)) {
+      for (const item of items) {
+        expect(item.label).not.toMatch(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u)
+      }
+    }
+    const pkgJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
+    expect(pkgJson.dependencies?.['lucide-react']).toBeTruthy()
   })
 
   test('28. enforces requirePermission on mutating sdk_request calls while auto-executing read-only GET and query/validation POST calls, and documents /spartan/oauth2_redirect + Safe Mode matrix (Issue #83)', async () => {

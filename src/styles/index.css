@@ -1146,6 +1146,9 @@ body {
 
 .dab-conv-action-btn,
 .dab-conv-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: transparent;
   color: var(--dab-text-muted, #94a3b8);
@@ -1413,6 +1416,9 @@ body {
 }
 
 .dab-thinking-kind-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 10px;
   font-weight: 700;
   padding: 1px 6px;
@@ -1528,7 +1534,7 @@ body {
 .dab-folder-expand-btn { width: 20px; height: 22px; border: none; background: transparent; color: var(--dab-text-muted, #64748b); font-size: 11px; cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .dab-folder-expand-btn:disabled { cursor: default; opacity: 0.4; }
 .dab-folder-select-btn { flex: 1; min-width: 0; border: none; background: transparent; color: inherit; font-size: 12px; font-weight: inherit; text-align: left; padding: 3px 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
-.dab-folder-node-icon { font-size: 12px; flex-shrink: 0; }
+.dab-folder-node-icon { display: inline-flex; align-items: center; font-size: 12px; flex-shrink: 0; }
 .dab-folder-node-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dab-folder-popover-footer { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; border-top: 1px solid var(--dab-border, #e2e8f0); background: var(--dab-surface-muted, #f8fafc); }
 .dab-folder-adv-btn { height: 24px; font-size: 11px; padding: 0 8px; }

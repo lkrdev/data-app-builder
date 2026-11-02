@@ -135,7 +135,7 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               onClick={() => setSchedulerOpen(true)}
               style={{ cursor: 'pointer' }}
             >
-              ⏰ Scheduled: {savedScheduleBadge}
+              Scheduled: {savedScheduleBadge}
             </StudioBadge>
           ) : null
         }
@@ -183,7 +183,7 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               className="dab-btn-secondary"
               onClick={() => setSchedulerOpen(true)}
             >
-              ⏰ Schedule Script
+              Schedule Script
             </button>
             <button
               type="button"
@@ -191,7 +191,7 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               onClick={handlePublishTileDashboard}
               disabled={!!busyStatus}
             >
-              ✨ Publish Dashboard
+              Publish Dashboard
             </button>
             {publishedTileDash && (
               <button
@@ -263,7 +263,7 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                 onClick={() => handleRunPython()}
                 disabled={!!busyStatus}
               >
-                ✨ Run Python
+                Run Python
               </button>
             </div>
           </div>
@@ -302,7 +302,7 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             <ScriptOutputRenderer output={scriptOutput} />
           ) : (
             <div className="dab-placeholder">
-              <p>Click &ldquo;✨ Run Python&rdquo; to execute in WASM Monty sandbox.</p>
+              <p>Click &ldquo;Run Python&rdquo; to execute in WASM Monty sandbox.</p>
               <p className="dab-muted">
                 Renders a table for <code>list[dict]</code>, HTML/Markdown for{' '}
                 <code>str</code>, or <code>&lt;pre&gt;</code> for <code>dict</code>.
@@ -316,7 +316,7 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         open={schedulerOpen}
         onClose={() => setSchedulerOpen(false)}
         testId="tile-schedule-modal"
-        title="⏰ Custom CodeMode Script Scheduler"
+        title="Custom CodeMode Script Scheduler"
         subtitle={
           <>
             Schedule <code>obj_script_{scriptId}</code> with custom <code>vars.mode</code> &amp; non-query controls
@@ -341,7 +341,7 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                 setSchedulerOpen(false)
               }}
             >
-              ✨ Save Script Schedule
+              Save Script Schedule
             </button>
           </>
         }
