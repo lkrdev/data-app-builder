@@ -2948,12 +2948,18 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
 
         const routeAfterClick = window.__DAB_STUDIO__.history.location.pathname;
         const redirectUriEl = document.querySelector('[data-testid="config-oauth-redirect-uri"]');
+        const spartanRedirectUriEl = document.querySelector('[data-testid="config-spartan-oauth-redirect-uri"]');
         const copyBtn = document.querySelector('[data-testid="config-copy-redirect-uri-btn"]');
+        const copySpartanBtn = document.querySelector('[data-testid="copy-spartan-redirect-uri-btn"]');
         const redirectUriText = (redirectUriEl?.textContent || '').trim();
+        const spartanRedirectUriText = (spartanRedirectUriEl?.textContent || '').trim();
         const copyBtnInitialText = (copyBtn?.textContent || '').trim();
+        const copySpartanBtnInitialText = (copySpartanBtn?.textContent || '').trim();
         copyBtn?.click();
+        copySpartanBtn?.click();
         await new Promise((r) => setTimeout(r, 40));
         const copyBtnAfterText = (copyBtn?.textContent || '').trim();
+        const copySpartanBtnAfterText = (copySpartanBtn?.textContent || '').trim();
 
         const helperRect = document.querySelector('.dab-oauth-redirect-helper')?.getBoundingClientRect();
         const clip = helperRect
@@ -2970,8 +2976,11 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           missingClientBtnText,
           routeAfterClick,
           redirectUriText,
+          spartanRedirectUriText,
           copyBtnInitialText,
           copyBtnAfterText,
+          copySpartanBtnInitialText,
+          copySpartanBtnAfterText,
           clip
         };
       })()`,
@@ -2983,8 +2992,11 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       missingClientBtnText: 'Configure credentials to send',
       routeAfterClick: '/config',
       redirectUriText: 'https://dev-argolis.looker.com/extensions/oauth2_redirect',
+      spartanRedirectUriText: 'https://dev-argolis.looker.com/spartan/oauth2_redirect',
       copyBtnInitialText: 'Copy Redirect URI',
-      copyBtnAfterText: '✓ Copied Redirect URI'
+      copyBtnAfterText: '✓ Copied Redirect URI',
+      copySpartanBtnInitialText: 'Copy Spartan URI',
+      copySpartanBtnAfterText: '✓ Copied Spartan URI'
     })
     expect(configRes.result.value.clip).toBeTruthy()
 

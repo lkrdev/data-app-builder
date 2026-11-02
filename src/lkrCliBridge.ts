@@ -758,6 +758,38 @@ export function extractLkrExtensionToolRequests(
   return out
 }
 
+export function classifyLookerOperation(
+  httpMethod?: string,
+  rawPath?: string,
+  code?: string
+): { operation: string; requiresPermission: boolean } {
+  const verb = String(httpMethod || 'GET').toUpperCase()
+  const p = normalizeLookerBridgePath(rawPath)
+  const readOnlyPost =
+    verb === 'POST' &&
+    (/^\/(queries|sql_queries|merge_queries|content_validation)(\/|$)/.test(p) ||
+      /\/(validate|lookml_tests\/run|git_connection_tests)(\/|$)/.test(p))
+  if (verb === 'GET' || verb === 'HEAD' || verb === 'OPTIONS' || readOnlyPost) {
+    return {
+      operation: `read_${p.replace(/^\/+|\/+$/g, '').replace(/[^a-zA-Z0-9]+/g, '_')}`,
+      requiresPermission: false,
+    }
+  }
+  const callMatches = String(code || '').match(/\b([a-z_][a-z0-9_]*)\s*\(/g) || []
+  for (const match of callMatches) {
+    const fn = match.replace(/\s*\($/, '')
+    if (/^(create|update|delete|deploy|commit|publish|unpublish|repair)_/.test(fn) || fn === 'commit') {
+      return { operation: fn, requiresPermission: true }
+    }
+  }
+  const prefix = verb === 'POST' ? 'create' : verb === 'DELETE' ? 'delete' : 'update'
+  const seg = p.split('/').filter(Boolean)[0] || 'resource'
+  return {
+    operation: `${prefix}_${seg.replace(/s$/, '')}`,
+    requiresPermission: true,
+  }
+}
+
 export async function executeLkrExtensionToolRequest(params: {
   sdk: Looker40SDK
   req: LkrExtensionToolRequest
@@ -765,16 +797,52 @@ export async function executeLkrExtensionToolRequest(params: {
   extensionSDK?: Partial<ExtensionSDK>
   requirePermission?: boolean
   approvedOperations?: Set<string>
-  onPermissionRequest?: (req: Record<string, unknown>) => Promise<string>
+  onPermissionRequest?: (req: {
+    operation: string
+    httpMethod: string
+    path: string
+    args: { params?: unknown; body?: unknown }
+    thought?: string
+    [key: string]: unknown
+  }) => Promise<string>
 }): Promise<{ cacheKey: string; result: unknown }> {
   const { sdk, req, defaultVars, extensionSDK, requirePermission, approvedOperations, onPermissionRequest } = params
   const cacheKey = req.cache_key || computeLkrExtensionCacheKey(req)
   const cleanPath = req.kind === 'sdk_request' ? normalizeLookerBridgePath(req.path) : ''
+  const effectiveThought = typeof req.thought === 'string' && req.thought.trim() ? req.thought.trim() : undefined
+
+  if (req.kind === 'sdk_request') {
+    const method = String(req.method || 'GET').toUpperCase() as 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
+    const queryParams = cleanQueryParams(req.query_params) || undefined
+    const body = req.body !== null && req.body !== undefined ? req.body : undefined
+    const shouldRequirePermission =
+      requirePermission !== undefined ? Boolean(requirePermission) : typeof onPermissionRequest === 'function'
+    const info = classifyLookerOperation(method, cleanPath)
+    if (
+      shouldRequirePermission &&
+      info.requiresPermission &&
+      !approvedOperations?.has('*') &&
+      !approvedOperations?.has(info.operation)
+    ) {
+      const denyMsg = `PermissionError: Operation '${info.operation}' (${method} ${cleanPath}) mutates Looker state and was not approved.`
+      if (typeof onPermissionRequest !== 'function') throw new Error(denyMsg)
+      const decision = await onPermissionRequest({
+        operation: info.operation,
+        httpMethod: method,
+        path: cleanPath,
+        args: { params: queryParams, body },
+        thought: effectiveThought || `${method} ${cleanPath}`,
+      })
+      if (decision === 'allow_op') approvedOperations?.add(info.operation)
+      else if (decision === 'allow_all') approvedOperations?.add('*')
+      else if (decision !== 'allow_once' && (decision as unknown) !== true) throw new Error(denyMsg)
+    }
+  }
 
   if (req.dev_mode && cleanPath !== '/session') {
     try {
       const sdkExt = sdk as unknown as {
-        update_session?: (body: { workspace_id: string }) => Promise<unknown>
+        update_session?: (b: { workspace_id: string }) => Promise<unknown>
         ok?: (p: Promise<unknown>) => Promise<unknown>
         authSession?: { transport?: { rawRequest?: unknown } }
       }
@@ -801,24 +869,32 @@ export async function executeLkrExtensionToolRequest(params: {
     return { cacheKey, result }
   }
 
-  const effectiveThought = typeof req.thought === 'string' && req.thought.trim() ? req.thought.trim() : undefined
-
   const rawOut = await LkrCodeMode.runPythonCode({
     code: String(req.code || ''),
     sdk,
     vars: { ...(defaultVars || {}), ...(req.vars || {}) },
     allowUpdateSession: Boolean(req.dev_mode),
     extensionSDK,
-    requirePermission,
+    requirePermission: approvedOperations?.has('*') ? false : requirePermission,
     approvedOperations,
     onPermissionRequest: onPermissionRequest
-      ? (permReq: Record<string, unknown>) =>
-          onPermissionRequest({
+      ? async (permReq: Record<string, unknown>) => {
+          const decision = await onPermissionRequest({
+            operation: String(permReq?.operation || 'mutate'),
+            httpMethod: String(permReq?.httpMethod || 'POST'),
+            path: String(permReq?.path || '/'),
+            args: (permReq?.args as { params?: unknown; body?: unknown }) || {},
             ...permReq,
             ...(permReq?.thought || effectiveThought
-              ? { thought: permReq?.thought || effectiveThought }
+              ? { thought: String(permReq?.thought || effectiveThought) }
               : {}),
           })
+          if (decision === 'allow_all') approvedOperations?.add('*')
+          else if (decision === 'allow_op' && typeof permReq?.operation === 'string') {
+            approvedOperations?.add(permReq.operation)
+          }
+          return decision
+        }
       : undefined,
   })
   let result: unknown = rawOut

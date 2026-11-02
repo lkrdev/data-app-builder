@@ -9,7 +9,7 @@ import {
   authenticateGoogleOAuth, CodeModePermissionDecision, CodeModePermissionRequest, computeIsAuthenticated,
   DEFAULT_ANTIGRAVITY_MODEL, ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig, generateConversationLabel,
   listAvailableAntigravityModels, LkrCodeMode, loginWithGoogleOAuth, normalizeEnvironmentId,
-  PastedImage, prewarmOrWakeAntigravityEnvironment, resolveLookerOAuthRedirectUri, runAntigravityTurn, sanitizeConversationLabel,
+  PastedImage, prewarmOrWakeAntigravityEnvironment, resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, runAntigravityTurn, sanitizeConversationLabel,
 } from './antigravity'
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
 import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
@@ -45,6 +45,7 @@ export {
   computeIsAuthenticated,
   normalizeStudioThemeMode,
   resolveLookerOAuthRedirectUri,
+  resolveLookerOAuthRedirectUris,
   resolveStudioTheme,
   resolveSystemTheme,
   STUDIO_THEME_STORAGE_KEY,

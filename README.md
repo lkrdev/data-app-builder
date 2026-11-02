@@ -25,10 +25,12 @@ Only a **Web application OAuth 2.0 Client ID** is needed — **no Client Secret 
      ```text
      https://<your-looker-host>
      ```
-   - **Authorized redirect URIs**:
+   - **Authorized redirect URIs** (register **both** Standard Extension and Full Screen / Spartan URIs to prevent `Error 400: redirect_uri_mismatch`):
      ```text
      https://<your-looker-host>/extensions/oauth2_redirect
+     https://<your-looker-host>/spartan/oauth2_redirect
      ```
+     > **Why both URIs are required**: Launching the extension in Looker's standard frame (`/extensions/...`) passes `redirect_uri=https://<your-looker-host>/extensions/oauth2_redirect`, whereas launching in Looker Full Screen mode (`/spartan/...`, `lookerHostData.hostType === 'spartan'`) passes `redirect_uri=https://<your-looker-host>/spartan/oauth2_redirect` (`flowName=GeneralOAuthFlow`). Both URIs are displayed with one-click Copy buttons in **⚙ Setup** (`/config`).
 3. **Save in Extension Context (Once)**:
    - Click **⚙ Setup** in the extension top bar, select **Google OAuth**, enter the **OAuth Client ID** and optional **GCP Project ID** (`x-goog-user-project`), and click **Save Setup**.
    - All users on the instance will then simply click **Sign In** in the top bar.
@@ -54,6 +56,28 @@ The extension synchronizes its route with Looker's host URL:
   - `/extensions/data-app-builder::data-app-builder/dashboards/:dashboardId`
 
 Opening a route with `:dashboardId` (or entering a Dashboard ID in the top bar and clicking **Load App**) fetches the published bundle from `/api/4.0/inline_extension/{id}/bundle.js`, detects `this.lookerModel` and `this.explore`, loads the live `/embed/dashboards/:dashboardId` preview on the right, and mounts the code at `/workspace/apps/current/app.js` on the next Antigravity turn for in-place updates.
+
+---
+
+## Execution Approval Policy (`Safe Mode (Ask)` vs. `Auto-Approve (YOLO)`)
+
+The top bar includes an execution approval toggle (`🛡️ Safe Mode (Ask)` vs. `⚡ Auto-Approve (YOLO)`). Both `LkrCodeMode` (`classifyOperation` in `src/vendor/codemode.js`) and the `lkr-dev-cli` Extension Bridge (`classifyLookerOperation` / `executeLkrExtensionToolRequest` in `src/lkrCliBridge.ts` for both `codemode` and `sdk_request` calls) enforce the following permission matrix:
+
+| Category | HTTP Methods & Looker API 4.0 Endpoints / SDK Calls | `🛡️ Safe Mode (Ask)` (`requirePermission: true`) | `⚡ Auto-Approve (YOLO)` (`requirePermission: false`) |
+| --- | --- | --- | --- |
+| **Read-Only Metadata & Content Lookups** | All `GET`, `HEAD`, and `OPTIONS` endpoints (`me`, `all_lookml_models`, `lookml_model_explore`, `all_folders`, `folder_children`, `folder_ancestors`, `search_folders`, `dashboard`, `search_content`, `all_projects`, `all_project_files`, `get_file_content`, `search_artifacts`, `user_roles`, etc.) | **Auto-executes** (`requiresPermission: false`) | **Auto-executes** |
+| **Read-Only Query Execution** | `POST /queries`, `POST /queries/run/*`, `POST /sql_queries`, `POST /sql_queries/*/run/*`, `POST /merge_queries` (`run_inline_query`, `create_query`, `run_query`, `create_sql_query`, `run_sql_query`, `create_merge_query`) | **Auto-executes** (`requiresPermission: false`) | **Auto-executes** |
+| **Read-Only Validation & Testing** | `POST /content_validation`, `POST /projects/{id}/validate`, `POST /projects/{id}/lookml_tests/run`, `POST /projects/{id}/git_connection_tests` (`content_validation`, `validate_project`, `run_lookml_test`, `run_git_connection_test`) | **Auto-executes** (`requiresPermission: false`) | **Auto-executes** |
+| **Content & Dashboard Mutations** | `POST`, `PATCH`, `PUT`, `DELETE` on `/dashboards`, `/dashboard_elements`, `/dashboard_filters`, `/dashboard_layouts`, `/dashboard_layout_components`, `/looks`, `/boards`, `/board_sections`, `/board_items`, `/scheduled_plans` (`create_dashboard`, `update_dashboard`, `delete_dashboard`, `import_lookml_dashboard`, `sync_lookml_dashboard`, `create_look`, `update_look`, `delete_look`, `create_board`, `create_scheduled_plan`, etc.) | **Prompts for user approval** (`requiresPermission: true`) | **Auto-executes** |
+| **Data App Inline Extensions & Artifacts** | `POST`, `PATCH`, `DELETE` on `/data_app_extension` (`publish_app`), `PUT`, `POST`, `DELETE` on `/artifacts/{namespace}` (`update_artifacts`, `delete_artifact`) | **Prompts for user approval** (`requiresPermission: true`) | **Auto-executes** |
+| **LookML File CRUD, Git & Production Deploy** | `POST`, `PATCH`, `PUT`, `DELETE` on `/projects/{id}/files`, `/projects/{id}/git_branch`, `/projects/{id}/deploy_to_production`, `/lookml_models` (`create_file`, `update_file`, `delete_file`, `create_git_branch`, `update_git_branch`, `commit`, `deploy_to_production`, `create_lookml_model`, `update_lookml_model`) | **Prompts for user approval** (`requiresPermission: true`) | **Auto-executes** |
+
+### Interactive Approval Decisions (`Safe Mode (Ask)`)
+When a mutating `codemode` or `sdk_request` call is intercepted in `Safe Mode (Ask)`, the Studio displays an inline approval prompt with four options:
+- **Allow once** (`allow_once`): Executes the single pending mutation.
+- **Allow all `'<operation>'` this turn** (`allow_op`): Adds `<operation>` (e.g., `create_dashboard_element`) to `approvedOperations` so loops over that operation execute without re-prompting during the current turn.
+- **Allow all mutations this turn** (`allow_all`): Approves all remaining mutating operations for the current turn.
+- **Deny** (`deny`): Rejects the request with `PermissionError: Operation '<operation>' (<VERB> <path>) mutates Looker state and was not approved.` before any HTTP call is sent.
 
 ---
 
