@@ -1265,25 +1265,19 @@ export function extractInteractionActivitySteps(
   return Array.from(byKey.values())
 }
 
-function summarizeProgress(interaction: AntigravityInteractionPayload | null | undefined): string {
+export function summarizeProgress(
+  interaction: AntigravityInteractionPayload | null | undefined
+): string {
+  const extracted = extractInteractionActivitySteps(interaction)
+  const lastTitle = extracted[extracted.length - 1]?.title
+  if (lastTitle) return lastTitle
   const steps = interaction?.steps || []
-  if (steps.length === 0) return `Status: ${interaction?.status || 'starting'}...`
   const last = steps[steps.length - 1]
-  if (last.type === 'function_call') {
-    const args = parseStepArguments(last.arguments ?? last.args)
-    const thought = extractThoughtText(args.thought)
-    if (thought) return thought
-    return `Running tool: ${last.name || 'sandbox command'}...`
+  if (last?.type === 'function_call') {
+    const thought = extractThoughtText(parseStepArguments(last.arguments ?? last.args).thought)
+    return thought || `Running tool: ${last.name || 'sandbox command'}...`
   }
-  if (last.type === 'thought' || last.type === 'thinking' || last.thought) {
-    const tObj =
-      last.thought && typeof last.thought === 'object' && !Array.isArray(last.thought)
-        ? (last.thought as Record<string, unknown>)
-        : null
-    const raw = extractThoughtText(tObj?.summary ?? last.summary ?? last.thought ?? last)
-    return stripThoughtHeading(raw.split(/\r?\n/)[0] || '') || 'Agent is reasoning...'
-  }
-  return `Step ${steps.length} (${last.type || interaction?.status})...`
+  return 'Thinking...'
 }
 
 function extractInteractionTelemetry(

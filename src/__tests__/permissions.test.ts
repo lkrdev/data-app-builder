@@ -64,6 +64,7 @@ import {
   stripStarterPromptEmojis,
   STUDIO_OAUTH_STORAGE_KEY,
   StudioAttachedFile,
+  summarizeProgress,
 } from '../antigravity'
 import {
   StudioBadge,
@@ -2147,6 +2148,43 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       },
     ])
     expect(JSON.stringify(arrayThoughtSteps)).not.toContain('[object Object]')
+    expect(summarizeProgress(null)).toBe('Thinking...')
+    expect(summarizeProgress({ status: 'in_progress', steps: [] })).toBe('Thinking...')
+    expect(summarizeProgress({ status: 'in_progress', steps: [] })).not.toContain('Status: in_progress')
+    expect(
+      summarizeProgress({
+        status: 'in_progress',
+        steps: [{ id: 's_thought_arr', type: 'thought', summary: multiPartSummary }],
+      })
+    ).toBe('Inspecting Explore Schema')
+    expect(
+      summarizeProgress({
+        status: 'in_progress',
+        outputs: [
+          {
+            id: 'out_thought_arr',
+            type: 'thought',
+            thought: { content: [{ type: 'text', text: '**Validating LookML**\nRunning offline schema checks.' }] },
+          },
+        ],
+      })
+    ).toBe('Validating LookML')
+    expect(
+      summarizeProgress({
+        status: 'in_progress',
+        steps: [
+          {
+            id: 's_cm_progress',
+            type: 'function_call',
+            name: 'run_looker_codemode',
+            arguments: {
+              thought: 'Querying monthly revenue and brand share from thelook::order_items',
+              code: 'res = 1',
+            },
+          },
+        ],
+      })
+    ).toBe('Querying monthly revenue and brand share from thelook::order_items')
 
     const sampleSteps = extractInteractionActivitySteps({
       status: 'in_progress',
@@ -2399,6 +2437,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(statusHistory).toContain('Inspecting Explore Schema')
     expect(statusHistory).toContain('Creating executive KPI dashboard with 4 tiles')
     expect(statusHistory.join('\n')).not.toContain('[object Object]')
+    expect(statusHistory.join('\n')).not.toContain('Status: in_progress')
     expect(permissionRequests.length).toBeGreaterThanOrEqual(1)
     expect(permissionRequests[0]).toMatchObject({
       operation: 'create_dashboard',
