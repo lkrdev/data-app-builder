@@ -1,6 +1,6 @@
-# Looker Data App Studio (`data-app-builder`)
+# Looker Agent (`data-app-builder`)
 
-A Looker Extension (React + TypeScript) that builds, validates, previews, and publishes **Looker Data Apps** directly inside Looker using the **Antigravity Managed Agent** (`antigravity-preview-09-2026` on the Gemini Interactions API) and the **WASM Looker Code Mode** (`LkrCodeMode` Monty Python sandbox).
+A Looker Extension (React + TypeScript) that lets you **Use your Looker Agent** to build, analyze, and automate across **Looker Dashboards (Content Studio)**, **Data Apps**, **Conversational Analytics**, **Agentic LookML**, **Python Tiles**, and **3-Pillar Health Checks** directly inside Looker using the **Antigravity Managed Agent** (`antigravity-preview-09-2026` on the Gemini Interactions API) and the **WASM Looker Code Mode** (`LkrCodeMode` Monty Python sandbox).
 
 ---
 
@@ -100,7 +100,7 @@ See [`looker/manifest.lkml`](./looker/manifest.lkml) (or root [`manifest.lkml`](
 project_name: "data_app_builder"
 
 application: data_app_builder {
-  label: "Data App Studio"
+  label: "Looker Agent"
   url: "https://localhost:8080/bundle.js"
   # file: "bundle.js"
   mount_points: {

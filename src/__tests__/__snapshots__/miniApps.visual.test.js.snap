@@ -6,10 +6,9 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "modeTabs": [],
   "scenario": "centered_empty_prompt",
   "verifiedVisibleText": [
-    "New Conversation",
-    "Build a Looker Data App with Antigravity",
+    "Use your Looker Agent",
     "Use Case:",
-    "✨ Build App",
+    "Send Message",
   ],
 }
 `;
@@ -61,7 +60,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "scenario": "chatbar_pasted_image_inspector",
   "verifiedVisibleText": [
     "Gemini 3.8 Flash",
-    "✨ Update App",
+    "Send Message",
   ],
 }
 `;
@@ -125,7 +124,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
     "Approve Looker State Mutation?",
     "create_dashboard",
     "Executive Revenue App",
-    "✨ Update App",
+    "Send Message",
   ],
 }
 `;
@@ -241,7 +240,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
     "Agent",
     "Agentic LookML",
     "Executive Revenue App",
-    "✨ Update App",
+    "Send Message",
   ],
 }
 `;

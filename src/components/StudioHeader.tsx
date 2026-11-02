@@ -108,7 +108,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     <div className="dab-shell" data-theme={resolvedTheme} data-theme-mode={themeMode}>
       <header className="dab-topbar">
         <div className="dab-brand">
-          <strong>Agent</strong>
+          <strong>Looker Agent</strong>
           <span className="dab-badge">Agentic LookML</span>
           <span className="dab-badge">Configuration</span>
         </div>
@@ -605,7 +605,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   return (
     <header className="dab-topbar">
       <div className="dab-brand">
-        <strong>Agent</strong>
+        <strong>Looker Agent</strong>
         <span className="dab-badge">Agentic LookML</span>
         <span className="dab-badge">
           {LkrCodeMode?.runPythonCode ? 'WASM CodeMode ✓' : 'WASM CodeMode (pending build)'}
@@ -1039,7 +1039,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                     onClick={handleResetNewApp}
                     disabled={!!busyStatus}
                   >
-                    {builderMode === 'dashboard' ? 'New Content' : 'New App'}
+                    {builderMode === 'dashboard' ? 'New Content' : 'New Session'}
                   </button>
                 </div>
               </>

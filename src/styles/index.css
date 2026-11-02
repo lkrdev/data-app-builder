@@ -351,6 +351,12 @@ body {
 }
 
 .dab-composer-model-select {
+  border: none;
+  padding: 0;
+  background: transparent;
+}
+
+.dab-composer-model-select .dab-studio-select-trigger {
   height: 28px;
   font-size: 11.5px;
   padding: 0 8px;

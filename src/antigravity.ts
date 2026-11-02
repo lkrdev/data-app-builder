@@ -326,7 +326,7 @@ export async function ensureGeminiApiKeyUserAttribute(
       await sdk.ok(
         sdk.create_user_attribute({
           name: attrName,
-          label: 'Data App Studio Gemini API Key',
+          label: 'Looker Agent Gemini API Key',
           type: 'string',
           value_is_hidden: true,
           user_can_view: false,

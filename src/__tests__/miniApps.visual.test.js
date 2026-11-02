@@ -1052,7 +1052,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         'Approve Looker State Mutation?',
         'create_dashboard',
         'Executive Revenue App',
-        '✨ Update App'
+        'Send Message'
       ]
     },
     {
@@ -1200,7 +1200,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       clipSelector: '.dab-composer',
       expectText: [
         'Gemini 3.8 Flash',
-        '✨ Update App'
+        'Send Message'
       ]
     },
     {
@@ -1261,10 +1261,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       snapshotName: '17-centered-empty-prompt-snap.png',
       clipSelector: '.dab-empty-prompt-card',
       expectText: [
-        'New Conversation',
-        'Build a Looker Data App with Antigravity',
+        'Use your Looker Agent',
         'Use Case:',
-        '✨ Build App'
+        'Send Message'
       ]
     },
     {
@@ -1276,7 +1275,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         'Agent',
         'Agentic LookML',
         'Executive Revenue App',
-        '✨ Update App'
+        'Send Message'
       ]
     }
   ]
@@ -1681,8 +1680,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     expect(step1.result.value.expandedState).toBe(true)
     expect(step1.result.value.routeOnNew).toBe('/')
     expect(step1.result.value.hasCenteredStage).toBe(true)
-    expect(step1.result.value.centeredHeroText).toContain('New Conversation')
-    expect(step1.result.value.centeredHeroText).toContain('Build a Looker Data App with Antigravity')
+    expect(step1.result.value.centeredHeroText).not.toContain('New Conversation')
+    expect(step1.result.value.centeredHeroText).toContain('Use your Looker Agent')
     expect(step1.result.value.cardCenteredHorizontally).toBe(true)
     expect(step1.result.value.cardCenteredVertically).toBe(true)
 
@@ -3070,10 +3069,10 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     expect(openRes.result.value.modalText).toContain('Execute & Test Script Mode')
     expect(openRes.result.value.tabs).toEqual([
       { label: 'Auto', selected: false },
-      { label: 'Data App', selected: false },
+      { label: 'Agentic LookML', selected: false },
       { label: 'Content Studio', selected: false },
       { label: 'Conversational Analytics', selected: false },
-      { label: 'LookML', selected: false },
+      { label: 'Data App', selected: false },
       { label: 'Health Check', selected: false },
       { label: 'Script', selected: true }
     ])
@@ -3157,6 +3156,11 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const lookmlComponents = await clickTab('lookml');
         const healthComponents = await clickTab('health-check');
         const autoComponents = await clickTab('auto');
+        const autoBodyText = (document.querySelector('[data-testid="use-case-info-mdx-body"]')?.textContent || '').trim();
+        const modelSelectOuter = document.querySelector('[data-testid="composer-model-select"]');
+        const modelSelectTrigger = document.querySelector('[data-testid="composer-model-select-trigger"]');
+        const outerBorderWidth = modelSelectOuter ? window.getComputedStyle(modelSelectOuter).borderTopWidth : null;
+        const triggerBorderWidth = modelSelectTrigger ? window.getComputedStyle(modelSelectTrigger).borderTopWidth : null;
         const closeBtn = document.querySelector('[data-testid="use-case-info-close-btn"]');
         if (closeBtn) closeBtn.click();
         await new Promise((r) => setTimeout(r, 80));
@@ -3164,6 +3168,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           lookmlComponents,
           healthComponents,
           autoComponents,
+          hasAutoBody: autoBodyText.includes('Automatic Workflow Discovery') && !autoBodyText.includes('Conversation Use-Case Lock'),
+          outerBorderWidth,
+          triggerBorderWidth,
           modalClosed: !document.querySelector('[data-testid="use-case-info-modal"]')
         };
       })()`,
@@ -3174,7 +3181,10 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     expect(tabSwitchRes.result.value).toEqual({
       lookmlComponents: ['LookmlTurnSkills', 'PushLookmlButton'],
       healthComponents: ['ExportHealthTddButton'],
-      autoComponents: ['UseCaseBadge'],
+      autoComponents: [],
+      hasAutoBody: true,
+      outerBorderWidth: '0px',
+      triggerBorderWidth: '1px',
       modalClosed: true
     })
   }, 15000)
