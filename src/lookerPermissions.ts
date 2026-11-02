@@ -234,12 +234,25 @@ export function getAllowedUseCases(
   return out.length > 0 ? out : ['app']
 }
 
+const CONVERSATIONAL_NOOP_RE =
+  /^\s*(?:(?:hi|hello|hey|howdy|greetings|good\s+(?:morning|afternoon|evening)|yo)(?:\s+(?:there|looker(?:\s+studio)?|studio|team|agent))?|help(?:\s+me)?|what\s+can\s+you\s+do|how\s+can\s+you\s+help(?:\s+me)?|what\s+do\s+you\s+do|who\s+are\s+you)[!?.]*\s*$/i
+
+export function isConversationalNoOpPrompt(text?: string): boolean {
+  return CONVERSATIONAL_NOOP_RE.test(String(text || '').trim())
+}
+
 const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
   ['health-check', /\b(3-pillar|three-pillar|health\s*check|transcriber\s*rubric|technical_design_document)\b/i],
   ['lookml', /\b(lookml|\.lkml|dimension\s*:|measure\s*:|explore\s*:|refinement|data\s*test|model\.lkml|view\.lkml)\b/i],
-  ['tile', /\b(python\s*tile|python\s*script|codemode\s*script|obj_script|monty\s*python\s*tile)\b/i],
+  [
+    'tile',
+    /\b(python\s*tile|python\s*script|codemode\s*script|obj_script|monty\s*python\s*tile|personal\s*(?:space|folder)s?|shared\s*(?:space|folder)s?|(?:my|our|all|empty|unused|list|find|inspect|search|query)\s+(?:looker\s+)?(?:personal\s+|shared\s+)?(?:spaces|folders)\b|(?:my|our)\s+(?:looker\s+)?(?:space|folder)\b|(?:spaces|folders)\s+(?:that|which|without|with\s+no)|folder_children|all_folders|search_folders|looker\s*sdk|instance\s*metadata|(?:query|inspect|list|find|check)\s+(?:looker\s+)?(?:users|roles|permissions|scheduled\s*plans|schedules|instance\s*metadata))\b/i,
+  ],
   ['dashboard', /\b(udd|user[- ]defined\s*dashboard|native\s*dashboard|saved\s*look|lookml\s*dashboard|pin\s*to\s*board|schedule\s*dashboard|content\s*studio)\b/i],
-  ['data-investigator', /\b(data\s*investigat(?:or|ion)|investigat(?:e|ion|ing)\s+(?:why|how|the|root\s*cause|drop|spike|anomaly|driver|decline|change|trend)|key\s*driver\s*analysis|run_key_driver_analysis|root[- ]cause\s*(?:analysis|investigation|narrative|report|story)|narrative\s*(?:data\s*app|report|slides|deck|doc|investigation)|google\s*(?:doc|slides|presentation)\s*(?:narrative|story|investigation|app|report)|data\s*story)\b/i],
+  [
+    'data-investigator',
+    /\b(data\s*investigat(?:or|ion)|investigat(?:e|es|ed|ing|ion)\b|(?:find\s+out|figure\s+out|dig\s+into|what\s+drove|what\s+caused)\b|key\s*driver\s*analysis|run_key_driver_analysis|\bkda\b|root[- ]cause\s*(?:analysis|investigation|narrative|report|story|drivers?)?|narrative\s*(?:data\s*app|report|slides|deck|doc|investigation)|google\s*(?:doc|slides|presentation)\s*(?:narrative|story|investigation|app|report)|data\s*story)\b/i,
+  ],
   ['app', /\b(data\s*app|lit\s*app|web\s*component|app-kpi|app-chart|app-grid|custom\s*app|interactive\s*app)\b/i],
   ['conversational-analytics', /\b(conversational\s*analytics|ca\s*agent|what\s+(?:is|are)|how\s+many|which\s+\w+|why\s+did|summarize\s+the|explain\s+the|answer\s+this\s+question|show\s+(?:me\s+)?the\s+monthly\s+breakdown)\b|\?\s*$/i],
   ['lookml', /\b(add\s+a\s+measure|add\s+a\s+dimension|create\s+a\s+view|edit\s+view|sql_table_name|derived_table)\b/i],
@@ -275,6 +288,8 @@ export function matchExplicitUseCaseRule(
     const tagged = USE_CASE_ALIAS_MAP[token]
     if (tagged && allowedSet.has(tagged)) return tagged
   }
+  const stripped = rawText.replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '').trim()
+  if (isConversationalNoOpPrompt(stripped)) return null
   for (const [candidate, re] of USE_CASE_RULES) {
     if (allowedSet.has(candidate) && re.test(rawText)) return candidate
   }

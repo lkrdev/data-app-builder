@@ -2597,7 +2597,11 @@ export function useStudioController() {
         canDeploy: canDeployLookml,
         schemaMarkdown: turnSchemaMarkdown,
         userPrompt:
-          turnTargetUseCase === 'tile' || (explicitUseCase !== 'auto' && activeMode === 'tile')
+          explicitUseCase === 'tile' ||
+          loadedScript ||
+          /\b(python\s*tile|python\s*script|codemode\s*script|obj_script|monty\s*python\s*tile)\b/i.test(
+            effectivePrompt
+          )
             ? `Write a LkrCodeMode Python script for the user's request. Return the Python snippet inside a \`\`\`python code block.\n\nCurrent script:\n\`\`\`python\n${scriptCode}\n\`\`\`\n\nUser request: ${turnPromptWithContext}`
             : turnPromptWithContext,
         images: attachedImages,
@@ -2693,9 +2697,6 @@ export function useStudioController() {
       } else if (resolvedUseCase === 'tile') {
         const pyMatch = (result.assistantText || '').match(/```(?:python|py)?\s*\n([\s\S]*?)```/i)
         const extractedPy = pyMatch ? pyMatch[1].trim() : ''
-        const nextCode = extractedPy || scriptCode
-        if (extractedPy) setScriptCode(extractedPy)
-        await handleRunPython(nextCode, filtersJson)
         finalMsgs = [
           ...messagesWithUser,
           {
@@ -2708,15 +2709,20 @@ export function useStudioController() {
         ]
         setAgentSession({ ...result.session, explores: turnExplores }, 'tile')
         setMessages(finalMsgs, 'tile')
-        try {
-          const saved = await handleSaveScript(nextCode, finalMsgs, publishedTileDash)
-          convId = `conv_tile_${saved.id}`
-          convType = 'tile'
-          convTitle = saved.title
-          convContent = { scriptId: saved.id, dashboardId: saved.dashboardId, elementId: saved.elementId }
-          setActiveObjectId(saved.id)
-        } catch {
-          // Ignore script save failure
+        if (extractedPy || explicitUseCase === 'tile' || loadedScript) {
+          const nextCode = extractedPy || scriptCode
+          if (extractedPy) setScriptCode(extractedPy)
+          await handleRunPython(nextCode, filtersJson)
+          try {
+            const saved = await handleSaveScript(nextCode, finalMsgs, publishedTileDash)
+            convId = `conv_tile_${saved.id}`
+            convType = 'tile'
+            convTitle = saved.title
+            convContent = { scriptId: saved.id, dashboardId: saved.dashboardId, elementId: saved.elementId }
+            setActiveObjectId(saved.id)
+          } catch {
+            // Ignore script save failure
+          }
         }
       } else {
         const bundleExplores = result.bundle

@@ -8,6 +8,8 @@ import {
   CONVERSATION_LABEL_REQUEST_TAG,
   DATA_APP_GUIDE_MD,
   DATA_INVESTIGATOR_GUIDE_MD,
+  KDA_SKILL_MD,
+  KDA_TOOLKIT_PY,
   STARTER_PROMPTS_REQUEST_TAG,
   wrapDashboardCodeMode,
 } from './antigravityPrompts'
@@ -21,6 +23,8 @@ import {
   getAllowedUseCases,
   getArtifactNamespace,
   getUseCaseLabel,
+  isConversationalNoOpPrompt,
+  matchExplicitUseCaseRule,
   NativeContentBundle,
   NativeContentState,
   normalizeNativeContent,
@@ -63,6 +67,8 @@ export {
   extractResolvedUseCase,
   getAllowedUseCases,
   getUseCaseLabel,
+  isConversationalNoOpPrompt,
+  matchExplicitUseCaseRule,
   normalizeQueryFiltersToFixedDates,
   STUDIO_USE_CASE_OPTIONS,
   studioModeToUseCase,
@@ -905,13 +911,28 @@ function extractTddFromInteraction(
     : null
 }
 
+const VALID_NATIVE_CONTENT_TYPES = new Set(['dashboard', 'lookml_dashboard', 'look', 'board'])
+
 function normalizeNativeBundleCandidate(raw: unknown): NativeContentBundle | null {
-  if (!raw || typeof raw !== 'object') return null
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const rawObj = raw as Record<string, unknown>
-  const r =
+  const hasBundleEnvelope = Boolean(
     rawObj.NATIVE_CONTENT_BUNDLE && typeof rawObj.NATIVE_CONTENT_BUNDLE === 'object'
-      ? (rawObj.NATIVE_CONTENT_BUNDLE as Record<string, unknown>)
-      : rawObj
+  )
+  const r = hasBundleEnvelope
+    ? (rawObj.NATIVE_CONTENT_BUNDLE as Record<string, unknown>)
+    : rawObj
+  const explicitType = String(r.content_type || r.contentType || '').trim()
+  const hasExplicitContentId = Boolean(
+    r.dashboard_id ||
+      r.lookml_dashboard_id ||
+      r.look_id ||
+      r.board_id ||
+      (typeof r.embed_path === 'string' && r.embed_path.startsWith('/embed/'))
+  )
+  if (!hasBundleEnvelope && !(VALID_NATIVE_CONTENT_TYPES.has(explicitType) && hasExplicitContentId)) {
+    return null
+  }
   const id =
     r.id ||
     r.lookml_dashboard_id ||
@@ -990,7 +1011,11 @@ export function extractNativeContentFromInteraction(
       if (tagMatches.length > 0) {
         try {
           const parsedTag = JSON.parse(tagMatches[tagMatches.length - 1][1].trim())
-          const norm = normalizeNativeBundleCandidate(parsedTag)
+          const norm = normalizeNativeBundleCandidate(
+            parsedTag && typeof parsedTag === 'object' && 'NATIVE_CONTENT_BUNDLE' in parsedTag
+              ? parsedTag
+              : { NATIVE_CONTENT_BUNDLE: parsedTag }
+          )
           if (norm) return norm
         } catch {
           // Ignore malformed tag JSON
@@ -1013,7 +1038,11 @@ export function extractNativeContentFromInteraction(
   if (matches.length > 0) {
     try {
       const parsed = JSON.parse(matches[matches.length - 1][1].trim())
-      return normalizeNativeBundleCandidate(parsed) || (parsed as NativeContentBundle)
+      const wrapped =
+        parsed && typeof parsed === 'object' && 'NATIVE_CONTENT_BUNDLE' in parsed
+          ? parsed
+          : { NATIVE_CONTENT_BUNDLE: parsed }
+      return normalizeNativeBundleCandidate(wrapped) || (parsed as NativeContentBundle)
     } catch {
       // Ignore malformed tag JSON
     }
@@ -1353,6 +1382,16 @@ export function buildWorkspaceSources(params: {
     { type: 'inline', content: BUNDLE_APP_PY, target: '/workspace/bundle_app.py' },
     { type: 'inline', content: DATA_APP_GUIDE_MD, target: '/workspace/DATA_APP_GUIDE.md' },
     { type: 'inline', content: DATA_INVESTIGATOR_GUIDE_MD, target: '/workspace/DATA_INVESTIGATOR_GUIDE.md' },
+    {
+      type: 'inline',
+      content: KDA_SKILL_MD,
+      target: '/workspace/skills/key-driver-analysis/SKILL.md',
+    },
+    {
+      type: 'inline',
+      content: KDA_TOOLKIT_PY,
+      target: '/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py',
+    },
     { type: 'inline', content: BOOTSTRAP_LOOKML_PY, target: '/workspace/bootstrap_lookml.py' },
     { type: 'inline', content: LKR_CLI_SITECUSTOMIZE_PY, target: '/workspace/sitecustomize.py' },
     {
@@ -1701,7 +1740,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                 'tile',
                 'conversational-analytics',
               ]
-        )}. Start your response with <USE_CASE>...</USE_CASE> naming the single best allowed use case for this request, then execute that workflow.]`
+        )}. Start your response with <USE_CASE>...</USE_CASE> naming the single best allowed use case for this request, then execute that workflow. CRITICAL: (1) Conversational No-Op: when the prompt is a greeting, help request, or conversational message that does not ask for a specific tool or artifact ("hello", "hi", "help", "what can you do?"), call zero tools, reply in chat only, and do NOT create or open any right-pane content item (do NOT run bundle_app.py or emit_native_bundle). (2) Script (tile) Routing for Ad-Hoc Looker Instance / Folder / Space / SDK Queries: route prompts asking to inspect or query Looker spaces, folders, personal spaces, users, permissions, schedules, or instance metadata via SDK (e.g. "tell me what my personal space is", "can you find me all personal spaces that don't have dashboards") to <USE_CASE>tile</USE_CASE> and use run_looker_codemode without creating a Data App or Dashboard. (3) Data Investigator Routing: route prompts asking to "investigate", "find out", "figure out", "dig into", "what drove", or "what caused" across data, metrics, dashboards, Looks, or explores to <USE_CASE>data-investigator</USE_CASE> and follow /workspace/DATA_INVESTIGATOR_GUIDE.md and /workspace/skills/key-driver-analysis/SKILL.md.]`
       : ''
 
   const uploadsSection =
@@ -1991,6 +2030,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
             )
             codemodeExecMs += Date.now() - cmStart
             await throwIfAborted(interaction.id)
+            accumulatedSteps.push(...(interaction.steps || []), ...resultsInput)
 
             interaction = await callInteractionsApi(
               extensionSDK,
