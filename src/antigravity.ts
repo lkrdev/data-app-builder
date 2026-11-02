@@ -21,6 +21,7 @@ import {
   getAllowedUseCases,
   getArtifactNamespace,
   getUseCaseLabel,
+  matchExplicitUseCaseRule,
   NativeContentBundle,
   NativeContentState,
   normalizeNativeContent,
@@ -60,6 +61,7 @@ export {
   extractResolvedUseCase,
   getAllowedUseCases,
   getUseCaseLabel,
+  matchExplicitUseCaseRule,
   normalizeQueryFiltersToFixedDates,
   STUDIO_USE_CASE_OPTIONS,
   studioModeToUseCase,
@@ -794,12 +796,14 @@ export async function callInteractionsApi(
           output_text: `<STARTER_PROMPTS>${JSON.stringify(mockPrompts)}</STARTER_PROMPTS>`,
         }
       }
-      const inferred = extractResolvedUseCase(undefined, promptText)
+      const userReqMatch = promptText.match(/User request:\s*([\s\S]*)$/i)
+      const effectiveUserText = userReqMatch ? userReqMatch[1].trim() : promptText
+      const inferred = extractResolvedUseCase(undefined, effectiveUserText)
       return {
         id: `int_mock_${Date.now().toString(36).slice(-5)}`,
         environment_id: `env_${inferred}_mock`,
         status: 'completed',
-        output_text: `<USE_CASE>${inferred}</USE_CASE>\nRouted Turn 1 via AGENTS.md to ${inferred}.`,
+        output_text: `<USE_CASE>${inferred}</USE_CASE>\nRouted turn via AGENTS.md to ${inferred}.`,
       }
     }
     headers['Authorization'] = `Bearer ${auth.oauthToken.trim()}`
@@ -1676,8 +1680,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : ''
 
   const autoRoutingDirective =
-    useCase === 'auto' && isFreshConversation
-      ? `\n\n[AUTO USE-CASE ROUTING (Turn 1): Consult /workspace/AGENTS.md ("## Use Case Auto-Classification (Turn 1 Routing)"). Allowed use cases for this user: ${JSON.stringify(
+    useCase === 'auto'
+      ? `\n\n[AUTO USE-CASE ROUTING: Consult /workspace/AGENTS.md ("## Use Case Auto-Classification (Turn 1 Routing)"). Allowed use cases for this user: ${JSON.stringify(
           allowedModes && allowedModes.length > 0
             ? allowedModes
             : [
@@ -1702,7 +1706,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       type: 'text',
       text: fresh
         ? `${systemGuide}${autoRoutingDirective}${historyDigest}\n\nUser request:\n${userPrompt}${uploadsSection}`
-        : `${warmTurnDirective}${userPrompt}${uploadsSection}`,
+        : `${warmTurnDirective}${autoRoutingDirective ? `${autoRoutingDirective.trim()}\n\n` : ''}User request:\n${userPrompt}${uploadsSection}`,
     },
     ...(images || [])
       .filter((img) => img.mimeType.startsWith('image/') || img.mimeType === 'application/pdf')
@@ -2141,14 +2145,18 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     interaction.output_text ||
     (interaction.outputs || []).map((o: AntigravityInteractionOutput) => o.text || '').join('\n') ||
     'Completed.'
+  const combinedOutput = `${rawText}\n${collectInteractionTextCandidates(interaction)}`
+  const hasExplicitUseCaseTag = /<USE_CASE>\s*[^<]+?\s*<\/USE_CASE>/i.test(combinedOutput)
   const inferredFromOutput = extractResolvedUseCase(
-    `${rawText}\n${collectInteractionTextCandidates(interaction)}`,
+    combinedOutput,
     userPrompt,
     allowedModes
   )
   const resolvedUseCase: ResolvedStudioUseCase =
-    useCase && useCase !== 'auto'
+    useCase && useCase !== 'auto' && !hasExplicitUseCaseTag
       ? useCase
+      : hasExplicitUseCaseTag
+      ? inferredFromOutput
       : lookmlBundle
       ? 'lookml'
       : nativeBundle

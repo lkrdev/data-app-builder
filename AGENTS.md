@@ -50,7 +50,7 @@ When a prompt starts with or contains `[STARTER_PROMPTS_REQUEST]`, you are handl
 
 ## Use Case Auto-Classification (Turn 1 Routing)
 
-When the Studio use-case selector is set to `Auto` (`useCase="auto"`), classify the user's Turn 1 prompt into **one** of the user's permitted Studio use cases and emit `<USE_CASE>...</USE_CASE>` at the start of your response before executing the matching workflow:
+When handling a Studio turn (`useCase="auto"`), classify the current turn's prompt into **one** of the user's permitted Studio use cases and emit `<USE_CASE>...</USE_CASE>` at the start of your response before executing the matching workflow:
 
 | Use Case ID | Label | Routing Intent & Trigger Signals |
 | --- | --- | --- |
@@ -62,7 +62,7 @@ When the Studio use-case selector is set to `Auto` (`useCase="auto"`), classify 
 | `tile` | **Python Tile** | Custom `LkrCodeMode` Monty Python script tile (`obj_script_<id>`, `vars.dashboard_filters`, custom Python table/markdown/dict output, or script scheduler) |
 | `conversational-analytics` | **Conversational Analytics** | Ad-hoc natural-language analytical Q&A, explore data questions, KPI lookups, or trend explanations without building a persistent app or LookML file |
 
-Always restrict your `<USE_CASE>` choice to the allowed modes list provided in the Turn 1 prompt (`Allowed use cases for this user: [...]`), and lock the conversation to that resolved use case for all subsequent turns.
+Always restrict your `<USE_CASE>` choice to the allowed modes list provided in the prompt (`Allowed use cases for this user: [...]`). Emit `<USE_CASE>...</USE_CASE>` for the current turn's target workflow on every turn so Studio routes dynamically and appends or updates the resulting item in the conversation's `contentItems` tabs.
 
 ## Conversational Analytics Isolated Sub-Agent Router (Stateless Agent Selection)
 

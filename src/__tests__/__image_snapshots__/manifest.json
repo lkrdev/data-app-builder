@@ -24,7 +24,7 @@
     "snapshotName": "03-mode-agentic-lookml-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "health_check",
@@ -33,7 +33,7 @@
     "snapshotName": "04-mode-3-pillar-health-check-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "python_tile_studio",
@@ -42,7 +42,7 @@
     "snapshotName": "05-mode-python-tile-studio-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "tile_mount_view",
@@ -83,7 +83,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "explore_dropdown_scrolled",
@@ -97,7 +97,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "chatbar_lookml_skills",
@@ -105,10 +105,10 @@
     "title": "11. Chat Bar State — LookML Activated Turn Skills & Prompt",
     "snapshotName": "11-chatbar-state-lookml-activated-skills-snap.png",
     "width": 766,
-    "height": 270,
+    "height": 230,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "chatbar_pasted_image_inspector",
@@ -116,10 +116,10 @@
     "title": "12. Chat Bar State — Pasted Screenshot Thumbnail & Composer Model Selector",
     "snapshotName": "12-chatbar-state-pasted-image-and-inspector-snap.png",
     "width": 427,
-    "height": 270,
+    "height": 234,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "chatbar_busy_running",
@@ -147,7 +147,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "python_tile_scheduler_modal",
@@ -175,7 +175,7 @@
     "title": "17. Centered New-Conversation Empty Prompt Box (Use-Case Selector, Input & Actions)",
     "snapshotName": "17-centered-empty-prompt-snap.png",
     "width": 768,
-    "height": 383,
+    "height": 343,
     "clipSelector": ".dab-empty-prompt-card",
     "clipMargin": 24,
     "changedInGit": false

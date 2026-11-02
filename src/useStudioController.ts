@@ -32,7 +32,7 @@ import {
   hydrateConversationContentItems, hydrateMentionedContext, listSavedScripts,
   listUserArtifacts, loadExistingDashboardApp, loadNativeContentById,
   loadObjectArtifact, loadScriptArtifact, loadStoredStudioThemeMode, loadUserConversations,
-  loadUserEnvironmentId, LookerFolderNode, NativeContentState,
+  loadUserEnvironmentId, LookerFolderNode, matchExplicitUseCaseRule, NativeContentState,
   normalizeStudioThemeMode, parseExploreId, persistStudioThemeMode, PublishedAppState,
   publishScriptDashboard, readInitialStudioThemeMode, resolveCaEmbedPath,
   resolveConversationRelatedContent, ResolvedStudioTheme, ResolvedStudioUseCase, resolveStudioTheme, resolveSystemTheme,
@@ -336,6 +336,9 @@ export function useStudioController() {
   const [selectedUseCase, setSelectedUseCase] = useState<StudioUseCase>(
     () => parsedRoute.useCase || 'auto'
   )
+  const explicitUseCaseRef = useRef<StudioUseCase>(
+    parsedRoute.useCase && !parsedRoute.objectId ? parsedRoute.useCase : 'auto'
+  )
   const effectiveUseCase: StudioUseCase = parsedRoute.objectId
     ? inferredRouteUseCase || (selectedUseCase !== 'auto' ? selectedUseCase : 'app')
     : selectedUseCase !== 'auto'
@@ -349,7 +352,6 @@ export function useStudioController() {
   const builderMode: 'data_app' | 'dashboard' =
     activeMode === 'dashboard' ? 'dashboard' : 'data_app'
 
-  const [lockedByTurn, setLockedByTurn] = useState<boolean>(false)
   const [caConversation, setCaConversation] = useState<CaConversationState | null>(null)
   const lastCaIdRef = useRef<string>('')
   const isCaMode = Boolean(
@@ -671,17 +673,7 @@ export function useStudioController() {
         : []
   )
 
-  const isUseCaseLocked = Boolean(
-    lockedByTurn ||
-      parsedRoute.objectId ||
-      messages.length > 0 ||
-      publishedApp ||
-      nativeContent ||
-      lookmlBundle ||
-      healthReport ||
-      caConversation ||
-      loadedScript
-  )
+  const isUseCaseLocked = false
 
   useEffect(() => {
     if (inferredRouteUseCase) {
@@ -693,13 +685,13 @@ export function useStudioController() {
 
   const handleChangeUseCase = useCallback(
     (nextUseCase: StudioUseCase) => {
-      if (isUseCaseLocked) return
+      explicitUseCaseRef.current = nextUseCase
       setSelectedUseCase(nextUseCase)
       if (location.pathname !== '/' && !parsedRoute.objectId) {
         history.replace('/')
       }
     },
-    [isUseCaseLocked, location.pathname, parsedRoute.objectId, history]
+    [location.pathname, parsedRoute.objectId, history]
   )
 
   const wakeContextRef = useRef({
@@ -1434,7 +1426,6 @@ export function useStudioController() {
           existingUc === 'data-investigator' ? 'data-investigator' : 'app'
         resolvedUseCaseByIdRef.current[loaded.dashboardId] = targetUc
         setSelectedUseCase(targetUc)
-        setLockedByTurn(true)
         setPublishedApp(loaded)
         setCurrentAppCode(loaded.code)
         setLoadDashInput(loaded.dashboardId)
@@ -1473,7 +1464,6 @@ export function useStudioController() {
         lastNativeIdRef.current = loaded.id
         resolvedUseCaseByIdRef.current[loaded.id] = 'dashboard'
         setSelectedUseCase('dashboard')
-        setLockedByTurn(true)
         setNativeContent(loaded)
         setLoadDashInput(loaded.id)
         setSelectedFolderId(loaded.folderId)
@@ -1497,7 +1487,6 @@ export function useStudioController() {
         lastHealthIdRef.current = loaded.id
         resolvedUseCaseByIdRef.current[loaded.id] = 'health-check'
         setSelectedUseCase('health-check')
-        setLockedByTurn(true)
         setHealthReport(loaded)
         setLoadDashInput(loaded.id)
         hydrateLoadedArtifact({
@@ -1520,7 +1509,6 @@ export function useStudioController() {
         lastLookmlIdRef.current = loaded.id
         resolvedUseCaseByIdRef.current[loaded.id] = 'lookml'
         setSelectedUseCase('lookml')
-        setLockedByTurn(true)
         setLookmlBundle(loaded.bundle)
         setLoadLookmlInput(loaded.id)
         if (loaded.bundle?.project_id) setLookmlProjectId(loaded.bundle.project_id)
@@ -1576,7 +1564,6 @@ export function useStudioController() {
       lastScriptIdRef.current = id
       resolvedUseCaseByIdRef.current[id] = 'tile'
       setSelectedUseCase('tile')
-      setLockedByTurn(true)
       setLoadedScript(true)
       setScriptId(id)
       const loaded = await loadScriptArtifact(core40SDK, id)
@@ -1707,7 +1694,6 @@ export function useStudioController() {
             updatedAt: state.updatedAt,
           })
           setSelectedUseCase('conversational-analytics')
-          setLockedByTurn(true)
           setLoadDashInput(caConvId)
           const msgs = content.studio?.messages || content.messages || convFromList?.messages
           hydrateLoadedArtifact({
@@ -1779,7 +1765,6 @@ export function useStudioController() {
         updatedAt: nextCaState.updatedAt,
       })
       setSelectedUseCase('conversational-analytics')
-      setLockedByTurn(true)
       setActiveObjectId(created.caConversationId)
       setLoadDashInput(created.caConversationId)
       if (selection.explores.length > 0) setSelectedExplores(selection.explores)
@@ -1913,7 +1898,6 @@ export function useStudioController() {
       setMessages(nextHealthMsgs, 'health')
       const convId = activeConversationId.startsWith('conv_health_') ? activeConversationId : `conv_health_${finalReport.id}`
       setSelectedUseCase('health-check')
-      setLockedByTurn(true)
       void persistConversationAndLabel({
         id: convId,
         type: 'health-check',
@@ -1976,6 +1960,7 @@ export function useStudioController() {
   useEffect(() => {
     if (isTileMount || location.pathname === '/config') return
     if (disabledModes.includes(activeMode)) {
+      explicitUseCaseRef.current = 'auto'
       setSelectedUseCase('auto')
       if (location.pathname !== '/') history.replace('/')
       return
@@ -1994,6 +1979,7 @@ export function useStudioController() {
         if (location.pathname !== target) history.replace(target)
       } else {
         if (parsedRoute.useCase && parsedRoute.useCase !== 'auto') {
+          explicitUseCaseRef.current = parsedRoute.useCase
           setSelectedUseCase(parsedRoute.useCase)
         }
         if (location.pathname !== '/') history.replace('/')
@@ -2074,7 +2060,7 @@ export function useStudioController() {
       }
       setPastedImages([])
       setPrompt('')
-      setLockedByTurn(false)
+      explicitUseCaseRef.current = nextUseCase
       setSelectedUseCase(nextUseCase)
       if (location.pathname !== '/') history.push('/')
     },
@@ -2135,8 +2121,8 @@ export function useStudioController() {
       const useCase = studioModeToUseCase(conv.type)
       const mode = normalizeCatalogMode(conv.type)
       resolvedUseCaseByIdRef.current[conv.id] = useCase
+      explicitUseCaseRef.current = 'auto'
       setSelectedUseCase(useCase)
-      setLockedByTurn(true)
       setActiveConversationId(conv.id)
       const initialItems = hydrateConversationContentItems(conv)
       setContentItems(initialItems)
@@ -2293,9 +2279,13 @@ export function useStudioController() {
     setPastedImages([])
     setMentionedItems([])
     setMessages(messagesWithUser)
-    setLockedByTurn(true)
 
-    if (isHealthCheckMode || selectedUseCase === 'health-check') {
+    const explicitUseCase = explicitUseCaseRef.current
+    const classifiedPromptUseCase = matchExplicitUseCaseRule(effectivePrompt, allowedUseCases)
+    const turnTargetUseCase: StudioUseCase =
+      explicitUseCase !== 'auto' ? explicitUseCase : (classifiedPromptUseCase || 'auto')
+
+    if (turnTargetUseCase === 'health-check' || (explicitUseCase !== 'auto' && isHealthCheckMode)) {
       setSelectedUseCase('health-check')
       await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages)
       await refreshCatalog()
@@ -2303,10 +2293,9 @@ export function useStudioController() {
     }
 
     if (
-      selectedUseCase === 'conversational-analytics' ||
-      isCaMode ||
-      (isFirstTurn &&
-        selectedUseCase === 'auto' &&
+      turnTargetUseCase === 'conversational-analytics' ||
+      (explicitUseCase !== 'auto' && isCaMode) ||
+      (turnTargetUseCase === 'auto' &&
         extractResolvedUseCase('', effectivePrompt, allowedUseCases) === 'conversational-analytics')
     ) {
       setSelectedUseCase('conversational-analytics')
@@ -2365,7 +2354,7 @@ export function useStudioController() {
           mentions: activeMentions,
           conversations,
           selectedExplores,
-          useCase: selectedUseCase,
+          useCase: turnTargetUseCase,
         })
         if (hydrated.explores.length > 0) {
           turnExplores = hydrated.explores
@@ -2397,9 +2386,14 @@ export function useStudioController() {
         }
       }
 
-      const effectiveLookmlTurn = isLookmlMode || selectedUseCase === 'lookml'
+      const effectiveLookmlTurn =
+        turnTargetUseCase === 'lookml' || (explicitUseCase !== 'auto' && isLookmlMode)
       const effectiveBuilderMode: 'data_app' | 'dashboard' =
-        selectedUseCase === 'dashboard' ? 'dashboard' : builderMode
+        turnTargetUseCase === 'dashboard'
+          ? 'dashboard'
+          : turnTargetUseCase === 'app' || turnTargetUseCase === 'data-investigator'
+          ? 'data_app'
+          : builderMode
       const result = await runAntigravityTurn({
         sdk: core40SDK,
         extensionSDK,
@@ -2411,7 +2405,7 @@ export function useStudioController() {
         session: agentSession,
         model: selectedModel,
         mode: effectiveBuilderMode,
-        useCase: selectedUseCase,
+        useCase: explicitUseCase,
         allowedModes: allowedUseCases,
         selectedExplores: turnExplores,
         folderId: selectedFolderId,
@@ -2422,7 +2416,7 @@ export function useStudioController() {
         canDeploy: canDeployLookml,
         schemaMarkdown: turnSchemaMarkdown,
         userPrompt:
-          activeMode === 'tile' || selectedUseCase === 'tile'
+          turnTargetUseCase === 'tile' || (explicitUseCase !== 'auto' && activeMode === 'tile')
             ? `Write a LkrCodeMode Python script for the user's request. Return the Python snippet inside a \`\`\`python code block.\n\nCurrent script:\n\`\`\`python\n${scriptCode}\n\`\`\`\n\nUser request: ${turnPromptWithContext}`
             : turnPromptWithContext,
         images: attachedImages,
@@ -2438,8 +2432,8 @@ export function useStudioController() {
       })
 
       const resolvedUseCase: ResolvedStudioUseCase =
-        selectedUseCase !== 'auto'
-          ? selectedUseCase
+        explicitUseCase !== 'auto'
+          ? explicitUseCase
           : result.resolvedUseCase ||
             extractResolvedUseCase(result.assistantText, effectivePrompt, allowedUseCases)
       setSelectedUseCase(resolvedUseCase)
@@ -2696,7 +2690,7 @@ export function useStudioController() {
             },
           ]
           setMessages(finalMsgs, resolvedMode)
-          if (selectedUseCase === 'auto' && resolvedMode !== activeMode) {
+          if (explicitUseCase === 'auto' && resolvedMode !== activeMode) {
             if (resolvedUseCase === 'health-check') {
               await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages)
               await refreshCatalog()
@@ -2799,7 +2793,8 @@ export function useStudioController() {
         isAuthenticated, oauthSigningIn, oauthRedirectUri,
         handleOAuthLogin, handleCancelOAuthLogin,
         setSidebarCollapsed, themeMode, resolvedTheme, setThemeMode,
-        setSelectedUseCase: handleChangeUseCase, setCapabilities,
+        selectedUseCase, setSelectedUseCase: handleChangeUseCase,
+        isUseCaseLocked, allowedUseCases, useCaseOptions, setCapabilities,
         handleResetNewApp, handleNewConversation, handleSelectConversation,
         setNativeContent, setPublishedApp, bumpEmbedNonce,
         contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey,
@@ -2813,7 +2808,7 @@ export function useStudioController() {
         preloadedContent, setPreloadedContent, mentionedItems, setMentionedItems,
       }
     }
-  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems])
+  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems])
 
   return {
     extensionSDK, core40SDK, lookerHostData, history, location, isTileMount,

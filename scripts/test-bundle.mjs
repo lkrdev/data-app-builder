@@ -226,9 +226,9 @@ assert(
     appTsx.includes('parseStudioRoute') &&
     appTsx.includes('PythonTileMount') &&
     appTsx.includes('dab-permission-bar') &&
-    appTsx.includes('topbar-use-case-badge') &&
+    !appTsx.includes('topbar-use-case-badge') &&
     !appTsx.includes('dab-mode-switcher'),
-  'App.tsx must include STUDIO_MODES, parseStudioRoute, PythonTileMount, dab-permission-bar, and topbar-use-case-badge without topbar dab-mode-switcher'
+  'App.tsx must include STUDIO_MODES, parseStudioRoute, PythonTileMount, and dab-permission-bar without topbar-use-case-badge or dab-mode-switcher'
 )
 const match = antigravityTs.match(/export const BUNDLE_APP_PY = `([\s\S]*?)`\n/)
 assert(match, 'Could not find BUNDLE_APP_PY in src/antigravity.ts')
@@ -540,14 +540,16 @@ chmod +x "${fakeBinDir}/uv"
       lookerApiTs.includes('user_conversations:') &&
       lookerApiTs.includes('loadUserConversations') &&
       lookerApiTs.includes('saveUserConversation') &&
-      appTsx.includes('data-testid="use-case-selector"') &&
-      appTsx.includes('data-testid="locked-use-case-badge"') &&
+      appTsx.includes('data-testid="use-case-info-btn"') &&
+      appTsx.includes('data-testid="new-conversation-btn"') &&
+      !appTsx.includes('data-testid="use-case-selector"') &&
+      !appTsx.includes('data-testid="locked-use-case-badge"') &&
       rootAgentsMd.includes('<CA_AGENT_SELECTION>') &&
       upstreamAgentsMd.includes('<CA_AGENT_SELECTION>') &&
       lookerApiTs.includes('selectCaAgentViaIsolatedSubagent') &&
       lookerApiTs.includes('createLookerCaConversation') &&
       appTsx.includes('data-testid="ca-embed-preview"'),
-    'Issues #25, #26, #27 & #32: AGENTS.md routing + labeling + CA sub-agent selection + uv/lkr-dev-cli bootstrap, /workspace/AGENTS.md seeding, use-case-selector, locked-use-case-badge, ca-embed-preview, and user_conversations:${me.id} persistence must be present'
+    'Issues #25, #26, #27, #32 & #100: AGENTS.md routing + labeling + CA sub-agent selection + uv/lkr-dev-cli bootstrap, /workspace/AGENTS.md seeding, use-case-info-btn, new-conversation-btn (without use-case-selector or locked-use-case-badge), ca-embed-preview, and user_conversations:${me.id} persistence must be present'
   )
 
   // Issue #39: Self-evaluating concurrent multi-conversation benchmark harness in a single shared environment_id

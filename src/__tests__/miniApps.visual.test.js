@@ -1181,7 +1181,6 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       title: '2. Content Studio Mode (Create & Update UDDs, Looks, Boards, Schedules)',
       snapshotName: '02-mode-native-dashboard-builder-snap.png',
       expectText: [
-        'Content Studio',
         'Executive Order Performance (Native UDD)',
         '/embed/dashboards/7',
         'Update Content'
@@ -1382,7 +1381,6 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       clipSelector: '.dab-empty-prompt-card',
       expectText: [
         'Use your Looker Agent',
-        'Use Case:',
         'Send Message'
       ]
     },
@@ -1553,8 +1551,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         );
         if (saveBtn) saveBtn.click();
         await new Promise((r) => setTimeout(r, 150));
-        const sel = document.querySelector('[data-testid="use-case-selector"]');
-        const useCaseOptionsAfterSave = sel ? Array.from(sel.options).map((o) => o.value) : [];
+        const useCaseOptionsAfterSave = (window.__DAB_STUDIO__.useCaseOptions || []).map((o) => o.value);
         const text = document.body ? document.body.innerText : '';
         // Navigate to disabled route /lookml/20261030_dev_branch and verify redirect back to '/'
         window.__DAB_STUDIO__.history.push('/lookml/20261030_dev_branch');
@@ -1826,13 +1823,14 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     writeFileSync(issue47Screenshot, pngBuffer)
     expect(existsSync(issue47Screenshot)).toBe(true)
 
-    // Click previous conversation (conv_dashboard_7) -> routes to /c/7, shows 🔒 Content Studio badge, restores chat & preview
+    // Click previous conversation (conv_dashboard_7) -> routes to /c/7, restores chat & preview without topbar use-case badge
     const step2 = await chrome.send('Runtime.evaluate', {
       expression: `(async () => {
         const item = document.querySelector('[data-testid="conversation-item-conv_dashboard_7"]');
         if (item) item.click();
         await new Promise((r) => setTimeout(r, 200));
-        const topbarBadge = (document.querySelector('[data-testid="topbar-use-case-badge"]')?.textContent || '').trim();
+        const noTopbarBadge = !document.querySelector('[data-testid="topbar-use-case-badge"]');
+        const selectedUseCaseAfterSelect = window.__DAB_STUDIO__.selectedUseCase;
         const routeAfterSelect = window.__DAB_STUDIO__.history.location.pathname;
         const centeredGone = !document.querySelector('[data-testid="centered-empty-prompt"]');
         const bodyText = document.body ? document.body.innerText : '';
@@ -1841,16 +1839,17 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         window.__DAB_STUDIO__.history.push('/lookml/20261030_dev_branch');
         await new Promise((r) => setTimeout(r, 150));
         const redirectedLegacyRoute = window.__DAB_STUDIO__.history.location.pathname;
-        const lookmlBadge = (document.querySelector('[data-testid="topbar-use-case-badge"]')?.textContent || '').trim();
+        const lookmlUseCase = window.__DAB_STUDIO__.selectedUseCase;
 
         return {
-          topbarBadge,
+          noTopbarBadge,
+          selectedUseCaseAfterSelect,
           routeAfterSelect,
           centeredGone,
           restoredChatMsg: bodyText.includes('Created native Looker Dashboard #7'),
           restoredPreview: bodyText.includes('/embed/dashboards/7'),
           redirectedLegacyRoute,
-          lookmlBadge
+          lookmlUseCase
         };
       })()`,
       awaitPromise: true,
@@ -1858,13 +1857,14 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     })
 
     expect(step2.result.value).toEqual({
-      topbarBadge: 'Content Studio',
+      noTopbarBadge: true,
+      selectedUseCaseAfterSelect: 'dashboard',
       routeAfterSelect: '/c/7',
       centeredGone: true,
       restoredChatMsg: true,
       restoredPreview: true,
       redirectedLegacyRoute: '/c/20261030_dev_branch',
-      lookmlBadge: 'LookML'
+      lookmlUseCase: 'lookml'
     })
   }, 15000)
 
@@ -1891,12 +1891,16 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         if (newBtn) newBtn.click();
         await new Promise((r) => setTimeout(r, 100));
 
-        const sel = document.querySelector('[data-testid="use-case-selector"]');
-        const defaultUseCase = sel ? sel.value : null;
-        const optionValues = sel ? Array.from(sel.options).map((o) => o.value) : [];
-        const optionLabels = sel ? Array.from(sel.options).map((o) => (o.textContent || '').trim()) : [];
+        const noUseCaseSelector = !document.querySelector('[data-testid="use-case-selector"]');
+        const noSplitNewConvTrigger = !document.querySelector('[data-testid="new-conversation-menu-trigger"]');
+        const hasInfoBtnInComposerActions = Boolean(
+          document.querySelector('.dab-composer-actions [data-testid="use-case-info-btn"]')
+        );
+        const defaultUseCase = window.__DAB_STUDIO__.selectedUseCase;
+        const optionValues = (window.__DAB_STUDIO__.useCaseOptions || []).map((o) => o.value);
+        const optionLabels = (window.__DAB_STUDIO__.useCaseOptions || []).map((o) => o.label);
 
-        // 2. Verify permission gating disables LookML with 🔒 indicator & tooltip when user lacks develop permission
+        // 2. Verify permission gating excludes LookML & Health Check from allowedUseCases when user lacks develop permission
         window.__DAB_STUDIO__.setCapabilities({
           isAdmin: false,
           rolesLoaded: true,
@@ -1918,15 +1922,11 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           }
         });
         await new Promise((r) => setTimeout(r, 80));
-        const selRestricted = document.querySelector('[data-testid="use-case-selector"]');
-        const lookmlOpt = selRestricted
-          ? Array.from(selRestricted.options).find((o) => o.value === 'lookml')
-          : null;
-        const lookmlOptDisabledWhenRestricted = Boolean(lookmlOpt?.disabled);
-        const lookmlOptHasLockLabel = Boolean((lookmlOpt?.textContent || '').includes('(Locked)'));
-        const lookmlOptTitle = lookmlOpt?.getAttribute('title') || '';
+        const restrictedAllowed = window.__DAB_STUDIO__.allowedUseCases || [];
+        const lookmlExcludedWhenRestricted = !restrictedAllowed.includes('lookml');
+        const healthExcludedWhenRestricted = !restrictedAllowed.includes('health-check');
 
-        // Restore full admin capabilities so Auto can route to LookML on Turn 1
+        // Restore full admin capabilities so Auto can route to LookML on Turn 1 and Dashboard on Turn 2
         window.__DAB_STUDIO__.setCapabilities({
           isAdmin: true,
           rolesLoaded: true,
@@ -1949,7 +1949,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         });
         await new Promise((r) => setTimeout(r, 80));
 
-        // 3. Submit Turn 1 LookML prompt with selector in 'auto'
+        // 3. Submit Turn 1 LookML prompt with dynamic auto-routing
         window.__DAB_STUDIO__.setOauthToken('mock_oauth_token');
         await new Promise((r) => setTimeout(r, 40));
         const ta = document.querySelector('[data-testid="studio-prompt-input"]');
@@ -1963,11 +1963,10 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         if (sendBtn) sendBtn.click();
         await new Promise((r) => setTimeout(r, 200));
 
-        const selectorGoneAfterTurn1 = !document.querySelector('[data-testid="use-case-selector"]');
-        const lockedBadge = document.querySelector('[data-testid="locked-use-case-badge"]');
-        const lockedBadgeText = lockedBadge ? (lockedBadge.textContent || '').trim() : '';
-        const topbarBadge = document.querySelector('[data-testid="topbar-use-case-badge"]');
-        const topbarBadgeText = topbarBadge ? (topbarBadge.textContent || '').trim() : '';
+        const useCaseAfterTurn1 = window.__DAB_STUDIO__.selectedUseCase;
+        const isLockedAfterTurn1 = window.__DAB_STUDIO__.isUseCaseLocked;
+        const noLockedBadge = !document.querySelector('[data-testid="locked-use-case-badge"]');
+        const noTopbarBadge = !document.querySelector('[data-testid="topbar-use-case-badge"]');
         const noModeSwitcher = !document.querySelector('.dab-mode-switcher');
 
         const convUpdates = (window.__ARTIFACT_UPDATES__ || []).filter(
@@ -1976,27 +1975,40 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const latestConversations =
           convUpdates.length > 0 ? JSON.parse(convUpdates[convUpdates.length - 1].value) : [];
 
-        // 4. Click + New Conversation -> resets back to editable Auto selector at '/'
+        // 4. Submit Turn 2 Dashboard prompt in the SAME conversation -> dynamically routes to 'dashboard' without locking
+        const ta2 = document.querySelector('[data-testid="studio-prompt-input"]');
+        const sendBtn2 = document.querySelector('[data-testid="studio-send-btn"]');
+        taSetter.call(ta2, 'Create a native Looker UDD dashboard for executive KPIs');
+        ta2.dispatchEvent(new Event('input', { bubbles: true }));
+        ta2.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 60));
+        if (sendBtn2) sendBtn2.click();
+        await new Promise((r) => setTimeout(r, 200));
+        const useCaseAfterTurn2 = window.__DAB_STUDIO__.selectedUseCase;
+
+        // 5. Click + New Conversation -> resets back to 'auto' at '/'
         const resetBtn = document.querySelector('[data-testid="new-conversation-btn"]');
         if (resetBtn) resetBtn.click();
         await new Promise((r) => setTimeout(r, 120));
-        const selAfterReset = document.querySelector('[data-testid="use-case-selector"]');
-        const badgeAfterReset = document.querySelector('[data-testid="locked-use-case-badge"]');
+        const resetUseCase = window.__DAB_STUDIO__.selectedUseCase;
 
         return {
+          noUseCaseSelector,
+          noSplitNewConvTrigger,
+          hasInfoBtnInComposerActions,
           defaultUseCase,
           optionValues,
           optionLabels,
-          lookmlOptDisabledWhenRestricted,
-          lookmlOptHasLockLabel,
-          lookmlOptTitle,
-          selectorGoneAfterTurn1,
-          lockedBadgeText,
-          topbarBadgeText,
+          lookmlExcludedWhenRestricted,
+          healthExcludedWhenRestricted,
+          useCaseAfterTurn1,
+          isLockedAfterTurn1,
+          noLockedBadge,
+          noTopbarBadge,
           noModeSwitcher,
           persistedType: latestConversations[0]?.type,
-          resetUseCase: selAfterReset ? selAfterReset.value : null,
-          badgeGoneAfterReset: !badgeAfterReset
+          useCaseAfterTurn2,
+          resetUseCase
         };
       })()`,
       awaitPromise: true,
@@ -2004,6 +2016,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     })
 
     expect(res.result.value).toEqual({
+      noUseCaseSelector: true,
+      noSplitNewConvTrigger: true,
+      hasInfoBtnInComposerActions: true,
       defaultUseCase: 'auto',
       optionValues: [
         'auto',
@@ -2025,16 +2040,16 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         'LookML',
         'Script'
       ],
-      lookmlOptDisabledWhenRestricted: true,
-      lookmlOptHasLockLabel: true,
-      lookmlOptTitle: 'Missing Looker permissions: develop',
-      selectorGoneAfterTurn1: true,
-      lockedBadgeText: 'LookML',
-      topbarBadgeText: 'LookML',
+      lookmlExcludedWhenRestricted: true,
+      healthExcludedWhenRestricted: true,
+      useCaseAfterTurn1: 'lookml',
+      isLockedAfterTurn1: false,
+      noLockedBadge: true,
+      noTopbarBadge: true,
       noModeSwitcher: true,
       persistedType: 'lookml',
-      resetUseCase: 'auto',
-      badgeGoneAfterReset: true
+      useCaseAfterTurn2: 'dashboard',
+      resetUseCase: 'auto'
     })
   }, 15000)
 
@@ -2081,7 +2096,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const subagentCall = (window.__INTERACTION_CALLS__ || []).find((c) =>
           ((c.body && c.body.input && c.body.input[0] && c.body.input[0].text) || '').includes('[CA_AGENT_SELECTION_REQUEST]')
         );
-        const lockedBadge = document.querySelector('[data-testid="locked-use-case-badge"]');
+        const noLockedBadge = !document.querySelector('[data-testid="locked-use-case-badge"]');
+        const selectedUseCase = window.__DAB_STUDIO__.selectedUseCase;
         const agentBadge = document.querySelector('[data-testid="ca-selected-agent-badge"]');
         const caIframe = document.querySelector('[data-testid="ca-embed-iframe"]');
         const convUpdates = (window.__ARTIFACT_UPDATES__ || []).filter((u) => u.key === 'user_conversations:1');
@@ -2092,7 +2108,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           hasSubagentCall: Boolean(subagentCall),
           subagentTools: subagentCall ? subagentCall.body.tools : null,
           subagentHasPrevId: subagentCall ? ('previous_interaction_id' in subagentCall.body) : null,
-          lockedBadgeText: lockedBadge ? (lockedBadge.textContent || '').trim() : '',
+          noLockedBadge,
+          selectedUseCase,
           agentBadgeText: agentBadge ? (agentBadge.textContent || '').trim() : '',
           hasCaIframe: Boolean(caIframe),
           persistedType: latestConversations[0]?.type,
@@ -2108,7 +2125,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       hasSubagentCall: true,
       subagentTools: [],
       subagentHasPrevId: false,
-      lockedBadgeText: 'Conversational Analytics',
+      noLockedBadge: true,
+      selectedUseCase: 'conversational-analytics',
       agentBadgeText: 'Agent: eCommerce & BigQuery Analytics Agent (ca_agent_ecommerce)',
       hasCaIframe: true,
       persistedType: 'conversational-analytics',
@@ -2880,10 +2898,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         window.__DAB_STUDIO__?.setStarterPromptsLoading?.(false);
         await new Promise((r) => setTimeout(r, 50));
 
-        const ucSelect = document.querySelector('[data-testid="use-case-selector"]');
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-        setter.call(ucSelect, 'tile');
-        ucSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        window.__DAB_STUDIO__?.setSelectedUseCase?.('tile');
         await new Promise((r) => setTimeout(r, 80));
 
         const tileBtns = Array.from(document.querySelectorAll('[data-testid="starter-prompt-list"] button[data-testid^="starter-prompt-"]'));
@@ -2892,8 +2907,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const promptAfterTileClick = ta ? ta.value : '';
         const tilePlaceholder = ta ? ta.getAttribute('placeholder') || '' : '';
 
-        setter.call(ucSelect, 'auto');
-        ucSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        window.__DAB_STUDIO__?.setSelectedUseCase?.('auto');
         await new Promise((r) => setTimeout(r, 80));
 
         const r = document.querySelector('.dab-empty-prompt-card')?.getBoundingClientRect();
@@ -2991,7 +3005,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
 
         const promptPreserved = ta.value === 'Build an executive revenue dashboard';
         const stillEmptyCentered = Boolean(document.querySelector('[data-testid="centered-empty-prompt"]'));
-        const useCaseStillUnlocked = Boolean(document.querySelector('[data-testid="use-case-selector"]'));
+        const useCaseStillUnlocked = !window.__DAB_STUDIO__.isUseCaseLocked && !document.querySelector('[data-testid="use-case-selector"]');
         const noErrorBanner = !document.querySelector('.dab-msg-error');
 
         // 2. Simulate hanging oauth2Authenticate (e.g. closed popup or Error 400: redirect_uri_mismatch)
@@ -3221,7 +3235,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     const openRes = await chrome.send('Runtime.evaluate', {
       expression: `(async () => {
         const btns = Array.from(document.querySelectorAll('[data-testid="use-case-info-btn"]'));
-        const composerBtn = document.querySelector('.dab-use-case-bar [data-testid="use-case-info-btn"]');
+        const composerBtn = document.querySelector('.dab-composer-actions [data-testid="use-case-info-btn"]');
         const toolbarBtn = document.querySelector('[data-testid="tile-preview-toolbar"] [data-testid="use-case-info-btn"]');
         if (toolbarBtn) toolbarBtn.click();
         await new Promise((r) => setTimeout(r, 120));
@@ -3765,26 +3779,26 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     const deadline = Date.now() + 8000
     while (Date.now() < deadline) {
       const r = await chrome.send('Runtime.evaluate', {
-        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="new-conversation-menu-trigger"]') && document.querySelector('[data-testid="topbar-theme-select"]'))`,
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="new-conversation-btn"]') && document.querySelector('[data-testid="topbar-theme-select"]'))`,
         returnByValue: true
       })
       if (r.result && r.result.value) break
       await new Promise((res) => setTimeout(res, 100))
     }
 
-    // Open both the split + New Conversation use-case menu and the SVG theme menu to inspect and screenshot
+    // Open the SVG theme menu and inspect single + New Conversation button and composer StudioSelect/guide controls
     const openMenusRes = await chrome.send('Runtime.evaluate', {
       expression: `(async () => {
-        const splitTrigger = document.querySelector('[data-testid="new-conversation-menu-trigger"]');
-        if (splitTrigger) splitTrigger.click();
         const themeTrigger = document.querySelector('[data-testid="topbar-theme-select"] .dab-studio-select-trigger');
         if (themeTrigger) themeTrigger.click();
         await new Promise((r) => setTimeout(r, 100));
 
-        const newConvMenu = document.querySelector('[data-testid="new-conversation-use-case-menu"]');
-        const newConvOptionValues = newConvMenu
-          ? Array.from(newConvMenu.querySelectorAll('[role="menuitem"]')).map((el) => el.getAttribute('data-value'))
-          : [];
+        const noSplitTrigger = !document.querySelector('[data-testid="new-conversation-menu-trigger"]');
+        const noNewConvMenu = !document.querySelector('[data-testid="new-conversation-use-case-menu"]');
+        const hasSingleNewConvBtn = Boolean(document.querySelector('[data-testid="new-conversation-btn"]'));
+        const hasInfoBtnInComposer = Boolean(
+          document.querySelector('.dab-composer-actions [data-testid="use-case-info-btn"]')
+        );
 
         const themeSelect = document.querySelector('[data-testid="topbar-theme-select"]');
         const themeTriggerSvg = themeSelect?.querySelector('.dab-studio-select-trigger svg')?.getAttribute('data-theme-icon') || null;
@@ -3801,8 +3815,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
 
         const rects = [
           document.querySelector('.dab-topbar'),
-          document.querySelector('.dab-conv-new-split-group'),
-          newConvMenu,
+          document.querySelector('[data-testid="new-conversation-btn"]'),
           themeMenu
         ]
           .filter(Boolean)
@@ -3815,8 +3828,10 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const bottom = Math.min(900, Math.ceil(Math.max(...rects.map((r) => r.bottom)) + margin));
 
         return {
-          hasNewConvMenu: Boolean(newConvMenu),
-          newConvOptionValues,
+          noSplitTrigger,
+          noNewConvMenu,
+          hasSingleNewConvBtn,
+          hasInfoBtnInComposer,
           themeTriggerSvg,
           themeMenuIcons,
           themeHasEmoji,
@@ -3830,17 +3845,10 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     })
 
     expect(openMenusRes.result.value).toMatchObject({
-      hasNewConvMenu: true,
-      newConvOptionValues: [
-        'auto',
-        'dashboard',
-        'conversational-analytics',
-        'app',
-        'data-investigator',
-        'health-check',
-        'lookml',
-        'tile'
-      ],
+      noSplitTrigger: true,
+      noNewConvMenu: true,
+      hasSingleNewConvBtn: true,
+      hasInfoBtnInComposer: true,
       themeTriggerSvg: 'system',
       themeMenuIcons: ['light', 'dark', 'system'],
       themeHasEmoji: false,
@@ -3861,7 +3869,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     writeFileSync(scratchSnapPath, pngBuffer)
     expect(existsSync(scratchSnapPath)).toBe(true)
 
-    // Test interactive selection on SVG theme menu, split + New Conversation use-case menu, and StudioSelect use-case-selector
+    // Test interactive selection on SVG theme menu, single + New Conversation button, and composer capabilities guide modal
     const interactionRes = await chrome.send('Runtime.evaluate', {
       expression: `(async () => {
         // 1. Click Dark in the SVG theme menu
@@ -3883,31 +3891,29 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           .querySelector('[data-testid="topbar-theme-select"] .dab-studio-select-trigger svg')
           ?.getAttribute('data-theme-icon');
 
-        // 2. Click LookML in the split + New Conversation menu -> routes to '/' with LookML pre-selected
-        const lookmlSplitOpt = document.querySelector('[data-testid="new-conversation-use-case-option-lookml"]');
-        if (lookmlSplitOpt) lookmlSplitOpt.click();
+        // 2. Click + New Conversation button -> routes to '/' with 'auto' useCase
+        document.querySelector('[data-testid="new-conversation-btn"]')?.click();
         await new Promise((r) => setTimeout(r, 120));
-        const routeAfterSplitSelect = window.__DAB_STUDIO__.history.location.pathname;
+        const routeAfterNewConv = window.__DAB_STUDIO__.history.location.pathname;
         const hasCenteredPrompt = Boolean(document.querySelector('[data-testid="centered-empty-prompt"]'));
-        const useCaseSel = document.querySelector('[data-testid="use-case-selector"]');
-        const presetUseCase = useCaseSel ? useCaseSel.value : null;
+        const presetUseCase = window.__DAB_STUDIO__.selectedUseCase;
 
-        // 3. Click Use Case StudioSelect trigger and pick Content Studio ('dashboard')
-        useCaseSel?.querySelector('.dab-studio-select-trigger')?.click();
-        await new Promise((r) => setTimeout(r, 60));
-        document.querySelector('[data-testid="use-case-selector-option-dashboard"]')?.click();
+        // 3. Click '?' capabilities guide button inside .dab-composer-actions -> opens UseCaseInfoModal
+        document.querySelector('.dab-composer-actions [data-testid="use-case-info-btn"]')?.click();
         await new Promise((r) => setTimeout(r, 80));
-        const afterCustomMenuSelect = useCaseSel ? useCaseSel.value : null;
+        const hasInfoModal = Boolean(document.querySelector('[data-testid="use-case-info-modal"]'));
+        document.querySelector('[data-testid="use-case-info-close"]')?.click();
+        await new Promise((r) => setTimeout(r, 60));
 
         return {
           themeAfterDarkClick,
           iconAfterDarkClick,
           themeAfterLightClick,
           iconAfterLightClick,
-          routeAfterSplitSelect,
+          routeAfterNewConv,
           hasCenteredPrompt,
           presetUseCase,
-          afterCustomMenuSelect
+          hasInfoModal
         };
       })()`,
       awaitPromise: true,
@@ -3919,10 +3925,10 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       iconAfterDarkClick: 'dark',
       themeAfterLightClick: 'light',
       iconAfterLightClick: 'light',
-      routeAfterSplitSelect: '/',
+      routeAfterNewConv: '/',
       hasCenteredPrompt: true,
-      presetUseCase: 'lookml',
-      afterCustomMenuSelect: 'dashboard'
+      presetUseCase: 'auto',
+      hasInfoModal: true
     })
   }, 15000)
 

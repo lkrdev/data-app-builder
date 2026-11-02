@@ -246,13 +246,12 @@ const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
   ['dashboard', /\b(build\s+a\s+dashboard|create\s+a\s+dashboard|create\s+a\s+look|create\s+a\s+board)\b/i],
 ]
 
-// ponytail: extract <USE_CASE>...</USE_CASE> emitted by AGENTS.md Turn 1 routing or infer from prompt keywords,
+// ponytail: extract <USE_CASE>...</USE_CASE> emitted by AGENTS.md per-turn routing or infer from prompt keywords,
 // always intersecting with the user's allowed modes so restricted users never route to a locked capability.
-export function extractResolvedUseCase(
+export function matchExplicitUseCaseRule(
   text?: string,
-  promptFallback?: string,
   allowedModes?: string[]
-): ResolvedStudioUseCase {
+): ResolvedStudioUseCase | null {
   const allowedList: ResolvedStudioUseCase[] =
     Array.isArray(allowedModes) && allowedModes.length > 0
       ? Array.from(
@@ -285,11 +284,43 @@ export function extractResolvedUseCase(
     if (tagged && allowedSet.has(tagged)) return tagged
   }
 
-  const combined = `${String(promptFallback || '')}\n${rawText}`
   for (const [candidate, re] of USE_CASE_RULES) {
-    if (allowedSet.has(candidate) && re.test(combined)) return candidate
+    if (allowedSet.has(candidate) && re.test(rawText)) return candidate
   }
-  return allowedSet.has('app') ? 'app' : allowedList[0] || 'app'
+  return null
+}
+
+export function extractResolvedUseCase(
+  text?: string,
+  promptFallback?: string,
+  allowedModes?: string[]
+): ResolvedStudioUseCase {
+  const allowedList: ResolvedStudioUseCase[] =
+    Array.isArray(allowedModes) && allowedModes.length > 0
+      ? Array.from(
+          new Set(
+            allowedModes
+              .map((m) => USE_CASE_ALIAS_MAP[String(m || '').trim().toLowerCase().replace(/\s+/g, '-')])
+              .filter((m): m is ResolvedStudioUseCase => Boolean(m))
+          )
+        )
+      : [
+          'app',
+          'data-investigator',
+          'dashboard',
+          'lookml',
+          'health-check',
+          'tile',
+          'conversational-analytics',
+        ]
+  const allowedSet = new Set<ResolvedStudioUseCase>(allowedList.length > 0 ? allowedList : ['app'])
+  const rawText = String(text || '')
+  const combined = `${String(promptFallback || '')}\n${rawText}`
+  return (
+    matchExplicitUseCaseRule(rawText, allowedModes) ||
+    matchExplicitUseCaseRule(combined, allowedModes) ||
+    (allowedSet.has('app') ? 'app' : allowedList[0] || 'app')
+  )
 }
 
 export interface ToolAvailability {
