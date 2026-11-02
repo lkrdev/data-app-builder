@@ -1,34 +1,40 @@
 import React, { useEffect, useRef, useState } from 'react'
 
+interface DabSelectAugmentedElement extends HTMLElement {
+  __dabSelectPatched?: boolean
+  __dabPropsDefined?: boolean
+  __dabValue?: string
+}
+
 // ponytail: allow DOM tests using HTMLSelectElement.prototype.value setter on [data-testid] custom StudioSelect wrappers to forward seamlessly
 if (typeof window !== 'undefined' && window.HTMLSelectElement) {
-  const proto = window.HTMLSelectElement.prototype as any
+  const proto = window.HTMLSelectElement.prototype as unknown as DabSelectAugmentedElement
   const orig = Object.getOwnPropertyDescriptor(proto, 'value')
   if (orig?.get && orig?.set && !proto.__dabSelectPatched) {
     Object.defineProperty(proto, '__dabSelectPatched', { value: true })
     Object.defineProperty(proto, 'value', {
       configurable: true,
       enumerable: orig.enumerable,
-      get() {
+      get(this: DabSelectAugmentedElement) {
         if (this instanceof window.HTMLSelectElement) return orig.get!.call(this)
-        const inner = (this as HTMLElement)?.querySelector?.('select.dab-studio-select-native')
-        return inner ? orig.get!.call(inner) : (this as any).__dabValue ?? ''
+        const inner = this?.querySelector?.('select.dab-studio-select-native')
+        return inner ? orig.get!.call(inner) : this.__dabValue ?? ''
       },
-      set(v: any) {
+      set(this: DabSelectAugmentedElement, v: unknown) {
         if (this instanceof window.HTMLSelectElement) {
           orig.set!.call(this, v)
           return
         }
-        ;(this as any).__dabValue = String(v ?? '')
-        const inner = (this as HTMLElement)?.querySelector?.('select.dab-studio-select-native')
+        this.__dabValue = String(v ?? '')
+        const inner = this?.querySelector?.('select.dab-studio-select-native')
         if (inner) orig.set!.call(inner, v)
       },
     })
   }
 }
 
-export interface StudioSelectOption {
-  value: string
+export interface StudioSelectOption<T extends string = string> {
+  value: T
   label: string
   disabled?: boolean
   title?: string
@@ -36,10 +42,10 @@ export interface StudioSelectOption {
   badge?: string
 }
 
-export interface StudioSelectProps {
-  value: string
-  onChange: (value: string) => void
-  options: StudioSelectOption[]
+export interface StudioSelectProps<T extends string = string> {
+  value: T
+  onChange: (value: T) => void
+  options: Array<StudioSelectOption<T>>
   disabled?: boolean
   title?: string
   ariaLabel?: string
@@ -54,7 +60,7 @@ export interface StudioSelectProps {
   extraAttrs?: Record<string, string | undefined>
 }
 
-export const StudioSelect: React.FC<StudioSelectProps> = ({
+export function StudioSelect<T extends string = string>({
   value,
   onChange,
   options,
@@ -70,7 +76,7 @@ export const StudioSelect: React.FC<StudioSelectProps> = ({
   iconOnly = false,
   align = 'left',
   extraAttrs,
-}) => {
+}: StudioSelectProps<T>): React.ReactElement {
   const testId = testIdProp || dataTestIdProp
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -84,18 +90,19 @@ export const StudioSelect: React.FC<StudioSelectProps> = ({
   const setContainerNode = (el: HTMLDivElement | null) => {
     containerRef.current = el
     if (!el) return
-    ;(el as any).__dabValue = value
-    if (!(el as any).__dabPropsDefined) {
-      Object.defineProperty(el, '__dabPropsDefined', { value: true })
-      Object.defineProperty(el, 'value', {
+    const augEl = el as DabSelectAugmentedElement
+    augEl.__dabValue = value
+    if (!augEl.__dabPropsDefined) {
+      Object.defineProperty(augEl, '__dabPropsDefined', { value: true })
+      Object.defineProperty(augEl, 'value', {
         configurable: true,
-        get: () => nativeSelectRef.current?.value ?? String((el as any).__dabValue ?? ''),
-        set: (v: any) => {
-          ;(el as any).__dabValue = String(v ?? '')
+        get: () => nativeSelectRef.current?.value ?? String(augEl.__dabValue ?? ''),
+        set: (v: unknown) => {
+          augEl.__dabValue = String(v ?? '')
           if (nativeSelectRef.current) nativeSelectRef.current.value = String(v ?? '')
         },
       })
-      Object.defineProperty(el, 'options', {
+      Object.defineProperty(augEl, 'options', {
         configurable: true,
         get: () => nativeSelectRef.current?.options ?? [],
       })
@@ -103,12 +110,12 @@ export const StudioSelect: React.FC<StudioSelectProps> = ({
   }
 
   useEffect(() => {
-    const el = containerRef.current
+    const el = containerRef.current as DabSelectAugmentedElement | null
     if (!el) return
     const onDomChange = (e: Event) => {
       if (e.target === el) {
-        const nextVal = (el as any).__dabValue ?? nativeSelectRef.current?.value
-        if (nextVal !== undefined) onChangeRef.current(String(nextVal))
+        const nextVal = el.__dabValue ?? nativeSelectRef.current?.value
+        if (nextVal !== undefined) onChangeRef.current(String(nextVal) as T)
       }
     }
     el.addEventListener('change', onDomChange)
@@ -188,7 +195,7 @@ export const StudioSelect: React.FC<StudioSelectProps> = ({
         onClick={(e) => e.stopPropagation()}
         onChange={(e) => {
           e.stopPropagation()
-          onChange(e.target.value)
+          onChange(e.target.value as T)
         }}
       >
         {options.map((opt, idx) => (

@@ -1,7 +1,15 @@
+import type { ExtensionSDK } from '@looker/extension-sdk'
+import type {
+  IFolder,
+  ILookmlModelNavExplore,
+  IRole,
+  IUser,
+  Looker40SDK,
+} from '@looker/sdk'
 import useSWR, { mutate, SWRConfig, unstable_serialize } from 'swr'
-import type { Looker40SDK } from '@looker/sdk'
-import { classifyLooker404Error, resolveUserCapabilities } from './lookerPermissions'
+
 import { fetchLookerCaAgentsCatalog } from './conversationalAnalytics'
+import { classifyLooker404Error, resolveUserCapabilities } from './lookerPermissions'
 
 export * from './lookerPermissions'
 export * from './dataAppPublisher'
@@ -37,29 +45,45 @@ export function extractExploreIdsFromCode(code: string): string[] {
   return Array.from(found)
 }
 
-const inFlightMetadataRequests = new Map<string, Promise<any>>()
-const recentMetadataCache = new Map<string, { expiresAt: number; value: any }>()
+const inFlightMetadataRequests = new Map<string, Promise<unknown>>()
+const recentMetadataCache = new Map<string, { expiresAt: number; value: unknown }>()
 export const LOOKER_METADATA_CACHE_TTL_MS = 15_000
 export const LOOKER_SWR_CONFIG = {
   revalidateOnFocus: false,
   dedupingInterval: LOOKER_METADATA_CACHE_TTL_MS,
 }
 
-function syncSwrKey(swrKey: any, val: any): void {
+interface SwrConfigDefaultWithCache {
+  default?: {
+    cache?: {
+      set?: (key: string, value: unknown) => void
+      clear?: () => void
+    }
+  }
+}
+
+function syncSwrKey(swrKey: unknown, val: unknown): void {
   if (!swrKey) return
   try {
-    ;(SWRConfig as any).default?.cache?.set(unstable_serialize(swrKey), val)
-  } catch {}
-  void mutate(swrKey, val, false).catch(() => {})
+    ;(SWRConfig as unknown as SwrConfigDefaultWithCache).default?.cache?.set?.(
+      unstable_serialize(swrKey as never),
+      val
+    )
+  } catch {
+    // ignore SWR cache sync error
+  }
+  void mutate(swrKey as never, val, false).catch(() => {})
 }
 
 export function clearLookerMetadataCache(): void {
   inFlightMetadataRequests.clear()
   recentMetadataCache.clear()
   try {
-    const cache = (SWRConfig as any).default?.cache
+    const cache = (SWRConfig as unknown as SwrConfigDefaultWithCache).default?.cache
     if (cache && typeof cache.clear === 'function') cache.clear()
-  } catch {}
+  } catch {
+    // ignore SWR cache clear error
+  }
 }
 
 export const clearLookerMetadataRequestCache = clearLookerMetadataCache
@@ -70,7 +94,7 @@ export async function coalesceLookerMetadataRequest<T>(
   cacheKey: string,
   fn: () => Promise<T>,
   ttlMs = LOOKER_METADATA_CACHE_TTL_MS,
-  swrKey?: any
+  swrKey?: unknown
 ): Promise<T> {
   const now = Date.now()
   const hit = recentMetadataCache.get(cacheKey)
@@ -91,15 +115,40 @@ export async function coalesceLookerMetadataRequest<T>(
   return p
 }
 
+export interface RawLookerTransportResponse {
+  ok?: boolean
+  statusCode?: number
+  status?: number
+  body?: unknown
+}
+
+export type LookerRawRequestFn = (
+  method: string,
+  path: string,
+  queryParams?: Record<string, unknown>,
+  body?: unknown,
+  ...rest: unknown[]
+) => Promise<RawLookerTransportResponse>
+
 export function createDeduplicatedLookerSdkProxy(
   sdk: Looker40SDK,
-  onRawRequest?: (res: any, elapsedMs: number, err?: unknown) => void
+  onRawRequest?: (res: RawLookerTransportResponse | undefined, elapsedMs: number, err?: unknown) => void
 ): Looker40SDK {
   if (!sdk || typeof sdk !== 'object') return sdk
-  const rawTransport = (sdk as any)?.authSession?.transport
+  const sdkRec = sdk as unknown as Record<string, unknown> & {
+    __rawSdk?: Looker40SDK
+    authSession?: {
+      transport?: {
+        rawRequest?: LookerRawRequestFn
+        [key: string]: unknown
+      }
+      [key: string]: unknown
+    }
+  }
+  const rawTransport = sdkRec?.authSession?.transport
   const origRawReq = rawTransport?.rawRequest
-  const wrappedsdk: any = Object.create(sdk)
-  wrappedsdk.__rawSdk = (sdk as any).__rawSdk || sdk
+  const wrappedsdk: Record<string, unknown> = Object.create(sdk)
+  wrappedsdk.__rawSdk = sdkRec.__rawSdk || sdk
   for (const method of [
     'lookml_model_explore',
     'all_lookml_models',
@@ -111,17 +160,24 @@ export function createDeduplicatedLookerSdkProxy(
     'folder_ancestors',
     'search_folders',
   ]) {
-    if (typeof (sdk as any)[method] === 'function') {
-      const origFn = (sdk as any)[method].bind(sdk)
+    const fn = sdkRec[method]
+    if (typeof fn === 'function') {
+      const origFn = (fn as (...args: unknown[]) => unknown).bind(sdk)
       wrappedSdkMethod(wrappedsdk, method, origFn)
     }
   }
   if (typeof origRawReq === 'function') {
     wrappedsdk.authSession = {
-      ...(sdk as any).authSession,
+      ...sdkRec.authSession,
       transport: {
         ...rawTransport,
-        rawRequest: async (method: string, path: string, queryParams?: any, body?: any, ...rest: any[]) => {
+        rawRequest: async (
+          method: string,
+          path: string,
+          queryParams?: Record<string, unknown>,
+          body?: unknown,
+          ...rest: unknown[]
+        ) => {
           const reqStart = Date.now()
           const upper = String(method || 'GET').toUpperCase()
           const isMetaGet =
@@ -141,24 +197,28 @@ export function createDeduplicatedLookerSdkProxy(
       },
     }
   }
-  return wrappedsdk as Looker40SDK
+  return wrappedsdk as unknown as Looker40SDK
 }
 
-function wrappedSdkMethod(target: any, method: string, origFn: (...args: any[]) => any): void {
-  target[method] = (...args: any[]) =>
+function wrappedSdkMethod(
+  target: Record<string, unknown>,
+  method: string,
+  origFn: (...args: unknown[]) => unknown
+): void {
+  target[method] = (...args: unknown[]) =>
     coalesceLookerMetadataRequest(`sdk:${method}:${JSON.stringify(args)}`, () => Promise.resolve(origFn(...args)))
 }
 
 // ponytail: use SDK's underlying transport.rawRequest (requires raw_api_request: yes in manifest.lkml)
 // instead of generating custom SDK bindings for /data_app_extension and /inline_extension.
-export async function rawLookerRequest<T = any>(
+export async function rawLookerRequest<T = unknown>(
   sdk: Looker40SDK,
   method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
   path: string,
-  queryParams?: Record<string, any>,
-  body?: any
+  queryParams?: Record<string, unknown>,
+  body?: unknown
 ): Promise<T> {
-  const transport = (sdk.authSession as any).transport
+  const transport = (sdk.authSession as unknown as { transport: { rawRequest: LookerRawRequestFn } }).transport
   const rawResp = await transport.rawRequest(
     method,
     path,
@@ -214,8 +274,12 @@ export interface SearchLookerFoldersParams {
 export const LOOKER_FOLDER_FIELDS =
   'id,name,parent_id,child_count,is_personal,is_personal_descendant,creator_id,can'
 
+export type RawLookerFolderLike = Partial<IFolder> & {
+  has_children?: boolean
+}
+
 export function normalizeLookerFolderNode(
-  raw: any,
+  raw: RawLookerFolderLike | null | undefined,
   fallbackParentId?: string | null
 ): LookerFolderNode {
   const childCount = typeof raw?.child_count === 'number' ? raw.child_count : undefined
@@ -241,7 +305,7 @@ export function normalizeLookerFolderNode(
   }
 }
 
-export function buildRootLookerFolders(user?: any): LookerFolderNode[] {
+export function buildRootLookerFolders(user?: Partial<IUser> | null): LookerFolderNode[] {
   const canEdit = { show: true, edit_content: true, save_content: true }
   const candidates: LookerFolderNode[] = [
     { id: String(user?.personal_folder_id || '5'), name: 'My folder', parent_id: null, is_personal: true, has_children: true, can: canEdit },
@@ -253,7 +317,17 @@ export function buildRootLookerFolders(user?: any): LookerFolderNode[] {
   return Array.from(new Map(candidates.filter((n) => n.id).map((n) => [n.id, n])).values())
 }
 
-async function unwrapSdkCall(sdk: any, p: any): Promise<any> {
+interface LookerFolderSdkLike {
+  ok?: <T>(p: Promise<T>) => Promise<T>
+  get?: unknown
+  folder?: (...args: unknown[]) => Promise<RawLookerFolderLike>
+  folder_ancestors?: (...args: unknown[]) => Promise<RawLookerFolderLike[]>
+  folder_children?: (params: { folder_id: string; fields: string }) => Promise<RawLookerFolderLike[]>
+  all_folders?: (fields: string) => Promise<RawLookerFolderLike[]>
+  search_folders?: (req: Record<string, unknown>) => Promise<RawLookerFolderLike[]>
+}
+
+async function unwrapSdkCall<T>(sdk: LookerFolderSdkLike, p: Promise<T> | T): Promise<T> {
   const resolved = await p
   if (typeof sdk?.ok === 'function') return sdk.ok(Promise.resolve(resolved))
   return resolved
@@ -268,7 +342,7 @@ export async function fetchFolderChildren(
   return coalesceLookerMetadataRequest(
     `folder_children:${fid}`,
     async () => {
-      const s = sdk as any
+      const s = sdk as unknown as LookerFolderSdkLike
       if (typeof s?.folder_children === 'function') {
         const rows = await unwrapSdkCall(
           s,
@@ -285,8 +359,8 @@ export async function fetchFolderChildren(
           s.all_folders('id,name,parent_id,child_count,is_personal,can')
         )
         return (Array.isArray(all) ? all : [])
-          .filter((r: any) => String(r?.parent_id ?? '') === fid)
-          .map((r: any) => normalizeLookerFolderNode(r, fid))
+          .filter((r) => String(r?.parent_id ?? '') === fid)
+          .map((r) => normalizeLookerFolderNode(r, fid))
       }
       return []
     },
@@ -296,11 +370,11 @@ export async function fetchFolderChildren(
 }
 
 async function callFolderIdEndpoint(
-  sdk: any,
+  sdk: LookerFolderSdkLike,
   method: 'folder' | 'folder_ancestors',
   folderId: string,
   fields: string
-): Promise<any> {
+): Promise<unknown> {
   const fn = sdk?.[method]
   if (typeof fn !== 'function') return null
   if (typeof sdk?.get === 'function') {
@@ -309,7 +383,9 @@ async function callFolderIdEndpoint(
   try {
     const res = await unwrapSdkCall(sdk, fn.call(sdk, { folder_id: folderId, fields }))
     if (res !== undefined) return res
-  } catch {}
+  } catch {
+    // fall back to positional call
+  }
   return unwrapSdkCall(sdk, fn.call(sdk, folderId, fields))
 }
 
@@ -327,29 +403,35 @@ export async function fetchFolderWithAncestors(
   return coalesceLookerMetadataRequest(
     `folder_ancestors:${fid}`,
     async () => {
-      const s = sdk as any
-      let rawFolder: any = null
-      let rawAncestors: any[] | null = null
+      const s = sdk as unknown as LookerFolderSdkLike
+      let rawFolder: RawLookerFolderLike | null = null
+      let rawAncestors: RawLookerFolderLike[] | null = null
       try {
         if (typeof s?.folder === 'function') {
-          rawFolder = await callFolderIdEndpoint(s, 'folder', fid, LOOKER_FOLDER_FIELDS)
+          rawFolder = (await callFolderIdEndpoint(s, 'folder', fid, LOOKER_FOLDER_FIELDS)) as RawLookerFolderLike | null
         }
-      } catch {}
+      } catch {
+        // ignore folder lookup error
+      }
       try {
         if (typeof s?.folder_ancestors === 'function') {
           const anc = await callFolderIdEndpoint(s, 'folder_ancestors', fid, LOOKER_FOLDER_FIELDS)
-          if (Array.isArray(anc)) rawAncestors = anc
+          if (Array.isArray(anc)) rawAncestors = anc as RawLookerFolderLike[]
         }
-      } catch {}
+      } catch {
+        // ignore folder_ancestors lookup error
+      }
 
       if ((!rawFolder || !rawAncestors) && typeof s?.all_folders === 'function') {
         try {
           const all = await unwrapSdkCall(s, s.all_folders(LOOKER_FOLDER_FIELDS))
           const list = Array.isArray(all) ? all : []
-          const byId = new Map<string, any>(list.map((f: any) => [String(f.id), f]))
+          const byId = new Map<string, RawLookerFolderLike>(
+            list.map((f) => [String(f.id), f])
+          )
           if (!rawFolder) rawFolder = byId.get(fid) || null
           if (!rawAncestors && rawFolder) {
-            const chainUp: any[] = []
+            const chainUp: RawLookerFolderLike[] = []
             let cur = rawFolder.parent_id ? byId.get(String(rawFolder.parent_id)) : null
             const visited = new Set<string>([fid])
             while (cur && !visited.has(String(cur.id))) {
@@ -359,7 +441,9 @@ export async function fetchFolderWithAncestors(
             }
             rawAncestors = chainUp
           }
-        } catch {}
+        } catch {
+          // ignore all_folders fallback error
+        }
       }
 
       const folder = rawFolder ? normalizeLookerFolderNode(rawFolder) : null
@@ -383,7 +467,7 @@ export async function searchLookerFolders(
   sdk: Looker40SDK,
   params: SearchLookerFoldersParams = {}
 ): Promise<LookerFolderNode[]> {
-  const req: Record<string, any> = {
+  const req: Record<string, unknown> = {
     fields: params.fields || LOOKER_FOLDER_FIELDS,
   }
   if (params.name?.trim()) req.name = params.name.trim()
@@ -405,7 +489,7 @@ export async function searchLookerFolders(
   return coalesceLookerMetadataRequest(
     `search_folders:${JSON.stringify(req)}`,
     async () => {
-      const s = sdk as any
+      const s = sdk as unknown as LookerFolderSdkLike
       if (typeof s?.search_folders === 'function') {
         const rows = await unwrapSdkCall(s, s.search_folders(req))
         return (Array.isArray(rows) ? rows : []).map((r) => normalizeLookerFolderNode(r))
@@ -463,13 +547,16 @@ export async function fetchInitialLookerMetadata(sdk: Looker40SDK) {
       ['looker:models']
     ),
   ])
-  let roles: any[] | null = null
-  if (me?.id && typeof (sdk as any).user_roles === 'function') {
+  let roles: IRole[] | null = null
+  const sdkWithRoles = sdk as unknown as {
+    user_roles?: (params: { user_id: string }) => Promise<IRole[]>
+  }
+  if (me?.id && typeof sdkWithRoles.user_roles === 'function') {
     try {
       const uid = String(me.id)
       const fetchedRoles = await coalesceLookerMetadataRequest(
         `meta:user_roles:${uid}`,
-        () => sdk.ok((sdk as any).user_roles({ user_id: uid })),
+        () => sdk.ok(sdkWithRoles.user_roles!({ user_id: uid }) as never),
         LOOKER_METADATA_CACHE_TTL_MS,
         ['looker:user_roles', uid]
       )
@@ -510,7 +597,11 @@ export async function fetchInitialLookerMetadata(sdk: Looker40SDK) {
 }
 
 export function buildAvailableExploresCatalog(
-  models: Array<{ name: string; label: string; explores: any[] }>
+  models: Array<{
+    name?: string | null
+    label?: string | null
+    explores?: Array<Partial<ILookmlModelNavExplore>> | null
+  }>
 ): string {
   const lines: string[] = [
     '# Available Looker Explores Catalog (Let the Agent Decide)',
@@ -521,15 +612,17 @@ export function buildAvailableExploresCatalog(
     String(a.label || a.name).localeCompare(String(b.label || b.name))
   )
   for (const m of sortedModels) {
+    const modelName = String(m.name || '')
+    if (!modelName) continue
     const visible = (m.explores || [])
-      .filter((e: any) => !e.hidden && e.name)
-      .sort((a: any, b: any) =>
+      .filter((e) => !e.hidden && e.name)
+      .sort((a, b) =>
         String(a.label || a.name).localeCompare(String(b.label || b.name))
       )
     if (visible.length === 0) continue
-    lines.push(`## Model: ${m.label || m.name} (\`${m.name}\`)`)
+    lines.push(`## Model: ${m.label || modelName} (\`${modelName}\`)`)
     for (const e of visible) {
-      const id = formatExploreId(m.name, String(e.name))
+      const id = formatExploreId(modelName, String(e.name))
       const desc = e.description ? ` — ${String(e.description).trim()}` : ''
       lines.push(`- \`${id}\` (${e.label || e.name})${desc}`)
     }
@@ -623,7 +716,7 @@ export async function buildDenseExploreSchema(
                 limit: '5',
               },
             })
-          )) as unknown as Record<string, any>[]
+          )) as unknown as Record<string, unknown>[]
           if (Array.isArray(rows) && rows.length > 0) {
             lines.push(`## Sample Rows (${sampleFields.join(', ')})`)
             lines.push('```json')
@@ -730,7 +823,7 @@ export function applyStudioDocumentTheme(
 
 export function readInitialStudioThemeMode(): StudioThemeMode {
   try {
-    const w = typeof window !== 'undefined' ? (window as any) : undefined
+    const w = typeof window !== 'undefined' ? window : undefined
     return normalizeStudioThemeMode(
       w?.__MOCK_LOOKER_EXTENSION__?.initialThemeMode ??
         w?.localStorage?.getItem?.(STUDIO_THEME_STORAGE_KEY)
@@ -741,10 +834,10 @@ export function readInitialStudioThemeMode(): StudioThemeMode {
 }
 
 export async function loadStoredStudioThemeMode(
-  extensionSDK?: any
+  extensionSDK?: Partial<ExtensionSDK>
 ): Promise<StudioThemeMode | null> {
   try {
-    const w = typeof window !== 'undefined' ? (window as any) : undefined
+    const w = typeof window !== 'undefined' ? window : undefined
     const raw =
       (await extensionSDK?.localStorageGetItem?.(STUDIO_THEME_STORAGE_KEY)) ??
       w?.localStorage?.getItem?.(STUDIO_THEME_STORAGE_KEY)
@@ -754,11 +847,20 @@ export async function loadStoredStudioThemeMode(
   }
 }
 
-export function persistStudioThemeMode(extensionSDK: any, mode: StudioThemeMode): void {
+export function persistStudioThemeMode(
+  extensionSDK: Partial<ExtensionSDK> | undefined,
+  mode: StudioThemeMode
+): void {
   try {
-    ;(window as any)?.localStorage?.setItem?.(STUDIO_THEME_STORAGE_KEY, mode)
-  } catch {}
+    if (typeof window !== 'undefined') {
+      window.localStorage?.setItem?.(STUDIO_THEME_STORAGE_KEY, mode)
+    }
+  } catch {
+    // ignore storage write failure
+  }
   try {
     void extensionSDK?.localStorageSetItem?.(STUDIO_THEME_STORAGE_KEY, mode)
-  } catch {}
+  } catch {
+    // ignore extensionSDK storage write failure
+  }
 }

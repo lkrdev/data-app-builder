@@ -1,7 +1,7 @@
 // Assert-based self-check for the embedded Antigravity sandbox bundler (BUNDLE_APP_PY) and WASM CodeMode bridge.
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -605,6 +605,19 @@ chmod +x "${fakeBinDir}/uv"
       rootAgentsMd.includes('skills/issue-authoring/SKILL.md') &&
       upstreamAgentsMd.includes('skills/issue-authoring/SKILL.md'),
     'StudioDesignSystem primitives, semantic status CSS tokens, skills/studio-design-system/SKILL.md, and skills/issue-authoring/SKILL.md must be present'
+  )
+
+  const eslintrcJson = JSON.parse(readFileSync(path.join(repoRoot, '.eslintrc.json'), 'utf8'))
+  const preCommitPath = path.join(repoRoot, '.githooks/pre-commit')
+  assert.equal(
+    eslintrcJson.rules?.['@typescript-eslint/no-explicit-any'],
+    'error',
+    '.eslintrc.json must enforce "@typescript-eslint/no-explicit-any": "error"'
+  )
+  assert(
+    (statSync(preCommitPath).mode & 0o111) !== 0 &&
+      readFileSync(preCommitPath, 'utf8').includes('lint:check'),
+    '.githooks/pre-commit must exist, be executable, and run lint:check'
   )
 
   console.log('✓ test-bundle.mjs: all assertions passed!')

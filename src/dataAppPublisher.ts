@@ -1,4 +1,6 @@
-import type { Looker40SDK } from '@looker/sdk'
+import type { IDashboardElement, Looker40SDK } from '@looker/sdk'
+
+import type { AntigravityActivityStep } from './antigravity'
 import { rawLookerRequest } from './lookerApi'
 
 export interface WidgetQueryEntry {
@@ -29,7 +31,7 @@ export interface PersistedChatTurn {
   interactionId?: string
   dashboardId?: string
   widgetCount?: number
-  activitySteps?: any[]
+  activitySteps?: AntigravityActivityStep[]
   thinkingDurationSec?: number
 }
 
@@ -162,7 +164,7 @@ export async function saveDashboardStudioMetadata(
     await sdk.ok(
       sdk.update_dashboard_element(elementId, {
         rich_content_json: richContentJson,
-      } as any)
+      } as Partial<IDashboardElement>)
     )
   }
   return {
@@ -173,7 +175,7 @@ export async function saveDashboardStudioMetadata(
 }
 
 export function canonicalQueryJson(query: WidgetQueryEntry['query']): string {
-  const norm: Record<string, any> = {
+  const norm: Record<string, unknown> = {
     model: query.model,
     view: query.view,
     fields: query.fields || [],
@@ -277,7 +279,7 @@ export async function upsertPublishedDataApp(
       sdk.ok(
         sdk.update_dashboard(existing.dashboardId, {
           title,
-        } as any)
+        })
       ),
       elementId
         ? sdk.ok(
@@ -286,7 +288,7 @@ export async function upsertPublishedDataApp(
               title_hidden: true,
               extension_id: `db::${bareExistingId}`,
               rich_content_json: richContentJson,
-            } as any)
+            } as Partial<IDashboardElement>)
           )
         : Promise.resolve(null),
     ])

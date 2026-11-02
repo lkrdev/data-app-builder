@@ -1,5 +1,7 @@
+import type { ExtensionSDK } from '@looker/extension-sdk'
+import type { IArtifact, IDashboard, IDashboardElement, Looker40SDK } from '@looker/sdk'
 import { mutate, SWRConfig, unstable_serialize } from 'swr'
-import type { Looker40SDK } from '@looker/sdk'
+
 import {
   DashboardStudioMetadata,
   mergeStudioMetadata,
@@ -10,25 +12,54 @@ import { rawLookerRequest } from './lookerApi'
 
 export const ARTIFACT_NAMESPACE = 'data_app_builder'
 
-export function getArtifactNamespace(extensionSDK?: any): string {
+export type ArtifactExtensionHostLike =
+  | Partial<ExtensionSDK>
+  | { lookerHostData?: { extensionId?: string } }
+  | null
+  | undefined
+
+export type ArtifactRowLike = Partial<IArtifact> & {
+  key?: string
+  value?: unknown
+  version?: number
+  content_type?: string
+}
+
+interface SwrConfigWithDefaultCache {
+  default?: {
+    cache?: {
+      get: (key: string) => unknown
+      set: (key: string, value: unknown) => void
+    }
+  }
+}
+
+export function getArtifactNamespace(extensionSDK?: ArtifactExtensionHostLike): string {
   return (
     String(extensionSDK?.lookerHostData?.extensionId || ARTIFACT_NAMESPACE).trim() ||
     ARTIFACT_NAMESPACE
   )
 }
 
-export function readSwrCache<T = any>(key: any): T | undefined {
+export function readSwrCache<T = unknown>(key: unknown): T | undefined {
   try {
-    return (SWRConfig as any).default?.cache?.get(unstable_serialize(key)) as T | undefined
+    return (SWRConfig as unknown as SwrConfigWithDefaultCache).default?.cache?.get(
+      unstable_serialize(key)
+    ) as T | undefined
   } catch {
     return undefined
   }
 }
 
-function writeSwrCache(key: any, value: any): void {
+function writeSwrCache(key: unknown, value: unknown): void {
   try {
-    ;(SWRConfig as any).default?.cache?.set(unstable_serialize(key), value)
-  } catch {}
+    ;(SWRConfig as unknown as SwrConfigWithDefaultCache).default?.cache?.set(
+      unstable_serialize(key),
+      value
+    )
+  } catch {
+    // Ignore cache write errors
+  }
   void mutate(key, value, false).catch(() => {})
 }
 
@@ -66,16 +97,16 @@ export interface UserArtifactIndexEntry {
   explores?: string[]
   lastInteractionId?: string
   environmentId?: string
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export type UserArtifactIndex = UserArtifactIndexEntry
 
 export interface SharedArtifactPayload extends UserArtifactIndexEntry {
   code?: string
-  content?: any
+  content?: unknown
   messages?: PersistedChatTurn[]
-  meta?: Record<string, any>
+  meta?: Record<string, unknown>
 }
 
 export interface SaveUserArtifactParams extends Partial<UserArtifactIndexEntry> {
@@ -84,8 +115,8 @@ export interface SaveUserArtifactParams extends Partial<UserArtifactIndexEntry> 
   id: string
   type: StudioToolMode
   title?: string
-  content?: any
-  objectPayload?: Record<string, any>
+  content?: Record<string, unknown>
+  objectPayload?: Record<string, unknown>
   namespace?: string
 }
 
@@ -119,7 +150,7 @@ export interface UserConversationContent {
   id?: string
   contentType?: string
   embedPath?: string
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export interface UserConversationEntry {
@@ -323,7 +354,7 @@ export function formatUserConversationsKey(userId: string): string {
 
 export const formatUserConversationsArtifactKey = formatUserConversationsKey
 
-function parseArtifactValue<T = any>(raw: any): T {
+function parseArtifactValue<T = unknown>(raw: unknown): T {
   if (typeof raw !== 'string') return raw as T
   try {
     return JSON.parse(raw) as T
@@ -332,15 +363,20 @@ function parseArtifactValue<T = any>(raw: any): T {
   }
 }
 
-function normalizeConversationsArray(raw: any): UserConversationEntry[] {
+function normalizeConversationsArray(raw: unknown): UserConversationEntry[] {
+  const rawObj =
+    raw && typeof raw === 'object' ? (raw as { conversations?: unknown[] }) : undefined
   const list = Array.isArray(raw)
     ? raw
-    : Array.isArray(raw?.conversations)
-    ? raw.conversations
+    : Array.isArray(rawObj?.conversations)
+    ? rawObj.conversations
     : []
   return list
-    .filter((c: any): c is UserConversationEntry => Boolean(c && c.id))
-    .map((c: any) => ({
+    .filter(
+      (c): c is Partial<UserConversationEntry> & { id: string; title?: string } =>
+        Boolean(c && typeof c === 'object' && 'id' in c && (c as { id?: unknown }).id)
+    )
+    .map((c) => ({
       ...c,
       id: String(c.id),
       type: c.type || 'app',
@@ -352,10 +388,13 @@ function normalizeConversationsArray(raw: any): UserConversationEntry[] {
     )
 }
 
-function parseUserIndexRow(row: any, fallbackUserId: string): UserArtifactIndexEntry | null {
+function parseUserIndexRow(
+  row: ArtifactRowLike | null | undefined,
+  fallbackUserId: string
+): UserArtifactIndexEntry | null {
   if (!row?.value) return null
   try {
-    const parsed = parseArtifactValue<Record<string, any>>(row.value)
+    const parsed = parseArtifactValue<Record<string, unknown>>(row.value)
     if (!parsed || typeof parsed !== 'object') return null
     const keyMatch = String(row.key || '').match(
       /^user_[^_]+_(app|data_app|lookml|tile|script|health|health_check|dashboard|conversational-analytics)_(.+)$/
@@ -390,7 +429,7 @@ function matchesArtifactType(entryType: StudioToolMode, filterType?: StudioToolM
 export class ArtifactService {
   private readonly versionByKey = new Map<string, number>()
   private readonly knownMissingKeys = new Set<string>()
-  private readonly valueByKey = new Map<string, any>()
+  private readonly valueByKey = new Map<string, unknown>()
   private readonly conversationsCache = new Map<string, UserConversationEntry[]>()
   private readonly userListCache = new Map<string, UserArtifactIndexEntry[]>()
   private readonly scriptsCache = new Map<string, SavedScript[]>()
@@ -412,8 +451,8 @@ export class ArtifactService {
     this.tileScriptCache.clear()
   }
 
-  private recordRows(rows: any, requestedKeys?: string[]): any[] {
-    const list = Array.isArray(rows) ? rows : rows ? [rows] : []
+  private recordRows(rows: unknown, requestedKeys?: string[]): ArtifactRowLike[] {
+    const list = (Array.isArray(rows) ? rows : rows ? [rows] : []) as ArtifactRowLike[]
     const seenKeys = new Set<string>()
     for (const r of list) {
       if (r?.key) {
@@ -442,14 +481,14 @@ export class ArtifactService {
     try {
       const joined = keys.join(',')
       const existing =
-        typeof (this.sdk as any).artifact === 'function'
+        typeof (this.sdk as Partial<Looker40SDK>).artifact === 'function'
           ? await this.sdk.ok(
               this.sdk.artifact({
                 namespace: this.namespace,
                 key: joined,
               })
             )
-          : await rawLookerRequest<any[]>(
+          : await rawLookerRequest<ArtifactRowLike[]>(
               this.sdk,
               'GET',
               `/artifacts/${encodeURIComponent(this.namespace)}`,
@@ -481,9 +520,13 @@ export class ArtifactService {
     }
   }
 
-  private syncInPlaceCachesOnWrite(key: string, parsedVal: any): void {
+  private syncInPlaceCachesOnWrite(key: string, parsedVal: unknown): void {
     this.valueByKey.set(key, parsedVal)
     writeSwrCache(['artifact:obj', this.namespace, key], parsedVal)
+    const parsedObj =
+      parsedVal && typeof parsedVal === 'object'
+        ? (parsedVal as Record<string, unknown>)
+        : undefined
 
     const convMatch = key.match(/^user_conversations:(.+)$/)
     if (convMatch) {
@@ -502,12 +545,12 @@ export class ArtifactService {
       const rawType = userKeyMatch[2] as StudioToolMode
       const id = userKeyMatch[3]
       const entry = parseUserIndexRow({ key, value: parsedVal }, uid) || {
-        ...(typeof parsedVal === 'object' && parsedVal ? parsedVal : {}),
-        id: String(parsedVal?.id || id),
-        type: (parsedVal?.type || parsedVal?.contentType || rawType) as StudioToolMode,
-        title: String(parsedVal?.title || parsedVal?.label || id),
-        updatedAt: String(parsedVal?.updatedAt || new Date().toISOString()),
-        createdBy: String(parsedVal?.createdBy || uid),
+        ...(parsedObj || {}),
+        id: String(parsedObj?.id || id),
+        type: (parsedObj?.type || parsedObj?.contentType || rawType) as StudioToolMode,
+        title: String(parsedObj?.title || parsedObj?.label || id),
+        updatedAt: String(parsedObj?.updatedAt || new Date().toISOString()),
+        createdBy: String(parsedObj?.createdBy || uid),
       }
       const prevAll =
         this.userListCache.get(uid) ??
@@ -534,10 +577,10 @@ export class ArtifactService {
         const scriptEntry: SavedScript = {
           id: entry.id,
           title: entry.title,
-          code: String(parsedVal?.code || ''),
+          code: String(parsedObj?.code || ''),
           updatedAt: entry.updatedAt,
-          ...(parsedVal?.dashboardId ? { dashboardId: String(parsedVal.dashboardId) } : {}),
-          ...(parsedVal?.elementId ? { elementId: String(parsedVal.elementId) } : {}),
+          ...(parsedObj?.dashboardId ? { dashboardId: String(parsedObj.dashboardId) } : {}),
+          ...(parsedObj?.elementId ? { elementId: String(parsedObj.elementId) } : {}),
         }
         this.updateScriptsCache(uid, (prev) => [
           scriptEntry,
@@ -548,14 +591,14 @@ export class ArtifactService {
     }
 
     const objScriptMatch = key.match(/^obj_script_(.+)$/)
-    if (objScriptMatch && parsedVal && typeof parsedVal === 'object') {
-      const id = String(parsedVal.id || objScriptMatch[1])
+    if (objScriptMatch && parsedObj) {
+      const id = String(parsedObj.id || objScriptMatch[1])
       const scriptEntry: SavedScript = {
-        ...parsedVal,
+        ...(parsedObj as Partial<SavedScript>),
         id,
-        title: String(parsedVal.title || id),
-        code: String(parsedVal.code || ''),
-        updatedAt: String(parsedVal.updatedAt || new Date().toISOString()),
+        title: String(parsedObj.title || id),
+        code: String(parsedObj.code || ''),
+        updatedAt: String(parsedObj.updatedAt || new Date().toISOString()),
       }
       this.updateScriptsCache(undefined, (prev) => [
         scriptEntry,
@@ -627,18 +670,18 @@ export class ArtifactService {
     }
   }
 
-  async getMany(keys: string[]): Promise<any[]> {
+  async getMany(keys: string[]): Promise<ArtifactRowLike[]> {
     const cleanKeys = keys.map((k) => String(k || '').trim()).filter(Boolean)
     if (cleanKeys.length === 0) return []
     const joined = cleanKeys.join(',')
     const rows =
-      typeof (this.sdk as any).artifact === 'function'
+      typeof (this.sdk as Partial<Looker40SDK>).artifact === 'function'
         ? await this.sdk.ok(this.sdk.artifact({ namespace: this.namespace, key: joined }))
         : await this.search(joined)
     return this.recordRows(rows, cleanKeys)
   }
 
-  async get<T = any>(key: string): Promise<T | null> {
+  async get<T = unknown>(key: string): Promise<T | null> {
     const cleanKey = String(key || '').trim()
     if (!cleanKey) return null
     try {
@@ -653,11 +696,11 @@ export class ArtifactService {
     }
   }
 
-  async search(pattern: string): Promise<any[]> {
+  async search(pattern: string): Promise<ArtifactRowLike[]> {
     const items =
-      typeof (this.sdk as any).search_artifacts === 'function'
+      typeof (this.sdk as Partial<Looker40SDK>).search_artifacts === 'function'
         ? await this.sdk.ok(this.sdk.search_artifacts({ namespace: this.namespace, key: pattern }))
-        : await rawLookerRequest<any[]>(
+        : await rawLookerRequest<ArtifactRowLike[]>(
             this.sdk,
             'GET',
             `/artifacts/${encodeURIComponent(this.namespace)}/search`,
@@ -666,7 +709,7 @@ export class ArtifactService {
     return this.recordRows(Array.isArray(items) ? items : [])
   }
 
-  async put(items: Array<{ key: string; value: any }>): Promise<void> {
+  async put(items: Array<{ key: string; value: unknown }>): Promise<void> {
     if (items.length === 0) return
     const uncachedKeys = items
       .map((i) => i.key)
@@ -686,9 +729,16 @@ export class ArtifactService {
         }
       })
 
-    const sendUpdates = async (updates: any[]) => {
-      if (typeof (this.sdk as any).update_artifacts === 'function') {
-        return await this.sdk.ok(this.sdk.update_artifacts(this.namespace, updates as any))
+    const sendUpdates = async (
+      updates: Array<{ key: string; value: string; content_type: string; version?: number }>
+    ) => {
+      if (typeof (this.sdk as Partial<Looker40SDK>).update_artifacts === 'function') {
+        return await this.sdk.ok(
+          this.sdk.update_artifacts(
+            this.namespace,
+            updates as Parameters<Looker40SDK['update_artifacts']>[1]
+          )
+        )
       }
       return await rawLookerRequest(
         this.sdk,
@@ -699,7 +749,7 @@ export class ArtifactService {
       )
     }
 
-    let result: any
+    let result: unknown
     try {
       result = await sendUpdates(buildUpdates())
     } catch {
@@ -712,8 +762,8 @@ export class ArtifactService {
       result = await sendUpdates(buildUpdates())
     }
 
-    const resList = Array.isArray(result) ? result : result ? [result] : []
-    const resByKey = new Map<string, any>()
+    const resList = (Array.isArray(result) ? result : result ? [result] : []) as ArtifactRowLike[]
+    const resByKey = new Map<string, ArtifactRowLike>()
     for (const r of resList) {
       if (r?.key) resByKey.set(String(r.key), r)
     }
@@ -743,7 +793,7 @@ export class ArtifactService {
     if (keyList.length === 0) return
     const joined = keyList.join(',')
     try {
-      if (typeof (this.sdk as any).delete_artifact === 'function') {
+      if (typeof (this.sdk as Partial<Looker40SDK>).delete_artifact === 'function') {
         await this.sdk.ok(this.sdk.delete_artifact(this.namespace, joined))
       } else {
         await rawLookerRequest(
@@ -824,7 +874,7 @@ export class ArtifactService {
         : {}),
       id: cleanId,
       type: entry.type || prev?.type || 'app',
-      label: String(entry.label || prev?.label || (entry as any).title || cleanId),
+      label: String(entry.label || prev?.label || (entry as { title?: string }).title || cleanId),
       createdAt: prev?.createdAt || entry.createdAt || now,
       updatedAt: entry.updatedAt || now,
     }
@@ -884,22 +934,30 @@ export class ArtifactService {
     if (keysToDelete.length > 0) {
       try {
         await this.delete(keysToDelete)
-      } catch {}
+      } catch {
+        // Ignore deletion errors for missing index keys
+      }
     }
 
     if (deleteRelatedContent) {
+      const sdkRecord = this.sdk as unknown as Record<
+        string,
+        ((id: string) => ReturnType<Looker40SDK['delete_dashboard']>) | undefined
+      >
       for (const [fnName, pathPrefix, targetId] of [
         ['delete_dashboard', '/dashboards', related.dashboardId],
         ['delete_look', '/looks', related.lookId],
       ] as const) {
         if (!targetId) continue
         try {
-          if (typeof (this.sdk as any)[fnName] === 'function') {
-            await this.sdk.ok((this.sdk as any)[fnName](String(targetId)))
+          if (typeof sdkRecord[fnName] === 'function') {
+            await this.sdk.ok(sdkRecord[fnName]!(String(targetId)))
           } else {
             await rawLookerRequest(this.sdk, 'DELETE', `${pathPrefix}/${encodeURIComponent(String(targetId))}`)
           }
-        } catch {}
+        } catch {
+          // Ignore errors when related Looker content was already removed
+        }
       }
     }
 
@@ -951,7 +1009,7 @@ export class ArtifactService {
   async saveUserArtifact(
     userIdOrParams: string | SaveUserArtifactParams,
     indexEntry?: UserArtifactIndexEntry,
-    objectPayload?: Record<string, any>
+    objectPayload?: Record<string, unknown>
   ): Promise<SharedArtifactPayload> {
     if (typeof userIdOrParams === 'object' && userIdOrParams !== null) {
       const {
@@ -1051,9 +1109,13 @@ export class ArtifactService {
             if (parsed?.id && !byId.has(parsed.id)) {
               byId.set(parsed.id, parsed)
             }
-          } catch {}
+          } catch {
+            // Ignore malformed script row
+          }
         }
-      } catch {}
+      } catch {
+        // Ignore search error for pattern
+      }
       if (byId.size > 0 && userId) break
     }
     const sorted = Array.from(byId.values()).sort((a, b) =>
@@ -1128,7 +1190,7 @@ export function getArtifactService(
   namespace = ARTIFACT_NAMESPACE
 ): ArtifactService {
   const ns = String(namespace || ARTIFACT_NAMESPACE).trim() || ARTIFACT_NAMESPACE
-  const rawCandidate = (sdk as any)?.__rawSdk || sdk
+  const rawCandidate = (sdk as Looker40SDK & { __rawSdk?: object })?.__rawSdk || sdk
   const rawKey =
     rawCandidate && (typeof rawCandidate === 'object' || typeof rawCandidate === 'function')
       ? (rawCandidate as object)
@@ -1154,7 +1216,7 @@ export async function searchArtifactsRaw(
   sdk: Looker40SDK,
   namespace: string,
   key: string
-): Promise<any[]> {
+): Promise<ArtifactRowLike[]> {
   return getArtifactService(sdk, namespace).search(key)
 }
 
@@ -1162,7 +1224,7 @@ export async function searchArtifacts(
   sdk: Looker40SDK,
   key: string,
   namespace = ARTIFACT_NAMESPACE
-): Promise<any[]> {
+): Promise<ArtifactRowLike[]> {
   return getArtifactService(sdk, namespace).search(key)
 }
 
@@ -1170,7 +1232,7 @@ export async function getArtifacts(
   sdk: Looker40SDK,
   keys: string | string[],
   namespace = ARTIFACT_NAMESPACE
-): Promise<any[]> {
+): Promise<ArtifactRowLike[]> {
   const list = Array.isArray(keys) ? keys : String(keys || '').split(',')
   return getArtifactService(sdk, namespace).getMany(list)
 }
@@ -1179,7 +1241,7 @@ export async function getArtifacts(
 // delegate to ArtifactService so cached `versionByKey` skips redundant `artifact` GET calls.
 export async function putArtifacts(
   sdk: Looker40SDK,
-  items: Array<{ key: string; value: any }>,
+  items: Array<{ key: string; value: unknown }>,
   namespace = ARTIFACT_NAMESPACE
 ): Promise<void> {
   return getArtifactService(sdk, namespace).put(items)
@@ -1193,7 +1255,7 @@ export async function deleteArtifacts(
   return getArtifactService(sdk, namespace).delete(keys)
 }
 
-export async function getArtifactJson<T = any>(
+export async function getArtifactJson<T = unknown>(
   sdk: Looker40SDK,
   key: string,
   namespace = ARTIFACT_NAMESPACE
@@ -1228,6 +1290,8 @@ export async function clearUserEnvironmentId(
 
 export type NativeContentType = 'dashboard' | 'lookml_dashboard' | 'look' | 'board'
 
+export type NativeContentElementLike = Partial<IDashboardElement> & Record<string, unknown>
+
 export interface NativeContentBundle {
   id: string
   content_type?: NativeContentType
@@ -1253,7 +1317,7 @@ export interface NativeContentBundle {
   query_cache?: Record<string, string>
   filter_cache?: Record<string, string>
   summary?: string
-  elements?: any[]
+  elements?: NativeContentElementLike[]
   explores?: string[]
 }
 
@@ -1279,7 +1343,7 @@ export interface NativeContentState {
   queryCache?: Record<string, string>
   filterCache?: Record<string, string>
   summary?: string
-  elements?: any[]
+  elements?: NativeContentElementLike[]
   studio?: DashboardStudioMetadata
 }
 
@@ -1298,8 +1362,11 @@ export function resolveNativeEmbedPath(
   return `/embed/dashboards/${cleanId}`
 }
 
+export type RawNativeContentInput = Partial<NativeContentBundle & NativeContentState> &
+  Record<string, unknown>
+
 export function normalizeNativeContent(
-  raw: any,
+  raw: RawNativeContentInput | null | undefined,
   fallbackFolderId = '1',
   explicitType?: NativeContentType
 ): NativeContentState {
@@ -1342,7 +1409,7 @@ export function normalizeNativeContent(
 // ponytail: batch both user_${userId}_dashboard_${id} and obj_dashboard_${id} into one putArtifacts call
 export async function saveNativeContentArtifact(
   sdk: Looker40SDK,
-  extensionSDK: any,
+  extensionSDK: ArtifactExtensionHostLike,
   userId: string,
   bundle: NativeContentBundle,
   folderId: string,
@@ -1399,13 +1466,13 @@ export async function saveNativeContentArtifact(
 
 export async function loadNativeContentById(
   sdk: Looker40SDK,
-  extensionSDK: any,
+  extensionSDK: ArtifactExtensionHostLike,
   rawId: string
 ): Promise<NativeContentState> {
   const prefixMatch = rawId.trim().match(/^(dashboard|lookml_dashboard|look|board):(.+)$/i)
   const explicitType = prefixMatch ? (prefixMatch[1].toLowerCase() as NativeContentType) : undefined
   const cleanId = (prefixMatch ? prefixMatch[2] : rawId).trim()
-  const stored = await getArtifactJson<any>(
+  const stored = await getArtifactJson<RawNativeContentInput>(
     sdk,
     `obj_dashboard_${cleanId}`,
     getArtifactNamespace(extensionSDK)
@@ -1414,13 +1481,21 @@ export async function loadNativeContentById(
     return normalizeNativeContent(stored, '1', explicitType)
   }
 
+  type RawContentItem = Partial<IDashboard> & {
+    id?: string | number
+    title?: string | null
+    folder?: { id?: string | null } | null
+    folder_id?: string | null
+    lookml_link_id?: string | null
+  }
+
   const cType: NativeContentType =
     explicitType || (cleanId.includes('::') ? 'lookml_dashboard' : 'dashboard')
-  const item =
+  const item: RawContentItem =
     cType === 'look'
-      ? await rawLookerRequest<any>(sdk, 'GET', `/looks/${encodeURIComponent(cleanId)}`)
+      ? await rawLookerRequest<RawContentItem>(sdk, 'GET', `/looks/${encodeURIComponent(cleanId)}`)
       : cType === 'board'
-      ? await rawLookerRequest<any>(sdk, 'GET', `/boards/${encodeURIComponent(cleanId)}`)
+      ? await rawLookerRequest<RawContentItem>(sdk, 'GET', `/boards/${encodeURIComponent(cleanId)}`)
       : await sdk.ok(sdk.dashboard(cleanId))
   const id = String(item.id || cleanId)
   const finalType: NativeContentType =
@@ -1447,7 +1522,7 @@ export async function loadNativeContentById(
 
 export async function listUserDashboardArtifacts(
   sdk: Looker40SDK,
-  extensionSDK: any,
+  extensionSDK: ArtifactExtensionHostLike,
   userId: string
 ): Promise<Array<{ id: string; title: string; contentType: NativeContentType; embedPath: string }>> {
   try {
@@ -1590,7 +1665,7 @@ export async function publishScriptDashboard(
           folder_id: folderId,
           load_configuration: 'wait',
           show_filters_bar: true,
-        } as any)
+        } as Parameters<Looker40SDK['create_dashboard']>[0])
       )
       dashId = String(dash.id)
     }
@@ -1621,7 +1696,7 @@ export async function publishScriptDashboard(
         title,
         title_hidden: true,
         extension_id: extId,
-      } as any)
+      } as Parameters<Looker40SDK['update_dashboard_element']>[1])
     )
   }
 
@@ -1659,7 +1734,7 @@ export async function saveUserArtifact(
   sdkOrParams: Looker40SDK | SaveUserArtifactParams,
   userId?: string,
   indexEntry?: UserArtifactIndexEntry,
-  objectPayload?: Record<string, any>,
+  objectPayload?: Record<string, unknown>,
   namespace = ARTIFACT_NAMESPACE
 ): Promise<SharedArtifactPayload> {
   if (

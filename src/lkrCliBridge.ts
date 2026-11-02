@@ -1,4 +1,6 @@
+import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
+
 import { rawLookerRequest } from './lookerApi'
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -12,12 +14,12 @@ export interface LkrExtensionToolRequest {
   kind: 'codemode' | 'sdk_request'
   cache_key?: string
   code?: string
-  vars?: Record<string, any>
+  vars?: Record<string, unknown>
   dev_mode?: boolean
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE' | string
   path?: string
-  query_params?: Record<string, any> | null
-  body?: any
+  query_params?: Record<string, unknown> | null
+  body?: unknown
   thought?: string
 }
 
@@ -628,13 +630,14 @@ function sha256Hex(input: string): string {
   return [h0, h1, h2, h3, h4, h5, h6, h7].map((v) => (v >>> 0).toString(16).padStart(8, '0')).join('')
 }
 
-function canonicalJson(val: any): string {
+function canonicalJson(val: unknown): string {
   if (val === null || val === undefined) return 'null'
   if (typeof val === 'boolean' || typeof val === 'number' || typeof val === 'string') return JSON.stringify(val)
   if (Array.isArray(val)) return `[${val.map(canonicalJson).join(',')}]`
   if (typeof val === 'object') {
-    const keys = Object.keys(val).filter((k) => val[k] !== undefined).sort()
-    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(val[k])}`).join(',')}}`
+    const rec = val as Record<string, unknown>
+    const keys = Object.keys(rec).filter((k) => rec[k] !== undefined).sort()
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(rec[k])}`).join(',')}}`
   }
   return JSON.stringify(String(val))
 }
@@ -647,7 +650,7 @@ function normalizeLookerBridgePath(rawPath?: string): string {
   return p.startsWith('/') ? p : `/${p}`
 }
 
-function cleanQueryParams(qp?: Record<string, any> | null): Record<string, any> | null {
+function cleanQueryParams(qp?: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!qp || typeof qp !== 'object') return null
   const entries = Object.entries(qp).filter(([, v]) => v !== undefined && v !== null)
   return entries.length > 0 ? Object.fromEntries(entries) : null
@@ -678,14 +681,29 @@ export function computeLkrExtensionCacheKey(req: LkrExtensionToolRequest): strin
   )
 }
 
-export function extractLkrExtensionToolRequests(interactionOrText: any): LkrExtensionToolRequest[] {
+export interface LkrCliBridgeInteractionLike {
+  output_text?: string
+  outputs?: Array<{ text?: string }>
+  steps?: Array<{
+    output?: string
+    stdout?: string
+    stderr?: string
+    result?: string
+    text?: string
+    code_execution_result?: { output?: string; stderr?: string }
+  }>
+}
+
+export function extractLkrExtensionToolRequests(
+  interactionOrText: string | LkrCliBridgeInteractionLike | null | undefined
+): LkrExtensionToolRequest[] {
   const texts: string[] =
     typeof interactionOrText === 'string'
       ? [interactionOrText]
       : [
           interactionOrText?.output_text,
-          ...(interactionOrText?.outputs || []).map((o: any) => o?.text),
-          ...(interactionOrText?.steps || []).flatMap((s: any) => [
+          ...(interactionOrText?.outputs || []).map((o) => o?.text),
+          ...(interactionOrText?.steps || []).flatMap((s) => [
             s?.output,
             s?.stdout,
             s?.stderr,
@@ -743,25 +761,32 @@ export function extractLkrExtensionToolRequests(interactionOrText: any): LkrExte
 export async function executeLkrExtensionToolRequest(params: {
   sdk: Looker40SDK
   req: LkrExtensionToolRequest
-  defaultVars?: Record<string, any>
-  extensionSDK?: any
+  defaultVars?: Record<string, unknown>
+  extensionSDK?: Partial<ExtensionSDK>
   requirePermission?: boolean
   approvedOperations?: Set<string>
-  onPermissionRequest?: (req: any) => Promise<any>
-}): Promise<{ cacheKey: string; result: any }> {
+  onPermissionRequest?: (req: Record<string, unknown>) => Promise<string>
+}): Promise<{ cacheKey: string; result: unknown }> {
   const { sdk, req, defaultVars, extensionSDK, requirePermission, approvedOperations, onPermissionRequest } = params
   const cacheKey = req.cache_key || computeLkrExtensionCacheKey(req)
   const cleanPath = req.kind === 'sdk_request' ? normalizeLookerBridgePath(req.path) : ''
 
   if (req.dev_mode && cleanPath !== '/session') {
     try {
-      if (typeof (sdk as any)?.update_session === 'function') {
-        const p = (sdk as any).update_session({ workspace_id: 'dev' })
-        await (typeof (sdk as any).ok === 'function' ? sdk.ok(p) : p)
-      } else if (req.kind === 'sdk_request' && (sdk as any)?.authSession?.transport?.rawRequest) {
+      const sdkExt = sdk as unknown as {
+        update_session?: (body: { workspace_id: string }) => Promise<unknown>
+        ok?: (p: Promise<unknown>) => Promise<unknown>
+        authSession?: { transport?: { rawRequest?: unknown } }
+      }
+      if (typeof sdkExt?.update_session === 'function') {
+        const p = sdkExt.update_session({ workspace_id: 'dev' })
+        await (typeof sdkExt.ok === 'function' ? sdkExt.ok(p) : p)
+      } else if (req.kind === 'sdk_request' && sdkExt?.authSession?.transport?.rawRequest) {
         await rawLookerRequest(sdk, 'PATCH', '/session', undefined, { workspace_id: 'dev' })
       }
-    } catch {}
+    } catch {
+      // ignore dev session switch failure
+    }
   }
 
   if (req.kind === 'sdk_request') {
@@ -787,7 +812,7 @@ export async function executeLkrExtensionToolRequest(params: {
     requirePermission,
     approvedOperations,
     onPermissionRequest: onPermissionRequest
-      ? (permReq: any) =>
+      ? (permReq: Record<string, unknown>) =>
           onPermissionRequest({
             ...permReq,
             ...(permReq?.thought || effectiveThought
@@ -796,7 +821,7 @@ export async function executeLkrExtensionToolRequest(params: {
           })
       : undefined,
   })
-  let result: any = rawOut
+  let result: unknown = rawOut
   if (typeof rawOut === 'string') {
     const trimmed = rawOut.trim()
     if (trimmed.startsWith('{') || trimmed.startsWith('[')) {

@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+
 import { useLocation } from 'react-router-dom'
-import { getGeminiUserAttributeName, LkrCodeMode } from '../antigravity'
+
+import { getGeminiUserAttributeName } from '../antigravity'
 import { useLookerExtension } from '../contexts/LookerExtensionContext'
 import { formatExploreId, LookerFolderNode } from '../lookerApi'
 import {
@@ -9,6 +11,14 @@ import {
   StudioThemeMode,
 } from '../useStudioController'
 import { STUDIO_MODES } from './App'
+import {
+  StudioBadge,
+  StudioModal,
+  StudioSelect,
+  StudioSkeleton,
+  ThemeModeIcon,
+} from './StudioDesignSystem'
+export * from './StudioDesignSystem'
 
 export const FullScreenToggleButton: React.FC = () => {
   const { extensionSDK, lookerHostData } = useLookerExtension()
@@ -33,15 +43,6 @@ export const FullScreenToggleButton: React.FC = () => {
     </button>
   )
 }
-
-import {
-  StudioBadge,
-  StudioModal,
-  StudioSelect,
-  StudioSkeleton,
-  ThemeModeIcon,
-} from './StudioDesignSystem'
-export * from './StudioDesignSystem'
 
 export const ThemeModeSelect: React.FC<{
   themeMode: StudioThemeMode
@@ -386,7 +387,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   } = ctl
 
   const mockExt =
-    typeof window !== 'undefined' ? (window as any).__MOCK_LOOKER_EXTENSION__ : undefined
+    typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
   const [exploreSearch, setExploreSearch] = useState('')
   const [comboOpen, setComboOpen] = useState(() => Boolean(mockExt?.initialComboOpen))
   const comboRef = useRef<HTMLDivElement | null>(null)
@@ -552,7 +553,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
         ) => {
           if (model?.explores?.length) {
             const modelTerm = `${model.label} ${model.name}`.toLowerCase()
-            const matchingExplores = model.explores.filter((explore: any) => {
+            const matchingExplores = model.explores.filter((explore) => {
               if (explore.hidden) return false
               if (!q) return true
               const exploreTerm = `${explore.label || ''} ${explore.name}`.toLowerCase()
@@ -563,7 +564,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                 label: model.label || model.name,
                 modelName: model.name,
                 options: matchingExplores
-                  .map((explore: any) => ({
+                  .map((explore) => ({
                     label: String(explore.label || explore.name),
                     value: formatExploreId(model.name, String(explore.name)),
                   }))
@@ -952,7 +953,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                     <StudioSelect
                       testId="folder-search-select-personal"
                       value={advPersonal}
-                      onChange={(val) => setAdvPersonal(val as any)}
+                      onChange={(val) => setAdvPersonal(val)}
                       options={[
                         { value: 'any', label: 'Any Folder' },
                         { value: 'false', label: 'Shared Folders Only (is_personal=false)' },
@@ -1092,7 +1093,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
               <StudioSelect
                 testId="topbar-health-scope-select"
                 value={healthScope}
-                onChange={(val) => setHealthScope(val as any)}
+                onChange={(val) => setHealthScope(val)}
                 title="Select Looker Health Check, BigQuery Health Check, or Combined 3-Pillar Audit"
                 options={[
                   {

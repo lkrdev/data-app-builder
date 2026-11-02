@@ -1,4 +1,5 @@
 {
+  "ignorePatterns": ["src/vendor/**", "dist/**", "upstream/**"],
   "extends": [
     "eslint:recommended",
     "plugin:react/recommended",
@@ -8,6 +9,15 @@
   ],
   "plugins": ["import"],
   "rules": {
+    "@typescript-eslint/no-explicit-any": "error",
+    "@typescript-eslint/no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_"
+      }
+    ],
+    "react/prop-types": "off",
     "import/order": [
       "error",
       {
@@ -28,6 +38,14 @@
       }
     ]
   },
+  "overrides": [
+    {
+      "files": ["src/__tests__/**/*.js"],
+      "rules": {
+        "@typescript-eslint/no-var-requires": "off"
+      }
+    }
+  ],
   "parser": "@typescript-eslint/parser",
   "parserOptions": {
     "ecmaVersion": 2021,
@@ -39,6 +57,7 @@
   "env": {
     "browser": true,
     "es2021": true,
+    "jest": true,
     "node": true
   },
   "settings": {

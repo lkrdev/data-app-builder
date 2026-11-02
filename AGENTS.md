@@ -63,6 +63,12 @@ When a prompt starts with or contains `[CA_AGENT_SELECTION_REQUEST]`, you are ru
 3. Reply with **only**:
    `<CA_AGENT_SELECTION>{"agent_id":"<best_agent_id>","rationale":"<concise 1-sentence reason>"}</CA_AGENT_SELECTION>`
 
+## Library-First TypeScript Typing & Zero-`any` Rule
+
+All TypeScript and React code in `src/` enforces `"@typescript-eslint/no-explicit-any": "error"` with `--max-warnings=0` via `npm run lint:check` and `.githooks/pre-commit`:
+1. **Import Canonical Types from Installed SDKs First**: Before defining custom interfaces, import existing types from `@looker/sdk` (`Looker40SDK`, `IDashboard`, `IDashboardElement`, `IDashboardFilter`, `IDashboardLayout`, `IDashboardLayoutComponent`, `ILookmlModel`, `ILookmlModelExplore`, `ILookmlModelExploreField`, `IFolder`, `IArtifact`, `IUser`, `IRole`, `IPermission`, `IScheduledPlan`, `IQuery`, `ILookWithQuery`, `IBoard`), `@looker/extension-sdk` (`ExtensionSDK`, `LookerHostData`, `TileHostData`, `FetchCustomParameters`, `FetchProxyDataResponse`), `@looker/extension-sdk-react` (`ExtensionContextData`), `@looker/embed-sdk` (`LookerEmbedSDK`, `getEmbedSDK`, `ILookerConnection`), `swr`, `react`, and `react-router-dom`.
+2. **Compose Partial/Narrowed Shapes Without `any`**: When REST payloads or test mocks omit or extend SDK fields, compose with `Partial<IDashboard>`, `Pick<...>`, generics (`StudioSelect<T extends string = string>`), or `unknown` / `Record<string, unknown>` narrowing instead of `any`.
+
 <mandatory_rules>
 ### Strict Workspace Boundaries & Configuration Isolation
 
