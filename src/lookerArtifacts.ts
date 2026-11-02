@@ -143,6 +143,128 @@ export interface TileScriptBinding {
   updatedAt?: string
 }
 
+export type StudioContentItemType =
+  | 'dashboard'
+  | 'lookml_dashboard'
+  | 'look'
+  | 'explore'
+  | 'board'
+  | 'data_app'
+  | 'data-investigator'
+  | 'conversational-analytics'
+  | 'extension'
+  | 'report'
+
+export interface StudioContentItem {
+  key: string // `${contentType}:${id}`
+  id: string
+  contentType: StudioContentItemType
+  title: string // Meaningful human-readable name (e.g. "Executive Revenue Overview", "eCommerce: Order Items")
+  embedPath: string
+  folderId?: string
+  dashboardId?: string
+  lookId?: string
+  lookmlDashboardId?: string
+  exploreId?: string
+  extensionId?: string
+  rawCode?: string
+  updatedAt?: string
+}
+
+export function formatStudioContentItemTitle(
+  contentType: StudioContentItemType,
+  id: string,
+  rawTitle?: string
+): string {
+  const cleanId = String(id || '').trim()
+  const cleanTitle = String(rawTitle || '').trim()
+  if (cleanTitle && cleanTitle !== cleanId && !/^\d+$/.test(cleanTitle)) return cleanTitle
+  if (contentType === 'explore' && cleanId.includes('::')) {
+    const humanize = (s: string) =>
+      s
+        .split(/[_-]+/)
+        .filter(Boolean)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ')
+    const [model, explore] = cleanId.split('::')
+    return `${humanize(model)}: ${humanize(explore)}`
+  }
+  const labels: Partial<Record<StudioContentItemType, string>> = {
+    look: `Look #${cleanId}`,
+    lookml_dashboard: `LookML Dashboard (${cleanId})`,
+    explore: `Explore (${cleanId})`,
+    board: `Board #${cleanId}`,
+    data_app: `Data App #${cleanId}`,
+    'data-investigator': `Data Investigator #${cleanId}`,
+    'conversational-analytics': `CA Chat (${cleanId})`,
+    extension: `Extension (${cleanId})`,
+    report: `Report (${cleanId})`,
+  }
+  return labels[contentType] || `Dashboard #${cleanId}`
+}
+
+export function resolveStudioContentEmbedPath(
+  contentType: StudioContentItemType,
+  id: string,
+  explicitPath?: string
+): string {
+  const cleanExplicit = String(explicitPath || '').trim()
+  if (cleanExplicit) return cleanExplicit
+  const cleanId = String(id || '').trim()
+  const enc = encodeURIComponent(cleanId)
+  const paths: Partial<Record<StudioContentItemType, string>> = {
+    look: `/embed/looks/${enc}`,
+    explore: `/embed/explore/${cleanId.replace('::', '/')}`,
+    board: `/embed/boards/${enc}`,
+    'conversational-analytics': `/embed/conversations/${enc}`,
+    extension: `/embed/extensions/${cleanId}`,
+    report: `/embed/reporting/${cleanId}`,
+  }
+  return paths[contentType] || `/embed/dashboards/${enc}`
+}
+
+export function normalizeStudioContentItem(
+  raw: Partial<StudioContentItem> & { id: string; contentType: StudioContentItemType }
+): StudioContentItem {
+  const id = String(raw.id || '').trim()
+  const contentType = raw.contentType
+  const key = String(raw.key || `${contentType}:${id}`).trim()
+  const title = formatStudioContentItemTitle(contentType, id, raw.title)
+  const embedPath = resolveStudioContentEmbedPath(contentType, id, raw.embedPath)
+  return {
+    ...raw,
+    key,
+    id,
+    contentType,
+    title,
+    embedPath,
+  }
+}
+
+export function upsertStudioContentItem(
+  items: StudioContentItem[],
+  nextRaw: Partial<StudioContentItem> & { id: string; contentType: StudioContentItemType }
+): { items: StudioContentItem[]; activeKey: string; item: StudioContentItem } {
+  const normalized = normalizeStudioContentItem(nextRaw)
+  const existingIdx = items.findIndex((it) => it.key === normalized.key)
+  if (existingIdx >= 0) {
+    const prev = items[existingIdx]
+    const merged = normalizeStudioContentItem({
+      ...prev,
+      ...nextRaw,
+      title:
+        nextRaw.title && nextRaw.title !== normalized.id && !/^\d+$/.test(nextRaw.title)
+          ? nextRaw.title
+          : prev.title || normalized.title,
+      embedPath: nextRaw.embedPath || prev.embedPath || normalized.embedPath,
+    })
+    const nextItems = [...items]
+    nextItems[existingIdx] = merged
+    return { items: nextItems, activeKey: merged.key, item: merged }
+  }
+  return { items: [...items, normalized], activeKey: normalized.key, item: normalized }
+}
+
 export interface UserConversationContent {
   dashboardId?: string
   lookId?: string
@@ -169,10 +291,104 @@ export interface UserConversationEntry {
   interactionId?: string
   environmentId?: string
   content?: UserConversationContent
+  contentItems?: StudioContentItem[]
+  activeContentTabKey?: string
   messages?: PersistedChatTurn[]
   explores?: string[]
   createdAt?: string
   updatedAt: string
+}
+
+export function hydrateConversationContentItems(
+  conv: Partial<UserConversationEntry>
+): StudioContentItem[] {
+  if (Array.isArray(conv.contentItems) && conv.contentItems.length > 0) {
+    return conv.contentItems
+      .filter((it): it is StudioContentItem => Boolean(it && it.id && it.contentType))
+      .map((it) => normalizeStudioContentItem(it))
+  }
+  const c = conv.content || {}
+  const rawType = String(conv.type || conv.use_case || 'app').trim()
+  if (
+    rawType === 'tile' ||
+    rawType === 'script' ||
+    rawType === 'health' ||
+    rawType === 'health_check' ||
+    rawType === 'health-check' ||
+    rawType === 'lookml'
+  ) {
+    return []
+  }
+  const fallbackTitle =
+    typeof c.title === 'string' && c.title.trim()
+      ? c.title.trim()
+      : conv.label && conv.label !== conv.id
+      ? conv.label
+      : undefined
+  const items: StudioContentItem[] = []
+  const pushItem = (
+    item: Partial<StudioContentItem> & { id: string; contentType: StudioContentItemType }
+  ) => {
+    if (!item.id) return
+    const res = upsertStudioContentItem(items, item)
+    items.splice(0, items.length, ...res.items)
+  }
+
+  if (rawType === 'conversational-analytics' || rawType === 'ca' || c.caConversationId) {
+    const caId = String(c.caConversationId || c.id || conv.objectId || '').trim()
+    if (caId) {
+      pushItem({
+        id: caId,
+        contentType: 'conversational-analytics',
+        title: fallbackTitle,
+        embedPath: c.embedPath,
+        updatedAt: conv.updatedAt,
+      })
+    }
+    return items
+  }
+
+  const baseMeta = { title: fallbackTitle, embedPath: c.embedPath, updatedAt: conv.updatedAt }
+  if (c.contentType === 'lookml_dashboard' || c.lookmlDashboardId) {
+    const id = String(c.lookmlDashboardId || c.dashboardId || c.id || conv.objectId || '').trim()
+    pushItem({ ...baseMeta, id, contentType: 'lookml_dashboard', lookmlDashboardId: id })
+  } else if (c.contentType === 'board') {
+    const id = String(c.id || c.dashboardId || conv.objectId || '').trim()
+    pushItem({ ...baseMeta, id, contentType: 'board' })
+  } else if (c.contentType === 'explore') {
+    const id = String(c.id || conv.objectId || '').trim()
+    pushItem({ ...baseMeta, id, contentType: 'explore', exploreId: id })
+  } else if (c.dashboardId || (c.contentType !== 'look' && (c.id || conv.objectId))) {
+    const id = String(c.dashboardId || c.id || conv.objectId || '').trim()
+    const contentType: StudioContentItemType =
+      rawType === 'data-investigator' || rawType === 'data_investigator'
+        ? 'data-investigator'
+        : rawType === 'dashboard' || c.contentType === 'dashboard'
+        ? 'dashboard'
+        : 'data_app'
+    pushItem({
+      ...baseMeta,
+      id,
+      contentType,
+      dashboardId: id,
+      extensionId: typeof c.extensionId === 'string' ? c.extensionId : undefined,
+    })
+  }
+
+  if (c.lookId || c.contentType === 'look') {
+    const lookId = String(c.lookId || c.id || conv.objectId || '').trim()
+    pushItem({
+      id: lookId,
+      contentType: 'look',
+      lookId,
+      title: c.dashboardId ? `Look #${lookId}` : fallbackTitle,
+      embedPath:
+        c.contentType === 'look' ? c.embedPath : `/embed/looks/${encodeURIComponent(lookId)}`,
+      updatedAt: conv.updatedAt,
+    })
+  }
+
+  return items
 }
 
 export type UserConversationSummary = UserConversationEntry
@@ -185,6 +401,8 @@ export interface ConversationRelatedContentInfo {
   sharedObjectKeys: string[]
   dashboardId?: string
   lookId?: string
+  dashboardIds?: string[]
+  lookIds?: string[]
   summary: string
   items: string[]
 }
@@ -210,6 +428,81 @@ export function resolveConversationRelatedContent(
   const uniq = (...vals: Array<string | undefined | false>) =>
     Array.from(new Set(vals.filter((v): v is string => Boolean(v))))
 
+  const enrichWithContentItems = (
+    base: ConversationRelatedContentInfo
+  ): ConversationRelatedContentInfo => {
+    if (!Array.isArray(conv.contentItems) || conv.contentItems.length === 0) {
+      return base
+    }
+    const extraUserKeys: string[] = [...base.userIndexKeys]
+    const extraSharedKeys: string[] = [...base.sharedObjectKeys]
+    const extraDashIds: string[] = base.dashboardId ? [base.dashboardId] : []
+    const extraLookIds: string[] = base.lookId ? [base.lookId] : []
+    const extraItems: string[] = [...base.items]
+
+    for (const rawItem of conv.contentItems) {
+      if (!rawItem || !rawItem.id) continue
+      const item = normalizeStudioContentItem(rawItem)
+      const itemId = item.id
+      if (item.contentType === 'dashboard') {
+        const dId = String(item.dashboardId || itemId).trim()
+        if (dId) {
+          extraDashIds.push(dId)
+          extraUserKeys.push(`user_${uid}_dashboard_${dId}`)
+          extraSharedKeys.push(`obj_dashboard_${dId}`)
+          extraItems.push(`Native Looker Dashboard #${dId} (sdk.delete_dashboard)`)
+          extraItems.push(`Content Studio artifact (obj_dashboard_${dId})`)
+        }
+      } else if (item.contentType === 'look') {
+        const lId = String(item.lookId || itemId).trim()
+        if (lId) {
+          extraLookIds.push(lId)
+          extraUserKeys.push(`user_${uid}_dashboard_${lId}`)
+          extraSharedKeys.push(`obj_dashboard_${lId}`)
+          extraItems.push(`Saved Look #${lId} (sdk.delete_look)`)
+        }
+      } else if (item.contentType === 'data_app' || item.contentType === 'data-investigator') {
+        const dId = String(item.dashboardId || itemId).trim()
+        if (dId) {
+          extraDashIds.push(dId)
+          extraUserKeys.push(`user_${uid}_app_${dId}`, `user_${uid}_data_app_${dId}`)
+          if (item.contentType === 'data-investigator') {
+            extraUserKeys.push(`user_${uid}_data-investigator_${dId}`)
+          }
+          extraSharedKeys.push(`obj_app_${dId}`)
+          extraItems.push(`Looker Dashboard #${dId} (sdk.delete_dashboard)`)
+          extraItems.push(`Shared app artifact (obj_app_${dId})`)
+        }
+      } else if (item.contentType === 'conversational-analytics') {
+        extraUserKeys.push(
+          `user_${uid}_conversational-analytics_${itemId}`,
+          `user_${uid}_ca_${itemId}`
+        )
+        extraSharedKeys.push(`obj_ca_${itemId}`, `obj_conversational-analytics_${itemId}`)
+        extraItems.push(`CA conversation artifact (obj_ca_${itemId})`)
+      } else if (item.contentType === 'lookml_dashboard' || item.contentType === 'board') {
+        extraUserKeys.push(`user_${uid}_dashboard_${itemId}`)
+        extraSharedKeys.push(`obj_dashboard_${itemId}`)
+        extraItems.push(`Content Studio artifact (obj_dashboard_${itemId})`)
+      }
+    }
+
+    const dashboardIds = uniq(...extraDashIds)
+    const lookIds = uniq(...extraLookIds)
+    const items = uniq(...extraItems)
+    return {
+      ...base,
+      userIndexKeys: uniq(...extraUserKeys),
+      sharedObjectKeys: uniq(...extraSharedKeys),
+      dashboardId: base.dashboardId || dashboardIds[0],
+      lookId: base.lookId || lookIds[0],
+      dashboardIds,
+      lookIds,
+      items,
+      summary: items.join(' + ') || base.summary,
+    }
+  }
+
   if (rawType === 'dashboard') {
     const contentType =
       c.contentType || (c.lookId ? 'look' : c.lookmlDashboardId ? 'lookml_dashboard' : 'dashboard')
@@ -231,7 +524,7 @@ export function resolveConversationRelatedContent(
       lookId && `Saved Look #${lookId} (sdk.delete_look)`,
       objectId && `Content Studio artifact (obj_dashboard_${objectId})`
     )
-    return {
+    return enrichWithContentItems({
       mode: 'dashboard',
       objectId,
       userIndexKeys: uniq(
@@ -243,7 +536,7 @@ export function resolveConversationRelatedContent(
       lookId,
       summary: items.join(' + ') || 'Content Studio artifact',
       items,
-    }
+    })
   }
 
   if (rawType === 'tile' || rawType === 'script') {
@@ -254,7 +547,7 @@ export function resolveConversationRelatedContent(
       objectId && `Script schedule (obj_schedule_${objectId})`,
       dashboardId && `Published wrapper Dashboard #${dashboardId} (sdk.delete_dashboard)`
     )
-    return {
+    return enrichWithContentItems({
       mode: 'tile',
       objectId,
       userIndexKeys: uniq(
@@ -265,13 +558,13 @@ export function resolveConversationRelatedContent(
       dashboardId,
       summary: items.join(' + ') || 'Python script & schedule artifacts',
       items,
-    }
+    })
   }
 
   if (rawType === 'health' || rawType === 'health_check' || rawType === 'health-check') {
     const objectId = stripPrefix(String(conv.objectId || c.reportId || c.id || conv.id || ''))
     const items = uniq(objectId && `Health Check report artifact (obj_health_${objectId})`)
-    return {
+    return enrichWithContentItems({
       mode: 'health',
       objectId,
       userIndexKeys: uniq(
@@ -281,26 +574,26 @@ export function resolveConversationRelatedContent(
       sharedObjectKeys: uniq(objectId && `obj_health_${objectId}`, objectId && `obj_health_check_${objectId}`),
       summary: items.join(' + ') || 'Health Check report artifact',
       items,
-    }
+    })
   }
 
   if (rawType === 'lookml') {
     const objectId = stripPrefix(String(conv.objectId || c.sessionId || c.id || conv.id || ''))
     const items = uniq(objectId && `LookML session artifact (obj_lookml_${objectId})`)
-    return {
+    return enrichWithContentItems({
       mode: 'lookml',
       objectId,
       userIndexKeys: uniq(objectId && `user_${uid}_lookml_${objectId}`),
       sharedObjectKeys: uniq(objectId && `obj_lookml_${objectId}`),
       summary: items.join(' + ') || 'LookML session artifact',
       items,
-    }
+    })
   }
 
   if (rawType === 'conversational-analytics' || rawType === 'ca') {
     const objectId = stripPrefix(String(conv.objectId || c.caConversationId || c.id || conv.id || ''))
     const items = uniq(objectId && `CA conversation artifact (obj_ca_${objectId})`)
-    return {
+    return enrichWithContentItems({
       mode: 'conversational-analytics',
       objectId,
       userIndexKeys: uniq(
@@ -313,7 +606,7 @@ export function resolveConversationRelatedContent(
       ),
       summary: items.join(' + ') || 'CA conversation artifact',
       items,
-    }
+    })
   }
 
   const objectId = stripPrefix(String(conv.objectId || c.dashboardId || c.id || conv.id || ''))
@@ -323,7 +616,7 @@ export function resolveConversationRelatedContent(
     dashboardId && `Looker Dashboard #${dashboardId} (sdk.delete_dashboard)`,
     appKey && `Shared app artifact (${appKey})`
   )
-  return {
+  return enrichWithContentItems({
     mode: 'app',
     objectId,
     userIndexKeys: uniq(
@@ -335,7 +628,7 @@ export function resolveConversationRelatedContent(
     dashboardId,
     summary: items.join(' + ') || 'Data App dashboard & artifact',
     items,
-  }
+  })
 }
 
 export function formatUserEnvArtifactKey(userId: string): string {
@@ -878,11 +1171,21 @@ export class ArtifactService {
       ? this.conversationsCache.get(uid)!
       : await this.listConversations(uid)
     const prev = existing.find((c) => c.id === cleanId)
+    let mergedContentItems = entry.contentItems
+    if (!mergedContentItems && prev?.contentItems?.length) {
+      mergedContentItems = prev.contentItems
+    }
     const merged: UserConversationEntry = {
       ...prev,
       ...entry,
       ...(prev?.content || entry.content
         ? { content: { ...prev?.content, ...entry.content } }
+        : {}),
+      ...(mergedContentItems
+        ? { contentItems: mergedContentItems.map((it) => normalizeStudioContentItem(it)) }
+        : {}),
+      ...(entry.activeContentTabKey || prev?.activeContentTabKey
+        ? { activeContentTabKey: entry.activeContentTabKey || prev?.activeContentTabKey }
         : {}),
       id: cleanId,
       type: entry.type || prev?.type || 'app',
@@ -956,10 +1259,23 @@ export class ArtifactService {
         string,
         ((id: string) => ReturnType<Looker40SDK['delete_dashboard']>) | undefined
       >
-      for (const [fnName, pathPrefix, targetId] of [
-        ['delete_dashboard', '/dashboards', related.dashboardId],
-        ['delete_look', '/looks', related.lookId],
-      ] as const) {
+      const dashTargets =
+        related.dashboardIds && related.dashboardIds.length > 0
+          ? related.dashboardIds
+          : related.dashboardId
+          ? [related.dashboardId]
+          : []
+      const lookTargets =
+        related.lookIds && related.lookIds.length > 0
+          ? related.lookIds
+          : related.lookId
+          ? [related.lookId]
+          : []
+      const deleteJobs: Array<readonly ['delete_dashboard' | 'delete_look', string, string]> = [
+        ...dashTargets.map((id) => ['delete_dashboard', '/dashboards', id] as const),
+        ...lookTargets.map((id) => ['delete_look', '/looks', id] as const),
+      ]
+      for (const [fnName, pathPrefix, targetId] of deleteJobs) {
         if (!targetId) continue
         try {
           if (typeof sdkRecord[fnName] === 'function') {

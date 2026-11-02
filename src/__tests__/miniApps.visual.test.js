@@ -2194,6 +2194,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
   }, 15000)
 
   test('auto-executes bound Python script on initial tile mount (when dashboardRunState is NOT_RUNNING), fires extensionSDK.rendered() only after DOM paint, re-executes on dashboardFilters and dashboardRunState -> RUNNING changes, and fires rendered() on unbound tile fallback', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
     const waitForRenderedCount = async (minCount) => {
       const deadline = Date.now() + 8000
       while (Date.now() < deadline) {
@@ -2285,6 +2287,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
   }, 15000)
 
   test('preloads @looker/embed-sdk immediately on empty centered stage and reuses the single iframe DOM node across loadDashboard, asDashboardConnection().run(), loadLook, loadUrl, and + New Conversation (Issue #45)', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
     const url = `http://127.0.0.1:${port}/?scenario=centered_empty_prompt`
     await chrome.send('Page.navigate', { url })
 
@@ -2424,8 +2428,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         sameIframe: true
       },
       afterLookmlDash: {
-        state: 'url',
-        target: '/embed/dashboards/thelook::executive_pulse',
+        state: 'dashboard',
+        target: 'thelook::executive_pulse',
         sameIframe: true
       },
       afterReset: {
@@ -4108,5 +4112,143 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       hasPulseChip: true,
       promptValue: '@dashboard:Business Pulse '
     })
+  }, 15000)
+
+  test('Issue #99: renders meaningful content tabs in StudioRightPane and switches between Dashboard, Look, Explore, and Data App tabs via @looker/embed-sdk loadX()', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    await chrome.send('Page.navigate', {
+      url: `http://127.0.0.1:${port}/?scenario=data_app`
+    })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(document.querySelector('[data-testid="conversation-item-conv_dashboard_7"]'))`,
+        returnByValue: true
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    const res = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        // Select conversation conv_dashboard_7 so right pane is visible
+        const convDash7 = document.querySelector('[data-testid="conversation-item-conv_dashboard_7"]');
+        if (convDash7) convDash7.click();
+        await new Promise((r) => setTimeout(r, 180));
+
+        const container = document.querySelector('[data-testid="looker-embed-container"]');
+        const studio = window.__DAB_STUDIO__;
+
+        // Upsert Look #15, Explore thelook::order_items, and Data App #42 into the active conversation
+        studio.upsertContentItem({
+          id: '15',
+          lookId: '15',
+          contentType: 'look',
+          title: 'Monthly Churn Look',
+          embedPath: '/embed/looks/15'
+        });
+        studio.upsertContentItem({
+          id: 'thelook::order_items',
+          exploreId: 'thelook::order_items',
+          contentType: 'explore',
+          title: 'eCommerce: Order Items',
+          embedPath: '/embed/explore/thelook/order_items'
+        });
+        studio.upsertContentItem({
+          id: '42',
+          dashboardId: '42',
+          contentType: 'data_app',
+          title: 'Executive Revenue Overview',
+          embedPath: '/embed/dashboards/42'
+        });
+        await new Promise((r) => setTimeout(r, 140));
+
+        const tabBar = document.querySelector('[data-testid="studio-content-tabs"]');
+        const tabDash = document.querySelector('[data-testid="studio-content-tab-dashboard:7"]');
+        const tabLook = document.querySelector('[data-testid="studio-content-tab-look:15"]');
+        const tabExplore = document.querySelector('[data-testid="studio-content-tab-explore:thelook::order_items"]');
+        const tabApp = document.querySelector('[data-testid="studio-content-tab-data_app:42"]');
+
+        const labels = [tabDash, tabLook, tabExplore, tabApp].map((el) => (el?.textContent || '').trim());
+        const allHaveSvg = [tabDash, tabLook, tabExplore, tabApp].every((el) => Boolean(el?.querySelector('svg')));
+
+        // 1. Click Look tab -> loadLook({ id: '15' })
+        tabLook.click();
+        await new Promise((r) => setTimeout(r, 120));
+        const afterClickLook = {
+          selected: tabLook.getAttribute('aria-selected'),
+          state: container.getAttribute('data-embed-state'),
+          target: container.getAttribute('data-embed-target')
+        };
+
+        // 2. Click Explore tab -> loadExplore({ id: 'thelook/order_items' })
+        tabExplore.click();
+        await new Promise((r) => setTimeout(r, 120));
+        const afterClickExplore = {
+          selected: tabExplore.getAttribute('aria-selected'),
+          state: container.getAttribute('data-embed-state'),
+          target: container.getAttribute('data-embed-target')
+        };
+
+        // 3. Click Dashboard tab -> loadDashboard({ id: '7' })
+        tabDash.click();
+        await new Promise((r) => setTimeout(r, 120));
+        const afterClickDash = {
+          selected: tabDash.getAttribute('aria-selected'),
+          state: container.getAttribute('data-embed-state'),
+          target: container.getAttribute('data-embed-target')
+        };
+
+        const calls = (window.__LOOKER_EMBED_STATE__?.calls || []).map((c) => c.method + ':' + c.arg);
+
+        return {
+          hasTabBar: Boolean(tabBar),
+          labels,
+          allHaveSvg,
+          afterClickLook,
+          afterClickExplore,
+          afterClickDash,
+          calls
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(res.result.value).toMatchObject({
+      hasTabBar: true,
+      labels: [
+        'Executive Order Performance (Native UDD)',
+        'Monthly Churn Look',
+        'eCommerce: Order Items',
+        'Executive Revenue Overview'
+      ],
+      allHaveSvg: true,
+      afterClickLook: {
+        selected: 'true',
+        state: 'look',
+        target: '15'
+      },
+      afterClickExplore: {
+        selected: 'true',
+        state: 'explore',
+        target: 'thelook/order_items'
+      },
+      afterClickDash: {
+        selected: 'true',
+        state: 'dashboard',
+        target: '7'
+      }
+    })
+    expect(res.result.value.calls).toEqual(
+      expect.arrayContaining([
+        'loadLook:15',
+        'loadExplore:thelook/order_items',
+        'loadDashboard:7',
+        'loadDashboard:42'
+      ])
+    )
   }, 15000)
 })

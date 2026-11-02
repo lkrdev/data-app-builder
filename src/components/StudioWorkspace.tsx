@@ -18,12 +18,14 @@ import {
   Database,
   Eye,
   FileText,
+  Kanban,
   LayoutDashboard,
   Loader2,
   Lock,
   MessageSquare,
   Paperclip,
   Plus,
+  Sparkles,
   Terminal,
   Trash2,
   Wrench,
@@ -45,6 +47,8 @@ import {
   formatExploreId,
   ResolvedStudioUseCase,
   resolveConversationRelatedContent,
+  StudioContentItem,
+  StudioContentItemType,
   StudioContextCategory,
   StudioContextMention,
 } from '../lookerApi'
@@ -82,7 +86,7 @@ function buildUseCaseMenuOptions(ctl: StudioController): Array<StudioSelectOptio
 }
 
 export interface LookerEmbedTarget {
-  kind: 'preload' | 'dashboard' | 'look' | 'url'
+  kind: 'preload' | 'dashboard' | 'look' | 'explore' | 'extension' | 'report' | 'url'
   target: string
   previewMode: 'preload' | 'conversational-analytics' | 'dashboard' | 'data_app'
   previewObjectId: string
@@ -91,7 +95,7 @@ export interface LookerEmbedTarget {
 
 export interface LookerEmbedSessionTelemetry {
   hostUrl: string
-  state: 'preloaded' | 'dashboard' | 'look' | 'url'
+  state: 'preloaded' | 'dashboard' | 'look' | 'explore' | 'extension' | 'report' | 'url'
   target: string
   running: boolean
   runCount: number
@@ -123,6 +127,7 @@ export function resolveLookerEmbedTarget(opts: {
   isTileMode?: boolean
   isCaMode?: boolean
   builderMode?: 'data_app' | 'dashboard'
+  activeContentItem?: StudioContentItem | null
   caConversation?: { caConversationId: string; embedPath: string } | null
   nativeContent?: {
     id: string
@@ -146,6 +151,58 @@ export function resolveLookerEmbedTarget(opts: {
   }
   if (opts.isEmptyConversation || opts.isHealthCheckMode || opts.isLookmlMode || opts.isTileMode)
     return preload
+
+  const item =
+    opts.activeContentItem?.id && opts.activeContentItem?.contentType
+      ? opts.activeContentItem
+      : opts.builderMode === 'dashboard' && opts.nativeContent
+      ? (opts.nativeContent as Partial<StudioContentItem> & { id: string; contentType: string })
+      : null
+  if (item) {
+    const ct = item.contentType
+    if (ct === 'dashboard' || ct === 'lookml_dashboard') {
+      const id = String(item.lookmlDashboardId || item.dashboardId || item.id)
+      return { kind: 'dashboard', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
+    }
+    if (ct === 'data_app' || ct === 'data-investigator') {
+      const id = String(item.dashboardId || item.id)
+      return { kind: 'dashboard', target: id, previewMode: 'data_app', previewObjectId: id, nonce }
+    }
+    if (ct === 'look') {
+      const id = String(item.lookId || item.id)
+      return { kind: 'look', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
+    }
+    if (ct === 'explore') {
+      const rawId = String(item.exploreId || item.id)
+      return {
+        kind: 'explore',
+        target: rawId.replace('::', '/'),
+        previewMode: 'dashboard',
+        previewObjectId: rawId,
+        nonce,
+      }
+    }
+    if (ct === 'extension') {
+      const id = String(item.extensionId || item.id)
+      return { kind: 'extension', target: id, previewMode: 'data_app', previewObjectId: id, nonce }
+    }
+    if (ct === 'report') {
+      const id = String(item.id)
+      return { kind: 'report', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
+    }
+    const isCa = ct === 'conversational-analytics'
+    const id = String(item.lookmlDashboardId || item.id)
+    const rawUrl =
+      item.embedPath || `/embed/${isCa ? 'conversations' : 'boards'}/${encodeURIComponent(id)}`
+    return {
+      kind: 'url',
+      target: normalizeLookerEmbedUrl(rawUrl, opts.hostUrl),
+      previewMode: isCa ? 'conversational-analytics' : 'dashboard',
+      previewObjectId: id,
+      nonce,
+    }
+  }
+
   if ((opts.isCaMode || opts.caConversation) && opts.caConversation?.embedPath) {
     return {
       kind: 'url',
@@ -155,27 +212,7 @@ export function resolveLookerEmbedTarget(opts: {
       nonce,
     }
   }
-  if (opts.builderMode === 'dashboard') {
-    const nc = opts.nativeContent
-    if (!nc) return preload
-    if (nc.contentType === 'dashboard') {
-      const id = String(nc.dashboardId || nc.id)
-      return { kind: 'dashboard', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
-    }
-    if (nc.contentType === 'look') {
-      const id = String(nc.lookId || nc.id)
-      return { kind: 'look', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
-    }
-    const id = String(nc.lookmlDashboardId || nc.id)
-    const rawUrl = nc.embedPath || `/embed/dashboards/${encodeURIComponent(id)}`
-    return {
-      kind: 'url',
-      target: normalizeLookerEmbedUrl(rawUrl, opts.hostUrl),
-      previewMode: 'dashboard',
-      previewObjectId: id,
-      nonce,
-    }
-  }
+  if (opts.builderMode === 'dashboard') return preload
   if (opts.publishedApp?.dashboardId) {
     const id = String(opts.publishedApp.dashboardId)
     return { kind: 'dashboard', target: id, previewMode: 'data_app', previewObjectId: id, nonce }
@@ -385,11 +422,14 @@ export function createLookerEmbedPreloadController(opts: {
       if (isSameTarget && prev.nonce === next.nonce) return connection
       lastTarget = next
       const options = { waitUntilLoaded: true }
+      const recordLoad = async (method: string, arg: string, p: Promise<unknown>) => {
+        telemetry.calls.push({ method, arg })
+        telemetry.loadCount += 1
+        await p
+      }
       if (next.kind === 'preload') {
         if (prev && prev.kind !== 'preload') {
-          telemetry.calls.push({ method: 'loadUrl', arg: '/preload' })
-          telemetry.loadCount += 1
-          await connection.loadUrl({ url: '/preload', options })
+          await recordLoad('loadUrl', '/preload', connection.loadUrl({ url: '/preload', options }))
         }
       } else if (next.kind === 'dashboard') {
         if (isSameTarget && prev.nonce !== next.nonce) {
@@ -397,23 +437,22 @@ export function createLookerEmbedPreloadController(opts: {
             telemetry.calls.push({ method: 'asDashboardConnection.run', arg: next.target })
             connection.asDashboardConnection().run()
           } catch {
-            telemetry.calls.push({ method: 'loadDashboard', arg: next.target })
-            telemetry.loadCount += 1
-            await connection.loadDashboard({ id: next.target, options })
+            await recordLoad('loadDashboard', next.target, connection.loadDashboard({ id: next.target, options }))
           }
         } else {
-          telemetry.calls.push({ method: 'loadDashboard', arg: next.target })
-          telemetry.loadCount += 1
-          await connection.loadDashboard({ id: next.target, options })
+          await recordLoad('loadDashboard', next.target, connection.loadDashboard({ id: next.target, options }))
         }
       } else if (next.kind === 'look') {
-        telemetry.calls.push({ method: 'loadLook', arg: next.target })
-        telemetry.loadCount += 1
-        await connection.loadLook({ id: next.target, options })
+        await recordLoad('loadLook', next.target, connection.loadLook({ id: next.target, options }))
+      } else if (next.kind === 'explore') {
+        const exploreId = next.target.replace('::', '/')
+        await recordLoad('loadExplore', exploreId, connection.loadExplore({ id: exploreId, options }))
+      } else if (next.kind === 'extension') {
+        await recordLoad('loadExtension', next.target, connection.loadExtension({ id: next.target, options }))
+      } else if (next.kind === 'report') {
+        await recordLoad('loadReport', next.target, connection.loadReport({ id: next.target, options }))
       } else {
-        telemetry.calls.push({ method: 'loadUrl', arg: next.target })
-        telemetry.loadCount += 1
-        await connection.loadUrl({ url: next.target, options })
+        await recordLoad('loadUrl', next.target, connection.loadUrl({ url: next.target, options }))
       }
       telemetry.state = next.kind === 'preload' ? 'preloaded' : next.kind
       telemetry.target = next.target
@@ -2297,6 +2336,31 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   )
 }
 
+function renderContentTabIcon(contentType: StudioContentItemType): React.ReactNode {
+  switch (contentType) {
+    case 'dashboard':
+    case 'lookml_dashboard':
+      return <LayoutDashboard size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'look':
+      return <Eye size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'explore':
+      return <Database size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'data_app':
+    case 'data-investigator':
+      return <Sparkles size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'board':
+      return <Kanban size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'conversational-analytics':
+      return <MessageSquare size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'extension':
+      return <Code2 size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'report':
+      return <FileText size={13} strokeWidth={1.75} aria-hidden="true" />
+    default:
+      return <LayoutDashboard size={13} strokeWidth={1.75} aria-hidden="true" />
+  }
+}
+
 export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
     activeMode,
@@ -2312,6 +2376,10 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     canDeployLookml,
     nativeContent,
     publishedApp,
+    contentItems = [],
+    activeContentTabKey = '',
+    activeContentItem = null,
+    handleSelectContentTab,
     currentAppCode,
     embedNonce,
     extensionSDK,
@@ -2342,6 +2410,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         isTileMode,
         isCaMode,
         builderMode,
+        activeContentItem,
         caConversation,
         nativeContent,
         publishedApp,
@@ -2355,6 +2424,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
       isTileMode,
       isCaMode,
       builderMode,
+      activeContentItem,
       caConversation,
       nativeContent,
       publishedApp,
@@ -2401,17 +2471,49 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   }
 
   const activePreviewId =
-    builderMode === 'dashboard' ? nativeContent?.id : publishedApp?.dashboardId
-  const openInLookerPath =
-    builderMode === 'dashboard' && nativeContent
-      ? nativeContent.embedPath.replace(/^\/embed/, '')
-      : publishedApp
-      ? `/dashboards/${encodeURIComponent(publishedApp.dashboardId)}`
-      : ''
+    activeContentItem?.id ||
+    (builderMode === 'dashboard' ? nativeContent?.id : publishedApp?.dashboardId)
+  const openInLookerPath = activeContentItem
+    ? activeContentItem.embedPath.replace(/^\/embed/, '')
+    : builderMode === 'dashboard' && nativeContent
+    ? nativeContent.embedPath.replace(/^\/embed/, '')
+    : publishedApp
+    ? `/dashboards/${encodeURIComponent(publishedApp.dashboardId)}`
+    : ''
   const hasActiveEmbed = embedTarget.kind !== 'preload'
+  const showContentTabs =
+    !isTileMode && !isHealthCheckMode && !isLookmlMode && contentItems.length > 0
+  const resolvedActiveTabKey = activeContentTabKey || activeContentItem?.key || ''
 
   return (
     <main className="dab-right-pane" style={isEmptyConversation ? { display: 'none' } : undefined}>
+      {showContentTabs && (
+        <div
+          className="dab-content-tabs"
+          data-testid="studio-content-tabs"
+          role="tablist"
+          aria-label="Conversation Looker content tabs"
+        >
+          {contentItems.map((item) => {
+            const isSelected = item.key === resolvedActiveTabKey
+            return (
+              <button
+                key={item.key}
+                type="button"
+                role="tab"
+                aria-selected={isSelected}
+                data-testid={`studio-content-tab-${item.key}`}
+                className={`dab-content-tab ${isSelected ? 'active' : ''}`}
+                onClick={() => handleSelectContentTab?.(item.key)}
+                title={`${item.title} (${item.contentType}: ${item.id})`}
+              >
+                <span className="dab-content-tab-icon">{renderContentTabIcon(item.contentType)}</span>
+                <span className="dab-content-tab-label">{item.title}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
       {isTileMode ? (
         <TilePreviewPane ctl={ctl} />
       ) : isHealthCheckMode ? (
@@ -2562,7 +2664,17 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
       ) : (
         <StudioToolbar
           title={
-            builderMode === 'dashboard' ? (
+            activeContentItem &&
+            activeContentItem.contentType !== 'data_app' &&
+            activeContentItem.contentType !== 'data-investigator' ? (
+              <>
+                <strong>{activeContentItem.title}</strong>{' '}
+                <span className="dab-muted">
+                  ({activeContentItem.contentType} #{activeContentItem.id} ·{' '}
+                  <code>{activeContentItem.embedPath}</code>)
+                </span>
+              </>
+            ) : builderMode === 'dashboard' ? (
               nativeContent ? (
                 <>
                   <strong>{nativeContent.title}</strong>{' '}
