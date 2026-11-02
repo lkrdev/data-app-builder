@@ -246,32 +246,24 @@ const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
   ['dashboard', /\b(build\s+a\s+dashboard|create\s+a\s+dashboard|create\s+a\s+look|create\s+a\s+board)\b/i],
 ]
 
+const ALL_RESOLVED_USE_CASES: ResolvedStudioUseCase[] = [
+  'app', 'data-investigator', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics',
+]
+
+function resolveAllowedUseCases(allowedModes?: string[]): Set<ResolvedStudioUseCase> {
+  const mapped = (allowedModes || [])
+    .map((m) => USE_CASE_ALIAS_MAP[String(m || '').trim().toLowerCase().replace(/\s+/g, '-')])
+    .filter((m): m is ResolvedStudioUseCase => Boolean(m))
+  return new Set<ResolvedStudioUseCase>(mapped.length > 0 ? mapped : ALL_RESOLVED_USE_CASES)
+}
+
 // ponytail: extract <USE_CASE>...</USE_CASE> emitted by AGENTS.md per-turn routing or infer from prompt keywords,
 // always intersecting with the user's allowed modes so restricted users never route to a locked capability.
 export function matchExplicitUseCaseRule(
   text?: string,
   allowedModes?: string[]
 ): ResolvedStudioUseCase | null {
-  const allowedList: ResolvedStudioUseCase[] =
-    Array.isArray(allowedModes) && allowedModes.length > 0
-      ? Array.from(
-          new Set(
-            allowedModes
-              .map((m) => USE_CASE_ALIAS_MAP[String(m || '').trim().toLowerCase().replace(/\s+/g, '-')])
-              .filter((m): m is ResolvedStudioUseCase => Boolean(m))
-          )
-        )
-      : [
-          'app',
-          'data-investigator',
-          'dashboard',
-          'lookml',
-          'health-check',
-          'tile',
-          'conversational-analytics',
-        ]
-  const allowedSet = new Set<ResolvedStudioUseCase>(allowedList.length > 0 ? allowedList : ['app'])
-
+  const allowedSet = resolveAllowedUseCases(allowedModes)
   const rawText = String(text || '')
   const tagMatches = Array.from(rawText.matchAll(/<USE_CASE>\s*([^<]+?)\s*<\/USE_CASE>/gi))
   if (tagMatches.length > 0) {
@@ -283,7 +275,6 @@ export function matchExplicitUseCaseRule(
     const tagged = USE_CASE_ALIAS_MAP[token]
     if (tagged && allowedSet.has(tagged)) return tagged
   }
-
   for (const [candidate, re] of USE_CASE_RULES) {
     if (allowedSet.has(candidate) && re.test(rawText)) return candidate
   }
@@ -295,31 +286,13 @@ export function extractResolvedUseCase(
   promptFallback?: string,
   allowedModes?: string[]
 ): ResolvedStudioUseCase {
-  const allowedList: ResolvedStudioUseCase[] =
-    Array.isArray(allowedModes) && allowedModes.length > 0
-      ? Array.from(
-          new Set(
-            allowedModes
-              .map((m) => USE_CASE_ALIAS_MAP[String(m || '').trim().toLowerCase().replace(/\s+/g, '-')])
-              .filter((m): m is ResolvedStudioUseCase => Boolean(m))
-          )
-        )
-      : [
-          'app',
-          'data-investigator',
-          'dashboard',
-          'lookml',
-          'health-check',
-          'tile',
-          'conversational-analytics',
-        ]
-  const allowedSet = new Set<ResolvedStudioUseCase>(allowedList.length > 0 ? allowedList : ['app'])
+  const allowedSet = resolveAllowedUseCases(allowedModes)
   const rawText = String(text || '')
   const combined = `${String(promptFallback || '')}\n${rawText}`
   return (
     matchExplicitUseCaseRule(rawText, allowedModes) ||
     matchExplicitUseCaseRule(combined, allowedModes) ||
-    (allowedSet.has('app') ? 'app' : allowedList[0] || 'app')
+    (allowedSet.has('app') ? 'app' : Array.from(allowedSet)[0] || 'app')
   )
 }
 
