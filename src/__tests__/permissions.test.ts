@@ -137,6 +137,7 @@ import {
   hydrateMentionedContext,
   isConversationalNoOpPrompt,
   listUserArtifacts,
+  loadStoredSelectedFolderId,
   loadUserConversations,
   loadUserEnvironmentId,
   matchExplicitUseCaseRule,
@@ -145,7 +146,9 @@ import {
   normalizeStudioThemeMode,
   parseCaAgentSelectionResponse,
   parseStudioRoute,
+  persistSelectedFolderId,
   rawLookerRequest,
+  readInitialSelectedFolderId,
   readSwrCache,
   resolveConversationRelatedContent,
   resolveStudioContentEmbedPath,
@@ -158,6 +161,7 @@ import {
   searchGlobalContentV2,
   searchLookerFolders,
   selectCaAgentViaIsolatedSubagent,
+  STUDIO_FOLDER_STORAGE_KEY,
   STUDIO_MODES,
   STUDIO_THEME_STORAGE_KEY,
   STUDIO_USE_CASE_OPTIONS,
@@ -4912,5 +4916,99 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
       g.document = prev.document
       g.fetch = prev.fetch
     }
+  })
+
+  test('47. Issue #112: resolves Looker Dev Mode via sdk.session(), persists Save to Folder via STUDIO_FOLDER_STORAGE_KEY, and resolves non-numeric parent_id / creator_id in searchLookerFolders', async () => {
+    expect(SWR_DEDUPED_METHODS).toContain('session')
+    expect(STUDIO_FOLDER_STORAGE_KEY).toBe('dab_selected_folder_id')
+
+    // 1. fetchInitialLookerMetadata resolves workspaceId from sdk.session() and defaults to 'production' on error
+    clearLookerMetadataCache()
+    const devSdk = asSdk({
+      ok: async <T>(p: T) => p,
+      me: async () => ({ id: '1', display_name: 'Bryan Weber', personal_folder_id: '5' }),
+      all_lookml_models: async () => [],
+      session: async () => ({ workspace_id: 'dev' }),
+    })
+    const devMeta = await fetchInitialLookerMetadata(devSdk)
+    expect(devMeta.workspaceId).toBe('dev')
+
+    clearLookerMetadataCache()
+    const prodFallbackSdk = asSdk({
+      ok: async <T>(p: T) => p,
+      me: async () => ({ id: '1', display_name: 'Bryan Weber', personal_folder_id: '5' }),
+      all_lookml_models: async () => [],
+      session: async () => {
+        throw new Error('session endpoint unavailable')
+      },
+    })
+    const prodMeta = await fetchInitialLookerMetadata(prodFallbackSdk)
+    expect(prodMeta.workspaceId).toBe('production')
+
+    // 2. STUDIO_FOLDER_STORAGE_KEY persistence via persistSelectedFolderId / loadStoredSelectedFolderId / readInitialSelectedFolderId
+    const g = globalThis as unknown as { window?: Record<string, unknown> }
+    const prevWin = g.window
+    const winStore = new Map<string, string>()
+    const extStore = new Map<string, string>()
+    g.window = {
+      ...(prevWin || {}),
+      localStorage: {
+        getItem: (k: string) => winStore.get(k) ?? null,
+        setItem: (k: string, v: string) => void winStore.set(k, v),
+        removeItem: (k: string) => void winStore.delete(k),
+      },
+    }
+    try {
+      const extSdk = {
+        localStorageGetItem: async (k: string) => extStore.get(k) ?? null,
+        localStorageSetItem: async (k: string, v: string) => void extStore.set(k, v),
+      }
+      expect(readInitialSelectedFolderId()).toBeNull()
+      persistSelectedFolderId(extSdk, '502')
+      expect(winStore.get(STUDIO_FOLDER_STORAGE_KEY)).toBe('502')
+      expect(extStore.get(STUDIO_FOLDER_STORAGE_KEY)).toBe('502')
+      expect(readInitialSelectedFolderId()).toBe('502')
+      expect(await loadStoredSelectedFolderId(extSdk)).toBe('502')
+    } finally {
+      g.window = prevWin
+    }
+
+    // 3. searchLookerFolders resolves non-numeric parent_id and creator_id by name
+    clearLookerMetadataCache()
+    const seenSearchPayloads: Array<Record<string, unknown>> = []
+    const folderSearchSdk = asSdk({
+      ok: async <T>(p: T) => p,
+      me: async () => ({ id: '1', display_name: 'Bryan Weber', email: 'bryanweber@google.com' }),
+      all_folders: async () => [
+        { id: '1', name: 'Shared folders', parent_id: null, is_personal: false },
+        { id: '501', name: 'Marketing Analytics', parent_id: '1', is_personal: false, creator_id: '1' },
+        { id: '502', name: 'subfolder test', parent_id: '501', is_personal: false, creator_id: '1' },
+      ],
+      search_folders: async (req: Record<string, unknown>) => {
+        seenSearchPayloads.push(req)
+        if (String(req.parent_id) === '501' && String(req.creator_id) === '1') {
+          return [{ id: '502', name: 'subfolder test', parent_id: '501', is_personal: false, creator_id: '1' }]
+        }
+        return []
+      },
+    })
+    const byNameResults = await searchLookerFolders(folderSearchSdk, {
+      parent_id: 'Marketing Analytics',
+      creator_id: 'Bryan Weber',
+    })
+    expect(seenSearchPayloads).toEqual([
+      expect.objectContaining({ parent_id: '501', creator_id: '1' }),
+    ])
+    expect(byNameResults).toEqual([
+      expect.objectContaining({ id: '502', name: 'subfolder test', parent_id: '501', creator_id: '1' }),
+    ])
+
+    // 4. Verify Zero Layout Shift (CLS) rule in studio-design-system/SKILL.md and index.css
+    const repoRoot = path.resolve(__dirname, '../..')
+    const skillMd = readFileSync(path.join(repoRoot, '.agents/skills/studio-design-system/SKILL.md'), 'utf8')
+    expect(skillMd).toContain('Zero Layout Shift (CLS) on Dynamic Select / Grid Controls')
+    expect(skillMd).toContain('minmax(0, 1fr) minmax(0, 1fr)')
+    const indexCss = readFileSync(path.join(repoRoot, 'src/styles/index.css'), 'utf8')
+    expect(indexCss).toContain('grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)')
   })
 })

@@ -16,6 +16,7 @@ export interface LookerExtensionContextState {
 export interface MockLookerExtensionContextValue extends LookerExtensionContextState {
   initialRoute?: string;
   initialSelectedFolderId?: string;
+  initialLookerWorkspaceId?: 'dev' | 'production';
   forceFolderSkeleton?: boolean;
   forceStarterPromptsSkeleton?: boolean;
   initialComboOpen?: boolean;

@@ -1,4 +1,55 @@
+import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { IFolder, ILookmlModel, IRole, IUser } from '@looker/sdk'
+
+export const STUDIO_FOLDER_STORAGE_KEY = 'dab_selected_folder_id'
+
+export function readInitialSelectedFolderId(): string | null {
+  try {
+    const w = typeof window !== 'undefined' ? window : undefined
+    const raw =
+      w?.__MOCK_LOOKER_EXTENSION__?.initialSelectedFolderId ??
+      w?.localStorage?.getItem?.(STUDIO_FOLDER_STORAGE_KEY)
+    const clean = String(raw ?? '').trim()
+    return clean || null
+  } catch {
+    return null
+  }
+}
+
+export async function loadStoredSelectedFolderId(
+  extensionSDK?: Partial<ExtensionSDK>
+): Promise<string | null> {
+  try {
+    const w = typeof window !== 'undefined' ? window : undefined
+    const raw =
+      (await extensionSDK?.localStorageGetItem?.(STUDIO_FOLDER_STORAGE_KEY)) ??
+      w?.localStorage?.getItem?.(STUDIO_FOLDER_STORAGE_KEY)
+    const clean = String(raw ?? '').trim()
+    return clean || null
+  } catch {
+    return null
+  }
+}
+
+export function persistSelectedFolderId(
+  extensionSDK: Partial<ExtensionSDK> | undefined,
+  folderId: string
+): void {
+  const clean = String(folderId ?? '').trim()
+  if (!clean) return
+  try {
+    if (typeof window !== 'undefined') {
+      window.localStorage?.setItem?.(STUDIO_FOLDER_STORAGE_KEY, clean)
+    }
+  } catch {
+    // ignore storage write failure
+  }
+  try {
+    void extensionSDK?.localStorageSetItem?.(STUDIO_FOLDER_STORAGE_KEY, clean)
+  } catch {
+    // ignore extensionSDK storage write failure
+  }
+}
 
 export interface Looker404Diagnostic {
   kind: 'role_denied' | 'feature_disabled' | 'not_found'

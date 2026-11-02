@@ -71,7 +71,6 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "scenario": "config_page",
   "verifiedVisibleText": [
     "Agent",
-    "Agentic LookML",
     "Configuration",
     "Agent & Vertex / Gemini Setup",
     "Google OAuth",
@@ -116,7 +115,6 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "scenario": "data_app",
   "verifiedVisibleText": [
     "Agent",
-    "Agentic LookML",
     "Data App",
     "Safe Mode (Ask)",
     "Approve Looker State Mutation?",
@@ -236,7 +234,6 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "scenario": "studio_dark_theme",
   "verifiedVisibleText": [
     "Agent",
-    "Agentic LookML",
     "Executive Revenue App",
     "Send Message",
   ],

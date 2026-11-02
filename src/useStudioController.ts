@@ -34,14 +34,14 @@ import {
   getAllowedUseCases, getArtifactNamespace, getArtifactService, getUseCaseLabel,
   hydrateConversationContentItems, hydrateMentionedContext, listSavedScripts,
   listUserArtifacts, loadExistingDashboardApp, loadNativeContentById,
-  loadObjectArtifact, loadScriptArtifact, loadStoredStudioThemeMode, loadUserConversations,
+  loadObjectArtifact, loadScriptArtifact, loadStoredSelectedFolderId, loadStoredStudioThemeMode, loadUserConversations,
   loadUserEnvironmentId, LookerFolderNode, matchExplicitUseCaseRule, NativeContentState,
-  normalizeStudioThemeMode, parseExploreId, persistStudioThemeMode, PublishedAppState,
-  publishScriptDashboard, readInitialStudioThemeMode, resolveCaEmbedPath,
+  normalizeStudioThemeMode, parseExploreId, persistSelectedFolderId, persistStudioThemeMode, PublishedAppState,
+  publishScriptDashboard, readInitialSelectedFolderId, readInitialStudioThemeMode, resolveCaEmbedPath,
   resolveConversationRelatedContent, ResolvedStudioTheme, ResolvedStudioUseCase, resolveStudioTheme, resolveSystemTheme,
   resolveUserCapabilities, saveDashboardStudioMetadata, SavedScript, saveNativeContentArtifact,
   saveScriptArtifact, saveUserArtifact, saveUserConversation, saveUserEnvironmentId, searchGlobalContentV2, searchLookerFolders, SearchLookerFoldersParams,
-  selectCaAgentViaIsolatedSubagent, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
+  selectCaAgentViaIsolatedSubagent, STUDIO_FOLDER_STORAGE_KEY, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
   StudioContentItem, StudioContentItemType, StudioContextCategory, StudioContextMention, studioModeToUseCase, StudioThemeMode, StudioToolMode, StudioUseCase, studioUseCaseToMode, upsertPublishedDataApp, upsertStudioContentItem,
   UserArtifactIndex, UserCapabilities, UserConversationEntry,
 } from './lookerApi'
@@ -53,16 +53,20 @@ export {
   authenticateGoogleOAuth,
   computeIsAuthenticated,
   DEFAULT_THINKING_LEVEL,
+  loadStoredSelectedFolderId,
   loadStoredThinkingLevel,
   normalizeStudioThemeMode,
   normalizeThinkingLevel,
+  persistSelectedFolderId,
   persistThinkingLevel,
+  readInitialSelectedFolderId,
   readInitialThinkingLevel,
   refreshOAuthSessionIfNeeded,
   resolveLookerOAuthRedirectUri,
   resolveLookerOAuthRedirectUris,
   resolveStudioTheme,
   resolveSystemTheme,
+  STUDIO_FOLDER_STORAGE_KEY,
   STUDIO_OAUTH_REFRESH_LOCK_KEY,
   STUDIO_OAUTH_STORAGE_KEY,
   STUDIO_THEME_STORAGE_KEY,
@@ -336,6 +340,66 @@ export function useStudioController() {
     [extensionSDK]
   )
   const [userId, setUserId] = useState('1')
+  const [userDisplayName, setUserDisplayName] = useState('')
+  const [lookerWorkspaceId, setLookerWorkspaceId] = useState<'dev' | 'production'>(() =>
+    mockExt?.initialLookerWorkspaceId === 'dev' ? 'dev' : 'production'
+  )
+  const isLookerDevMode = lookerWorkspaceId === 'dev'
+  const syncLookerSessionWorkspace = useCallback(async () => {
+    const sdkWithSession = core40SDK as unknown as {
+      session?: () => Promise<{ workspace_id?: string | null }>
+      ok?: <T>(p: Promise<T> | T) => Promise<T>
+    }
+    if (typeof sdkWithSession?.session !== 'function') return
+    try {
+      const raw = sdkWithSession.session()
+      const sess = typeof sdkWithSession.ok === 'function' ? await sdkWithSession.ok(raw) : await raw
+      if (sess?.workspace_id === 'dev' || sess?.workspace_id === 'production') {
+        setLookerWorkspaceId(sess.workspace_id)
+      }
+    } catch {
+      // ignore session check failure
+    }
+  }, [core40SDK])
+
+  const handleToggleLookerDevMode = useCallback(
+    async (targetWorkspace?: 'dev' | 'production') => {
+      const nextWorkspace: 'dev' | 'production' =
+        targetWorkspace === 'dev' || targetWorkspace === 'production'
+          ? targetWorkspace
+          : lookerWorkspaceId === 'dev'
+          ? 'production'
+          : 'dev'
+      setLookerWorkspaceId(nextWorkspace)
+      const sdkWithUpdate = core40SDK as unknown as {
+        update_session?: (body: { workspace_id: string }) => Promise<{ workspace_id?: string | null }>
+        ok?: <T>(p: Promise<T> | T) => Promise<T>
+      }
+      if (typeof sdkWithUpdate?.update_session === 'function') {
+        try {
+          const p = sdkWithUpdate.update_session({ workspace_id: nextWorkspace })
+          const res = typeof sdkWithUpdate.ok === 'function' ? await sdkWithUpdate.ok(p) : await p
+          if (res?.workspace_id === 'dev' || res?.workspace_id === 'production') {
+            setLookerWorkspaceId(res.workspace_id)
+          }
+        } catch {
+          // ignore session update failure
+        }
+      }
+      return nextWorkspace
+    },
+    [core40SDK, lookerWorkspaceId]
+  )
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.addEventListener) return
+    const onFocus = () => {
+      void syncLookerSessionWorkspace()
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [syncLookerSessionWorkspace])
+
   const [capabilities, setCapabilities] = useState<UserCapabilities>(() =>
     resolveUserCapabilities()
   )
@@ -361,9 +425,37 @@ export function useStudioController() {
   const [selectedExplores, setSelectedExplores] = useState<string[]>([])
   const [preloadedContent, setPreloadedContent] = useState<StudioContextMention[]>([])
   const [mentionedItems, setMentionedItems] = useState<StudioContextMention[]>([])
-  const [selectedFolderId, setSelectedFolderId] = useState<string>(() =>
-    String(mockExt?.initialSelectedFolderId || '1')
+  const [selectedFolderId, setSelectedFolderIdState] = useState<string>(() =>
+    String(mockExt?.initialSelectedFolderId || readInitialSelectedFolderId() || '1')
   )
+  const hasExplicitFolderRef = useRef<boolean>(
+    Boolean(mockExt?.initialSelectedFolderId || readInitialSelectedFolderId())
+  )
+  const setSelectedFolderId = useCallback(
+    (next: string | ((prev: string) => string)) => {
+      hasExplicitFolderRef.current = true
+      setSelectedFolderIdState((prev) => {
+        const resolved = String(typeof next === 'function' ? next(prev) : next).trim() || '1'
+        persistSelectedFolderId(extensionSDK, resolved)
+        return resolved
+      })
+    },
+    [extensionSDK]
+  )
+
+  useEffect(() => {
+    if (mockExt?.initialSelectedFolderId) return
+    let mounted = true
+    void loadStoredSelectedFolderId(extensionSDK).then((stored) => {
+      if (mounted && stored) {
+        hasExplicitFolderRef.current = true
+        setSelectedFolderIdState(stored)
+      }
+    })
+    return () => {
+      mounted = false
+    }
+  }, [extensionSDK, mockExt?.initialSelectedFolderId])
   const [schemaMarkdown, setSchemaMarkdown] = useState('')
   const [loadingSchema, setLoadingSchema] = useState(false)
   const [starterPrompts, setStarterPrompts] = useState<StarterPromptItem[]>([])
@@ -1170,7 +1262,11 @@ export function useStudioController() {
 
   const handleSearchFolders = useCallback(
     async (params: SearchLookerFoldersParams): Promise<LookerFolderNode[]> => {
-      const results = await searchLookerFolders(core40SDK, params)
+      const results = await searchLookerFolders(core40SDK, {
+        knownFolders: folderTreeNodes,
+        knownUsers: userDisplayName ? [{ id: userId, display_name: userDisplayName }] : undefined,
+        ...params,
+      })
       if (results.length > 0) {
         setFolderTreeNodes((prev) => {
           const next = { ...prev }
@@ -1180,7 +1276,7 @@ export function useStudioController() {
       }
       return results
     },
-    [core40SDK]
+    [core40SDK, folderTreeNodes, userDisplayName, userId]
   )
 
   useEffect(() => {
@@ -1198,12 +1294,19 @@ export function useStudioController() {
 
   useEffect(() => {
     let mounted = true
-    fetchInitialLookerMetadata(core40SDK)
-      .then((meta) => {
+    Promise.all([
+      fetchInitialLookerMetadata(core40SDK),
+      loadStoredSelectedFolderId(extensionSDK),
+    ])
+      .then(([meta, asyncStoredFolderId]) => {
         if (!mounted) return
         const resolvedUserId = String(meta.user?.id || '1')
         userIdRef.current = resolvedUserId
         setUserId(resolvedUserId)
+        setUserDisplayName(String(meta.user?.display_name || ''))
+        if (meta.workspaceId === 'dev' || meta.workspaceId === 'production') {
+          setLookerWorkspaceId(meta.workspaceId)
+        }
         setCapabilities(meta.capabilities)
         if (meta.capabilities.rolesLoaded && meta.capabilities.sqlRunnerConnections.size === 0) {
           setHealthScope((prev) => (prev === 'all' || prev === 'bq' ? 'looker' : prev))
@@ -1250,15 +1353,14 @@ export function useStudioController() {
         )
         const extMock =
           typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
+        const storedFolderId = asyncStoredFolderId || readInitialSelectedFolderId()
         const targetInitialFolder = extMock?.initialSelectedFolderId
           ? String(extMock.initialSelectedFolderId)
-          : meta.defaultFolderId
-        setSelectedFolderId((prev) =>
+          : storedFolderId || meta.defaultFolderId
+        setSelectedFolderIdState((prev) =>
           extMock?.initialSelectedFolderId
             ? String(extMock.initialSelectedFolderId)
-            : prev === '1'
-            ? meta.defaultFolderId
-            : prev
+            : storedFolderId || (hasExplicitFolderRef.current ? prev : meta.defaultFolderId)
         )
         if (!extMock?.forceFolderSkeleton) setLoadingMetadata(false)
         void hydrateFolderAncestors(targetInitialFolder, initialRootIds)
@@ -1627,7 +1729,7 @@ export function useStudioController() {
         })
       })
     },
-    [core40SDK, hydrateLoadedArtifact, runWithBusy, setPublishedApp]
+    [core40SDK, hydrateLoadedArtifact, runWithBusy, setPublishedApp, setSelectedFolderId]
   )
 
   const loadNativeById = useCallback(
@@ -1650,7 +1752,7 @@ export function useStudioController() {
         })
       })
     },
-    [core40SDK, extensionSDK, hydrateLoadedArtifact, runWithBusy, setNativeContent]
+    [core40SDK, extensionSDK, hydrateLoadedArtifact, runWithBusy, setNativeContent, setSelectedFolderId]
   )
 
   const loadHealthCheckById = useCallback(
@@ -2776,6 +2878,8 @@ export function useStudioController() {
       let finalMsgs: ChatMessage[] = []
 
       if (result.lookmlBundle) {
+        setLookerWorkspaceId('dev')
+        void syncLookerSessionWorkspace()
         setBusyStatus('Saving LookML session artifacts (user_..._lookml_... & obj_lookml_...)...')
         finalMsgs = [
           ...messagesWithUser,
@@ -3191,9 +3295,10 @@ export function useStudioController() {
         selectedFolderId, setSelectedFolderId,
         hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders,
         preloadedContent, setPreloadedContent, mentionedItems, setMentionedItems,
+        lookerWorkspaceId, isLookerDevMode, setLookerWorkspaceId, handleToggleLookerDevMode,
       }
     }
-  }, [history, requestCodeModePermission, oauthExpiresAt, triggerSilentOAuthRefresh, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, selectedModel, thinkingLevel, setThinkingLevel, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, queuedPrompts, updateQueuedPrompts, handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, environmentStatus, envResetNotice, handleResetEnvironment, handleStopEnvironment, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems])
+  }, [history, requestCodeModePermission, oauthExpiresAt, triggerSilentOAuthRefresh, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, selectedModel, thinkingLevel, setThinkingLevel, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, queuedPrompts, updateQueuedPrompts, handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, environmentStatus, envResetNotice, handleResetEnvironment, handleStopEnvironment, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, setSelectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems, lookerWorkspaceId, isLookerDevMode, handleToggleLookerDevMode])
 
   return {
     extensionSDK, core40SDK, lookerHostData, history, location, isTileMount,
@@ -3254,7 +3359,8 @@ export function useStudioController() {
     handleCancelDeleteConversation, handleConfirmDeleteConversation,
     handleDeleteConversation,
     handleSendPrompt, handleSend: handleSendPrompt,
-    userId,
+    userId, userDisplayName,
+    lookerWorkspaceId, isLookerDevMode, setLookerWorkspaceId, handleToggleLookerDevMode,
     resolveConversationRelatedContent,
   }
 }
