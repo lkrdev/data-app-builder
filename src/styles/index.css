@@ -1514,6 +1514,11 @@ body {
 .dab-use-case-info-modal { width: 680px; max-height: 86vh; overflow: hidden; }
 .dab-use-case-guide-tabs { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--dab-border, #e2e8f0); }
 .dab-use-case-guide-body { overflow-y: auto; max-height: 64vh; padding-right: 4px; }
+.dab-use-case-badge-investigator {
+  background: var(--dab-accent-subtle, #eff6ff);
+  color: var(--dab-accent, #2563eb);
+  border: 1px solid var(--dab-accent-border, #bfdbfe);
+}
 .dab-doc-ui-preview { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; margin: 4px 6px 8px 0; border-radius: 8px; background: var(--dab-surface-muted, #f8fafc); border: 1px dashed var(--dab-border-strong, #cbd5e1); pointer-events: none; user-select: none; }
 
 /* Issue #62: Fixed-width async selector trigger, loading skeleton, lazy folder tree & search modal */

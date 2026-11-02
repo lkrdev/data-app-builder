@@ -1575,7 +1575,13 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
 
     expect(afterSave.result.value).toEqual({
       savedDisabledModes: ['lookml', 'health', 'tile'],
-      useCaseOptionsAfterSave: ['auto', 'dashboard', 'conversational-analytics', 'app'],
+      useCaseOptionsAfterSave: [
+        'auto',
+        'dashboard',
+        'conversational-analytics',
+        'app',
+        'data-investigator'
+      ],
       hasFilteredCatalogCount: true,
       routeAfterDisabledPush: '/',
       noTopbarModeSwitcher: true
@@ -2004,6 +2010,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         'dashboard',
         'conversational-analytics',
         'app',
+        'data-investigator',
         'health-check',
         'lookml',
         'tile'
@@ -2013,6 +2020,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         'Content Studio',
         'Conversational Analytics',
         'Data App',
+        'Data Investigator',
         'Health Check',
         'LookML',
         'Script'
@@ -3261,6 +3269,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       { label: 'Content Studio', selected: false },
       { label: 'Conversational Analytics', selected: false },
       { label: 'Data App', selected: false },
+      { label: 'Data Investigator', selected: false },
       { label: 'Health Check', selected: false },
       { label: 'Script', selected: true }
     ])
@@ -3823,6 +3832,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         'dashboard',
         'conversational-analytics',
         'app',
+        'data-investigator',
         'health-check',
         'lookml',
         'tile'
@@ -3951,11 +3961,18 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const deleteBtnHasLucideSvg = Boolean(document.querySelector('[data-testid^="delete-conv-"] svg.lucide'));
         const hasDecorativeEmoji = /[✨🛡️⚡🟢📊📈💬🧩🩺🐍📝🧪📸🧱🔄⏰🤖📖👤📁🔍📥🗑️]/u.test(document.body?.innerText || '');
 
-        // 3. Open UseCaseInfoModal (built on StudioModal) and verify StudioDocPreview inside it
+        // 3. Open UseCaseInfoModal (built on StudioModal) and verify StudioDocPreview + Data Investigator tab inside it
         document.querySelector('[data-testid="use-case-info-btn"]').click();
         await new Promise((r) => setTimeout(r, 100));
         const modal = document.querySelector('[data-testid="use-case-info-modal"]');
         const hasModalHeader = Boolean(modal && modal.querySelector('.dab-ds-modal-header'));
+        const invTab = modal && modal.querySelector('[data-testid="use-case-guide-tab-data-investigator"]');
+        const hasInvestigatorGuideTab = Boolean(invTab);
+        if (invTab) invTab.click();
+        await new Promise((r) => setTimeout(r, 80));
+        const hasInvestigatorDocSlidesPreview = Boolean(
+          modal && modal.querySelector('[data-testid="data-investigator-doc-slides-preview"]')
+        );
         const hasDocPreview = Boolean(modal && modal.querySelector('[data-testid="doc-ui-preview"]'));
         const rect = modal.getBoundingClientRect();
         const clip = {
@@ -3974,6 +3991,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           deleteBtnHasLucideSvg,
           hasDecorativeEmoji,
           hasModalHeader,
+          hasInvestigatorGuideTab,
+          hasInvestigatorDocSlidesPreview,
           hasDocPreview,
           clip
         };
@@ -3990,6 +4009,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       deleteBtnHasLucideSvg: true,
       hasDecorativeEmoji: false,
       hasModalHeader: true,
+      hasInvestigatorGuideTab: true,
+      hasInvestigatorDocSlidesPreview: true,
       hasDocPreview: true
     })
 

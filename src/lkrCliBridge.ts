@@ -768,7 +768,7 @@ export function classifyLookerOperation(
   const readOnlyPost =
     verb === 'POST' &&
     (/^\/(queries|sql_queries|merge_queries|content_validation)(\/|$)/.test(p) ||
-      /\/(validate|lookml_tests\/run|git_connection_tests)(\/|$)/.test(p))
+      /\/(validate|lookml_tests\/run|git_connection_tests|kda\/analyze)(\/|$)/.test(p))
   if (verb === 'GET' || verb === 'HEAD' || verb === 'OPTIONS' || readOnlyPost) {
     return {
       operation: `read_${p.replace(/^\/+|\/+$/g, '').replace(/[^a-zA-Z0-9]+/g, '_')}`,

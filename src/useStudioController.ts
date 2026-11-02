@@ -719,6 +719,8 @@ export function useStudioController() {
       'health-check': 'health',
       script: 'tile',
       data_app: 'app',
+      'data-investigator': 'app',
+      data_investigator: 'app',
       'conversational-analytics': 'app',
     } as Record<string, StudioMode>)[t || ''] ||
     (t as StudioMode) ||
@@ -1302,8 +1304,11 @@ export function useStudioController() {
       await runWithBusy(`Loading Data App from dashboard #${id}...`, `Could not load dashboard #${id}`, async () => {
         const loaded = await loadExistingDashboardApp(core40SDK, id)
         lastPublishedIdRef.current = loaded.dashboardId
-        resolvedUseCaseByIdRef.current[loaded.dashboardId] = 'app'
-        setSelectedUseCase('app')
+        const existingUc = resolvedUseCaseByIdRef.current[loaded.dashboardId]
+        const targetUc: ResolvedStudioUseCase =
+          existingUc === 'data-investigator' ? 'data-investigator' : 'app'
+        resolvedUseCaseByIdRef.current[loaded.dashboardId] = targetUc
+        setSelectedUseCase(targetUc)
         setLockedByTurn(true)
         setPublishedApp(loaded)
         setCurrentAppCode(loaded.code)
@@ -1325,7 +1330,7 @@ export function useStudioController() {
         setSelectedExplores(resolvedExplores)
         hydrateLoadedArtifact({
           mode: 'app', id: loaded.dashboardId, route: `/c/${encodeURIComponent(loaded.dashboardId)}`,
-          pushRoute, convTypes: ['app', 'data_app'], explores: resolvedExplores, studio: loaded.studio,
+          pushRoute, convTypes: ['app', 'data_app', 'data-investigator', 'data_investigator'], explores: resolvedExplores, studio: loaded.studio,
           defaultEnvId: 'env_app_42', dashboardId: loaded.dashboardId,
           fallbackText: `Loaded existing Data App "${loaded.title}" (Dashboard #${loaded.dashboardId}, ${loaded.code.length.toLocaleString()} bytes). Describe any changes to update it in place.`,
         })
@@ -1798,6 +1803,8 @@ export function useStudioController() {
       const loaders: Record<string, (id: string, pushRoute: boolean) => Promise<void>> = {
         'conversational-analytics': loadCaConversationById,
         app: loadDashboardById,
+        'data-investigator': loadDashboardById,
+        data_investigator: loadDashboardById,
         dashboard: loadNativeById,
         lookml: loadLookmlSessionById,
         health: loadHealthCheckById,
@@ -2142,6 +2149,7 @@ export function useStudioController() {
           mentions: activeMentions,
           conversations,
           selectedExplores,
+          useCase: selectedUseCase,
         })
         if (hydrated.explores.length > 0) {
           turnExplores = hydrated.explores
@@ -2404,8 +2412,10 @@ export function useStudioController() {
               messages: [...messagesWithUser, prelimAssistantMsg],
             }
           )
+          const appUseCaseType: ResolvedStudioUseCase =
+            resolvedUseCase === 'data-investigator' ? 'data-investigator' : 'app'
           lastPublishedIdRef.current = upserted.dashboardId
-          resolvedUseCaseByIdRef.current[upserted.dashboardId] = 'app'
+          resolvedUseCaseByIdRef.current[upserted.dashboardId] = appUseCaseType
           setPublishedApp(upserted)
           setEmbedNonce((n) => n + 1)
           setActiveObjectId(upserted.dashboardId)
@@ -2421,7 +2431,7 @@ export function useStudioController() {
               userId,
               {
                 id: upserted.dashboardId,
-                type: 'app',
+                type: appUseCaseType,
                 title: upserted.title,
                 explores: effectiveExplores,
                 updatedAt: new Date().toISOString(),
@@ -2429,7 +2439,7 @@ export function useStudioController() {
               },
               {
                 id: upserted.dashboardId,
-                type: 'app',
+                type: appUseCaseType,
                 title: upserted.title,
                 explores: effectiveExplores,
                 updatedAt: new Date().toISOString(),
@@ -2451,7 +2461,7 @@ export function useStudioController() {
           }
           setMessages(finalMsgs, 'app')
           convId = upserted.dashboardId
-          convType = 'app'
+          convType = appUseCaseType
           convTitle = upserted.title
           convContent = {
             dashboardId: upserted.dashboardId,

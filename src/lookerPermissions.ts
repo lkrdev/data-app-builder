@@ -58,6 +58,7 @@ export type StudioCapabilityMode = 'app' | 'dashboard' | 'lookml' | 'health' | '
 
 export type ResolvedStudioUseCase =
   | 'app'
+  | 'data-investigator'
   | 'dashboard'
   | 'lookml'
   | 'health-check'
@@ -75,6 +76,7 @@ export const STUDIO_USE_CASE_OPTIONS: Array<{
   { value: 'dashboard', label: 'Content Studio', capabilityMode: 'dashboard' },
   { value: 'conversational-analytics', label: 'Conversational Analytics', capabilityMode: 'app' },
   { value: 'app', label: 'Data App', capabilityMode: 'app' },
+  { value: 'data-investigator', label: 'Data Investigator', capabilityMode: 'app' },
   { value: 'health-check', label: 'Health Check', capabilityMode: 'health' },
   { value: 'lookml', label: 'LookML', capabilityMode: 'lookml' },
   { value: 'tile', label: 'Script', capabilityMode: 'tile' },
@@ -89,6 +91,13 @@ const USE_CASE_ALIAS_MAP: Record<string, ResolvedStudioUseCase> = {
   'data-app': 'app',
   data_app: 'app',
   dataapp: 'app',
+  'data-investigator': 'data-investigator',
+  data_investigator: 'data-investigator',
+  datainvestigator: 'data-investigator',
+  investigator: 'data-investigator',
+  investigation: 'data-investigator',
+  'data-story': 'data-investigator',
+  data_story: 'data-investigator',
   dashboard: 'dashboard',
   'content-studio': 'dashboard',
   content_studio: 'dashboard',
@@ -138,6 +147,7 @@ export const STUDIO_MODES: Array<{ mode: StudioMode; label: string; prefix: stri
 
 const CONV_PREFIX_USE_CASES: Array<[RegExp, ResolvedStudioUseCase]> = [
   [/^ca_conv_/i, 'conversational-analytics'],
+  [/^(?:inv|investigator|data[-_]investigator)_/i, 'data-investigator'],
   [/^lookml_/i, 'lookml'],
   [/^(?:hc|health)_/i, 'health-check'],
   [/^(?:dash_native|look|board)_/i, 'dashboard'],
@@ -146,12 +156,23 @@ const CONV_PREFIX_USE_CASES: Array<[RegExp, ResolvedStudioUseCase]> = [
 
 const LEGACY_ROUTE_PATTERNS: Array<[RegExp, StudioUseCase]> = [
   [/^\/(?:conversational-analytics|ca)(?:\/(.*))?$/i, 'conversational-analytics'],
+  [/^\/(?:data-investigator|investigator)(?:\/(.*))?$/i, 'data-investigator'],
   [/^\/health(?:-check)?(?:\/(.*))?$/i, 'health-check'],
   [/^\/(?:script|tile)(?:\/(.*))?$/i, 'tile'],
   [/^\/dashboard(?:\/(.*))?$/i, 'dashboard'],
   [/^\/lookml(?:\/(.*))?$/i, 'lookml'],
   [/^\/app(?:\/(.*))?$/i, 'app'],
 ]
+
+export function buildStudioRoute(
+  useCaseOrMode?: StudioUseCase | StudioMode | string,
+  objectId = ''
+): string {
+  const cleanId = String(objectId || '').trim()
+  const uc = USE_CASE_ALIAS_MAP[String(useCaseOrMode || '').trim().toLowerCase().replace(/\s+/g, '-')]
+  if (!uc) return cleanId ? `/c/${encodeURIComponent(cleanId)}` : '/'
+  return cleanId ? `/${uc}/${encodeURIComponent(cleanId)}` : `/${uc}`
+}
 
 export function parseStudioRoute(pathname: string): {
   mode: StudioMode
@@ -175,7 +196,7 @@ export function parseStudioRoute(pathname: string): {
   if (clean.startsWith('/c/')) {
     const convId = decodeURIComponent(clean.slice(3).replace(/^\/+|\/+$/g, ''))
     const convMatch = convId.match(
-      /^conv_(app|data_app|dashboard|lookml|health-check|health_check|health|tile|script|conversational-analytics)_(.+)$/i
+      /^conv_(app|data_app|data-investigator|data_investigator|investigator|dashboard|lookml|health-check|health_check|health|tile|script|conversational-analytics)_(.+)$/i
     )
     if (convMatch) return mk(studioModeToUseCase(convMatch[1]), convMatch[2], convId)
     for (const [re, uc] of CONV_PREFIX_USE_CASES) {
@@ -218,6 +239,7 @@ const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
   ['lookml', /\b(lookml|\.lkml|dimension\s*:|measure\s*:|explore\s*:|refinement|data\s*test|model\.lkml|view\.lkml)\b/i],
   ['tile', /\b(python\s*tile|python\s*script|codemode\s*script|obj_script|monty\s*python\s*tile)\b/i],
   ['dashboard', /\b(udd|user[- ]defined\s*dashboard|native\s*dashboard|saved\s*look|lookml\s*dashboard|pin\s*to\s*board|schedule\s*dashboard|content\s*studio)\b/i],
+  ['data-investigator', /\b(data\s*investigat(?:or|ion)|investigat(?:e|ion|ing)\s+(?:why|how|the|root\s*cause|drop|spike|anomaly|driver|decline|change|trend)|key\s*driver\s*analysis|run_key_driver_analysis|root[- ]cause\s*(?:analysis|investigation|narrative|report|story)|narrative\s*(?:data\s*app|report|slides|deck|doc|investigation)|google\s*(?:doc|slides|presentation)\s*(?:narrative|story|investigation|app|report)|data\s*story)\b/i],
   ['app', /\b(data\s*app|lit\s*app|web\s*component|app-kpi|app-chart|app-grid|custom\s*app|interactive\s*app)\b/i],
   ['conversational-analytics', /\b(conversational\s*analytics|ca\s*agent|what\s+(?:is|are)|how\s+many|which\s+\w+|why\s+did|summarize\s+the|explain\s+the|answer\s+this\s+question|show\s+(?:me\s+)?the\s+monthly\s+breakdown)\b|\?\s*$/i],
   ['lookml', /\b(add\s+a\s+measure|add\s+a\s+dimension|create\s+a\s+view|edit\s+view|sql_table_name|derived_table)\b/i],
@@ -240,7 +262,15 @@ export function extractResolvedUseCase(
               .filter((m): m is ResolvedStudioUseCase => Boolean(m))
           )
         )
-      : ['app', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics']
+      : [
+          'app',
+          'data-investigator',
+          'dashboard',
+          'lookml',
+          'health-check',
+          'tile',
+          'conversational-analytics',
+        ]
   const allowedSet = new Set<ResolvedStudioUseCase>(allowedList.length > 0 ? allowedList : ['app'])
 
   const rawText = String(text || '')

@@ -46,7 +46,7 @@ When a prompt starts with or contains `[CONVERSATION_LABEL_REQUEST]`, you are ha
 When a prompt starts with or contains `[STARTER_PROMPTS_REQUEST]`, you are handling an out-of-band, stateless starter prompt synthesis request:
 1. Inspect the active `useCase`, permitted use cases, discovered LookML explore/field metadata (`model::explore`, dimensions, measures), and recent user content (`content_summary` dashboards and Looks).
 2. Do **not** call any tools (`lookup_skill`, `code_execution`, `run_looker_codemode`) or read any skill files.
-3. Reply with **only** 3–4 concise, tailored starter chips wrapped in `<STARTER_PROMPTS>[...]</STARTER_PROMPTS>` JSON (`[{"id":"...","label":"3-6 word plain text without emojis","prompt":"1-sentence actionable prompt","useCase":"app|dashboard|conversational-analytics|lookml|health-check|tile"}]`).
+3. Reply with **only** 3–4 concise, tailored starter chips wrapped in `<STARTER_PROMPTS>[...]</STARTER_PROMPTS>` JSON (`[{"id":"...","label":"3-6 word plain text without emojis","prompt":"1-sentence actionable prompt","useCase":"app|data-investigator|dashboard|conversational-analytics|lookml|health-check|tile"}]`).
 
 ## Use Case Auto-Classification (Turn 1 Routing)
 
@@ -55,6 +55,7 @@ When the Studio use-case selector is set to `Auto` (`useCase="auto"`), classify 
 | Use Case ID | Label | Routing Intent & Trigger Signals |
 | --- | --- | --- |
 | `app` | **Data App** | Custom interactive Lit web component Data App (`apps/<name>/app.js`), metric switchers, custom UI layouts, `<app-kpi>`, `<app-chart>`, `<app-grid>`, or screenshot-to-app conversion |
+| `data-investigator` | **Data Investigator** | Point-in-time root-cause narrative Data App in Google Doc (`doc`, default) or Google Presentation (`slides` / `presentation` / `deck`) format with `run_key_driver_analysis`, LookML `drill_fields` (`limit: '500'`), fixed date ranges (`YYYY-MM-DD to YYYY-MM-DD`), and sequential **Chart -> What This Chart Means -> Next Investigation Path** chapters |
 | `dashboard` | **Content Studio** | Native Looker User-Defined Dashboards (UDDs), LookML Dashboards (`.dashboard.lookml`), Saved Looks, Boards, or Scheduled Plans (`upsert_udd`, `upsert_lookml_dashboard`, `pin_to_board`, `schedule_dashboard`) |
 | `lookml` | **Agentic LookML** | Authoring or refactoring LookML models, views, explores, refinements (`.lkml`), SQL-to-LookML parity, field curation/descriptions, or LookML data tests (`.test.lkml`) |
 | `health-check` | **Health Check** | 3-Pillar Looker & BigQuery Health Check audit (System Activity Pillar 1, LookML 0–4 Transcriber Rubric Pillar 2, BigQuery `INFORMATION_SCHEMA` Pillar 3, `TECHNICAL_DESIGN_DOCUMENT.md`) |

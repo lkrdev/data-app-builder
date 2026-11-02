@@ -497,7 +497,7 @@ When a prompt starts with or contains \`[CONVERSATION_LABEL_REQUEST]\`, you are 
 When a prompt starts with or contains \`[STARTER_PROMPTS_REQUEST]\`, you are handling an out-of-band, stateless starter prompt synthesis request:
 1. Inspect the active \`useCase\`, permitted use cases, discovered LookML explore/field metadata (\`model::explore\`, dimensions, measures), and recent user content (\`content_summary\` dashboards and Looks).
 2. Do **not** call any tools (\`lookup_skill\`, \`code_execution\`, \`run_looker_codemode\`) or read any skill files.
-3. Reply with **only** 3–4 concise, tailored starter chips wrapped in \`<STARTER_PROMPTS>[...]</STARTER_PROMPTS>\` JSON (\`[{"id":"...","label":"3-6 word plain text without emojis","prompt":"1-sentence actionable prompt","useCase":"app|dashboard|conversational-analytics|lookml|health-check|tile"}]\`).
+3. Reply with **only** 3–4 concise, tailored starter chips wrapped in \`<STARTER_PROMPTS>[...]</STARTER_PROMPTS>\` JSON (\`[{"id":"...","label":"3-6 word plain text without emojis","prompt":"1-sentence actionable prompt","useCase":"app|data-investigator|dashboard|conversational-analytics|lookml|health-check|tile"}]\`).
 
 ## Use Case Auto-Classification (Turn 1 Routing)
 
@@ -506,6 +506,7 @@ When the Studio use-case selector is set to \`Auto\` (\`useCase="auto"\`), class
 | Use Case ID | Label | Routing Intent & Trigger Signals |
 | --- | --- | --- |
 | \`app\` | **Data App** | Custom interactive Lit web component Data App (\`apps/<name>/app.js\`), metric switchers, custom UI layouts, \`<app-kpi>\`, \`<app-chart>\`, \`<app-grid>\`, or screenshot-to-app conversion |
+| \`data-investigator\` | **Data Investigator** | Point-in-time root-cause narrative Data App in Google Doc (\`doc\`, default) or Google Presentation (\`slides\` / \`presentation\` / \`deck\`) format with \`run_key_driver_analysis\`, LookML \`drill_fields\` (\`limit: '500'\`), fixed date ranges (\`YYYY-MM-DD to YYYY-MM-DD\`), and sequential **Chart -> What This Chart Means -> Next Investigation Path** chapters |
 | \`dashboard\` | **Content Studio** | Native Looker User-Defined Dashboards (UDDs), LookML Dashboards (\`.dashboard.lookml\`), Saved Looks, Boards, or Scheduled Plans (\`upsert_udd\`, \`upsert_lookml_dashboard\`, \`pin_to_board\`, \`schedule_dashboard\`) |
 | \`lookml\` | **Agentic LookML** | Authoring or refactoring LookML models, views, explores, refinements (\`.lkml\`), SQL-to-LookML parity, field curation/descriptions, or LookML data tests (\`.test.lkml\`) |
 | \`health-check\` | **Health Check** | 3-Pillar Looker & BigQuery Health Check audit (System Activity Pillar 1, LookML 0–4 Transcriber Rubric Pillar 2, BigQuery \`INFORMATION_SCHEMA\` Pillar 3, \`TECHNICAL_DESIGN_DOCUMENT.md\`) |
@@ -513,6 +514,36 @@ When the Studio use-case selector is set to \`Auto\` (\`useCase="auto"\`), class
 | \`conversational-analytics\` | **Conversational Analytics** | Ad-hoc natural-language analytical Q&A, explore data questions, KPI lookups, or trend explanations without building a persistent app or LookML file |
 
 Always restrict your \`<USE_CASE>\` choice to the allowed modes list provided in the Turn 1 prompt (\`Allowed use cases for this user: [...]\`), and lock the conversation to that resolved use case for all subsequent turns.
+`
+
+export const DATA_INVESTIGATOR_GUIDE_MD = `# Data Investigator — Narrative Root-Cause Data Apps (Google Doc & Slides)
+
+When building a **Data Investigator** (\`data-investigator\`) app, author a self-contained Lit Data App (\`apps/<name>/app.js\`) that presents a point-in-time root-cause investigation as a structured **Google Doc** (default) or **Google Presentation (Slides)** narrative.
+
+## 1. Format Selection & Header Mode Switcher (\`Doc View\` / \`Slides View\`)
+- **Default Format = Google Doc Narrative (\`this.viewMode = 'doc'\`)** unless the user prompt explicitly mentions \`"slides"\`, \`"presentation"\`, \`"deck"\`, or \`"google presentation"\` (in which case initialize \`this.viewMode = 'slides'\` in \`constructor()\`).
+- Always render an in-app header switcher (\`Doc View\` and \`Slides View\` buttons updating \`this.viewMode\`) so the reader can toggle between document and presentation layouts at any time.
+- **Google Doc Mode (\`doc\`)**:
+  - Render a clean document page container with a sticky chapter outline and an **Overview / Executive Summary** section stating the initial question/input, target Explore (\`model::explore\`), and the **fixed point-in-time date window** (\`YYYY-MM-DD to YYYY-MM-DD\`).
+  - Follow the overview with sequential investigation chapters. Each chapter MUST contain three subsections in order:
+    1. **Chart / Visual Evidence (\`<app-chart>\` / \`<app-kpi>\`)**
+    2. **What This Chart Means** — quantitative callouts, segment shares, period deltas, and unexpected anomalies discovered in the query output.
+    3. **Next Investigation Path** — the explicit drill hypothesis explaining *why* the next dimension or LookML \`drill_fields\` path is examined next.
+  - Conclude with a root-driver chapter and a final \`limit="500"\` \`<app-grid>\` evidence table.
+- **Google Presentation Mode (\`slides\`)**:
+  - Render an interactive slide deck viewer (\`Slide \${this.activeSlide + 1} of \${slides.length}\`, \`Previous\` / \`Next\` buttons + \`ArrowLeft\` / \`ArrowRight\` keyboard navigation).
+  - Each investigation step renders as a self-contained slide with a headline takeaway, \`<app-chart>\` / \`<app-kpi>\`, a **"What This Means"** bullet summary, and a **"Next Investigation Path"** footer transition.
+
+## 2. LookML \`drill_fields\`, \`limit: '500'\`, & \`run_key_driver_analysis\`
+- **Prioritize Predefined LookML \`drill_fields\`**: Inspect \`[Drills: \`...\`]\` annotations in \`/workspace/schema.md\` (or \`f.get("drill_fields")\` from \`lookml_model_explore\`) and follow the measure/dimension \`drill_fields\` hierarchy and related explore dimensions along the investigation path.
+- **Enforce \`limit: '500'\`**: Set \`limit: '500'\` on all drill, breakdown, and evidence queries in \`data-investigator\` mode (\`run_inline_query("json", { ..., "limit": "500" })\` and \`.query=\${{ ..., limit: '500' }}\`).
+- **Pre-Injected \`run_key_driver_analysis(body)\` (\`POST /api/4.0/internal/kda/analyze\`)**:
+  - Available directly in \`run_looker_codemode\` as a read-only helper (\`requiresPermission: false\`).
+  - Call \`run_key_driver_analysis({ "data_source": { "model_name": m, "explore_name": e }, "contribution_metric": "<view.measure>", "dimensions": ["<dim1>", "<dim2>"], "base_filters": { ... }, "baseline_filters": { "<date_dim>": "<fixed_baseline_range>" }, "breach_filters": { "<date_dim>": "<fixed_breach_range>" } })\` (up to 6 dimensions, or \`"data_source": { "query_id": qid }\`) to rank the dimensional segments driving the metric change. If KDA is unavailable on the instance, gracefully fall back to \`run_inline_query\` breakdowns across the top \`drill_fields\` dimensions with \`limit: "500"\`.
+
+## 3. Strict Point-in-Time Fixed Dates Rule (\`YYYY-MM-DD to YYYY-MM-DD\`)
+- A Data Investigation is a point-in-time record. **NEVER** use relative Looker date strings (\`"last 30 days"\`, \`"90 days"\`, \`"last quarter"\`, \`"this month"\`, \`"this year"\`, \`"yesterday"\`, \`"today"\`) in \`<app-kpi>\`, \`<app-chart>\`, or \`<app-grid>\` \`.query.filters\`.
+- In \`run_looker_codemode\`, use pre-injected \`INVESTIGATION_ANCHOR_DATE\` and \`to_fixed_date_range(expr)\` (e.g. \`to_fixed_date_range("last 30 days")\` -> \`"2026-02-28 to 2026-03-30"\`) so every query and widget filter uses an explicit fixed date range (\`"YYYY-MM-DD to YYYY-MM-DD"\`).
 `
 
 export const DATA_APP_GUIDE_MD = `# Looker Lit Data Apps — Compact Sandbox Guide
