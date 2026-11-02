@@ -168,6 +168,7 @@ export function StudioSelect<T extends string = string>({
     >
       <button
         type="button"
+        data-testid={testId ? `${testId}-trigger` : undefined}
         className={`dab-studio-select-trigger ${iconOnly ? 'icon-only' : ''}`.trim()}
         disabled={disabled}
         aria-haspopup="listbox"

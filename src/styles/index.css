@@ -350,7 +350,7 @@ body {
   gap: 8px;
 }
 
-.dab-composer-model-select {
+.dab-composer-model-select .dab-studio-select-trigger {
   height: 28px;
   font-size: 11.5px;
   padding: 0 8px;

@@ -1,7 +1,7 @@
 project_name: "data_app_builder"
 
 application: data_app_builder {
-  label: "Data App Studio"
+  label: "Looker Agent"
   url: "https://localhost:8080/bundle.js"
   # file: "bundle.js"
   mount_points: {

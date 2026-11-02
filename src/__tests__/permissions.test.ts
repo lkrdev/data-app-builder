@@ -2468,16 +2468,9 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     }
   })
 
-  test('24. renders contextual use-case Markdown guides with embedded non-actionable React UI preview components (Issue #64)', () => {
-    expect(USE_CASE_GUIDE_ORDER.map((u) => u.tabLabel)).toEqual([
-      'Auto',
-      'Data App',
-      'Content Studio',
-      'Conversational Analytics',
-      'LookML',
-      'Health Check',
-      'Script',
-    ])
+  test('24. renders contextual use-case Markdown guides with embedded non-actionable React UI preview components (Issue #64 & Issue #85)', () => {
+    expect(USE_CASE_GUIDE_ORDER.map((u) => u.useCase)).toEqual(['auto', 'lookml', 'dashboard', 'conversational-analytics', 'app', 'health-check', 'tile'])
+    expect(USE_CASE_GUIDE_ORDER.map((u) => u.tabLabel)).toEqual(['Auto', 'Agentic LookML', 'Content Studio', 'Conversational Analytics', 'Data App', 'Health Check', 'Script'])
 
     const expectedComponents = [
       'PublishDashboardButton',
@@ -2490,17 +2483,27 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       'LookmlTurnSkills',
       'PushLookmlButton',
       'ExportHealthTddButton',
-      'UseCaseBadge',
     ]
     for (const compName of expectedComponents) {
       expect(typeof DOC_UI_COMPONENTS[compName]).toBe('function')
     }
+    expect(DOC_UI_COMPONENTS.UseCaseBadge).toBeUndefined()
 
     const allGuideMarkdown = Object.values(USE_CASE_GUIDES)
       .map((g) => g.markdown)
       .join('\n')
     for (const compName of expectedComponents) {
       expect(allGuideMarkdown).toContain(`<${compName} />`)
+    }
+    expect(allGuideMarkdown).not.toContain('Conversation Use-Case Lock')
+    expect(allGuideMarkdown).not.toContain('After Turn 1')
+    expect(allGuideMarkdown).not.toContain('AGENTS.md')
+    expect(allGuideMarkdown).not.toContain('apps/<name>/app.js')
+    expect(allGuideMarkdown).not.toContain('[CA_AGENT_SELECTION_REQUEST]')
+    expect(allGuideMarkdown).not.toContain('obj_script_')
+    expect(allGuideMarkdown).not.toContain('My Creations')
+    for (const label of ['Agentic LookML', 'Content Studio', 'Conversational Analytics', 'Data App', 'Health Check', 'Python Tile']) {
+      expect(USE_CASE_GUIDES.auto.markdown).toContain(label)
     }
 
     const tree = renderUseCaseGuideMarkdown(USE_CASE_GUIDES.tile.markdown)

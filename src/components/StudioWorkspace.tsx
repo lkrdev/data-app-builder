@@ -24,6 +24,7 @@ import { StudioController } from '../useStudioController'
 import { TilePreviewPane } from './ScriptStudioView'
 import {
   StudioBadge,
+  StudioButton,
   StudioDocPreview,
   StudioModal,
   StudioSelect,
@@ -449,109 +450,112 @@ export const DOC_UI_COMPONENTS: Record<string, () => React.ReactElement> = {
   ),
   PushLookmlButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>✨ Update LookML</button>,
   ExportHealthTddButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>✨ Download Markdown (.md)</button>,
-  UseCaseBadge: () => <span className="dab-badge dab-locked-use-case-badge">🔒 Locked Use Case</span>,
 }
 
 export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: string; markdown: string }> = {
   auto: {
-    title: 'Auto (Agent Decides) — Turn-1 Routing Guide',
+    title: 'Auto — Smart Looker Agent Routing Guide',
     tabLabel: 'Auto',
     markdown: [
-      '# Auto Use-Case Routing',
-      'Evaluates your first prompt against `AGENTS.md` and your Looker role permissions (`explore`, `save_dashboards`, `develop`, `use_sql_runner`) to select the best Studio workflow automatically.',
-      '## Conversation Use-Case Lock',
-      '<UseCaseBadge />',
-      '- After Turn 1 completes, the conversation locks to the resolved use case so follow-up turns preserve your artifact, sandbox state, and preview pane.',
-      '- Click `+ New Conversation` in the left sidebar at any time to unlock the selector and start a fresh task.',
-    ].join('\n'),
-  },
-  app: {
-    title: 'Data App — Custom Lit Web Component Guide',
-    tabLabel: 'Data App',
-    markdown: [
-      '# Interactive Looker Data App (`apps/<name>/app.js`)',
-      'Builds a self-contained single-file Lit web component (`<app-kpi>`, `<app-chart>`, `<app-grid>`) validated in `/workspace` and published directly into a Looker dashboard extension tile.',
-      '## Live Preview Controls',
-      '<ReloadPreviewButton />',
-      'Re-runs the warm `@looker/embed-sdk` dashboard connection (`asDashboardConnection().run()`) without recreating the iframe.',
-      '### Open Published Dashboard in Looker',
-      '<OpenInLookerButton />',
-      '- Opens the underlying Looker dashboard (`/dashboards/:id`) in a new browser tab.',
-      '- Supports pasting screenshots (`Cmd+V`) into the composer to convert mockups into live Data Apps.',
-    ].join('\n'),
-  },
-  dashboard: {
-    title: 'Content Studio — Native UDDs, Looks, Boards & Schedules',
-    tabLabel: 'Content Studio',
-    markdown: [
-      '# Native Looker Content Studio',
-      'Creates and updates native Looker User-Defined Dashboards (UDDs), Saved Looks, Boards, and Scheduled Plans in-browser via `LkrCodeMode`.',
-      '## Preview & Navigation Controls',
-      '<ReloadPreviewButton />',
-      'Refreshes the embedded Looker UDD or Saved Look inside the warm preview container.',
-      '### Open Native Content in Looker',
-      '<OpenInLookerButton />',
-      '- Launches the native Looker dashboard (`/dashboards/:id`) or Look (`/looks/:id`) directly in Looker.',
-      '- All created content is indexed in **My Creations** and persisted to your personal or selected shared folder.',
-    ].join('\n'),
-  },
-  'conversational-analytics': {
-    title: 'Conversational Analytics — Isolated Sub-Agent & Embedded Chat',
-    tabLabel: 'Conversational Analytics',
-    markdown: [
-      '# Looker Conversational Analytics (CA)',
-      'Routes natural-language analytical questions to the best Looker CA Agent via a stateless isolated sub-agent (`[CA_AGENT_SELECTION_REQUEST]`, `tools=[]`) and embeds the live CA chat.',
-      '## Embedded CA Chat Controls',
-      '<ReloadPreviewButton />',
-      'Reloads the embedded `/embed/conversations/:id` session in the right preview pane.',
-      '### Open CA Conversation in Looker',
-      '<OpenInLookerButton />',
-      '- Opens the full Looker Conversational Analytics conversation in a new tab.',
-      '- Displays the isolated sub-agent selection rationale and matched `model::explore` scope below the toolbar.',
+      '# Automatic Workflow Discovery',
+      '**Auto** analyzes what you want to accomplish and automatically routes your request to the best Looker workflow allowed by your Looker permissions.',
+      '## What You Can Do Across Each Use Case',
+      '- **Agentic LookML**: Author, validate, and test LookML views, explores, refinements, and field descriptions in your development branch.',
+      '- **Content Studio**: Create and update native Looker User-Defined Dashboards (UDDs), Saved Looks, Boards, and Scheduled Plans.',
+      '- **Conversational Analytics**: Ask natural-language data questions and explore trends with Looker Conversational Analytics agents.',
+      '- **Data App**: Build custom interactive Looker Data Apps with KPI cards, charts, tables, and metric switchers, or convert pasted screenshots into live apps.',
+      '- **Health Check**: Run a 3-Pillar Looker and BigQuery audit covering System Activity performance, LookML maturity, and warehouse efficiency.',
+      '- **Python Tile (Script)**: Write, test, publish, and schedule custom Python data scripts that run as interactive dashboard tiles.',
     ].join('\n'),
   },
   lookml: {
-    title: 'Agentic LookML — Dev Workspace Sync, Curation & Parity',
-    tabLabel: 'LookML',
+    title: 'Agentic LookML — Modeling, Validation & Data Tests',
+    tabLabel: 'Agentic LookML',
     markdown: [
-      '# Agentic LookML (`lkr-dev-cli` + `LkrCodeMode`)',
-      'Switches to your active Looker `dev` workspace in-browser, runs offline `lkr parse` & `lkr schema validate` in `/workspace`, and verifies `/sql/:slug` vs `/x/:slug` parity.',
-      '## Per-Turn Activated LookML Skills',
+      '# Agentic LookML Modeling & Validation',
+      'Author and refine LookML models, views, explores, field descriptions, and data tests in your Looker development workspace with automated SQL and Explore parity checks.',
+      '## Focus Your Turn with LookML Skills',
       '<LookmlTurnSkills />',
-      'Toggle per-turn skills (`lookml-field-curation`, `lookml-tests`, `lookml-snapshot`, `generate-view-from-table`, `agentic-lookml-workflow`) to steer field descriptions, `.test.lkml` assertions, and Bronze/Silver/Gold refinements.',
-      '## Push & Validate LookML Changes',
+      'Toggle specialized skills before sending your prompt to steer field descriptions, data test assertions, Explore parity verification, or layered view refinements.',
+      '## Review Diffs & Update LookML',
       '<PushLookmlButton />',
-      '- Pushes modified `.lkml` files to your active dev branch, runs `validate_project` and `run_lookml_test`, and renders unified diffs.',
+      '- Inspect side-by-side LookML diffs, validator results, and query parity checks in the preview pane.',
+      '- Push validated updates directly to your active Looker development branch.',
+    ].join('\n'),
+  },
+  dashboard: {
+    title: 'Content Studio — Native Dashboards, Looks, Boards & Schedules',
+    tabLabel: 'Content Studio',
+    markdown: [
+      '# Native Looker Content Studio',
+      'Create, organize, and update native Looker User-Defined Dashboards (UDDs), Saved Looks, Boards, and Scheduled Plans directly from natural-language prompts.',
+      '## Preview & Refresh Controls',
+      '<ReloadPreviewButton />',
+      'Refreshes the embedded Looker dashboard or Saved Look in the live preview pane after changes are applied.',
+      '### Open Native Content in Looker',
+      '<OpenInLookerButton />',
+      '- Launches your dashboard, Look, or Board in a new Looker browser tab.',
+      '- Save content to your personal folder or any shared folder you have permission to edit.',
+    ].join('\n'),
+  },
+  'conversational-analytics': {
+    title: 'Conversational Analytics — Natural-Language Data Q&A',
+    tabLabel: 'Conversational Analytics',
+    markdown: [
+      '# Looker Conversational Analytics',
+      'Ask ad-hoc analytical questions in plain language, automatically match with the best Looker Conversational Analytics agent for your data, and explore interactive answers.',
+      '## Embedded Conversation Controls',
+      '<ReloadPreviewButton />',
+      'Reloads the embedded Looker Conversational Analytics session in the preview pane.',
+      '### Open Conversation in Looker',
+      '<OpenInLookerButton />',
+      '- Opens the full Looker Conversational Analytics thread in a new browser tab.',
+      '- Shows the matched analytics agent and target Explore scope above the conversation.',
+    ].join('\n'),
+  },
+  app: {
+    title: 'Data App — Custom Interactive Looker Applications',
+    tabLabel: 'Data App',
+    markdown: [
+      '# Interactive Looker Data Apps',
+      'Build custom interactive applications with KPI scorecards, dynamic charts, data grids, and metric switchers published directly into a Looker dashboard tile.',
+      '## Live Preview Controls',
+      '<ReloadPreviewButton />',
+      'Re-runs the live Looker dashboard preview in place so you can test interactive filters and controls immediately.',
+      '### Open Published App in Looker',
+      '<OpenInLookerButton />',
+      '- Opens the published Looker dashboard hosting your Data App in a new browser tab.',
+      '- Paste a mockup or screenshot (`Cmd+V`) into the composer to turn a visual design into a working Data App.',
     ].join('\n'),
   },
   'health-check': {
-    title: '3-Pillar Looker & BigQuery Health Check Guide',
+    title: 'Health Check — 3-Pillar Looker & BigQuery Audit',
     tabLabel: 'Health Check',
     markdown: [
       '# 3-Pillar Looker & BigQuery Health Check',
-      'Executes a zero-CLI audit in `LkrCodeMode` across **Pillar 1** (`system__activity` latency & cache), **Pillar 2** (LookML 0–4 Transcriber Maturity Rubric), and **Pillar 3** (BigQuery `INFORMATION_SCHEMA` slot & partition telemetry).',
+      'Run a comprehensive audit across **Pillar 1** (System Activity query latency and caching), **Pillar 2** (LookML modeling quality and best practices), and **Pillar 3** (BigQuery slot usage and storage partitioning).',
       '## Export Technical Design Document (TDD)',
       '<ExportHealthTddButton />',
-      '- Downloads the synthesized 7-section `TECHNICAL_DESIGN_DOCUMENT.md` with remediation diffs, BigQuery `PARTITION BY` / `CLUSTER BY` DDL, and quantified ROI.',
-      '- Switch between **Rendered Report** and **`{ } Raw Markdown`** or copy the full Markdown to your clipboard.',
+      '- Downloads a complete Markdown Technical Design Document with prioritized recommendations, SQL optimizations, and estimated impact.',
+      '- Switch between the formatted **Rendered Report** and **`{ } Raw Markdown`**, or copy the report to your clipboard.',
     ].join('\n'),
   },
   tile: {
-    title: 'Python Tile (Script) — WASM Monty Sandbox & Scheduler Guide',
+    title: 'Python Tile (Script) — Custom Data Scripts & Scheduling',
     tabLabel: 'Script',
     markdown: [
       '# Publish As Dashboard',
       '<PublishDashboardButton />',
-      'Publishes the current script as a Looker UDD tile in your selected target folder (`load_configuration="wait"`, `layout="extension"`) and binds `tile_element_<id>` to `obj_script_<id>`.',
+      'Publishes your Python script as an interactive Looker dashboard tile in your selected folder so teammates can view and filter its output.',
       '## Execute & Test Script Mode',
       '<RunPythonButton />',
       '<ScriptModeSelect />',
-      'Executes your Python script in the browser WASM Monty sandbox (`LkrCodeMode.runPythonCode`) with `vars.mode` (`summary`, `detailed_audit`, `anomaly_alert`) and `vars.dashboard_filters`.',
+      'Runs your Python script in the in-browser sandbox and lets you switch execution modes (`summary`, `detailed_audit`, `anomaly_alert`) with live dashboard filter values.',
       '## Save & Schedule Recurring Runs',
       '<SaveScriptButton />',
       '<ScheduleScriptButton />',
-      '- **Save Script**: Persists `obj_script_<id>` and indexes it in **My Creations**.',
-      '- **Schedule Script**: Opens the Custom CodeMode Script Scheduler (`obj_schedule_<id>`) to configure cron cadence, `vars.mode`, and snapshot/webhook delivery.',
+      '- **Save Script**: Saves your latest script code and configuration so you can reuse or publish it anytime.',
+      '- **Schedule Script**: Configures recurring cron schedules, execution modes, and automated delivery for your script.',
     ].join('\n'),
   },
 }
@@ -673,7 +677,7 @@ export const UseCaseInfoModal: React.FC<{
         ))}
       </div>
 
-      <div className="dab-use-case-guide-body">
+      <div className="dab-use-case-guide-body" data-testid="use-case-info-mdx-body">
         {renderUseCaseGuideMarkdown(guide.markdown)}
       </div>
     </StudioModal>
@@ -1069,7 +1073,6 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     history,
     lookmlBundle,
     nativeContent,
-    publishedApp,
     infoModalUseCase,
     setInfoModalUseCase,
   } = ctl
@@ -1211,7 +1214,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
             ? 'Describe the Script to generate or update (or paste a screenshot)...'
             : builderMode === 'dashboard'
             ? 'Describe a Looker UDD, Look, Board, or Schedule to create or update...'
-            : 'Describe the Data App to build or paste a screenshot (Cmd+Enter to send)...'
+            : 'Ask your Looker Agent what you want to build, analyze, or automate, or pick a starter prompt above...'
         }
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
@@ -1264,16 +1267,17 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 : 'Configure credentials to send'}
             </button>
           )}
-          <button
-            type="button"
-            data-testid="studio-send-btn"
-            className="dab-btn-gemini"
+          <StudioButton
+            variant="gemini"
+            testId="studio-send-btn"
             onClick={handleSendPrompt}
             disabled={
               !isAuthenticated || !!busyStatus || (!prompt.trim() && pastedImages.length === 0)
             }
           >
-            {isCaMode || selectedUseCase === 'conversational-analytics'
+            {busyStatus
+              ? 'Generating...'
+              : isCaMode || selectedUseCase === 'conversational-analytics'
               ? caConversation
                 ? '✨ Ask CA Agent'
                 : '✨ Route & Start CA Chat'
@@ -1287,10 +1291,8 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               ? nativeContent
                 ? '✨ Update Content'
                 : '✨ Create / Update Content'
-              : publishedApp
-              ? '✨ Update App'
-              : '✨ Build App'}
-          </button>
+              : 'Send Message'}
+          </StudioButton>
         </div>
       </div>
     </div>
@@ -1311,9 +1313,8 @@ export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ 
 
   return (
     <main className="dab-empty-stage-centered" data-testid="centered-empty-prompt">
-      <div className="dab-empty-prompt-card">
+      <div className="dab-empty-prompt-card" data-testid="studio-empty-stage">
         <div className="dab-empty-hero">
-          <span className="dab-badge">New Conversation</span>
           <h2>
             {isHealthCheckMode
               ? 'Run a 3-Pillar Looker & BigQuery Health Check'
@@ -1323,7 +1324,7 @@ export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ 
               ? 'Author & Schedule a Looker Script'
               : builderMode === 'dashboard'
               ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)'
-              : 'Build a Looker Data App with Antigravity'}
+              : 'Use your Looker Agent'}
           </h2>
           <p className="dab-muted">
             {selectedExplores.length > 0 ? <>Exploring <code>{selectedExplores.join(', ')}</code> — pick a starter prompt below or describe what you want to build.</> : 'Pick a starter prompt below or describe what you want to build, analyze, or automate.'}
@@ -1400,7 +1401,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               <strong>
                 {builderMode === 'dashboard'
                   ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)'
-                  : 'Build a Looker Data App with Antigravity'}
+                  : 'Ask your Looker Agent to build, analyze, or automate across Looker'}
               </strong>
             </p>
             <p className="dab-muted">
