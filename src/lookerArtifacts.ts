@@ -66,6 +66,8 @@ function writeSwrCache(key: unknown, value: unknown): void {
 export type StudioToolMode =
   | 'app'
   | 'data_app'
+  | 'data-investigator'
+  | 'data_investigator'
   | 'lookml'
   | 'tile'
   | 'script'
@@ -74,9 +76,13 @@ export type StudioToolMode =
   | 'health_check'
   | 'conversational-analytics'
 
+export type StudioArtifactType = StudioToolMode
+
 const STUDIO_TOOL_MODES = new Set<string>([
   'app',
   'data_app',
+  'data-investigator',
+  'data_investigator',
   'lookml',
   'tile',
   'script',
@@ -190,13 +196,13 @@ export function resolveConversationRelatedContent(
   const uid = String(userId || '1').trim()
   const c = conv.content || {}
   const prefixMatch = String(conv.id || '').match(
-    /^conv_(app|data_app|dashboard|tile|script|health_check|health-check|health|lookml|ca|conversational-analytics)_(.+)$/
+    /^conv_(app|data_app|data-investigator|data_investigator|dashboard|tile|script|health_check|health-check|health|lookml|ca|conversational-analytics)_(.+)$/
   )
   const rawType = String(conv.type || conv.use_case || prefixMatch?.[1] || 'app').trim()
   const stripPrefix = (s: string) =>
     s
       .replace(
-        /^conv_(?:app|data_app|dashboard|tile|script|health_check|health-check|health|lookml|ca|conversational-analytics)_/,
+        /^conv_(?:app|data_app|data-investigator|data_investigator|dashboard|tile|script|health_check|health-check|health|lookml|ca|conversational-analytics)_/,
         ''
       )
       .replace(/^obj_script_/, '')
@@ -397,7 +403,7 @@ function parseUserIndexRow(
     const parsed = parseArtifactValue<Record<string, unknown>>(row.value)
     if (!parsed || typeof parsed !== 'object') return null
     const keyMatch = String(row.key || '').match(
-      /^user_[^_]+_(app|data_app|lookml|tile|script|health|health_check|dashboard|conversational-analytics)_(.+)$/
+      /^user_[^_]+_(app|data_app|data-investigator|data_investigator|lookml|tile|script|health|health_check|dashboard|conversational-analytics)_(.+)$/
     )
     const inferredType = (parsed.type ||
       parsed.contentType ||
@@ -418,7 +424,13 @@ function parseUserIndexRow(
 }
 
 const canonArtifactMode = (t?: StudioToolMode): string =>
-  t === 'data_app' ? 'app' : t === 'health_check' ? 'health' : t === 'script' ? 'tile' : t || ''
+  t === 'data_app' || t === 'data-investigator' || t === 'data_investigator'
+    ? 'app'
+    : t === 'health_check'
+    ? 'health'
+    : t === 'script'
+    ? 'tile'
+    : t || ''
 
 function matchesArtifactType(entryType: StudioToolMode, filterType?: StudioToolMode): boolean {
   return !filterType || canonArtifactMode(entryType) === canonArtifactMode(filterType)
@@ -538,7 +550,7 @@ export class ArtifactService {
     }
 
     const userKeyMatch = key.match(
-      /^user_([^_]+)_(app|data_app|lookml|tile|script|health|health_check|dashboard|conversational-analytics)_(.+)$/
+      /^user_([^_]+)_(app|data_app|data-investigator|data_investigator|lookml|tile|script|health|health_check|dashboard|conversational-analytics)_(.+)$/
     )
     if (userKeyMatch) {
       const uid = userKeyMatch[1]
@@ -631,7 +643,7 @@ export class ArtifactService {
     }
 
     const userKeyMatch = key.match(
-      /^user_([^_]+)_(app|data_app|lookml|tile|script|health|health_check|dashboard|conversational-analytics)_(.+)$/
+      /^user_([^_]+)_(app|data_app|data-investigator|data_investigator|lookml|tile|script|health|health_check|dashboard|conversational-analytics)_(.+)$/
     )
     if (userKeyMatch) {
       const uid = userKeyMatch[1]

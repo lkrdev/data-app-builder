@@ -7,10 +7,14 @@ import {
   BUNDLE_APP_PY,
   CONVERSATION_LABEL_REQUEST_TAG,
   DATA_APP_GUIDE_MD,
+  DATA_INVESTIGATOR_GUIDE_MD,
   STARTER_PROMPTS_REQUEST_TAG,
   wrapDashboardCodeMode,
 } from './antigravityPrompts'
 import {
+  buildStudioRoute,
+  classifyStudioUseCase,
+  convertRelativeDateFilterToFixed,
   createDeduplicatedLookerSdkProxy,
   DataAppBundle,
   extractResolvedUseCase,
@@ -20,6 +24,7 @@ import {
   NativeContentBundle,
   NativeContentState,
   normalizeNativeContent,
+  normalizeQueryFiltersToFixedDates,
   parseExploreId,
   ResolvedStudioUseCase,
   resolveNativeEmbedPath,
@@ -49,9 +54,13 @@ import {
 
 export * from './antigravityPrompts'
 export {
+  buildStudioRoute,
+  classifyStudioUseCase,
+  convertRelativeDateFilterToFixed,
   extractResolvedUseCase,
   getAllowedUseCases,
   getUseCaseLabel,
+  normalizeQueryFiltersToFixedDates,
   STUDIO_USE_CASE_OPTIONS,
   studioModeToUseCase,
   studioUseCaseToMode,
@@ -1017,7 +1026,7 @@ export function extractNativeContentFromInteraction(
 }
 
 const KNOWN_LOOKER_SDK_CALL_RE =
-  /\b(?:sdk\.([a-z_][a-z0-9_]*)|(run_inline_query|lookml_model_explore|lookml_model|all_lookml_models|search_content|search_dashboards|search_looks|create_dashboard|update_dashboard|dashboard_dashboard_layouts|update_dashboard_layout_component|create_dashboard_element|update_dashboard_element|create_dashboard_filter|update_dashboard_filter|create_query|create_look|create_board|update_board|create_board_section|create_board_item|create_scheduled_plan|upsert_udd|upsert_lookml_dashboard|reflow_24col|pin_to_board|schedule_dashboard|emit_native_bundle|validate_project|run_lookml_test|create_sql_query|run_sql_query|all_project_files|get_file_content|create_file|update_file|delete_file|create_project_directory|update_session|git_branch|import_lookml_dashboard|sync_lookml_dashboard|me|user_roles|all_folders))\s*\(/gi
+  /\b(?:sdk\.([a-z_][a-z0-9_]*)|(run_inline_query|run_key_driver_analysis|to_fixed_date_range|lookml_model_explore|lookml_model|all_lookml_models|search_content|search_dashboards|search_looks|create_dashboard|update_dashboard|dashboard_dashboard_layouts|update_dashboard_layout_component|create_dashboard_element|update_dashboard_element|create_dashboard_filter|update_dashboard_filter|create_query|create_look|create_board|update_board|create_board_section|create_board_item|create_scheduled_plan|upsert_udd|upsert_lookml_dashboard|reflow_24col|pin_to_board|schedule_dashboard|emit_native_bundle|validate_project|run_lookml_test|create_sql_query|run_sql_query|all_project_files|get_file_content|create_file|update_file|delete_file|create_project_directory|update_session|git_branch|import_lookml_dashboard|sync_lookml_dashboard|me|user_roles|all_folders))\s*\(/gi
 
 const CODEMODE_MACROS = new Set([
   'upsert_udd',
@@ -1026,6 +1035,7 @@ const CODEMODE_MACROS = new Set([
   'pin_to_board',
   'schedule_dashboard',
   'emit_native_bundle',
+  'to_fixed_date_range',
 ])
 
 function extractLookerSdkMethodPreview(code: string): string {
@@ -1352,6 +1362,7 @@ export function buildWorkspaceSources(params: {
     { type: 'inline', content: schemaMarkdown, target: '/workspace/schema.md' },
     { type: 'inline', content: BUNDLE_APP_PY, target: '/workspace/bundle_app.py' },
     { type: 'inline', content: DATA_APP_GUIDE_MD, target: '/workspace/DATA_APP_GUIDE.md' },
+    { type: 'inline', content: DATA_INVESTIGATOR_GUIDE_MD, target: '/workspace/DATA_INVESTIGATOR_GUIDE.md' },
     { type: 'inline', content: BOOTSTRAP_LOOKML_PY, target: '/workspace/bootstrap_lookml.py' },
     { type: 'inline', content: LKR_CLI_SITECUSTOMIZE_PY, target: '/workspace/sitecustomize.py' },
     {
@@ -1572,6 +1583,11 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       })
     : null
 
+  const isDataInvestigatorTurn =
+    useCase === 'data-investigator' ||
+    (useCase === 'auto' &&
+      extractResolvedUseCase('', userPrompt, allowedModes) === 'data-investigator')
+
   const dataAppOrNativeGuide =
     mode === 'dashboard'
       ? buildNativeContentGuide({
@@ -1583,9 +1599,10 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           existingNativeContent: normalizedExistingNative,
         })
       : [
-          `You are building a Looker Data App (Lit web component using Looker's data-app.js runtime) ${exploreDirective}`,
+          `You are building a Looker ${isDataInvestigatorTurn ? 'Data Investigator Narrative Data App' : 'Data App'} (Lit web component using Looker's data-app.js runtime) ${exploreDirective}`,
           `Follow these exact steps inside your Linux sandbox:`,
-          `1. /workspace/DATA_APP_GUIDE.md is pre-loaded with component contracts (<app-kpi>, <app-chart>, <app-grid>, <app-select>), .da-* layout classes, dark mode (this.isDark), and static widget extraction rules. Do NOT download toolkits or read external skill directories.`,
+          `1. /workspace/DATA_APP_GUIDE.md${isDataInvestigatorTurn ? ' and /workspace/DATA_INVESTIGATOR_GUIDE.md are' : ' is'} pre-loaded with component contracts (<app-kpi>, <app-chart>, <app-grid>, <app-select>), .da-* layout classes, dark mode (this.isDark), and static widget extraction rules. Do NOT download toolkits or read external skill directories.`,
+          ...(isDataInvestigatorTurn ? [DATA_INVESTIGATOR_GUIDE_MD] : []),
           step2Directive,
           step3Directive,
           `4. If bundle_app.py reports any syntax or tile safety violation, fix ${appFilePath} and re-run \`python3 /workspace/bundle_app.py ${appFilePath} "<App Title>"\` until it exits 0.`,
@@ -1663,7 +1680,15 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       ? `\n\n[AUTO USE-CASE ROUTING (Turn 1): Consult /workspace/AGENTS.md ("## Use Case Auto-Classification (Turn 1 Routing)"). Allowed use cases for this user: ${JSON.stringify(
           allowedModes && allowedModes.length > 0
             ? allowedModes
-            : ['app', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics']
+            : [
+                'app',
+                'data-investigator',
+                'dashboard',
+                'lookml',
+                'health-check',
+                'tile',
+                'conversational-analytics',
+              ]
         )}. Start your response with <USE_CASE>...</USE_CASE> naming the single best allowed use case for this request, then execute that workflow.]`
       : ''
 
@@ -2116,6 +2141,11 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     interaction.output_text ||
     (interaction.outputs || []).map((o: AntigravityInteractionOutput) => o.text || '').join('\n') ||
     'Completed.'
+  const inferredFromOutput = extractResolvedUseCase(
+    `${rawText}\n${collectInteractionTextCandidates(interaction)}`,
+    userPrompt,
+    allowedModes
+  )
   const resolvedUseCase: ResolvedStudioUseCase =
     useCase && useCase !== 'auto'
       ? useCase
@@ -2126,12 +2156,10 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : tddMarkdown
       ? 'health-check'
       : bundle
-      ? 'app'
-      : extractResolvedUseCase(
-          `${rawText}\n${collectInteractionTextCandidates(interaction)}`,
-          userPrompt,
-          allowedModes
-        )
+      ? inferredFromOutput === 'data-investigator'
+        ? 'data-investigator'
+        : 'app'
+      : inferredFromOutput
   const cleanAssistantText = rawText
     .replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '')
     .replace(/<DATA_APP_BUNDLE>[\s\S]*?<\/DATA_APP_BUNDLE>/g, '')
@@ -2971,6 +2999,32 @@ export function buildDynamicStarterPrompts(
           : 'Create a conversion and retention Data App with regional filters and period-over-period comparison cards.'
       ),
     ],
+    'data-investigator': [
+      mk(
+        'data-investigator',
+        'inv-doc-drivers',
+        hasExplore ? `Investigate ${expLabel} Key Drivers` : 'Root-Cause Key Driver Narrative Doc',
+        hasExplore
+          ? `Investigate key drivers of ${measureLabelPair} in ${expKey} across ${catLabel} using run_key_driver_analysis, LookML drill_fields (limit 500), and fixed point-in-time dates in a Google Doc narrative Data App.`
+          : 'Investigate the root-cause key drivers of our primary business metric change using run_key_driver_analysis, LookML drill_fields (limit 500), and fixed point-in-time dates in a Google Doc narrative Data App.'
+      ),
+      mk(
+        'data-investigator',
+        'inv-slides-deck',
+        hasExplore ? `${expLabel} Executive Slides Investigation` : 'Executive Presentation Slides Investigation',
+        hasExplore
+          ? `Build a Google Presentation slides investigation deck on ${expKey} drilling into ${measureLabelPair} by ${catLabel} across ${timeLabel} with What This Chart Means and Next Investigation Path slides.`
+          : 'Build a Google Presentation slides investigation deck drilling into segment anomalies with What This Chart Means callouts and Next Investigation Path transitions.'
+      ),
+      mk(
+        'data-investigator',
+        'inv-anomaly-drill',
+        hasExplore ? `${expLabel} Segment Anomaly Drill Path` : 'Segment Anomaly & Drill Path Story',
+        hasExplore
+          ? `Run a point-in-time data investigation on ${expKey} with fixed date filters, drilling from ${measureLabelPair} down its LookML drill_fields and ${catLabel} to a 500-row evidence grid.`
+          : 'Run a point-in-time data investigation with fixed date ranges, drilling from headline KPI variance down LookML drill_fields to a 500-row evidence grid.'
+      ),
+    ],
     dashboard: [
       mk(
         'dashboard',
@@ -3111,6 +3165,7 @@ export function buildDynamicStarterPrompts(
 
   const candidateOrder: Array<{ uc: ResolvedStudioUseCase; autoId: string; fallbackLabel: string }> = [
     { uc: 'app', autoId: 'exec-app', fallbackLabel: hasExplore ? `Build ${expLabel} Data App` : 'Build an Executive KPI Data App' },
+    { uc: 'data-investigator', autoId: 'inv-doc', fallbackLabel: hasExplore ? `Investigate ${expLabel} Drivers` : 'Investigate Key Metric Drivers' },
     { uc: 'dashboard', autoId: 'native-udd', fallbackLabel: hasExplore ? `Create ${expLabel} Looker Dashboard` : 'Create a Native Looker Dashboard' },
     { uc: 'conversational-analytics', autoId: 'ask-ca', fallbackLabel: hasExplore ? `Ask a Question on ${expLabel}` : 'Ask a Data Question' },
     { uc: 'lookml', autoId: 'lookml-measure', fallbackLabel: hasExplore ? `Add LookML Measures to ${expLabel}` : 'Add LookML Measures & Data Tests' },
@@ -3162,6 +3217,7 @@ export function parseStarterPromptsResponse(
     if (!Array.isArray(parsed)) return fallbackPrompts
     const validUseCases = new Set<string>([
       'app',
+      'data-investigator',
       'dashboard',
       'conversational-analytics',
       'lookml',
@@ -3278,7 +3334,15 @@ export async function generateDynamicStarterPrompts(params: {
   const allowedList =
     Array.isArray(permittedUseCases) && permittedUseCases.length > 0
       ? permittedUseCases.filter((u) => u !== 'auto')
-      : ['app', 'dashboard', 'conversational-analytics', 'lookml', 'health-check', 'tile']
+      : [
+          'app',
+          'data-investigator',
+          'dashboard',
+          'conversational-analytics',
+          'lookml',
+          'health-check',
+          'tile',
+        ]
 
   const inputText = [
     `${STARTER_PROMPTS_REQUEST_TAG} Synthesize ${normUc === 'auto' ? 4 : 3} concise, tailored Looker Studio starter prompts as JSON wrapped in <STARTER_PROMPTS>[...]</STARTER_PROMPTS> (plain-text labels with zero emojis, no tools, no markdown outside tag).`,

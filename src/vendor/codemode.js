@@ -262,7 +262,8 @@ let wasm_bindgen = (function(exports) {
             __wbg_instanceof_Promise_e1dc6893aa1ece28: function(arg0) {
                 let result;
                 try {
-                    result = getObject(arg0) instanceof Promise;
+                    const obj = getObject(arg0);
+                    result = obj instanceof Promise || Boolean(obj && typeof obj.then === "function");
                 } catch (_) {
                     result = false;
                 }
@@ -356,7 +357,7 @@ let wasm_bindgen = (function(exports) {
                 return isLikeNone(ret) ? 0 : addHeapObject(ret);
             },
             __wbg_static_accessor_WINDOW_d7f903d1508cbdc4: function() {
-                const ret = typeof window === 'undefined' ? null : window;
+                const ret = (typeof window === 'undefined' || typeof window.postMessage !== 'function') ? null : window;
                 return isLikeNone(ret) ? 0 : addHeapObject(ret);
             },
             __wbg_stringify_52ff602c1cc4fbb6: function() { return handleError(function (arg0) {
@@ -711,7 +712,7 @@ let wasm_bindgen = (function(exports) {
     const readOnlyPost =
       verb === "POST" &&
       (/^\/(queries|sql_queries|merge_queries|content_validation)(\/|$)/.test(p) ||
-        /\/(validate|lookml_tests\/run|git_connection_tests)(\/|$)/.test(p));
+        /\/(validate|lookml_tests\/run|git_connection_tests|kda\/analyze)(\/|$)/.test(p));
     if (verb === "GET" || verb === "HEAD" || verb === "OPTIONS" || readOnlyPost) {
       return { operation: "read_" + p.replace(/^\/+|\/+$/g, "").replace(/[^a-zA-Z0-9]+/g, "_"), requiresPermission: false };
     }
@@ -812,16 +813,65 @@ let wasm_bindgen = (function(exports) {
               } else if (decision !== "allow_once" && decision !== true) {
                 return Promise.reject(denyMsg);
               }
-              return baseHandler(m, p, q, b, o);
+              return Promise.resolve(baseHandler(m, p, q, b, o));
             });
           }
-          return baseHandler(m, p, q, b, o);
+          return Promise.resolve(baseHandler(m, p, q, b, o));
         }
       : undefined;
 
+    const mergedVars = Object.assign(
+      { INVESTIGATION_ANCHOR_DATE: new Date().toISOString().slice(0, 10) },
+      opts.vars || {}
+    );
+    const rawCode = String(code || "");
+    const needsDateHelper =
+      /\bto_fixed_date_range\b/.test(rawCode) && !/\bdef\s+to_fixed_date_range\b/.test(rawCode);
+    const dateHelperPreamble = needsDateHelper
+      ? [
+          "def _dim(y, m): return 31 if m in (1,3,5,7,8,10,12) else (30 if m in (4,6,9,11) else (29 if (y%4==0 and y%100!=0) or y%400==0 else 28))",
+          "def _fymd(y, m, d): return str(y) + '-' + (('0'+str(m)) if m<10 else str(m)) + '-' + (('0'+str(d)) if d<10 else str(d))",
+          "def _add_d(y, m, d, n):",
+          "    d += n",
+          "    while d < 1: m, y = (12, y-1) if m == 1 else (m-1, y); d += _dim(y, m)",
+          "    while d > _dim(y, m): d -= _dim(y, m); m, y = (1, y+1) if m == 12 else (m+1, y)",
+          "    return (y, m, d)",
+          "def _add_m(y, m, d, n):",
+          "    t = y * 12 + (m - 1) + n; ny, nm = t // 12, (t % 12) + 1; mx = _dim(ny, nm)",
+          "    return (ny, nm, d if d <= mx else mx)",
+          "def to_fixed_date_range(expr, anchor_date=None):",
+          "    raw = str(expr or '').strip()",
+          "    if not raw: return raw",
+          "    if ' to ' in raw.lower() and len(raw) >= 20 and raw[4:5] in ('-', '/'):",
+          "        p = raw.replace('/', '-').split()",
+          "        if len(p) == 3: return p[0] + ' to ' + p[2]",
+          "    ap = str(anchor_date or INVESTIGATION_ANCHOR_DATE or '2026-03-30').strip()[:10].replace('/', '-').split('-')",
+          "    ay, am, ad = int(ap[0]), int(ap[1]), int(ap[2]); end_s = _fymd(ay, am, ad); low = ' '.join(raw.lower().split())",
+          "    if low == 'today': return end_s + ' to ' + end_s",
+          "    if low == 'yesterday': s = _fymd(*_add_d(ay, am, ad, -1)); return s + ' to ' + s",
+          "    if low in ('this month', 'mtd'): return _fymd(ay, am, 1) + ' to ' + end_s",
+          "    if low == 'last month': y1, m1, _ = _add_m(ay, am, 1, -1); return _fymd(y1, m1, 1) + ' to ' + _fymd(y1, m1, _dim(y1, m1))",
+          "    if low in ('this quarter', 'qtd'): return _fymd(ay, ((am-1)//3)*3+1, 1) + ' to ' + end_s",
+          "    if low == 'last quarter':",
+          "        y1, m1, _ = _add_m(ay, ((am-1)//3)*3+1, 1, -3); y2, m2, _ = _add_m(y1, m1, 1, 2)",
+          "        return _fymd(y1, m1, 1) + ' to ' + _fymd(y2, m2, _dim(y2, m2))",
+          "    if low in ('this year', 'ytd'): return str(ay) + '-01-01 to ' + end_s",
+          "    if low == 'last year': ly = str(ay - 1); return ly + '-01-01 to ' + ly + '-12-31'",
+          "    if low == 'last week': return _fymd(*_add_d(ay, am, ad, -7)) + ' to ' + end_s",
+          "    t = [x for x in low.split() if x not in ('last', 'past', 'previous', 'trailing')]",
+          "    ago = len(t) >= 2 and t[-1] == 'ago'; t = t[:-1] if ago else t",
+          "    if len(t) == 2 and t[0].isdigit():",
+          "        n, u = int(t[0]), t[1]",
+          "        ymd = _add_d(ay,am,ad,-n) if u.startswith('day') else (_add_d(ay,am,ad,-n*7) if u.startswith('week') else (_add_m(ay,am,ad,-n) if u.startswith('month') else (_add_m(ay,am,ad,-n*3) if u.startswith('quarter') else (_add_m(ay,am,ad,-n*12) if u.startswith('year') else None))))",
+          "        if ymd: s = _fymd(*ymd); return s + ' to ' + (s if ago else end_s)",
+          "    return raw",
+          ""
+        ].join("\n")
+      : "";
+
     return {
-      code: String(code || ""),
-      varsJson: opts.vars ? JSON.stringify(opts.vars) : undefined,
+      code: dateHelperPreamble + rawCode,
+      varsJson: JSON.stringify(mergedVars),
       allowUpdate: Boolean(opts.allowUpdateSession || opts.allow_update_session),
       handler: handler,
       opts: opts,
@@ -834,7 +884,7 @@ let wasm_bindgen = (function(exports) {
       type: "function",
       name: name || "run_looker_codemode",
       description:
-        'Execute Python code in the browser Looker Code Mode WASM (Monty) sandbox with direct access to all Looker 4.0 SDK methods (e.g. `lookml_model_explore(target_model, target_explore)`, `run_inline_query("json", {...})`, `me()`, `search_dashboards()`, `help("*query*")`, `lookup("run_inline_query")`, `lookup_type("WriteQuery")`). Variables passed in `vars` (such as `target_model`, `target_explore`, and `target_folder_id`) are pre-injected. Return a compact dict/list instead of raw multi-MB responses.',
+        'Execute Python code in the browser Looker Code Mode WASM (Monty) sandbox with direct access to all Looker 4.0 SDK methods (e.g. `lookml_model_explore(target_model, target_explore)`, `run_inline_query("json", {...})`, `run_key_driver_analysis({...})`, `to_fixed_date_range("last 30 days")`, `INVESTIGATION_ANCHOR_DATE`, `me()`, `search_dashboards()`, `help("*query*")`, `lookup("run_inline_query")`, `lookup_type("WriteQuery")`). Variables passed in `vars` (such as `target_model`, `target_explore`, `target_folder_id`, and `INVESTIGATION_ANCHOR_DATE`) are pre-injected. Return a compact dict/list instead of raw multi-MB responses.',
       parameters: {
         type: "object",
         properties: {

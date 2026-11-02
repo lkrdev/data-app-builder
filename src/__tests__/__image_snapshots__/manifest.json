@@ -178,7 +178,7 @@
     "height": 383,
     "clipSelector": ".dab-empty-prompt-card",
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "studio_dark_theme",

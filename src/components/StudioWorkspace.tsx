@@ -481,6 +481,30 @@ export const DOC_UI_COMPONENTS: Record<string, () => React.ReactElement> = {
   ),
   PushLookmlButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>Update LookML</button>,
   ExportHealthTddButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>Download Markdown (.md)</button>,
+  DataInvestigatorPreview: () => (
+    <div className="dab-skill-bar" data-testid="data-investigator-doc-slides-preview">
+      <span className="dab-skill-label">Narrative View:</span>
+      <button type="button" className="dab-skill-chip active" tabIndex={-1}>Doc View</button>
+      <button type="button" className="dab-skill-chip" tabIndex={-1}>Slides View</button>
+    </div>
+  ),
+}
+
+export const USE_CASE_BADGES: Record<StudioUseCase, { label: string; className: string }> = {
+  auto: { label: 'Auto', className: 'dab-use-case-badge-auto' },
+  dashboard: { label: 'Content Studio', className: 'dab-use-case-badge-dashboard' },
+  'conversational-analytics': {
+    label: 'Conversational Analytics',
+    className: 'dab-use-case-badge-ca',
+  },
+  app: { label: 'Data App', className: 'dab-use-case-badge-app' },
+  'data-investigator': {
+    label: 'Data Investigator',
+    className: 'dab-use-case-badge-investigator',
+  },
+  'health-check': { label: 'Health Check', className: 'dab-use-case-badge-health' },
+  lookml: { label: 'LookML', className: 'dab-use-case-badge-lookml' },
+  tile: { label: 'Script', className: 'dab-use-case-badge-tile' },
 }
 
 export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: string; markdown: string }> = {
@@ -495,6 +519,7 @@ export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: s
       '- **Content Studio**: Create and update native Looker User-Defined Dashboards (UDDs), Saved Looks, Boards, and Scheduled Plans.',
       '- **Conversational Analytics**: Ask natural-language data questions and explore trends with Looker Conversational Analytics agents.',
       '- **Data App**: Build custom interactive Looker Data Apps with KPI cards, charts, tables, and metric switchers, or convert pasted screenshots into live apps.',
+      '- **Data Investigator**: Generate point-in-time root-cause narrative Data Apps in Google Doc or Google Presentation (Slides) format with Key Driver Analysis, LookML drill paths (`limit: 500`), and fixed date windows.',
       '- **Health Check**: Run a 3-Pillar Looker and BigQuery audit covering System Activity performance, LookML maturity, and warehouse efficiency.',
       '- **Python Tile (Script)**: Write, test, publish, and schedule custom Python data scripts that run as interactive dashboard tiles.',
     ].join('\n'),
@@ -557,6 +582,21 @@ export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: s
       '<OpenInLookerButton />',
       '- Opens the published Looker dashboard hosting your Data App in a new browser tab.',
       '- Paste a mockup or screenshot (`Cmd+V`) into the composer to turn a visual design into a working Data App.',
+    ].join('\n'),
+  },
+  'data-investigator': {
+    title: 'Data Investigator — Google Doc & Slides Root-Cause Narrative Apps',
+    tabLabel: 'Data Investigator',
+    markdown: [
+      '# Point-in-Time Root-Cause Narrative Data Apps',
+      'Investigate metric changes and anomalies using Looker Key Driver Analysis (`run_key_driver_analysis`), LookML `drill_fields` (`limit: 500`), and fixed point-in-time date ranges (`YYYY-MM-DD to YYYY-MM-DD`).',
+      '## Google Doc (Default) & Google Presentation (Slides) Modes',
+      '<DataInvestigatorPreview />',
+      '- **Doc View (Default)**: Renders an executive overview followed by sequential **Chart -> What This Chart Means -> Next Investigation Path** chapters and a 500-row evidence grid.',
+      '- **Slides View**: Mention `slides`, `presentation`, or `deck` in your prompt (or toggle in the app header) to present each drill step as a self-contained slide with keyboard arrow navigation.',
+      '### Live Preview & Looker Launch Controls',
+      '<ReloadPreviewButton />',
+      '<OpenInLookerButton />',
     ].join('\n'),
   },
   'health-check': {
@@ -1013,11 +1053,20 @@ export { buildDynamicStarterPrompts, stripStarterPromptEmojis }
 export type { StarterPromptItem }
 
 export const STARTER_PROMPTS_BY_USE_CASE: Record<string, StarterPromptItem[]> = Object.fromEntries(
-  (['auto', 'app', 'dashboard', 'conversational-analytics', 'health-check', 'lookml', 'tile'] as const).map(
-    (uc) => [uc, buildDynamicStarterPrompts({ useCase: uc })]
-  )
+  ([
+    'auto',
+    'app',
+    'data-investigator',
+    'dashboard',
+    'conversational-analytics',
+    'health-check',
+    'lookml',
+    'tile',
+  ] as const).map((uc) => [uc, buildDynamicStarterPrompts({ useCase: uc })])
 )
 STARTER_PROMPTS_BY_USE_CASE.health = STARTER_PROMPTS_BY_USE_CASE['health-check']
+STARTER_PROMPTS_BY_USE_CASE.investigator = STARTER_PROMPTS_BY_USE_CASE['data-investigator']
+STARTER_PROMPTS_BY_USE_CASE.data_investigator = STARTER_PROMPTS_BY_USE_CASE['data-investigator']
 
 export function getStarterPromptsForUseCase(
   useCase?: string,
@@ -2251,6 +2300,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
     activeMode,
+    selectedUseCase,
     isEmptyConversation,
     isHealthCheckMode,
     isLookmlMode,
@@ -2571,7 +2621,13 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                 </>
               )}
               <UseCaseInfoTrigger
-                useCase={builderMode === 'dashboard' ? 'dashboard' : 'app'}
+                useCase={
+                  builderMode === 'dashboard'
+                    ? 'dashboard'
+                    : selectedUseCase === 'data-investigator'
+                    ? 'data-investigator'
+                    : 'app'
+                }
                 onOpen={setInfoModalUseCase}
               />
             </>

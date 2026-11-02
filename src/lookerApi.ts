@@ -714,27 +714,22 @@ export async function buildDenseExploreSchema(
       const measures = (fields.measures || []).filter((f) => !f.hidden)
       const dimensions = (fields.dimensions || []).filter((f) => !f.hidden)
 
-      lines.push(`## Measures (${measures.length})`)
-      for (const m of measures) {
-        const meta = [m.type, m.label ? `"${m.label}"` : ''].filter(Boolean).join(', ')
-        let line = `- \`${m.name}\` (${meta})`
-        if (m.description) line += ` — ${m.description}`
-        const sql = cleanSql(m.sql)
-        if (sql) line += ` [SQL: \`${sql}\`]`
-        lines.push(line)
+      const formatFieldLine = (f: {
+        name?: string | null
+        type?: string | null
+        label?: string | null
+        description?: string | null
+        sql?: string | null
+        drill_fields?: string[] | null
+      }) => {
+        const meta = [f.type, f.label ? `"${f.label}"` : ''].filter(Boolean).join(', ')
+        const sql = cleanSql(f.sql)
+        const drills = Array.isArray(f.drill_fields) && f.drill_fields.length > 0 ? f.drill_fields.join(', ') : ''
+        return `- \`${f.name}\` (${meta})${f.description ? ` — ${f.description}` : ''}${sql ? ` [SQL: \`${sql}\`]` : ''}${drills ? ` [Drills: \`${drills}\`]` : ''}`
       }
-      lines.push('')
 
-      lines.push(`## Dimensions (${dimensions.length})`)
-      for (const d of dimensions) {
-        const meta = [d.type, d.label ? `"${d.label}"` : ''].filter(Boolean).join(', ')
-        let line = `- \`${d.name}\` (${meta})`
-        if (d.description) line += ` — ${d.description}`
-        const sql = cleanSql(d.sql)
-        if (sql) line += ` [SQL: \`${sql}\`]`
-        lines.push(line)
-      }
-      lines.push('')
+      lines.push(`## Measures (${measures.length})`, ...measures.map(formatFieldLine), '')
+      lines.push(`## Dimensions (${dimensions.length})`, ...dimensions.map(formatFieldLine), '')
 
       const baseView = exp.view_name || exploreName
       const sampleDims = dimensions
@@ -906,6 +901,110 @@ export function persistStudioThemeMode(
   } catch {
     // ignore extensionSDK storage write failure
   }
+}
+
+function parseAnchorUtcDate(anchorDate?: string): Date {
+  const m = String(anchorDate || '')
+    .trim()
+    .match(/^(\d{4})[-/](\d{2})[-/](\d{2})/)
+  if (m) return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])))
+  const now = new Date()
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+}
+
+const formatUtcDate = (d: Date): string => d.toISOString().slice(0, 10)
+const addUtcDays = (d: Date, delta: number): Date =>
+  new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + delta))
+const addUtcMonths = (d: Date, delta: number): Date => {
+  const targetMonth = d.getUTCMonth() + delta
+  const maxDay = new Date(Date.UTC(d.getUTCFullYear(), targetMonth + 1, 0)).getUTCDate()
+  return new Date(Date.UTC(d.getUTCFullYear(), targetMonth, Math.min(d.getUTCDate(), maxDay)))
+}
+const shiftUtcByUnit = (base: Date, n: number, unit: string): Date =>
+  unit.startsWith('day')
+    ? addUtcDays(base, n)
+    : unit.startsWith('week')
+    ? addUtcDays(base, n * 7)
+    : unit.startsWith('month')
+    ? addUtcMonths(base, n)
+    : unit.startsWith('quarter')
+    ? addUtcMonths(base, n * 3)
+    : addUtcMonths(base, n * 12)
+
+// ponytail: deterministic UTC relative-to-fixed Looker date converter so point-in-time Data Investigator
+// narratives never drift as calendar days advance.
+export function convertRelativeDateFilterToFixed(filterExpr: string, anchorDate?: string): string {
+  const raw = String(filterExpr || '').trim()
+  if (!raw) return raw
+
+  const fixedRangeMatch = raw.match(
+    /^(\d{4})[-/](\d{2})[-/](\d{2})\s+(?:to|until|-)\s+(\d{4})[-/](\d{2})[-/](\d{2})$/i
+  )
+  if (fixedRangeMatch) {
+    return `${fixedRangeMatch[1]}-${fixedRangeMatch[2]}-${fixedRangeMatch[3]} to ${fixedRangeMatch[4]}-${fixedRangeMatch[5]}-${fixedRangeMatch[6]}`
+  }
+  const singleDateMatch = raw.match(/^(\d{4})[-/](\d{2})[-/](\d{2})$/)
+  if (singleDateMatch) return `${singleDateMatch[1]}-${singleDateMatch[2]}-${singleDateMatch[3]}`
+
+  const anchor = parseAnchorUtcDate(anchorDate)
+  const endStr = formatUtcDate(anchor)
+  const lower = raw.toLowerCase().replace(/\s+/g, ' ').trim()
+  const y = anchor.getUTCFullYear()
+  const m = anchor.getUTCMonth()
+  const qStart = Math.floor(m / 3) * 3
+
+  if (lower === 'today') return `${endStr} to ${endStr}`
+  if (lower === 'yesterday') {
+    const yd = formatUtcDate(addUtcDays(anchor, -1))
+    return `${yd} to ${yd}`
+  }
+  if (lower === 'this week') {
+    const dow = anchor.getUTCDay()
+    return `${formatUtcDate(addUtcDays(anchor, -(dow === 0 ? 6 : dow - 1)))} to ${endStr}`
+  }
+  if (lower === 'last week') return `${formatUtcDate(addUtcDays(anchor, -7))} to ${endStr}`
+  if (lower === 'this month' || lower === 'mtd') {
+    return `${formatUtcDate(new Date(Date.UTC(y, m, 1)))} to ${endStr}`
+  }
+  if (lower === 'last month') {
+    return `${formatUtcDate(new Date(Date.UTC(y, m - 1, 1)))} to ${formatUtcDate(new Date(Date.UTC(y, m, 0)))}`
+  }
+  if (lower === 'this quarter' || lower === 'qtd') {
+    return `${formatUtcDate(new Date(Date.UTC(y, qStart, 1)))} to ${endStr}`
+  }
+  if (lower === 'last quarter') {
+    return `${formatUtcDate(new Date(Date.UTC(y, qStart - 3, 1)))} to ${formatUtcDate(new Date(Date.UTC(y, qStart, 0)))}`
+  }
+  if (lower === 'this year' || lower === 'ytd') return `${y}-01-01 to ${endStr}`
+  if (lower === 'last year') return `${y - 1}-01-01 to ${y - 1}-12-31`
+
+  const agoForMatch = lower.match(
+    /^(\d+)\s+(day|days|week|weeks|month|months|quarter|quarters|year|years)\s+ago\s+for\s+(\d+)\s+(day|days|week|weeks|month|months|quarter|quarters|year|years)$/
+  )
+  if (agoForMatch) {
+    const start = shiftUtcByUnit(anchor, -Number(agoForMatch[1]), agoForMatch[2])
+    const end = shiftUtcByUnit(start, Number(agoForMatch[3]), agoForMatch[4])
+    return `${formatUtcDate(start)} to ${formatUtcDate(end)}`
+  }
+
+  const relMatch = lower.match(
+    /^(?:(?:last|past|previous|trailing)\s+)?(\d+)\s+(day|days|week|weeks|month|months|quarter|quarters|year|years)(?:\s+ago)?$/
+  )
+  if (relMatch) {
+    const start = shiftUtcByUnit(anchor, -Number(relMatch[1]), relMatch[2])
+    return `${formatUtcDate(start)} to ${lower.endsWith(' ago') ? formatUtcDate(start) : endStr}`
+  }
+
+  return raw
+}
+
+export function normalizeQueryFiltersToFixedDates(
+  filters: Record<string, string>,
+  anchorDate?: string
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(filters || {}).map(([k, v]) => [k, convertRelativeDateFilterToFixed(v, anchorDate)])
+  )
 }
 
 export type StudioContextCategory = 'explore' | 'dashboard' | 'look' | 'conversation'
@@ -1161,17 +1260,25 @@ function sanitizeContextFilename(rawId: string): string {
     .replace(/[^a-zA-Z0-9._-]+/g, '_')
 }
 
-function summarizeQuerySpec(q: Record<string, unknown> | null | undefined) {
+function summarizeQuerySpec(
+  q: Record<string, unknown> | null | undefined,
+  fixedDates = false,
+  anchorDate?: string
+) {
   if (!q || typeof q !== 'object') return null
   const model = String(q.model || '').trim()
   const view = String(q.view || q.explore || '').trim()
+  const rawFilters =
+    q.filters && typeof q.filters === 'object' ? (q.filters as Record<string, string>) : undefined
+  const filters =
+    rawFilters && fixedDates ? normalizeQueryFiltersToFixedDates(rawFilters, anchorDate) : rawFilters
   return {
     model: model || undefined,
     view: view || undefined,
     fields: Array.isArray(q.fields) ? q.fields : undefined,
     pivots: Array.isArray(q.pivots) ? q.pivots : undefined,
     fill_fields: Array.isArray(q.fill_fields) ? q.fill_fields : undefined,
-    filters: q.filters && typeof q.filters === 'object' ? q.filters : undefined,
+    filters,
     sorts: Array.isArray(q.sorts) ? q.sorts : undefined,
     limit: q.limit !== undefined && q.limit !== null ? String(q.limit) : undefined,
     dynamic_fields: q.dynamic_fields,
@@ -1210,8 +1317,11 @@ export async function hydrateMentionedContext(params: {
   mentions: StudioContextMention[]
   conversations?: UserConversationEntry[]
   selectedExplores?: string[]
+  useCase?: string
+  anchorDate?: string
 }): Promise<HydratedMentionedContext> {
-  const { sdk, mentions, conversations = [], selectedExplores = [] } = params
+  const { sdk, mentions, conversations = [], selectedExplores = [], useCase, anchorDate } = params
+  const fixedDates = useCase === 'data-investigator' || useCase === 'data_investigator'
   const exploresSet = new Set<string>(selectedExplores.filter(Boolean))
   const extraSources: Array<{ type: 'inline'; content: string; target: string }> = []
   const summaryLines: string[] = []
@@ -1242,7 +1352,7 @@ export async function hydrateMentionedContext(params: {
         const tiles = elements.map((el) => {
           const resultMaker = el.result_maker as Record<string, unknown> | undefined
           const rawQ = (el.query || resultMaker?.query) as Record<string, unknown> | undefined
-          const qSpec = summarizeQuerySpec(rawQ)
+          const qSpec = summarizeQuerySpec(rawQ, fixedDates, anchorDate)
           if (qSpec?.model && qSpec?.view) {
             const expId = formatExploreId(qSpec.model, qSpec.view)
             exploresSet.add(expId)
@@ -1285,7 +1395,11 @@ export async function hydrateMentionedContext(params: {
       const lookObj = await fetchLookerEntityRecord(sdk, 'look', 'look_id', '/looks', lookId)
 
       if (lookObj) {
-        const qSpec = summarizeQuerySpec(lookObj.query as Record<string, unknown> | undefined)
+        const qSpec = summarizeQuerySpec(
+          lookObj.query as Record<string, unknown> | undefined,
+          fixedDates,
+          anchorDate
+        )
         const expId = qSpec?.model && qSpec?.view ? formatExploreId(qSpec.model, qSpec.view) : ''
         if (expId) exploresSet.add(expId)
         const safeId = sanitizeContextFilename(lookId)
@@ -1361,4 +1475,3 @@ export async function hydrateMentionedContext(params: {
         : '',
   }
 }
-

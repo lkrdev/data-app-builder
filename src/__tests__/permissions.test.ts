@@ -26,6 +26,7 @@ import {
   CONCURRENT_POLL_SCHEDULE_MS,
   CONVERSATION_LABEL_REQUEST_TAG,
   DASHBOARD_CODEMODE_PREAMBLE_PY,
+  DATA_INVESTIGATOR_GUIDE_MD,
   DEFAULT_ANTIGRAVITY_MODEL,
   discoverStarterContentSummaries,
   discoverStarterExploreContext,
@@ -81,6 +82,7 @@ import {
   resolveLookerEmbedTarget,
   STARTER_PROMPTS_BY_USE_CASE,
   StarterPromptButtons,
+  USE_CASE_BADGES,
   USE_CASE_GUIDE_ORDER,
   USE_CASE_GUIDES,
 } from '../components/StudioWorkspace'
@@ -90,12 +92,14 @@ import {
   ArtifactService,
   buildDenseExploreSchema,
   buildRootLookerFolders,
+  buildStudioRoute,
   CA_AGENT_SELECTION_REQUEST_TAG,
   classifyLooker404Error,
   classifyStudioUseCase,
   clearArtifactServiceCache,
   clearLookerMetadataCache,
   ConversationRecord,
+  convertRelativeDateFilterToFixed,
   createDeduplicatedLookerSdkProxy,
   createLookerCaConversation,
   deleteUserArtifact,
@@ -116,6 +120,7 @@ import {
   listUserArtifacts,
   loadUserConversations,
   loadUserEnvironmentId,
+  normalizeQueryFiltersToFixedDates,
   normalizeStudioThemeMode,
   parseCaAgentSelectionResponse,
   parseStudioRoute,
@@ -2391,6 +2396,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       'Content Studio',
       'Conversational Analytics',
       'Data App',
+      'Data Investigator',
       'Health Check',
       'LookML',
       'Script',
@@ -2400,17 +2406,20 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       'dashboard',
       'conversational-analytics',
       'app',
+      'data-investigator',
       'health-check',
       'lookml',
       'tile',
     ])
     expect(getUseCaseLabel('auto')).toBe('Auto')
+    expect(getUseCaseLabel('data-investigator')).toBe('Data Investigator')
     expect(getUseCaseLabel('tile')).toBe('Script')
     expect(STUDIO_MODES.find((m) => m.mode === 'tile')?.label).toBe('Script')
 
     for (const uc of [
       'auto',
       'app',
+      'data-investigator',
       'dashboard',
       'conversational-analytics',
       'health',
@@ -2610,8 +2619,26 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
   })
 
   test('24. renders contextual use-case Markdown guides with embedded non-actionable React UI preview components (Issue #64 & Issue #85)', () => {
-    expect(USE_CASE_GUIDE_ORDER.map((u) => u.useCase)).toEqual(['auto', 'lookml', 'dashboard', 'conversational-analytics', 'app', 'health-check', 'tile'])
-    expect(USE_CASE_GUIDE_ORDER.map((u) => u.tabLabel)).toEqual(['Auto', 'Agentic LookML', 'Content Studio', 'Conversational Analytics', 'Data App', 'Health Check', 'Script'])
+    expect(USE_CASE_GUIDE_ORDER.map((u) => u.useCase)).toEqual([
+      'auto',
+      'lookml',
+      'dashboard',
+      'conversational-analytics',
+      'app',
+      'data-investigator',
+      'health-check',
+      'tile',
+    ])
+    expect(USE_CASE_GUIDE_ORDER.map((u) => u.tabLabel)).toEqual([
+      'Auto',
+      'Agentic LookML',
+      'Content Studio',
+      'Conversational Analytics',
+      'Data App',
+      'Data Investigator',
+      'Health Check',
+      'Script',
+    ])
 
     const expectedComponents = [
       'PublishDashboardButton',
@@ -2624,6 +2651,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       'LookmlTurnSkills',
       'PushLookmlButton',
       'ExportHealthTddButton',
+      'DataInvestigatorPreview',
     ]
     for (const compName of expectedComponents) {
       expect(typeof DOC_UI_COMPONENTS[compName]).toBe('function')
@@ -3824,5 +3852,170 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         expect.objectContaining({ type: 'document', mime_type: 'application/pdf', data: 'JVBERi0xLjQK' }),
       ])
     )
+  })
+
+  test('30. Issue #94: registers Data Investigator (data-investigator) use case, Google Doc & Slides narrative guide, LookML drill_fields in buildDenseExploreSchema, run_key_driver_analysis in LkrCodeMode, and convertRelativeDateFilterToFixed', async () => {
+    // 1. Routing, aliases, badges, and classification
+    expect(USE_CASE_BADGES['data-investigator']).toEqual({
+      label: 'Data Investigator',
+      className: 'dab-use-case-badge-investigator',
+    })
+    expect(buildStudioRoute('data-investigator')).toBe('/data-investigator')
+    expect(buildStudioRoute('data-investigator', '42')).toBe('/data-investigator/42')
+    expect(parseStudioRoute('/data-investigator/42')).toEqual({
+      mode: 'app',
+      objectId: '42',
+      conversationId: '42',
+      useCase: 'data-investigator',
+      isLegacyRoute: true,
+    })
+    expect(parseStudioRoute('/c/conv_data-investigator_42')).toEqual({
+      mode: 'app',
+      objectId: '42',
+      conversationId: 'conv_data-investigator_42',
+      useCase: 'data-investigator',
+    })
+    expect(parseStudioRoute('/c/inv_42')).toEqual({
+      mode: 'app',
+      objectId: 'inv_42',
+      conversationId: 'inv_42',
+      useCase: 'data-investigator',
+    })
+    expect(
+      classifyStudioUseCase(
+        'Run a key driver analysis and root-cause investigation in a Google Doc narrative report'
+      )
+    ).toBe('data-investigator')
+    expect(
+      extractResolvedUseCase(
+        '<USE_CASE>data-investigator</USE_CASE>\nBuilt Google Presentation slides investigation.',
+        'Investigate revenue drop in slides'
+      )
+    ).toBe('data-investigator')
+
+    // 2. DATA_INVESTIGATOR_GUIDE_MD contract (Doc default vs Slides mode, Chart -> What This Chart Means -> Next Investigation Path, limit 500)
+    expect(DATA_INVESTIGATOR_GUIDE_MD).toContain("this.viewMode = 'doc'")
+    expect(DATA_INVESTIGATOR_GUIDE_MD).toContain("this.viewMode = 'slides'")
+    expect(DATA_INVESTIGATOR_GUIDE_MD).toContain('Doc View')
+    expect(DATA_INVESTIGATOR_GUIDE_MD).toContain('Slides View')
+    expect(DATA_INVESTIGATOR_GUIDE_MD).toContain('What This Chart Means')
+    expect(DATA_INVESTIGATOR_GUIDE_MD).toContain('Next Investigation Path')
+    expect(DATA_INVESTIGATOR_GUIDE_MD).toContain("limit: '500'")
+    expect(DATA_INVESTIGATOR_GUIDE_MD).toContain('run_key_driver_analysis')
+    expect(DATA_INVESTIGATOR_GUIDE_MD).toContain('to_fixed_date_range')
+
+    // 3. buildDenseExploreSchema surfaces LookML drill_fields on measures and dimensions
+    clearLookerMetadataCache()
+    const mockDrillSdk = asSdk({
+      ok: async <T>(p: T) => p,
+      lookml_model_explore: async () => ({
+        name: 'order_items',
+        label: 'Order Items',
+        view_name: 'order_items',
+        fields: {
+          measures: [
+            {
+              name: 'order_items.total_sale_price',
+              label: 'Total Sale Price',
+              type: 'sum',
+              drill_fields: ['products.category', 'products.brand', 'users.country'],
+            },
+          ],
+          dimensions: [
+            {
+              name: 'products.category',
+              label: 'Category',
+              type: 'string',
+              drill_fields: ['products.brand', 'products.name'],
+            },
+          ],
+        },
+      }),
+      run_inline_query: async () => [],
+    })
+    const schemaMd = await buildDenseExploreSchema(mockDrillSdk, 'thelook', 'order_items')
+    expect(schemaMd).toContain(
+      '[Drills: `products.category, products.brand, users.country`]'
+    )
+    expect(schemaMd).toContain('[Drills: `products.brand, products.name`]')
+
+    // 4. convertRelativeDateFilterToFixed & normalizeQueryFiltersToFixedDates
+    const anchor = '2026-03-30'
+    expect(convertRelativeDateFilterToFixed('today', anchor)).toBe('2026-03-30 to 2026-03-30')
+    expect(convertRelativeDateFilterToFixed('yesterday', anchor)).toBe('2026-03-29 to 2026-03-29')
+    expect(convertRelativeDateFilterToFixed('last 30 days', anchor)).toBe('2026-02-28 to 2026-03-30')
+    expect(convertRelativeDateFilterToFixed('90 days', anchor)).toBe('2025-12-30 to 2026-03-30')
+    expect(convertRelativeDateFilterToFixed('last 4 weeks', anchor)).toBe('2026-03-02 to 2026-03-30')
+    expect(convertRelativeDateFilterToFixed('last 3 months', anchor)).toBe('2025-12-30 to 2026-03-30')
+    expect(convertRelativeDateFilterToFixed('this month', anchor)).toBe('2026-03-01 to 2026-03-30')
+    expect(convertRelativeDateFilterToFixed('last month', anchor)).toBe('2026-02-01 to 2026-02-28')
+    expect(convertRelativeDateFilterToFixed('this quarter', anchor)).toBe('2026-01-01 to 2026-03-30')
+    expect(convertRelativeDateFilterToFixed('last quarter', anchor)).toBe('2025-10-01 to 2025-12-31')
+    expect(convertRelativeDateFilterToFixed('this year', anchor)).toBe('2026-01-01 to 2026-03-30')
+    expect(convertRelativeDateFilterToFixed('last year', anchor)).toBe('2025-01-01 to 2025-12-31')
+    expect(convertRelativeDateFilterToFixed('2026-01-01 to 2026-03-31', anchor)).toBe(
+      '2026-01-01 to 2026-03-31'
+    )
+    expect(convertRelativeDateFilterToFixed('Complete', anchor)).toBe('Complete')
+    expect(
+      normalizeQueryFiltersToFixedDates(
+        {
+          'order_items.created_date': 'last 30 days',
+          'order_items.status': 'Complete',
+        },
+        anchor
+      )
+    ).toEqual({
+      'order_items.created_date': '2026-02-28 to 2026-03-30',
+      'order_items.status': 'Complete',
+    })
+
+    // 5. LkrCodeMode run_key_driver_analysis & to_fixed_date_range read-only whitelisting
+    expect(classifyLookerOperation('POST', '/api/4.0/internal/kda/analyze')).toEqual({
+      operation: 'read_internal_kda_analyze',
+      requiresPermission: false,
+    })
+    expect(LkrCodeMode.classifyOperation('POST', '/internal/kda/analyze')).toEqual({
+      operation: 'read_internal_kda_analyze',
+      requiresPermission: false,
+    })
+
+    const kdaCalls: Array<{ method: string; path: string; body: unknown }> = []
+    const kdaOut = await LkrCodeMode.runPythonCode(
+      `
+fixed_window = to_fixed_date_range("last 30 days")
+res = run_key_driver_analysis({
+    "data_source": {"model_name": "thelook", "explore_name": "order_items"},
+    "contribution_metric": "order_items.total_sale_price",
+    "dimensions": ["products.category", "products.brand"],
+    "baseline_filters": {"order_items.created_date": to_fixed_date_range("last month")},
+    "breach_filters": {"order_items.created_date": fixed_window},
+})
+return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda": res}
+`,
+      {
+        vars: { INVESTIGATION_ANCHOR_DATE: '2026-03-30' },
+        requirePermission: true,
+        requestHandler: async (m: string, p: string, _q: unknown, b: unknown) => {
+          kdaCalls.push({ method: m, path: p, body: b })
+          return { status: 'SUCCESS', drivers: [{ dimension: 'products.category', value: 'Outerwear' }] }
+        },
+      }
+    )
+    const parsedKda = typeof kdaOut === 'string' ? JSON.parse(kdaOut) : kdaOut
+    expect(parsedKda.anchor).toBe('2026-03-30')
+    expect(parsedKda.fixed_window).toBe('2026-02-28 to 2026-03-30')
+    expect(kdaCalls).toHaveLength(1)
+    expect(kdaCalls[0]).toMatchObject({
+      method: 'POST',
+      path: '/internal/kda/analyze',
+      body: {
+        data_source: { model_name: 'thelook', explore_name: 'order_items' },
+        contribution_metric: 'order_items.total_sale_price',
+        dimensions: ['products.category', 'products.brand'],
+        baseline_filters: { 'order_items.created_date': '2026-02-01 to 2026-02-28' },
+        breach_filters: { 'order_items.created_date': '2026-02-28 to 2026-03-30' },
+      },
+    })
   })
 })
