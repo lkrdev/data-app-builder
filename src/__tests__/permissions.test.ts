@@ -16,8 +16,10 @@ import {
   buildDynamicStarterPrompts,
   buildWorkspaceSources,
   BUNDLE_APP_PY,
+  callInteractionsApi,
   classifyLookerOperation,
   clearStarterPromptsCache,
+  clearStoredOAuthSession,
   CodeModePermissionRequest,
   computeIsAuthenticated,
   computeLkrExtensionCacheKey,
@@ -34,6 +36,7 @@ import {
   generateConversationLabel,
   generateDynamicStarterPrompts,
   getCachedStarterPrompts,
+  getInitialStoredOAuthToken,
   getSharedEnvExploreSchemas,
   isEnvironmentNotFoundError,
   LKR_DEV_CLI_SPEC,
@@ -42,8 +45,10 @@ import {
   LKR_CLI_BRIDGE_TOOL,
   LKR_CLI_SITECUSTOMIZE_PY,
   LkrCodeMode,
+  loadStoredOAuthSession,
   loginWithGoogleOAuth,
   parseStarterPromptsResponse,
+  persistOAuthSession,
   prewarmOrWakeAntigravityEnvironment,
   recordSharedEnvExploreSchema,
   resolveAdaptivePollScheduleMs,
@@ -53,6 +58,7 @@ import {
   sanitizeConversationLabel,
   STARTER_PROMPTS_REQUEST_TAG,
   stripStarterPromptEmojis,
+  STUDIO_OAUTH_STORAGE_KEY,
 } from '../antigravity'
 import {
   StudioBadge,
@@ -2498,6 +2504,100 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       abortCtl.abort()
       await expect(abortPromise).rejects.toThrow(/cancelled/i)
       expect(listeners.focus?.length || 0).toBe(0)
+
+      // 4. Issue #93: Persist & hydrate OAuth session via extensionSDK.localStorageSetItem / localStorageGetItem
+      expect(STUDIO_OAUTH_STORAGE_KEY).toBe('dab_oauth_session')
+      const extStorage = new Map<string, string>()
+      const winStorage = new Map<string, string>()
+      ;(globalWithWindow.window as Record<string, unknown>).localStorage = {
+        getItem: (k: string) => winStorage.get(k) ?? null,
+        setItem: (k: string, v: string) => {
+          winStorage.set(k, v)
+        },
+        removeItem: (k: string) => {
+          winStorage.delete(k)
+        },
+      }
+      const storageSdk = {
+        oauth2Authenticate: async () => ({
+          access_token: 'persisted_oauth_tok_93',
+          expires_in: 1800,
+        }),
+        localStorageGetItem: async (k: string) => extStorage.get(k) ?? null,
+        localStorageSetItem: async (k: string, v: string) => {
+          extStorage.set(k, v)
+        },
+        localStorageRemoveItem: async (k: string) => {
+          extStorage.delete(k)
+        },
+      }
+      const beforeLogin = Date.now()
+      const loggedInToken = await loginWithGoogleOAuth(storageSdk, '  client-93  ')
+      expect(loggedInToken).toBe('persisted_oauth_tok_93')
+      expect(getInitialStoredOAuthToken('client-93')).toBe('persisted_oauth_tok_93')
+      expect(getInitialStoredOAuthToken('other-client')).toBe('')
+      const hydrated = await loadStoredOAuthSession(storageSdk, 'client-93')
+      expect(hydrated).toMatchObject({
+        token: 'persisted_oauth_tok_93',
+        clientId: 'client-93',
+      })
+      expect(hydrated!.expiresAt).toBeGreaterThanOrEqual(beforeLogin + 1730 * 1000)
+      clearStoredOAuthSession(storageSdk)
+      expect(getInitialStoredOAuthToken('client-93')).toBe('')
+
+      // Expired session is pruned and returns null / empty string
+      extStorage.set(
+        STUDIO_OAUTH_STORAGE_KEY,
+        JSON.stringify({
+          token: 'expired_tok',
+          expiresAt: Date.now() - 1000,
+          clientId: 'client-93',
+        })
+      )
+      winStorage.set(STUDIO_OAUTH_STORAGE_KEY, extStorage.get(STUDIO_OAUTH_STORAGE_KEY)!)
+      expect(getInitialStoredOAuthToken('client-93')).toBe('')
+      expect(winStorage.has(STUDIO_OAUTH_STORAGE_KEY)).toBe(false)
+      extStorage.set(
+        STUDIO_OAUTH_STORAGE_KEY,
+        JSON.stringify({
+          token: 'expired_tok_2',
+          expiresAt: Date.now() - 500,
+          clientId: 'client-93',
+        })
+      )
+      expect(await loadStoredOAuthSession(storageSdk, 'client-93')).toBeNull()
+      expect(extStorage.get(STUDIO_OAUTH_STORAGE_KEY) || '').toBe('')
+
+      // HTTP 401 in callInteractionsApi clears stored OAuth session
+      persistOAuthSession(storageSdk, {
+        token: 'revoked_tok_93',
+        expiresAt: Date.now() + 600_000,
+        clientId: 'client-93',
+      })
+      expect(getInitialStoredOAuthToken('client-93')).toBe('revoked_tok_93')
+      const globalWithFetch = globalThis as unknown as {
+        fetch?: (url: string, init?: unknown) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>
+      }
+      const prevFetch = globalWithFetch.fetch
+      globalWithFetch.fetch = async () => ({
+        ok: false,
+        status: 401,
+        text: async () => JSON.stringify({ error: { message: 'Request had invalid authentication credentials.' } }),
+      })
+      try {
+        await expect(
+          callInteractionsApi(
+            storageSdk,
+            { mode: 'oauth', oauthToken: 'revoked_tok_93', clientId: 'client-93' },
+            'models',
+            'GET'
+          )
+        ).rejects.toThrow(/Antigravity API error \(401\)/)
+        expect(winStorage.has(STUDIO_OAUTH_STORAGE_KEY)).toBe(false)
+        expect(extStorage.get(STUDIO_OAUTH_STORAGE_KEY) || '').toBe('')
+      } finally {
+        globalWithFetch.fetch = prevFetch
+      }
     } finally {
       globalWithWindow.window = prevWindow
     }
