@@ -1647,6 +1647,60 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         await new Promise((r) => setTimeout(r, 50));
         const afterFlashSwitch = composerSelect ? composerSelect.value : '';
 
+        const triggerBtn = document.querySelector('[data-testid="composer-model-select-trigger"]');
+        const beforeTriggerRect = triggerBtn ? triggerBtn.getBoundingClientRect() : null;
+        if (triggerBtn) triggerBtn.click();
+        await new Promise((r) => setTimeout(r, 60));
+
+        const menuOptionOrder = Array.from(
+          document.querySelectorAll('[data-testid="composer-model-select-menu"] > .dab-studio-menu-item-row > [role="option"]')
+        ).map((el) => el.getAttribute('data-value'));
+        const argonOption = document.querySelector('[data-testid="composer-model-select-option-gemini-4-argon"]');
+        const argonRowSubLabel = (argonOption?.querySelector('.dab-studio-menu-sublabel')?.textContent || '').trim();
+        if (argonOption) {
+          argonOption.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        }
+        await new Promise((r) => setTimeout(r, 60));
+
+        const flyoutMenu = document.querySelector('[data-testid="composer-thinking-level-menu"]');
+        const flyoutOptionIds = Array.from(flyoutMenu?.querySelectorAll('[role="menuitemradio"]') || []).map((el) =>
+          el.getAttribute('data-testid')
+        );
+        const mediumOption = document.querySelector('[data-testid="thinking-level-option-medium"]');
+        const mediumInitiallyChecked = mediumOption?.getAttribute('aria-checked') === 'true';
+
+        const menuEl = document.querySelector('[data-testid="composer-model-select-menu"]');
+        const menuRect = menuEl ? menuEl.getBoundingClientRect() : null;
+        const flyoutRect = flyoutMenu ? flyoutMenu.getBoundingClientRect() : null;
+        const unionClip =
+          menuRect && flyoutRect
+            ? {
+                x: Math.max(0, Math.floor(Math.min(menuRect.left, flyoutRect.left) - 24)),
+                y: Math.max(0, Math.floor(Math.min(menuRect.top, flyoutRect.top) - 24)),
+                width: Math.min(
+                  1440,
+                  Math.ceil(Math.max(menuRect.right, flyoutRect.right) - Math.min(menuRect.left, flyoutRect.left) + 48)
+                ),
+                height: Math.min(
+                  900,
+                  Math.ceil(Math.max(menuRect.bottom, flyoutRect.bottom) - Math.min(menuRect.top, flyoutRect.top) + 48)
+                ),
+                scale: 1
+              }
+            : null;
+
+        const highOption = document.querySelector('[data-testid="thinking-level-option-high"]');
+        if (highOption) highOption.click();
+        await new Promise((r) => setTimeout(r, 60));
+
+        const afterHighModel = composerSelect ? composerSelect.value : '';
+        const afterHighThinkingLevel = window.__DAB_STUDIO__?.thinkingLevel;
+        const afterTriggerRect = triggerBtn ? triggerBtn.getBoundingClientRect() : null;
+        const noTriggerHeightShift =
+          beforeTriggerRect && afterTriggerRect
+            ? Math.abs(beforeTriggerRect.height - afterTriggerRect.height) <= 1
+            : false;
+
         return {
           initialDefault,
           optionIds,
@@ -1655,18 +1709,27 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           noComposerInspector,
           syncedComposerModel,
           afterLiteSwitch,
-          afterFlashSwitch
+          afterFlashSwitch,
+          menuOptionOrder,
+          argonRowSubLabel,
+          flyoutOptionIds,
+          mediumInitiallyChecked,
+          afterHighModel,
+          afterHighThinkingLevel,
+          noTriggerHeightShift,
+          unionClip
         };
       })()`,
       awaitPromise: true,
       returnByValue: true
     })
 
-    expect(res.result.value).toEqual({
+    const { unionClip, ...modelSelectResult } = res.result.value
+    expect(modelSelectResult).toEqual({
       initialDefault: 'gemini-3.8-flash',
       optionIds: [
-        'gemini-3.8-flash',
         'gemini-4-argon',
+        'gemini-3.8-flash',
         'gemini-3.7-flash',
         'gemini-3.6-flash',
         'gemini-3.5-flash-lite'
@@ -1676,8 +1739,31 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       noComposerInspector: true,
       syncedComposerModel: 'gemini-4-argon',
       afterLiteSwitch: 'gemini-3.5-flash-lite',
-      afterFlashSwitch: 'gemini-3.8-flash'
+      afterFlashSwitch: 'gemini-3.8-flash',
+      menuOptionOrder: [
+        'gemini-4-argon',
+        'gemini-3.8-flash',
+        'gemini-3.7-flash',
+        'gemini-3.6-flash',
+        'gemini-3.5-flash-lite'
+      ],
+      argonRowSubLabel: 'Medium',
+      flyoutOptionIds: [
+        'thinking-level-option-low',
+        'thinking-level-option-medium',
+        'thinking-level-option-high'
+      ],
+      mediumInitiallyChecked: true,
+      afterHighModel: 'gemini-4-argon',
+      afterHighThinkingLevel: 'high',
+      noTriggerHeightShift: true
     })
+    expect(unionClip).toBeTruthy()
+    const { data: flyoutPngData } = await chrome.send('Page.captureScreenshot', {
+      format: 'png',
+      clip: unionClip
+    })
+    expect(Buffer.from(flyoutPngData, 'base64').length).toBeGreaterThan(500)
   }, 15000)
 
   test('auto-labels conversation after Turn 1 via stateless side-request (no previous_interaction_id, tools=[]) and updates user_conversations:1 + sidebar UI', async () => {

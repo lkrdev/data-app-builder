@@ -98,12 +98,77 @@ export interface AntigravityModelOption {
 export const DEFAULT_ANTIGRAVITY_MODEL = 'gemini-3.8-flash'
 
 export const ANTIGRAVITY_ALLOWED_MODELS: AntigravityModelOption[] = [
-  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', description: 'Default — balanced reasoning, coding & tool use' },
   { id: 'gemini-4-argon', label: 'Gemini 4 Argon', description: 'Frontier reasoning & complex multi-step engineering' },
+  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', description: 'Default — balanced reasoning, coding & tool use' },
   { id: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash', description: 'Fast multi-step reasoning & coding' },
   { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', description: 'Stable reasoning & tool use' },
   { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite', description: 'Lowest latency & cost' },
 ]
+
+export type StudioThinkingLevel = 'low' | 'medium' | 'high'
+
+export const DEFAULT_THINKING_LEVEL: StudioThinkingLevel = 'medium'
+
+export const STUDIO_THINKING_LEVEL_STORAGE_KEY = 'dab_thinking_level'
+
+export const STUDIO_THINKING_LEVEL_OPTIONS: Array<{
+  value: StudioThinkingLevel
+  label: string
+  testId: string
+}> = [
+  { value: 'low', label: 'Low', testId: 'thinking-level-option-low' },
+  { value: 'medium', label: 'Medium', testId: 'thinking-level-option-medium' },
+  { value: 'high', label: 'High', testId: 'thinking-level-option-high' },
+]
+
+export function normalizeThinkingLevel(raw: unknown): StudioThinkingLevel {
+  return raw === 'low' || raw === 'medium' || raw === 'high' ? raw : DEFAULT_THINKING_LEVEL
+}
+
+export function readInitialThinkingLevel(): StudioThinkingLevel {
+  try {
+    const w = typeof window !== 'undefined' ? window : undefined
+    return normalizeThinkingLevel(
+      (w?.__MOCK_LOOKER_EXTENSION__ as { initialThinkingLevel?: string } | undefined)
+        ?.initialThinkingLevel ?? w?.localStorage?.getItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY)
+    )
+  } catch {
+    return DEFAULT_THINKING_LEVEL
+  }
+}
+
+export async function loadStoredThinkingLevel(
+  extensionSDK?: AntigravityExtensionHostLike
+): Promise<StudioThinkingLevel | null> {
+  try {
+    const w = typeof window !== 'undefined' ? window : undefined
+    const raw =
+      (await extensionSDK?.localStorageGetItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY)) ??
+      w?.localStorage?.getItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY)
+    return raw === 'low' || raw === 'medium' || raw === 'high' ? raw : null
+  } catch {
+    return null
+  }
+}
+
+export function persistThinkingLevel(
+  extensionSDK: AntigravityExtensionHostLike,
+  level: StudioThinkingLevel
+): void {
+  const normalized = normalizeThinkingLevel(level)
+  try {
+    if (typeof window !== 'undefined') {
+      window.localStorage?.setItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY, normalized)
+    }
+  } catch {
+    // ignore storage write failure
+  }
+  try {
+    void extensionSDK?.localStorageSetItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY, normalized)
+  } catch {
+    // ignore extensionSDK storage write failure
+  }
+}
 
 export interface ExtensionAuthContextConfig {
   authMode: 'oauth' | 'apikey'
@@ -1519,6 +1584,7 @@ export interface RunAntigravityTurnOptions {
   auth: AntigravityAuth
   session: AgentSession
   model?: string
+  thinkingLevel?: StudioThinkingLevel
   mode?: 'data_app' | 'dashboard'
   useCase?: StudioUseCase
   allowedModes?: string[]
@@ -1587,6 +1653,7 @@ export async function runAntigravityTurn(
     auth,
     session,
     model = DEFAULT_ANTIGRAVITY_MODEL,
+    thinkingLevel = DEFAULT_THINKING_LEVEL,
     mode = 'data_app',
     useCase = 'auto',
     allowedModes,
@@ -1828,12 +1895,19 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       ? `\n\nAttached files in /workspace/uploads:\n${uploadedFileNotices.join('\n')}`
       : ''
 
+  const thinkingDirective =
+    thinkingLevel === 'low'
+      ? '[THINKING LEVEL: LOW — Be concise and minimize exploratory steps]\n\n'
+      : thinkingLevel === 'high'
+      ? '[THINKING LEVEL: HIGH — Reason deeply and verify edge cases thoroughly]\n\n'
+      : ''
+
   const buildInputItems = (fresh: boolean): Array<Record<string, unknown>> => [
     {
       type: 'text',
       text: fresh
-        ? `${systemGuide}${autoRoutingDirective}${historyDigest}\n\nUser request:\n${userPrompt}${uploadsSection}`
-        : `${warmTurnDirective}${autoRoutingDirective ? `${autoRoutingDirective.trim()}\n\n` : ''}User request:\n${userPrompt}${uploadsSection}`,
+        ? `${thinkingDirective}${systemGuide}${autoRoutingDirective}${historyDigest}\n\nUser request:\n${userPrompt}${uploadsSection}`
+        : `${thinkingDirective}${warmTurnDirective}${autoRoutingDirective ? `${autoRoutingDirective.trim()}\n\n` : ''}User request:\n${userPrompt}${uploadsSection}`,
     },
     ...(images || [])
       .filter((img) => img.mimeType.startsWith('image/') || img.mimeType === 'application/pdf')
