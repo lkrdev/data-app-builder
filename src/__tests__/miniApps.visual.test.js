@@ -938,7 +938,9 @@ async function startHeadlessChrome() {
             if (document.body) document.body.innerHTML = '';
           })()`
         })
-      } catch {}
+      } catch {
+        /* ignore */
+      }
     }
     return rawSend(method, params)
   }
@@ -957,7 +959,9 @@ async function startHeadlessChrome() {
     close: () => {
       try {
         ws.close()
-      } catch {}
+      } catch {
+        /* ignore */
+      }
       proc.kill('SIGKILL')
     }
   }
@@ -1029,7 +1033,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     // Write manifest.json recording snapshot dimensions, crop selectors, and git status
     try {
       writeSnapshotManifest()
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   })
 
   const scenarios = [

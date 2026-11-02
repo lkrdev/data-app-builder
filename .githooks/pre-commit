@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH="/usr/local/google/home/bryanweber/.nvm/versions/node/v24.21.0/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
+npm run lint:check

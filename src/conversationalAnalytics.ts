@@ -1,5 +1,7 @@
+import type { ExtensionSDK } from '@looker/extension-sdk'
+import type { ILookmlModel, Looker40SDK } from '@looker/sdk'
 import { mutate, SWRConfig, unstable_serialize } from 'swr'
-import type { Looker40SDK } from '@looker/sdk'
+
 import {
   AntigravityAuth,
   callInteractionsApi,
@@ -69,22 +71,37 @@ export function classifyStudioUseCase(
   return extractResolvedUseCase('', userPrompt, allowedModes)
 }
 
-export function normalizeCaAgent(raw: any): LookerCaAgentSummary | null {
-  if (!raw || typeof raw !== 'object' || raw.deleted === true) return null
-  const id = String(raw.id || raw.agent_id || '').trim()
+export interface RawLookerCaAgent {
+  id?: string; agent_id?: string; name?: string; title?: string; description?: string; deleted?: boolean
+  context?: string | { instructions?: string; golden_queries?: unknown[] }
+  system_instructions?: string; instructions?: string
+  sources?: Array<{
+    model?: string; explore?: string
+    looker_explores?: Array<{ model_name?: string; model?: string; explore_name?: string; explore?: string }>
+  }>
+  explores?: Array<string | { model?: string; explore?: string }>
+  golden_queries?: unknown[]; goldenQueries?: unknown[]; example_questions?: unknown[]
+}
+
+export function normalizeCaAgent(raw: unknown): LookerCaAgentSummary | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as RawLookerCaAgent
+  if (r.deleted === true) return null
+  const id = String(r.id || r.agent_id || '').trim()
   if (!id) return null
-  const name = String(raw.name || raw.title || id).trim()
-  const description = String(raw.description || '').trim()
+  const name = String(r.name || r.title || id).trim()
+  const description = String(r.description || '').trim()
+  const ctxObj = typeof r.context === 'object' && r.context !== null ? r.context : undefined
   const instructions = String(
-    raw.context?.instructions ||
-      raw.system_instructions ||
-      raw.instructions ||
-      (typeof raw.context === 'string' ? raw.context : '') ||
+    ctxObj?.instructions ||
+      r.system_instructions ||
+      r.instructions ||
+      (typeof r.context === 'string' ? r.context : '') ||
       ''
   ).trim()
 
   const exploreSet = new Set<string>()
-  for (const s of Array.isArray(raw.sources) ? raw.sources : []) {
+  for (const s of Array.isArray(r.sources) ? r.sources : []) {
     if (s?.model && s?.explore) {
       exploreSet.add(formatExploreId(String(s.model), String(s.explore)))
     }
@@ -94,28 +111,36 @@ export function normalizeCaAgent(raw: any): LookerCaAgentSummary | null {
       if (m && e) exploreSet.add(formatExploreId(String(m), String(e)))
     }
   }
-  for (const e of Array.isArray(raw.explores) ? raw.explores : []) {
+  for (const e of Array.isArray(r.explores) ? r.explores : []) {
     if (typeof e === 'string' && e.includes('::')) exploreSet.add(e.trim())
-    else if (e?.model && e?.explore) {
+    else if (typeof e === 'object' && e?.model && e?.explore) {
       exploreSet.add(formatExploreId(String(e.model), String(e.explore)))
     }
   }
 
   const rawGqs = [
-    ...(Array.isArray(raw.golden_queries) ? raw.golden_queries : []),
-    ...(Array.isArray(raw.goldenQueries) ? raw.goldenQueries : []),
-    ...(Array.isArray(raw.context?.golden_queries) ? raw.context.golden_queries : []),
-    ...(Array.isArray(raw.example_questions) ? raw.example_questions : []),
+    ...(Array.isArray(r.golden_queries) ? r.golden_queries : []),
+    ...(Array.isArray(r.goldenQueries) ? r.goldenQueries : []),
+    ...(Array.isArray(ctxObj?.golden_queries) ? ctxObj.golden_queries : []),
+    ...(Array.isArray(r.example_questions) ? r.example_questions : []),
   ]
   const goldenQueries: LookerCaGoldenQuery[] = []
-  for (const gq of rawGqs) {
-    if (typeof gq === 'string' && gq.trim()) {
-      goldenQueries.push({ questions: [gq.trim()] })
+  for (const gqItem of rawGqs) {
+    if (typeof gqItem === 'string' && gqItem.trim()) {
+      goldenQueries.push({ questions: [gqItem.trim()] })
       continue
     }
-    if (!gq || typeof gq !== 'object') continue
+    if (!gqItem || typeof gqItem !== 'object') continue
+    const gq = gqItem as {
+      questions?: unknown[]
+      question?: string
+      query?: string
+      model?: string
+      explore?: string
+      fields?: unknown[]
+    }
     const questions = Array.isArray(gq.questions)
-      ? gq.questions.map((q: any) => String(q || '').trim()).filter(Boolean)
+      ? gq.questions.map((q) => String(q || '').trim()).filter(Boolean)
       : gq.question || gq.query
       ? [String(gq.question || gq.query).trim()]
       : []
@@ -144,14 +169,17 @@ export function normalizeCaAgent(raw: any): LookerCaAgentSummary | null {
 
 export async function fetchLookerCaAgentsCatalog(
   sdk: Looker40SDK,
-  _fallbackModels?: any[]
+  _fallbackModels?: Array<Partial<ILookmlModel>>
 ): Promise<LookerCaAgentSummary[]> {
-  let rawList: any[] = []
+  let rawList: unknown[] = []
   try {
+    const sdkWithAgents = sdk as unknown as {
+      search_agents?: () => Promise<unknown>
+    }
     const res =
-      typeof (sdk as any)?.search_agents === 'function'
-        ? await sdk.ok((sdk as any).search_agents())
-        : await rawLookerRequest<any[]>(sdk, 'GET', '/agents/search')
+      typeof sdkWithAgents?.search_agents === 'function'
+        ? await sdk.ok(sdkWithAgents.search_agents() as never)
+        : await rawLookerRequest<unknown[]>(sdk, 'GET', '/agents/search')
     if (Array.isArray(res)) rawList = res
   } catch {
     rawList = []
@@ -173,7 +201,8 @@ export async function fetchLookerCaAgentsCatalog(
             goldenQueries: [{ questions: ['what are our shipping statuses?'] }],
           },
         ]
-  ;(SWRConfig as any).default?.cache?.set?.(unstable_serialize(['looker:ca_agents']), result)
+  const swrDefault = (SWRConfig as unknown as { default?: { cache?: { set?: (k: string, v: unknown) => void } } }).default
+  swrDefault?.cache?.set?.(unstable_serialize(['looker:ca_agents']), result)
   void mutate(['looker:ca_agents'], result, false).catch(() => {})
   return result
 }
@@ -274,7 +303,9 @@ export function parseCaAgentSelectionResponse(
         }
       }
     }
-  } catch {}
+  } catch {
+    // ignore malformed CA selection JSON
+  }
 
   const hit = catalog.find((a) => text.includes(a.id)) || bestLocal
   return {
@@ -295,7 +326,7 @@ export const parseCaAgentSelectionOutput = parseCaAgentSelectionResponse
 // so the full CA agents catalog (system instructions, explores, golden queries) never enters the main conversation history.
 export async function selectCaAgentViaIsolatedSubagent(params: {
   sdk?: Looker40SDK
-  extensionSDK?: any
+  extensionSDK?: Partial<ExtensionSDK>
   auth: AntigravityAuth
   environmentId?: string
   userQuestion?: string
@@ -361,7 +392,7 @@ export async function selectCaAgentViaIsolatedSubagent(params: {
       )
       const outText =
         interaction?.output_text ||
-        (interaction?.outputs || []).map((o: any) => o?.text || '').join('\n') ||
+        (interaction?.outputs || []).map((o: { text?: string }) => o?.text || '').join('\n') ||
         ''
       const parsed = parseCaAgentSelectionResponse(outText, catalog, question)
       return {
@@ -389,15 +420,15 @@ export function resolveCaEmbedPath(
   )}?agent_id=${encodeURIComponent(agentId.trim())}`
 }
 
+export interface CreateCaConversationOptions {
+  sdk: Looker40SDK
+  agent?: LookerCaAgentSummary
+  selection?: CaAgentSelectionResult
+  userPrompt: string
+}
+
 export async function createLookerCaConversation(
-  sdkOrOpts:
-    | Looker40SDK
-    | {
-        sdk: Looker40SDK
-        agent: LookerCaAgentSummary
-        selection?: CaAgentSelectionResult
-        userPrompt: string
-      },
+  sdkOrOpts: Looker40SDK | CreateCaConversationOptions,
   agentIdArg?: string,
   initialPromptArg?: string,
   agentNameArg?: string
@@ -411,20 +442,15 @@ export async function createLookerCaConversation(
   assistantReply?: string
 }> {
   const isObj = Boolean(sdkOrOpts && typeof sdkOrOpts === 'object' && 'sdk' in sdkOrOpts)
-  const sdk: Looker40SDK = isObj ? (sdkOrOpts as any).sdk : (sdkOrOpts as Looker40SDK)
+  const opts = isObj ? (sdkOrOpts as CreateCaConversationOptions) : undefined
+  const sdk: Looker40SDK = opts ? opts.sdk : (sdkOrOpts as Looker40SDK)
   const cleanAgentId = String(
-    isObj
-      ? (sdkOrOpts as any).agent?.id || (sdkOrOpts as any).selection?.agentId
-      : agentIdArg || ''
+    opts ? opts.agent?.id || opts.selection?.agentId : agentIdArg || ''
   ).trim()
   const resolvedAgentName = String(
-    isObj
-      ? (sdkOrOpts as any).agent?.name || (sdkOrOpts as any).selection?.agentName
-      : agentNameArg || cleanAgentId
+    opts ? opts.agent?.name || opts.selection?.agentName : agentNameArg || cleanAgentId
   ).trim()
-  const cleanPrompt = String(
-    isObj ? (sdkOrOpts as any).userPrompt : initialPromptArg || ''
-  ).trim()
+  const cleanPrompt = String(opts ? opts.userPrompt : initialPromptArg || '').trim()
 
   if (!cleanAgentId) throw new Error('Looker CA agent_id is required to create a conversation.')
   const label =
@@ -432,24 +458,35 @@ export async function createLookerCaConversation(
       ? `${cleanPrompt.slice(0, 53).trim()}...`
       : cleanPrompt || `${resolvedAgentName || 'CA'} Conversation`
 
+  const sdkWithCa = sdk as unknown as {
+    create_conversation?: (body: Record<string, string>) => Promise<{ id?: string }>
+    conversational_analytics_chat?: (body: Record<string, string>) => Promise<{
+      reply?: string
+      text?: string
+      output_text?: string
+    }>
+  }
+
   let caConversationId = ''
   try {
     const created =
-      typeof (sdk as any).create_conversation === 'function'
+      typeof sdkWithCa.create_conversation === 'function'
         ? await sdk.ok(
-            (sdk as any).create_conversation({
+            sdkWithCa.create_conversation({
               name: label,
               title: label,
               agent_id: cleanAgentId,
-            })
+            }) as never
           )
-        : await rawLookerRequest<any>(sdk, 'POST', '/conversations', undefined, {
+        : await rawLookerRequest<{ id?: string }>(sdk, 'POST', '/conversations', undefined, {
             name: label,
             title: label,
             agent_id: cleanAgentId,
           })
-    caConversationId = String(created?.id || '').trim()
-  } catch {}
+    caConversationId = String((created as { id?: string } | undefined)?.id || '').trim()
+  } catch {
+    // fall back to generated CA conversation ID
+  }
   if (!caConversationId) {
     caConversationId = `ca_conv_${Date.now().toString(36)}`
   }
@@ -458,23 +495,30 @@ export async function createLookerCaConversation(
   if (cleanPrompt) {
     try {
       const chatRes =
-        typeof (sdk as any).conversational_analytics_chat === 'function'
+        typeof sdkWithCa.conversational_analytics_chat === 'function'
           ? await sdk.ok(
-              (sdk as any).conversational_analytics_chat({
+              sdkWithCa.conversational_analytics_chat({
                 conversation_id: caConversationId,
                 agent_id: cleanAgentId,
                 user_message: cleanPrompt,
-              })
+              }) as never
             )
-          : await rawLookerRequest<any>(sdk, 'POST', '/conversational_analytics/chat', undefined, {
-              conversation_id: caConversationId,
-              agent_id: cleanAgentId,
-              user_message: cleanPrompt,
-            })
-      assistantReply = String(
-        chatRes?.reply || chatRes?.text || chatRes?.output_text || ''
-      ).trim()
-    } catch {}
+          : await rawLookerRequest<{ reply?: string; text?: string; output_text?: string }>(
+              sdk,
+              'POST',
+              '/conversational_analytics/chat',
+              undefined,
+              {
+                conversation_id: caConversationId,
+                agent_id: cleanAgentId,
+                user_message: cleanPrompt,
+              }
+            )
+      const cr = chatRes as { reply?: string; text?: string; output_text?: string } | undefined
+      assistantReply = String(cr?.reply || cr?.text || cr?.output_text || '').trim()
+    } catch {
+      // ignore optional initial chat turn failure
+    }
   }
 
   return {

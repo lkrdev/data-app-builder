@@ -1,5 +1,10 @@
 import React, { useState } from 'react'
+
+import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
+
+import { StudioBadge, StudioCard } from './components/StudioDesignSystem'
+import { LKR_DEV_CLI_SPEC } from './lkrCliBridge'
 import {
   getArtifactNamespace,
   listUserArtifacts,
@@ -7,8 +12,6 @@ import {
   PersistedChatTurn,
   saveUserArtifact,
 } from './lookerApi'
-import { LKR_DEV_CLI_SPEC } from './lkrCliBridge'
-import { StudioBadge, StudioCard } from './components/StudioDesignSystem'
 export { getArtifactNamespace } from './lookerApi'
 export * from './lkrCliBridge'
 
@@ -83,11 +86,19 @@ export interface LookmlArtifactPayload {
   }
 }
 
-export function extractLookmlBundleFromInteraction(interaction: any): LookmlBundle | null {
+export interface LookmlInteractionLike {
+  output_text?: string
+  outputs?: Array<{ text?: string }>
+  steps?: Array<{ output?: string; result?: string; text?: string }>
+}
+
+export function extractLookmlBundleFromInteraction(
+  interaction?: LookmlInteractionLike | null
+): LookmlBundle | null {
   const texts = [
     interaction?.output_text,
-    ...(interaction?.outputs || []).map((o: any) => o?.text),
-    ...(interaction?.steps || []).flatMap((s: any) => [s?.output, s?.result, s?.text]),
+    ...(interaction?.outputs || []).map((o) => o?.text),
+    ...(interaction?.steps || []).flatMap((s) => [s?.output, s?.result, s?.text]),
   ].filter((x): x is string => typeof x === 'string')
   const matches = Array.from(texts.join('\n').matchAll(/<LOOKML_BUNDLE>([\s\S]*?)<\/LOOKML_BUNDLE>/g))
   return matches.length ? (JSON.parse(matches[matches.length - 1][1].trim()) as LookmlBundle) : null
@@ -193,7 +204,7 @@ export function getLookmlArtifactKeys(userId: string, id: string) {
 // via shared saveUserArtifact/loadObjectArtifact/listUserArtifacts in lookerArtifacts.ts.
 export async function saveLookmlSessionArtifact(params: {
   sdk: Looker40SDK
-  extensionSDK?: any
+  extensionSDK?: Partial<ExtensionSDK>
   userId: string
   bundle: LookmlBundle
   studio: {
@@ -229,7 +240,7 @@ export async function saveLookmlSessionArtifact(params: {
 
 export async function loadLookmlSessionArtifact(
   sdk: Looker40SDK,
-  extensionSDK: any,
+  extensionSDK: Partial<ExtensionSDK> | undefined,
   rawId: string
 ): Promise<LookmlArtifactPayload> {
   const namespace = getArtifactNamespace(extensionSDK)
@@ -241,7 +252,7 @@ export async function loadLookmlSessionArtifact(
 
 export async function listUserLookmlSessions(
   sdk: Looker40SDK,
-  extensionSDK: any,
+  extensionSDK: Partial<ExtensionSDK> | undefined,
   userId: string
 ): Promise<LookmlSessionIndex[]> {
   return (await listUserArtifacts(
@@ -255,7 +266,7 @@ export async function listUserLookmlSessions(
 export const LookmlPreviewPane: React.FC<{
   bundle: LookmlBundle | null
   hostUrl: string
-  extensionSDK?: any
+  extensionSDK?: Partial<ExtensionSDK>
   canDeploy?: boolean
 }> = ({ bundle, hostUrl, extensionSDK, canDeploy = true }) => {
   const [selectedFileIdx, setSelectedFileIdx] = useState(0)

@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+
 import useSWR from 'swr'
-import { useLookerExtension } from '../contexts/LookerExtensionContext'
+
+import { LkrCodeMode } from '../antigravity'
 import {
   bindTileScriptArtifact,
   getArtifactNamespace,
@@ -10,9 +12,9 @@ import {
   SavedScript,
   TileScriptBinding,
 } from '../lookerApi'
-import { LkrCodeMode } from '../antigravity'
 import { ScriptOutputRenderer, renderMarkdownOrHtmlString } from './ScriptStudioView'
 import { StudioSelect } from './StudioSelect'
+import { useLookerExtension } from '../contexts/LookerExtensionContext'
 export { ScriptOutputRenderer, renderMarkdownOrHtmlString }
 
 export const PYTHON_TILE_SKILL_GUIDE = [
@@ -101,7 +103,7 @@ export const PythonTile: React.FC = () => {
   const executeBoundScript = useCallback(
     async (
       overrideBinding?: TileScriptBinding | null,
-      overrideFilters?: Record<string, any>
+      overrideFilters?: Record<string, unknown>
     ) => {
       const code = (overrideBinding ?? binding)?.code
       if (!code || runningRef.current) return
@@ -118,8 +120,8 @@ export const PythonTile: React.FC = () => {
           },
         })
         setOutput(out)
-      } catch (err: any) {
-        setOutput(JSON.stringify({ error: err?.message || String(err) }))
+      } catch (err: unknown) {
+        setOutput(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
       } finally {
         runningRef.current = false
         setRunning(false)

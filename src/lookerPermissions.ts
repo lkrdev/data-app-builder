@@ -1,3 +1,5 @@
+import type { IFolder, ILookmlModel, IRole, IUser } from '@looker/sdk'
+
 export interface Looker404Diagnostic {
   kind: 'role_denied' | 'feature_disabled' | 'not_found'
   status: number
@@ -12,10 +14,12 @@ export function classifyLooker404Error(
   rawText: string
 ): Looker404Diagnostic {
   const text = String(rawText || '').trim()
-  let parsed: any = null
+  let parsed: Record<string, unknown> | null = null
   try {
-    if (text.startsWith('{')) parsed = JSON.parse(text)
-  } catch {}
+    if (text.startsWith('{')) parsed = JSON.parse(text) as Record<string, unknown>
+  } catch {
+    // ignore malformed JSON
+  }
   const message = String(parsed?.message || text || 'Not found')
   const docUrl = String(parsed?.documentation_url || '')
   const isInlineExt = path.includes('/data_app_extension') || path.includes('/inline_extension')
@@ -107,13 +111,15 @@ const USE_CASE_ALIAS_MAP: Record<string, ResolvedStudioUseCase> = {
   qa: 'conversational-analytics',
 }
 
-export function useCaseToStudioMode(useCase: StudioUseCase): StudioCapabilityMode {
+export function studioUseCaseToMode(useCase: StudioUseCase): StudioCapabilityMode {
   if (useCase === 'dashboard') return 'dashboard'
   if (useCase === 'lookml') return 'lookml'
   if (useCase === 'health-check') return 'health'
   if (useCase === 'tile') return 'tile'
   return 'app'
 }
+
+export const useCaseToStudioMode = studioUseCaseToMode
 
 export function studioModeToUseCase(mode?: string): ResolvedStudioUseCase {
   const token = String(mode || '').trim().toLowerCase().replace(/\s+/g, '-')
@@ -157,7 +163,7 @@ export function parseStudioRoute(pathname: string): {
 } {
   const clean = (pathname || '/').trim()
   const mk = (useCase: StudioUseCase, objectId = '', conversationId = objectId, isLegacyRoute?: boolean) => ({
-    mode: useCaseToStudioMode(useCase),
+    mode: studioUseCaseToMode(useCase),
     objectId,
     conversationId,
     useCase,
@@ -292,12 +298,22 @@ const ALL_CORE_PERMISSIONS = [
   'manage_user_attributes', 'schedule_look_emails',
 ]
 
+export type LookerUserLike = Partial<IUser> & { is_iam_admin?: boolean }
+export type LookerRoleLike = Partial<IRole>
+export type LookerModelLike = Partial<ILookmlModel>
+export type LookerFolderLike = Partial<IFolder>
+
 // ponytail: evaluate Role = PermissionSet × ModelSet per role first so model sets never bleed across roles,
 // then apply Looker's Model -> Project and Model -> Connection expansion rules.
 export function resolveUserCapabilities(
-  params: { user?: any; roles?: any[] | null; models?: any[]; folders?: any[] } = {}
+  params: {
+    user?: LookerUserLike | null
+    roles?: LookerRoleLike[] | null
+    models?: LookerModelLike[] | null
+    folders?: LookerFolderLike[] | null
+  } = {}
 ): UserCapabilities {
-  const user = params.user || {}
+  const user: LookerUserLike = params.user || {}
   const models = Array.isArray(params.models) ? params.models : []
   const folders = Array.isArray(params.folders) ? params.folders : []
   const roles = params.roles
@@ -309,7 +325,7 @@ export function resolveUserCapabilities(
       (user?.can?.create && user?.can?.destroy) ||
       (rolesLoaded &&
         roles.some(
-          (r: any) =>
+          (r: LookerRoleLike) =>
             r?.permission_set?.all_access ||
             (r?.permission_set?.permissions || []).includes('admin') ||
             String(r?.name || '').toLowerCase() === 'admin' ||

@@ -1,16 +1,25 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { getEmbedSDK, ILookerConnection, LookerEmbedExSDK } from '@looker/embed-sdk'
+
+import {
+  ChattyHostBuilderFactory,
+  getEmbedSDK,
+  ILookerConnection,
+  LookerEmbedExSDK,
+  PageChangedEvent,
+} from '@looker/embed-sdk'
+
 import {
   AntigravityActivityStep,
   handleImageClipboardPaste,
   StudioUseCase,
 } from '../antigravity'
+import { renderTddMarkdownToHtml } from '../healthCheck'
 import {
   ConversationRecord,
+  ResolvedStudioUseCase,
   resolveConversationRelatedContent,
 } from '../lookerApi'
 import { LOOKML_TURN_SKILLS, LookmlPreviewPane } from '../lookmlTool'
-import { renderTddMarkdownToHtml } from '../healthCheck'
 import { StudioController } from '../useStudioController'
 import { TilePreviewPane } from './ScriptStudioView'
 import {
@@ -22,10 +31,11 @@ import {
   StudioToolbar,
 } from './StudioDesignSystem'
 
-function buildUseCaseMenuOptions(ctl: StudioController): StudioSelectOption[] {
+function buildUseCaseMenuOptions(ctl: StudioController): Array<StudioSelectOption<StudioUseCase>> {
   const { useCaseOptions, allowedUseCases, capabilities } = ctl
   return useCaseOptions.map((opt) => {
-    const isAllowed = opt.value === 'auto' || allowedUseCases.includes(opt.value as any)
+    const isAllowed =
+      opt.value === 'auto' || allowedUseCases.includes(opt.value as ResolvedStudioUseCase)
     const toolReason =
       opt.capabilityMode && capabilities?.rolesLoaded
         ? capabilities.tools?.[opt.capabilityMode]?.reason
@@ -165,7 +175,7 @@ export function createLookerEmbedPreloadController(opts: {
     opts.container?.setAttribute?.('data-embed-running', String(telemetry.running))
     opts.container?.setAttribute?.('data-embed-run-count', String(telemetry.runCount))
     if (typeof window !== 'undefined') {
-      ;(window as any).__LOOKER_EMBED_STATE__ = {
+      window.__LOOKER_EMBED_STATE__ = {
         ...telemetry,
         events: [...telemetry.events],
         calls: [...telemetry.calls],
@@ -174,7 +184,7 @@ export function createLookerEmbedPreloadController(opts: {
   }
 
   if (typeof window === 'undefined') {
-    ;(globalThis as any).window = {
+    ;(globalThis as Record<string, unknown>).window = {
       location: { origin: opts.hostUrl || 'https://looker.example.com' },
       setTimeout,
       clearTimeout,
@@ -184,13 +194,13 @@ export function createLookerEmbedPreloadController(opts: {
   }
 
   const chattyHostCreator = (initialUrl: string) => {
-    const handlers: Record<string, Array<(...args: any[]) => void>> = {}
-    let targetEl: any = opts.container
-    const emit = (evt: string, payload: any = {}) =>
+    const handlers: Record<string, Array<(payload?: Record<string, unknown>) => void>> = {}
+    let targetEl: HTMLElement | null = opts.container
+    const emit = (evt: string, payload: Record<string, unknown> = {}) =>
       (handlers[evt] || []).forEach((fn) => fn(payload))
     const noop = () => builder
-    const builder: any = {
-      on: (evt: string, fn: (...args: any[]) => void) => {
+    const builder = {
+      on: (evt: string, fn: (payload?: Record<string, unknown>) => void) => {
         ;(handlers[evt] = handlers[evt] || []).push(fn)
         return builder
       },
@@ -207,7 +217,12 @@ export function createLookerEmbedPreloadController(opts: {
       },
       build: () => {
         const doc = targetEl?.ownerDocument || (typeof document !== 'undefined' ? document : null)
-        const iframe: any =
+        const iframe: Partial<HTMLIFrameElement> & {
+          setAttribute?: (k: string, v: string) => void
+          removeAttribute?: (k: string) => void
+          getAttribute?: (k: string) => string | null
+          classList?: { add: (c: string) => void }
+        } =
           targetEl?.querySelector?.('iframe') ||
           (doc
             ? doc.createElement('iframe')
@@ -216,7 +231,7 @@ export function createLookerEmbedPreloadController(opts: {
                 removeAttribute: () => {},
                 getAttribute: () => '',
                 classList: { add: () => {} },
-                style: {},
+                style: {} as CSSStyleDeclaration,
                 className: '',
                 src: '',
                 srcdoc: '',
@@ -240,7 +255,9 @@ export function createLookerEmbedPreloadController(opts: {
           iframe.setAttribute?.('src', rawUrl)
         }
         syncIframe(initialUrl)
-        if (doc && targetEl && iframe.parentNode !== targetEl) targetEl.appendChild(iframe)
+        if (doc && targetEl && iframe.parentNode !== targetEl) {
+          targetEl.appendChild(iframe as HTMLIFrameElement)
+        }
         const connectedHost = {
           send: (event: string) => {
             if (event === 'dashboard:run') {
@@ -249,7 +266,7 @@ export function createLookerEmbedPreloadController(opts: {
               emit('dashboard:run:complete')
             }
           },
-          sendAndReceive: async (event: string, payload?: any) => {
+          sendAndReceive: async (event: string, payload?: { url?: string }) => {
             if (event === 'page:load' && payload?.url) {
               const nextUrl = String(payload.url)
               syncIframe(nextUrl)
@@ -289,7 +306,7 @@ export function createLookerEmbedPreloadController(opts: {
   }
 
   const sdk = opts.mockPreviewHtml
-    ? getEmbedSDK(new LookerEmbedExSDK(chattyHostCreator as any))
+    ? getEmbedSDK(new LookerEmbedExSDK(chattyHostCreator as unknown as ChattyHostBuilderFactory))
     : getEmbedSDK()
   sdk.init(opts.hostUrl)
   telemetry.calls.push({ method: 'init', arg: opts.hostUrl }, { method: 'preload', arg: '/embed/preload' })
@@ -314,7 +331,7 @@ export function createLookerEmbedPreloadController(opts: {
     .on('explore:ready', () => recordEvent('explore:ready', false))
     .on('explore:run:start', () => recordEvent('explore:run:start', true))
     .on('explore:run:complete', () => recordEvent('explore:run:complete', false))
-    .on('page:changed', (e: any) => {
+    .on('page:changed', (e: PageChangedEvent) => {
       if (e?.page?.url) telemetry.lastPageUrl = String(e.page.url)
       recordEvent('page:changed')
     })
@@ -1032,10 +1049,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     selectedUseCase,
     setSelectedUseCase,
     isUseCaseLocked,
-    allowedUseCases,
-    useCaseOptions,
     getUseCaseLabel,
-    capabilities,
     selectedModel,
     setSelectedModel,
     availableModels,
@@ -1544,9 +1558,9 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   } = ctl
   const isTileMode = activeMode === 'tile'
 
-  const hostUrl = (extensionSDK as any)?.lookerHostData?.hostUrl || window.location.origin
+  const hostUrl = extensionSDK?.lookerHostData?.hostUrl || window.location.origin
   const mockExt =
-    typeof window !== 'undefined' ? (window as any).__MOCK_LOOKER_EXTENSION__ : undefined
+    typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
   const [tddViewMode, setTddViewMode] = useState<'rendered' | 'raw'>(
     () => mockExt?.initialTddViewMode || 'rendered'
   )

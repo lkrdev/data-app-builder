@@ -1,25 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+
+import type { ILookmlModelNavExplore } from '@looker/sdk'
 import { useHistory, useLocation } from 'react-router-dom'
 import useSWR from 'swr'
-import { useLookerExtension } from './contexts/LookerExtensionContext'
-import {
-  applyStudioDocumentTheme, archiveUserConversation, buildAvailableExploresCatalog, buildDenseExploreSchema,
-  buildRootLookerFolders, CaConversationState, ConversationRecord, createLookerCaConversation,
-  deleteUserArtifact, deleteUserConversation, extractExploreIdsFromCode, extractResolvedUseCase,
-  fetchFolderChildren, fetchFolderWithAncestors, fetchInitialLookerMetadata, formatExploreId,
-  getAllowedUseCases, getArtifactNamespace, getArtifactService, getUseCaseLabel, listSavedScripts,
-  listUserArtifacts, loadExistingDashboardApp, loadNativeContentById,
-  loadObjectArtifact, loadScriptArtifact, loadStoredStudioThemeMode, loadUserConversations,
-  loadUserEnvironmentId, LookerFolderNode, NativeContentState, NativeContentType,
-  normalizeStudioThemeMode, parseExploreId, persistStudioThemeMode, PublishedAppState,
-  publishScriptDashboard, readInitialStudioThemeMode, resolveCaEmbedPath,
-  resolveConversationRelatedContent, ResolvedStudioTheme, ResolvedStudioUseCase, resolveStudioTheme, resolveSystemTheme,
-  resolveUserCapabilities, saveDashboardStudioMetadata, SavedScript, saveNativeContentArtifact,
-  saveScriptArtifact, saveUserArtifact, saveUserConversation, searchLookerFolders, SearchLookerFoldersParams,
-  selectCaAgentViaIsolatedSubagent, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
-  studioModeToUseCase, StudioThemeMode, StudioUseCase, upsertPublishedDataApp, useCaseToStudioMode,
-  UserArtifactIndex, UserCapabilities, UserConversationEntry,
-} from './lookerApi'
+
 import {
   AgentSession, ANTIGRAVITY_ALLOWED_MODELS, AntigravityActivityStep, AntigravityAuth, AntigravityModelOption,
   authenticateGoogleOAuth, CodeModePermissionDecision, CodeModePermissionRequest, computeIsAuthenticated,
@@ -27,15 +11,34 @@ import {
   listAvailableAntigravityModels, LkrCodeMode, loginWithGoogleOAuth, normalizeEnvironmentId,
   PastedImage, prewarmOrWakeAntigravityEnvironment, resolveLookerOAuthRedirectUri, runAntigravityTurn, sanitizeConversationLabel,
 } from './antigravity'
-import {
-  listUserLookmlSessions, loadLookmlSessionArtifact, LookmlBundle, LookmlSessionIndex, saveLookmlSessionArtifact,
-} from './lookmlTool'
+import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
+import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
+import { useLookerExtension } from './contexts/LookerExtensionContext'
 import {
   HEALTH_CHECK_SYSTEM_GUIDE, HealthCheckReportPayload, loadHealthCheckArtifact,
   runThreePillarHealthCheckViaCodeMode, saveHealthCheckArtifact, THREE_PILLAR_CODEMODE_PY,
 } from './healthCheck'
-import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
-import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
+import {
+  applyStudioDocumentTheme, archiveUserConversation, buildAvailableExploresCatalog, buildDenseExploreSchema,
+  buildRootLookerFolders, CaConversationState, ConversationRecord, createLookerCaConversation,
+  deleteUserConversation, extractExploreIdsFromCode, extractResolvedUseCase,
+  fetchFolderChildren, fetchFolderWithAncestors, fetchInitialLookerMetadata, formatExploreId,
+  getAllowedUseCases, getArtifactNamespace, getArtifactService, getUseCaseLabel, listSavedScripts,
+  listUserArtifacts, loadExistingDashboardApp, loadNativeContentById,
+  loadObjectArtifact, loadScriptArtifact, loadStoredStudioThemeMode, loadUserConversations,
+  loadUserEnvironmentId, LookerFolderNode, NativeContentState,
+  normalizeStudioThemeMode, parseExploreId, persistStudioThemeMode, PublishedAppState,
+  publishScriptDashboard, readInitialStudioThemeMode, resolveCaEmbedPath,
+  resolveConversationRelatedContent, ResolvedStudioTheme, ResolvedStudioUseCase, resolveStudioTheme, resolveSystemTheme,
+  resolveUserCapabilities, saveDashboardStudioMetadata, SavedScript, saveNativeContentArtifact,
+  saveScriptArtifact, saveUserArtifact, saveUserConversation, searchLookerFolders, SearchLookerFoldersParams,
+  selectCaAgentViaIsolatedSubagent, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
+  studioModeToUseCase, StudioThemeMode, StudioToolMode, StudioUseCase, studioUseCaseToMode, upsertPublishedDataApp,
+  UserArtifactIndex, UserCapabilities, UserConversationEntry,
+} from './lookerApi'
+import {
+  listUserLookmlSessions, loadLookmlSessionArtifact, LookmlBundle, LookmlSessionIndex, saveLookmlSessionArtifact,
+} from './lookmlTool'
 
 export {
   authenticateGoogleOAuth,
@@ -48,15 +51,36 @@ export {
 }
 export type { ResolvedStudioTheme, StudioThemeMode }
 
+type HostDataWithMount = {
+  mountType?: string
+  mountPoint?: string
+  hostUrl?: string
+  extensionId?: string
+}
+
+interface StoredCaArtifactPayload extends Partial<CaConversationState> {
+  agent_id?: string
+  agent_name?: string
+  lastInteractionId?: string
+  studio?: { lastInteractionId?: string; messages?: ChatMessage[] }
+  messages?: ChatMessage[]
+}
+
+const getErrorMessage = (err: unknown): string =>
+  err instanceof Error ? err.message : String(err || '')
+
 export function useStudioController() {
   const { extensionSDK, core40SDK, tileHostData, lookerHostData } = useLookerExtension()
   const history = useHistory()
   const location = useLocation()
+  const extHostData = (extensionSDK as { lookerHostData?: HostDataWithMount } | undefined)
+    ?.lookerHostData
+  const hostData = (lookerHostData as HostDataWithMount | undefined) || extHostData
   const mountType =
-    (lookerHostData as any)?.mountType ||
-    (extensionSDK as any)?.lookerHostData?.mountType ||
+    hostData?.mountType ||
+    extHostData?.mountType ||
     lookerHostData?.mountPoint ||
-    (extensionSDK as any)?.lookerHostData?.mountPoint
+    extHostData?.mountPoint
   const isTileMount =
     mountType === 'dashboard_tile' ||
     mountType === 'dashboard-tile' ||
@@ -70,7 +94,7 @@ export function useStudioController() {
     }
   })()
   const mockExt =
-    typeof window !== 'undefined' ? (window as any).__MOCK_LOOKER_EXTENSION__ : undefined
+    typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
   const [authMode, setAuthMode] = useState<'oauth' | 'apikey'>(initialCtx?.authMode || 'oauth')
   const [clientId, setClientId] = useState(initialCtx?.clientId || '')
   const [projectId, setProjectId] = useState(initialCtx?.projectId || '')
@@ -95,9 +119,9 @@ export function useStudioController() {
   const oauthRedirectUri = useMemo(
     () =>
       resolveLookerOAuthRedirectUri(
-        lookerHostData?.hostUrl || (extensionSDK as any)?.lookerHostData?.hostUrl
+        lookerHostData?.hostUrl || extHostData?.hostUrl
       ),
-    [lookerHostData?.hostUrl, extensionSDK]
+    [lookerHostData?.hostUrl, extHostData?.hostUrl]
   )
   const [isConfigured, setIsConfigured] = useState(() =>
     Boolean(initialCtx?.authMode && (initialCtx.authMode === 'apikey' || initialCtx.clientId))
@@ -153,7 +177,7 @@ export function useStudioController() {
     resolveUserCapabilities()
   )
   const [allModels, setAllModels] = useState<
-    Array<{ name: string; label: string; project_name?: string; explores: any[] }>
+    Array<{ name: string; label: string; project_name?: string; explores: ILookmlModelNavExplore[] }>
   >([])
   const [loadingMetadata, setLoadingMetadata] = useState<boolean>(
     () => Boolean(mockExt?.forceFolderSkeleton ?? true)
@@ -215,7 +239,7 @@ export function useStudioController() {
     () => Boolean(mockExt?.initialShowArchived)
   )
   const [pendingDeleteConv, setPendingDeleteConv] = useState<ConversationRecord | null>(
-    () => mockExt?.initialPendingDeleteConv || null
+    () => (mockExt?.initialPendingDeleteConv as ConversationRecord | undefined) || null
   )
   const [deleteRelatedContent, setDeleteRelatedContent] = useState<boolean>(
     () => Boolean(mockExt?.initialDeleteRelatedContent)
@@ -273,7 +297,7 @@ export function useStudioController() {
     ? selectedUseCase
     : inferredRouteUseCase || 'auto'
   const activeMode: StudioMode =
-    effectiveUseCase !== 'auto' ? useCaseToStudioMode(effectiveUseCase) : parsedRoute.mode
+    effectiveUseCase !== 'auto' ? studioUseCaseToMode(effectiveUseCase) : parsedRoute.mode
   const isLookmlMode = activeMode === 'lookml'
   const isHealthCheckMode =
     location.pathname === '/health-check' || activeMode === 'health'
@@ -402,7 +426,13 @@ export function useStudioController() {
   })
   const [messagesByMode, setMessagesByMode] = useState<Record<StudioMode, ChatMessage[]>>(() => {
     if (Array.isArray(mockExt?.initialMessages)) {
-      return { app: mockExt.initialMessages, dashboard: [], lookml: [], health: [], tile: [] }
+      return {
+        app: mockExt.initialMessages as ChatMessage[],
+        dashboard: [],
+        lookml: [],
+        health: [],
+        tile: [],
+      }
     }
     const initialErr = mockExt?.initialError
       ? [{ role: 'error' as const, text: String(mockExt.initialError) }]
@@ -424,9 +454,12 @@ export function useStudioController() {
     }))
   }, [])
 
+  const activeModeRef = useRef<StudioMode>(activeMode)
+  activeModeRef.current = activeMode
+
   const agentSession = sessionsByMode[activeMode] || { toolType: activeMode }
   const setAgentSession = useCallback(
-    (next: AgentSession, targetMode: StudioMode = activeMode) => {
+    (next: AgentSession, targetMode: StudioMode = activeModeRef.current) => {
       const nextShared = normalizeEnvironmentId(next.environmentId)
       if (nextShared && nextShared !== sharedEnvIdRef.current && next.lastInteractionId) {
         sharedEnvIdRef.current = nextShared
@@ -445,33 +478,40 @@ export function useStudioController() {
         },
       }))
     },
-    [activeMode]
+    []
   )
 
-  const messages = messagesByMode[activeMode] || []
+  const messages = useMemo(
+    () => messagesByMode[activeMode] || [],
+    [messagesByMode, activeMode]
+  )
   const setMessages = useCallback(
     (
       updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[]),
-      targetMode: StudioMode = activeMode
+      targetMode?: StudioMode
     ) => {
+      const mode = targetMode ?? activeModeRef.current
       setMessagesByMode((prev) => {
-        const cur = prev[targetMode] || []
+        const cur = prev[mode] || []
         const next = typeof updater === 'function' ? updater(cur) : updater
-        return { ...prev, [targetMode]: next }
+        return { ...prev, [mode]: next }
       })
     },
-    [activeMode]
+    []
   )
 
   const [prompt, setPrompt] = useState(() => String(mockExt?.initialPrompt || ''))
   const [pastedImages, setPastedImages] = useState<PastedImage[]>(
-    () => mockExt?.initialPastedImages || []
+    () => (mockExt?.initialPastedImages as PastedImage[] | undefined) || []
   )
   const [busyStatus, setBusyStatus] = useState<string | null>(
     () => mockExt?.initialBusyStatus || null
   )
   const [liveActivitySteps, setLiveActivitySteps] = useState<AntigravityActivityStep[]>(
-    () => (Array.isArray(mockExt?.initialLiveActivitySteps) ? mockExt.initialLiveActivitySteps : [])
+    () =>
+      Array.isArray(mockExt?.initialLiveActivitySteps)
+        ? (mockExt.initialLiveActivitySteps as AntigravityActivityStep[])
+        : []
   )
 
   const isUseCaseLocked = Boolean(
@@ -505,9 +545,24 @@ export function useStudioController() {
     [isUseCaseLocked, location.pathname, parsedRoute.objectId, history]
   )
 
+  const wakeContextRef = useRef({
+    sessionsByMode,
+    selectedExplores,
+    schemaMarkdown,
+    currentAppCode,
+  })
+  wakeContextRef.current = {
+    sessionsByMode,
+    selectedExplores,
+    schemaMarkdown,
+    currentAppCode,
+  }
+
   const handleWakeModeEnv = useCallback(
-    async (modeToWake: StudioMode = activeMode) => {
+    async (modeToWake: StudioMode = activeModeRef.current) => {
       try {
+        const ctx = wakeContextRef.current
+        const existingSession = ctx.sessionsByMode[modeToWake]
         const res = await prewarmOrWakeAntigravityEnvironment({
           sdk: core40SDK,
           userId: userIdRef.current || userId,
@@ -515,23 +570,37 @@ export function useStudioController() {
           auth: { mode: authMode, oauthToken, clientId, projectId, apiKey },
           toolType: modeToWake,
           model: selectedModel,
-          environmentId: sharedEnvIdRef.current || sessionsByMode[modeToWake]?.environmentId,
-          existingSession: sessionsByMode[modeToWake],
-          selectedExplores,
-          schemaMarkdown,
-          existingAppCode: modeToWake === 'app' ? currentAppCode : undefined,
+          environmentId: sharedEnvIdRef.current || existingSession?.environmentId,
+          existingSession,
+          selectedExplores: ctx.selectedExplores,
+          schemaMarkdown: ctx.schemaMarkdown,
+          existingAppCode: modeToWake === 'app' ? ctx.currentAppCode : undefined,
           onEnvironmentUpdated: syncSharedEnvironmentId,
         })
-        setSessionsByMode((prev) => ({
-          ...prev,
-          [modeToWake]: {
-            ...res.session,
-            environmentId: sharedEnvIdRef.current || res.session.environmentId,
-          },
-        }))
-      } catch {}
+        setSessionsByMode((prev) => {
+          const nextEnvId = sharedEnvIdRef.current || res.session.environmentId
+          const cur = prev[modeToWake]
+          if (
+            cur &&
+            cur.environmentId === nextEnvId &&
+            cur.lastInteractionId === res.session.lastInteractionId &&
+            cur.toolType === res.session.toolType
+          ) {
+            return prev
+          }
+          return {
+            ...prev,
+            [modeToWake]: {
+              ...res.session,
+              environmentId: nextEnvId,
+            },
+          }
+        })
+      } catch {
+        // Ignore prewarm errors
+      }
     },
-    [activeMode, core40SDK, userId, extensionSDK, authMode, oauthToken, clientId, projectId, apiKey, selectedModel, sessionsByMode, selectedExplores, schemaMarkdown, currentAppCode, syncSharedEnvironmentId]
+    [core40SDK, userId, extensionSDK, authMode, oauthToken, clientId, projectId, apiKey, selectedModel, syncSharedEnvironmentId]
   )
 
   useEffect(() => {
@@ -548,8 +617,8 @@ export function useStudioController() {
   useEffect(() => {
     if (disabledModes.includes(activeMode)) return
     if (sharedEnvIdRef.current) return
-    handleWakeModeEnv(activeMode)
-  }, [activeMode, disabledModes])
+    void handleWakeModeEnv(activeMode)
+  }, [activeMode, disabledModes, handleWakeModeEnv])
 
   const [requirePermission, setRequirePermission] = useState(true)
   const approvedOpsRef = useRef<Set<string>>(new Set())
@@ -557,7 +626,9 @@ export function useStudioController() {
     req: CodeModePermissionRequest
     resolve: (decision: CodeModePermissionDecision) => void
   } | null>(() =>
-    mockExt?.initialPendingPerm ? { req: mockExt.initialPendingPerm, resolve: () => {} } : null
+    mockExt?.initialPendingPerm
+      ? { req: mockExt.initialPendingPerm as CodeModePermissionRequest, resolve: () => {} }
+      : null
   )
 
   const requestCodeModePermission = useCallback(
@@ -576,7 +647,7 @@ export function useStudioController() {
   }
 
   const refreshCatalog = useCallback(
-    async (uid = userId) => {
+    async (uid = userIdRef.current || '1') => {
       if (!uid) return
       try {
         const items = await listUserArtifacts(core40SDK, uid, getArtifactNamespace(extensionSDK))
@@ -590,9 +661,11 @@ export function useStudioController() {
               : item
           )
         )
-      } catch {}
+      } catch {
+        // Ignore catalog refresh failure
+      }
     },
-    [core40SDK, extensionSDK, userId]
+    [core40SDK, extensionSDK]
   )
 
   const normalizeCatalogMode = (t?: string): StudioMode =>
@@ -664,9 +737,9 @@ export function useStudioController() {
       setIsConfigured(true)
       setBusyStatus(null)
       history.replace('/')
-    } catch (err: any) {
+    } catch (err: unknown) {
       setBusyStatus(null)
-      setMessages((prev) => [...prev, { role: 'error', text: err?.message || String(err) }])
+      setMessages((prev) => [...prev, { role: 'error', text: getErrorMessage(err) }])
     }
   }
 
@@ -719,7 +792,9 @@ export function useStudioController() {
               .catch(() => {})
           }
         }
-      } catch {}
+      } catch {
+        // Ignore ancestor hydration errors
+      }
     },
     [core40SDK]
   )
@@ -752,6 +827,7 @@ export function useStudioController() {
           return { ...prev, [fid]: merged }
         })
       } catch {
+        // Ignore folder children fetch errors
       } finally {
         setLoadingFolderIds((prev) => prev.filter((id) => id !== fid))
       }
@@ -817,11 +893,11 @@ export function useStudioController() {
           })
           .catch(() => {})
         setAllModels(
-          meta.models.map((m: any) => ({
-            name: String(m.name),
-            label: String(m.label || m.name),
+          meta.models.map((m) => ({
+            name: String(m.name || ''),
+            label: String(m.label || m.name || ''),
             project_name: m.project_name ? String(m.project_name) : undefined,
-            explores: (m.explores || []).filter((e: any) => !e.hidden),
+            explores: (m.explores || []).filter((e) => !e.hidden),
           }))
         )
         const rawFolders = (meta.folders || []) as LookerFolderNode[]
@@ -832,24 +908,26 @@ export function useStudioController() {
         })
         setRootFolderIds(rawFolders.map((f) => String(f.id)))
         setFolders(
-          rawFolders.map((f: any) => ({
+          rawFolders.map((f) => ({
             id: String(f.id),
             name: `${f.name} (#${f.id})`,
           }))
         )
-        const targetInitialFolder = mockExt?.initialSelectedFolderId
-          ? String(mockExt.initialSelectedFolderId)
+        const extMock =
+          typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
+        const targetInitialFolder = extMock?.initialSelectedFolderId
+          ? String(extMock.initialSelectedFolderId)
           : meta.defaultFolderId
         setSelectedFolderId((prev) =>
-          mockExt?.initialSelectedFolderId
-            ? String(mockExt.initialSelectedFolderId)
+          extMock?.initialSelectedFolderId
+            ? String(extMock.initialSelectedFolderId)
             : prev === '1'
             ? meta.defaultFolderId
             : prev
         )
-        if (!mockExt?.forceFolderSkeleton) setLoadingMetadata(false)
+        if (!extMock?.forceFolderSkeleton) setLoadingMetadata(false)
         void hydrateFolderAncestors(targetInitialFolder)
-        refreshCatalog(resolvedUserId)
+        void refreshCatalog(resolvedUserId)
         loadUserConversations(
           core40SDK,
           resolvedUserId,
@@ -858,17 +936,19 @@ export function useStudioController() {
           if (mounted) setConversations(loadedConvs)
         })
       })
-      .catch((err) => {
-        if (!mockExt?.forceFolderSkeleton) setLoadingMetadata(false)
+      .catch((err: unknown) => {
+        const extMock =
+          typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
+        if (!extMock?.forceFolderSkeleton) setLoadingMetadata(false)
         setMessages((prev) => [
           ...prev,
-          { role: 'error', text: `Failed to load Looker models: ${err.message}` },
+          { role: 'error', text: `Failed to load Looker models: ${getErrorMessage(err)}` },
         ])
       })
     return () => {
       mounted = false
     }
-  }, [core40SDK, extensionSDK, syncSharedEnvironmentId, hydrateFolderAncestors])
+  }, [core40SDK, extensionSDK, syncSharedEnvironmentId, hydrateFolderAncestors, refreshCatalog, setMessages])
 
   useEffect(() => {
     let mounted = true
@@ -884,8 +964,8 @@ export function useStudioController() {
         if (!parsed) return ''
         try {
           return await buildDenseExploreSchema(core40SDK, parsed.modelName, parsed.exploreName)
-        } catch (err: any) {
-          return `# Error loading explore \`${id}\`\n${err?.message || err}`
+        } catch (err: unknown) {
+          return `# Error loading explore \`${id}\`\n${getErrorMessage(err)}`
         }
       })
     )
@@ -906,7 +986,7 @@ export function useStudioController() {
     setOauthSigningIn(false)
   }, [])
 
-  const handleOAuthLogin = async () => {
+  const handleOAuthLogin = useCallback(async () => {
     if (!clientId.trim()) {
       setMessages((prev) => [
         ...prev,
@@ -927,11 +1007,11 @@ export function useStudioController() {
             : 1500,
       })
       if (oauthAbortRef.current === controller) setOauthToken(token)
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (oauthAbortRef.current === controller && !controller.signal.aborted) {
         setMessages((prev) => [
           ...prev,
-          { role: 'error', text: `Google OAuth failed: ${err.message || err}` },
+          { role: 'error', text: `Google OAuth failed: ${getErrorMessage(err)}` },
         ])
       }
     } finally {
@@ -940,7 +1020,7 @@ export function useStudioController() {
         setOauthSigningIn(false)
       }
     }
-  }
+  }, [clientId, extensionSDK, mockExt?.oauthFocusReturnDelayMs, setMessages])
 
   const runWithBusy = useCallback(
     async (statusText: string, errPrefix: string, fn: () => Promise<void>) => {
@@ -948,11 +1028,11 @@ export function useStudioController() {
         setBusyStatus(statusText)
         await fn()
         setBusyStatus(mockExt?.initialBusyStatus || null)
-      } catch (err: any) {
+      } catch (err: unknown) {
         setBusyStatus(mockExt?.initialBusyStatus || null)
         setMessages((prev) => [
           ...prev,
-          { role: 'error', text: `${errPrefix}: ${err?.message || err}` },
+          { role: 'error', text: `${errPrefix}: ${getErrorMessage(err)}` },
         ])
       }
     },
@@ -962,12 +1042,20 @@ export function useStudioController() {
   const hydrateLoadedArtifact = useCallback(
     (opts: {
       mode: StudioMode; id: string; route: string; pushRoute: boolean; convTypes: string[]
-      convId?: string; explores?: string[]; studio?: any; lastInteractionId?: string
+      convId?: string; explores?: string[]
+      studio?: {
+        explores?: string[]
+        messages?: unknown[]
+        lastInteractionId?: string
+        environmentId?: string
+        lastSession?: { lastInteractionId?: string; environmentId?: string }
+      } | null
+      lastInteractionId?: string
       environmentId?: string; defaultEnvId: string; messages?: ChatMessage[]
       fallbackText: string; dashboardId?: string
     }) => {
       const explores = opts.explores ?? opts.studio?.explores?.filter(Boolean)
-      const msgs = opts.messages ?? opts.studio?.messages
+      const msgs = opts.messages ?? (opts.studio?.messages as ChatMessage[] | undefined)
       setActiveObjectId(opts.id)
       setActiveConversationId((prev) => {
         if (opts.convId) return opts.convId
@@ -1006,7 +1094,7 @@ export function useStudioController() {
   const persistConversationAndLabel = useCallback(
     async (opts: {
       id: string; type: string; interactionId?: string; environmentId?: string; label?: string
-      explores?: string[]; content?: Record<string, any>; messages: ChatMessage[]
+      explores?: string[]; content?: Record<string, unknown>; messages: ChatMessage[]
       isFirstTurn?: boolean; userPrompt?: string; assistantText?: string; updateArtifactIndex?: boolean
     }) => {
       const namespace = getArtifactNamespace(extensionSDK)
@@ -1040,7 +1128,7 @@ export function useStudioController() {
               await saveUserArtifact(
                 core40SDK, userId,
                 {
-                  id: opts.id, type: useCaseToStudioMode(studioModeToUseCase(opts.type)),
+                  id: opts.id, type: studioUseCaseToMode(studioModeToUseCase(opts.type)),
                   title: label, label, explores: opts.explores,
                   lastInteractionId: opts.interactionId, environmentId: opts.environmentId,
                   updatedAt, createdBy: userId,
@@ -1188,8 +1276,8 @@ export function useStudioController() {
         })
         setScriptOutput(out)
         return out
-      } catch (err: any) {
-        const errOut = JSON.stringify({ error: err?.message || String(err) })
+      } catch (err: unknown) {
+        const errOut = JSON.stringify({ error: getErrorMessage(err) })
         setScriptOutput(errOut)
         return errOut
       } finally {
@@ -1264,7 +1352,7 @@ export function useStudioController() {
     try {
       const saved = await handleSaveScript()
       setBusyStatus('Publishing extension-layout Looker dashboard & binding tile artifact...')
-      const extId = (extensionSDK as any)?.lookerHostData?.extensionId || 'data_app_builder::data_app_builder'
+      const extId = extHostData?.extensionId || 'data_app_builder::data_app_builder'
       const pub = await publishScriptDashboard(core40SDK, {
         script: saved,
         folderId: selectedFolderId,
@@ -1285,11 +1373,11 @@ export function useStudioController() {
         ],
         'tile'
       )
-    } catch (err: any) {
+    } catch (err: unknown) {
       setBusyStatus(mockExt?.initialBusyStatus || null)
-      setMessages((prev) => [...prev, { role: 'error', text: err?.message || String(err) }], 'tile')
+      setMessages((prev) => [...prev, { role: 'error', text: getErrorMessage(err) }], 'tile')
     }
-  }, [core40SDK, extensionSDK, handleSaveScript, mockExt?.initialBusyStatus, publishedTileDash?.dashboardId, selectedFolderId, setMessages])
+  }, [core40SDK, extHostData?.extensionId, handleSaveScript, mockExt?.initialBusyStatus, publishedTileDash?.dashboardId, selectedFolderId, setMessages])
 
   const loadCaConversationById = useCallback(
     async (rawId: string, pushRoute = true) => {
@@ -1299,9 +1387,10 @@ export function useStudioController() {
         `Loading Conversational Analytics session "${id}"...`,
         `Could not load Conversational Analytics session "${id}"`,
         async () => {
-          const loaded = await loadObjectArtifact<any>(core40SDK, 'conversational-analytics', id, getArtifactNamespace(extensionSDK))
+          const loaded = await loadObjectArtifact<StoredCaArtifactPayload>(core40SDK, 'conversational-analytics', id, getArtifactNamespace(extensionSDK))
           const convFromList = conversations.find((c) => c.id === id || String(c.content?.caConversationId || c.content?.id || '') === id)
-          const content = loaded || convFromList?.content || {}
+          const content: StoredCaArtifactPayload =
+            loaded || (convFromList?.content as StoredCaArtifactPayload | undefined) || {}
           const agentId = String(content.agentId || content.agent_id || 'ad69f74cd9e2494090e9e9e9c50190c8')
           const agentName = String(content.agentName || content.agent_name || 'Looker CA Agent')
           const caConvId = String(content.caConversationId || content.id || id)
@@ -1447,8 +1536,8 @@ export function useStudioController() {
         assistantText,
       })
       await refreshCatalog()
-    } catch (err: any) {
-      setMessages((prev) => [...prev, { role: 'error', text: err?.message || String(err) }], 'app')
+    } catch (err: unknown) {
+      setMessages((prev) => [...prev, { role: 'error', text: getErrorMessage(err) }], 'app')
     } finally {
       setBusyStatus(null)
     }
@@ -1504,7 +1593,9 @@ export function useStudioController() {
             }
             await saveHealthCheckArtifact(core40SDK, extensionSDK, userId, finalReport)
           }
-        } catch {}
+        } catch {
+          // Ignore optional Antigravity refinement failure
+        }
       }
       lastHealthIdRef.current = finalReport.id
       resolvedUseCaseByIdRef.current[finalReport.id] = 'health-check'
@@ -1541,8 +1632,8 @@ export function useStudioController() {
         },
         messages: nextHealthMsgs,
       })
-    } catch (err: any) {
-      setMessages((prev) => [...prev, { role: 'error', text: err?.message || String(err) }])
+    } catch (err: unknown) {
+      setMessages((prev) => [...prev, { role: 'error', text: getErrorMessage(err) }])
     } finally {
       setBusyStatus(null)
     }
@@ -1561,7 +1652,7 @@ export function useStudioController() {
       }
       if (typeOrMode === 'auto') {
         const ns = getArtifactNamespace(extensionSDK)
-        const probes: Array<[string, string]> = [
+        const probes: Array<[StudioToolMode, string]> = [
           ['conversational-analytics', 'conversational-analytics'],
           ['lookml', 'lookml'],
           ['health_check', 'health'],
@@ -1569,7 +1660,7 @@ export function useStudioController() {
           ['dashboard', 'dashboard'],
         ]
         for (const [artifactType, loaderKey] of probes) {
-          if (await loadObjectArtifact(core40SDK, artifactType as any, id, ns)) {
+          if (await loadObjectArtifact(core40SDK, artifactType, id, ns)) {
             return loaders[loaderKey](id, pushRoute)
           }
         }
@@ -1577,7 +1668,7 @@ export function useStudioController() {
       }
       const fn = loaders[typeOrMode] || loaders[normalizeCatalogMode(typeOrMode)]
       if (fn) return fn(id, pushRoute)
-      const loaded = await loadObjectArtifact(core40SDK, typeOrMode as any, id)
+      const loaded = await loadObjectArtifact(core40SDK, typeOrMode as StudioToolMode, id)
       if (loaded?.messages) setMessages(loaded.messages)
     },
     [core40SDK, extensionSDK, loadCaConversationById, loadDashboardById, loadHealthCheckById, loadLookmlSessionById, loadNativeById, loadScriptById, setMessages]
@@ -1644,98 +1735,104 @@ export function useStudioController() {
     await openArtifactByMode(isHealthCheckMode ? 'health' : isCaMode ? 'conversational-analytics' : builderMode, loadDashInput, true)
   }
 
-  const handleResetNewApp = (
-    resetToDefaultRoute?: boolean | React.MouseEvent,
-    presetUseCase?: StudioUseCase
-  ) => {
-    const forceDefaultRoute = resetToDefaultRoute === true
-    const nextUseCase: StudioUseCase =
-      typeof presetUseCase === 'string' && presetUseCase ? presetUseCase : 'auto'
-    lastPublishedIdRef.current = ''
-    lastNativeIdRef.current = ''
-    lastLookmlIdRef.current = ''
-    lastHealthIdRef.current = ''
-    lastCaIdRef.current = ''
-    lastScriptIdRef.current = ''
-    setLoadedScript(false)
-    setActiveObjectId('')
-    setActiveConversationId(`conv_${Date.now()}`)
-    setPublishedApp(null)
-    setNativeContent(null)
-    setLookmlBundle(null)
-    setHealthReport(null)
-    setCaConversation(null)
-    setCurrentAppCode('')
-    setLoadDashInput('')
-    setLoadLookmlInput('')
-    setSelectedExplores([])
-    setAgentSession({
-      environmentId: sharedEnvIdRef.current || undefined,
-      lastInteractionId: undefined,
-      conversationId: `conv_${Date.now().toString(36)}`,
-    })
-    setMessages([])
-    if (forceDefaultRoute) {
-      setMessages([], 'app')
-      if (nextUseCase !== 'auto') {
-        setMessages([], useCaseToStudioMode(nextUseCase))
+  const handleResetNewApp = useCallback(
+    (resetToDefaultRoute?: boolean | React.MouseEvent, presetUseCase?: StudioUseCase) => {
+      const forceDefaultRoute = resetToDefaultRoute === true
+      const nextUseCase: StudioUseCase =
+        typeof presetUseCase === 'string' && presetUseCase ? presetUseCase : 'auto'
+      lastPublishedIdRef.current = ''
+      lastNativeIdRef.current = ''
+      lastLookmlIdRef.current = ''
+      lastHealthIdRef.current = ''
+      lastCaIdRef.current = ''
+      lastScriptIdRef.current = ''
+      setLoadedScript(false)
+      setActiveObjectId('')
+      setActiveConversationId(`conv_${Date.now()}`)
+      setPublishedApp(null)
+      setNativeContent(null)
+      setLookmlBundle(null)
+      setHealthReport(null)
+      setCaConversation(null)
+      setCurrentAppCode('')
+      setLoadDashInput('')
+      setLoadLookmlInput('')
+      setSelectedExplores([])
+      setAgentSession({
+        environmentId: sharedEnvIdRef.current || undefined,
+        lastInteractionId: undefined,
+        conversationId: `conv_${Date.now().toString(36)}`,
+      })
+      setMessages([])
+      if (forceDefaultRoute) {
+        setMessages([], 'app')
+        if (nextUseCase !== 'auto') {
+          setMessages([], studioUseCaseToMode(nextUseCase))
+        }
       }
-    }
-    setPastedImages([])
-    setPrompt('')
-    setLockedByTurn(false)
-    setSelectedUseCase(nextUseCase)
-    if (location.pathname !== '/') history.push('/')
-  }
+      setPastedImages([])
+      setPrompt('')
+      setLockedByTurn(false)
+      setSelectedUseCase(nextUseCase)
+      if (location.pathname !== '/') history.push('/')
+    },
+    [history, location.pathname, setAgentSession, setMessages]
+  )
 
-  const handleNewConversation = (presetUseCase?: StudioUseCase | React.MouseEvent) =>
-    handleResetNewApp(true, typeof presetUseCase === 'string' ? presetUseCase : 'auto')
+  const handleNewConversation = useCallback(
+    (presetUseCase?: StudioUseCase | React.MouseEvent) =>
+      handleResetNewApp(true, typeof presetUseCase === 'string' ? presetUseCase : 'auto'),
+    [handleResetNewApp]
+  )
 
-  const handleSelectConversation = async (conv: ConversationRecord) => {
-    const useCase = studioModeToUseCase(conv.type)
-    const mode = normalizeCatalogMode(conv.type)
-    resolvedUseCaseByIdRef.current[conv.id] = useCase
-    setSelectedUseCase(useCase)
-    setLockedByTurn(true)
-    setActiveConversationId(conv.id)
-    if (conv.explores?.length) setSelectedExplores(conv.explores)
-    const c = conv.content || {}
-    const targetId = String(
-      (conv.type === 'conversational-analytics' && (c.caConversationId || c.id || conv.id)) ||
-        c.dashboardId ||
-        c.lookId ||
-        c.lookmlDashboardId ||
-        c.sessionId ||
-        c.reportId ||
-        c.scriptId ||
-        c.id ||
-        ''
-    )
-    if (targetId) {
-      resolvedUseCaseByIdRef.current[targetId] = useCase
-      setActiveObjectId(targetId)
-      await openArtifactByMode(conv.type, targetId, true)
-    } else {
-      const targetPath = `/c/${encodeURIComponent(conv.id)}`
-      if (location.pathname !== targetPath) history.push(targetPath)
-    }
-    setActiveConversationId(conv.id)
-    if (conv.messages?.length) {
-      setMessages(conv.messages as ChatMessage[], mode)
-    }
-    if (conv.interactionId || conv.environmentId || sharedEnvIdRef.current) {
-      setAgentSession(
-        {
-          lastInteractionId: conv.interactionId,
-          environmentId: sharedEnvIdRef.current || conv.environmentId || `env_${mode}_isolated`,
-          conversationId: conv.id,
-          explores: conv.explores,
-          toolType: mode,
-        },
-        mode
+  const handleSelectConversation = useCallback(
+    async (conv: ConversationRecord) => {
+      const useCase = studioModeToUseCase(conv.type)
+      const mode = normalizeCatalogMode(conv.type)
+      resolvedUseCaseByIdRef.current[conv.id] = useCase
+      setSelectedUseCase(useCase)
+      setLockedByTurn(true)
+      setActiveConversationId(conv.id)
+      if (conv.explores?.length) setSelectedExplores(conv.explores)
+      const c = conv.content || {}
+      const targetId = String(
+        (conv.type === 'conversational-analytics' && (c.caConversationId || c.id || conv.id)) ||
+          c.dashboardId ||
+          c.lookId ||
+          c.lookmlDashboardId ||
+          c.sessionId ||
+          c.reportId ||
+          c.scriptId ||
+          c.id ||
+          ''
       )
-    }
-  }
+      if (targetId) {
+        resolvedUseCaseByIdRef.current[targetId] = useCase
+        setActiveObjectId(targetId)
+        await openArtifactByMode(conv.type, targetId, true)
+      } else {
+        const targetPath = `/c/${encodeURIComponent(conv.id)}`
+        if (location.pathname !== targetPath) history.push(targetPath)
+      }
+      setActiveConversationId(conv.id)
+      if (conv.messages?.length) {
+        setMessages(conv.messages as ChatMessage[], mode)
+      }
+      if (conv.interactionId || conv.environmentId || sharedEnvIdRef.current) {
+        setAgentSession(
+          {
+            lastInteractionId: conv.interactionId,
+            environmentId: sharedEnvIdRef.current || conv.environmentId || `env_${mode}_isolated`,
+            conversationId: conv.id,
+            explores: conv.explores,
+            toolType: mode,
+          },
+          mode
+        )
+      }
+    },
+    [history, location.pathname, openArtifactByMode, setAgentSession, setMessages]
+  )
 
   const handleToggleArchiveConversation = async (
     e: React.MouseEvent | undefined,
@@ -1757,7 +1854,9 @@ export function useStudioController() {
         getArtifactNamespace(extensionSDK)
       )
       setConversations(next)
-    } catch {}
+    } catch {
+      // Ignore archive error
+    }
   }
 
   const handleRequestDeleteConversation = (
@@ -1802,7 +1901,9 @@ export function useStudioController() {
       )
       setConversations(next)
       await refreshCatalog(userIdRef.current || userId)
-    } catch {}
+    } catch {
+      // Ignore delete conversation error
+    }
     if (activeConversationId === conversationId) {
       handleResetNewApp()
     }
@@ -1922,13 +2023,13 @@ export function useStudioController() {
         await handleRunConversationalAnalytics(effectivePrompt, messagesWithUser)
         return
       }
-      const resolvedMode: StudioMode = useCaseToStudioMode(resolvedUseCase)
+      const resolvedMode: StudioMode = studioUseCaseToMode(resolvedUseCase)
 
       let convId = activeObjectId || activeConversationId || result.session.lastInteractionId || 'conv_1'
       let convType: string = resolvedUseCase
       let convTitle = ''
       let convExplores = selectedExplores
-      let convContent: Record<string, any> | undefined
+      let convContent: Record<string, unknown> | undefined
       let finalMsgs: ChatMessage[] = []
 
       if (result.lookmlBundle) {
@@ -1981,7 +2082,9 @@ export function useStudioController() {
           if (location.pathname !== targetRoute) {
             history.replace(targetRoute)
           }
-        } catch {}
+        } catch {
+          // Ignore LookML artifact save failure
+        }
         setAgentSession({ ...result.session, explores: selectedExplores }, 'lookml')
         setMessages(finalMsgs, 'lookml')
       } else if (resolvedUseCase === 'tile') {
@@ -2009,7 +2112,9 @@ export function useStudioController() {
           convTitle = saved.title
           convContent = { scriptId: saved.id, dashboardId: saved.dashboardId, elementId: saved.elementId }
           setActiveObjectId(saved.id)
-        } catch {}
+        } catch {
+          // Ignore script save failure
+        }
       } else {
         const bundleExplores = result.bundle
           ? Array.from(
@@ -2137,7 +2242,9 @@ export function useStudioController() {
               getArtifactNamespace(extensionSDK)
             )
             await refreshCatalog()
-          } catch {}
+          } catch {
+            // Ignore app artifact save failure
+          }
           const targetRoute = `/c/${encodeURIComponent(upserted.dashboardId)}`
           if (location.pathname !== targetRoute) {
             history.replace(targetRoute)
@@ -2237,13 +2344,15 @@ export function useStudioController() {
         assistantText: result.assistantText,
         updateArtifactIndex: true,
       })
-    } catch (err: any) {
-      setMessages((prev) => [...prev, { role: 'error', text: err?.message || String(err) }])
+    } catch (err: unknown) {
+      setMessages((prev) => [...prev, { role: 'error', text: getErrorMessage(err) }])
     } finally {
       setPendingPerm(null)
       setBusyStatus(null)
       setLiveActivitySteps(
-        Array.isArray(mockExt?.initialLiveActivitySteps) ? mockExt.initialLiveActivitySteps : []
+        Array.isArray(mockExt?.initialLiveActivitySteps)
+          ? (mockExt.initialLiveActivitySteps as AntigravityActivityStep[])
+          : []
       )
     }
   }
@@ -2256,7 +2365,7 @@ export function useStudioController() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      ;(window as any).__DAB_STUDIO__ = {
+      window.__DAB_STUDIO__ = {
         history, requestCodeModePermission, setRequirePermission, setDisabledModes,
         setSelectedModel, setAuthMode, setClientId, setOauthToken, setApiKey,
         isAuthenticated, oauthSigningIn, oauthRedirectUri,
@@ -2272,7 +2381,7 @@ export function useStudioController() {
         hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders,
       }
     }
-  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce, setMessages, infoModalUseCase, loadingMetadata, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders])
+  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce, setMessages, infoModalUseCase, loadingMetadata, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders])
 
   return {
     extensionSDK, core40SDK, lookerHostData, history, location, isTileMount,
