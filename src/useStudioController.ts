@@ -29,7 +29,7 @@ import {
   fetchFolderChildren, fetchFolderWithAncestors, fetchInitialLookerMetadata,
   fetchPreloadedContentSummary, formatExploreId,
   getAllowedUseCases, getArtifactNamespace, getArtifactService, getUseCaseLabel,
-  hydrateMentionedContext, listSavedScripts,
+  hydrateConversationContentItems, hydrateMentionedContext, listSavedScripts,
   listUserArtifacts, loadExistingDashboardApp, loadNativeContentById,
   loadObjectArtifact, loadScriptArtifact, loadStoredStudioThemeMode, loadUserConversations,
   loadUserEnvironmentId, LookerFolderNode, NativeContentState,
@@ -39,7 +39,7 @@ import {
   resolveUserCapabilities, saveDashboardStudioMetadata, SavedScript, saveNativeContentArtifact,
   saveScriptArtifact, saveUserArtifact, saveUserConversation, searchGlobalContentV2, searchLookerFolders, SearchLookerFoldersParams,
   selectCaAgentViaIsolatedSubagent, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
-  StudioContextCategory, StudioContextMention, studioModeToUseCase, StudioThemeMode, StudioToolMode, StudioUseCase, studioUseCaseToMode, upsertPublishedDataApp,
+  StudioContentItem, StudioContentItemType, StudioContextCategory, StudioContextMention, studioModeToUseCase, StudioThemeMode, StudioToolMode, StudioUseCase, studioUseCaseToMode, upsertPublishedDataApp, upsertStudioContentItem,
   UserArtifactIndex, UserCapabilities, UserConversationEntry,
 } from './lookerApi'
 import {
@@ -407,8 +407,120 @@ export function useStudioController() {
   const [lookmlSessions, setLookmlSessions] = useState<LookmlSessionIndex[]>([])
   const [loadLookmlInput, setLoadLookmlInput] = useState('')
   const lastLookmlIdRef = useRef<string>('')
-  const [publishedApp, setPublishedApp] = useState<PublishedAppState | null>(null)
-  const [nativeContent, setNativeContent] = useState<NativeContentState | null>(null)
+  const [publishedApp, setPublishedAppState] = useState<PublishedAppState | null>(null)
+  const [nativeContent, setNativeContentState] = useState<NativeContentState | null>(null)
+  const [contentItems, setContentItemsState] = useState<StudioContentItem[]>([])
+  const contentItemsRef = useRef<StudioContentItem[]>([])
+  const [activeContentTabKey, setActiveContentTabKeyState] = useState<string>('')
+  const activeContentTabKeyRef = useRef<string>('')
+
+  const setContentItems = useCallback(
+    (
+      next:
+        | StudioContentItem[]
+        | ((prev: StudioContentItem[]) => StudioContentItem[])
+    ) => {
+      setContentItemsState((prev) => {
+        const resolved = typeof next === 'function' ? next(prev) : next
+        contentItemsRef.current = resolved
+        return resolved
+      })
+    },
+    []
+  )
+
+  const setActiveContentTabKey = useCallback((nextKey: string) => {
+    activeContentTabKeyRef.current = nextKey
+    setActiveContentTabKeyState(nextKey)
+  }, [])
+
+  const upsertContentItem = useCallback(
+    (
+      rawItem: Partial<StudioContentItem> & { id: string; contentType: StudioContentItemType },
+      activate = true
+    ): StudioContentItem => {
+      const res = upsertStudioContentItem(contentItemsRef.current, rawItem)
+      contentItemsRef.current = res.items
+      setContentItemsState(res.items)
+      if (activate || !activeContentTabKeyRef.current) {
+        activeContentTabKeyRef.current = res.activeKey
+        setActiveContentTabKeyState(res.activeKey)
+      }
+      return res.item
+    },
+    []
+  )
+
+  const setPublishedApp = useCallback(
+    (
+      next:
+        | PublishedAppState
+        | null
+        | ((prev: PublishedAppState | null) => PublishedAppState | null)
+    ) => {
+      setPublishedAppState((prev) => {
+        const resolved = typeof next === 'function' ? next(prev) : next
+        if (resolved && resolved.dashboardId) {
+          const uc = resolvedUseCaseByIdRef.current[resolved.dashboardId]
+          const ct: StudioContentItemType =
+            uc === 'data-investigator' ? 'data-investigator' : 'data_app'
+          upsertContentItem({
+            id: String(resolved.dashboardId),
+            dashboardId: String(resolved.dashboardId),
+            contentType: ct,
+            title: resolved.title,
+            embedPath: `/embed/dashboards/${encodeURIComponent(String(resolved.dashboardId))}`,
+            folderId: resolved.folderId,
+            extensionId: resolved.extensionId,
+            rawCode: resolved.code,
+          })
+        }
+        return resolved
+      })
+    },
+    [upsertContentItem]
+  )
+
+  const setNativeContent = useCallback(
+    (
+      next:
+        | NativeContentState
+        | null
+        | ((prev: NativeContentState | null) => NativeContentState | null)
+    ) => {
+      setNativeContentState((prev) => {
+        const resolved = typeof next === 'function' ? next(prev) : next
+        if (resolved && resolved.id) {
+          const ct = (resolved.contentType || 'dashboard') as StudioContentItemType
+          upsertContentItem({
+            id: String(resolved.id),
+            contentType: ct,
+            title: resolved.title,
+            embedPath: resolved.embedPath,
+            folderId: resolved.folderId,
+            dashboardId:
+              resolved.dashboardId || (ct === 'dashboard' ? String(resolved.id) : undefined),
+            lookId: resolved.lookId || (ct === 'look' ? String(resolved.id) : undefined),
+            lookmlDashboardId:
+              resolved.lookmlDashboardId ||
+              (ct === 'lookml_dashboard' ? String(resolved.id) : undefined),
+          })
+        }
+        return resolved
+      })
+    },
+    [upsertContentItem]
+  )
+
+  const activeContentItem = useMemo<StudioContentItem | null>(() => {
+    if (contentItems.length === 0) return null
+    return (
+      contentItems.find((it) => it.key === activeContentTabKey) ||
+      contentItems[contentItems.length - 1] ||
+      null
+    )
+  }, [contentItems, activeContentTabKey])
+
   const [embedNonce, setEmbedNonce] = useState<number>(0)
   const bumpEmbedNonce = useCallback(() => setEmbedNonce((n) => n + 1), [])
   const lastPublishedIdRef = useRef<string>('')
@@ -1210,18 +1322,28 @@ export function useStudioController() {
     }) => {
       const explores = opts.explores ?? opts.studio?.explores?.filter(Boolean)
       const msgs = opts.messages ?? (opts.studio?.messages as ChatMessage[] | undefined)
+      const matchedConv = conversations.find((c) => {
+        if (opts.convId && c.id === opts.convId) return true
+        const cid = String(
+          c.content?.dashboardId || c.content?.lookId || c.content?.lookmlDashboardId ||
+          c.content?.reportId || c.content?.sessionId || c.content?.caConversationId || c.content?.id || ''
+        )
+        return cid === opts.id && opts.convTypes.includes(c.type)
+      })
+      if (matchedConv) {
+        const fromConv = hydrateConversationContentItems(matchedConv)
+        for (const item of fromConv) {
+          upsertContentItem(item, false)
+        }
+        if (matchedConv.activeContentTabKey) {
+          setActiveContentTabKey(matchedConv.activeContentTabKey)
+        }
+      }
       setActiveObjectId(opts.id)
       setActiveConversationId((prev) => {
         if (opts.convId) return opts.convId
-        const match = conversations.find((c) => {
-          const cid = String(
-            c.content?.dashboardId || c.content?.lookId || c.content?.lookmlDashboardId ||
-            c.content?.reportId || c.content?.sessionId || c.content?.caConversationId || c.content?.id || ''
-          )
-          return cid === opts.id && opts.convTypes.includes(c.type)
-        })
         const prefix = `conv_${opts.mode}_`
-        return match ? match.id : prev.startsWith(prefix) ? prev : `${prefix}${opts.id}`
+        return matchedConv ? matchedConv.id : prev.startsWith(prefix) ? prev : `${prefix}${opts.id}`
       })
       if (explores && explores.length > 0) setSelectedExplores(explores)
       setAgentSession(
@@ -1242,7 +1364,7 @@ export function useStudioController() {
       )
       if (opts.pushRoute && location.pathname !== opts.route) history.replace(opts.route)
     },
-    [conversations, history, location.pathname, setAgentSession, setMessages]
+    [conversations, history, location.pathname, setActiveContentTabKey, setAgentSession, setMessages, upsertContentItem]
   )
 
   const persistConversationAndLabel = useCallback(
@@ -1255,7 +1377,10 @@ export function useStudioController() {
       const auth: AntigravityAuth = { mode: authMode, oauthToken, clientId, projectId, apiKey }
       const baseConv = {
         id: opts.id, type: opts.type, interactionId: opts.interactionId, environmentId: opts.environmentId,
-        explores: opts.explores, ...(opts.content ? { content: opts.content } : {}), messages: opts.messages,
+        explores: opts.explores, ...(opts.content ? { content: opts.content } : {}),
+        ...(contentItemsRef.current.length > 0 ? { contentItems: contentItemsRef.current } : {}),
+        ...(activeContentTabKeyRef.current ? { activeContentTabKey: activeContentTabKeyRef.current } : {}),
+        messages: opts.messages,
       }
       setActiveConversationId(opts.id)
       await saveUserConversation(
@@ -1336,7 +1461,7 @@ export function useStudioController() {
         })
       })
     },
-    [core40SDK, hydrateLoadedArtifact, runWithBusy]
+    [core40SDK, hydrateLoadedArtifact, runWithBusy, setPublishedApp]
   )
 
   const loadNativeById = useCallback(
@@ -1360,7 +1485,7 @@ export function useStudioController() {
         })
       })
     },
-    [core40SDK, extensionSDK, hydrateLoadedArtifact, runWithBusy]
+    [core40SDK, extensionSDK, hydrateLoadedArtifact, runWithBusy, setNativeContent]
   )
 
   const loadHealthCheckById = useCallback(
@@ -1574,6 +1699,13 @@ export function useStudioController() {
           lastCaIdRef.current = caConvId
           resolvedUseCaseByIdRef.current[caConvId] = 'conversational-analytics'
           setCaConversation(state)
+          upsertContentItem({
+            id: caConvId,
+            contentType: 'conversational-analytics',
+            title: state.title,
+            embedPath: state.embedPath,
+            updatedAt: state.updatedAt,
+          })
           setSelectedUseCase('conversational-analytics')
           setLockedByTurn(true)
           setLoadDashInput(caConvId)
@@ -1604,7 +1736,7 @@ export function useStudioController() {
         }
       )
     },
-    [conversations, core40SDK, extensionSDK, hydrateLoadedArtifact, runWithBusy]
+    [conversations, core40SDK, extensionSDK, hydrateLoadedArtifact, runWithBusy, upsertContentItem]
   )
 
   const handleRunConversationalAnalytics = async (userQuestion: string, baseMessages: ChatMessage[]) => {
@@ -1639,6 +1771,13 @@ export function useStudioController() {
       lastCaIdRef.current = created.caConversationId
       resolvedUseCaseByIdRef.current[created.caConversationId] = 'conversational-analytics'
       setCaConversation(nextCaState)
+      upsertContentItem({
+        id: created.caConversationId,
+        contentType: 'conversational-analytics',
+        title: created.label,
+        embedPath: created.embedPath,
+        updatedAt: nextCaState.updatedAt,
+      })
       setSelectedUseCase('conversational-analytics')
       setLockedByTurn(true)
       setActiveObjectId(created.caConversationId)
@@ -1909,8 +2048,10 @@ export function useStudioController() {
       setLoadedScript(false)
       setActiveObjectId('')
       setActiveConversationId(`conv_${Date.now()}`)
-      setPublishedApp(null)
-      setNativeContent(null)
+      setPublishedAppState(null)
+      setNativeContentState(null)
+      setContentItems([])
+      setActiveContentTabKey('')
       setLookmlBundle(null)
       setHealthReport(null)
       setCaConversation(null)
@@ -1937,13 +2078,56 @@ export function useStudioController() {
       setSelectedUseCase(nextUseCase)
       if (location.pathname !== '/') history.push('/')
     },
-    [history, location.pathname, setAgentSession, setMessages]
+    [history, location.pathname, setActiveContentTabKey, setAgentSession, setContentItems, setMessages]
   )
 
   const handleNewConversation = useCallback(
     (presetUseCase?: StudioUseCase | React.MouseEvent) =>
       handleResetNewApp(true, typeof presetUseCase === 'string' ? presetUseCase : 'auto'),
     [handleResetNewApp]
+  )
+
+  const handleSelectContentTab = useCallback(
+    (key: string) => {
+      setActiveContentTabKey(key)
+      const item = contentItemsRef.current.find((it) => it.key === key)
+      if (!item) return
+      if (
+        item.contentType === 'dashboard' ||
+        item.contentType === 'lookml_dashboard' ||
+        item.contentType === 'look' ||
+        item.contentType === 'board'
+      ) {
+        setNativeContentState((prev) => ({
+          id: item.id,
+          title: item.title,
+          contentType: item.contentType as NativeContentState['contentType'],
+          embedPath: item.embedPath,
+          folderId: item.folderId || prev?.folderId || selectedFolderId,
+          dashboardId: item.dashboardId,
+          lookId: item.lookId,
+          lookmlDashboardId: item.lookmlDashboardId,
+        }))
+      } else if (
+        item.contentType === 'data_app' ||
+        item.contentType === 'data-investigator'
+      ) {
+        const dashId = String(item.dashboardId || item.id)
+        setPublishedAppState((prev) =>
+          prev && prev.dashboardId === dashId
+            ? prev
+            : {
+                dashboardId: dashId,
+                title: item.title,
+                folderId: item.folderId || prev?.folderId || selectedFolderId,
+                extensionId: item.extensionId || prev?.extensionId || '',
+                elementId: prev?.elementId || '',
+                code: item.rawCode || prev?.code || currentAppCode,
+              }
+        )
+      }
+    },
+    [currentAppCode, selectedFolderId, setActiveContentTabKey]
   )
 
   const handleSelectConversation = useCallback(
@@ -1954,6 +2138,11 @@ export function useStudioController() {
       setSelectedUseCase(useCase)
       setLockedByTurn(true)
       setActiveConversationId(conv.id)
+      const initialItems = hydrateConversationContentItems(conv)
+      setContentItems(initialItems)
+      setActiveContentTabKey(
+        conv.activeContentTabKey || initialItems[initialItems.length - 1]?.key || ''
+      )
       if (conv.explores?.length) setSelectedExplores(conv.explores)
       const c = conv.content || {}
       const targetId = String(
@@ -1975,6 +2164,12 @@ export function useStudioController() {
         const targetPath = `/c/${encodeURIComponent(conv.id)}`
         if (location.pathname !== targetPath) history.push(targetPath)
       }
+      if (
+        conv.activeContentTabKey &&
+        contentItemsRef.current.some((it) => it.key === conv.activeContentTabKey)
+      ) {
+        setActiveContentTabKey(conv.activeContentTabKey)
+      }
       setActiveConversationId(conv.id)
       if (conv.messages?.length) {
         setMessages(conv.messages as ChatMessage[], mode)
@@ -1992,7 +2187,7 @@ export function useStudioController() {
         )
       }
     },
-    [history, location.pathname, openArtifactByMode, setAgentSession, setMessages]
+    [history, location.pathname, openArtifactByMode, setActiveContentTabKey, setAgentSession, setContentItems, setMessages]
   )
 
   const handleToggleArchiveConversation = async (
@@ -2143,6 +2338,27 @@ export function useStudioController() {
       let turnPromptWithContext = effectivePrompt
 
       if (activeMentions.length > 0) {
+        for (const m of activeMentions) {
+          if (m.type === 'explore' || m.type === 'dashboard' || m.type === 'look') {
+            const ct: StudioContentItemType =
+              m.type === 'explore'
+                ? 'explore'
+                : m.type === 'look'
+                ? 'look'
+                : m.id.includes('::')
+                ? 'lookml_dashboard'
+                : 'dashboard'
+            upsertContentItem({
+              id: m.id,
+              contentType: ct,
+              title: m.title,
+              ...(ct === 'explore' ? { exploreId: m.id } : {}),
+              ...(ct === 'look' ? { lookId: m.id } : {}),
+              ...(ct === 'dashboard' ? { dashboardId: m.id } : {}),
+              ...(ct === 'lookml_dashboard' ? { lookmlDashboardId: m.id } : {}),
+            })
+          }
+        }
         setBusyStatus('Hydrating referenced Looker @-mention context...')
         const hydrated = await hydrateMentionedContext({
           sdk: core40SDK,
@@ -2571,6 +2787,7 @@ export function useStudioController() {
   const isEmptyConversation =
     !isTileMount && location.pathname !== '/config' &&
     !parsedRoute.objectId && messages.length === 0 && !publishedApp && !nativeContent &&
+    contentItems.length === 0 &&
     !lookmlBundle && !healthReport && !caConversation && !loadedScript && !busyStatus &&
     liveActivitySteps.length === 0
 
@@ -2585,6 +2802,8 @@ export function useStudioController() {
         setSelectedUseCase: handleChangeUseCase, setCapabilities,
         handleResetNewApp, handleNewConversation, handleSelectConversation,
         setNativeContent, setPublishedApp, bumpEmbedNonce,
+        contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey,
+        activeContentItem, upsertContentItem, handleSelectContentTab,
         setMessages, setBusyStatus, setLiveActivitySteps,
         infoModalUseCase, setInfoModalUseCase,
         loadingMetadata, setLoadingMetadata,
@@ -2594,7 +2813,7 @@ export function useStudioController() {
         preloadedContent, setPreloadedContent, mentionedItems, setMentionedItems,
       }
     }
-  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, bumpEmbedNonce, setMessages, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems])
+  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, handleChangeUseCase, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems])
 
   return {
     extensionSDK, core40SDK, lookerHostData, history, location, isTileMount,
@@ -2618,7 +2837,10 @@ export function useStudioController() {
     isUseCaseLocked, allowedUseCases, useCaseOptions, getUseCaseLabel,
     lookmlProjectId, setLookmlProjectId, activatedLookmlSkills, setActivatedLookmlSkills,
     lookmlBundle, lookmlSessions, loadLookmlInput, setLoadLookmlInput,
-    publishedApp, nativeContent, embedNonce, bumpEmbedNonce,
+    publishedApp, setPublishedApp, nativeContent, setNativeContent,
+    contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey,
+    activeContentItem, upsertContentItem, handleSelectContentTab,
+    embedNonce, bumpEmbedNonce,
     healthReport, healthScope, setHealthScope, caConversation,
     savedScripts, scriptId, setScriptId, scriptTitle, setScriptTitle,
     scriptCode, setScriptCode, filtersJson, setFiltersJson,
