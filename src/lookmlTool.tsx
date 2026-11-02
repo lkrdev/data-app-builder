@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 
 import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
+import { Lock } from 'lucide-react'
 
 import { StudioBadge, StudioCard } from './components/StudioDesignSystem'
 import { LKR_DEV_CLI_SPEC } from './lkrCliBridge'
@@ -107,27 +108,27 @@ export function extractLookmlBundleFromInteraction(
 export const LOOKML_TURN_SKILLS = [
   {
     id: 'lookml-field-curation',
-    label: '📝 Descriptions & Curation',
+    label: 'Descriptions & Curation',
     desc: 'Profile string fields, curate descriptions, group_label & hidden flags',
   },
   {
     id: 'lookml-tests',
-    label: '🧪 Data Tests (.test.lkml)',
+    label: 'Data Tests (.test.lkml)',
     desc: 'Author & run assert-based LookML data tests via run_lookml_test',
   },
   {
     id: 'lookml-snapshot',
-    label: '📸 Snapshot & Parity',
+    label: 'Snapshot & Parity',
     desc: 'Capture lkr parse lookml snapshot & verify SQL-to-Explore parity',
   },
   {
     id: 'generate-view-from-table',
-    label: '🧱 Bronze View',
+    label: 'Bronze View',
     desc: 'Scaffold or refresh Bronze base views from table metadata',
   },
   {
     id: 'agentic-lookml-workflow',
-    label: '🔄 SQL Workflow',
+    label: 'SQL Workflow',
     desc: 'Full SQL-to-LookML Bronze refinement + Silver/Gold layer workflow',
   },
 ] as const
@@ -336,7 +337,7 @@ export const LookmlPreviewPane: React.FC<{
             tone="warning"
             title="Requires Looker 'deploy' or 'admin' permission to run deploy_to_production"
           >
-            🔒 deploy_to_production disabled (missing deploy)
+            <Lock size={13} strokeWidth={1.75} aria-hidden="true" /> deploy_to_production disabled (missing deploy)
           </StudioBadge>
         )}
       </StudioCard>

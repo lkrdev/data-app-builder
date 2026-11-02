@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 
+import { AlertTriangle, Folder, FolderOpen, Lock, Search, User } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 
 import {
@@ -210,7 +211,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                   : undefined
               }
             >
-              ✨ Save Setup
+              Save Setup
             </button>
           </div>
           {authMode === 'oauth' && (
@@ -338,13 +339,15 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           </div>
           {!canSaveContext && (
             <div className="dab-muted" style={{ fontSize: 11, color: 'var(--dab-warning-text)' }}>
-              🔒 Read-only: saving shared extension context requires Looker <code>develop</code> or{' '}
+              <Lock size={13} strokeWidth={1.75} style={{ verticalAlign: -2, marginRight: 4 }} aria-hidden="true" />
+              Read-only: saving shared extension context requires Looker <code>develop</code> or{' '}
               <code>admin</code> permission.
             </div>
           )}
           {authMode === 'apikey' && !canManageAttrs && (
             <div className="dab-muted" style={{ fontSize: 11, color: 'var(--dab-warning-text)' }}>
-              🔒 Creating or updating hidden Looker User Attributes requires{' '}
+              <Lock size={13} strokeWidth={1.75} style={{ verticalAlign: -2, marginRight: 4 }} aria-hidden="true" />
+              Creating or updating hidden Looker User Attributes requires{' '}
               <code>manage_user_attributes</code> or <code>admin</code> permission.
             </div>
           )}
@@ -517,6 +520,11 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     if (closeModal) setAdvModalOpen(false)
   }
 
+  const renderFolderIcon = (isPersonal?: boolean | null, isOpen = false) => {
+    const Icon = isPersonal ? User : isOpen ? FolderOpen : Folder
+    return <Icon size={14} strokeWidth={1.75} aria-hidden="true" />
+  }
+
   const renderFolderTreeNode = (folderId: string, depth = 0, visited = new Set<string>()): React.ReactNode => {
     if (visited.has(folderId)) return null
     const node = folderTreeNodes[folderId]
@@ -558,7 +566,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
             onClick={() => handleSelectFolderNode(node.id)}
             title={node.name}
           >
-            <span className="dab-folder-node-icon">{node.is_personal ? '👤' : '📁'}</span>
+            <span className="dab-folder-node-icon">{renderFolderIcon(node.is_personal, isExpanded)}</span>
             <span className="dab-folder-node-name">{node.name}</span>
           </button>
         </div>
@@ -648,7 +656,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
           style={{ cursor: 'pointer' }}
           title="Mode-isolated Antigravity sandbox environment (click to wake or reload)"
         >
-          🟢 Env [{activeMode}]: {agentSession.environmentId || `env_${activeMode}_isolated`}
+          Env [{activeMode}]: {agentSession.environmentId || `env_${activeMode}_isolated`}
         </StudioBadge>
         {isUseCaseLocked && (
           <StudioBadge
@@ -657,7 +665,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
             className="dab-locked-use-case-badge"
             title="Conversation use case is locked — click + New Conversation in the sidebar to start another use case"
           >
-            🔒 {getUseCaseLabel(selectedUseCase)}
+            <Lock size={13} strokeWidth={1.75} aria-hidden="true" /> {getUseCaseLabel(selectedUseCase)}
           </StudioBadge>
         )}
         <ThemeModeSelect
@@ -676,7 +684,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
           title="Toggle whether mutating Looker SDK calls require interactive user approval or auto-approve"
         >
           <span data-testid="studio-approval-policy-select">
-            {requirePermission ? '🛡️ Safe Mode (Ask)' : '⚡ Auto-Approve (YOLO)'}
+            {requirePermission ? 'Safe Mode (Ask)' : 'Auto-Approve (YOLO)'}
           </span>
         </button>
 
@@ -813,7 +821,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                 tone="warning"
                 title="Deploy to production requires Looker 'deploy' or 'admin' permission"
               >
-                🔒 No deploy
+                <Lock size={13} strokeWidth={1.75} aria-hidden="true" /> No deploy
               </StudioBadge>
             )}
             {(lookmlSessions.length > 0 || lookmlBundle) && (
@@ -873,9 +881,10 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                   onClick={() => setFolderPopoverOpen((prev) => !prev)}
                   title={`Publish target folder: ${selectedFolderPath}`}
                 >
-                  <span className="dab-folder-trigger-text">
-                    {selectedFolderNode?.is_personal ? '👤' : '📁'} {selectedFolderLabel}
+                  <span className="dab-folder-node-icon">
+                    {renderFolderIcon(selectedFolderNode?.is_personal, folderPopoverOpen)}
                   </span>
+                  <span className="dab-folder-trigger-text">{selectedFolderLabel}</span>
                   <span className="dab-folder-trigger-caret">▾</span>
                 </button>
               )}
@@ -914,9 +923,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                                 onClick={() => handleSelectFolderNode(node.id)}
                                 title={node.name}
                               >
-                                <span className="dab-folder-node-icon">
-                                  {node.is_personal ? '👤' : '📁'}
-                                </span>
+                                <span className="dab-folder-node-icon">{renderFolderIcon(node.is_personal)}</span>
                                 <span className="dab-folder-node-name">{node.name}</span>
                               </button>
                             </div>
@@ -937,7 +944,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                       className="dab-btn-secondary dab-folder-adv-btn"
                       onClick={handleOpenAdvancedSearch}
                     >
-                      🔍 Advanced Search...
+                      <Search size={14} strokeWidth={1.75} aria-hidden="true" /> Advanced Search...
                     </button>
                   </div>
                 </div>
@@ -953,7 +960,8 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                 className="dab-folder-search-modal"
                 title={
                   <>
-                    🔍 Advanced Looker Folder Search (<code>sdk.search_folders</code>)
+                    <Search size={14} strokeWidth={1.75} style={{ verticalAlign: -2, marginRight: 5 }} aria-hidden="true" />
+                    Advanced Looker Folder Search (<code>sdk.search_folders</code>)
                   </>
                 }
                 subtitle="Search across all Looker folders by name, parent_id, personal scope, creator_id, or ID"
@@ -1049,8 +1057,9 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                           className={`dab-folder-search-result-row ${isSelected ? 'selected' : ''}`}
                           onClick={() => handleSelectFolderNode(item.id, true)}
                         >
-                          <span style={{ fontWeight: 600 }}>
-                            {item.is_personal ? '👤' : '📁'} {item.name}
+                          <span style={{ fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                            {renderFolderIcon(item.is_personal)}
+                            {item.name}
                           </span>
                           <span className="dab-muted" style={{ fontSize: 11 }}>
                             {item.parent_id
@@ -1123,7 +1132,8 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                   tone="warning"
                   title={capabilities.tools.health.reason}
                 >
-                  ⚠️ Missing: {capabilities.tools.health.missingPermissions.join(', ')}
+                  <AlertTriangle size={14} strokeWidth={1.75} aria-hidden="true" /> Missing:{' '}
+                  {capabilities.tools.health.missingPermissions.join(', ')}
                 </StudioBadge>
               )}
               <StudioSelect
@@ -1151,7 +1161,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                 onClick={() => handleRunHealthCheck()}
                 disabled={!!busyStatus}
               >
-                ✨ Run 3-Pillar Audit
+                Run 3-Pillar Audit
               </button>
             </>
           )}

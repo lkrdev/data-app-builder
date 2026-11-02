@@ -1085,7 +1085,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       expectText: [
         'Agent',
         'Agentic LookML',
-        '🔒 Data App',
+        'Data App',
         'Safe Mode (Ask)',
         'Approve Looker State Mutation?',
         'create_dashboard',
@@ -1102,7 +1102,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         'Content Studio',
         'Executive Order Performance (Native UDD)',
         '/embed/dashboards/7',
-        '✨ Update Content'
+        'Update Content'
       ]
     },
     {
@@ -1116,11 +1116,11 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         '✓ LookML Validator Passed',
         'run_lookml_test (1/1 passed)',
         'TURN SKILLS:',
-        '📝 Descriptions & Curation',
-        '🧪 Data Tests (.test.lkml)',
-        '📸 Snapshot & Parity',
+        'Descriptions & Curation',
+        'Data Tests (.test.lkml)',
+        'Snapshot & Parity',
         'bronze/orders.refinement.lkml',
-        '✨ Update LookML'
+        'Update LookML'
       ]
     },
     {
@@ -1129,14 +1129,14 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       title: '4. 3-Pillar Health Check Mode (Rendered Markdown Viewer & Top-Right Gemini Button)',
       snapshotName: '04-mode-3-pillar-health-check-snap.png',
       expectText: [
-        '✨ Run 3-Pillar Audit',
+        'Run 3-Pillar Audit',
         'All 3 Pillars (Looker + BQ)',
         'Health Score: 70% (B- (Optimization Recommended))',
         'Transcriber: 2.86/4.00',
         'Technical Design Document (TDD): Looker & BigQuery 3-Pillar Health Check',
         '{ } Raw Markdown',
         'Copy Markdown',
-        '✨ Download Markdown (.md)'
+        'Download Markdown (.md)'
       ]
     },
     {
@@ -1146,11 +1146,11 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       snapshotName: '05-mode-python-tile-studio-snap.png',
       expectText: [
         'Looker Explore & Filter Summary',
-        '⏰ Schedule Script',
-        '✨ Publish Dashboard',
-        '✨ Run Python',
-        '✨ Ask AI',
-        '⏰ Scheduled: 0 8 * * * · summary',
+        'Schedule Script',
+        'Publish Dashboard',
+        'Run Python',
+        'Ask AI',
+        'Scheduled: 0 8 * * * · summary',
         'agentic_thelook'
       ]
     },
@@ -1183,7 +1183,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         'Configuration',
         'Agent & Vertex / Gemini Setup',
         'Google OAuth',
-        '✨ Save Setup'
+        'Save Setup'
       ]
     },
     {
@@ -1223,11 +1223,11 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       clipSelector: '.dab-composer',
       expectText: [
         'TURN SKILLS:',
-        '✓ 📝 Descriptions & Curation',
-        '✓ 🧪 Data Tests (.test.lkml)',
-        '✓ 📸 Snapshot & Parity',
-        '+ 🧱 Bronze View',
-        '✨ Run Agentic LookML'
+        '✓ Descriptions & Curation',
+        '✓ Data Tests (.test.lkml)',
+        '✓ Snapshot & Parity',
+        '+ Bronze View',
+        'Run Agentic LookML'
       ]
     },
     {
@@ -1270,12 +1270,12 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       snapshotName: '15-python-tile-scheduler-modal-snap.png',
       clipSelector: '.dab-modal',
       expectText: [
-        '⏰ Custom CodeMode Script Scheduler',
+        'Custom CodeMode Script Scheduler',
         'obj_schedule_demo1',
         'Daily at 8:00 AM (0 8 * * *)',
         'Script Execution Mode (`vars.mode`)',
         'Custom Controls / Non-Query Variables (`vars.custom_controls` JSON)',
-        '✨ Save Script Schedule'
+        'Save Script Schedule'
       ]
     },
     {
@@ -1284,12 +1284,12 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       title: '16. Conversational Analytics Mode (Isolated Sub-Agent Selection & Embedded CA Chat)',
       snapshotName: '16-mode-conversational-analytics-snap.png',
       expectText: [
-        '🔒 Conversational Analytics',
+        'Conversational Analytics',
         'BigQuery Streaming Buffer & Order Revenue Q&A',
-        '🤖 Agent: eCommerce & BigQuery Analytics Agent (ca_agent_ecommerce)',
+        'Agent: eCommerce & BigQuery Analytics Agent (ca_agent_ecommerce)',
         'Isolated Sub-Agent Selection:',
         '/embed/conversations/ca_conv_streaming_1',
-        '✨ Ask CA Agent'
+        'Ask CA Agent'
       ]
     },
     {
@@ -1768,13 +1768,13 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     })
 
     expect(step2.result.value).toEqual({
-      topbarBadge: '🔒 Content Studio',
+      topbarBadge: 'Content Studio',
       routeAfterSelect: '/c/7',
       centeredGone: true,
       restoredChatMsg: true,
       restoredPreview: true,
       redirectedLegacyRoute: '/c/20261030_dev_branch',
-      lookmlBadge: '🔒 LookML'
+      lookmlBadge: 'LookML'
     })
   }, 15000)
 
@@ -1833,7 +1833,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           ? Array.from(selRestricted.options).find((o) => o.value === 'lookml')
           : null;
         const lookmlOptDisabledWhenRestricted = Boolean(lookmlOpt?.disabled);
-        const lookmlOptHasLockLabel = Boolean((lookmlOpt?.textContent || '').includes('🔒') && (lookmlOpt?.textContent || '').includes('(Locked)'));
+        const lookmlOptHasLockLabel = Boolean((lookmlOpt?.textContent || '').includes('(Locked)'));
         const lookmlOptTitle = lookmlOpt?.getAttribute('title') || '';
 
         // Restore full admin capabilities so Auto can route to LookML on Turn 1
@@ -1937,8 +1937,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       lookmlOptHasLockLabel: true,
       lookmlOptTitle: 'Missing Looker permissions: develop',
       selectorGoneAfterTurn1: true,
-      lockedBadgeText: '🔒 LookML',
-      topbarBadgeText: '🔒 LookML',
+      lockedBadgeText: 'LookML',
+      topbarBadgeText: 'LookML',
       noModeSwitcher: true,
       persistedType: 'lookml',
       resetUseCase: 'auto',
@@ -2016,8 +2016,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       hasSubagentCall: true,
       subagentTools: [],
       subagentHasPrevId: false,
-      lockedBadgeText: '🔒 Conversational Analytics',
-      agentBadgeText: '🤖 Agent: eCommerce & BigQuery Analytics Agent (ca_agent_ecommerce)',
+      lockedBadgeText: 'Conversational Analytics',
+      agentBadgeText: 'Agent: eCommerce & BigQuery Analytics Agent (ca_agent_ecommerce)',
       hasCaIframe: true,
       persistedType: 'conversational-analytics',
       persistedCaId: 'ca_conv_live_77',
@@ -3152,14 +3152,14 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         pointerEvents: 'none',
         ariaHidden: 'true',
         tabIndex: '-1',
-        text: '✨ Publish Dashboard'
+        text: 'Publish Dashboard'
       }),
       expect.objectContaining({
         component: 'RunPythonButton',
         pointerEvents: 'none',
         ariaHidden: 'true',
         tabIndex: '-1',
-        text: '✨ Run Python'
+        text: 'Run Python'
       }),
       expect.objectContaining({
         component: 'ScriptModeSelect',
@@ -3179,7 +3179,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         pointerEvents: 'none',
         ariaHidden: 'true',
         tabIndex: '-1',
-        text: '⏰ Schedule Script'
+        text: 'Schedule Script'
       })
     ])
 
@@ -3579,7 +3579,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       hasPersonalChild: true,
       quickSearchMatchesExperiments: true,
       hasSearchResult502: true,
-      selectedTriggerText: '📁 subfolder test▾',
+      selectedTriggerText: 'subfolder test▾',
       hasHydratedParent501: true,
       hasHydratedLeaf502: true,
       personalNodeCount: 1,
@@ -3826,9 +3826,12 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         probeWrap.remove();
         document.documentElement.setAttribute('data-theme', 'light');
 
-        // 2. Verify StudioCard & StudioToolbar in LookML mode
+        // 2. Verify StudioCard, StudioToolbar & lucide-react SVG icons (no decorative emojis) in LookML mode
         const hasToolbarTitleBlock = Boolean(document.querySelector('.dab-preview-toolbar .dab-ds-toolbar-title-block'));
         const hasStudioCard = Boolean(document.querySelector('.dab-ds-card'));
+        const archiveBtnHasLucideSvg = Boolean(document.querySelector('[data-testid^="archive-conv-"] svg.lucide'));
+        const deleteBtnHasLucideSvg = Boolean(document.querySelector('[data-testid^="delete-conv-"] svg.lucide'));
+        const hasDecorativeEmoji = /[✨🛡️⚡🟢📊📈💬🧩🩺🐍📝🧪📸🧱🔄⏰🤖📖👤📁🔍📥🗑️]/u.test(document.body?.innerText || '');
 
         // 3. Open UseCaseInfoModal (built on StudioModal) and verify StudioDocPreview inside it
         document.querySelector('[data-testid="use-case-info-btn"]').click();
@@ -3849,6 +3852,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           lightDistinctFromDark: lightOkBg !== darkOkBg && lightWarnBg !== darkWarnBg && lightErrBg !== darkErrBg,
           hasToolbarTitleBlock,
           hasStudioCard,
+          archiveBtnHasLucideSvg,
+          deleteBtnHasLucideSvg,
+          hasDecorativeEmoji,
           hasModalHeader,
           hasDocPreview,
           clip
@@ -3862,6 +3868,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       lightDistinctFromDark: true,
       hasToolbarTitleBlock: true,
       hasStudioCard: true,
+      archiveBtnHasLucideSvg: true,
+      deleteBtnHasLucideSvg: true,
+      hasDecorativeEmoji: false,
       hasModalHeader: true,
       hasDocPreview: true
     })

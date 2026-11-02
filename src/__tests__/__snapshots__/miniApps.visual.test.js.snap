@@ -44,11 +44,11 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "scenario": "chatbar_lookml_skills",
   "verifiedVisibleText": [
     "TURN SKILLS:",
-    "✓ 📝 Descriptions & Curation",
-    "✓ 🧪 Data Tests (.test.lkml)",
-    "✓ 📸 Snapshot & Parity",
-    "+ 🧱 Bronze View",
-    "✨ Run Agentic LookML",
+    "✓ Descriptions & Curation",
+    "✓ Data Tests (.test.lkml)",
+    "✓ Snapshot & Parity",
+    "+ Bronze View",
+    "Run Agentic LookML",
   ],
 }
 `;
@@ -76,7 +76,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
     "Configuration",
     "Agent & Vertex / Gemini Setup",
     "Google OAuth",
-    "✨ Save Setup",
+    "Save Setup",
   ],
 }
 `;
@@ -87,12 +87,12 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "modeTabs": [],
   "scenario": "conversational_analytics",
   "verifiedVisibleText": [
-    "🔒 Conversational Analytics",
+    "Conversational Analytics",
     "BigQuery Streaming Buffer & Order Revenue Q&A",
-    "🤖 Agent: eCommerce & BigQuery Analytics Agent (ca_agent_ecommerce)",
+    "Agent: eCommerce & BigQuery Analytics Agent (ca_agent_ecommerce)",
     "Isolated Sub-Agent Selection:",
     "/embed/conversations/ca_conv_streaming_1",
-    "✨ Ask CA Agent",
+    "Ask CA Agent",
   ],
 }
 `;
@@ -106,7 +106,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
     "Content Studio",
     "Executive Order Performance (Native UDD)",
     "/embed/dashboards/7",
-    "✨ Update Content",
+    "Update Content",
   ],
 }
 `;
@@ -119,7 +119,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "verifiedVisibleText": [
     "Agent",
     "Agentic LookML",
-    "🔒 Data App",
+    "Data App",
     "Safe Mode (Ask)",
     "Approve Looker State Mutation?",
     "create_dashboard",
@@ -166,14 +166,14 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "modeTabs": [],
   "scenario": "health_check",
   "verifiedVisibleText": [
-    "✨ Run 3-Pillar Audit",
+    "Run 3-Pillar Audit",
     "All 3 Pillars (Looker + BQ)",
     "Health Score: 70% (B- (Optimization Recommended))",
     "Transcriber: 2.86/4.00",
     "Technical Design Document (TDD): Looker & BigQuery 3-Pillar Health Check",
     "{ } Raw Markdown",
     "Copy Markdown",
-    "✨ Download Markdown (.md)",
+    "Download Markdown (.md)",
   ],
 }
 `;
@@ -189,11 +189,11 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
     "✓ LookML Validator Passed",
     "run_lookml_test (1/1 passed)",
     "TURN SKILLS:",
-    "📝 Descriptions & Curation",
-    "🧪 Data Tests (.test.lkml)",
-    "📸 Snapshot & Parity",
+    "Descriptions & Curation",
+    "Data Tests (.test.lkml)",
+    "Snapshot & Parity",
     "bronze/orders.refinement.lkml",
-    "✨ Update LookML",
+    "Update LookML",
   ],
 }
 `;
@@ -204,12 +204,12 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "modeTabs": [],
   "scenario": "python_tile_scheduler_modal",
   "verifiedVisibleText": [
-    "⏰ Custom CodeMode Script Scheduler",
+    "Custom CodeMode Script Scheduler",
     "obj_schedule_demo1",
     "Daily at 8:00 AM (0 8 * * *)",
     "Script Execution Mode (\`vars.mode\`)",
     "Custom Controls / Non-Query Variables (\`vars.custom_controls\` JSON)",
-    "✨ Save Script Schedule",
+    "Save Script Schedule",
   ],
 }
 `;
@@ -221,11 +221,11 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "scenario": "python_tile_studio",
   "verifiedVisibleText": [
     "Looker Explore & Filter Summary",
-    "⏰ Schedule Script",
-    "✨ Publish Dashboard",
-    "✨ Run Python",
-    "✨ Ask AI",
-    "⏰ Scheduled: 0 8 * * * · summary",
+    "Schedule Script",
+    "Publish Dashboard",
+    "Run Python",
+    "Ask AI",
+    "Scheduled: 0 8 * * * · summary",
     "agentic_thelook",
   ],
 }
