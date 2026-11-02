@@ -385,6 +385,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     resolvedTheme,
     setThemeMode,
     environmentStatus,
+    envResetNotice,
     handleResetEnvironment,
     handleStopEnvironment,
     requirePermission,
@@ -595,24 +596,48 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
         </span>
         <div className="dab-env-menu-wrap" ref={envMenuRef}>
           <StudioBadge
-            tone={environmentStatus === 'stopped' ? 'neutral' : 'success'}
+            tone={
+              environmentStatus === 'stopped'
+                ? 'neutral'
+                : environmentStatus === 'resetting'
+                ? 'warning'
+                : 'success'
+            }
             testId="topbar-environment-btn"
+            data-env-status={environmentStatus}
+            data-env-reset-notice={envResetNotice ? 'true' : undefined}
             onClick={() => setEnvMenuOpen((prev) => !prev)}
             style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }}
             title={
               environmentStatus === 'stopped'
                 ? 'Antigravity sandbox environment stopped (click to reset or manage)'
+                : environmentStatus === 'resetting'
+                ? 'Resetting Antigravity sandbox environment...'
                 : 'Antigravity sandbox environment active (click to reset or stop)'
             }
           >
-            <span
-              className={`dab-env-status-dot ${
-                environmentStatus === 'stopped' ? 'stopped' : 'active'
-              }`}
-              aria-hidden="true"
-            />
-            <Server size={12} strokeWidth={1.75} aria-hidden="true" />
-            <span>Environment</span>
+            {environmentStatus === 'resetting' ? (
+              <RotateCcw size={12} strokeWidth={1.75} className="dab-spin" aria-hidden="true" />
+            ) : (
+              <>
+                <span
+                  className={`dab-env-status-dot ${
+                    environmentStatus === 'stopped' ? 'stopped' : 'active'
+                  }`}
+                  aria-hidden="true"
+                />
+                <Server size={12} strokeWidth={1.75} aria-hidden="true" />
+              </>
+            )}
+            <span>
+              {environmentStatus === 'resetting'
+                ? 'Resetting...'
+                : environmentStatus === 'stopped'
+                ? 'Environment (Stopped)'
+                : envResetNotice
+                ? '✓ Environment Reset'
+                : 'Environment'}
+            </span>
             <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
           </StudioBadge>
 
