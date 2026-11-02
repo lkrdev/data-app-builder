@@ -2335,6 +2335,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     embedNonce,
     extensionSDK,
     setInfoModalUseCase,
+    busyStatus,
   } = ctl
   const isTileMode = activeMode === 'tile'
 
@@ -2625,20 +2626,14 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                   <code>{activeContentItem.embedPath}</code>)
                 </span>
               </>
-            ) : builderMode === 'dashboard' ? (
-              nativeContent ? (
-                <>
-                  <strong>{nativeContent.title}</strong>{' '}
-                  <span className="dab-muted">
-                    ({nativeContent.contentType} #{nativeContent.id} ·{' '}
-                    <code>{nativeContent.embedPath}</code>)
-                  </span>
-                </>
-              ) : (
+            ) : builderMode === 'dashboard' && nativeContent ? (
+              <>
+                <strong>{nativeContent.title}</strong>{' '}
                 <span className="dab-muted">
-                  Live Looker UDD / Look / Board preview will appear here after the first turn
+                  ({nativeContent.contentType} #{nativeContent.id} ·{' '}
+                  <code>{nativeContent.embedPath}</code>)
                 </span>
-              )
+              </>
             ) : publishedApp ? (
               <>
                 <strong>{publishedApp.title}</strong>{' '}
@@ -2647,9 +2642,11 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                   {publishedApp.extensionId.slice(0, 8)}…)
                 </span>
               </>
+            ) : busyStatus ? (
+              <span className="dab-muted">Thinking...</span>
             ) : (
               <span className="dab-muted">
-                Live Looker Data App preview will appear here after the first turn
+                Preview will appear here when Looker content is ready
               </span>
             )
           }
@@ -2766,20 +2763,31 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             </div>
           )
         ) : (
-          !hasActiveEmbed && (
-            <div className="dab-placeholder">
-              <p>
-                {builderMode === 'dashboard'
-                  ? 'No active native Looker content yet.'
-                  : 'No active Data App yet.'}
-              </p>
-              <p className="dab-muted">
-                {builderMode === 'dashboard'
-                  ? 'Ask on the left to build a native Looker UDD, Look, Board, or Schedule via CodeMode, or pick from My Creations.'
-                  : 'Enter a prompt on the left to create a new Data App, or load an existing Dashboard ID from the top bar.'}
-              </p>
-            </div>
-          )
+          !hasActiveEmbed &&
+            (busyStatus ? (
+              <div className="dab-placeholder">
+                <div
+                  className="dab-thinking-logo-card"
+                  data-testid="right-pane-thinking-state"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <div className="dab-thinking-logo-orb" aria-hidden="true">
+                    <Sparkles size={26} strokeWidth={1.75} className="dab-thinking-logo-icon" />
+                  </div>
+                  <strong className="dab-thinking-logo-title">Thinking...</strong>
+                  <span className="dab-muted dab-thinking-logo-subtitle">{busyStatus}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="dab-placeholder">
+                <p>Ready when you are</p>
+                <p className="dab-muted">
+                  Ask a question or describe what you want to analyze, build, or automate on the
+                  left.
+                </p>
+              </div>
+            ))
         )}
       </div>
     </main>

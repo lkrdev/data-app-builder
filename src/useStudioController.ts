@@ -9,11 +9,12 @@ import {
   authenticateGoogleOAuth, buildDynamicStarterPrompts, clearStoredOAuthSession, CodeModePermissionDecision,
   CodeModePermissionRequest, computeIsAuthenticated, DEFAULT_ANTIGRAVITY_MODEL, discoverStarterExploreContext,
   ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig, generateConversationLabel,
-  generateDynamicStarterPrompts, getCachedStarterPrompts, getInitialStoredOAuthToken,
-  listAvailableAntigravityModels, LkrCodeMode, loadStoredOAuthSession, loginWithGoogleOAuth,
-  normalizeEnvironmentId, PastedImage, prewarmOrWakeAntigravityEnvironment,
-  resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, resolveTargetExploreFromModels,
-  runAntigravityTurn, sanitizeConversationLabel, StarterPromptItem,
+  generateDynamicStarterPrompts, getCachedStarterPrompts, getInitialStoredOAuthSession, getInitialStoredOAuthToken,
+  inFlightEnvProvisionByUser, listAvailableAntigravityModels, LkrCodeMode, loadStoredOAuthSession, loginWithGoogleOAuth,
+  normalizeEnvironmentId, parseValidOAuthSession, PastedImage, prewarmOrWakeAntigravityEnvironment,
+  refreshOAuthSessionIfNeeded, resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris,
+  resolveTargetExploreFromModels, runAntigravityTurn, sanitizeConversationLabel, sharedEnvExploreSchemas,
+  StarterPromptItem, STUDIO_OAUTH_REFRESH_INTERVAL_MS, STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY,
 } from './antigravity'
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
 import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
@@ -50,10 +51,13 @@ export {
   authenticateGoogleOAuth,
   computeIsAuthenticated,
   normalizeStudioThemeMode,
+  refreshOAuthSessionIfNeeded,
   resolveLookerOAuthRedirectUri,
   resolveLookerOAuthRedirectUris,
   resolveStudioTheme,
   resolveSystemTheme,
+  STUDIO_OAUTH_REFRESH_LOCK_KEY,
+  STUDIO_OAUTH_STORAGE_KEY,
   STUDIO_THEME_STORAGE_KEY,
 }
 export type {
@@ -70,7 +74,7 @@ export interface QueuedPromptItem {
   mentions: StudioContextMention[]
 }
 
-export type StudioEnvironmentStatus = 'active' | 'stopped'
+export type StudioEnvironmentStatus = 'active' | 'resetting' | 'stopped'
 
 type HostDataWithMount = {
   mountType?: string
@@ -133,7 +137,15 @@ export function useStudioController() {
     return list.length > 0 ? list : [STUDIO_MODES[0]]
   }, [disabledModes])
   const initialClientId = initialCtx?.clientId || ''
-  const [oauthToken, setOauthToken] = useState(() => getInitialStoredOAuthToken(initialClientId))
+  const initialOAuthSession = getInitialStoredOAuthSession(initialClientId)
+  const [oauthToken, setOauthToken] = useState(
+    () => initialOAuthSession?.token || getInitialStoredOAuthToken(initialClientId)
+  )
+  const [oauthExpiresAt, setOauthExpiresAt] = useState<number>(
+    () => initialOAuthSession?.expiresAt || (initialOAuthSession?.token ? Date.now() + STUDIO_OAUTH_REFRESH_INTERVAL_MS : 0)
+  )
+  const oauthPendingRefreshRef = useRef(false)
+  const tabIdRef = useRef(`tab_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`)
   const [apiKey, setApiKey] = useState(() => String(mockExt?.initialApiKey || ''))
   const [oauthSigningIn, setOauthSigningIn] = useState(false)
   const oauthAbortRef = useRef<AbortController | null>(null)
@@ -145,22 +157,103 @@ export function useStudioController() {
       if (authMode === 'oauth' && /\b401\b|UNAUTHENTICATED/i.test(msg)) {
         clearStoredOAuthSession(extensionSDK)
         setOauthToken('')
+        setOauthExpiresAt(0)
       }
       return msg
     },
     [authMode, extensionSDK]
   )
 
+  const triggerSilentOAuthRefresh = useCallback(
+    async (force = false): Promise<string | null> => {
+      if (authMode !== 'oauth' || !clientId.trim()) return null
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        oauthPendingRefreshRef.current = true
+        return null
+      }
+      try {
+        const res = await refreshOAuthSessionIfNeeded({
+          extensionSDK,
+          clientId,
+          tabId: tabIdRef.current,
+          force,
+          currentToken: oauthToken,
+        })
+        if (res?.deferredUntilVisible) {
+          oauthPendingRefreshRef.current = true
+          return null
+        }
+        if (res?.token) {
+          oauthPendingRefreshRef.current = false
+          setOauthToken(res.token)
+          if (res.expiresAt > 0) setOauthExpiresAt(res.expiresAt)
+          return res.token
+        }
+        return null
+      } catch {
+        clearStoredOAuthSession(extensionSDK)
+        setOauthToken('')
+        setOauthExpiresAt(0)
+        return null
+      }
+    },
+    [authMode, clientId, extensionSDK, oauthToken]
+  )
+
   useEffect(() => {
     if (mockExt && 'initialOauthToken' in mockExt && mockExt.initialOauthToken) return
     let mounted = true
     void loadStoredOAuthSession(extensionSDK, initialClientId).then((stored) => {
-      if (mounted && stored?.token) setOauthToken((prev) => prev || stored.token)
+      if (!mounted || !stored?.token) return
+      setOauthToken((prev) => prev || stored.token)
+      setOauthExpiresAt((prev) => prev || stored.expiresAt)
     })
     return () => {
       mounted = false
     }
   }, [extensionSDK, initialClientId, mockExt])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.addEventListener) return
+    const onStorage = (e: StorageEvent) => {
+      if (e.key && e.key !== STUDIO_OAUTH_STORAGE_KEY) return
+      if (!e.newValue) {
+        oauthPendingRefreshRef.current = false
+        setOauthToken('')
+        setOauthExpiresAt(0)
+        return
+      }
+      const { session } = parseValidOAuthSession(e.newValue, clientId)
+      if (session) {
+        oauthPendingRefreshRef.current = false
+        setOauthToken(session.token)
+        setOauthExpiresAt(session.expiresAt)
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [clientId])
+
+  useEffect(() => {
+    if (authMode !== 'oauth' || !oauthToken.trim() || !clientId.trim() || !oauthExpiresAt) return
+    const maybeRefresh = () => {
+      if (Date.now() < oauthExpiresAt && !oauthPendingRefreshRef.current) return
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        oauthPendingRefreshRef.current = true
+        return
+      }
+      oauthPendingRefreshRef.current = false
+      void triggerSilentOAuthRefresh(false)
+    }
+    const timer = setTimeout(maybeRefresh, Math.max(0, oauthExpiresAt - Date.now()))
+    if (typeof document !== 'undefined') document.addEventListener?.('visibilitychange', maybeRefresh)
+    if (typeof window !== 'undefined') window.addEventListener?.('focus', maybeRefresh)
+    return () => {
+      clearTimeout(timer)
+      if (typeof document !== 'undefined') document.removeEventListener?.('visibilitychange', maybeRefresh)
+      if (typeof window !== 'undefined') window.removeEventListener?.('focus', maybeRefresh)
+    }
+  }, [authMode, oauthToken, clientId, oauthExpiresAt, triggerSilentOAuthRefresh])
   const oauthRedirectUri = useMemo(
     () =>
       resolveLookerOAuthRedirectUri(
@@ -586,6 +679,8 @@ export function useStudioController() {
   const [environmentStatus, setEnvironmentStatus] = useState<StudioEnvironmentStatus>('active')
   const environmentStatusRef = useRef<StudioEnvironmentStatus>('active')
   environmentStatusRef.current = environmentStatus
+  const [envResetNotice, setEnvResetNotice] = useState<boolean>(false)
+  const envResetNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const turnAbortControllerRef = useRef<AbortController | null>(null)
   const [queuedPrompts, setQueuedPrompts] = useState<QueuedPromptItem[]>([])
   const queuedPromptsRef = useRef<QueuedPromptItem[]>([])
@@ -812,7 +907,7 @@ export function useStudioController() {
 
   useEffect(() => {
     if (disabledModes.includes(activeMode)) return
-    if (environmentStatus === 'stopped') return
+    if (environmentStatus === 'stopped' || environmentStatus === 'resetting') return
     if (sharedEnvIdRef.current) return
     void handleWakeModeEnv(activeMode)
   }, [activeMode, disabledModes, environmentStatus, handleWakeModeEnv])
@@ -1314,7 +1409,12 @@ export function useStudioController() {
             ? mockExt.oauthFocusReturnDelayMs
             : 1500,
       })
-      if (oauthAbortRef.current === controller) setOauthToken(token)
+      if (oauthAbortRef.current === controller) {
+        oauthPendingRefreshRef.current = false
+        setOauthToken(token)
+        const stored = await loadStoredOAuthSession(extensionSDK, clientId)
+        setOauthExpiresAt(stored?.expiresAt || Date.now() + STUDIO_OAUTH_REFRESH_INTERVAL_MS)
+      }
     } catch (err: unknown) {
       if (oauthAbortRef.current === controller && !controller.signal.aborted) {
         setMessages((prev) => [
@@ -2385,21 +2485,30 @@ export function useStudioController() {
   )
 
   const handleResetEnvironment = useCallback(async () => {
-    clearAllEnvSessions('active')
+    if (envResetNoticeTimerRef.current) clearTimeout(envResetNoticeTimerRef.current)
+    envResetNoticeTimerRef.current = null
+    setEnvResetNotice(false)
+    clearAllEnvSessions('resetting')
+    sharedEnvExploreSchemas.clear()
+    inFlightEnvProvisionByUser.clear()
+    await saveUserEnvironmentId(core40SDK, userIdRef.current || userId, '', getArtifactNamespace(extensionSDK)).catch(() => {})
     try {
-      await saveUserEnvironmentId(
-        core40SDK,
-        userIdRef.current || userId,
-        '',
-        getArtifactNamespace(extensionSDK)
-      )
-    } catch {
-      // Ignore clear environment artifact errors
+      await handleWakeModeEnv(activeModeRef.current, true)
+    } finally {
+      environmentStatusRef.current = 'active'
+      setEnvironmentStatus('active')
+      setEnvResetNotice(true)
+      envResetNoticeTimerRef.current = setTimeout(() => {
+        setEnvResetNotice(false)
+        envResetNoticeTimerRef.current = null
+      }, 2500)
     }
-    await handleWakeModeEnv(activeModeRef.current, true)
   }, [clearAllEnvSessions, core40SDK, userId, extensionSDK, handleWakeModeEnv])
 
   const handleStopEnvironment = useCallback(() => {
+    if (envResetNoticeTimerRef.current) clearTimeout(envResetNoticeTimerRef.current)
+    envResetNoticeTimerRef.current = null
+    setEnvResetNotice(false)
     clearAllEnvSessions('stopped')
   }, [clearAllEnvSessions])
 
@@ -3032,7 +3141,8 @@ export function useStudioController() {
     if (typeof window !== 'undefined') {
       window.__DAB_STUDIO__ = {
         history, requestCodeModePermission, setRequirePermission, setDisabledModes,
-        setSelectedModel, setAuthMode, setClientId, setOauthToken, setApiKey,
+        setSelectedModel, setAuthMode, setClientId, setOauthToken, setOauthExpiresAt, setApiKey,
+        oauthExpiresAt, triggerSilentOAuthRefresh,
         isAuthenticated, oauthSigningIn, oauthRedirectUri,
         handleOAuthLogin, handleCancelOAuthLogin,
         setSidebarCollapsed, themeMode, resolvedTheme, setThemeMode,
@@ -3045,7 +3155,8 @@ export function useStudioController() {
         setMessages, setBusyStatus, setLiveActivitySteps,
         queuedPrompts, setQueuedPrompts: updateQueuedPrompts,
         handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt,
-        environmentStatus, setEnvironmentStatus, handleResetEnvironment, handleStopEnvironment,
+        environmentStatus, setEnvironmentStatus, envResetNotice, setEnvResetNotice,
+        handleResetEnvironment, handleStopEnvironment,
         infoModalUseCase, setInfoModalUseCase,
         loadingMetadata, setLoadingMetadata,
         starterPrompts, setStarterPrompts, starterPromptsLoading, setStarterPromptsLoading,
@@ -3054,14 +3165,15 @@ export function useStudioController() {
         preloadedContent, setPreloadedContent, mentionedItems, setMentionedItems,
       }
     }
-  }, [history, requestCodeModePermission, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, queuedPrompts, updateQueuedPrompts, handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, environmentStatus, handleResetEnvironment, handleStopEnvironment, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems])
+  }, [history, requestCodeModePermission, oauthExpiresAt, triggerSilentOAuthRefresh, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, queuedPrompts, updateQueuedPrompts, handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, environmentStatus, envResetNotice, handleResetEnvironment, handleStopEnvironment, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems])
 
   return {
     extensionSDK, core40SDK, lookerHostData, history, location, isTileMount,
     themeMode, resolvedTheme, setThemeMode,
     authMode, setAuthMode, clientId, setClientId, projectId, setProjectId,
     disabledModes, setDisabledModes, selectedModel, setSelectedModel,
-    availableModels, enabledModes, oauthToken, oauthAccessToken, setOauthToken, apiKey, setApiKey,
+    availableModels, enabledModes, oauthToken, oauthAccessToken, setOauthToken,
+    oauthExpiresAt, setOauthExpiresAt, triggerSilentOAuthRefresh, apiKey, setApiKey,
     isAuthenticated, oauthSigningIn, oauthRedirectUri,
     capabilities, setCapabilities, availableLookmlProjects, canDeployLookml,
     loadingMetadata, setLoadingMetadata,
@@ -3092,7 +3204,8 @@ export function useStudioController() {
     handleRunPython, handleSaveScript, handlePublishTileDashboard, loadScriptById,
     currentAppCode, loadDashInput, setLoadDashInput,
     sharedEnvironmentId, syncSharedEnvironmentId,
-    environmentStatus, setEnvironmentStatus, handleResetEnvironment, handleStopEnvironment,
+    environmentStatus, setEnvironmentStatus, envResetNotice, setEnvResetNotice,
+    handleResetEnvironment, handleStopEnvironment,
     agentSession, messages, setMessages, prompt, setPrompt, pastedImages, setPastedImages,
     busyStatus, loading: Boolean(busyStatus), liveActivitySteps, setLiveActivitySteps,
     queuedPrompts, setQueuedPrompts: updateQueuedPrompts,

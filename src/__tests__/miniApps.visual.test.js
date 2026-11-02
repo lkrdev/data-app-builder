@@ -4407,10 +4407,11 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const afterStopEnv = {
           menuClosed: !document.querySelector('[data-testid="topbar-environment-menu"]'),
           status: window.__DAB_STUDIO__.environmentStatus,
-          hasNeutralClass: envBtn.classList.contains('dab-badge-neutral')
+          hasNeutralClass: envBtn.classList.contains('dab-badge-neutral'),
+          text: (envBtn?.textContent || '').trim()
         };
 
-        // Re-open menu and click Reset Environment -> sets status to 'active' (success badge)
+        // Re-open menu and click Reset Environment -> sets status to 'active' (success badge) & shows reset notice
         envBtn.click();
         await new Promise((r) => setTimeout(r, 60));
         document.querySelector('[data-testid="env-reset-btn"]').click();
@@ -4418,7 +4419,33 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const afterResetEnv = {
           menuClosed: !document.querySelector('[data-testid="topbar-environment-menu"]'),
           status: window.__DAB_STUDIO__.environmentStatus,
-          hasSuccessClass: envBtn.classList.contains('dab-badge-success')
+          hasSuccessClass: envBtn.classList.contains('dab-badge-success'),
+          hasResetNoticeAttr: envBtn.getAttribute('data-env-reset-notice') === 'true',
+          text: (envBtn?.textContent || '').trim()
+        };
+
+        // 6. Verify right-pane Thinking logo state when busy without active embed, and neutral copy when idle
+        s.setPublishedApp(null);
+        s.setContentItems([]);
+        s.setBusyStatus('Synthesizing Looker query...');
+        await new Promise((r) => setTimeout(r, 60));
+        const thinkingEl = document.querySelector('[data-testid="right-pane-thinking-state"]');
+        const rightToolbarThinkingText = (document.querySelector('.dab-right-pane .dab-ds-toolbar-title-block')?.textContent || '').trim();
+        const thinkingCheck = {
+          hasThinkingState: Boolean(thinkingEl),
+          thinkingText: (thinkingEl?.textContent || '').trim(),
+          toolbarText: rightToolbarThinkingText
+        };
+
+        s.setBusyStatus(null);
+        await new Promise((r) => setTimeout(r, 60));
+        const idlePlaceholderText = (document.querySelector('.dab-right-pane .dab-placeholder')?.textContent || '').trim();
+        const rightToolbarIdleText = (document.querySelector('.dab-right-pane .dab-ds-toolbar-title-block')?.textContent || '').trim();
+        const idleCheck = {
+          hasThinkingState: Boolean(document.querySelector('[data-testid="right-pane-thinking-state"]')),
+          toolbarText: rightToolbarIdleText,
+          hasReadyCopy: idlePlaceholderText.includes('Ready when you are'),
+          hasHardcodedDataAppCopy: /Data App/i.test(idlePlaceholderText) || /Data App/i.test(rightToolbarIdleText)
         };
 
         return {
@@ -4432,7 +4459,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           hasRawEnvLabel,
           menuOpenCheck,
           afterStopEnv,
-          afterResetEnv
+          afterResetEnv,
+          thinkingCheck,
+          idleCheck
         };
       })()`,
       awaitPromise: true,
@@ -4474,12 +4503,26 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       afterStopEnv: {
         menuClosed: true,
         status: 'stopped',
-        hasNeutralClass: true
+        hasNeutralClass: true,
+        text: 'Environment (Stopped)'
       },
       afterResetEnv: {
         menuClosed: true,
         status: 'active',
-        hasSuccessClass: true
+        hasSuccessClass: true,
+        hasResetNoticeAttr: true,
+        text: '✓ Environment Reset'
+      },
+      thinkingCheck: {
+        hasThinkingState: true,
+        thinkingText: 'Thinking...Synthesizing Looker query...',
+        toolbarText: 'Thinking...'
+      },
+      idleCheck: {
+        hasThinkingState: false,
+        toolbarText: 'Preview will appear here when Looker content is ready',
+        hasReadyCopy: true,
+        hasHardcodedDataAppCopy: false
       }
     })
   }, 15000)
