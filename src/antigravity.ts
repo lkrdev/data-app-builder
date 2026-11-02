@@ -1268,14 +1268,14 @@ export function extractInteractionActivitySteps(
 export function summarizeProgress(
   interaction: AntigravityInteractionPayload | null | undefined
 ): string {
-  const extracted = extractInteractionActivitySteps(interaction)
-  const lastTitle = extracted[extracted.length - 1]?.title
+  const lastTitle = extractInteractionActivitySteps(interaction).pop()?.title
   if (lastTitle) return lastTitle
-  const steps = interaction?.steps || []
-  const last = steps[steps.length - 1]
+  const last = (interaction?.steps || []).slice(-1)[0]
   if (last?.type === 'function_call') {
-    const thought = extractThoughtText(parseStepArguments(last.arguments ?? last.args).thought)
-    return thought || `Running tool: ${last.name || 'sandbox command'}...`
+    return (
+      extractThoughtText(parseStepArguments(last.arguments ?? last.args).thought) ||
+      `Running tool: ${last.name || 'sandbox command'}...`
+    )
   }
   return 'Thinking...'
 }
