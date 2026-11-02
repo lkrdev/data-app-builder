@@ -1,14 +1,16 @@
 import React from 'react'
+
+import { ExtensionProvider } from '@looker/extension-sdk-react'
 import { MemoryRouter } from 'react-router-dom'
 import { SWRConfig } from 'swr'
-import { ExtensionProvider } from '@looker/extension-sdk-react'
+
+import type { AntigravityActivityStep } from '../antigravity'
 import {
   LookerExtensionProvider,
   MockLookerExtensionProvider,
 } from '../contexts/LookerExtensionContext'
-import { useStudioController } from '../useStudioController'
 import { parseStudioRoute, STUDIO_MODES, type StudioMode } from '../lookerApi'
-import type { AntigravityActivityStep } from '../antigravity'
+import { useStudioController } from '../useStudioController'
 import { PythonTile } from './PythonTile'
 import { ConfigSetupView, StudioTopbar } from './StudioHeader'
 import {
@@ -66,7 +68,7 @@ const StudioMain: React.FC = () => {
 
 export const App = () => {
   const mockCtx =
-    typeof window !== 'undefined' ? (window as any).__MOCK_LOOKER_EXTENSION__ : undefined
+    typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
   return (
     <SWRConfig value={{ revalidateOnFocus: false, dedupingInterval: 15000 }}>
       {mockCtx ? (

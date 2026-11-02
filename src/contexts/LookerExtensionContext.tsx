@@ -1,6 +1,7 @@
 // LOOKER SDK: All Looker SDK initialization happens here
 
 import React, { createContext, useContext, ReactNode } from 'react';
+
 import { ExtensionContext, ExtensionContextData } from '@looker/extension-sdk-react';
 import type { Looker40SDK } from '@looker/sdk';
 
@@ -12,18 +13,56 @@ export interface LookerExtensionContextState {
   lookerHostData?: ExtensionContextData['lookerHostData'];
 }
 
+export interface MockLookerExtensionContextValue extends LookerExtensionContextState {
+  initialRoute?: string;
+  initialSelectedFolderId?: string;
+  forceFolderSkeleton?: boolean;
+  initialComboOpen?: boolean;
+  initialFolderPopoverOpen?: boolean;
+  initialFolderSearchModalOpen?: boolean;
+  initialExploreScrollTop?: number;
+  initialTddViewMode?: 'rendered' | 'raw';
+  getMockPreviewHtml?: (mode: string, objectId: string) => string | undefined;
+  initialThemeMode?: 'light' | 'dark' | 'system';
+  initialOauthToken?: string;
+  initialApiKey?: string;
+  initialShowArchived?: boolean;
+  initialPendingDeleteConv?: unknown;
+  initialDeleteRelatedContent?: boolean;
+  initialSidebarCollapsed?: boolean;
+  openSchedulerModal?: boolean;
+  initialInfoModalUseCase?: string;
+  initialMessages?: unknown[];
+  initialError?: string;
+  initialPrompt?: string;
+  initialPastedImages?: string[];
+  initialBusyStatus?: string | null;
+  initialLiveActivitySteps?: unknown[];
+  initialPendingPerm?: { operation: string; httpMethod: string; path: string };
+  oauthFocusReturnDelayMs?: number;
+  setTileHostData?: React.Dispatch<React.SetStateAction<ExtensionContextData['tileHostData']>>;
+}
+
+declare global {
+  interface Window {
+    __MOCK_LOOKER_EXTENSION__?: MockLookerExtensionContextValue;
+    __LOOKER_EMBED_STATE__?: unknown;
+    __DAB_STUDIO__?: unknown;
+  }
+}
+
 export const LookerExtensionContext = createContext<LookerExtensionContextState | undefined>(undefined);
 
 export const MockLookerExtensionProvider: React.FC<{
-  value: LookerExtensionContextState;
+  value: MockLookerExtensionContextValue;
   children: ReactNode;
 }> = ({ value, children }) => {
   const [tileHostData, setTileHostData] = React.useState(value.tileHostData);
   React.useEffect(() => {
     setTileHostData(value.tileHostData);
   }, [value.tileHostData]);
-  if (typeof window !== 'undefined' && (window as any).__MOCK_LOOKER_EXTENSION__ === value) {
-    (value as any).setTileHostData = setTileHostData;
+  if (typeof window !== 'undefined' && window.__MOCK_LOOKER_EXTENSION__ === value) {
+    value.setTileHostData = setTileHostData;
   }
   return (
     <LookerExtensionContext.Provider value={{ ...value, tileHostData }}>
@@ -35,7 +74,7 @@ export const MockLookerExtensionProvider: React.FC<{
 export const LookerExtensionProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const extensionContext = useContext(ExtensionContext) as ExtensionContextData;
   const mockOverride =
-    typeof window !== 'undefined' ? (window as any).__MOCK_LOOKER_EXTENSION__ : undefined;
+    typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined;
   if (mockOverride) {
     return (
       <LookerExtensionContext.Provider value={mockOverride}>

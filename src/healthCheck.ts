@@ -1,3 +1,4 @@
+import type { ExtensionSDK } from '@looker/extension-sdk';
 import type { Looker40SDK } from '@looker/sdk';
 
 import { LkrCodeMode } from './antigravity';
@@ -28,6 +29,14 @@ export interface HealthCheckIndexEntry {
   environmentId?: string;
 }
 
+export interface HealthCheckTelemetry {
+  user?: { id?: string; display_name?: string; email?: string };
+  pillar1?: Record<string, unknown>;
+  pillar2?: Record<string, unknown>;
+  pillar3?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 export interface HealthCheckReportPayload {
   id: string;
   type: 'health_check';
@@ -36,7 +45,7 @@ export interface HealthCheckReportPayload {
   connectionName: string;
   scores: PillarBreakdown;
   tddMarkdown: string;
-  telemetry: Record<string, any>;
+  telemetry: HealthCheckTelemetry;
   messages?: PersistedChatTurn[];
   lastInteractionId?: string;
   environmentId?: string;
@@ -215,21 +224,21 @@ export const HEALTH_CHECK_SYSTEM_GUIDE = [
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 
-function parseJsonRows(raw: any): Array<Record<string, any>> {
-  if (Array.isArray(raw)) return raw;
+function parseJsonRows(raw: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(raw)) return raw as Array<Record<string, unknown>>;
   if (typeof raw !== 'string') return [];
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? (parsed as Array<Record<string, unknown>>) : [];
   } catch {
     return [];
   }
 }
 
-export function computeHealthCheckScores(telemetry: Record<string, any>): PillarBreakdown {
-  const p1 = telemetry?.pillar1 || {};
-  const p2 = telemetry?.pillar2 || {};
-  const p3 = telemetry?.pillar3 || {};
+export function computeHealthCheckScores(telemetry: HealthCheckTelemetry): PillarBreakdown {
+  const p1: Record<string, unknown> = telemetry?.pillar1 || {};
+  const p2: Record<string, unknown> = telemetry?.pillar2 || {};
+  const p3: Record<string, unknown> = telemetry?.pillar3 || {};
 
   const qm = parseJsonRows(p1.query_metrics)[0] || {};
   const asyncAvg = Number(qm['query_metrics.async_processing_average'] || 0.1);
@@ -328,13 +337,13 @@ export function computeHealthCheckScores(telemetry: Record<string, any>): Pillar
 }
 
 export function synthesizeHealthCheckTdd(
-  telemetry: Record<string, any>,
+  telemetry: HealthCheckTelemetry,
   customFocus?: string
 ): { title: string; scores: PillarBreakdown; markdown: string } {
   const scores = computeHealthCheckScores(telemetry);
-  const p1 = telemetry?.pillar1 || {};
-  const p2 = telemetry?.pillar2 || {};
-  const p3 = telemetry?.pillar3 || {};
+  const p1: Record<string, unknown> = telemetry?.pillar1 || {};
+  const p2: Record<string, unknown> = telemetry?.pillar2 || {};
+  const p3: Record<string, unknown> = telemetry?.pillar3 || {};
 
   const projectId = String(p2.project_id || 'thelook_event');
   const connName = String(p3.connection_name || 'default_bigquery_connection');
@@ -606,7 +615,7 @@ export function synthesizeHealthCheckTdd(
 
 export async function saveHealthCheckArtifact(
   sdk: Looker40SDK,
-  extensionSDK: any,
+  extensionSDK: Partial<ExtensionSDK> | undefined,
   userId: string,
   report: HealthCheckReportPayload
 ): Promise<{ userKey: string; objKey: string; namespace: string }> {
@@ -635,7 +644,7 @@ export async function saveHealthCheckArtifact(
 
 export async function loadHealthCheckArtifact(
   sdk: Looker40SDK,
-  extensionSDK: any,
+  extensionSDK: Partial<ExtensionSDK> | undefined,
   id: string
 ): Promise<HealthCheckReportPayload> {
   const namespace = getArtifactNamespace(extensionSDK);
@@ -652,7 +661,7 @@ export async function loadHealthCheckArtifact(
 
 export async function runThreePillarHealthCheckViaCodeMode(params: {
   sdk: Looker40SDK;
-  extensionSDK?: any;
+  extensionSDK?: Partial<ExtensionSDK>;
   reportId?: string;
   targetProject?: string;
   healthScope?: 'all' | 'looker' | 'bq';

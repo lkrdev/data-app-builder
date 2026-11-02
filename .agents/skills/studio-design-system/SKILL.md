@@ -92,6 +92,11 @@ Right-pane preview toolbar with a responsive wrapping title/badge group (`.dab-d
 Non-interactive wrapper for live UI components embedded inside documentation Markdown (`renderUseCaseGuideMarkdown`).
 - **Props**: `component?: string`, `testId?: string` (defaults to `'doc-ui-preview'`), `children: React.ReactNode`.
 
+### Library-First TypeScript Typing & Zero-`any` Rule
+All Studio UI components and hooks enforce `"@typescript-eslint/no-explicit-any": "error"` (`npm run lint:check`):
+- Import canonical types from `@looker/sdk` (`Looker40SDK`, `IDashboard`, `IFolder`, `ILookmlModel`, `IRole`, `IUser`), `@looker/extension-sdk` (`ExtensionSDK`, `LookerHostData`, `TileHostData`, `FetchCustomParameters`), `@looker/extension-sdk-react` (`ExtensionContextData`), `@looker/embed-sdk` (`ILookerConnection`), `swr`, `react`, and `react-router-dom` before defining custom interfaces.
+- Keep `<StudioSelect<T extends string = string>>` generic and type event handlers/mocks with `Partial<...>` or `Record<string, unknown>` rather than `any`.
+
 ---
 
 ## 4. Visual Regression Testing Protocol (`src/__tests__/miniApps.visual.test.js`)

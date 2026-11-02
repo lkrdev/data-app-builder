@@ -8,10 +8,12 @@
     "build": "NODE_ENV=production webpack --mode production --config webpack.prod.js",
     "dev": "NODE_ENV=development webpack serve --mode development --port 8080 --config webpack.develop.js",
     "lint": "eslint src --ext js,jsx,ts,tsx --fix",
+    "lint:check": "eslint src --ext js,jsx,ts,tsx --max-warnings=0",
+    "prepare": "git config core.hooksPath .githooks || true",
     "format": "prettier --write src",
     "sync-upstream": "bash scripts/sync-upstream.sh",
     "sync-codemode": "bash scripts/sync-codemode.sh",
-    "test": "jest && node scripts/test-bundle.mjs"
+    "test": "npm run lint:check && jest && node scripts/test-bundle.mjs"
   },
   "jest": {
     "testEnvironment": "node",

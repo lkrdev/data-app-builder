@@ -1,4 +1,5 @@
 import React from 'react'
+
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import type { StudioController } from '../useStudioController'
 import { StudioBadge, StudioModal, StudioSelect, StudioToolbar } from './StudioDesignSystem'
@@ -49,7 +50,7 @@ export const ScriptOutputRenderer: React.FC<{ output: string }> = ({ output }) =
             </tr>
           </thead>
           <tbody>
-            {parsed.map((row: Record<string, any>, rIdx: number) => (
+            {parsed.map((row: Record<string, unknown>, rIdx: number) => (
               <tr key={rIdx}>
                 {columns.map((col) => {
                   const v = row?.[col]
@@ -408,7 +409,7 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               onChange={(val) =>
                 setScheduleConfig((prev) => ({
                   ...prev,
-                  destination: val as any,
+                  destination: val,
                 }))
               }
               options={[

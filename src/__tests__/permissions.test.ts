@@ -1,5 +1,68 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+
+import type React from 'react'
+
+import type { FetchCustomParameters } from '@looker/extension-sdk'
+import type { Looker40SDK } from '@looker/sdk'
+
+import {
+  AGENTS_MD,
+  AntigravityActivityStep,
+  ANTIGRAVITY_ALLOWED_MODELS,
+  authenticateGoogleOAuth,
+  BOOTSTRAP_LOOKML_PY,
+  BOOTSTRAP_SANDBOX_SH,
+  buildWorkspaceSources,
+  BUNDLE_APP_PY,
+  CodeModePermissionRequest,
+  computeIsAuthenticated,
+  computeLkrExtensionCacheKey,
+  CONCURRENT_POLL_SCHEDULE_MS,
+  CONVERSATION_LABEL_REQUEST_TAG,
+  DASHBOARD_CODEMODE_PREAMBLE_PY,
+  DEFAULT_ANTIGRAVITY_MODEL,
+  executeLkrExtensionToolRequest,
+  extractInteractionActivitySteps,
+  extractLkrExtensionToolRequests,
+  generateConversationLabel,
+  getSharedEnvExploreSchemas,
+  isEnvironmentNotFoundError,
+  LKR_DEV_CLI_SPEC,
+  LKR_DEV_CLI_VERSION,
+  listAvailableAntigravityModels,
+  LKR_CLI_BRIDGE_TOOL,
+  LKR_CLI_SITECUSTOMIZE_PY,
+  LkrCodeMode,
+  loginWithGoogleOAuth,
+  prewarmOrWakeAntigravityEnvironment,
+  recordSharedEnvExploreSchema,
+  resolveAdaptivePollScheduleMs,
+  resolveLookerOAuthRedirectUri,
+  runAntigravityTurn,
+  sanitizeConversationLabel,
+} from '../antigravity'
+import {
+  StudioBadge,
+  StudioButton,
+  StudioCard,
+  StudioDocPreview,
+  StudioModal,
+  StudioSelect,
+  StudioSkeleton,
+  StudioToolbar,
+} from '../components/StudioDesignSystem'
+import {
+  createLookerEmbedPreloadController,
+  DOC_UI_COMPONENTS,
+  getStarterPromptsForUseCase,
+  normalizeLookerEmbedUrl,
+  renderUseCaseGuideMarkdown,
+  resolveLookerEmbedTarget,
+  STARTER_PROMPTS_BY_USE_CASE,
+  USE_CASE_GUIDE_ORDER,
+  USE_CASE_GUIDES,
+} from '../components/StudioWorkspace'
 import {
   archiveUserConversation,
   ARTIFACT_NAMESPACE,
@@ -11,7 +74,6 @@ import {
   classifyStudioUseCase,
   clearArtifactServiceCache,
   clearLookerMetadataCache,
-  coalesceLookerMetadataRequest,
   ConversationRecord,
   createDeduplicatedLookerSdkProxy,
   createLookerCaConversation,
@@ -48,62 +110,17 @@ import {
   STUDIO_MODES,
   STUDIO_THEME_STORAGE_KEY,
   STUDIO_USE_CASE_OPTIONS,
+  UserArtifactIndexItem,
 } from '../lookerApi'
-import {
-  AGENTS_MD,
-  ANTIGRAVITY_ALLOWED_MODELS,
-  authenticateGoogleOAuth,
-  BOOTSTRAP_LOOKML_PY,
-  BOOTSTRAP_SANDBOX_SH,
-  buildWorkspaceSources,
-  BUNDLE_APP_PY,
-  computeIsAuthenticated,
-  computeLkrExtensionCacheKey,
-  CONCURRENT_POLL_SCHEDULE_MS,
-  CONVERSATION_LABEL_REQUEST_TAG,
-  DASHBOARD_CODEMODE_PREAMBLE_PY,
-  DEFAULT_ANTIGRAVITY_MODEL,
-  executeLkrExtensionToolRequest,
-  extractInteractionActivitySteps,
-  extractLkrExtensionToolRequests,
-  generateConversationLabel,
-  getSharedEnvExploreSchemas,
-  isEnvironmentNotFoundError,
-  LKR_DEV_CLI_SPEC,
-  LKR_DEV_CLI_VERSION,
-  listAvailableAntigravityModels,
-  LKR_CLI_BRIDGE_TOOL,
-  LKR_CLI_SITECUSTOMIZE_PY,
-  LkrCodeMode,
-  loginWithGoogleOAuth,
-  prewarmOrWakeAntigravityEnvironment,
-  recordSharedEnvExploreSchema,
-  resolveAdaptivePollScheduleMs,
-  resolveLookerOAuthRedirectUri,
-  runAntigravityTurn,
-  sanitizeConversationLabel,
-} from '../antigravity'
-import {
-  createLookerEmbedPreloadController,
-  DOC_UI_COMPONENTS,
-  getStarterPromptsForUseCase,
-  normalizeLookerEmbedUrl,
-  renderUseCaseGuideMarkdown,
-  resolveLookerEmbedTarget,
-  STARTER_PROMPTS_BY_USE_CASE,
-  USE_CASE_GUIDE_ORDER,
-  USE_CASE_GUIDES,
-} from '../components/StudioWorkspace'
-import {
-  StudioBadge,
-  StudioButton,
-  StudioCard,
-  StudioDocPreview,
-  StudioModal,
-  StudioSelect,
-  StudioSkeleton,
-  StudioToolbar,
-} from '../components/StudioDesignSystem'
+
+interface MockInteractionPostBody {
+  environment?: string | { type?: string; sources?: Array<{ target: string; content: string }> }
+  previous_interaction_id?: string
+  tools?: unknown[]
+  agent_config?: { type: string; model: string }
+  input?: Array<{ type?: string; text?: string }>
+}
+const asSdk = (mock: Record<string, unknown>): Looker40SDK => mock as unknown as Looker40SDK
 
 describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics', () => {
   test('1. evaluates Role = PermissionSet x ModelSet per role without cross-role model bleeding', () => {
@@ -187,8 +204,8 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
   })
 
   test('3. falls back gracefully when sdk.user_roles returns 404 for non-see_users user', async () => {
-    const mockSdk: any = {
-      ok: async (p: any) => p,
+    const mockSdk = asSdk({
+      ok: async <T>(p: T) => p,
       me: async () => ({ id: '99', display_name: 'Standard Analyst', personal_folder_id: '50' }),
       user_roles: async () => {
         throw new Error('404 Not found: https://docs.looker.com/r/err/4.0/404/get/users/:user_id/roles')
@@ -207,7 +224,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         { id: '1', name: 'Shared', can: { show: true, edit_content: false } },
         { id: '50', name: 'Personal', is_personal: true, can: { show: true, edit_content: true } },
       ],
-    }
+    })
 
     const meta = await fetchInitialLookerMetadata(mockSdk)
     expect(meta.roles).toBeNull()
@@ -245,7 +262,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(featureDisabledBareDoc.kind).toBe('feature_disabled')
     expect(featureDisabledBareDoc.remediation).toMatch(/inline_extensions/i)
 
-    const mockSdkWith404: any = {
+    const mockSdkWith404 = asSdk({
       authSession: {
         transport: {
           rawRequest: async () => ({
@@ -255,7 +272,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
           }),
         },
       },
-    }
+    })
     await expect(
       rawLookerRequest(mockSdkWith404, 'POST', '/data_app_extension', undefined, {})
     ).rejects.toThrow(/404 feature_disabled.*inline_extensions/i)
@@ -335,10 +352,10 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       ANTIGRAVITY_ALLOWED_MODELS
     )
 
-    const calls: Array<{ url: string; method: string; body?: any }> = []
+    const calls: Array<{ url: string; method?: string; body?: MockInteractionPostBody }> = []
     const mockExtensionSDK = {
-      serverProxy: async (url: string, init: any) => {
-        calls.push({ url, method: init.method, body: init.body ? JSON.parse(init.body) : undefined })
+      serverProxy: async (url: string, init?: FetchCustomParameters) => {
+        calls.push({ url, method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined })
         return {
           ok: true,
           status: 200,
@@ -372,7 +389,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(discovered[1].description).toBe('Live 4 Argon')
 
     const turnRes = await runAntigravityTurn({
-      sdk: {} as any,
+      sdk: asSdk({}),
       extensionSDK: mockExtensionSDK,
       auth: { mode: 'apikey' },
       session: { toolType: 'app' },
@@ -388,7 +405,9 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       type: 'antigravity',
       model: 'gemini-4-argon',
     })
-    expect(postCall?.body?.environment?.sources).toEqual(
+    expect(
+      typeof postCall?.body?.environment === 'object' ? postCall.body.environment.sources : []
+    ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ target: '/workspace/AGENTS.md', content: AGENTS_MD }),
       ])
@@ -416,11 +435,11 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       sanitizeConversationLabel('', 'Build an executive revenue dashboard on order_items')
     ).toBe('Build an executive revenue dashboard on')
 
-    const apiCalls: Array<{ url: string; method: string; body?: any }> = []
+    const apiCalls: Array<{ url: string; method: string; body?: MockInteractionPostBody }> = []
     let pollCounter = 0
     const mockExtSDK = {
-      serverProxy: async (url: string, init: any) => {
-        const parsedBody = init?.body ? JSON.parse(init.body) : undefined
+      serverProxy: async (url: string, init?: FetchCustomParameters) => {
+        const parsedBody = init?.body ? JSON.parse(String(init.body)) : undefined
         apiCalls.push({ url, method: init?.method || 'GET', body: parsedBody })
         if (init?.method === 'POST') {
           return {
@@ -465,9 +484,9 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(postReq?.body?.environment).toBe('env_shared_1')
     expect(postReq?.body?.input?.[0]?.text).toContain(CONVERSATION_LABEL_REQUEST_TAG)
 
-    const store = new Map<string, any>()
-    const mockArtifactSdk: any = {
-      ok: async (p: any) => p,
+    const store = new Map<string, unknown>()
+    const mockArtifactSdk = asSdk({
+      ok: async <T>(p: T) => p,
       artifact: async ({ key }: { key: string }) => {
         const val = store.get(key)
         return val ? [{ key, version: 1, value: JSON.stringify(val) }] : []
@@ -478,7 +497,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         }
         return []
       },
-    }
+    })
 
     expect(formatUserConversationsKey('42')).toBe('user_conversations:42')
     await saveUserConversation(mockArtifactSdk, '42', {
@@ -506,13 +525,16 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
   test('8. persists, sorts, upserts, and deletes user_conversations:${me.id} in Looker Artifacts', async () => {
     expect(formatUserConversationsArtifactKey('1')).toBe('user_conversations:1')
     const store = new Map<string, { key: string; version: number; value: string }>()
-    const mockSdk: any = {
-      ok: async (p: any) => p,
+    const mockSdk = asSdk({
+      ok: async <T>(p: T) => p,
       artifact: async ({ key }: { key: string }) => {
         const hit = store.get(key)
         return hit ? [hit] : []
       },
-      update_artifacts: async (_ns: string, updates: any[]) => {
+      update_artifacts: async (
+        _ns: string,
+        updates: Array<{ key: string; value: string; version?: number }>
+      ) => {
         for (const u of updates) {
           store.set(u.key, {
             key: u.key,
@@ -522,7 +544,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         }
         return updates
       },
-    }
+    })
 
     expect(await loadUserConversations(mockSdk, '1')).toEqual([])
 
@@ -610,10 +632,10 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(allowedForExplorer).not.toContain('lookml')
     expect(allowedForExplorer).not.toContain('health-check')
 
-    const capturedCalls: any[] = []
+    const capturedCalls: Array<{ url: string; body?: MockInteractionPostBody }> = []
     const mockExt = {
-      serverProxy: async (url: string, init: any) => {
-        const body = init?.body ? JSON.parse(init.body) : undefined
+      serverProxy: async (url: string, init?: FetchCustomParameters) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : undefined
         capturedCalls.push({ url, body })
         return {
           ok: true,
@@ -628,7 +650,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       },
     }
     const turnRes = await runAntigravityTurn({
-      sdk: {} as any,
+      sdk: asSdk({}),
       extensionSDK: mockExt,
       auth: { mode: 'apikey' },
       session: {},
@@ -641,10 +663,11 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     })
     expect(turnRes.resolvedUseCase).toBe('dashboard')
     expect(turnRes.assistantText).toBe('Built native Looker UDD.')
-    const sentSources = capturedCalls[0]?.body?.environment?.sources || []
+    const env0 = capturedCalls[0]?.body?.environment
+    const sentSources = typeof env0 === 'object' ? env0.sources || [] : []
     expect(
       sentSources.some(
-        (s: any) =>
+        (s) =>
           s.target === '/workspace/AGENTS.md' &&
           String(s.content).includes('## Use Case Auto-Classification (Turn 1 Routing)')
       )
@@ -656,8 +679,8 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(formatUserEnvArtifactKey('42')).toBe('user_env:42')
 
     const artifactStore = new Map<string, { key: string; version: number; value: string }>()
-    const mockSdk: any = {
-      ok: async (p: any) => p,
+    const mockSdk = asSdk({
+      ok: async <T>(p: T) => p,
       me: async () => ({ id: '1' }),
       artifact: async ({ key }: { namespace: string; key: string }) => {
         const hit = artifactStore.get(key)
@@ -674,16 +697,16 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         }
         return items
       },
-    }
+    })
 
     expect(await loadUserEnvironmentId(mockSdk, '1')).toBeNull()
 
-    const apiCalls: Array<{ url: string; method: string; body?: any }> = []
+    const apiCalls: Array<{ url: string; method?: string; body?: MockInteractionPostBody }> = []
     let turnCounter = 0
     const mockExtensionSDK = {
-      serverProxy: async (url: string, init: any) => {
-        const body = init.body ? JSON.parse(init.body) : undefined
-        apiCalls.push({ url, method: init.method, body })
+      serverProxy: async (url: string, init?: FetchCustomParameters) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : undefined
+        apiCalls.push({ url, method: init?.method, body })
         turnCounter += 1
         return {
           ok: true,
@@ -715,7 +738,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(turnA1.session.environmentId).toBe('env_user_1_shared')
     expect(turnA1.session.lastInteractionId).toBe('int_turn_1')
     expect(await loadUserEnvironmentId(mockSdk, '1')).toBe('env_user_1_shared')
-    expect(apiCalls[0].body.environment).toEqual(
+    expect(apiCalls[0].body?.environment).toEqual(
       expect.objectContaining({
         type: 'remote',
         sources: expect.arrayContaining([
@@ -724,9 +747,9 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         ]),
       })
     )
-    expect(apiCalls[0].body.previous_interaction_id).toBeUndefined()
-    expect(apiCalls[0].body.input[0].text).toContain('/workspace/apps/conv_alpha/app.js')
-    expect(apiCalls[0].body.input[0].text).toContain('--app-dir /workspace/apps/conv_alpha')
+    expect(apiCalls[0].body?.previous_interaction_id).toBeUndefined()
+    expect(apiCalls[0].body?.input?.[0]?.text).toContain('/workspace/apps/conv_alpha/app.js')
+    expect(apiCalls[0].body?.input?.[0]?.text).toContain('--app-dir /workspace/apps/conv_alpha')
 
     // Conversation B — Turn 1: reuses shared environment_id string WITHOUT sources and WITHOUT Conversation A's previous_interaction_id
     const sharedEnvFromLooker = (await loadUserEnvironmentId(mockSdk, '1')) || undefined
@@ -746,11 +769,11 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
 
     expect(turnB1.session.environmentId).toBe('env_user_1_shared')
     expect(turnB1.session.lastInteractionId).toBe('int_turn_2')
-    expect(apiCalls[1].body.environment).toBe('env_user_1_shared')
-    expect(apiCalls[1].body.previous_interaction_id).toBeUndefined()
-    expect(apiCalls[1].body.input[0].text).toContain('/workspace/apps/conv_beta/app.js')
-    expect(apiCalls[1].body.input[0].text).toContain('--app-dir /workspace/apps/conv_beta')
-    expect(apiCalls[1].body.input[0].text).not.toContain('conv_alpha')
+    expect(apiCalls[1].body?.environment).toBe('env_user_1_shared')
+    expect(apiCalls[1].body?.previous_interaction_id).toBeUndefined()
+    expect(apiCalls[1].body?.input?.[0]?.text).toContain('/workspace/apps/conv_beta/app.js')
+    expect(apiCalls[1].body?.input?.[0]?.text).toContain('--app-dir /workspace/apps/conv_beta')
+    expect(apiCalls[1].body?.input?.[0]?.text).not.toContain('conv_alpha')
 
     // Conversation A — Turn 2: continues Conversation A's previous_interaction_id on the shared environment
     const turnA2 = await runAntigravityTurn({
@@ -768,9 +791,9 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     })
 
     expect(turnA2.session.lastInteractionId).toBe('int_turn_3')
-    expect(apiCalls[2].body.environment).toBe('env_user_1_shared')
-    expect(apiCalls[2].body.previous_interaction_id).toBe('int_turn_1')
-    expect(apiCalls[2].body.input[0].text).toContain('/workspace/apps/conv_alpha/app.js')
+    expect(apiCalls[2].body?.environment).toBe('env_user_1_shared')
+    expect(apiCalls[2].body?.previous_interaction_id).toBe('int_turn_1')
+    expect(apiCalls[2].body?.input?.[0]?.text).toContain('/workspace/apps/conv_alpha/app.js')
 
     // Conversation B — Turn 2: continues Conversation B's previous_interaction_id on the shared environment
     const turnB2 = await runAntigravityTurn({
@@ -788,9 +811,9 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     })
 
     expect(turnB2.session.lastInteractionId).toBe('int_turn_4')
-    expect(apiCalls[3].body.environment).toBe('env_user_1_shared')
-    expect(apiCalls[3].body.previous_interaction_id).toBe('int_turn_2')
-    expect(apiCalls[3].body.input[0].text).toContain('/workspace/apps/conv_beta/app.js')
+    expect(apiCalls[3].body?.environment).toBe('env_user_1_shared')
+    expect(apiCalls[3].body?.previous_interaction_id).toBe('int_turn_2')
+    expect(apiCalls[3].body?.input?.[0]?.text).toContain('/workspace/apps/conv_beta/app.js')
   })
 
   test('11. auto-recovers on 404 (Environment not found) in runAntigravityTurn and prewarmOrWakeAntigravityEnvironment by creating { type: "remote", sources } and updating user_env:${me.id}', async () => {
@@ -799,8 +822,8 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(isEnvironmentNotFoundError(new Error('Antigravity API error (500): Internal error'))).toBe(false)
 
     const artifactStore = new Map<string, { key: string; version: number; value: string }>()
-    const mockSdk: any = {
-      ok: async (p: any) => p,
+    const mockSdk = asSdk({
+      ok: async <T>(p: T) => p,
       me: async () => ({ id: '1' }),
       artifact: async ({ key }: { namespace: string; key: string }) => {
         const hit = artifactStore.get(key)
@@ -817,15 +840,15 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         }
         return items
       },
-    }
+    })
 
     await saveUserEnvironmentId(mockSdk, '1', 'env_stale_404')
     expect(await loadUserEnvironmentId(mockSdk, '1')).toBe('env_stale_404')
 
-    const postedPayloads: any[] = []
+    const postedPayloads: MockInteractionPostBody[] = []
     const mockExtensionSDK = {
-      serverProxy: async (_url: string, init: any) => {
-        const body = init.body ? JSON.parse(init.body) : undefined
+      serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+        const body = init?.body ? (JSON.parse(String(init.body)) as MockInteractionPostBody) : {}
         postedPayloads.push(body)
         if (typeof body?.environment === 'string' && body.environment.includes('stale')) {
           return {
@@ -926,8 +949,8 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     ).toBe('app')
 
     const artifactStore = new Map<string, { key: string; version: number; value: string }>()
-    const mockSdk: any = {
-      ok: async (p: any) => p,
+    const mockSdk = asSdk({
+      ok: async <T>(p: T) => p,
       me: async () => ({ id: '1' }),
       search_agents: async () => [
         {
@@ -943,7 +966,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
           explores: ['bigquery_information_schema::jobs_timeline'],
         },
       ],
-      create_conversation: async (body: any) => ({
+      create_conversation: async (body: { agent_id?: string; title?: string }) => ({
         id: 'ca_conv_9001',
         agent_id: body.agent_id,
         title: body.title,
@@ -967,17 +990,17 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         }
         return items
       },
-    }
+    })
 
     const catalog = await fetchLookerCaAgentsCatalog(mockSdk, [])
     expect(catalog).toHaveLength(2)
     expect(catalog[0].id).toBe('ca_agent_ecommerce')
     expect(catalog[1].id).toBe('ca_agent_bq_ops')
 
-    const capturedPayloads: any[] = []
+    const capturedPayloads: MockInteractionPostBody[] = []
     const mockExtensionSDK = {
-      serverProxy: async (_url: string, init: any) => {
-        const body = init.body ? JSON.parse(init.body) : undefined
+      serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+        const body = init?.body ? (JSON.parse(String(init.body)) as MockInteractionPostBody) : {}
         capturedPayloads.push(body)
         return {
           ok: true,
@@ -1006,7 +1029,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(capturedPayloads[0].previous_interaction_id).toBeUndefined()
     expect(capturedPayloads[0].tools).toEqual([])
     expect(capturedPayloads[0].environment).toBe('env_shared_1')
-    expect(capturedPayloads[0].input[0].text).toContain(CA_AGENT_SELECTION_REQUEST_TAG)
+    expect(capturedPayloads[0].input?.[0]?.text).toContain(CA_AGENT_SELECTION_REQUEST_TAG)
 
     expect(selection.agentId).toBe('ca_agent_bq_ops')
     expect(selection.agentName).toBe('BigQuery Cost & Jobs Agent')
@@ -1078,10 +1101,10 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(workflowYml).toContain('src/lookmlTool.tsx')
     expect(workflowYml).toContain('chore/update-skills')
 
-    const postedBodies: any[] = []
+    const postedBodies: MockInteractionPostBody[] = []
     const mockExtensionSDK = {
-      serverProxy: async (_url: string, init: any) => {
-        const body = init.body ? JSON.parse(init.body) : undefined
+      serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+        const body = init?.body ? (JSON.parse(String(init.body)) as MockInteractionPostBody) : {}
         postedBodies.push(body)
         return {
           ok: true,
@@ -1105,12 +1128,14 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(res.status).toBe('prelaunched')
     expect(res.session.environmentId).toBe('env_fresh_bootstrap_1')
     expect(postedBodies).toHaveLength(1)
-    expect(postedBodies[0].input[0].text).toContain('python3 /workspace/bootstrap_lookml.py cli')
-    expect(postedBodies[0].input[0].text).toContain('pip install --break-system-packages --quiet uv')
-    expect(postedBodies[0].input[0].text).toContain(
+    expect(postedBodies[0].input?.[0]?.text).toContain('python3 /workspace/bootstrap_lookml.py cli')
+    expect(postedBodies[0].input?.[0]?.text).toContain('pip install --break-system-packages --quiet uv')
+    expect(postedBodies[0].input?.[0]?.text).toContain(
       'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.61"'
     )
-    expect(postedBodies[0].environment.sources).toEqual(
+    expect(
+      typeof postedBodies[0].environment === 'object' ? postedBodies[0].environment.sources : []
+    ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           target: '/workspace/bootstrap_lookml.py',
@@ -1212,12 +1237,22 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     })
 
     // 3. Verify executeLkrExtensionToolRequest for both codemode and sdk_request
-    const rawTransportCalls: Array<{ method: string; path: string; queryParams?: any; body?: any }> = []
-    const mockSdk: any = {
-      ok: async (p: any) => p,
+    const rawTransportCalls: Array<{
+      method: string
+      path: string
+      queryParams?: unknown
+      body?: unknown
+    }> = []
+    const mockSdk = asSdk({
+      ok: async <T>(p: T) => p,
       authSession: {
         transport: {
-          rawRequest: async (method: string, reqPath: string, queryParams?: any, body?: any) => {
+          rawRequest: async (
+            method: string,
+            reqPath: string,
+            queryParams?: unknown,
+            body?: unknown
+          ) => {
             rawTransportCalls.push({ method, path: reqPath, queryParams, body })
             if (reqPath === '/session') {
               return { ok: true, statusCode: 200, body: JSON.stringify({ workspace_id: 'dev' }) }
@@ -1230,7 +1265,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
           },
         },
       },
-    }
+    })
 
     const spyCodeMode = jest
       .spyOn(LkrCodeMode, 'runPythonCode')
@@ -1274,11 +1309,11 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       JSON.stringify({ run_id: '20261101_1', branch_name: '20261101_1', model_name: 'thelook' })
     )
 
-    const interactionPostBodies: any[] = []
+    const interactionPostBodies: MockInteractionPostBody[] = []
     let interactionPostCount = 0
     const mockExtSDK = {
-      serverProxy: async (_url: string, init: any) => {
-        const body = init?.body ? JSON.parse(init.body) : undefined
+      serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+        const body = init?.body ? (JSON.parse(String(init.body)) as MockInteractionPostBody) : {}
         if (init?.method === 'POST') {
           interactionPostCount += 1
           interactionPostBodies.push(body)
@@ -1344,10 +1379,10 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(interactionPostBodies).toHaveLength(2)
     expect(interactionPostBodies[1].previous_interaction_id).toBe('int_bridge_round_1')
     expect(interactionPostBodies[1].environment).toBe('env_lookml_shared')
-    expect(interactionPostBodies[1].input[0].text).toContain(
+    expect(interactionPostBodies[1].input?.[0]?.text).toContain(
       `/workspace/.lkr_extension_cache/${codemodeKey}.json`
     )
-    expect(interactionPostBodies[1].input[0].text).toContain('"branch_name":"20261101_1"')
+    expect(interactionPostBodies[1].input?.[0]?.text).toContain('"branch_name":"20261101_1"')
     expect(turnResult.lookmlBundle?.project_id).toBe('thelook')
     expect(turnResult.lookmlBundle?.branch_name).toBe('20261101_1')
     expect(turnResult.session.lastInteractionId).toBe('int_bridge_round_2')
@@ -1364,17 +1399,19 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       statusCode: 200,
       body: JSON.stringify({ method, path: reqPath }),
     })
-    const mockSdk: any = {
-      ok: async (p: any) => p,
-      authSession: { transport: { rawRequest: originalRawRequest } },
-    }
-    const spyCodeMode = jest.spyOn(LkrCodeMode, 'runPythonCode').mockImplementation(async (opts: any) => {
+    const transport = { rawRequest: originalRawRequest }
+    const mockSdk = asSdk({
+      ok: async <T>(p: T) => p,
+      authSession: { transport },
+    })
+    const spyCodeMode = jest.spyOn(LkrCodeMode, 'runPythonCode').mockImplementation(async (opts) => {
       const count = String(opts.code || '').includes('stream_b') ? 3 : 1
-      for (let i = 0; i < count; i += 1) await opts.sdk.authSession.transport.rawRequest('GET', `/api/4.0/test_${i}`)
+      const sdkTransport = (opts.sdk as unknown as { authSession: { transport: typeof transport } }).authSession.transport
+      for (let i = 0; i < count; i += 1) await sdkTransport.rawRequest('GET', `/api/4.0/test_${i}`)
       return JSON.stringify({ NATIVE_CONTENT_BUNDLE: { id: '101', content_type: 'dashboard', title: 'Executive Commerce Pulse' } })
     })
 
-    const postedBodies: any[] = []
+    const postedBodies: MockInteractionPostBody[] = []
     const appStep = (title: string) => [
       { type: 'code_execution', output: `<DATA_APP_BUNDLE>${JSON.stringify({ title, source_code: 'export class App {}', prod_code: 'export class App {}', widgets: [] })}</DATA_APP_BUNDLE>` },
     ]
@@ -1382,8 +1419,8 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       { type: 'function_call', id, name: 'run_looker_codemode', arguments: { code } },
     ]
     const mockExtSDK = {
-      serverProxy: async (_url: string, init: any) => {
-        const body = init?.body ? JSON.parse(init.body) : undefined
+      serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+        const body = init?.body ? (JSON.parse(String(init.body)) as MockInteractionPostBody) : {}
         if (init?.method !== 'POST') return { ok: true, status: 200, body: '{}' }
         postedBodies.push(body)
         const text = String(body?.input?.[0]?.text || '')
@@ -1437,7 +1474,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       })(),
     ])
 
-    expect(mockSdk.authSession.transport.rawRequest).toBe(originalRawRequest)
+    expect(transport.rawRequest).toBe(originalRawRequest)
     expect(postedBodies.every((b) => b.environment === sharedEnvId)).toBe(true)
     expect(convAResults[0].session.environmentId).toBe(sharedEnvId)
     expect(convAResults[1].session.lastInteractionId).toBe('int_A2')
@@ -1472,9 +1509,16 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
 
     // 3. Concurrent Looker metadata GET deduplication
     let lookmlModelExploreCount = 0
-    const rawSdk: any = {
-      ok: async (p: any) => p,
-      lookml_model_explore: async (params: any) => {
+    const rawTransport = {
+      rawRequest: async (_method: string, reqPath: string) => ({
+        ok: true,
+        statusCode: 200,
+        body: JSON.stringify({ path: reqPath }),
+      }),
+    }
+    const rawSdk = asSdk({
+      ok: async <T>(p: T) => p,
+      lookml_model_explore: async (params: { explore_name?: string; lookml_model_name?: string }) => {
         lookmlModelExploreCount += 1
         await new Promise((r) => setTimeout(r, 10))
         return {
@@ -1484,11 +1528,9 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         }
       },
       authSession: {
-        transport: {
-          rawRequest: async (_method: string, reqPath: string) => ({ ok: true, statusCode: 200, body: JSON.stringify({ path: reqPath }) }),
-        },
+        transport: rawTransport,
       },
-    }
+    })
     const [s1, s2] = await Promise.all([
       buildDenseExploreSchema(rawSdk, 'thelook', 'order_items'),
       buildDenseExploreSchema(rawSdk, 'thelook', 'order_items'),
@@ -1498,12 +1540,12 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
 
     let httpHits = 0
     let rawTransportCount = 0
-    rawSdk.authSession.transport.rawRequest = async (_method: string, reqPath: string) => {
+    rawTransport.rawRequest = async (_method: string, reqPath: string) => {
       rawTransportCount += 1
       await new Promise((r) => setTimeout(r, 10))
       return { ok: true, statusCode: 200, body: JSON.stringify({ path: reqPath }) }
     }
-    const proxySdk: any = createDeduplicatedLookerSdkProxy(rawSdk, () => {
+    const proxySdk = createDeduplicatedLookerSdkProxy(rawSdk, () => {
       httpHits += 1
     })
     await Promise.all([
@@ -1517,11 +1559,11 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(httpHits).toBe(2)
 
     // 4. Coalesced cold-start environment provisioning across concurrent turns
-    const postedBodies: any[] = []
+    const postedBodies: MockInteractionPostBody[] = []
     const mockExtSDK = {
-      serverProxy: async (_url: string, init: any) => {
+      serverProxy: async (_url: string, init?: FetchCustomParameters) => {
         if (init?.method !== 'POST') return { ok: true, status: 200, body: '{}' }
-        const body = init?.body ? JSON.parse(init.body) : undefined
+        const body = init?.body ? (JSON.parse(String(init.body)) as MockInteractionPostBody) : {}
         postedBodies.push(body)
         if (typeof body?.environment === 'object') {
           await new Promise((r) => setTimeout(r, 15))
@@ -1577,7 +1619,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     ).toBe('/embed/conversations/ca_1?agent_id=a1')
 
     const attrs: Record<string, string> = {}
-    const fakeIframe: any = {
+    const fakeIframe = {
       className: '',
       title: '',
       src: '',
@@ -1591,12 +1633,12 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         delete attrs[`iframe:${k}`]
       },
     }
-    const fakeContainer: any = {
+    const fakeContainer = {
       setAttribute: (k: string, v: string) => {
         attrs[k] = v
       },
       querySelector: (sel: string) => (sel === 'iframe' ? fakeIframe : null),
-    }
+    } as unknown as HTMLElement
 
     const ctl = createLookerEmbedPreloadController({
       hostUrl: 'https://dev-argolis.looker.com',
@@ -1814,8 +1856,8 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     let deleteArtifactCount = 0
     let simulateVersionConflictOnce = false
 
-    const mockSdk: any = {
-      ok: async (p: any) => p,
+    const mockSdk = asSdk({
+      ok: async <T>(p: T) => p,
       artifact: async ({ key }: { namespace: string; key: string }) => {
         artifactGetCount += 1
         const keys = String(key || '')
@@ -1867,7 +1909,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         }
         return ''
       },
-    }
+    })
 
     const svc = getArtifactService(mockSdk, ARTIFACT_NAMESPACE)
     expect(svc).toBeInstanceOf(ArtifactService)
@@ -1946,7 +1988,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       '42:Revenue App v2',
     ])
     expect(
-      readSwrCache<any[]>(['artifact:user_list', ARTIFACT_NAMESPACE, '7', 'all'])?.map(
+      readSwrCache<UserArtifactIndexItem[]>(['artifact:user_list', ARTIFACT_NAMESPACE, '7', 'all'])?.map(
         (a) => a.title
       )
     ).toEqual(['Revenue App v2'])
@@ -1961,7 +2003,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(searchArtifactsCount).toBe(0)
     expect((await listUserArtifacts(mockSdk, '7')).map((a) => a.id)).toEqual(['99', '42'])
     expect(
-      readSwrCache<any[]>(['artifact:user_list', ARTIFACT_NAMESPACE, '7', 'all'])?.map((a) => a.id)
+      readSwrCache<UserArtifactIndexItem[]>(['artifact:user_list', ARTIFACT_NAMESPACE, '7', 'all'])?.map((a) => a.id)
     ).toEqual(['99', '42'])
 
     await deleteUserArtifact(mockSdk, '7', 'app', '42', true)
@@ -1971,12 +2013,12 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(svc.getCachedVersion('obj_app_42')).toBeUndefined()
     expect((await listUserArtifacts(mockSdk, '7')).map((a) => a.id)).toEqual(['99'])
     expect(
-      readSwrCache<any[]>(['artifact:user_list', ARTIFACT_NAMESPACE, '7', 'all'])?.map((a) => a.id)
+      readSwrCache<UserArtifactIndexItem[]>(['artifact:user_list', ARTIFACT_NAMESPACE, '7', 'all'])?.map((a) => a.id)
     ).toEqual(['99'])
 
     await deleteUserConversation(mockSdk, '7', 'conv_42')
     expect(await loadUserConversations(mockSdk, '7')).toEqual([])
-    expect(readSwrCache<any[]>(['artifact:conversations', ARTIFACT_NAMESPACE, '7'])).toEqual([])
+    expect(readSwrCache<ConversationRecord[]>(['artifact:conversations', ARTIFACT_NAMESPACE, '7'])).toEqual([])
     expect(searchArtifactsCount).toBe(0)
   })
 
@@ -2093,8 +2135,8 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
 
     // 3. runAntigravityTurn invokes onProgressSteps, surfaces call.arguments.thought via onStatus and onRequestWritePermission (req.thought), and returns activitySteps
     const statusHistory: string[] = []
-    const progressSnapshots: any[][] = []
-    const permissionRequests: any[] = []
+    const progressSnapshots: AntigravityActivityStep[][] = []
+    const permissionRequests: CodeModePermissionRequest[] = []
     let interactionCallIdx = 0
 
     const mockExtensionSDK = {
@@ -2170,21 +2212,26 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       },
     }
 
-    const mockSdk: any = {
-      ok: async (p: any) => p,
+    const mockSdk = asSdk({
+      ok: async <T>(p: T) => p,
       authSession: {
         transport: {
-          request: async (method: string, pathStr: string, _qp?: any, body?: any) => ({
+          request: async (
+            method: string,
+            pathStr: string,
+            _qp?: unknown,
+            body?: { title?: string }
+          ) => ({
             ok: true,
             value: { id: '99', title: body?.title || 'Executive KPI', method, path: pathStr },
           }),
         },
       },
-    }
+    })
 
     const spyCodeMode = jest
       .spyOn(LkrCodeMode, 'runPythonCode')
-      .mockImplementationOnce(async (opts: any) => {
+      .mockImplementationOnce(async (opts) => {
         if (opts?.onPermissionRequest) {
           await opts.onPermissionRequest({
             operation: 'create_dashboard',
@@ -2323,9 +2370,10 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
 
     // 2. Hanging OAuth popup (e.g. Error 400: redirect_uri_mismatch or closed window) settles when window regains focus
     const listeners: Record<string, Array<() => void>> = {}
-    const prevWindow = (globalThis as any).window
-    ;(globalThis as any).window = {
-      ...(prevWindow || {}),
+    const globalWithWindow = globalThis as unknown as { window?: unknown }
+    const prevWindow = globalWithWindow.window
+    globalWithWindow.window = {
+      ...(typeof prevWindow === 'object' && prevWindow ? prevWindow : {}),
       location: { origin: 'https://dev-argolis.looker.com' },
       addEventListener: (evt: string, fn: () => void) => {
         ;(listeners[evt] = listeners[evt] || []).push(fn)
@@ -2354,7 +2402,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       await expect(abortPromise).rejects.toThrow(/cancelled/i)
       expect(listeners.focus?.length || 0).toBe(0)
     } finally {
-      ;(globalThis as any).window = prevWindow
+      globalWithWindow.window = prevWindow
     }
   })
 
@@ -2395,7 +2443,9 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
 
     const tree = renderUseCaseGuideMarkdown(USE_CASE_GUIDES.tile.markdown)
     expect(tree.props.className).toContain('dab-use-case-guide-markdown')
-    const children: any[] = Array.isArray(tree.props.children)
+    const children: Array<React.ReactElement<Record<string, unknown>>> = Array.isArray(
+      tree.props.children
+    )
       ? tree.props.children
       : [tree.props.children]
     const previews = children.filter((c) => c?.props?.['data-testid'] === 'doc-ui-preview')
@@ -2421,8 +2471,8 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     const deletedLooks: string[] = []
     const deletedArtifactKeys: string[] = []
 
-    const mockSdk: any = {
-      ok: async (p: any) => p,
+    const mockSdk = asSdk({
+      ok: async <T>(p: T) => p,
       artifact: async ({ key }: { key: string }) =>
         String(key || '')
           .split(',')
@@ -2432,7 +2482,10 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         const prefix = String(key || '').replace(/%/g, '')
         return Array.from(store.values()).filter((r) => r.key.startsWith(prefix))
       },
-      update_artifacts: async (_ns: string, updates: any[]) => {
+      update_artifacts: async (
+        _ns: string,
+        updates: Array<{ key: string; value: string; version?: number }>
+      ) => {
         for (const u of updates) {
           store.set(u.key, {
             key: u.key,
@@ -2460,7 +2513,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         deletedLooks.push(String(id))
         return ''
       },
-    }
+    })
 
     // 1. Verify resolveConversationRelatedContent across all 6 Studio modes
     expect(
@@ -2607,13 +2660,13 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
   test('26. seeds lazy root folders without upfront all_folders, lazily fetches folder_children, hydrates folder_ancestors, and queries search_folders (Issue #62)', async () => {
     clearLookerMetadataCache()
     let allFoldersCalls = 0
-    const childCalls: any[] = []
-    const folderCalls: any[] = []
-    const ancestorCalls: any[] = []
-    const searchCalls: any[] = []
+    const childCalls: unknown[] = []
+    const folderCalls: unknown[] = []
+    const ancestorCalls: unknown[] = []
+    const searchCalls: unknown[] = []
 
-    const mockSdk: any = {
-      ok: async (p: any) => p,
+    const mockSdk = asSdk({
+      ok: async <T>(p: T) => p,
       me: async () => ({
         id: '1',
         display_name: 'Bryan Weber',
@@ -2633,7 +2686,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         allFoldersCalls += 1
         return []
       },
-      folder_children: async (req: any) => {
+      folder_children: async (req: { folder_id?: string }) => {
         childCalls.push(req)
         if (String(req.folder_id) === '1') {
           return [
@@ -2648,7 +2701,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         }
         return []
       },
-      folder: async (req: any) => {
+      folder: async (req: string | { folder_id?: string }) => {
         folderCalls.push(req)
         const fid = String(typeof req === 'object' ? req.folder_id : req)
         if (fid === '502') {
@@ -2663,7 +2716,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         }
         return { id: fid, name: `Folder #${fid}`, parent_id: null, child_count: 0 }
       },
-      folder_ancestors: async (req: any) => {
+      folder_ancestors: async (req: string | { folder_id?: string }) => {
         ancestorCalls.push(req)
         const fid = String(typeof req === 'object' ? req.folder_id : req)
         if (fid === '502') {
@@ -2674,7 +2727,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         }
         return []
       },
-      search_folders: async (req: any) => {
+      search_folders: async (req: unknown) => {
         searchCalls.push(req)
         return [
           {
@@ -2687,13 +2740,13 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
           },
         ]
       },
-    }
+    })
 
     // 1. fetchInitialLookerMetadata does NOT call all_folders upfront and seeds top-level roots
     const meta = await fetchInitialLookerMetadata(mockSdk)
     expect(allFoldersCalls).toBe(0)
     expect(meta.defaultFolderId).toBe('5')
-    expect(meta.folders.map((f: any) => ({ id: f.id, name: f.name }))).toEqual([
+    expect(meta.folders.map((f) => ({ id: f.id, name: f.name }))).toEqual([
       { id: '5', name: 'My folder' },
       { id: '1', name: 'Shared folders' },
       { id: '2', name: 'People' },
@@ -2748,21 +2801,22 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
 
   test('27. provides StudioDesignSystem primitives (StudioButton, StudioBadge, StudioModal, StudioToolbar, StudioCard, StudioSkeleton, StudioDocPreview) and studio-design-system skill documentation', () => {
     expect(typeof StudioSelect).toBe('function')
+    type Elem = React.ReactElement<Record<string, unknown>>
 
-    const btn = StudioButton({ variant: 'primary', testId: 'ds-btn', children: 'Run' }) as any
+    const btn = StudioButton({ variant: 'primary', testId: 'ds-btn', children: 'Run' }) as Elem
     expect(btn.type).toBe('button')
     expect(btn.props['data-testid']).toBe('ds-btn')
     expect(btn.props.className).toContain('dab-btn-primary')
 
-    const dangerBtn = StudioButton({ variant: 'danger', children: 'Delete' }) as any
+    const dangerBtn = StudioButton({ variant: 'danger', children: 'Delete' }) as Elem
     expect(dangerBtn.props.className).toContain('dab-badge-danger')
 
-    const badge = StudioBadge({ tone: 'success', testId: 'ds-badge', children: 'OK' }) as any
+    const badge = StudioBadge({ tone: 'success', testId: 'ds-badge', children: 'OK' }) as Elem
     expect(badge.props['data-testid']).toBe('ds-badge')
     expect(badge.props.className).toContain('dab-badge')
     expect(badge.props.className).toContain('dab-badge-success')
 
-    const pill = StudioBadge({ tone: 'warning', pill: true, children: '2 warnings' }) as any
+    const pill = StudioBadge({ tone: 'warning', pill: true, children: '2 warnings' }) as Elem
     expect(pill.props.className).toContain('dab-msg-pill')
     expect(pill.props.className).toContain('dab-badge-warning')
 
@@ -2774,20 +2828,20 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       title: 'Preview',
       badges: 'Badge',
       actions: 'Action',
-    }) as any
+    }) as Elem
     expect(toolbar.props['data-testid']).toBe('ds-toolbar')
     expect(toolbar.props.className).toContain('dab-preview-toolbar')
 
-    const card = StudioCard({ testId: 'ds-card', children: 'Card body' }) as any
+    const card = StudioCard({ testId: 'ds-card', children: 'Card body' }) as Elem
     expect(card.props['data-testid']).toBe('ds-card')
     expect(card.props.className).toContain('dab-ds-card')
 
-    const skel = StudioSkeleton({ width: 120, height: 28, testId: 'ds-skel' }) as any
+    const skel = StudioSkeleton({ width: 120, height: 28, testId: 'ds-skel' }) as Elem
     expect(skel.props['data-testid']).toBe('ds-skel')
     expect(skel.props.className).toContain('dab-skeleton')
     expect(skel.props.style).toMatchObject({ width: 120, height: 28 })
 
-    const docPrev = StudioDocPreview({ component: 'RunPythonButton', children: 'Preview' }) as any
+    const docPrev = StudioDocPreview({ component: 'RunPythonButton', children: 'Preview' }) as Elem
     expect(docPrev.props['data-testid']).toBe('doc-ui-preview')
     expect(docPrev.props['data-component']).toBe('RunPythonButton')
     expect(docPrev.props.style).toEqual({ pointerEvents: 'none', userSelect: 'none' })

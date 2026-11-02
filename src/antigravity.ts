@@ -1,4 +1,14 @@
+import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
+
+import {
+  AGENTS_MD,
+  buildNativeContentGuide,
+  BUNDLE_APP_PY,
+  CONVERSATION_LABEL_REQUEST_TAG,
+  DATA_APP_GUIDE_MD,
+  wrapDashboardCodeMode,
+} from './antigravityPrompts'
 import {
   createDeduplicatedLookerSdkProxy,
   DataAppBundle,
@@ -16,17 +26,9 @@ import {
   STUDIO_USE_CASE_OPTIONS,
   studioModeToUseCase,
   StudioUseCase,
+  studioUseCaseToMode,
   useCaseToStudioMode,
 } from './lookerApi'
-export {
-  extractResolvedUseCase,
-  getAllowedUseCases,
-  getUseCaseLabel,
-  STUDIO_USE_CASE_OPTIONS,
-  studioModeToUseCase,
-  useCaseToStudioMode,
-}
-export type { ResolvedStudioUseCase, StudioUseCase } from './lookerApi'
 import {
   BOOTSTRAP_LOOKML_PY,
   BOOTSTRAP_SANDBOX_SH,
@@ -42,6 +44,18 @@ import {
   LkrExtensionToolRequest,
   LookmlBundle,
 } from './lookmlTool'
+
+export * from './antigravityPrompts'
+export {
+  extractResolvedUseCase,
+  getAllowedUseCases,
+  getUseCaseLabel,
+  STUDIO_USE_CASE_OPTIONS,
+  studioModeToUseCase,
+  studioUseCaseToMode,
+  useCaseToStudioMode,
+}
+export type { ResolvedStudioUseCase, StudioUseCase } from './lookerApi'
 export {
   BOOTSTRAP_LOOKML_PY,
   BOOTSTRAP_SANDBOX_SH,
@@ -54,15 +68,6 @@ export {
   LKR_DEV_CLI_VERSION,
 }
 export type { LkrExtensionToolRequest, LookmlBundle } from './lookmlTool'
-import {
-  AGENTS_MD,
-  buildNativeContentGuide,
-  BUNDLE_APP_PY,
-  CONVERSATION_LABEL_REQUEST_TAG,
-  DATA_APP_GUIDE_MD,
-  wrapDashboardCodeMode,
-} from './antigravityPrompts'
-export * from './antigravityPrompts'
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 export const LkrCodeMode = require('./vendor/codemode.js')
@@ -125,14 +130,58 @@ export interface AgentSession {
   objectId?: string
 }
 
+export type AntigravityExtensionHostLike =
+  | (Partial<ExtensionSDK> & {
+      createSecretKeyTag?: (key: string) => string
+      lookerHostData?: { extensionId?: string; hostUrl?: string }
+    })
+  | null
+  | undefined
+
+export interface AntigravityNestedStepCall {
+  name?: string; arguments?: unknown; args?: unknown; path?: string; file_path?: string
+  target?: string; description?: string; skill?: string; skill_name?: string
+  code?: string; command?: string; language?: string
+}
+
+export interface AntigravityInteractionStep extends AntigravityNestedStepCall {
+  id?: string; call_id?: string; type?: string; status?: string
+  output?: unknown; stdout?: unknown; stderr?: unknown; result?: unknown
+  text?: string; summary?: string; thought?: string | { summary?: string; text?: string } | null
+  input?: string; method?: string
+  function_call?: AntigravityNestedStepCall; view_file_call?: AntigravityNestedStepCall
+  edit_file_call?: AntigravityNestedStepCall; skill_lookup_call?: AntigravityNestedStepCall
+  code_execution?: AntigravityNestedStepCall; code_execution_call?: AntigravityNestedStepCall
+  executable_code?: AntigravityNestedStepCall; code_execution_result?: { output?: unknown }
+}
+
+export interface AntigravityInteractionOutput {
+  id?: string; type?: string; text?: string; summary?: string
+  thought?: string | { summary?: string; text?: string } | null
+}
+
+export interface AntigravityUsageMetadata {
+  input_tokens?: number; prompt_token_count?: number; output_tokens?: number
+  candidates_token_count?: number; thought_tokens?: number; thoughts_token_count?: number
+}
+
+export interface AntigravityInteractionPayload {
+  id?: string; status?: string; environment_id?: string; output_text?: string
+  outputs?: AntigravityInteractionOutput[]; steps?: AntigravityInteractionStep[]
+  error?: { message?: string }; bash_calls?: number
+  usage?: AntigravityUsageMetadata; usage_metadata?: AntigravityUsageMetadata
+  models?: Array<{ name?: string; displayName?: string; description?: string }>; raw?: string
+}
+
 export function normalizeEnvironmentId(raw?: string | null): string | undefined {
   const id = String(raw || '').trim()
   return !id || id === 'remote' || /^env_(?:app|dashboard|lookml|health|tile)(?:_isolated|_warm)?$/.test(id) ? undefined : id
 }
 
 export function isEnvironmentNotFoundError(err: unknown): boolean {
-  const status = Number((err as any)?.status || (err as any)?.statusCode || 0)
-  return status === 404 || /\b404\b|environment.*not[\s_-]*found|requested entity was not found/i.test(String((err as any)?.message || err || ''))
+  const e = err && typeof err === 'object' ? (err as { status?: number; statusCode?: number; message?: string }) : undefined
+  const status = Number(e?.status || e?.statusCode || 0)
+  return status === 404 || /\b404\b|environment.*not[\s_-]*found|requested entity was not found/i.test(String(e?.message || err || ''))
 }
 
 export type CodeModePermissionDecision =
@@ -145,7 +194,7 @@ export interface CodeModePermissionRequest {
   operation: string
   httpMethod: string
   path: string
-  args: { params?: any; body?: any }
+  args: { params?: unknown; body?: unknown }
   thought?: string
 }
 
@@ -217,21 +266,25 @@ export const CONCURRENT_POLL_SCHEDULE_MS = [250, 450, 750, 1100]
 // ponytail: coalesce concurrent environment creation per user so simultaneous Turn 1 / prewarm calls
 // spin up 1 remote container and attach all other conversations to the same environment_id.
 export const inFlightEnvProvisionByUser = new Map<string, Promise<string>>()
-export const sharedEnvExploreSchemas = new Map<string, Record<string, any>>()
+export const sharedEnvExploreSchemas = new Map<string, Record<string, unknown>>()
 export const activeInteractionsByEnv = new Map<string, number>()
 
 export function resolveUserProvisionKey(userId?: string, auth?: AntigravityAuth): string {
   return String(userId || auth?.oauthToken?.slice(-16) || auth?.apiKey?.slice(-16) || auth?.clientId || 'default').trim() || 'default'
 }
 
-export function recordSharedEnvExploreSchema(environmentId: string | undefined, exploreKey: string, schemaPayload: any): void {
+export function recordSharedEnvExploreSchema(
+  environmentId: string | undefined,
+  exploreKey: string,
+  schemaPayload: unknown
+): void {
   const envId = normalizeEnvironmentId(environmentId)
   const key = String(exploreKey || '').trim()
   if (!envId || !key || !schemaPayload) return
   sharedEnvExploreSchemas.set(envId, { ...(sharedEnvExploreSchemas.get(envId) || {}), [key]: schemaPayload })
 }
 
-export function getSharedEnvExploreSchemas(environmentId: string | undefined): Record<string, any> {
+export function getSharedEnvExploreSchemas(environmentId: string | undefined): Record<string, unknown> {
   const envId = normalizeEnvironmentId(environmentId)
   return envId ? { ...(sharedEnvExploreSchemas.get(envId) || {}) } : {}
 }
@@ -247,20 +300,20 @@ export function resolveAdaptivePollScheduleMs(customSchedule?: number[], environ
   return DEFAULT_POLL_SCHEDULE_MS
 }
 
-export function getGeminiSecretKeyTag(extensionSDK: any): string {
+export function getGeminiSecretKeyTag(extensionSDK: AntigravityExtensionHostLike): string {
   if (extensionSDK && typeof extensionSDK.createSecretKeyTag === 'function') {
     return extensionSDK.createSecretKeyTag('gemini_api_key')
   }
   return '{{data_app_builder_data_app_builder_gemini_api_key}}'
 }
 
-export function getGeminiUserAttributeName(extensionSDK: any): string {
+export function getGeminiUserAttributeName(extensionSDK: AntigravityExtensionHostLike): string {
   return getGeminiSecretKeyTag(extensionSDK).replace(/^\{\{|\}\}$/g, '')
 }
 
 export async function ensureGeminiApiKeyUserAttribute(
   sdk: Looker40SDK,
-  extensionSDK: any,
+  extensionSDK: AntigravityExtensionHostLike,
   apiKeyValue?: string
 ): Promise<string> {
   const attrName = getGeminiUserAttributeName(extensionSDK)
@@ -289,11 +342,10 @@ export async function ensureGeminiApiKeyUserAttribute(
       )
     }
     return attrName
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err || '')
     throw new Error(
-      `Looker Admin required to create/update hidden user attribute "${attrName}" (value_is_hidden=true, user_can_view=false, whitelist="https://generativelanguage.googleapis.com/*"): ${
-        err?.message || err
-      }`
+      `Looker Admin required to create/update hidden user attribute "${attrName}" (value_is_hidden=true, user_can_view=false, whitelist="https://generativelanguage.googleapis.com/*"): ${errMsg}`
     )
   }
 }
@@ -325,7 +377,7 @@ export function computeIsAuthenticated(
 }
 
 export async function loginWithGoogleOAuth(
-  extensionSDK: any,
+  extensionSDK: AntigravityExtensionHostLike,
   clientId: string,
   options?: GoogleOAuthOptions
 ): Promise<string> {
@@ -333,6 +385,9 @@ export async function loginWithGoogleOAuth(
   const timeoutMs = options?.timeoutMs ?? 120000
   let cleanup = () => {}
   try {
+    if (!extensionSDK?.oauth2Authenticate) {
+      throw new Error('Looker Extension SDK oauth2Authenticate is not available.')
+    }
     const authPromise = Promise.resolve(
       extensionSDK.oauth2Authenticate(
         'https://accounts.google.com/o/oauth2/v2/auth',
@@ -366,7 +421,9 @@ export async function loginWithGoogleOAuth(
         if (typeof window !== 'undefined') window.removeEventListener?.('focus', onFocus)
       }
     })
-    const res = await Promise.race([authPromise, guardPromise])
+    const res = (await Promise.race([authPromise, guardPromise])) as
+      | { access_token?: string; id_token?: string }
+      | undefined
     const token = res?.access_token || res?.id_token
     if (!token) {
       throw new Error(`Google OAuth response did not include an access_token: ${JSON.stringify(res)}`)
@@ -380,12 +437,12 @@ export async function loginWithGoogleOAuth(
 export const authenticateGoogleOAuth = loginWithGoogleOAuth
 
 export async function callInteractionsApi(
-  extensionSDK: any,
+  extensionSDK: AntigravityExtensionHostLike,
   auth: AntigravityAuth,
   path: string,
   method: 'GET' | 'POST',
-  body?: any
-): Promise<any> {
+  body?: Record<string, unknown>
+): Promise<AntigravityInteractionPayload> {
   const url = `https://generativelanguage.googleapis.com/v1beta/${path.replace(/^\//, '')}`
   const serializedBody = body ? JSON.stringify(body) : undefined
 
@@ -398,16 +455,16 @@ export async function callInteractionsApi(
       },
       body: serializedBody,
     })
-    const parsed =
+    const parsed: AntigravityInteractionPayload =
       typeof proxyResp?.body === 'string'
         ? (() => {
             try {
-              return JSON.parse(proxyResp.body)
+              return JSON.parse(proxyResp.body) as AntigravityInteractionPayload
             } catch {
               return { raw: proxyResp.body }
             }
           })()
-        : proxyResp?.body || {}
+        : ((proxyResp?.body || {}) as AntigravityInteractionPayload)
     if (!proxyResp?.ok || (proxyResp?.status && proxyResp.status >= 400)) {
       const msg = parsed?.error?.message || JSON.stringify(parsed) || `HTTP ${proxyResp?.status}`
       throw new Error(`Antigravity API error (${proxyResp?.status}): ${msg}`)
@@ -422,8 +479,11 @@ export async function callInteractionsApi(
     if (!auth.oauthToken?.trim()) {
       throw new Error('Please sign in with Google OAuth first.')
     }
-    if (typeof window !== 'undefined' && (window as any).__MOCK_LOOKER_EXTENSION__) {
-      const promptText = String(body?.input?.[0]?.text || '')
+    if (typeof window !== 'undefined' && window.__MOCK_LOOKER_EXTENSION__) {
+      const inputArr = Array.isArray(body?.input)
+        ? (body?.input as Array<{ text?: string }>)
+        : []
+      const promptText = String(inputArr[0]?.text || '')
       if (promptText.includes(CONVERSATION_LABEL_REQUEST_TAG)) {
         return {
           id: 'int_mock_label',
@@ -456,9 +516,9 @@ export async function callInteractionsApi(
     body: serializedBody,
   })
   const text = await resp.text()
-  let parsed: any
+  let parsed: AntigravityInteractionPayload
   try {
-    parsed = text ? JSON.parse(text) : {}
+    parsed = text ? (JSON.parse(text) as AntigravityInteractionPayload) : {}
   } catch {
     parsed = { raw: text }
   }
@@ -470,7 +530,7 @@ export async function callInteractionsApi(
 }
 
 export async function listAvailableAntigravityModels(
-  extensionSDK: any,
+  extensionSDK: AntigravityExtensionHostLike,
   auth: AntigravityAuth
 ): Promise<AntigravityModelOption[]> {
   const canQuery =
@@ -480,8 +540,8 @@ export async function listAvailableAntigravityModels(
   if (!canQuery) return ANTIGRAVITY_ALLOWED_MODELS
   try {
     const res = await callInteractionsApi(extensionSDK, auth, 'models', 'GET')
-    const byId = new Map<string, any>(
-      (Array.isArray(res?.models) ? res.models : []).map((m: any) => [
+    const byId = new Map<string, { name?: string; displayName?: string; description?: string }>(
+      (Array.isArray(res?.models) ? res.models : []).map((m) => [
         String(m?.name || '').replace(/^models\//, '').trim(),
         m,
       ])
@@ -500,8 +560,10 @@ export async function listAvailableAntigravityModels(
   }
 }
 
-function collectInteractionTextCandidates(interaction: any): string {
-  const out: any[] = [interaction?.output_text]
+function collectInteractionTextCandidates(
+  interaction: AntigravityInteractionPayload | null | undefined
+): string {
+  const out: unknown[] = [interaction?.output_text]
   for (const o of interaction?.outputs || []) out.push(o?.text)
   for (const s of interaction?.steps || []) {
     out.push(
@@ -515,7 +577,9 @@ function collectInteractionTextCandidates(interaction: any): string {
   return out.filter((x): x is string => typeof x === 'string').join('\n')
 }
 
-function extractBundleFromInteraction(interaction: any): DataAppBundle | null {
+function extractBundleFromInteraction(
+  interaction: AntigravityInteractionPayload | null | undefined
+): DataAppBundle | null {
   const matches = Array.from(
     collectInteractionTextCandidates(interaction).matchAll(
       /<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g
@@ -526,7 +590,9 @@ function extractBundleFromInteraction(interaction: any): DataAppBundle | null {
     : null
 }
 
-function extractTddFromInteraction(interaction: any): string | null {
+function extractTddFromInteraction(
+  interaction: AntigravityInteractionPayload | null | undefined
+): string | null {
   const combined = collectInteractionTextCandidates(interaction)
   const matches = Array.from(
     combined.matchAll(/<HEALTH_CHECK_TDD>([\s\S]*?)<\/HEALTH_CHECK_TDD>/g)
@@ -537,11 +603,13 @@ function extractTddFromInteraction(interaction: any): string | null {
     : null
 }
 
-function normalizeNativeBundleCandidate(raw: any): NativeContentBundle | null {
+function normalizeNativeBundleCandidate(raw: unknown): NativeContentBundle | null {
   if (!raw || typeof raw !== 'object') return null
-  const r = raw.NATIVE_CONTENT_BUNDLE && typeof raw.NATIVE_CONTENT_BUNDLE === 'object'
-    ? raw.NATIVE_CONTENT_BUNDLE
-    : raw
+  const rawObj = raw as Record<string, unknown>
+  const r =
+    rawObj.NATIVE_CONTENT_BUNDLE && typeof rawObj.NATIVE_CONTENT_BUNDLE === 'object'
+      ? (rawObj.NATIVE_CONTENT_BUNDLE as Record<string, unknown>)
+      : rawObj
   const id =
     r.id ||
     r.lookml_dashboard_id ||
@@ -550,12 +618,21 @@ function normalizeNativeBundleCandidate(raw: any): NativeContentBundle | null {
     r.board_id
   if (!id) return null
   const strId = String(id).trim()
-  const cType =
-    r.content_type ||
+  const cType = (r.content_type ||
     r.contentType ||
-    (r.board_id ? 'board' : r.look_id && !r.dashboard_id ? 'look' : strId.includes('::') ? 'lookml_dashboard' : 'dashboard')
+    (r.board_id
+      ? 'board'
+      : r.look_id && !r.dashboard_id
+      ? 'look'
+      : strId.includes('::')
+      ? 'lookml_dashboard'
+      : 'dashboard')) as NativeContentBundle['contentType'] & string
   const folderId = r.folder_id || r.folderId ? String(r.folder_id || r.folderId) : undefined
-  const embedPath = resolveNativeEmbedPath(cType, strId, r.embed_path || r.url)
+  const embedPath = resolveNativeEmbedPath(
+    cType,
+    strId,
+    typeof (r.embed_path || r.url) === 'string' ? String(r.embed_path || r.url) : undefined
+  )
   return {
     id: strId,
     content_type: cType,
@@ -577,19 +654,30 @@ function normalizeNativeBundleCandidate(raw: any): NativeContentBundle | null {
     layout_id: r.layout_id ? String(r.layout_id) : undefined,
     element_ids: Array.isArray(r.element_ids) ? r.element_ids.map(String) : undefined,
     filter_names: Array.isArray(r.filter_names) ? r.filter_names.map(String) : undefined,
-    layout_component_ids: r.layout_component_ids && typeof r.layout_component_ids === 'object' ? r.layout_component_ids : undefined,
-    query_cache: r.query_cache && typeof r.query_cache === 'object' ? r.query_cache : undefined,
-    filter_cache: r.filter_cache && typeof r.filter_cache === 'object' ? r.filter_cache : undefined,
+    layout_component_ids:
+      r.layout_component_ids && typeof r.layout_component_ids === 'object'
+        ? (r.layout_component_ids as Record<string, string>)
+        : undefined,
+    query_cache:
+      r.query_cache && typeof r.query_cache === 'object'
+        ? (r.query_cache as Record<string, string>)
+        : undefined,
+    filter_cache:
+      r.filter_cache && typeof r.filter_cache === 'object'
+        ? (r.filter_cache as Record<string, string>)
+        : undefined,
     summary: r.summary ? String(r.summary) : undefined,
-    elements: Array.isArray(r.elements) ? r.elements : undefined,
-    explores: Array.isArray(r.explores) ? r.explores : undefined,
+    elements: Array.isArray(r.elements)
+      ? (r.elements as NativeContentBundle['elements'])
+      : undefined,
+    explores: Array.isArray(r.explores) ? r.explores.map(String) : undefined,
   }
 }
 
 // ponytail: capture NATIVE_CONTENT_BUNDLE directly from run_looker_codemode return value first
 // so the model never has to echo <NATIVE_CONTENT_BUNDLE>{...}</NATIVE_CONTENT_BUNDLE> in output_text.
 export function extractNativeContentFromInteraction(
-  interaction: any
+  interaction: AntigravityInteractionPayload | null | undefined
 ): NativeContentBundle | null {
   for (const step of [...(interaction?.steps || [])].reverse()) {
     if (step?.type === 'function_result' && step?.name === 'run_looker_codemode') {
@@ -602,11 +690,14 @@ export function extractNativeContentFromInteraction(
           const parsedTag = JSON.parse(tagMatches[tagMatches.length - 1][1].trim())
           const norm = normalizeNativeBundleCandidate(parsedTag)
           if (norm) return norm
-        } catch {}
+        } catch {
+          // Ignore malformed tag JSON
+        }
       }
       try {
         const parsed = typeof step.result === 'string' ? JSON.parse(step.result) : step.result
-        const norm = normalizeNativeBundleCandidate(parsed?.result ?? parsed)
+        const parsedObj = parsed && typeof parsed === 'object' ? (parsed as { result?: unknown }) : undefined
+        const norm = normalizeNativeBundleCandidate(parsedObj?.result ?? parsed)
         if (norm) return norm
       } catch {
         // Ignore non-JSON codemode outputs
@@ -621,7 +712,9 @@ export function extractNativeContentFromInteraction(
     try {
       const parsed = JSON.parse(matches[matches.length - 1][1].trim())
       return normalizeNativeBundleCandidate(parsed) || (parsed as NativeContentBundle)
-    } catch {}
+    } catch {
+      // Ignore malformed tag JSON
+    }
   }
   return null
 }
@@ -647,16 +740,28 @@ function extractLookerSdkMethodPreview(code: string): string {
   return Array.from(seen).join(', ')
 }
 
-function parseStepArguments(raw: any): Record<string, any> {
+function parseStepArguments(raw: unknown): Record<string, unknown> {
   if (typeof raw === 'string') {
-    try { raw = JSON.parse(raw) } catch { return {} }
+    try {
+      raw = JSON.parse(raw)
+    } catch {
+      return {}
+    }
   }
-  return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
+  return raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : {}
 }
 
-export function extractInteractionActivitySteps(interaction: any): AntigravityActivityStep[] {
-  const rawSteps: any[] = Array.isArray(interaction?.steps) ? interaction.steps : []
-  const rawOutputs: any[] = Array.isArray(interaction?.outputs) ? interaction.outputs : []
+export function extractInteractionActivitySteps(
+  interaction: AntigravityInteractionPayload | null | undefined
+): AntigravityActivityStep[] {
+  const rawSteps: AntigravityInteractionStep[] = Array.isArray(interaction?.steps)
+    ? interaction.steps
+    : []
+  const rawOutputs: AntigravityInteractionOutput[] = Array.isArray(interaction?.outputs)
+    ? interaction.outputs
+    : []
   const completedCallIds = new Set<string>(
     rawSteps
       .filter((s) => s?.type === 'function_result' || s?.type === 'tool_result')
@@ -685,7 +790,12 @@ export function extractInteractionActivitySteps(interaction: any): AntigravityAc
     byKey.set(mapKey, step)
   }
 
-  const addThought = (item: any, stepId: string, explicitId: string | undefined, status: 'running' | 'done') => {
+  const addThought = (
+    item: { summary?: string; text?: string; thought?: string | { summary?: string; text?: string } | null },
+    stepId: string,
+    explicitId: string | undefined,
+    status: 'running' | 'done'
+  ) => {
     const tObj = typeof item.thought === 'object' && item.thought !== null ? item.thought : null
     const summary = String(tObj?.summary ?? item.summary ?? '').trim()
     const text = String(tObj?.text ?? (typeof item.thought === 'string' ? item.thought : '') ?? item.text ?? '').trim()
@@ -749,7 +859,7 @@ export function extractInteractionActivitySteps(interaction: any): AntigravityAc
     if (skillCallRe.test(sType) || step.skill_lookup_call || (sType === 'function_call' && skillCallRe.test(fnName))) {
       const nested = step.skill_lookup_call || step.function_call || {}
       const args = parseStepArguments(step.arguments ?? step.args ?? nested.arguments ?? nested.args)
-      const pickName = (v: any) => (v && !skillCallRe.test(String(v)) ? String(v) : '')
+      const pickName = (v: unknown) => (v && !skillCallRe.test(String(v)) ? String(v) : '')
       const skillName = String(
         step.skill || step.skill_name || nested.skill || nested.skill_name || pickName(nested.name) || args.skill || args.skill_name || pickName(args.name) || pickName(step.name) || step.target || args.target || ''
       ).trim()
@@ -829,7 +939,7 @@ export function extractInteractionActivitySteps(interaction: any): AntigravityAc
   return Array.from(byKey.values())
 }
 
-function summarizeProgress(interaction: any): string {
+function summarizeProgress(interaction: AntigravityInteractionPayload | null | undefined): string {
   const steps = interaction?.steps || []
   if (steps.length === 0) return `Status: ${interaction?.status || 'starting'}...`
   const last = steps[steps.length - 1]
@@ -844,11 +954,11 @@ function summarizeProgress(interaction: any): string {
     const summary = String(tObj?.summary ?? last.summary ?? tObj?.text ?? last.text ?? '').trim()
     return summary || 'Agent is reasoning...'
   }
-  return `Step ${steps.length} (${last.type || interaction.status})...`
+  return `Step ${steps.length} (${last.type || interaction?.status})...`
 }
 
 function extractInteractionTelemetry(
-  interaction: any,
+  interaction: AntigravityInteractionPayload | null | undefined,
   stats: {
     agentWallMs: number
     pollWaitMs: number
@@ -860,7 +970,7 @@ function extractInteractionTelemetry(
     apiRetries: number
   }
 ): AntigravityTurnTelemetry {
-  const steps: any[] = interaction?.steps || []
+  const steps: AntigravityInteractionStep[] = interaction?.steps || []
   const bashCalls = steps.filter(
     (s) =>
       s?.type === 'code_execution' ||
@@ -898,7 +1008,7 @@ export function buildWorkspaceSources(params: {
   schemaMarkdown: string
   appFilePath?: string
   existingAppCode?: string
-  cachedExploreSchemas?: Record<string, any>
+  cachedExploreSchemas?: Record<string, unknown>
   extraSources?: Array<{ type: 'inline'; content: string; target: string }>
 }): Array<{ type: 'inline'; content: string; target: string }> {
   const {
@@ -927,7 +1037,7 @@ export function buildWorkspaceSources(params: {
 
 async function persistUserEnvIfChanged(params: {
   sdk?: Looker40SDK
-  extensionSDK?: any
+  extensionSDK?: AntigravityExtensionHostLike
   userId?: string
   previousEnvId?: string
   nextEnvId?: string
@@ -936,13 +1046,15 @@ async function persistUserEnvIfChanged(params: {
   const next = normalizeEnvironmentId(params.nextEnvId)
   if (!next || next === normalizeEnvironmentId(params.previousEnvId)) return
   await params.onEnvironmentUpdated?.(next)
-  if (params.sdk && typeof (params.sdk as any).update_artifacts === 'function') {
+  if (params.sdk && typeof (params.sdk as Partial<Looker40SDK>).update_artifacts === 'function') {
     let uid = String(params.userId || '').trim()
-    if (!uid && typeof (params.sdk as any).me === 'function') {
+    if (!uid && typeof (params.sdk as Partial<Looker40SDK>).me === 'function') {
       try {
         const me = await (params.sdk.ok ? params.sdk.ok(params.sdk.me('id')) : params.sdk.me('id'))
-        uid = String((me as any)?.id || '').trim()
-      } catch {}
+        uid = String((me as { id?: string | number } | undefined)?.id || '').trim()
+      } catch {
+        // Ignore error resolving user ID
+      }
     }
     if (uid) await saveUserEnvironmentId(params.sdk, uid, next, getArtifactNamespace(params.extensionSDK))
   }
@@ -950,7 +1062,7 @@ async function persistUserEnvIfChanged(params: {
 
 export interface RunAntigravityTurnOptions {
   sdk: Looker40SDK
-  extensionSDK?: any
+  extensionSDK?: AntigravityExtensionHostLike
   userId?: string
   environmentId?: string
   conversationId?: string
@@ -1124,8 +1236,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     ? normalizeNativeContent({
         ...existingNativeContent,
         folderId:
-          (existingNativeContent as any).folderId ||
-          (existingNativeContent as any).folder_id ||
+          (existingNativeContent as Partial<NativeContentState & NativeContentBundle>).folderId ||
+          (existingNativeContent as Partial<NativeContentState & NativeContentBundle>).folder_id ||
           folderId ||
           '1',
       })
@@ -1204,7 +1316,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         )}. Start your response with <USE_CASE>...</USE_CASE> naming the single best allowed use case for this request, then execute that workflow.]`
       : ''
 
-  const buildInputItems = (fresh: boolean): Array<Record<string, any>> => [
+  const buildInputItems = (fresh: boolean): Array<Record<string, unknown>> => [
     {
       type: 'text',
       text: fresh
@@ -1221,7 +1333,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const activeModel = model || DEFAULT_ANTIGRAVITY_MODEL
   const agentConfig = { type: 'antigravity', model: activeModel }
 
-  const buildFreshPayload = (): Record<string, any> => ({
+  const buildFreshPayload = (): Record<string, unknown> => ({
     agent: 'antigravity-preview-09-2026',
     agent_config: agentConfig,
     background: true,
@@ -1230,7 +1342,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     environment: { type: 'remote', sources },
   })
 
-  const provisionFreshEnvironmentInteraction = async (): Promise<any> => {
+  const provisionFreshEnvironmentInteraction = async (): Promise<AntigravityInteractionPayload> => {
     let resolveEnv!: (envId: string) => void
     let rejectEnv!: (err: unknown) => void
     const envPromise = new Promise<string>((res, rej) => {
@@ -1258,10 +1370,12 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     try {
       const coalescedId = normalizeEnvironmentId(await inFlightEnvProvisionByUser.get(userProvisionKey)!)
       if (coalescedId) activeEnvId = coalescedId
-    } catch {}
+    } catch {
+      // Ignore coalesced provisioning failure
+    }
   }
 
-  let interaction: any
+  let interaction: AntigravityInteractionPayload
   if (activeEnvId || (!isFreshConversation && session.lastInteractionId)) {
     try {
       interaction = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
@@ -1304,7 +1418,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   let prevStepCount = (interaction.steps || []).length
   let prevStatus = interaction.status
   const resolvedBridgeCacheKeys = new Set<string>()
-  const accumulatedSteps: any[] = []
+  const accumulatedSteps: AntigravityInteractionStep[] = []
   let bridgeRound = 0
 
   const n = normalizedExistingNative
@@ -1330,7 +1444,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         explores: selectedExplores,
       }
     : null
-  const defaultCodeModeVars: Record<string, any> = {
+  const defaultCodeModeVars: Record<string, unknown> = {
     target_explores: selectedExplores,
     target_model: primaryModel,
     target_explore: primaryExplore,
@@ -1354,7 +1468,9 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const envConcurrencySlot = activeInteractionsByEnv.get(envSlotKey) || 0
   activeInteractionsByEnv.set(envSlotKey, envConcurrencySlot + 1)
 
-  const emitProgressSteps = (currInteraction: any): AntigravityActivityStep[] => {
+  const emitProgressSteps = (
+    currInteraction: AntigravityInteractionPayload
+  ): AntigravityActivityStep[] => {
     const merged =
       accumulatedSteps.length > 0
         ? { ...currInteraction, steps: [...accumulatedSteps, ...(currInteraction?.steps || [])] }
@@ -1380,10 +1496,12 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         if (interaction.status === 'requires_action') {
           const steps = interaction.steps || []
           const executedIds = new Set(
-            steps.filter((s: any) => s.type === 'function_result').map((s: any) => s.call_id)
+            steps
+              .filter((s: AntigravityInteractionStep) => s.type === 'function_result')
+              .map((s: AntigravityInteractionStep) => s.call_id)
           )
           const pendingLookerCalls = steps.filter(
-            (s: any) =>
+            (s: AntigravityInteractionStep) =>
               s.type === 'function_call' &&
               (s.name === 'run_looker_codemode' || s.name === 'lkr_cli_extension_bridge') &&
               !executedIds.has(s.id)
@@ -1391,13 +1509,15 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
           if (pendingLookerCalls.length > 0) {
             const firstThought = pendingLookerCalls
-              .map((c: any) => String(parseStepArguments(c.arguments ?? c.args).thought || '').trim())
+              .map((c: AntigravityInteractionStep) =>
+                String(parseStepArguments(c.arguments ?? c.args).thought || '').trim()
+              )
               .find(Boolean)
             onStatus(firstThought || 'Running Looker Code Mode (WASM Monty sandbox) in extension...')
             const cmStart = Date.now()
             codemodeCalls += pendingLookerCalls.length
             const resultsInput = await Promise.all(
-              pendingLookerCalls.map(async (call: any) => {
+              pendingLookerCalls.map(async (call: AntigravityInteractionStep) => {
                 const args = parseStepArguments(call.arguments ?? call.args)
                 const callThought =
                   (typeof args.thought === 'string' && args.thought.trim()) ||
@@ -1416,7 +1536,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                   if (call.name === 'lkr_cli_extension_bridge') {
                     const bridged = await executeLkrExtensionToolRequest({
                       sdk: turnSdk,
-                      req: args as any,
+                      req: args as unknown as LkrExtensionToolRequest,
                       defaultVars: defaultCodeModeVars,
                       extensionSDK,
                       requirePermission,
@@ -1433,7 +1553,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                   } else {
                     const customVars =
                       args.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
-                        ? args.vars
+                        ? (args.vars as Record<string, unknown>)
                         : {}
                     const rawCode = String(args.code || '')
                     codeModeOutput = await LkrCodeMode.runPythonCode({
@@ -1450,11 +1570,12 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                       },
                     })
                   }
-                } catch (err: any) {
+                } catch (err: unknown) {
                   apiRetries += 1
+                  const errMsg = err instanceof Error ? err.message : String(err)
                   codeModeOutput = JSON.stringify({
                     ok: false,
-                    error: err?.message || String(err),
+                    error: errMsg,
                   })
                 }
                 return {
@@ -1627,7 +1748,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const tddMarkdown = extractTddFromInteraction(interaction)
   const rawText =
     interaction.output_text ||
-    (interaction.outputs || []).map((o: any) => o.text || '').join('\n') ||
+    (interaction.outputs || []).map((o: AntigravityInteractionOutput) => o.text || '').join('\n') ||
     'Completed.'
   const resolvedUseCase: ResolvedStudioUseCase =
     useCase && useCase !== 'auto'
@@ -1710,7 +1831,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 export async function prewarmOrWakeAntigravityEnvironment(params: {
   sdk?: Looker40SDK
   userId?: string
-  extensionSDK: any
+  extensionSDK: AntigravityExtensionHostLike
   auth: AntigravityAuth
   toolType: AntigravityToolType
   model?: string
@@ -1832,7 +1953,9 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
       try {
         const coalescedId = normalizeEnvironmentId(await inFlightEnvProvisionByUser.get(userProvisionKey)!)
         if (coalescedId) activeEnvId = coalescedId
-      } catch {}
+      } catch {
+        // Ignore coalesced provisioning failure
+      }
     }
 
     if (activeEnvId) {
@@ -1968,7 +2091,7 @@ export function sanitizeConversationLabel(raw: string, fallbackPrompt?: string):
 // ponytail: stateless out-of-band labeling request — omits previous_interaction_id and passes tools: []
 // so it never enters the conversation chain or triggers skill/tool execution.
 export async function generateConversationLabel(params: {
-  extensionSDK: any
+  extensionSDK: AntigravityExtensionHostLike
   auth: AntigravityAuth
   environmentId?: string
   userPrompt: string
@@ -2019,7 +2142,7 @@ export async function generateConversationLabel(params: {
     }
     const rawText =
       interaction?.output_text ||
-      (interaction?.outputs || []).map((o: any) => o?.text || '').join('\n') ||
+      (interaction?.outputs || []).map((o: AntigravityInteractionOutput) => o?.text || '').join('\n') ||
       collectInteractionTextCandidates(interaction)
     return sanitizeConversationLabel(rawText, userPrompt)
   } catch {
