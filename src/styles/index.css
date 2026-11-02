@@ -1411,6 +1411,15 @@ body {
   flex-wrap: wrap;
 }
 
+details.dab-thinking-step > summary.dab-thinking-step-header {
+  cursor: pointer;
+  list-style: none;
+}
+
+details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-marker {
+  display: none;
+}
+
 .dab-thinking-kind-badge {
   display: inline-flex;
   align-items: center;

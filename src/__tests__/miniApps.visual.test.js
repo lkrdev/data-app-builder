@@ -2691,6 +2691,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const completedEl = document.querySelector('[data-testid="completed-thinking-block"]');
         const liveEl = document.querySelector('[data-testid="live-thinking-block"]');
         const permThoughtEl = document.querySelector('[data-testid="permission-request-thought"]');
+        const statusBannerWhileLive = document.querySelector('.dab-status-banner');
 
         const initiallyCollapsed = completedEl ? !completedEl.open : false;
         const completedSummary = completedEl?.querySelector('summary')?.textContent?.trim() || '';
@@ -2701,10 +2702,20 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         }
         await new Promise((r) => setTimeout(r, 80));
 
+        const thoughtEl = completedEl?.querySelector('[data-testid="thinking-step-thought"]');
+        const thoughtInitiallyCollapsed = thoughtEl ? !thoughtEl.open : false;
+        if (thoughtEl) {
+          thoughtEl.querySelector('summary')?.click();
+        }
+        await new Promise((r) => setTimeout(r, 60));
+
         return {
           hasCompletedBlock: Boolean(completedEl),
           initiallyCollapsed,
           expandedAfterClick: Boolean(completedEl?.open),
+          thoughtInitiallyCollapsed,
+          thoughtExpandedAfterClick: Boolean(thoughtEl?.open),
+          statusBannerWhileLive,
           completedSummary,
           completedText: completedEl?.textContent || '',
           hasLiveBlock: Boolean(liveEl),
@@ -2722,6 +2733,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       hasCompletedBlock: true,
       initiallyCollapsed: true,
       expandedAfterClick: true,
+      thoughtInitiallyCollapsed: true,
+      thoughtExpandedAfterClick: true,
+      statusBannerWhileLive: null,
       completedSummary: 'Thought for 4s · 3 steps',
       hasLiveBlock: true,
       liveOpenByDefault: true,

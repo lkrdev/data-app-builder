@@ -2003,25 +2003,30 @@ function formatActivityStepBadge(step: AntigravityActivityStep): React.ReactNode
 function renderActivityStepsList(steps: AntigravityActivityStep[]) {
   return (
     <div className="dab-thinking-steps">
-      {steps.map((step, sIdx) => (
-        <div
-          key={step.id || sIdx}
-          className={`dab-thinking-step dab-thinking-step-${step.kind}`}
-          data-step-kind={step.kind}
-          data-step-status={step.status || 'done'}
-        >
-          <div className="dab-thinking-step-header">
-            <span className="dab-thinking-kind-badge">{formatActivityStepBadge(step)}</span>
-            <span className="dab-thinking-step-title">{step.title}</span>
-            {step.status === 'running' && (
-              <span className="dab-thinking-step-status">Running…</span>
-            )}
-          </div>
-          {step.detail && step.detail !== step.title && (
-            <code className="dab-thinking-step-detail">{step.detail}</code>
-          )}
-        </div>
-      ))}
+      {steps.map((step, sIdx) => {
+        const hasDetail = Boolean(step.detail && step.detail !== step.title)
+        const isCollapsibleThought = step.kind === 'thought' && hasDetail
+        const StepTag = isCollapsibleThought ? 'details' : 'div'
+        const HeaderTag = isCollapsibleThought ? 'summary' : 'div'
+        return (
+          <StepTag
+            key={step.id || sIdx}
+            className={`dab-thinking-step dab-thinking-step-${step.kind}`}
+            data-step-kind={step.kind}
+            data-step-status={step.status || 'done'}
+            {...(isCollapsibleThought ? { 'data-testid': 'thinking-step-thought' } : {})}
+          >
+            <HeaderTag className="dab-thinking-step-header">
+              <span className="dab-thinking-kind-badge">{formatActivityStepBadge(step)}</span>
+              <span className="dab-thinking-step-title">{step.title}</span>
+              {step.status === 'running' && (
+                <span className="dab-thinking-step-status">Running…</span>
+              )}
+            </HeaderTag>
+            {hasDetail && <code className="dab-thinking-step-detail">{step.detail}</code>}
+          </StepTag>
+        )
+      })}
     </div>
   )
 }
@@ -2129,7 +2134,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
           </details>
         )}
 
-        {busyStatus && (
+        {busyStatus && (!liveActivitySteps || liveActivitySteps.length === 0) && (
           <div className="dab-status-banner">
             <span className="dab-spinner" />
             <span>{busyStatus}</span>
