@@ -54,33 +54,43 @@ export function readInitialLeftPaneWidth(): number {
   const raw = getWinStorage(STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY)
   return raw == null || String(raw).trim() === '' ? DEFAULT_LEFT_PANE_WIDTH : clampLeftPaneWidth(Number(raw))
 }
-
 export async function loadStoredLeftPaneWidth(extensionSDK?: ExtensionHostStorageLike | null): Promise<number> {
   try {
     const raw = (await extensionSDK?.localStorageGetItem?.(STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY)) ?? getWinStorage(STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY)
     return raw == null || String(raw).trim() === '' ? DEFAULT_LEFT_PANE_WIDTH : clampLeftPaneWidth(Number(raw))
   } catch { return readInitialLeftPaneWidth() }
 }
-
 export async function saveStoredLeftPaneWidth(width: number, extensionSDK?: ExtensionHostStorageLike | null): Promise<void> {
   await setDualStorage(STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY, String(clampLeftPaneWidth(width)), extensionSDK)
 }
-
 export function readInitialRightPaneCollapsed(): boolean {
   const raw = String(getWinStorage(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY) ?? '').trim().toLowerCase()
   return raw === 'true' || raw === '1'
 }
-
 export async function loadStoredRightPaneCollapsed(extensionSDK?: ExtensionHostStorageLike | null): Promise<boolean> {
   try {
-    const raw = (await extensionSDK?.localStorageGetItem?.(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY)) ?? getWinStorage(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY)
-    const norm = String(raw ?? '').trim().toLowerCase()
+    const norm = String(((await extensionSDK?.localStorageGetItem?.(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY)) ?? getWinStorage(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY)) ?? '').trim().toLowerCase()
     return norm === 'true' || norm === '1'
   } catch { return readInitialRightPaneCollapsed() }
 }
-
 export async function saveStoredRightPaneCollapsed(collapsed: boolean, extensionSDK?: ExtensionHostStorageLike | null): Promise<void> {
   await setDualStorage(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY, collapsed ? 'true' : 'false', extensionSDK)
+}
+
+export type StudioBusySendAction = 'queue' | 'interject'
+export const STUDIO_BUSY_SEND_ACTION_STORAGE_KEY = 'dab_busy_send_action'
+export const DEFAULT_BUSY_SEND_ACTION: StudioBusySendAction = 'queue'
+export const normalizeBusySendAction = (val?: string | null): StudioBusySendAction =>
+  String(val || '').trim().toLowerCase() === 'interject' ? 'interject' : DEFAULT_BUSY_SEND_ACTION
+export const readInitialBusySendAction = (): StudioBusySendAction =>
+  normalizeBusySendAction(getWinStorage(STUDIO_BUSY_SEND_ACTION_STORAGE_KEY))
+export async function loadStoredBusySendAction(extensionSDK?: ExtensionHostStorageLike | null): Promise<StudioBusySendAction> {
+  try {
+    return normalizeBusySendAction((await extensionSDK?.localStorageGetItem?.(STUDIO_BUSY_SEND_ACTION_STORAGE_KEY)) ?? getWinStorage(STUDIO_BUSY_SEND_ACTION_STORAGE_KEY))
+  } catch { return readInitialBusySendAction() }
+}
+export async function saveStoredBusySendAction(action: StudioBusySendAction, extensionSDK?: ExtensionHostStorageLike | null): Promise<void> {
+  await setDualStorage(STUDIO_BUSY_SEND_ACTION_STORAGE_KEY, normalizeBusySendAction(action), extensionSDK)
 }
 
 export interface Looker404Diagnostic {

@@ -349,6 +349,9 @@ function buildHtmlPage(scenario) {
           window.localStorage.removeItem('dab_left_pane_width');
           window.localStorage.removeItem('dab_right_pane_collapsed');
         }
+        if (!window.location.search.includes('preserveBusyAction=1')) {
+          window.localStorage.removeItem('dab_busy_send_action');
+        }
       } catch {}
 
       const isTile =
@@ -2244,7 +2247,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       const deadline = Date.now() + 8000
       while (Date.now() < deadline) {
         const r = await chrome.send('Runtime.evaluate', {
-          expression: `Boolean(document.querySelector('[data-testid="topbar-fullscreen-toggle"]'))`,
+          expression: `window.location.search.includes('${scenario}') && Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="topbar-fullscreen-toggle"]'))`,
           returnByValue: true
         })
         if (r.result?.value) break
@@ -2258,6 +2261,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         window.__UPDATED_LOCATIONS__ = [];
         const btn = document.querySelector('[data-testid="topbar-fullscreen-toggle"]');
         const configLabel = (btn?.textContent || '').trim();
+        const configTitle = btn?.getAttribute('title') || '';
+        const hasSvg = Boolean(btn?.querySelector('svg'));
         btn?.click();
         window.__DAB_STUDIO__.history.push('/c/42');
         await new Promise((r) => setTimeout(r, 80));
@@ -2265,6 +2270,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const r = document.querySelector('.dab-topbar').getBoundingClientRect();
         return {
           configLabel,
+          configTitle,
+          hasSvg,
           calls: window.__UPDATED_LOCATIONS__,
           clip: { x: Math.max(0, Math.floor(r.left)), y: Math.max(0, Math.floor(r.top)), width: Math.min(1440, Math.ceil(r.width)), height: Math.min(900, Math.ceil(r.height) + 8), scale: 1 }
         };
@@ -2273,7 +2280,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       returnByValue: true
     })
 
-    expect(standardRes.result.value.configLabel).toBe('⤢ Full Screen')
+    expect(standardRes.result.value.configLabel).toBe('')
+    expect(standardRes.result.value.configTitle).toBe('Full Screen')
+    expect(standardRes.result.value.hasSvg).toBe(true)
     expect(standardRes.result.value.calls).toEqual([
       { url: '/spartan/data_app_builder::data_app_builder/config', state: undefined, target: '_top' },
       { url: '/spartan/data_app_builder::data_app_builder/c/42', state: undefined, target: '_top' }
@@ -2293,12 +2302,16 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         window.__UPDATED_LOCATIONS__ = [];
         const btn = document.querySelector('[data-testid="topbar-fullscreen-toggle"]');
         const spartanLabel = (btn?.textContent || '').trim();
+        const spartanTitle = btn?.getAttribute('title') || '';
+        const hasSvg = Boolean(btn?.querySelector('svg'));
         btn?.click();
         window.__MOCK_LOOKER_EXTENSION__.lookerHostData.mountPoint = 'dashboard-tile';
         window.__DAB_STUDIO__.history.push('/c/7');
         await new Promise((r) => setTimeout(r, 80));
         return {
           spartanLabel,
+          spartanTitle,
+          hasSvg,
           calls: window.__UPDATED_LOCATIONS__,
           hiddenInTile: !document.querySelector('[data-testid="topbar-fullscreen-toggle"]')
         };
@@ -2308,7 +2321,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     })
 
     expect(spartanRes.result.value).toEqual({
-      spartanLabel: '⤡ Exit Full Screen',
+      spartanLabel: '',
+      spartanTitle: 'Exit Full Screen',
+      hasSvg: true,
       calls: [{ url: '/extensions/data_app_builder::data_app_builder/c/42', state: undefined, target: '_top' }],
       hiddenInTile: true
     })
@@ -3167,7 +3182,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const afterSuccessSignIn = {
           sendDisabled: Boolean(document.querySelector('[data-testid="studio-send-btn"]')?.disabled),
           hasInlineSignInBtn: Boolean(document.querySelector('[data-testid="composer-signin-inline-btn"]')),
-          topbarText: (document.querySelector('[data-testid="topbar-oauth-signin-btn"]')?.textContent || '').trim()
+          topbarText: (document.querySelector('[data-testid="topbar-oauth-signin-btn"]')?.textContent || '').trim(),
+          topbarTitle: document.querySelector('[data-testid="topbar-oauth-signin-btn"]')?.getAttribute('title') || '',
+          topbarHasSvg: Boolean(document.querySelector('[data-testid="topbar-oauth-signin-btn"] svg'))
         };
 
         // Reset back to signed-out so we can also test missing clientId -> /config navigation & screenshot
@@ -3218,7 +3235,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       afterSuccessSignIn: {
         sendDisabled: false,
         hasInlineSignInBtn: false,
-        topbarText: '✓ Signed In'
+        topbarText: '',
+        topbarTitle: 'Sign Out',
+        topbarHasSvg: true
       }
     })
 
@@ -3312,24 +3331,44 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       await new Promise((res) => setTimeout(res, 80))
     }
     const persistedRes = await chrome.send('Runtime.evaluate', {
-      expression: `(() => {
+      expression: `(async () => {
         const stored = JSON.parse(window.localStorage.getItem('dab_oauth_session') || '{}');
-        return {
+        const btn = document.querySelector('[data-testid="topbar-oauth-signin-btn"]');
+        const beforeLogout = {
           storedToken: stored.token,
           hasExpiresAt: typeof stored.expiresAt === 'number' && stored.expiresAt > Date.now(),
           isAuthenticated: Boolean(window.__DAB_STUDIO__?.isAuthenticated),
-          topbarText: (document.querySelector('[data-testid="topbar-oauth-signin-btn"]')?.textContent || '').trim(),
+          topbarText: (btn?.textContent || '').trim(),
+          topbarTitle: btn?.getAttribute('title') || '',
+          topbarHasSvg: Boolean(btn?.querySelector('svg')),
           hasInlineSignInBtn: Boolean(document.querySelector('[data-testid="composer-signin-inline-btn"]'))
         };
+        btn?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const btnAfter = document.querySelector('[data-testid="topbar-oauth-signin-btn"]');
+        const afterLogout = {
+          storedAfter: window.localStorage.getItem('dab_oauth_session'),
+          isAuthenticated: Boolean(window.__DAB_STUDIO__?.isAuthenticated),
+          topbarText: (btnAfter?.textContent || '').trim()
+        };
+        return { ...beforeLogout, afterLogout };
       })()`,
+      awaitPromise: true,
       returnByValue: true
     })
     expect(persistedRes.result.value).toEqual({
       storedToken: 'mock_oauth_token_123',
       hasExpiresAt: true,
       isAuthenticated: true,
-      topbarText: '✓ Signed In',
-      hasInlineSignInBtn: false
+      topbarText: '',
+      topbarTitle: 'Sign Out',
+      topbarHasSvg: true,
+      hasInlineSignInBtn: false,
+      afterLogout: {
+        storedAfter: '',
+        isAuthenticated: false,
+        topbarText: 'Sign In'
+      }
     })
   }, 15000)
 
@@ -3867,7 +3906,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           hasLookmlSessionIdInput,
           triggerMinWidth,
           triggerMaxWidth,
-          hasSaveToFolderLabel: triggerLabel.includes('Save to Folder:'),
+          hasSaveToFolderLabel: triggerLabel.includes('Save New Content to Folder:'),
           hasSkeleton,
           hasPersonalChild,
           quickSearchMatchesExperiments: quickSearchFilteredText.includes('Personal Experiments'),
@@ -4471,16 +4510,34 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         await new Promise((r) => setTimeout(r, 40));
         const ta = document.querySelector('[data-testid="studio-prompt-input"]');
         const addBtn = document.querySelector('[data-testid="composer-add-context-btn"]');
+        const splitGroup = document.querySelector('[data-testid="studio-busy-action-group"]');
         const queueBtn = document.querySelector('[data-testid="studio-queue-btn"]');
-        const interjectBtn = document.querySelector('[data-testid="studio-interject-btn"]');
+        const menuTrigger = document.querySelector('[data-testid="studio-busy-action-menu-trigger"]');
         const stopBtn = document.querySelector('[data-testid="studio-stop-btn"]');
         const sendBtnWhileBusy = document.querySelector('[data-testid="studio-send-btn"]');
+
+        // Open split button caret menu, switch to Interject -> verifies studio-interject-btn & localStorage persistence, then switch back to Queue
+        menuTrigger?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const interjectOption = document.querySelector('[data-testid="studio-busy-action-option-interject"]');
+        interjectOption?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const hasInterjectAfterSwitch = Boolean(document.querySelector('[data-testid="studio-interject-btn"]'));
+        const storedAfterInterject = window.localStorage.getItem('dab_busy_send_action');
+        document.querySelector('[data-testid="studio-busy-action-menu-trigger"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        document.querySelector('[data-testid="studio-busy-action-option-queue"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const storedAfterQueue = window.localStorage.getItem('dab_busy_send_action');
 
         const initialBusyCheck = {
           textareaDisabled: Boolean(ta?.disabled),
           addContextDisabled: Boolean(addBtn?.disabled),
+          hasSplitGroup: Boolean(splitGroup),
           hasQueueBtn: Boolean(queueBtn),
-          hasInterjectBtn: Boolean(interjectBtn),
+          hasInterjectBtn: hasInterjectAfterSwitch,
+          storedAfterInterject,
+          storedAfterQueue,
           hasStopBtn: Boolean(stopBtn),
           hasSendBtnWhileBusy: Boolean(sendBtnWhileBusy)
         };
@@ -4631,8 +4688,11 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       initialBusyCheck: {
         textareaDisabled: false,
         addContextDisabled: false,
+        hasSplitGroup: true,
         hasQueueBtn: true,
         hasInterjectBtn: true,
+        storedAfterInterject: 'interject',
+        storedAfterQueue: 'queue',
         hasStopBtn: true,
         hasSendBtnWhileBusy: false
       },

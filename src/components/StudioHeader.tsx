@@ -1,39 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
-  AlertTriangle,
-  ChevronDown,
-  Folder,
-  FolderOpen,
-  Lock,
-  RotateCcw,
-  Search,
-  Server,
-  Square,
-  User,
+  AlertTriangle, ChevronDown, Folder, FolderOpen, Lock, LogOut,
+  Maximize2, Minimize2, RotateCcw, Search, Server, Square, User,
 } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 
-import {
-   getGeminiUserAttributeName,
-  resolveLookerOAuthRedirectUris,
-} from '../antigravity'
+import { getGeminiUserAttributeName, resolveLookerOAuthRedirectUris } from '../antigravity'
 import { useLookerExtension } from '../contexts/LookerExtensionContext'
 import { LookerFolderNode } from '../lookerApi'
-import {
-  ResolvedStudioTheme,
-  StudioController,
-  StudioThemeMode,
-} from '../useStudioController'
+import { ResolvedStudioTheme, StudioController, StudioThemeMode } from '../useStudioController'
 import { STUDIO_MODES } from './App'
 import {
-  StudioBadge,
-  StudioButton,
-  StudioCard,
-  StudioModal,
-  StudioSelect,
-  StudioSkeleton,
-  ThemeModeIcon,
+  StudioBadge, StudioButton, StudioCard, StudioModal,
+  StudioSelect, StudioSkeleton, ThemeModeIcon,
 } from './StudioDesignSystem'
 export * from './StudioDesignSystem'
 
@@ -48,15 +28,13 @@ export const FullScreenToggleButton: React.FC = () => {
     const subRoute = `${location.pathname === '/' ? '' : location.pathname}${location.search || ''}${location.hash || ''}`
     extensionSDK.updateLocation(`${isSpartan ? '/extensions' : '/spartan'}/${extensionId}${subRoute}`, undefined, '_top')
   }
+  const label = isSpartan ? 'Exit Full Screen' : 'Full Screen'
   return (
     <button
-      type="button"
-      data-testid="topbar-fullscreen-toggle"
-      className="dab-btn dab-btn-secondary"
-      onClick={handleToggleFullScreen}
-      title={`Switch between /extensions/${extensionId} and /spartan/${extensionId}`}
+      type="button" data-testid="topbar-fullscreen-toggle" className="dab-btn dab-btn-secondary dab-btn-icon"
+      onClick={handleToggleFullScreen} title={label} aria-label={label}
     >
-      {isSpartan ? '⤡ Exit Full Screen' : '⤢ Full Screen'}
+      {isSpartan ? <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" /> : <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />}
     </button>
   )
 }
@@ -90,30 +68,10 @@ export const ThemeModeSelect: React.FC<{
 
 export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
-    themeMode,
-    resolvedTheme,
-    setThemeMode,
-    authMode,
-    setAuthMode,
-    clientId,
-    setClientId,
-    projectId,
-    setProjectId,
-    disabledModes,
-    setDisabledModes,
-    selectedModel,
-    setSelectedModel,
-    availableModels,
-    enabledModes,
-    apiKey,
-    setApiKey,
-    oauthRedirectUri,
-    capabilities,
-    extensionSDK,
-    busyStatus,
-    messages,
-    handleSaveAuthSetup,
-    isLookerDevMode,
+    themeMode, resolvedTheme, setThemeMode, authMode, setAuthMode, clientId, setClientId,
+    projectId, setProjectId, disabledModes, setDisabledModes, selectedModel, setSelectedModel,
+    availableModels, enabledModes, apiKey, setApiKey, oauthRedirectUri, capabilities,
+    extensionSDK, busyStatus, messages, handleSaveAuthSetup, isLookerDevMode,
   } = ctl
   const [copiedRedirectUri, setCopiedRedirectUri] = useState(false)
   const [copiedSpartanRedirectUri, setCopiedSpartanRedirectUri] = useState(false)
@@ -390,52 +348,16 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
 
 export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
-    themeMode,
-    resolvedTheme,
-    setThemeMode,
-    environmentStatus,
-    envResetNotice,
-    handleResetEnvironment,
-    handleStopEnvironment,
-    requirePermission,
-    setRequirePermission,
-    capabilities,
-    availableLookmlProjects,
-    canDeployLookml,
-    isLookmlMode,
-    isHealthCheckMode,
-    builderMode,
-    lookmlProjectId,
-    setLookmlProjectId,
-    lookmlSessions,
-    loadLookmlSessionById,
-    lookmlBundle,
-    loadingMetadata,
-    folderTreeNodes,
-    rootFolderIds,
-    folderChildrenById,
-    expandedFolderIds,
-    loadingFolderIds,
-    toggleExpandFolder,
-    hydrateFolderAncestors,
-    handleSearchFolders,
-    selectedFolderId,
-    setSelectedFolderId,
-    nativeContent,
-    publishedApp,
-    handleResetNewApp,
-    authMode,
-    oauthToken,
-    oauthSigningIn,
-    handleOAuthLogin,
-    handleCancelOAuthLogin,
-    extensionSDK,
-    healthScope,
-    setHealthScope,
-    handleRunHealthCheck,
-    busyStatus,
-    userDisplayName,
-    isLookerDevMode,
+    themeMode, resolvedTheme, setThemeMode, environmentStatus, envResetNotice,
+    handleResetEnvironment, handleStopEnvironment, requirePermission, setRequirePermission,
+    capabilities, availableLookmlProjects, canDeployLookml, isLookmlMode, isHealthCheckMode,
+    builderMode, lookmlProjectId, setLookmlProjectId, lookmlSessions, loadLookmlSessionById,
+    lookmlBundle, loadingMetadata, folderTreeNodes, rootFolderIds, folderChildrenById,
+    expandedFolderIds, loadingFolderIds, toggleExpandFolder, hydrateFolderAncestors,
+    handleSearchFolders, selectedFolderId, setSelectedFolderId, nativeContent, publishedApp,
+    handleResetNewApp, authMode, oauthToken, oauthSigningIn, handleOAuthLogin,
+    handleOAuthLogout, handleCancelOAuthLogin, extensionSDK, healthScope, setHealthScope,
+    handleRunHealthCheck, busyStatus, userDisplayName, isLookerDevMode,
   } = ctl
 
   const mockExt =
@@ -777,7 +699,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
               data-testid="topbar-folder-picker"
               ref={folderPickerRef}
             >
-              <span>Save to Folder:</span>
+              <span>Save New Content to Folder:</span>
               {loadingMetadata ? (
                 <StudioSkeleton
                   testId="folder-selector-skeleton"
@@ -1034,12 +956,13 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
           {authMode === 'oauth' ? (
             <>
               <button
-                type="button"
-                data-testid="topbar-oauth-signin-btn"
-                className={oauthToken ? 'dab-btn-secondary' : 'dab-btn-primary'}
-                onClick={handleOAuthLogin}
+                type="button" data-testid="topbar-oauth-signin-btn"
+                className={oauthToken ? 'dab-btn dab-btn-secondary dab-btn-icon' : 'dab-btn-primary'}
+                onClick={oauthToken ? handleOAuthLogout : handleOAuthLogin}
+                title={oauthToken ? 'Sign Out' : 'Sign In with Google OAuth'}
+                aria-label={oauthToken ? 'Sign Out' : undefined}
               >
-                {oauthToken ? '✓ Signed In' : oauthSigningIn ? 'Retry Sign In' : 'Sign In'}
+                {oauthToken ? <LogOut size={14} strokeWidth={1.75} aria-hidden="true" /> : oauthSigningIn ? 'Retry Sign In' : 'Sign In'}
               </button>
               {oauthSigningIn && (
                 <button
