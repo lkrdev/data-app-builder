@@ -839,47 +839,27 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
     )
   }
 
-  const relatedInfo = pendingDeleteConv
-    ? resolveConversationRelatedContent(pendingDeleteConv, userId)
-    : null
-  const hostUrl = (
-    ctl.extensionSDK?.lookerHostData?.hostUrl ||
-    ctl.lookerHostData?.hostUrl ||
-    ''
-  ).replace(/\/$/, '')
+  const relatedInfo = pendingDeleteConv ? resolveConversationRelatedContent(pendingDeleteConv, userId) : null
+  const hostUrl = (ctl.extensionSDK?.lookerHostData?.hostUrl || ctl.lookerHostData?.hostUrl || '').replace(/\/$/, '')
 
   return (
-    <nav
-      className={`dab-conv-sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}
-      data-testid="conversations-sidebar"
-      aria-label="Previous Conversations"
-    >
+    <nav className={`dab-conv-sidebar ${sidebarCollapsed ? 'collapsed' : ''}`} data-testid="conversations-sidebar" aria-label="Previous Conversations">
       <div className="dab-conv-sidebar-header">
         <button
-          type="button"
-          className="dab-conv-collapse-btn"
-          data-testid="sidebar-collapse-toggle"
+          type="button" className="dab-conv-collapse-btn" data-testid="sidebar-collapse-toggle"
           onClick={() => setSidebarCollapsed((prev) => !prev)}
           title={sidebarCollapsed ? 'Expand conversations sidebar' : 'Collapse conversations sidebar'}
           aria-expanded={!sidebarCollapsed}
         >
           {sidebarCollapsed ? '»' : '«'}
         </button>
-        {!sidebarCollapsed && (
-          <strong className="dab-conv-sidebar-title">
-            Conversations ({conversations.length})
-          </strong>
-        )}
+        {!sidebarCollapsed && <strong className="dab-conv-sidebar-title">Conversations ({conversations.length})</strong>}
       </div>
 
       <div className="dab-conv-sidebar-actions">
         <button
-          type="button"
-          className="dab-conv-new-btn"
-          data-testid="new-conversation-btn"
-          onClick={() => handleNewConversation('auto')}
-          disabled={!!busyStatus}
-          title="Start a new conversation"
+          type="button" className="dab-conv-new-btn" data-testid="new-conversation-btn"
+          onClick={() => handleNewConversation('auto')} disabled={!!busyStatus} title="Start a new conversation"
         >
           {sidebarCollapsed ? '+' : '+ New Conversation'}
         </button>
@@ -887,30 +867,14 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
 
       {!sidebarCollapsed && (
         <div className="dab-conv-list">
-          {conversations.length === 0 ? (
-            <div className="dab-conv-empty">No previous conversations yet.</div>
-          ) : (
-            conversations.map((conv) => renderConversationRow(conv, false))
-          )}
-
+          {conversations.length === 0 ? <div className="dab-conv-empty">No previous conversations yet.</div> : conversations.map((conv) => renderConversationRow(conv, false))}
           <div className="dab-conv-archived-section">
-            <button
-              type="button"
-              className="dab-conv-archived-toggle"
-              data-testid="toggle-archived-convs"
-              onClick={() => setShowArchivedConversations((prev) => !prev)}
-            >
-              {showArchivedConversations
-                ? `Hide Archived (${archivedConversations.length})`
-                : `Show Archived (${archivedConversations.length})`}
+            <button type="button" className="dab-conv-archived-toggle" data-testid="toggle-archived-convs" onClick={() => setShowArchivedConversations((prev) => !prev)}>
+              {showArchivedConversations ? `Hide Archived (${archivedConversations.length})` : `Show Archived (${archivedConversations.length})`}
             </button>
             {showArchivedConversations && (
               <div className="dab-conv-archived-list" data-testid="archived-conversations-list">
-                {archivedConversations.length === 0 ? (
-                  <div className="dab-conv-empty">No archived conversations.</div>
-                ) : (
-                  archivedConversations.map((conv) => renderConversationRow(conv, true))
-                )}
+                {archivedConversations.length === 0 ? <div className="dab-conv-empty">No archived conversations.</div> : archivedConversations.map((conv) => renderConversationRow(conv, true))}
               </div>
             )}
           </div>
@@ -924,38 +888,10 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
         title="Delete Conversation?"
         footer={
           <>
-            <button
-              type="button"
-              className="dab-btn-secondary"
-              data-testid="cancel-delete-conv-btn"
-              onClick={handleCancelDeleteConversation}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="dab-btn-secondary"
-              data-testid="confirm-delete-conv-only-btn"
-              onClick={() => handleConfirmDeleteConversation(false)}
-            >
-              Delete Conversation Only
-            </button>
-            <button
-              type="button"
-              className="dab-btn-danger"
-              data-testid="confirm-delete-conv-and-content-btn"
-              onClick={() => handleConfirmDeleteConversation(true)}
-            >
-              Delete Conversation &amp; Related Content
-            </button>
-            <button
-              type="button"
-              className="dab-btn-primary"
-              data-testid="confirm-delete-conv-btn"
-              onClick={() => handleConfirmDeleteConversation()}
-            >
-              Confirm Delete
-            </button>
+            <button type="button" className="dab-btn-secondary" data-testid="cancel-delete-conv-btn" onClick={handleCancelDeleteConversation}>Cancel</button>
+            <button type="button" className="dab-btn-secondary" data-testid="confirm-delete-conv-only-btn" onClick={() => handleConfirmDeleteConversation(false)}>Delete Conversation Only</button>
+            <button type="button" className="dab-btn-danger" data-testid="confirm-delete-conv-and-content-btn" onClick={() => handleConfirmDeleteConversation(true)}>Delete Conversation &amp; Related Content</button>
+            <button type="button" className="dab-btn-primary" data-testid="confirm-delete-conv-btn" onClick={() => handleConfirmDeleteConversation()}>Confirm Delete</button>
           </>
         }
       >
@@ -971,24 +907,12 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
                 <strong>Linked Looker &amp; Shared Artifact Content:</strong>
                 <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
                   {relatedInfo.items.map((item, idx) => {
-                    const matchedLink = relatedInfo.relatedLinks?.find(
-                      (l) => l.itemText === item
-                    )
+                    const matchedLink = relatedInfo.relatedLinks?.find((l) => l.itemText === item)
                     return (
                       <li key={idx}>
                         {matchedLink ? (
-                          <a
-                            data-testid={`delete-modal-content-link-${idx}`}
-                            href={`${hostUrl}${matchedLink.path}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{ color: 'var(--dab-accent)', textDecoration: 'underline' }}
-                          >
-                            {item}
-                          </a>
-                        ) : (
-                          item
-                        )}
+                          <a data-testid={`delete-modal-content-link-${idx}`} href={`${hostUrl}${matchedLink.path}`} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--dab-accent)', textDecoration: 'underline' }}>{item}</a>
+                        ) : item}
                       </li>
                     )
                   })}
