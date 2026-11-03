@@ -27,20 +27,23 @@ import {
 } from './healthCheck'
 import {
   applyStudioDocumentTheme, archiveUserConversation, buildAvailableExploresCatalog, buildDenseExploreSchema,
-  buildRootLookerFolders, CaConversationState, ConversationRecord, createLookerCaConversation,
+  buildRootLookerFolders, CaConversationState, clampLeftPaneWidth, ConversationRecord, createLookerCaConversation,
   deleteUserConversation, extractExploreIdsFromCode, extractResolvedUseCase,
   fetchFolderChildren, fetchFolderWithAncestors, fetchInitialLookerMetadata,
   fetchPreloadedContentSummary, formatExploreId,
   getAllowedUseCases, getArtifactNamespace, getArtifactService, getUseCaseLabel,
   hydrateConversationContentItems, hydrateMentionedContext, isConversationalNoOpPrompt, listSavedScripts,
   listUserArtifacts, loadExistingDashboardApp, loadNativeContentById,
-  loadObjectArtifact, loadScriptArtifact, loadStoredSelectedFolderId, loadStoredStudioThemeMode, loadUserConversations,
+  loadObjectArtifact, loadScriptArtifact, loadStoredLeftPaneWidth, loadStoredRightPaneCollapsed,
+  loadStoredSelectedFolderId, loadStoredStudioThemeMode, loadUserConversations,
   loadUserEnvironmentId, LookerFolderNode, matchExplicitUseCaseRule, NativeContentState,
   normalizeStudioThemeMode, parseExploreId, persistSelectedFolderId, persistStudioThemeMode, PublishedAppState,
-  publishScriptDashboard, readInitialSelectedFolderId, readInitialStudioThemeMode, resolveCaEmbedPath,
+  publishScriptDashboard, readInitialLeftPaneWidth, readInitialRightPaneCollapsed,
+  readInitialSelectedFolderId, readInitialStudioThemeMode, resolveCaEmbedPath,
   resolveConversationRelatedContent, ResolvedStudioTheme, ResolvedStudioUseCase, resolveStudioTheme, resolveSystemTheme,
   resolveUserCapabilities, saveDashboardStudioMetadata, SavedScript, saveNativeContentArtifact,
-  saveScriptArtifact, saveUserArtifact, saveUserConversation, saveUserEnvironmentId, searchGlobalContentV2, searchLookerFolders, SearchLookerFoldersParams,
+  saveScriptArtifact, saveStoredLeftPaneWidth, saveStoredRightPaneCollapsed, saveUserArtifact,
+  saveUserConversation, saveUserEnvironmentId, searchGlobalContentV2, searchLookerFolders, SearchLookerFoldersParams,
   selectCaAgentViaIsolatedSubagent, shouldRouteToIsolatedCaSubagent, STUDIO_FOLDER_STORAGE_KEY, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
   StudioContentItem, StudioContentItemType, StudioContextCategory, StudioContextMention, studioModeToUseCase, StudioThemeMode, StudioToolMode, StudioUseCase, studioUseCaseToMode, upsertPublishedDataApp, upsertStudioContentItem,
   UserArtifactIndex, UserCapabilities, UserConversationEntry,
@@ -273,6 +276,11 @@ export function useStudioController() {
     applyStudioDocumentTheme(resolvedTheme, themeMode)
   }, [resolvedTheme, themeMode])
 
+  const [leftPaneWidth, setLeftPaneWidthState] = useState<number>(() => readInitialLeftPaneWidth())
+  const [rightPaneCollapsed, setRightPaneCollapsedState] = useState<boolean>(() =>
+    readInitialRightPaneCollapsed()
+  )
+
   useEffect(() => {
     let mounted = true
     void loadStoredStudioThemeMode(extensionSDK).then((stored) => {
@@ -281,10 +289,41 @@ export function useStudioController() {
     void loadStoredThinkingLevel(extensionSDK).then((stored) => {
       if (mounted && stored) setThinkingLevelState(stored)
     })
+    void loadStoredLeftPaneWidth(extensionSDK).then((storedWidth) => {
+      if (mounted && Number.isFinite(storedWidth)) {
+        setLeftPaneWidthState(clampLeftPaneWidth(storedWidth))
+      }
+    })
+    void loadStoredRightPaneCollapsed(extensionSDK).then((storedCollapsed) => {
+      if (mounted) setRightPaneCollapsedState(Boolean(storedCollapsed))
+    })
     return () => {
       mounted = false
     }
   }, [extensionSDK])
+
+  const setLeftPaneWidth = useCallback(
+    (next: number | ((prev: number) => number)) => {
+      setLeftPaneWidthState((prev) => {
+        const raw = typeof next === 'function' ? next(prev) : next
+        const clamped = clampLeftPaneWidth(raw)
+        void saveStoredLeftPaneWidth(clamped, extensionSDK)
+        return clamped
+      })
+    },
+    [extensionSDK]
+  )
+
+  const setRightPaneCollapsed = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      setRightPaneCollapsedState((prev) => {
+        const resolved = Boolean(typeof next === 'function' ? next(prev) : next)
+        void saveStoredRightPaneCollapsed(resolved, extensionSDK)
+        return resolved
+      })
+    },
+    [extensionSDK]
+  )
 
   const setThinkingLevel = useCallback(
     (next: StudioThinkingLevel | string) => {
@@ -1745,7 +1784,7 @@ export function useStudioController() {
   const handleRunPython = useCallback(
     async (codeToRun = scriptCode, rawFilters = filtersJson) => {
       try {
-        setBusyStatus('Running Python in WASM Monty sandbox...')
+        setBusyStatus('Executing Looker queries...')
         let parsedFilters: Record<string, string> = {}
         try {
           parsedFilters = JSON.parse(rawFilters || '{}')
@@ -2863,7 +2902,7 @@ export function useStudioController() {
           ...messagesWithUser,
           {
             role: 'assistant',
-            text: result.assistantText || 'Updated Python script and executed in WASM Monty sandbox.',
+            text: result.assistantText || 'Updated script and executed Looker queries.',
             interactionId: result.session.lastInteractionId,
             activitySteps: result.activitySteps,
             thinkingDurationSec: result.thinkingDurationSec,
@@ -3199,7 +3238,8 @@ export function useStudioController() {
         oauthExpiresAt, triggerSilentOAuthRefresh,
         isAuthenticated, oauthSigningIn, oauthRedirectUri,
         handleOAuthLogin, handleCancelOAuthLogin,
-        setSidebarCollapsed, themeMode, resolvedTheme, setThemeMode,
+        setSidebarCollapsed, leftPaneWidth, setLeftPaneWidth, rightPaneCollapsed, setRightPaneCollapsed,
+        themeMode, resolvedTheme, setThemeMode,
         selectedModel, setSelectedModel, thinkingLevel, setThinkingLevel,
         selectedUseCase, setSelectedUseCase: handleChangeUseCase,
         isUseCaseLocked, allowedUseCases, useCaseOptions, setCapabilities,
@@ -3221,7 +3261,7 @@ export function useStudioController() {
         lookerWorkspaceId, isLookerDevMode, setLookerWorkspaceId, handleToggleLookerDevMode,
       }
     }
-  }, [history, requestCodeModePermission, oauthExpiresAt, triggerSilentOAuthRefresh, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, selectedModel, thinkingLevel, setThinkingLevel, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, queuedPrompts, updateQueuedPrompts, handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, environmentStatus, envResetNotice, handleResetEnvironment, handleStopEnvironment, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, setSelectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems, lookerWorkspaceId, isLookerDevMode, handleToggleLookerDevMode])
+  }, [history, requestCodeModePermission, oauthExpiresAt, triggerSilentOAuthRefresh, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, leftPaneWidth, setLeftPaneWidth, rightPaneCollapsed, setRightPaneCollapsed, themeMode, resolvedTheme, setThemeMode, selectedModel, thinkingLevel, setThinkingLevel, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, queuedPrompts, updateQueuedPrompts, handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, environmentStatus, envResetNotice, handleResetEnvironment, handleStopEnvironment, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, setSelectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems, lookerWorkspaceId, isLookerDevMode, handleToggleLookerDevMode])
 
   return {
     extensionSDK, core40SDK, lookerHostData, history, location, isTileMount,
@@ -3272,7 +3312,8 @@ export function useStudioController() {
     archivedConversations, showArchivedConversations, setShowArchivedConversations,
     pendingDeleteConv, setPendingDeleteConv, deleteRelatedContent, setDeleteRelatedContent,
     activeConversationId,
-    sidebarCollapsed, setSidebarCollapsed, isEmptyConversation,
+    sidebarCollapsed, setSidebarCollapsed, leftPaneWidth, setLeftPaneWidth,
+    rightPaneCollapsed, setRightPaneCollapsed, isEmptyConversation,
     requirePermission, setRequirePermission, pendingPerm, resolvePermDecision,
     handleSaveAuthSetup, handleOAuthLogin, handleCancelOAuthLogin,
     loadNativeById, loadLookmlSessionById, loadCaConversationById,

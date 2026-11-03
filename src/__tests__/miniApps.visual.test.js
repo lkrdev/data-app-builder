@@ -345,6 +345,10 @@ function buildHtmlPage(scenario) {
         if (!window.location.search.includes('preserveFolder=1')) {
           window.localStorage.removeItem('dab_selected_folder_id');
         }
+        if (!window.location.search.includes('preserveLayout=1')) {
+          window.localStorage.removeItem('dab_left_pane_width');
+          window.localStorage.removeItem('dab_right_pane_collapsed');
+        }
       } catch {}
 
       const isTile =
@@ -896,7 +900,7 @@ function buildHtmlPage(scenario) {
         initialInspectorOpen: scenario === 'chatbar_pasted_image_inspector',
         initialBusyStatus:
           scenario === 'chatbar_busy_running'
-            ? 'Executing LkrCodeMode Monty Python & validating Looker queries...'
+            ? 'Executing Looker queries for Order Items...'
             : null,
         initialError:
           scenario === 'chatbar_error_banner'
@@ -1350,7 +1354,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       snapshotName: '13-chatbar-state-busy-running-snap.png',
       clipSelector: ['.dab-status-banner', '.dab-composer'],
       expectText: [
-        'Executing LkrCodeMode Monty Python & validating Looker queries...',
+        'Executing Looker queries for Order Items...',
         'Executive Revenue App'
       ]
     },
@@ -4679,6 +4683,100 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         hasReadyCopy: true,
         hasHardcodedDataAppCopy: false
       }
+    })
+  }, 15000)
+
+  test('Issue #119: supports draggable split resizer, collapsible right artifact icon rail, clickable file/skill steps, and copy reasoning button', async () => {
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=studio_thinking_progress` })
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', { expression: `Boolean(document.querySelector('[data-testid="completed-thinking-block"]'))`, returnByValue: true })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 80))
+    }
+
+    const res = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const workspace = document.querySelector('.dab-workspace');
+        const resizer = document.querySelector('[data-testid="workspace-split-resizer"]');
+        const initialWidth = window.__DAB_STUDIO__.leftPaneWidth;
+        resizer.dispatchEvent(new MouseEvent('mousedown', { clientX: 380, bubbles: true }));
+        window.dispatchEvent(new MouseEvent('mousemove', { clientX: 460, bubbles: true }));
+        window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 40));
+        const widthAfterDrag = window.__DAB_STUDIO__.leftPaneWidth;
+        const cssVarAfterDrag = workspace.style.getPropertyValue('--dab-left-pane-width');
+        const storedWidth = window.localStorage.getItem('dab_left_pane_width');
+        resizer.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 40));
+        const widthAfterKey = window.__DAB_STUDIO__.leftPaneWidth;
+
+        window.__DAB_STUDIO__.setContentItems([
+          { key: 'data_app:42', id: '42', contentType: 'data_app', title: 'Executive Revenue App', embedPath: '/embed/dashboards/42', extensionId: 'db::exec-rev' },
+          { key: 'dashboard:108', id: '108', contentType: 'dashboard', title: 'Regional Margin UDD', embedPath: '/embed/dashboards/108' }
+        ]);
+        await new Promise((r) => setTimeout(r, 50));
+        document.querySelector('[data-testid="right-pane-collapse-toggle"]').click();
+        await new Promise((r) => setTimeout(r, 50));
+        const railEl = document.querySelector('[data-testid="right-pane-collapsed-rail"]');
+        const hasCollapsedClass = workspace.classList.contains('dab-workspace-right-collapsed');
+        const storedCollapsed = window.localStorage.getItem('dab_right_pane_collapsed');
+        const artifactBtnApp = document.querySelector('[data-testid="right-rail-artifact-data_app:42"]');
+        const artifactBtnDash = document.querySelector('[data-testid="right-rail-artifact-dashboard:108"]');
+        const resizerWhileCollapsed = document.querySelector('[data-testid="workspace-split-resizer"]');
+        artifactBtnDash.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const afterRailArtifactClick = { rightPaneCollapsed: window.__DAB_STUDIO__.rightPaneCollapsed, activeContentTabKey: window.__DAB_STUDIO__.activeContentTabKey, railGone: !document.querySelector('[data-testid="right-pane-collapsed-rail"]') };
+
+        window.__DAB_STUDIO__.setMessages([
+          { role: 'user', text: 'Investigate order items revenue drop' },
+          { role: 'assistant', text: 'Completed root-cause investigation.', thinkingDurationSec: 5, activitySteps: [
+            { id: 'st_thought', kind: 'thought', title: 'Framing investigation plan', detail: 'Checking key driver skill and DATA_INVESTIGATOR_GUIDE.md.', status: 'done' },
+            { id: 'st_file', kind: 'file', title: 'Viewing DATA_INVESTIGATOR_GUIDE.md', detail: '/workspace/DATA_INVESTIGATOR_GUIDE.md', path: '/workspace/DATA_INVESTIGATOR_GUIDE.md', status: 'done' },
+            { id: 'st_skill', kind: 'skill', title: 'Skill: key-driver-analysis', detail: 'skills/key-driver-analysis/SKILL.md', path: 'skills/key-driver-analysis/SKILL.md', status: 'done' },
+            { id: 'st_codemode', kind: 'codemode', title: 'Executing Looker queries for Order Items...', detail: 'sdk.run_inline_query', status: 'done' }
+          ] }
+        ]);
+        await new Promise((r) => setTimeout(r, 60));
+        const completedDetails = document.querySelector('[data-testid="completed-thinking-block"]');
+        const wasOpenBeforeCopy = completedDetails.hasAttribute('open');
+        const copyBtn = completedDetails.querySelector('[data-testid="copy-thinking-trace-btn"]');
+        copyBtn.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const wasOpenAfterCopy = completedDetails.hasAttribute('open');
+        const copyBtnTextAfterClick = (copyBtn.textContent || '').trim();
+        const copiedMarkdown = window.__LAST_COPIED_THINKING_TRACE__ || '';
+        completedDetails.querySelector('summary').click();
+        await new Promise((r) => setTimeout(r, 40));
+        completedDetails.querySelector('[data-testid="thinking-step-file"] summary').click();
+        completedDetails.querySelector('[data-testid="thinking-step-skill"] summary').click();
+        await new Promise((r) => setTimeout(r, 40));
+        const previews = Array.from(completedDetails.querySelectorAll('[data-testid="activity-step-content-preview"]')).map((el) => (el.textContent || '').trim());
+        return {
+          initialWidth, widthAfterDrag, cssVarAfterDrag, storedWidth, widthAfterKey,
+          hasRail: Boolean(railEl), hasCollapsedClass, storedCollapsed,
+          hasArtifactBtnApp: Boolean(artifactBtnApp), hasArtifactBtnDash: Boolean(artifactBtnDash),
+          hasResizerWhileCollapsed: Boolean(resizerWhileCollapsed), afterRailArtifactClick,
+          wasOpenBeforeCopy, wasOpenAfterCopy, copyBtnTextAfterClick,
+          copiedContainsHeader: copiedMarkdown.includes('## Thinking & Activity Trace (5s · 4 steps)'),
+          copiedContainsPrompt: copiedMarkdown.includes('Investigate order items revenue drop'),
+          copiedContainsFriendlyStep: copiedMarkdown.includes('Executing Looker queries for Order Items...'),
+          previewCount: previews.length,
+          filePreviewHasGuide: previews.some((p) => p.includes('Data Investigator')),
+          skillPreviewHasKda: previews.some((p) => p.includes('Key Driver Analysis'))
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(res.result.value).toEqual({
+      initialWidth: 380, widthAfterDrag: 460, cssVarAfterDrag: '460px', storedWidth: '460', widthAfterKey: 476,
+      hasRail: true, hasCollapsedClass: true, storedCollapsed: 'true', hasArtifactBtnApp: true, hasArtifactBtnDash: true, hasResizerWhileCollapsed: false,
+      afterRailArtifactClick: { rightPaneCollapsed: false, activeContentTabKey: 'dashboard:108', railGone: true },
+      wasOpenBeforeCopy: false, wasOpenAfterCopy: false, copyBtnTextAfterClick: 'Copied',
+      copiedContainsHeader: true, copiedContainsPrompt: true, copiedContainsFriendlyStep: true,
+      previewCount: 2, filePreviewHasGuide: true, skillPreviewHasKda: true
     })
   }, 15000)
 })

@@ -14,12 +14,17 @@ import {
   wrapDashboardCodeMode,
 } from './antigravityPrompts'
 import {
-  buildStudioRoute, classifyStudioUseCase, convertRelativeDateFilterToFixed, createDeduplicatedLookerSdkProxy,
-  DataAppBundle, extractResolvedUseCase, getAllowedUseCases, getArtifactNamespace, getUseCaseLabel,
-  isConversationalNoOpPrompt, matchExplicitUseCaseRule, NativeContentBundle, NativeContentState,
-  normalizeNativeContent, normalizeQueryFiltersToFixedDates, parseExploreId, ResolvedStudioUseCase,
-  resolveNativeEmbedPath, saveUserEnvironmentId, shouldRouteToIsolatedCaSubagent, STUDIO_USE_CASE_OPTIONS,
-  studioModeToUseCase, StudioUseCase, studioUseCaseToMode, useCaseToStudioMode,
+  buildStudioRoute, clampLeftPaneWidth, classifyStudioUseCase, convertRelativeDateFilterToFixed,
+  createDeduplicatedLookerSdkProxy, DataAppBundle, DEFAULT_LEFT_PANE_WIDTH,
+  extractResolvedUseCase, getAllowedUseCases, getArtifactNamespace,
+  getUseCaseLabel, isConversationalNoOpPrompt, loadStoredLeftPaneWidth,
+  loadStoredRightPaneCollapsed, matchExplicitUseCaseRule, MAX_LEFT_PANE_WIDTH, MIN_LEFT_PANE_WIDTH,
+  NativeContentBundle, NativeContentState, normalizeNativeContent, normalizeQueryFiltersToFixedDates,
+  parseExploreId, readInitialLeftPaneWidth, readInitialRightPaneCollapsed, ResolvedStudioUseCase,
+  resolveNativeEmbedPath, saveStoredLeftPaneWidth, saveStoredRightPaneCollapsed,
+  saveUserEnvironmentId, shouldRouteToIsolatedCaSubagent, STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY,
+  STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS, studioModeToUseCase,
+  StudioUseCase, studioUseCaseToMode, useCaseToStudioMode,
 } from './lookerApi'
 import {
   BOOTSTRAP_LOOKML_PY, BOOTSTRAP_SANDBOX_SH, buildLookmlSystemGuide, classifyLookerOperation,
@@ -31,12 +36,16 @@ import {
 
 export * from './antigravityPrompts'
 export {
-  buildStudioRoute, classifyStudioUseCase, convertRelativeDateFilterToFixed, extractResolvedUseCase,
-  getAllowedUseCases, getUseCaseLabel, isConversationalNoOpPrompt, matchExplicitUseCaseRule,
-  normalizeQueryFiltersToFixedDates, shouldRouteToIsolatedCaSubagent, STUDIO_USE_CASE_OPTIONS,
-  studioModeToUseCase, studioUseCaseToMode, useCaseToStudioMode,
+  buildStudioRoute, clampLeftPaneWidth, classifyStudioUseCase, convertRelativeDateFilterToFixed,
+  DEFAULT_LEFT_PANE_WIDTH, extractResolvedUseCase, getAllowedUseCases, getUseCaseLabel,
+  isConversationalNoOpPrompt, loadStoredLeftPaneWidth, loadStoredRightPaneCollapsed,
+  matchExplicitUseCaseRule, MAX_LEFT_PANE_WIDTH, MIN_LEFT_PANE_WIDTH,
+  normalizeQueryFiltersToFixedDates, readInitialLeftPaneWidth, readInitialRightPaneCollapsed,
+  saveStoredLeftPaneWidth, saveStoredRightPaneCollapsed, shouldRouteToIsolatedCaSubagent,
+  STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY, STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY,
+  STUDIO_USE_CASE_OPTIONS, studioModeToUseCase, studioUseCaseToMode, useCaseToStudioMode,
 }
-export type { ResolvedStudioUseCase, StudioUseCase } from './lookerApi'
+export type { ExtensionHostStorageLike, ResolvedStudioUseCase, StudioUseCase } from './lookerApi'
 export {
   BOOTSTRAP_LOOKML_PY,
   BOOTSTRAP_SANDBOX_SH,
@@ -53,6 +62,7 @@ export {
   LkrCodeMode,
 }
 export type { LkrExtensionToolRequest, LookmlBundle } from './lookmlTool'
+export type { ExtensionHostStorageLike } from './lookerApi'
 
 export interface AntigravityModelOption {
   id: string
@@ -149,7 +159,10 @@ export type AntigravityExtensionHostLike =
 
 export interface AntigravityNestedStepCall {
   name?: string; arguments?: unknown; args?: unknown; path?: string; file_path?: string
+  filename?: string; file?: string; filepath?: string; uri?: string
+  Path?: string; FilePath?: string; TargetFile?: string; AbsolutePath?: string
   target?: string; description?: string; skill?: string; skill_name?: string
+  query?: string; input?: string; new_content?: string
   code?: string; command?: string; language?: string
 }
 
@@ -215,6 +228,8 @@ export interface AntigravityActivityStep {
   detail?: string
   language?: string
   status?: 'running' | 'done'
+  path?: string
+  content?: string
 }
 
 export interface StudioAttachedFile {
@@ -1195,21 +1210,152 @@ export function extractThoughtText(val: unknown): string {
 const stripThoughtHeading = (line: string): string =>
   line.trim().replace(/^#+\s*/, '').replace(/^\*\*(.+?)\*\*:?\s*$|^\*\*|\*\*$/g, '$1').trim()
 
-export function extractInteractionActivitySteps(
-  interaction: AntigravityInteractionPayload | null | undefined
-): AntigravityActivityStep[] {
-  const rawSteps: AntigravityInteractionStep[] = Array.isArray(interaction?.steps)
-    ? interaction.steps
-    : []
-  const rawOutputs: AntigravityInteractionOutput[] = Array.isArray(interaction?.outputs)
-    ? interaction.outputs
-    : []
-  const completedCallIds = new Set<string>(
-    rawSteps
-      .filter((s) => s?.type === 'function_result' || s?.type === 'tool_result')
-      .map((s) => String(s?.call_id || s?.id || '').trim())
-      .filter(Boolean)
-  )
+export const BUILTIN_SKILLS_FILES: Record<string, string> = {
+  '/workspace/skills/key-driver-analysis/SKILL.md': KDA_SKILL_MD,
+  'skills/key-driver-analysis/SKILL.md': KDA_SKILL_MD,
+  'key-driver-analysis': KDA_SKILL_MD,
+  '/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py': KDA_TOOLKIT_PY,
+  'skills/key-driver-analysis/scripts/kda_toolkit.py': KDA_TOOLKIT_PY,
+  'kda_toolkit.py': KDA_TOOLKIT_PY,
+  'data-app-creator': DATA_APP_GUIDE_MD,
+  'data-investigator': DATA_INVESTIGATOR_GUIDE_MD,
+  'lookml-field-curation': '# LookML Field Curation & Descriptions Skill\nCurate business-ready `label`, `description`, `group_label`, `value_format_name`, and `drill_fields` across LookML views and refinements.',
+  'lookml-tests': '# LookML Data Tests (.test.lkml) Skill\nAuthor `test:` blocks with `explore_source` and `assert:` expressions and validate via `run_lookml_test`.',
+  'lookml-snapshot': '# LookML SQL & Explore Parity Snapshot Skill\nVerify 100% row/value parity between raw SQL (`run_sql_query`) and LookML Explore (`run_inline_query`).',
+  'lookml-bronze-view': '# LookML Bronze View & Refinement Skill\nGenerate base `.view.lkml` and layered `.refinement.lkml` files with `primary_key: yes` and symmetric aggregate safety.',
+}
+
+export const BUILTIN_WORKSPACE_FILES: Record<string, string> = {
+  '/workspace/AGENTS.md': AGENTS_MD, 'AGENTS.md': AGENTS_MD,
+  '/workspace/DATA_APP_GUIDE.md': DATA_APP_GUIDE_MD, 'DATA_APP_GUIDE.md': DATA_APP_GUIDE_MD,
+  '/workspace/DATA_INVESTIGATOR_GUIDE.md': DATA_INVESTIGATOR_GUIDE_MD, 'DATA_INVESTIGATOR_GUIDE.md': DATA_INVESTIGATOR_GUIDE_MD,
+  '/workspace/bundle_app.py': BUNDLE_APP_PY, 'bundle_app.py': BUNDLE_APP_PY,
+  '/workspace/bootstrap_lookml.py': BOOTSTRAP_LOOKML_PY, 'bootstrap_lookml.py': BOOTSTRAP_LOOKML_PY,
+  '/workspace/sitecustomize.py': LKR_CLI_SITECUSTOMIZE_PY, 'sitecustomize.py': LKR_CLI_SITECUSTOMIZE_PY,
+  ...BUILTIN_SKILLS_FILES,
+}
+
+export function resolveBuiltinWorkspaceFileContent(pathOrName?: string): string | undefined {
+  const raw = String(pathOrName || '').trim()
+  if (!raw) return undefined
+  if (BUILTIN_WORKSPACE_FILES[raw]) return BUILTIN_WORKSPACE_FILES[raw]
+  const skill = raw.match(/(?:^|\/)skills\/([^/\s]+)(?:\/SKILL\.md)?$/i)?.[1]
+  return (skill && BUILTIN_SKILLS_FILES[skill]) || BUILTIN_WORKSPACE_FILES[raw.split('/').filter(Boolean).pop() || raw]
+}
+
+const IGNORED_TARGET_TOKENS = new Set([
+  'json', 'csv', 'txt', 'md', 'html', 'sql', 'true', 'false', 'none', 'null', 'undefined',
+  'dev', 'production', 'sdk', 'vars', 'args', 'params', 'body', 'result', 'res', 'data',
+  'get', 'post', 'put', 'patch', 'delete', 'ok', 'id', '1', '0',
+])
+
+function humanizeLookerTargetLabel(raw: unknown): string | undefined {
+  let str = String(raw ?? '').trim().replace(/^['"`]+|['"`]+$/g, '').trim()
+  if (!str) return undefined
+  if (str.startsWith('/') || str.includes('/api/')) {
+    const exp = str.match(/\/lookml_models\/[^/]+\/explores\/([^/?#]+)/i)?.[1]
+    const dash = str.match(/\/dashboards\/([^/?#]+)/i)?.[1]
+    const fold = str.match(/\/folders\/([^/?#]+)/i)?.[1]
+    const mod = str.match(/\/(?:lookml_models|projects)\/([^/?#]+)/i)?.[1]
+    if (exp) str = exp
+    else if (dash) return /^\d+$/.test(dash) ? `Dashboard #${dash}` : humanizeLookerTargetLabel(dash)
+    else if (fold) return /^\d+$/.test(fold) ? `Folder #${fold}` : humanizeLookerTargetLabel(fold)
+    else if (mod) str = mod
+    else return undefined
+  }
+  if (str.includes('::')) str = str.split('::').map((p) => p.trim()).filter(Boolean).pop() || str
+  str = str.replace(/\.(?:dashboard\.lookml|view\.lkml|model\.lkml|explore\.lkml|lkml|lookml)$/i, '').trim()
+  if (!str || /^\d+$/.test(str) || IGNORED_TARGET_TOKENS.has(str.toLowerCase())) return undefined
+  if (/\s/.test(str) && /[A-Z]/.test(str)) return str
+  return str.split(/[_-\s]+/).filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
+}
+
+const LOOKER_QUERY_EXEC_RE = /\b(?:run_inline_query|run_query|run_sql_query|create_query|create_sql_query|query_for_slug|run_key_driver_analysis)\b/i
+
+export function formatFriendlyLookerActivityLabel(
+  code: string, args?: Record<string, unknown>
+): { statusText: string; stepTitle: string; targetLabel?: string; isQuery: boolean } {
+  const codeStr = String(code || '')
+  const vars = args?.vars && typeof args.vars === 'object' && !Array.isArray(args.vars) ? (args.vars as Record<string, unknown>) : undefined
+  const activeContent = vars?.active_content && typeof vars.active_content === 'object' && !Array.isArray(vars.active_content) ? (vars.active_content as Record<string, unknown>) : undefined
+  const rawCandidates: unknown[] = [
+    codeStr.match(/lookml_model_explore\s*\(\s*['"][^'"]+['"]\s*,\s*['"]([^'"]+)['"]/i)?.[1],
+    codeStr.match(/['"](?:view|explore|explore_name)['"]\s*:\s*['"]([^'"]+)['"]/i)?.[1],
+    codeStr.match(/\b(?:view|explore|explore_name)\s*=\s*['"]([^'"]+)['"]/i)?.[1],
+    codeStr.match(/\b[a-z][a-z0-9_]*::([a-z][a-z0-9_]*)\b/i)?.[1],
+    codeStr.match(/(?:upsert_udd|create_dashboard|update_dashboard|upsert_lookml_dashboard)\s*\(\s*['"]([^'"]+)['"]/i)?.[1],
+    codeStr.match(/['"](?:title|dashboard_title|folder_name|name)['"]\s*:\s*['"]([^'"]+)['"]/i)?.[1],
+    codeStr.match(/['"]([a-z][a-z0-9_]*)\.[a-z][a-z0-9_]*['"]/i)?.[1],
+    codeStr.match(/lookml_model\s*\(\s*['"]([^'"]+)['"]/i)?.[1],
+    codeStr.match(/['"]model['"]\s*:\s*['"]([^'"]+)['"]/i)?.[1],
+    codeStr.match(/\bmodel\s*=\s*['"]([^'"]+)['"]/i)?.[1],
+    args?.explore, args?.view, args?.target_explore, vars?.target_explore, vars?.explore, vars?.view,
+    Array.isArray(args?.target_explores) ? args?.target_explores[0] : undefined,
+    Array.isArray(vars?.target_explores) ? vars?.target_explores[0] : undefined,
+    Array.isArray(args?.explores) ? args?.explores[0] : undefined,
+    Array.isArray(vars?.explores) ? vars?.explores[0] : undefined,
+    args?.title, args?.dashboard_title, args?.folder_name, activeContent?.title,
+    args?.path, args?.model, args?.target_model, vars?.target_model, vars?.model,
+  ]
+  let targetLabel: string | undefined
+  for (const cand of rawCandidates) {
+    targetLabel = humanizeLookerTargetLabel(cand)
+    if (targetLabel) break
+  }
+  const isQuery = LOOKER_QUERY_EXEC_RE.test(codeStr) || /\/(?:queries|sql_queries)\b|run_inline_query|run_query|run_sql_query/i.test(String(args?.path || ''))
+  const statusText = isQuery
+    ? (targetLabel ? `Executing Looker queries for ${targetLabel}...` : 'Executing Looker queries...')
+    : (targetLabel ? `Executing Looker API calls for ${targetLabel}...` : 'Executing Looker API calls...')
+  return { statusText, stepTitle: statusText, ...(targetLabel ? { targetLabel } : {}), isQuery }
+}
+
+const RESULT_STEP_TYPE_RE = /^(?:function_result|tool_result|view_file_result|edit_file_result|read_file_result|write_file_result|skill_lookup_result|lookup_skill_result|code_execution_result)$/
+const FILE_TOOL_FN_RE = /^(?:view_file|edit_file|read_file|write_file|open_file|cat_file)(?:_call)?$/i
+const SKILL_TOOL_FN_RE = /^(?:skill_lookup|lookup_skill)(?:_call)?$/i
+const INTERNAL_JARGON_THOUGHT_RE = /\b(?:LkrCodeMode|Monty|WASM|lkr-dev-cli|Looker Code Mode|Looker CLI Bridge)\b/i
+const FILE_PATH_KEYS = ['path', 'file_path', 'filename', 'file', 'filepath', 'uri', 'target', 'Path', 'FilePath', 'TargetFile', 'AbsolutePath', 'name', 'query', 'input'] as const
+const SKILL_NAME_KEYS = ['skill', 'skill_name', 'name', 'target', 'path', 'file_path', 'filename', 'file', 'filepath', 'uri', 'Path', 'FilePath', 'TargetFile', 'query', 'input'] as const
+
+function pickFirstStringField(sources: Array<Record<string, unknown> | undefined>, keys: readonly string[], ignoreRe?: RegExp): string {
+  for (const src of sources) {
+    if (!src || typeof src !== 'object') continue
+    for (const k of keys) {
+      const trimmed = typeof src[k] === 'string' ? String(src[k]).trim() : ''
+      if (trimmed && !trimmed.startsWith('{') && (!ignoreRe || !ignoreRe.test(trimmed))) return trimmed
+    }
+  }
+  return ''
+}
+
+function extractStepContentFromSources(sources: Array<Record<string, unknown> | undefined>, fallbackPathOrSkill?: string): string | undefined {
+  for (const src of sources) {
+    if (!src || typeof src !== 'object') continue
+    for (const key of ['content', 'new_content', 'file_content', 'markdown', 'output', 'result', 'text', 'stdout']) {
+      const trimmed = typeof src[key] === 'string' ? String(src[key]).trim() : ''
+      if (!trimmed) continue
+      if (trimmed.startsWith('{')) {
+        const parsed = parseStepArguments(trimmed)
+        for (const ik of ['content', 'text', 'output', 'result', 'markdown', 'file_content']) {
+          if (typeof parsed[ik] === 'string' && String(parsed[ik]).trim()) return String(parsed[ik]).trim()
+        }
+      }
+      return trimmed
+    }
+  }
+  return resolveBuiltinWorkspaceFileContent(fallbackPathOrSkill)
+}
+
+export function extractInteractionActivitySteps(interaction: AntigravityInteractionPayload | null | undefined): AntigravityActivityStep[] {
+  const rawSteps: AntigravityInteractionStep[] = Array.isArray(interaction?.steps) ? interaction.steps : []
+  const rawOutputs: AntigravityInteractionOutput[] = Array.isArray(interaction?.outputs) ? interaction.outputs : []
+  const completedCallIds = new Set<string>()
+  const resultStepByCallId = new Map<string, AntigravityInteractionStep>()
+  for (const s of rawSteps) {
+    if (RESULT_STEP_TYPE_RE.test(String(s?.type || '').trim())) {
+      const cid = String(s?.call_id || s?.id || '').trim()
+      if (cid) { completedCallIds.add(cid); resultStepByCallId.set(cid, s) }
+    }
+  }
   const interactionDone = /^(?:completed|failed|cancelled)$/.test(String(interaction?.status || ''))
   const byKey = new Map<string, AntigravityActivityStep>()
   const seenContent = new Set<string>()
@@ -1224,34 +1370,18 @@ export function extractInteractionActivitySteps(
     if (existing) {
       if (step.status === 'done') existing.status = 'done'
       if (step.detail && !existing.detail) existing.detail = step.detail
+      if (step.path && !existing.path) existing.path = step.path
+      if (step.content && !existing.content) existing.content = step.content
       return
     }
     if (seenContent.has(contentKey) || (!step.detail && seenKindTitle.has(kindTitleKey))) return
-    seenContent.add(contentKey)
-    seenKindTitle.add(kindTitleKey)
-    byKey.set(mapKey, step)
+    seenContent.add(contentKey); seenKindTitle.add(kindTitleKey); byKey.set(mapKey, step)
   }
 
-  const addThought = (
-    item: AntigravityInteractionStep | AntigravityInteractionOutput,
-    stepId: string,
-    explicitId: string | undefined,
-    status: 'running' | 'done'
-  ) => {
-    const tObj =
-      item.thought && typeof item.thought === 'object' && !Array.isArray(item.thought)
-        ? (item.thought as Record<string, unknown>)
-        : null
+  const addThought = (item: AntigravityInteractionStep | AntigravityInteractionOutput, stepId: string, explicitId: string | undefined, status: 'running' | 'done') => {
+    const tObj = item.thought && typeof item.thought === 'object' && !Array.isArray(item.thought) ? (item.thought as Record<string, unknown>) : null
     const summary = extractThoughtText(tObj?.summary ?? item.summary)
-    const text = extractThoughtText(
-      tObj?.text ??
-        (typeof item.thought === 'string' || Array.isArray(item.thought) ? item.thought : undefined) ??
-        item.text ??
-        tObj?.content ??
-        item.content ??
-        tObj?.parts ??
-        item.parts
-    )
+    const text = extractThoughtText(tObj?.text ?? (typeof item.thought === 'string' || Array.isArray(item.thought) ? item.thought : undefined) ?? item.text ?? tObj?.content ?? item.content ?? tObj?.parts ?? item.parts)
     const raw = summary && text && summary !== text ? `${summary}\n${text}` : summary || text
     const [firstLine = '', ...restLines] = raw.split(/\r?\n/)
     const title = stripThoughtHeading(firstLine)
@@ -1264,16 +1394,21 @@ export function extractInteractionActivitySteps(
     const step = rawSteps[i]
     if (!step || typeof step !== 'object') continue
     const sType = String(step.type || '').trim()
-    if (sType === 'function_result' || sType === 'tool_result') continue
+    if (RESULT_STEP_TYPE_RE.test(sType)) continue
 
     const explicitId = step.id ? String(step.id).trim() : undefined
     const stepId = explicitId || `step_${++autoIdx}`
     const isLastStep = i === rawSteps.length - 1
     const fnName = String(step.name || step.function_call?.name || '').trim()
+    const nextStep = rawSteps[i + 1]
+    const pairedResult = (explicitId ? resultStepByCallId.get(explicitId) : undefined) ||
+      (nextStep && RESULT_STEP_TYPE_RE.test(String(nextStep.type || '').trim()) && (!nextStep.call_id || !explicitId || String(nextStep.call_id).trim() === explicitId) ? nextStep : undefined)
+    const pairedResultObj = pairedResult as unknown as Record<string, unknown> | undefined
+    const pairedResultParsed = parseStepArguments(pairedResultObj?.result ?? pairedResultObj?.output ?? pairedResultObj?.content)
 
     const resolveStatus = (isFunctionCall = false): 'running' | 'done' => {
       if (step.status === 'running' || step.status === 'in_progress') return 'running'
-      if (step.status === 'done' || step.status === 'completed' || interactionDone) return 'done'
+      if (step.status === 'done' || step.status === 'completed' || interactionDone || pairedResult) return 'done'
       if (isFunctionCall && explicitId) {
         if (completedCallIds.has(explicitId)) return 'done'
         if (interaction?.status === 'requires_action' || isLastStep) return 'running'
@@ -1281,106 +1416,93 @@ export function extractInteractionActivitySteps(
       return interaction?.status === 'in_progress' && isLastStep ? 'running' : 'done'
     }
 
-    if (
-      sType === 'thought' ||
-      sType === 'thinking' ||
-      (step.thought && !/^(?:function_call|run_looker_codemode|lkr_cli_extension_bridge)$/.test(sType))
-    ) {
-      addThought(step, stepId, explicitId, resolveStatus(false))
-      continue
+    if (sType === 'thought' || sType === 'thinking' || (step.thought && !/^(?:function_call|run_looker_codemode|lkr_cli_extension_bridge)$/.test(sType))) {
+      addThought(step, stepId, explicitId, resolveStatus(false)); continue
     }
 
-    if (
-      sType === 'view_file_call' ||
-      sType === 'edit_file_call' ||
-      step.view_file_call ||
-      step.edit_file_call ||
-      (sType === 'function_call' && /^(?:view_file|edit_file|read_file|write_file)(?:_call)?$/.test(fnName))
-    ) {
-      const nested = step.view_file_call || step.edit_file_call || step.function_call || {}
-      const args = parseStepArguments(step.arguments ?? step.args ?? nested.arguments ?? nested.args)
-      const targetPath = String(
-        step.path || step.file_path || step.target || nested.path || nested.file_path || nested.target || args.path || args.file_path || args.target || ''
-      ).trim()
+    if (FILE_TOOL_FN_RE.test(sType) || step.view_file_call || step.edit_file_call || (sType === 'function_call' && FILE_TOOL_FN_RE.test(fnName))) {
+      const nested = (step.view_file_call || step.edit_file_call || step.function_call || {}) as Record<string, unknown>
+      const stepObj = step as unknown as Record<string, unknown>
+      const args = { ...parseStepArguments(step.input ?? nested.input), ...parseStepArguments(step.arguments ?? step.args ?? nested.arguments ?? nested.args) }
+      const targetPath = pickFirstStringField([stepObj, nested, args, pairedResultParsed, pairedResultObj], FILE_PATH_KEYS, FILE_TOOL_FN_RE)
       const desc = String(step.description || nested.description || args.description || '').trim()
       const isEdit = /edit|write/.test(`${sType}:${fnName}`)
-      const title = targetPath && desc ? `${targetPath} — ${desc}` : targetPath || desc || (isEdit ? 'Editing file' : 'Viewing file')
+      const shortName = targetPath ? targetPath.split('/').filter(Boolean).pop() || targetPath : ''
+      const title = targetPath && desc ? `${targetPath} — ${desc}` : shortName ? `${isEdit ? 'Editing' : 'Viewing'} ${shortName}` : desc || (isEdit ? 'Editing file' : 'Viewing file')
       const detail = desc || targetPath || undefined
-      upsertStep({ id: stepId, kind: 'file', title, ...(detail ? { detail } : {}), status: resolveStatus(true) }, explicitId)
+      const content = extractStepContentFromSources([args, pairedResultParsed, pairedResultObj, stepObj], targetPath)
+      upsertStep({ id: stepId, kind: 'file', title, ...(detail ? { detail } : {}), ...(targetPath ? { path: targetPath } : {}), ...(content ? { content } : {}), status: resolveStatus(true) }, explicitId)
       continue
     }
 
-    const skillCallRe = /^(?:skill_lookup|lookup_skill)(?:_call)?$/
-    if (skillCallRe.test(sType) || step.skill_lookup_call || (sType === 'function_call' && skillCallRe.test(fnName))) {
-      const nested = step.skill_lookup_call || step.function_call || {}
-      const args = parseStepArguments(step.arguments ?? step.args ?? nested.arguments ?? nested.args)
-      const pickName = (v: unknown) => (v && !skillCallRe.test(String(v)) ? String(v) : '')
-      const skillName = String(
-        step.skill || step.skill_name || nested.skill || nested.skill_name || pickName(nested.name) || args.skill || args.skill_name || pickName(args.name) || pickName(step.name) || step.target || args.target || ''
-      ).trim()
+    if (SKILL_TOOL_FN_RE.test(sType) || step.skill_lookup_call || (sType === 'function_call' && SKILL_TOOL_FN_RE.test(fnName))) {
+      const nested = (step.skill_lookup_call || step.function_call || {}) as Record<string, unknown>
+      const stepObj = step as unknown as Record<string, unknown>
+      const args = { ...parseStepArguments(step.input ?? nested.input), ...parseStepArguments(step.arguments ?? step.args ?? nested.arguments ?? nested.args) }
+      const rawSkill = pickFirstStringField([stepObj, nested, args, pairedResultParsed, pairedResultObj], SKILL_NAME_KEYS, SKILL_TOOL_FN_RE)
+      const skillName = rawSkill.match(/(?:^|\/)skills\/([^/\s]+)(?:\/SKILL\.md)?$/i)?.[1] || rawSkill
       const desc = String(step.description || nested.description || args.description || '').trim()
-      const title = skillName && desc ? `${skillName} — ${desc}` : skillName || desc || 'Skill lookup'
-      const detail = desc || skillName || undefined
-      upsertStep({ id: stepId, kind: 'skill', title, ...(detail ? { detail } : {}), status: resolveStatus(true) }, explicitId)
+      const title = skillName && desc ? `${skillName} — ${desc}` : skillName ? `Skill: ${skillName}` : desc || 'Skill lookup'
+      const detail = desc || rawSkill || skillName || undefined
+      const content = extractStepContentFromSources([pairedResultParsed, pairedResultObj, args, stepObj], rawSkill || skillName)
+      upsertStep({ id: stepId, kind: 'skill', title, ...(detail ? { detail } : {}), ...(rawSkill || skillName ? { path: rawSkill || skillName } : {}), ...(content ? { content } : {}), status: resolveStatus(true) }, explicitId)
       continue
     }
 
     if (/^(?:run_looker_codemode|lkr_cli_extension_bridge)$/.test(fnName) || /^(?:run_looker_codemode|lkr_cli_extension_bridge)$/.test(sType)) {
       const isBridge = fnName === 'lkr_cli_extension_bridge' || sType === 'lkr_cli_extension_bridge'
       const args = parseStepArguments(step.arguments ?? step.args ?? step.function_call?.arguments ?? step.function_call?.args ?? step)
-      const thought = extractThoughtText(args.thought ?? step.thought)
+      const rawThought = extractThoughtText(args.thought ?? step.thought)
+      const thought = INTERNAL_JARGON_THOUGHT_RE.test(rawThought) ? '' : rawThought
       const codeStr = String(args.code || step.code || '').trim()
       const sdkPreview = extractLookerSdkMethodPreview(codeStr)
       const firstCodeLine = codeStr.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('#')) || ''
+      const friendly = formatFriendlyLookerActivityLabel(codeStr, args)
       if (isBridge) {
         const method = String(args.method || step.method || '').trim().toUpperCase()
         const pathStr = String(args.path || step.path || '').trim()
         const methodPath = method || pathStr ? `${method || 'GET'} ${pathStr || '/'}` : ''
-        const title = thought || methodPath || (sdkPreview ? `Looker CLI Bridge (${sdkPreview})` : 'Executing bridged Looker CLI request')
+        const title = thought || methodPath || friendly.stepTitle
         const detail = methodPath || sdkPreview || (codeStr ? codeStr.split('\n')[0].trim().slice(0, 140) : undefined)
-        upsertStep(
-          { id: stepId, kind: 'cli_bridge', title, ...(detail ? { detail } : {}), ...(codeStr ? { language: 'PYTHON' } : {}), status: resolveStatus(true) },
-          explicitId
-        )
+        upsertStep({ id: stepId, kind: 'cli_bridge', title, ...(detail ? { detail } : {}), ...(codeStr ? { language: 'PYTHON' } : {}), status: resolveStatus(true) }, explicitId)
       } else {
-        const title = thought || (sdkPreview ? `Looker Code Mode (${sdkPreview})` : 'Running Looker Code Mode')
+        const title = thought || friendly.stepTitle
         const detail = sdkPreview || (firstCodeLine ? firstCodeLine.slice(0, 140) : undefined)
-        upsertStep(
-          { id: stepId, kind: 'codemode', title, ...(detail ? { detail } : {}), language: 'PYTHON', status: resolveStatus(true) },
-          explicitId
-        )
+        upsertStep({ id: stepId, kind: 'codemode', title, ...(detail ? { detail } : {}), language: 'PYTHON', status: resolveStatus(true) }, explicitId)
       }
       continue
     }
 
-    if (
-      /^(?:code_execution|code_execution_call|executable_code)$/.test(sType) ||
-      step.code_execution ||
-      step.code_execution_call ||
-      step.executable_code ||
-      (sType === 'function_call' && /^(?:code_execution|bash|sh|python)(?:_call)?$/.test(fnName))
-    ) {
-      const nested = step.code_execution || step.code_execution_call || step.executable_code || step.function_call || {}
-      const args = parseStepArguments(step.arguments ?? step.args ?? nested.arguments ?? nested.args)
+    if (/^(?:code_execution|code_execution_call|executable_code)$/.test(sType) || step.code_execution || step.code_execution_call || step.executable_code || (sType === 'function_call' && /^(?:code_execution|bash|sh|python)(?:_call)?$/.test(fnName))) {
+      const nested = (step.code_execution || step.code_execution_call || step.executable_code || step.function_call || {}) as Record<string, unknown>
+      const stepObj = step as unknown as Record<string, unknown>
+      const args = { ...parseStepArguments(step.input ?? nested.input), ...parseStepArguments(step.arguments ?? step.args ?? nested.arguments ?? nested.args) }
       const rawCode = String(step.code ?? step.command ?? nested.code ?? nested.command ?? args.code ?? args.command ?? step.input ?? '').trim()
       const rawLang = String(step.language ?? nested.language ?? args.language ?? '').trim().toUpperCase()
-      const language =
-        rawLang.includes('PYTHON') || rawLang === 'PY' || fnName === 'python'
-          ? 'PYTHON'
-          : rawLang.includes('BASH') || rawLang.includes('SH') || fnName === 'bash'
-          ? 'BASH'
-          : /^(?:import\s+\w|from\s+\w+\s+import\s+|def\s+\w)/m.test(rawCode) && !/^(?:python3?|uv|lkr|bash|sh)\b/.test(rawCode)
-          ? 'PYTHON'
-          : 'BASH'
+      const language = rawLang.includes('PYTHON') || rawLang === 'PY' || fnName === 'python' ? 'PYTHON'
+        : rawLang.includes('BASH') || rawLang.includes('SH') || fnName === 'bash' ? 'BASH'
+        : /^(?:import\s+\w|from\s+\w+\s+import\s+|def\s+\w)/m.test(rawCode) && !/^(?:python3?|uv|lkr|bash|sh)\b/.test(rawCode) ? 'PYTHON' : 'BASH'
       const firstLine = rawCode.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('#')) || rawCode
-      const conciseCmd =
-        firstLine.replace(/\s*<<\s*['"]?\w+['"]?.*$/, '').trim().slice(0, 140) ||
-        (language === 'PYTHON' ? 'Running Python script' : 'Running sandbox command')
+
+      if (language === 'BASH' && /^\s*(?:cat|head|tail|sed)\b/.test(firstLine) && !/[>|]|\btee\b|<<\s*['"]?\w+/.test(firstLine)) {
+        const matchedPath = firstLine.match(/((?:\/workspace\/[^\s'"|;&><]+)|(?:[a-zA-Z0-9_./-]*skills\/[a-zA-Z0-9_.-]+\/SKILL\.md)|(?:[a-zA-Z0-9_./-]+\.(?:lkml|lookml|md|py|js)))\b/)?.[1]?.trim()
+        if (matchedPath) {
+          const skillName = matchedPath.match(/(?:^|\/)skills\/([^/\s]+)\/SKILL\.md$/i)?.[1]
+          const content = extractStepContentFromSources([pairedResultParsed, pairedResultObj, (step.code_execution_result || {}) as Record<string, unknown>, stepObj], matchedPath)
+          const shortName = matchedPath.split('/').filter(Boolean).pop() || matchedPath
+          upsertStep(
+            skillName
+              ? { id: stepId, kind: 'skill', title: `Skill: ${skillName}`, detail: matchedPath, path: matchedPath, ...(content ? { content } : {}), status: resolveStatus(false) }
+              : { id: stepId, kind: 'file', title: `Viewing ${shortName}`, detail: matchedPath, path: matchedPath, ...(content ? { content } : {}), status: resolveStatus(false) },
+            explicitId
+          )
+          continue
+        }
+      }
+
+      const conciseCmd = firstLine.replace(/\s*<<\s*['"]?\w+['"]?.*$/, '').trim().slice(0, 140) || (language === 'PYTHON' ? 'Running Python script' : 'Running sandbox command')
       const detail = rawCode ? rawCode.split('\n').slice(0, 3).join('\n').slice(0, 200) : undefined
-      upsertStep(
-        { id: stepId, kind: 'code_execution', title: conciseCmd, ...(detail ? { detail } : {}), language, status: resolveStatus(false) },
-        explicitId
-      )
+      upsertStep({ id: stepId, kind: 'code_execution', title: conciseCmd, ...(detail ? { detail } : {}), language, status: resolveStatus(false) }, explicitId)
     }
   }
 
@@ -1390,50 +1512,49 @@ export function extractInteractionActivitySteps(
       addThought(out, outId || `step_${++autoIdx}`, outId, interactionDone ? 'done' : 'running')
     }
   }
-
   return Array.from(byKey.values())
 }
 
-export function summarizeProgress(
-  interaction: AntigravityInteractionPayload | null | undefined
+export function formatThinkingTraceMarkdown(
+  steps: AntigravityActivityStep[],
+  meta?: { thinkingDurationSec?: number; userPrompt?: string; assistantText?: string }
 ): string {
+  const safeSteps = Array.isArray(steps) ? steps : []
+  const stepWord = safeSteps.length === 1 ? 'step' : 'steps'
+  const headerSuffix = typeof meta?.thinkingDurationSec === 'number' ? ` (${meta.thinkingDurationSec}s · ${safeSteps.length} ${stepWord})` : ` (${safeSteps.length} ${stepWord})`
+  const lines: string[] = [`## Thinking & Activity Trace${headerSuffix}`]
+  if (meta?.userPrompt?.trim()) lines.push('', `**User Prompt:** ${meta.userPrompt.trim()}`)
+  lines.push('')
+  safeSteps.forEach((step, idx) => {
+    const badge = step.kind === 'thought' ? '[Thought]' : step.kind === 'file' ? '[File]' : step.kind === 'skill' ? '[Skill]' : step.kind === 'codemode' ? '[Code Mode]' : step.kind === 'cli_bridge' ? '[CLI Bridge]' : step.kind === 'code_execution' ? (step.language === 'PYTHON' ? '[Sandbox Python]' : '[Sandbox Bash]') : '[Activity]'
+    lines.push(`${idx + 1}. **${badge} ${step.title}**`)
+    if (step.path && step.path !== step.title && step.path !== step.detail) lines.push(`   - Path: \`${step.path}\``)
+    if (step.detail && step.detail !== step.title) {
+      lines.push(step.kind === 'thought' ? `   ${step.detail.replace(/\r?\n/g, '\n   ')}` : `   \`${step.detail.replace(/\r?\n/g, ' ')}\``)
+    }
+    if (step.content?.trim()) lines.push('   ```', `   ${step.content.trim().slice(0, 600).replace(/\r?\n/g, '\n   ')}`, '   ```')
+  })
+  if (meta?.assistantText?.trim()) lines.push('', '### Assistant Response', '', meta.assistantText.trim())
+  return lines.join('\n').trim()
+}
+
+export function summarizeProgress(interaction: AntigravityInteractionPayload | null | undefined): string {
   const lastTitle = extractInteractionActivitySteps(interaction).pop()?.title
   if (lastTitle) return lastTitle
   const last = (interaction?.steps || []).slice(-1)[0]
   if (last?.type === 'function_call') {
-    return (
-      extractThoughtText(parseStepArguments(last.arguments ?? last.args).thought) ||
-      `Running tool: ${last.name || 'sandbox command'}...`
-    )
+    return extractThoughtText(parseStepArguments(last.arguments ?? last.args).thought) || `Running tool: ${last.name || 'sandbox command'}...`
   }
   return 'Thinking...'
 }
 
 function extractInteractionTelemetry(
   interaction: AntigravityInteractionPayload | null | undefined,
-  stats: {
-    agentWallMs: number
-    pollWaitMs: number
-    pollCount: number
-    codemodeExecMs: number
-    lookerHttpMs: number
-    codemodeCalls: number
-    lookerHttpCalls: number
-    apiRetries: number
-  }
+  stats: { agentWallMs: number; pollWaitMs: number; pollCount: number; codemodeExecMs: number; lookerHttpMs: number; codemodeCalls: number; lookerHttpCalls: number; apiRetries: number }
 ): AntigravityTurnTelemetry {
   const steps: AntigravityInteractionStep[] = interaction?.steps || []
-  const bashCalls = steps.filter(
-    (s) =>
-      s?.type === 'code_execution' ||
-      s?.type === 'executable_code' ||
-      (s?.type === 'function_call' && s?.name !== 'run_looker_codemode')
-  ).length
-  const verifyRetries = steps.filter((s) =>
-    /"stage":\s*"(?:syntax|safety|widget_extraction)"/.test(
-      String(s?.output || s?.stderr || s?.result || '')
-    )
-  ).length
+  const bashCalls = steps.filter((s) => s?.type === 'code_execution' || s?.type === 'executable_code' || (s?.type === 'function_call' && s?.name !== 'run_looker_codemode')).length
+  const verifyRetries = steps.filter((s) => /"stage":\s*"(?:syntax|safety|widget_extraction)"/.test(String(s?.output || s?.stderr || s?.result || ''))).length
   const usage = interaction?.usage || interaction?.usage_metadata || {}
   return {
     agent_wall_ms: stats.agentWallMs,
@@ -1573,99 +1694,40 @@ export interface AntigravityTurnResult {
   thinkingDurationSec?: number
 }
 
-export async function runAntigravityTurn(
-  params: RunAntigravityTurnOptions
-): Promise<AntigravityTurnResult> {
+export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Promise<AntigravityTurnResult> {
   const turnStartMs = Date.now()
-  let pollWaitMs = 0
-  let pollCount = 0
-  let codemodeExecMs = 0
-  let lookerHttpMs = 0
-  let codemodeCalls = 0
-  let lookerHttpCalls = 0
-  let apiRetries = 0
+  let pollWaitMs = 0, pollCount = 0, codemodeExecMs = 0, lookerHttpMs = 0, codemodeCalls = 0, lookerHttpCalls = 0, apiRetries = 0
 
   const {
-    sdk,
-    extensionSDK,
-    userId,
-    environmentId,
-    conversationId: rawConversationId,
-    onEnvironmentUpdated,
-    auth,
-    session,
-    model = DEFAULT_ANTIGRAVITY_MODEL,
-    thinkingLevel = DEFAULT_THINKING_LEVEL,
-    mode = 'data_app',
-    useCase = 'auto',
-    allowedModes,
-    selectedExplores,
-    folderId,
-    toolMode = 'data_app',
-    lookmlProjectId,
-    activatedLookmlSkills,
-    developableProjects,
-    canDeploy,
-    schemaMarkdown,
-    userPrompt,
-    images,
-    existingAppCode,
-    existingNativeContent,
-    customSystemGuide,
-    extraSources,
-    priorMessages,
-    requirePermission = true,
-    approvedOperations,
-    onPermissionRequest,
-    onRequestWritePermission,
-    onProgressSteps,
-    pollScheduleMs = DEFAULT_POLL_SCHEDULE_MS,
-    signal,
-    onInteractionCreated,
-    onStatus,
+    sdk, extensionSDK, userId, environmentId, conversationId: rawConversationId, onEnvironmentUpdated, auth, session,
+    model = DEFAULT_ANTIGRAVITY_MODEL, thinkingLevel = DEFAULT_THINKING_LEVEL, mode = 'data_app', useCase = 'auto',
+    allowedModes, selectedExplores, folderId, toolMode = 'data_app', lookmlProjectId, activatedLookmlSkills,
+    developableProjects, canDeploy, schemaMarkdown, userPrompt, images, existingAppCode, existingNativeContent,
+    customSystemGuide, extraSources, priorMessages, requirePermission = true, approvedOperations, onPermissionRequest,
+    onRequestWritePermission, onProgressSteps, pollScheduleMs = DEFAULT_POLL_SCHEDULE_MS, signal, onInteractionCreated, onStatus,
   } = params
 
   const throwIfAborted = async (interactionId?: string): Promise<void> => {
     if (!signal?.aborted) return
     if (interactionId) {
-      try {
-        await callInteractionsApi(
-          extensionSDK,
-          auth,
-          `interactions/${encodeURIComponent(interactionId)}:cancel`,
-          'POST',
-          {}
-        )
-      } catch {
-        // Ignore best-effort cancel errors
-      }
+      try { await callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(interactionId)}:cancel`, 'POST', {}) } catch { /* ignore */ }
     }
     throw Object.assign(new Error('Turn stopped by user'), { name: 'AbortError' })
   }
 
   const effectivePermissionHandler = onPermissionRequest || onRequestWritePermission
-
   const firstParsed = selectedExplores[0] ? parseExploreId(selectedExplores[0]) : null
   const primaryModel = firstParsed?.modelName || ''
   const primaryExplore = firstParsed?.exploreName || ''
 
   const effectiveToolType: AntigravityToolType =
-    toolMode === 'lookml'
-      ? 'lookml'
-      : customSystemGuide?.includes('3-Pillar')
-      ? 'health'
-      : customSystemGuide?.includes('codemode-script-tile')
-      ? 'tile'
-      : mode === 'dashboard'
-      ? 'dashboard'
-      : 'app'
-
+    toolMode === 'lookml' ? 'lookml'
+      : customSystemGuide?.includes('3-Pillar') ? 'health'
+      : customSystemGuide?.includes('codemode-script-tile') ? 'tile'
+      : mode === 'dashboard' ? 'dashboard' : 'app'
   const isDashboardMode = effectiveToolType === 'dashboard'
 
-  const conversationId =
-    String(rawConversationId || session.conversationId || session.objectId || 'current')
-      .trim()
-      .replace(/[^a-zA-Z0-9_-]/g, '_') || 'current'
+  const conversationId = String(rawConversationId || session.conversationId || session.objectId || 'current').trim().replace(/[^a-zA-Z0-9_-]/g, '_') || 'current'
   const appDir = `/workspace/apps/${conversationId}`
   const appFilePath = `${appDir}/app.js`
 
@@ -1673,20 +1735,14 @@ export async function runAntigravityTurn(
   let activeEnvId = initialEnvId
   const userProvisionKey = resolveUserProvisionKey(userId, auth)
   if (activeEnvId && schemaMarkdown && selectedExplores.length > 0) {
-    for (const expKey of selectedExplores) {
-      recordSharedEnvExploreSchema(activeEnvId, expKey, schemaMarkdown)
-    }
+    for (const expKey of selectedExplores) recordSharedEnvExploreSchema(activeEnvId, expKey, schemaMarkdown)
   }
 
   // ponytail: decouple container state (environmentId) from conversation history (lastInteractionId).
-  // A single per-user environmentId is shared across conversations and tool modes, while
-  // previous_interaction_id stays strictly scoped to the active conversation.
   const isFreshConversation =
     !session.lastInteractionId ||
     Boolean(session.toolType && session.toolType !== effectiveToolType) ||
-    (Array.isArray(session.explores) &&
-      session.explores.length > 0 &&
-      JSON.stringify(session.explores) !== JSON.stringify(selectedExplores))
+    (Array.isArray(session.explores) && session.explores.length > 0 && JSON.stringify(session.explores) !== JSON.stringify(selectedExplores))
 
   const exploreDirective =
     selectedExplores.length > 0
@@ -1715,29 +1771,16 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const normalizedExistingNative: NativeContentState | null = existingNativeContent
     ? normalizeNativeContent({
         ...existingNativeContent,
-        folderId:
-          (existingNativeContent as Partial<NativeContentState & NativeContentBundle>).folderId ||
-          (existingNativeContent as Partial<NativeContentState & NativeContentBundle>).folder_id ||
-          folderId ||
-          '1',
+        folderId: (existingNativeContent as Partial<NativeContentState & NativeContentBundle>).folderId || (existingNativeContent as Partial<NativeContentState & NativeContentBundle>).folder_id || folderId || '1',
       })
     : null
 
   const isDataInvestigatorTurn =
-    useCase === 'data-investigator' ||
-    (useCase === 'auto' &&
-      extractResolvedUseCase('', userPrompt, allowedModes) === 'data-investigator')
+    useCase === 'data-investigator' || (useCase === 'auto' && extractResolvedUseCase('', userPrompt, allowedModes) === 'data-investigator')
 
   const dataAppOrNativeGuide =
     mode === 'dashboard'
-      ? buildNativeContentGuide({
-          selectedExplores,
-          primaryModel,
-          primaryExplore,
-          folderId: folderId || '1',
-          lookmlProjectId: lookmlProjectId || '',
-          existingNativeContent: normalizedExistingNative,
-        })
+      ? buildNativeContentGuide({ selectedExplores, primaryModel, primaryExplore, folderId: folderId || '1', lookmlProjectId: lookmlProjectId || '', existingNativeContent: normalizedExistingNative })
       : [
           `You are building a Looker ${isDataInvestigatorTurn ? 'Data Investigator Narrative Data App' : 'Data App'} (Lit web component using Looker's data-app.js runtime) ${exploreDirective}`,
           `Follow these exact steps inside your Linux sandbox:`,
@@ -1752,45 +1795,23 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const systemGuide =
     customSystemGuide ||
     (toolMode === 'lookml'
-      ? buildLookmlSystemGuide({
-          selectedExplores,
-          primaryModel,
-          primaryExplore,
-          projectId: lookmlProjectId,
-          activatedSkills: activatedLookmlSkills,
-          developableProjects,
-          canDeploy,
-        })
+      ? buildLookmlSystemGuide({ selectedExplores, primaryModel, primaryExplore, projectId: lookmlProjectId, activatedSkills: activatedLookmlSkills, developableProjects, canDeploy })
       : dataAppOrNativeGuide)
 
   const uploadSources: Array<{ type: 'inline'; content: string; target: string }> = []
   const uploadedFileNotices: string[] = []
   for (let i = 0; i < (images || []).length; i += 1) {
     const file = images![i]
-    const fallbackExt = file.mimeType.startsWith('image/')
-      ? `.${file.mimeType.split('/')[1] || 'png'}`
-      : file.mimeType === 'application/pdf'
-      ? '.pdf'
-      : '.txt'
-    const rawName = file.name || `attachment_${i + 1}${fallbackExt}`
-    const safeName = rawName.replace(/[^a-zA-Z0-9._-]+/g, '_')
+    const fallbackExt = file.mimeType.startsWith('image/') ? `.${file.mimeType.split('/')[1] || 'png'}` : file.mimeType === 'application/pdf' ? '.pdf' : '.txt'
+    const safeName = (file.name || `attachment_${i + 1}${fallbackExt}`).replace(/[^a-zA-Z0-9._-]+/g, '_')
     const targetPath = `/workspace/uploads/${safeName}`
-    uploadSources.push({
-      type: 'inline',
-      target: targetPath,
-      content: file.textContent !== undefined ? file.textContent : file.dataUrl || file.data,
-    })
-    uploadedFileNotices.push(
-      `- \`${targetPath}\` (${file.mimeType}${file.size ? `, ${file.size} bytes` : ''})`
-    )
+    uploadSources.push({ type: 'inline', target: targetPath, content: file.textContent !== undefined ? file.textContent : file.dataUrl || file.data })
+    uploadedFileNotices.push(`- \`${targetPath}\` (${file.mimeType}${file.size ? `, ${file.size} bytes` : ''})`)
   }
 
   const sources = buildWorkspaceSources({
-    schemaMarkdown,
-    appFilePath,
-    existingAppCode: mode === 'data_app' ? existingAppCode : undefined,
-    cachedExploreSchemas: getSharedEnvExploreSchemas(activeEnvId),
-    extraSources: [...(extraSources || []), ...uploadSources],
+    schemaMarkdown, appFilePath, existingAppCode: mode === 'data_app' ? existingAppCode : undefined,
+    cachedExploreSchemas: getSharedEnvExploreSchemas(activeEnvId), extraSources: [...(extraSources || []), ...uploadSources],
   })
 
   // ponytail: disable remote container code_execution in /dashboard mode so all UDD + .dashboard.lookml
@@ -1801,11 +1822,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
   const historyDigest =
     priorMessages && priorMessages.length > 0
-      ? `\n\nPrior conversation context:\n${priorMessages
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .slice(-40)
-          .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
-          .join('\n')}`
+      ? `\n\nPrior conversation context:\n${priorMessages.filter((m) => m.role === 'user' || m.role === 'assistant').slice(-40).map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`).join('\n')}`
       : ''
 
   const isNoOpTurn = isConversationalNoOpPrompt(userPrompt)
@@ -1818,24 +1835,13 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
   const autoRoutingDirective =
     useCase === 'auto'
-      ? `\n\n[AUTO USE-CASE ROUTING: Consult /workspace/AGENTS.md ("## Use Case Auto-Classification (Turn 1 Routing)"). Allowed use cases for this user: ${JSON.stringify(
-          allowedModes && allowedModes.length > 0
-            ? allowedModes
-            : ['app', 'data-investigator', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics']
-        )}. Start your response with <USE_CASE>...</USE_CASE> naming the single best allowed use case for this request, then execute that workflow. CRITICAL: (1) Conversational & Follow-Up Questions (No-Op): when the prompt is a greeting, help request, meta/error summary ("summarize the errors you experienced", "what went wrong?", "how can I make you better?"), or general follow-up question in an active conversation that does not ask to build or modify a right-pane artifact ("hello", "hi", "help", "what can you do?"), answer directly in chat (calling zero tools for greetings/meta-questions) and do NOT create or open any right-pane content item (do NOT run bundle_app.py, emit_native_bundle, or redirect to an isolated CA sub-agent). (2) Script (tile) Routing for Ad-Hoc Looker Instance / Folder / Space / SDK Queries: route prompts asking to inspect or query Looker spaces, folders, personal spaces, users, permissions, schedules, or instance metadata via SDK (e.g. "tell me what my personal space is", "can you find me all personal spaces that don't have dashboards") to <USE_CASE>tile</USE_CASE> and use run_looker_codemode without creating a Data App or Dashboard. (3) Data Investigator Routing: route prompts asking to "investigate", "find out", "figure out", "dig into", "what drove", or "what caused" across data, metrics, dashboards, Looks, or explores to <USE_CASE>data-investigator</USE_CASE> and follow /workspace/DATA_INVESTIGATOR_GUIDE.md and /workspace/skills/key-driver-analysis/SKILL.md.]`
+      ? `\n\n[AUTO USE-CASE ROUTING: Consult /workspace/AGENTS.md ("## Use Case Auto-Classification (Turn 1 Routing)"). Allowed use cases for this user: ${JSON.stringify(allowedModes && allowedModes.length > 0 ? allowedModes : ['app', 'data-investigator', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics'])}. Start your response with <USE_CASE>...</USE_CASE> naming the single best allowed use case for this request, then execute that workflow. CRITICAL: (1) Conversational & Follow-Up Questions (No-Op): when the prompt is a greeting, help request, meta/error summary ("summarize the errors you experienced", "what went wrong?", "how can I make you better?"), or general follow-up question in an active conversation that does not ask to build or modify a right-pane artifact ("hello", "hi", "help", "what can you do?"), answer directly in chat (calling zero tools for greetings/meta-questions) and do NOT create or open any right-pane content item (do NOT run bundle_app.py, emit_native_bundle, or redirect to an isolated CA sub-agent). (2) Script (tile) Routing for Ad-Hoc Looker Instance / Folder / Space / SDK Queries: route prompts asking to inspect or query Looker spaces, folders, personal spaces, users, permissions, schedules, or instance metadata via SDK (e.g. "tell me what my personal space is", "can you find me all personal spaces that don't have dashboards") to <USE_CASE>tile</USE_CASE> and use run_looker_codemode without creating a Data App or Dashboard. (3) Data Investigator Routing: route prompts asking to "investigate", "find out", "figure out", "dig into", "what drove", or "what caused" across data, metrics, dashboards, Looks, or explores to <USE_CASE>data-investigator</USE_CASE> and follow /workspace/DATA_INVESTIGATOR_GUIDE.md and /workspace/skills/key-driver-analysis/SKILL.md.]`
       : ''
 
-  const uploadsSection =
-    uploadedFileNotices.length > 0
-      ? `\n\nAttached files in /workspace/uploads:\n${uploadedFileNotices.join('\n')}`
-      : ''
-
+  const uploadsSection = uploadedFileNotices.length > 0 ? `\n\nAttached files in /workspace/uploads:\n${uploadedFileNotices.join('\n')}` : ''
   const thinkingDirective =
-    thinkingLevel === 'low'
-      ? '[THINKING LEVEL: LOW — Be concise and minimize exploratory steps]\n\n'
-      : thinkingLevel === 'high'
-      ? '[THINKING LEVEL: HIGH — Reason deeply and verify edge cases thoroughly]\n\n'
-      : ''
+    thinkingLevel === 'low' ? '[THINKING LEVEL: LOW — Be concise and minimize exploratory steps]\n\n'
+      : thinkingLevel === 'high' ? '[THINKING LEVEL: HIGH — Reason deeply and verify edge cases thoroughly]\n\n' : ''
 
   const buildInputItems = (fresh: boolean): Array<Record<string, unknown>> => [
     {
@@ -1846,32 +1852,20 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     },
     ...(images || [])
       .filter((img) => img.mimeType.startsWith('image/') || img.mimeType === 'application/pdf')
-      .map((img) => ({
-        type: img.mimeType === 'application/pdf' ? 'document' : 'image',
-        mime_type: img.mimeType,
-        data: img.data,
-      })),
+      .map((img) => ({ type: img.mimeType === 'application/pdf' ? 'document' : 'image', mime_type: img.mimeType, data: img.data })),
   ]
 
   const activeModel = model || DEFAULT_ANTIGRAVITY_MODEL
   const agentConfig = { type: 'antigravity', model: activeModel }
-
   const buildFreshPayload = (): Record<string, unknown> => ({
-    agent: 'antigravity-preview-09-2026',
-    agent_config: agentConfig,
-    background: true,
-    tools: activeTools,
-    input: buildInputItems(true),
-    environment: { type: 'remote', sources },
+    agent: 'antigravity-preview-09-2026', agent_config: agentConfig, background: true, tools: activeTools,
+    input: buildInputItems(true), environment: { type: 'remote', sources },
   })
 
   const provisionFreshEnvironmentInteraction = async (): Promise<AntigravityInteractionPayload> => {
     let resolveEnv!: (envId: string) => void
     let rejectEnv!: (err: unknown) => void
-    const envPromise = new Promise<string>((res, rej) => {
-      resolveEnv = res
-      rejectEnv = rej
-    })
+    const envPromise = new Promise<string>((res, rej) => { resolveEnv = res; rejectEnv = rej })
     envPromise.catch(() => {})
     inFlightEnvProvisionByUser.set(userProvisionKey, envPromise)
     try {
@@ -1882,9 +1876,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       rejectEnv(err)
       throw err
     } finally {
-      if (inFlightEnvProvisionByUser.get(userProvisionKey) === envPromise) {
-        inFlightEnvProvisionByUser.delete(userProvisionKey)
-      }
+      if (inFlightEnvProvisionByUser.get(userProvisionKey) === envPromise) inFlightEnvProvisionByUser.delete(userProvisionKey)
     }
   }
 
@@ -1894,9 +1886,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     try {
       const coalescedId = normalizeEnvironmentId(await inFlightEnvProvisionByUser.get(userProvisionKey)!)
       if (coalescedId) activeEnvId = coalescedId
-    } catch {
-      // Ignore coalesced provisioning failure
-    }
+    } catch { /* ignore */ }
   }
   if (signal?.aborted) await throwIfAborted()
 
@@ -1904,18 +1894,12 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   if (activeEnvId || (!isFreshConversation && session.lastInteractionId)) {
     try {
       interaction = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
-        agent: 'antigravity-preview-09-2026',
-        agent_config: agentConfig,
-        background: true,
-        tools: activeTools,
-        input: buildInputItems(isFreshConversation),
-        environment: activeEnvId || 'remote',
+        agent: 'antigravity-preview-09-2026', agent_config: agentConfig, background: true, tools: activeTools,
+        input: buildInputItems(isFreshConversation), environment: activeEnvId || 'remote',
         ...(isFreshConversation ? {} : { previous_interaction_id: session.lastInteractionId }),
       })
     } catch (err) {
       if (activeEnvId && !isEnvironmentNotFoundError(err) && isFreshConversation) throw err
-      // ponytail: if stored environmentId returned 404 (Environment '<env_id>' not found) or
-      // resumed conversation expired, spin up a fresh remote environment seeded with sources.
       apiRetries += 1
       onStatus('Resumed sandbox expired; provisioning fresh sandbox with app state...')
       interaction = await provisionFreshEnvironmentInteraction()
@@ -1923,69 +1907,34 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   } else {
     interaction = await provisionFreshEnvironmentInteraction()
   }
-  if (interaction.id) {
-    onInteractionCreated?.(interaction.id)
-  }
+  if (interaction.id) onInteractionCreated?.(interaction.id)
   await throwIfAborted(interaction.id)
-  let trackedEnvId: string | undefined =
-    normalizeEnvironmentId(interaction.environment_id) || activeEnvId
+  let trackedEnvId: string | undefined = normalizeEnvironmentId(interaction.environment_id) || activeEnvId
   if (trackedEnvId && schemaMarkdown && selectedExplores.length > 0) {
-    for (const expKey of selectedExplores) {
-      recordSharedEnvExploreSchema(trackedEnvId, expKey, schemaMarkdown)
-    }
+    for (const expKey of selectedExplores) recordSharedEnvExploreSchema(trackedEnvId, expKey, schemaMarkdown)
   }
-  await persistUserEnvIfChanged({
-    sdk,
-    extensionSDK,
-    userId,
-    previousEnvId: initialEnvId,
-    nextEnvId: trackedEnvId,
-    onEnvironmentUpdated,
-  })
+  await persistUserEnvIfChanged({ sdk, extensionSDK, userId, previousEnvId: initialEnvId, nextEnvId: trackedEnvId, onEnvironmentUpdated })
 
-  let pollIdx = 0
-  let prevStepCount = (interaction.steps || []).length
-  let prevStatus = interaction.status
+  let pollIdx = 0, prevStepCount = (interaction.steps || []).length, prevStatus = interaction.status, bridgeRound = 0
   const resolvedBridgeCacheKeys = new Set<string>()
   const accumulatedSteps: AntigravityInteractionStep[] = []
-  let bridgeRound = 0
 
   const n = normalizedExistingNative
   const activeContentVars = n
     ? {
-        ...n,
-        content_type: n.contentType,
-        folder_id: n.folderId,
-        lookml_dashboard_id: n.lookmlDashboardId,
-        projectId: n.projectId || lookmlProjectId || '',
-        project_id: n.projectId || lookmlProjectId || '',
-        model: n.model || primaryModel,
-        file_path: n.filePath,
-        look_id: n.lookId,
-        board_id: n.boardId,
-        schedule_id: n.scheduleId,
-        layout_id: n.layoutId,
-        element_ids: n.elementIds || [],
-        filter_names: n.filterNames || [],
-        layout_component_ids: n.layoutComponentIds || {},
-        query_cache: n.queryCache || {},
-        filter_cache: n.filterCache || {},
-        explores: selectedExplores,
+        ...n, content_type: n.contentType, folder_id: n.folderId, lookml_dashboard_id: n.lookmlDashboardId,
+        projectId: n.projectId || lookmlProjectId || '', project_id: n.projectId || lookmlProjectId || '',
+        model: n.model || primaryModel, file_path: n.filePath, look_id: n.lookId, board_id: n.boardId,
+        schedule_id: n.scheduleId, layout_id: n.layoutId, element_ids: n.elementIds || [],
+        filter_names: n.filterNames || [], layout_component_ids: n.layoutComponentIds || {},
+        query_cache: n.queryCache || {}, filter_cache: n.filterCache || {}, explores: selectedExplores,
       }
     : null
   const defaultCodeModeVars: Record<string, unknown> = {
-    target_explores: selectedExplores,
-    target_model: primaryModel,
-    target_explore: primaryExplore,
-    target_folder_id: folderId || '1',
-    target_project_id: lookmlProjectId || normalizedExistingNative?.projectId || '',
+    target_explores: selectedExplores, target_model: primaryModel, target_explore: primaryExplore,
+    target_folder_id: folderId || '1', target_project_id: lookmlProjectId || normalizedExistingNative?.projectId || '',
     cached_explore_schemas: getSharedEnvExploreSchemas(trackedEnvId),
-    ...(activeContentVars
-      ? {
-          active_content: activeContentVars,
-          active_dashboard_state: activeContentVars,
-        }
-      : {}),
+    ...(activeContentVars ? { active_content: activeContentVars, active_dashboard_state: activeContentVars } : {}),
   }
 
   const turnSdk = createDeduplicatedLookerSdkProxy(sdk, (res, elapsedMs, err) => {
@@ -1997,31 +1946,18 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const envConcurrencySlot = activeInteractionsByEnv.get(envSlotKey) || 0
   activeInteractionsByEnv.set(envSlotKey, envConcurrencySlot + 1)
 
-  const emitProgressSteps = (
-    currInteraction: AntigravityInteractionPayload
-  ): AntigravityActivityStep[] => {
-    const merged =
-      accumulatedSteps.length > 0
-        ? { ...currInteraction, steps: [...accumulatedSteps, ...(currInteraction?.steps || [])] }
-        : currInteraction
+  const emitProgressSteps = (currInteraction: AntigravityInteractionPayload): AntigravityActivityStep[] => {
+    const merged = accumulatedSteps.length > 0 ? { ...currInteraction, steps: [...accumulatedSteps, ...(currInteraction?.steps || [])] } : currInteraction
     const steps = extractInteractionActivitySteps(merged)
-    if (steps.length > 0) {
-      onProgressSteps?.(steps)
-    }
+    if (steps.length > 0) onProgressSteps?.(steps)
     return steps
   }
 
   try {
     for (;;) {
-      while (
-        interaction.status === 'in_progress' ||
-        interaction.status === 'requires_action' ||
-        interaction.status === 'queued'
-      ) {
+      while (interaction.status === 'in_progress' || interaction.status === 'requires_action' || interaction.status === 'queued') {
         await throwIfAborted(interaction.id)
-        if (interaction.environment_id) {
-          trackedEnvId = interaction.environment_id
-        }
+        if (interaction.environment_id) trackedEnvId = interaction.environment_id
         emitProgressSteps(interaction)
         if (interaction.status === 'requires_action') {
           const steps = interaction.steps || []
@@ -2039,12 +1975,19 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
           if (pendingLookerCalls.length > 0) {
             await throwIfAborted(interaction.id)
+            const firstCallArgs = parseStepArguments(
+              pendingLookerCalls[0]?.arguments ?? pendingLookerCalls[0]?.args
+            )
             const firstThought = pendingLookerCalls
               .map((c: AntigravityInteractionStep) =>
                 String(parseStepArguments(c.arguments ?? c.args).thought || '').trim()
               )
-              .find(Boolean)
-            onStatus(firstThought || 'Running Looker Code Mode (WASM Monty sandbox) in extension...')
+              .find((t) => Boolean(t) && !INTERNAL_JARGON_THOUGHT_RE.test(t))
+            const friendlyCall = formatFriendlyLookerActivityLabel(
+              String(firstCallArgs.code || ''),
+              { ...defaultCodeModeVars, ...firstCallArgs }
+            )
+            onStatus(firstThought || friendlyCall.statusText)
             const cmStart = Date.now()
             codemodeCalls += pendingLookerCalls.length
             const resultsInput = await Promise.all(
@@ -2213,10 +2156,15 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         await throwIfAborted(interaction.id)
         bridgeRound += 1
         accumulatedSteps.push(...(interaction.steps || []))
-        const firstBridgeThought = pendingBridgeReqs.map((r) => r.thought).find(Boolean)
-        onStatus(
-          firstBridgeThought || 'Executing bridged lkr-dev-cli request(s) in Looker extension...'
+        const firstBridgeThought = pendingBridgeReqs
+          .map((r) => String(r.thought || '').trim())
+          .find((t) => Boolean(t) && !INTERNAL_JARGON_THOUGHT_RE.test(t))
+        const firstBridgeReq = pendingBridgeReqs[0]
+        const friendlyBridge = formatFriendlyLookerActivityLabel(
+          String(firstBridgeReq?.code || ''),
+          { ...defaultCodeModeVars, ...(firstBridgeReq as unknown as Record<string, unknown>) }
         )
+        onStatus(firstBridgeThought || friendlyBridge.statusText)
         const bridgeStart = Date.now()
         const bridgedLines: string[] = []
         for (const req of pendingBridgeReqs) {
