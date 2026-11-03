@@ -346,45 +346,25 @@ export function useStudioController() {
   )
   const isLookerDevMode = lookerWorkspaceId === 'dev'
   const syncLookerSessionWorkspace = useCallback(async () => {
-    const sdkWithSession = core40SDK as unknown as {
-      session?: () => Promise<{ workspace_id?: string | null }>
-      ok?: <T>(p: Promise<T> | T) => Promise<T>
-    }
-    if (typeof sdkWithSession?.session !== 'function') return
+    const s = core40SDK as unknown as { session?: () => Promise<{ workspace_id?: string | null }>; ok?: <T>(p: Promise<T> | T) => Promise<T> }
+    if (typeof s?.session !== 'function') return
     try {
-      const raw = sdkWithSession.session()
-      const sess = typeof sdkWithSession.ok === 'function' ? await sdkWithSession.ok(raw) : await raw
-      if (sess?.workspace_id === 'dev' || sess?.workspace_id === 'production') {
-        setLookerWorkspaceId(sess.workspace_id)
-      }
-    } catch {
-      // ignore session check failure
-    }
+      const sess = typeof s.ok === 'function' ? await s.ok(s.session()) : await s.session()
+      if (sess?.workspace_id === 'dev' || sess?.workspace_id === 'production') setLookerWorkspaceId(sess.workspace_id)
+    } catch { /* ignore */ }
   }, [core40SDK])
 
   const handleToggleLookerDevMode = useCallback(
     async (targetWorkspace?: 'dev' | 'production') => {
       const nextWorkspace: 'dev' | 'production' =
-        targetWorkspace === 'dev' || targetWorkspace === 'production'
-          ? targetWorkspace
-          : lookerWorkspaceId === 'dev'
-          ? 'production'
-          : 'dev'
+        targetWorkspace === 'dev' || targetWorkspace === 'production' ? targetWorkspace : lookerWorkspaceId === 'dev' ? 'production' : 'dev'
       setLookerWorkspaceId(nextWorkspace)
-      const sdkWithUpdate = core40SDK as unknown as {
-        update_session?: (body: { workspace_id: string }) => Promise<{ workspace_id?: string | null }>
-        ok?: <T>(p: Promise<T> | T) => Promise<T>
-      }
-      if (typeof sdkWithUpdate?.update_session === 'function') {
+      const s = core40SDK as unknown as { update_session?: (body: { workspace_id: string }) => Promise<{ workspace_id?: string | null }>; ok?: <T>(p: Promise<T> | T) => Promise<T> }
+      if (typeof s?.update_session === 'function') {
         try {
-          const p = sdkWithUpdate.update_session({ workspace_id: nextWorkspace })
-          const res = typeof sdkWithUpdate.ok === 'function' ? await sdkWithUpdate.ok(p) : await p
-          if (res?.workspace_id === 'dev' || res?.workspace_id === 'production') {
-            setLookerWorkspaceId(res.workspace_id)
-          }
-        } catch {
-          // ignore session update failure
-        }
+          const res = typeof s.ok === 'function' ? await s.ok(s.update_session({ workspace_id: nextWorkspace })) : await s.update_session({ workspace_id: nextWorkspace })
+          if (res?.workspace_id === 'dev' || res?.workspace_id === 'production') setLookerWorkspaceId(res.workspace_id)
+        } catch { /* ignore */ }
       }
       return nextWorkspace
     },
@@ -393,9 +373,7 @@ export function useStudioController() {
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.addEventListener) return
-    const onFocus = () => {
-      void syncLookerSessionWorkspace()
-    }
+    const onFocus = () => { void syncLookerSessionWorkspace() }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [syncLookerSessionWorkspace])

@@ -504,9 +504,7 @@ export async function searchLookerFolders(
   sdk: Looker40SDK,
   params: SearchLookerFoldersParams = {}
 ): Promise<LookerFolderNode[]> {
-  const req: Record<string, unknown> = {
-    fields: params.fields || LOOKER_FOLDER_FIELDS,
-  }
+  const req: Record<string, unknown> = { fields: params.fields || LOOKER_FOLDER_FIELDS }
   const rawName = params.name?.trim() || ''
   const rawParent = params.parent_id?.trim() || ''
   const rawCreator = params.creator_id?.trim() || ''
@@ -517,15 +515,9 @@ export async function searchLookerFolders(
   if (params.is_personal !== undefined && params.is_personal !== '' && params.is_personal !== 'any') {
     req.is_personal = params.is_personal === true || params.is_personal === 'true'
   }
-  if (
-    params.is_personal_descendant !== undefined &&
-    params.is_personal_descendant !== '' &&
-    params.is_personal_descendant !== 'any'
-  ) {
-    req.is_personal_descendant =
-      params.is_personal_descendant === true || params.is_personal_descendant === 'true'
+  if (params.is_personal_descendant !== undefined && params.is_personal_descendant !== '' && params.is_personal_descendant !== 'any') {
+    req.is_personal_descendant = params.is_personal_descendant === true || params.is_personal_descendant === 'true'
   }
-
   const knownFoldersList: LookerFolderNode[] = Array.isArray(params.knownFolders)
     ? params.knownFolders
     : params.knownFolders && typeof params.knownFolders === 'object'
@@ -537,6 +529,9 @@ export async function searchLookerFolders(
     async () => {
       const s = sdk as unknown as LookerFolderSdkLike
       const execReq: Record<string, unknown> = { ...req }
+      const safeCall = async <T>(fn: () => Promise<T>): Promise<T | null> => {
+        try { return await fn() } catch { return null }
+      }
 
       if (rawParent && !/^\d+$/.test(rawParent)) {
         const parenId = rawParent.match(/\((\d+)\)\s*$/)?.[1]
@@ -544,55 +539,22 @@ export async function searchLookerFolders(
           execReq.parent_id = parenId
         } else {
           const parentQ = rawParent.toLowerCase()
-          let candidates = knownFoldersList.filter((f) => f.name.toLowerCase().includes(parentQ))
-          if (candidates.length === 0 && typeof s?.all_folders === 'function') {
-            try {
-              const all = await unwrapSdkCall(s, s.all_folders(LOOKER_FOLDER_FIELDS))
-              if (Array.isArray(all) && all.length > 0) {
-                candidates = all
-                  .map((r) => normalizeLookerFolderNode(r, undefined, all))
-                  .filter((f) => f.name.toLowerCase().includes(parentQ))
-              }
-            } catch {
-              // ignore parent all_folders lookup failure
-            }
+          const matchByName = (list: LookerFolderNode[]) => list.filter((f) => f.name.toLowerCase().includes(parentQ))
+          let candidates = matchByName(knownFoldersList)
+          if (!candidates.length && typeof s?.all_folders === 'function') {
+            const all = await safeCall(() => unwrapSdkCall(s, s.all_folders!(LOOKER_FOLDER_FIELDS)))
+            if (Array.isArray(all)) candidates = matchByName(all.map((r) => normalizeLookerFolderNode(r, undefined, all)))
           }
-          if (candidates.length === 0 && typeof s?.folder_children === 'function') {
-            try {
-              const children = await unwrapSdkCall(
-                s,
-                s.folder_children({
-                  folder_id: '1',
-                  fields: 'id,name,parent_id,child_count,is_personal,can',
-                })
-              )
-              if (Array.isArray(children) && children.length > 0) {
-                candidates = children
-                  .map((r) => normalizeLookerFolderNode(r, '1'))
-                  .filter((f) => f.name.toLowerCase().includes(parentQ))
-              }
-            } catch {
-              // ignore parent folder_children lookup failure
-            }
+          if (!candidates.length && typeof s?.folder_children === 'function') {
+            const ch = await safeCall(() => unwrapSdkCall(s, s.folder_children!({ folder_id: '1', fields: 'id,name,parent_id,child_count,is_personal,can' })))
+            if (Array.isArray(ch)) candidates = matchByName(ch.map((r) => normalizeLookerFolderNode(r, '1')))
           }
-          if (candidates.length === 0 && typeof s?.search_folders === 'function') {
-            try {
-              const found = await unwrapSdkCall(
-                s,
-                s.search_folders({ name: rawParent, fields: LOOKER_FOLDER_FIELDS })
-              )
-              if (Array.isArray(found) && found.length > 0) {
-                candidates = found
-                  .map((r) => normalizeLookerFolderNode(r))
-                  .filter((f) => f.name.toLowerCase().includes(parentQ))
-              }
-            } catch {
-              // ignore parent search_folders lookup failure
-            }
+          if (!candidates.length && typeof s?.search_folders === 'function') {
+            const found = await safeCall(() => unwrapSdkCall(s, s.search_folders!({ name: rawParent, fields: LOOKER_FOLDER_FIELDS })))
+            if (Array.isArray(found)) candidates = matchByName(found.map((r) => normalizeLookerFolderNode(r)))
           }
           if (candidates.length > 0) {
-            const exact = candidates.find((f) => f.name.toLowerCase() === parentQ) || candidates[0]
-            execReq.parent_id = String(exact.id)
+            execReq.parent_id = String((candidates.find((f) => f.name.toLowerCase() === parentQ) || candidates[0]).id)
           }
         }
       }
@@ -603,107 +565,52 @@ export async function searchLookerFolders(
           execReq.creator_id = parenUid
         } else {
           const creatorQ = rawCreator.toLowerCase()
-          const matchedUser = (params.knownUsers || []).find(
-            (u) =>
-              u.display_name?.toLowerCase().includes(creatorQ) ||
-              u.email?.toLowerCase().includes(creatorQ) ||
-              String(u.id).toLowerCase() === creatorQ
-          )
+          const matchesUser = (u?: { id?: string | number | null; display_name?: string | null; email?: string | null } | null) =>
+            Boolean(u?.display_name?.toLowerCase().includes(creatorQ) || u?.email?.toLowerCase().includes(creatorQ) || String(u?.id ?? '').toLowerCase() === creatorQ)
+          const matchedUser = (params.knownUsers || []).find(matchesUser)
           if (matchedUser?.id) {
             execReq.creator_id = String(matchedUser.id)
           } else if (typeof s?.search_users === 'function') {
-            try {
-              const users = await unwrapSdkCall(s, s.search_users({ display_name: rawCreator }))
-              const u = Array.isArray(users)
-                ? users.find(
-                    (it) =>
-                      it?.display_name?.toLowerCase().includes(creatorQ) ||
-                      it?.email?.toLowerCase().includes(creatorQ)
-                  ) || users[0]
-                : null
-              if (u?.id != null) execReq.creator_id = String(u.id)
-            } catch {
-              // ignore search_users lookup failure
-            }
+            const users = await safeCall(() => unwrapSdkCall(s, s.search_users!({ display_name: rawCreator })))
+            const u = Array.isArray(users) ? users.find(matchesUser) || users[0] : null
+            if (u?.id != null) execReq.creator_id = String(u.id)
           } else if (typeof s?.me === 'function') {
-            try {
-              const meUser = await unwrapSdkCall(s, s.me('id,display_name,email'))
-              if (
-                meUser?.id != null &&
-                (meUser.display_name?.toLowerCase().includes(creatorQ) ||
-                  meUser.email?.toLowerCase().includes(creatorQ))
-              ) {
-                execReq.creator_id = String(meUser.id)
-              }
-            } catch {
-              // ignore me lookup failure
-            }
+            const meUser = await safeCall(() => unwrapSdkCall(s, s.me!('id,display_name,email')))
+            if (meUser?.id != null && matchesUser(meUser)) execReq.creator_id = String(meUser.id)
           }
         }
       }
 
       if (typeof s?.search_folders === 'function') {
-        try {
-          let rows = await unwrapSdkCall(s, s.search_folders(execReq))
-          if (
-            (!Array.isArray(rows) || rows.length === 0) &&
-            rawName &&
-            /^\d+$/.test(rawName) &&
-            !execReq.id
-          ) {
-            const byIdReq = { ...execReq, id: rawName }
-            delete byIdReq.name
-            rows = await unwrapSdkCall(s, s.search_folders(byIdReq))
+        const rows = await safeCall(async () => {
+          let r = await unwrapSdkCall(s, s.search_folders!(execReq))
+          if ((!Array.isArray(r) || r.length === 0) && rawName && /^\d+$/.test(rawName) && !execReq.id) {
+            const { name: _omit, ...byIdReq } = execReq
+            r = await unwrapSdkCall(s, s.search_folders!({ ...byIdReq, id: rawName }))
           }
-          if (Array.isArray(rows)) {
-            return rows.map((r) => normalizeLookerFolderNode(r))
-          }
-        } catch {
-          // Fall back to all_folders when search_folders is not entitled or fails
-        }
+          return r
+        })
+        if (Array.isArray(rows)) return rows.map((r) => normalizeLookerFolderNode(r))
       }
       if (typeof s?.all_folders === 'function') {
-        try {
-          const rows = await unwrapSdkCall(s, s.all_folders(LOOKER_FOLDER_FIELDS))
-          const rawList = Array.isArray(rows) ? rows : []
-          const all = rawList.map((r) => normalizeLookerFolderNode(r, undefined, rawList))
-          const nameQ = String(execReq.name || '')
-            .replace(/%/g, '')
-            .trim()
-            .toLowerCase()
+        const rows = await safeCall(() => unwrapSdkCall(s, s.all_folders!(LOOKER_FOLDER_FIELDS)))
+        if (Array.isArray(rows)) {
+          const all = rows.map((r) => normalizeLookerFolderNode(r, undefined, rows))
+          const nameQ = String(execReq.name || '').replace(/%/g, '').trim().toLowerCase()
           const parentFilter = String(execReq.parent_id || '').trim()
           const creatorFilter = String(execReq.creator_id || '').trim()
           return all.filter((f) => {
-            if (
-              nameQ &&
-              !f.name.toLowerCase().includes(nameQ) &&
-              String(f.id).toLowerCase() !== nameQ
-            )
-              return false
+            if (nameQ && !f.name.toLowerCase().includes(nameQ) && String(f.id).toLowerCase() !== nameQ) return false
             if (parentFilter) {
-              const parentNode = all.find((p) => String(p.id) === String(f.parent_id || ''))
-              const matchesParentId = String(f.parent_id || '') === parentFilter
-              const matchesParentName = Boolean(
-                parentNode && parentNode.name.toLowerCase().includes(parentFilter.toLowerCase())
-              )
-              if (!matchesParentId && !matchesParentName) return false
+              const pNode = all.find((p) => String(p.id) === String(f.parent_id || ''))
+              if (String(f.parent_id || '') !== parentFilter && !pNode?.name.toLowerCase().includes(parentFilter.toLowerCase())) return false
             }
             if (execReq.id && String(f.id) !== String(execReq.id)) return false
             if (creatorFilter && String(f.creator_id || '') !== creatorFilter) return false
-            if (
-              typeof execReq.is_personal === 'boolean' &&
-              Boolean(f.is_personal) !== execReq.is_personal
-            )
-              return false
-            if (
-              typeof execReq.is_personal_descendant === 'boolean' &&
-              Boolean(f.is_personal_descendant) !== execReq.is_personal_descendant
-            )
-              return false
+            if (typeof execReq.is_personal === 'boolean' && Boolean(f.is_personal) !== execReq.is_personal) return false
+            if (typeof execReq.is_personal_descendant === 'boolean' && Boolean(f.is_personal_descendant) !== execReq.is_personal_descendant) return false
             return true
           })
-        } catch {
-          // ignore all_folders fallback error
         }
       }
       return []

@@ -939,12 +939,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                     <datalist id="dab-folder-creator-suggestions">
                       {Array.from(
                         new Set(
-                          [
-                            userDisplayName,
-                            ...Object.values(folderTreeNodes)
-                              .map((n) => n.creator_id)
-                              .filter((c): c is string => Boolean(c)),
-                          ].filter(Boolean)
+                          [userDisplayName, ...Object.values(folderTreeNodes).map((n) => n.creator_id)].filter((c): c is string => Boolean(c))
                         )
                       ).map((creator) => (
                         <option key={creator} value={creator} />
