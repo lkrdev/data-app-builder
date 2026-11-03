@@ -2178,7 +2178,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
 
         const ta = document.querySelector('[data-testid="studio-prompt-input"]');
         const taSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-        taSetter.call(ta, 'What are the top 3 product categories by gross margin in Q4?');
+        taSetter.call(ta, 'Ask the Conversational Analytics CA agent: What are the top 3 product categories by gross margin in Q4?');
         ta.dispatchEvent(new Event('input', { bubbles: true }));
         ta.dispatchEvent(new Event('change', { bubbles: true }));
         await new Promise((r) => setTimeout(r, 60));

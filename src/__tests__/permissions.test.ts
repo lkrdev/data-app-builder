@@ -7,168 +7,59 @@ import type { FetchCustomParameters } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
 
 import {
-  AGENTS_MD,
-  AntigravityActivityStep,
-  ANTIGRAVITY_ALLOWED_MODELS,
-  authenticateGoogleOAuth,
-  BOOTSTRAP_LOOKML_PY,
-  BOOTSTRAP_SANDBOX_SH,
-  buildDynamicStarterPrompts,
-  buildWorkspaceSources,
-  BUNDLE_APP_PY,
-  callInteractionsApi,
-  classifyLookerOperation,
-  clearStarterPromptsCache,
-  clearStoredOAuthSession,
-  CODEMODE_CDN_URL,
-  CodeModePermissionRequest,
-  computeIsAuthenticated,
-  computeLkrExtensionCacheKey,
-  CONCURRENT_POLL_SCHEDULE_MS,
-  CONVERSATION_LABEL_REQUEST_TAG,
-  DASHBOARD_CODEMODE_PREAMBLE_PY,
-  DATA_INVESTIGATOR_GUIDE_MD,
-  DEFAULT_ANTIGRAVITY_MODEL,
-  DEFAULT_THINKING_LEVEL,
-  discoverStarterContentSummaries,
-  discoverStarterExploreContext,
-  ensureCodeModeLoaded,
-  executeLkrExtensionToolRequest,
-  extractInteractionActivitySteps,
-  extractLkrExtensionToolRequests,
-  extractNativeContentFromInteraction,
-  extractThoughtText,
-  generateConversationLabel,
-  generateDynamicStarterPrompts,
-  getCachedStarterPrompts,
-  getInitialStoredOAuthToken,
-  getSharedEnvExploreSchemas,
-  isEnvironmentNotFoundError,
-  isTextAttachmentFile,
-  KDA_SKILL_MD,
-  KDA_TOOLKIT_PY,
-  listAvailableAntigravityModels,
-  LKR_CLI_BRIDGE_TOOL,
-  LKR_CLI_SITECUSTOMIZE_PY,
-  LKR_DEV_CLI_SPEC,
-  LKR_DEV_CLI_VERSION,
-  LkrCodeMode,
-  loadStoredOAuthSession,
-  loadStoredThinkingLevel,
-  loginWithGoogleOAuth,
-  normalizeThinkingLevel,
-  parseStarterPromptsResponse,
-  persistOAuthSession,
-  persistThinkingLevel,
-  prewarmOrWakeAntigravityEnvironment,
-  readInitialThinkingLevel,
-  recordSharedEnvExploreSchema,
-  refreshOAuthSessionIfNeeded,
-  resolveAdaptivePollScheduleMs,
-  resolveLookerOAuthRedirectUri,
-  resolveLookerOAuthRedirectUris,
-  runAntigravityTurn,
-  sanitizeConversationLabel,
-  STARTER_PROMPTS_REQUEST_TAG,
-  stripStarterPromptEmojis,
-  STUDIO_OAUTH_REFRESH_INTERVAL_MS,
-  STUDIO_OAUTH_REFRESH_LOCK_KEY,
-  STUDIO_OAUTH_STORAGE_KEY,
-  STUDIO_THINKING_LEVEL_OPTIONS,
-  STUDIO_THINKING_LEVEL_STORAGE_KEY,
-  StudioAttachedFile,
-  summarizeProgress,
+  AGENTS_MD, AntigravityActivityStep, ANTIGRAVITY_ALLOWED_MODELS, authenticateGoogleOAuth,
+  BOOTSTRAP_LOOKML_PY, BOOTSTRAP_SANDBOX_SH, buildDynamicStarterPrompts, buildWorkspaceSources,
+  BUNDLE_APP_PY, callInteractionsApi, classifyLookerOperation, clearStarterPromptsCache,
+  clearStoredOAuthSession, CODEMODE_CDN_URL, CodeModePermissionRequest, computeIsAuthenticated,
+  computeLkrExtensionCacheKey, CONCURRENT_POLL_SCHEDULE_MS, CONVERSATION_LABEL_REQUEST_TAG,
+  DASHBOARD_CODEMODE_PREAMBLE_PY, DATA_INVESTIGATOR_GUIDE_MD, DEFAULT_ANTIGRAVITY_MODEL,
+  DEFAULT_THINKING_LEVEL, discoverStarterContentSummaries, discoverStarterExploreContext,
+  ensureCodeModeLoaded, executeLkrExtensionToolRequest, extractInteractionActivitySteps,
+  extractLkrExtensionToolRequests, extractNativeContentFromInteraction, extractThoughtText,
+  generateConversationLabel, generateDynamicStarterPrompts, getCachedStarterPrompts,
+  getInitialStoredOAuthToken, getSharedEnvExploreSchemas, isEnvironmentNotFoundError,
+  isTextAttachmentFile, KDA_SKILL_MD, KDA_TOOLKIT_PY, listAvailableAntigravityModels,
+  LKR_CLI_BRIDGE_TOOL, LKR_CLI_SITECUSTOMIZE_PY, LKR_DEV_CLI_SPEC, LKR_DEV_CLI_VERSION,
+  LkrCodeMode, loadStoredOAuthSession, loadStoredThinkingLevel, loginWithGoogleOAuth,
+  normalizeThinkingLevel, parseStarterPromptsResponse, persistOAuthSession, persistThinkingLevel,
+  prewarmOrWakeAntigravityEnvironment, readInitialThinkingLevel, recordSharedEnvExploreSchema,
+  refreshOAuthSessionIfNeeded, resolveAdaptivePollScheduleMs, resolveLookerOAuthRedirectUri,
+  resolveLookerOAuthRedirectUris, runAntigravityTurn, sanitizeConversationLabel,
+  STARTER_PROMPTS_REQUEST_TAG, stripStarterPromptEmojis, STUDIO_OAUTH_REFRESH_INTERVAL_MS,
+  STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY, STUDIO_THINKING_LEVEL_OPTIONS,
+  STUDIO_THINKING_LEVEL_STORAGE_KEY, StudioAttachedFile, summarizeProgress,
 } from '../antigravity'
 import {
-  StudioBadge,
-  StudioButton,
-  StudioCard,
-  StudioDocPreview,
-  StudioModal,
-  StudioSelect,
-  StudioSkeleton,
-  StudioToolbar,
+  StudioBadge, StudioButton, StudioCard, StudioDocPreview, StudioModal,
+  StudioSelect, StudioSkeleton, StudioToolbar,
 } from '../components/StudioDesignSystem'
 import {
-  createLookerEmbedPreloadController,
-  DOC_UI_COMPONENTS,
-  getStarterPromptsForUseCase,
-  normalizeLookerEmbedUrl,
-  renderUseCaseGuideMarkdown,
-  resolveLookerEmbedTarget,
-  STARTER_PROMPTS_BY_USE_CASE,
-  StarterPromptButtons,
-  USE_CASE_BADGES,
-  USE_CASE_GUIDE_ORDER,
-  USE_CASE_GUIDES,
+  createLookerEmbedPreloadController, DOC_UI_COMPONENTS, getStarterPromptsForUseCase,
+  normalizeLookerEmbedUrl, renderUseCaseGuideMarkdown, resolveLookerEmbedTarget,
+  STARTER_PROMPTS_BY_USE_CASE, StarterPromptButtons, USE_CASE_BADGES,
+  USE_CASE_GUIDE_ORDER, USE_CASE_GUIDES,
 } from '../components/StudioWorkspace'
 import {
-  archiveUserConversation,
-  ARTIFACT_NAMESPACE,
-  ArtifactService,
-  buildDenseExploreSchema,
-  buildRootLookerFolders,
-  buildStudioRoute,
-  CA_AGENT_SELECTION_REQUEST_TAG,
-  classifyLooker404Error,
-  classifyStudioUseCase,
-  clearArtifactServiceCache,
-  clearLookerMetadataCache,
-  ConversationRecord,
-  convertRelativeDateFilterToFixed,
-  createDeduplicatedLookerSdkProxy,
-  createLookerCaConversation,
-  deleteUserArtifact,
-  deleteUserConversation,
-  extractResolvedUseCase,
-  fetchFolderChildren,
-  fetchFolderWithAncestors,
-  fetchInitialLookerMetadata,
-  fetchLookerCaAgentsCatalog,
-  fetchPreloadedContentSummary,
-  formatStudioContentItemTitle,
-  formatUserConversationsArtifactKey,
-  formatUserConversationsKey,
-  formatUserEnvArtifactKey,
-  getAllowedUseCases,
-  getArtifactService,
-  getUseCaseLabel,
-  hydrateConversationContentItems,
-  hydrateMentionedContext,
-  isConversationalNoOpPrompt,
-  listUserArtifacts,
-  loadStoredSelectedFolderId,
-  loadUserConversations,
-  loadUserEnvironmentId,
-  matchExplicitUseCaseRule,
-  normalizeQueryFiltersToFixedDates,
-  normalizeStudioContentItem,
-  normalizeStudioThemeMode,
-  parseCaAgentSelectionResponse,
-  parseStudioRoute,
-  persistSelectedFolderId,
-  rawLookerRequest,
-  readInitialSelectedFolderId,
-  readSwrCache,
-  resolveConversationRelatedContent,
-  resolveStudioContentEmbedPath,
-  resolveStudioTheme,
-  resolveSystemTheme,
-  resolveUserCapabilities,
-  saveUserArtifact,
-  saveUserConversation,
-  saveUserEnvironmentId,
-  searchGlobalContentV2,
-  searchLookerFolders,
-  selectCaAgentViaIsolatedSubagent,
-  STUDIO_FOLDER_STORAGE_KEY,
-  STUDIO_MODES,
-  STUDIO_THEME_STORAGE_KEY,
-  STUDIO_USE_CASE_OPTIONS,
-  StudioContentItem,
-  SWR_DEDUPED_METHODS,
-  upsertStudioContentItem,
-  UserArtifactIndexItem,
+  archiveUserConversation, ARTIFACT_NAMESPACE, ArtifactService, buildDenseExploreSchema,
+  buildRootLookerFolders, buildStudioRoute, CA_AGENT_SELECTION_REQUEST_TAG,
+  classifyLooker404Error, classifyStudioUseCase, clearArtifactServiceCache,
+  clearLookerMetadataCache, ConversationRecord, convertRelativeDateFilterToFixed,
+  createDeduplicatedLookerSdkProxy, createLookerCaConversation, deleteUserArtifact,
+  deleteUserConversation, extractResolvedUseCase, fetchFolderChildren,
+  fetchFolderWithAncestors, fetchInitialLookerMetadata, fetchLookerCaAgentsCatalog,
+  fetchPreloadedContentSummary, formatStudioContentItemTitle, formatUserConversationsArtifactKey,
+  formatUserConversationsKey, formatUserEnvArtifactKey, getAllowedUseCases, getArtifactService,
+  getUseCaseLabel, hydrateConversationContentItems, hydrateMentionedContext,
+  isConversationalNoOpPrompt, listUserArtifacts, loadStoredSelectedFolderId,
+  loadUserConversations, loadUserEnvironmentId, matchExplicitUseCaseRule,
+  normalizeQueryFiltersToFixedDates, normalizeStudioContentItem, normalizeStudioThemeMode,
+  parseCaAgentSelectionResponse, parseStudioRoute, persistSelectedFolderId, rawLookerRequest,
+  readInitialSelectedFolderId, readSwrCache, resolveConversationRelatedContent,
+  resolveStudioContentEmbedPath, resolveStudioTheme, resolveSystemTheme, resolveUserCapabilities,
+  saveUserArtifact, saveUserConversation, saveUserEnvironmentId, searchGlobalContentV2,
+  searchLookerFolders, selectCaAgentViaIsolatedSubagent, shouldRouteToIsolatedCaSubagent,
+  STUDIO_FOLDER_STORAGE_KEY, STUDIO_MODES, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
+  StudioContentItem, SWR_DEDUPED_METHODS, upsertStudioContentItem, UserArtifactIndexItem,
 } from '../lookerApi'
 
 interface MockInteractionPostBody {
@@ -921,6 +812,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       session: turnA1.session,
       selectedExplores: ['thelook::order_items'],
       schemaMarkdown: '# Schema',
+      existingAppCode: 'export class AlphaApp {}',
       userPrompt: 'Add YoY KPI to Alpha',
       onStatus: () => {},
     })
@@ -941,6 +833,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       session: turnB1.session,
       selectedExplores: ['thelook::order_items'],
       schemaMarkdown: '# Schema',
+      existingAppCode: 'export class BetaApp {}',
       userPrompt: 'Add stockout chart to Beta',
       onStatus: () => {},
     })
@@ -5010,5 +4903,46 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
     expect(skillMd).toContain('minmax(0, 1fr) minmax(0, 1fr)')
     const indexCss = readFileSync(path.join(repoRoot, 'src/styles/index.css'), 'utf8')
     expect(indexCss).toContain('grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)')
+  })
+
+  test('48. Issue #117: relaxes client-side use-case routing, prevents follow-up/meta prompts from hijacking into isolated CA sub-agent, and gates warmTurnDirective on existingAppCode', async () => {
+    const metaPrompt = 'can you summarize the eroors you experienced here and how i could make you better?'
+    for (const p of [metaPrompt, 'what errors did you experience?', 'what went wrong?', 'why did that fail?', 'how can I make you better?', 'summarize what you did', 'thank you', 'thanks!']) {
+      expect(isConversationalNoOpPrompt(p)).toBe(true)
+    }
+    for (const q of [metaPrompt, 'Can you change the chart color to blue?', 'What is the current filter value?']) {
+      expect(matchExplicitUseCaseRule(q)).toBeNull()
+    }
+    expect(classifyStudioUseCase('Why did gross margin drop in Q3 compared to Q2?', 'auto', ['app', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics'])).toBe('conversational-analytics')
+
+    expect(shouldRouteToIsolatedCaSubagent({ prompt: metaPrompt, explicitUseCase: 'auto', isFirstTurn: false })).toBe(false)
+    expect(shouldRouteToIsolatedCaSubagent({ prompt: metaPrompt, explicitUseCase: 'auto', isFirstTurn: true })).toBe(false)
+    expect(shouldRouteToIsolatedCaSubagent({ prompt: 'Why did gross margin drop in Q3 compared to Q2?', explicitUseCase: 'auto', isFirstTurn: false })).toBe(false)
+    expect(shouldRouteToIsolatedCaSubagent({ prompt: 'Why did gross margin drop in Q3 compared to Q2?', explicitUseCase: 'auto', isFirstTurn: true })).toBe(false)
+    expect(shouldRouteToIsolatedCaSubagent({ prompt: 'Ask the Conversational Analytics CA agent about Q3 margin', explicitUseCase: 'auto', isFirstTurn: true })).toBe(true)
+    expect(shouldRouteToIsolatedCaSubagent({ prompt: 'Any question', explicitUseCase: 'conversational-analytics', isFirstTurn: false })).toBe(true)
+    expect(shouldRouteToIsolatedCaSubagent({ prompt: 'Why did gross margin drop in Q3?', explicitUseCase: 'auto', assistantOutput: '<USE_CASE>conversational-analytics</USE_CASE>\nGross margin dropped 4.2% in Q3.' })).toBe(false)
+    expect(shouldRouteToIsolatedCaSubagent({ prompt: 'Why did gross margin drop in Q3?', explicitUseCase: 'auto', assistantOutput: '<USE_CASE>conversational-analytics</USE_CASE>' })).toBe(true)
+
+    const warmInputs: string[] = []
+    const warmExt = {
+      serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+        const txt = (init?.body ? (JSON.parse(init.body) as MockInteractionPostBody) : undefined)?.input?.[0]?.text
+        if (txt) warmInputs.push(txt)
+        return { ok: true, status: 200, body: JSON.stringify({ id: `int_warm_${warmInputs.length}`, environment_id: 'env_warm_117', status: 'completed', output_text: 'Answered directly in chat.' }) }
+      },
+    }
+    const baseTurnParams = {
+      sdk: asSdk({ ok: async <T>(p: T) => p }), extensionSDK: warmExt, userId: '1',
+      auth: { mode: 'apikey' as const, apiKey: 'key-117' },
+      session: { environmentId: 'env_warm_117', lastInteractionId: 'int_prev_117', toolType: 'app' as const },
+      useCase: 'auto' as const, selectedExplores: [], schemaMarkdown: '# Schema', pollScheduleMs: [5], onStatus: () => {},
+    }
+    await runAntigravityTurn({ ...baseTurnParams, userPrompt: 'Add a revenue KPI card' })
+    expect(warmInputs[0]).not.toContain('[WARM SANDBOX FAST PATH:')
+    await runAntigravityTurn({ ...baseTurnParams, userPrompt: metaPrompt, existingAppCode: 'export class App {}' })
+    expect(warmInputs[1]).not.toContain('[WARM SANDBOX FAST PATH:')
+    await runAntigravityTurn({ ...baseTurnParams, userPrompt: 'Add a revenue KPI card', existingAppCode: 'export class App {}' })
+    expect(warmInputs[2]).toContain('[WARM SANDBOX FAST PATH:')
   })
 })

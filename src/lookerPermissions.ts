@@ -116,37 +116,15 @@ export function getUseCaseLabel(useCase: StudioUseCase): string {
 }
 
 const USE_CASE_ALIAS_MAP: Record<string, ResolvedStudioUseCase> = {
-  app: 'app',
-  'data-app': 'app',
-  data_app: 'app',
-  dataapp: 'app',
-  'data-investigator': 'data-investigator',
-  data_investigator: 'data-investigator',
-  datainvestigator: 'data-investigator',
-  investigator: 'data-investigator',
-  investigation: 'data-investigator',
-  'data-story': 'data-investigator',
-  data_story: 'data-investigator',
-  dashboard: 'dashboard',
-  'content-studio': 'dashboard',
-  content_studio: 'dashboard',
-  udd: 'dashboard',
-  lookml: 'lookml',
-  'agentic-lookml': 'lookml',
-  agentic_lookml: 'lookml',
-  health: 'health-check',
-  'health-check': 'health-check',
-  health_check: 'health-check',
-  healthcheck: 'health-check',
-  tile: 'tile',
-  script: 'tile',
-  'python-tile': 'tile',
-  python_tile: 'tile',
-  'conversational-analytics': 'conversational-analytics',
-  conversational_analytics: 'conversational-analytics',
-  conversational: 'conversational-analytics',
-  ca: 'conversational-analytics',
-  qa: 'conversational-analytics',
+  app: 'app', 'data-app': 'app', data_app: 'app', dataapp: 'app',
+  'data-investigator': 'data-investigator', data_investigator: 'data-investigator', datainvestigator: 'data-investigator',
+  investigator: 'data-investigator', investigation: 'data-investigator', 'data-story': 'data-investigator', data_story: 'data-investigator',
+  dashboard: 'dashboard', 'content-studio': 'dashboard', content_studio: 'dashboard', udd: 'dashboard',
+  lookml: 'lookml', 'agentic-lookml': 'lookml', agentic_lookml: 'lookml',
+  health: 'health-check', 'health-check': 'health-check', health_check: 'health-check', healthcheck: 'health-check',
+  tile: 'tile', script: 'tile', 'python-tile': 'tile', python_tile: 'tile',
+  'conversational-analytics': 'conversational-analytics', conversational_analytics: 'conversational-analytics',
+  conversational: 'conversational-analytics', ca: 'conversational-analytics', qa: 'conversational-analytics',
 }
 
 export function studioUseCaseToMode(useCase: StudioUseCase): StudioCapabilityMode {
@@ -264,12 +242,13 @@ export function getAllowedUseCases(
 }
 
 const CONVERSATIONAL_NOOP_RE =
-  /^\s*(?:(?:hi|hello|hey|howdy|greetings|good\s+(?:morning|afternoon|evening)|yo)(?:\s+(?:there|looker(?:\s+studio)?|studio|team|agent))?|help(?:\s+me)?|what\s+can\s+you\s+do|how\s+can\s+you\s+help(?:\s+me)?|what\s+do\s+you\s+do|who\s+are\s+you)[!?.]*\s*$/i
+  /^\s*(?:(?:hi|hello|hey|howdy|greetings|good\s+(?:morning|afternoon|evening)|yo)(?:\s+(?:there|looker(?:\s+studio)?|studio|team|agent))?|thank(?:s|\s+you)(?:\s+(?:so|very)\s+much)?|help(?:\s+me)?|what\s+can\s+you\s+do|how\s+can\s+you\s+help(?:\s+me)?|what\s+do\s+you\s+do|who\s+are\s+you)[!?.]*\s*$/i
+const CONVERSATIONAL_META_RE =
+  /\b(?:er+o+rs?\s+(?:you|we|that)|what\s+er+o+rs?\s+did\s+you|experienced\s+here|make\s+you\s+better|improve\s+you(?:\b|rself)|what\s+went\s+wrong|why\s+did\s+(?:you|that|it|this)\s+fail|(?:summarize|explain)\s+(?:what\s+you\s+(?:did|ran|tried)|the\s+er+o+rs?|your\s+(?:er+o+rs?|steps|thinking)))\b/i
 
 export function isConversationalNoOpPrompt(text?: string): boolean {
-  return CONVERSATIONAL_NOOP_RE.test(
-    String(text || '').replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '').trim()
-  )
+  const clean = String(text || '').replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '').trim()
+  return CONVERSATIONAL_NOOP_RE.test(clean) || CONVERSATIONAL_META_RE.test(clean)
 }
 
 const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
@@ -285,7 +264,7 @@ const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
     /\b(data\s*investigat(?:or|ion)|investigat(?:e|es|ed|ing|ion)\b|(?:find\s+out|figure\s+out|dig\s+into|what\s+drove|what\s+caused)\b|key\s*driver\s*analysis|run_key_driver_analysis|\bkda\b|root[- ]cause\s*(?:analysis|investigation|narrative|report|story|drivers?)?|narrative\s*(?:data\s*app|report|slides|deck|doc|investigation)|google\s*(?:doc|slides|presentation)\s*(?:narrative|story|investigation|app|report)|data\s*story)\b/i,
   ],
   ['app', /\b(data\s*app|lit\s*app|web\s*component|app-kpi|app-chart|app-grid|custom\s*app|interactive\s*app)\b/i],
-  ['conversational-analytics', /\b(conversational\s*analytics|ca\s*agent|what\s+(?:is|are)|how\s+many|which\s+\w+|why\s+did|summarize\s+the|explain\s+the|answer\s+this\s+question|show\s+(?:me\s+)?the\s+monthly\s+breakdown)\b|\?\s*$/i],
+  ['conversational-analytics', /\b(conversational\s*analytics|ca\s*agent|looker\s+ca|how\s+many|which\s+\w+|why\s+did|answer\s+this\s+question|show\s+(?:me\s+)?the\s+monthly\s+breakdown)\b/i],
   ['lookml', /\b(add\s+a\s+measure|add\s+a\s+dimension|create\s+a\s+view|edit\s+view|sql_table_name|derived_table)\b/i],
   ['dashboard', /\b(build\s+a\s+dashboard|create\s+a\s+dashboard|create\s+a\s+look|create\s+a\s+board)\b/i],
 ]
@@ -299,6 +278,19 @@ function resolveAllowedUseCases(allowedModes?: string[]): Set<ResolvedStudioUseC
     .map((m) => USE_CASE_ALIAS_MAP[String(m || '').trim().toLowerCase().replace(/\s+/g, '-')])
     .filter((m): m is ResolvedStudioUseCase => Boolean(m))
   return new Set<ResolvedStudioUseCase>(mapped.length > 0 ? mapped : ALL_RESOLVED_USE_CASES)
+}
+
+export function shouldRouteToIsolatedCaSubagent({
+  prompt, explicitUseCase, isCaMode, isFirstTurn, assistantOutput, allowedModes,
+}: {
+  prompt: string; explicitUseCase: StudioUseCase; isCaMode?: boolean; isFirstTurn?: boolean; assistantOutput?: string; allowedModes?: string[]
+}): boolean {
+  if (explicitUseCase === 'conversational-analytics' || (explicitUseCase !== 'auto' && Boolean(isCaMode))) return true
+  if (explicitUseCase !== 'auto' || !resolveAllowedUseCases(allowedModes).has('conversational-analytics') || isConversationalNoOpPrompt(prompt)) return false
+  if (assistantOutput === undefined) return isFirstTurn !== false && /\b(conversational\s*analytics|ca\s*agent|looker\s+ca)\b/i.test(String(prompt || ''))
+  const rawOut = String(assistantOutput || '')
+  const stripped = rawOut.replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '').trim()
+  return /<USE_CASE>\s*conversational[-_\s]?analytics\s*<\/USE_CASE>/i.test(rawOut) && (!stripped || /^(?:completed|done)\.?$/i.test(stripped))
 }
 
 // ponytail: extract <USE_CASE>...</USE_CASE> emitted by AGENTS.md per-turn routing or infer from prompt keywords,

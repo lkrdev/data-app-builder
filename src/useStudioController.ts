@@ -32,7 +32,7 @@ import {
   fetchFolderChildren, fetchFolderWithAncestors, fetchInitialLookerMetadata,
   fetchPreloadedContentSummary, formatExploreId,
   getAllowedUseCases, getArtifactNamespace, getArtifactService, getUseCaseLabel,
-  hydrateConversationContentItems, hydrateMentionedContext, listSavedScripts,
+  hydrateConversationContentItems, hydrateMentionedContext, isConversationalNoOpPrompt, listSavedScripts,
   listUserArtifacts, loadExistingDashboardApp, loadNativeContentById,
   loadObjectArtifact, loadScriptArtifact, loadStoredSelectedFolderId, loadStoredStudioThemeMode, loadUserConversations,
   loadUserEnvironmentId, LookerFolderNode, matchExplicitUseCaseRule, NativeContentState,
@@ -41,7 +41,7 @@ import {
   resolveConversationRelatedContent, ResolvedStudioTheme, ResolvedStudioUseCase, resolveStudioTheme, resolveSystemTheme,
   resolveUserCapabilities, saveDashboardStudioMetadata, SavedScript, saveNativeContentArtifact,
   saveScriptArtifact, saveUserArtifact, saveUserConversation, saveUserEnvironmentId, searchGlobalContentV2, searchLookerFolders, SearchLookerFoldersParams,
-  selectCaAgentViaIsolatedSubagent, STUDIO_FOLDER_STORAGE_KEY, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
+  selectCaAgentViaIsolatedSubagent, shouldRouteToIsolatedCaSubagent, STUDIO_FOLDER_STORAGE_KEY, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
   StudioContentItem, StudioContentItemType, StudioContextCategory, StudioContextMention, studioModeToUseCase, StudioThemeMode, StudioToolMode, StudioUseCase, studioUseCaseToMode, upsertPublishedDataApp, upsertStudioContentItem,
   UserArtifactIndex, UserCapabilities, UserConversationEntry,
 } from './lookerApi'
@@ -50,35 +50,15 @@ import {
 } from './lookmlTool'
 
 export {
-  authenticateGoogleOAuth,
-  computeIsAuthenticated,
-  DEFAULT_THINKING_LEVEL,
-  loadStoredSelectedFolderId,
-  loadStoredThinkingLevel,
-  normalizeStudioThemeMode,
-  normalizeThinkingLevel,
-  persistSelectedFolderId,
-  persistThinkingLevel,
-  readInitialSelectedFolderId,
-  readInitialThinkingLevel,
-  refreshOAuthSessionIfNeeded,
-  resolveLookerOAuthRedirectUri,
-  resolveLookerOAuthRedirectUris,
-  resolveStudioTheme,
-  resolveSystemTheme,
-  STUDIO_FOLDER_STORAGE_KEY,
-  STUDIO_OAUTH_REFRESH_LOCK_KEY,
-  STUDIO_OAUTH_STORAGE_KEY,
-  STUDIO_THEME_STORAGE_KEY,
-  STUDIO_THINKING_LEVEL_OPTIONS,
-  STUDIO_THINKING_LEVEL_STORAGE_KEY,
+  authenticateGoogleOAuth, computeIsAuthenticated, DEFAULT_THINKING_LEVEL, loadStoredSelectedFolderId,
+  loadStoredThinkingLevel, normalizeStudioThemeMode, normalizeThinkingLevel, persistSelectedFolderId,
+  persistThinkingLevel, readInitialSelectedFolderId, readInitialThinkingLevel, refreshOAuthSessionIfNeeded,
+  resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, resolveStudioTheme, resolveSystemTheme,
+  STUDIO_FOLDER_STORAGE_KEY, STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY,
+  STUDIO_THEME_STORAGE_KEY, STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY,
 }
 export type {
-  ResolvedStudioTheme,
-  StudioContextCategory,
-  StudioContextMention,
-  StudioThemeMode,
-  StudioThinkingLevel,
+  ResolvedStudioTheme, StudioContextCategory, StudioContextMention, StudioThemeMode, StudioThinkingLevel,
 }
 
 export interface QueuedPromptItem {
@@ -2677,19 +2657,15 @@ export function useStudioController() {
     const turnTargetUseCase: StudioUseCase =
       explicitUseCase !== 'auto' ? explicitUseCase : (classifiedPromptUseCase || 'auto')
 
-    if (turnTargetUseCase === 'health-check' || (explicitUseCase !== 'auto' && isHealthCheckMode)) {
+    const caRouteBase = { prompt: effectivePrompt, explicitUseCase, isCaMode, isFirstTurn, allowedModes: allowedUseCases }
+    if (!isConversationalNoOpPrompt(effectivePrompt) && (turnTargetUseCase === 'health-check' || (explicitUseCase !== 'auto' && isHealthCheckMode))) {
       setSelectedUseCase('health-check')
       await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages)
       await refreshCatalog()
       return
     }
 
-    if (
-      turnTargetUseCase === 'conversational-analytics' ||
-      (explicitUseCase !== 'auto' && isCaMode) ||
-      (turnTargetUseCase === 'auto' &&
-        extractResolvedUseCase('', effectivePrompt, allowedUseCases) === 'conversational-analytics')
-    ) {
+    if (shouldRouteToIsolatedCaSubagent(caRouteBase)) {
       setSelectedUseCase('conversational-analytics')
       await handleRunConversationalAnalytics(effectivePrompt, messagesWithUser)
       return
@@ -2842,7 +2818,7 @@ export function useStudioController() {
           : result.resolvedUseCase ||
             extractResolvedUseCase(result.assistantText, effectivePrompt, allowedUseCases)
       setSelectedUseCase(resolvedUseCase)
-      if (resolvedUseCase === 'conversational-analytics') {
+      if (shouldRouteToIsolatedCaSubagent({ ...caRouteBase, assistantOutput: result.rawOutputText ?? result.assistantText })) {
         await handleRunConversationalAnalytics(effectivePrompt, messagesWithUser)
         return
       }

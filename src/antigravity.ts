@@ -14,62 +14,27 @@ import {
   wrapDashboardCodeMode,
 } from './antigravityPrompts'
 import {
-  buildStudioRoute,
-  classifyStudioUseCase,
-  convertRelativeDateFilterToFixed,
-  createDeduplicatedLookerSdkProxy,
-  DataAppBundle,
-  extractResolvedUseCase,
-  getAllowedUseCases,
-  getArtifactNamespace,
-  getUseCaseLabel,
-  NativeContentBundle,
-  NativeContentState,
-  normalizeNativeContent,
-  normalizeQueryFiltersToFixedDates,
-  parseExploreId,
-  ResolvedStudioUseCase,
-  resolveNativeEmbedPath,
-  saveUserEnvironmentId,
-  STUDIO_USE_CASE_OPTIONS,
-  studioModeToUseCase,
-  StudioUseCase,
-  studioUseCaseToMode,
-  useCaseToStudioMode,
+  buildStudioRoute, classifyStudioUseCase, convertRelativeDateFilterToFixed, createDeduplicatedLookerSdkProxy,
+  DataAppBundle, extractResolvedUseCase, getAllowedUseCases, getArtifactNamespace, getUseCaseLabel,
+  isConversationalNoOpPrompt, matchExplicitUseCaseRule, NativeContentBundle, NativeContentState,
+  normalizeNativeContent, normalizeQueryFiltersToFixedDates, parseExploreId, ResolvedStudioUseCase,
+  resolveNativeEmbedPath, saveUserEnvironmentId, shouldRouteToIsolatedCaSubagent, STUDIO_USE_CASE_OPTIONS,
+  studioModeToUseCase, StudioUseCase, studioUseCaseToMode, useCaseToStudioMode,
 } from './lookerApi'
 import {
-  BOOTSTRAP_LOOKML_PY,
-  BOOTSTRAP_SANDBOX_SH,
-  buildLookmlSystemGuide,
-  classifyLookerOperation,
-  CODEMODE_CDN_URL,
-  computeLkrExtensionCacheKey,
-  ensureCodeModeLoaded,
-  executeLkrExtensionToolRequest,
-  extractLkrExtensionToolRequests,
-  extractLookmlBundleFromInteraction,
-  LKR_CLI_BRIDGE_TOOL,
-  LKR_CLI_SITECUSTOMIZE_PY,
-  LKR_DEV_CLI_SPEC,
-  LKR_DEV_CLI_VERSION,
-  LkrCodeMode,
-  LkrExtensionToolRequest,
-  LookmlBundle,
+  BOOTSTRAP_LOOKML_PY, BOOTSTRAP_SANDBOX_SH, buildLookmlSystemGuide, classifyLookerOperation,
+  CODEMODE_CDN_URL, computeLkrExtensionCacheKey, ensureCodeModeLoaded, executeLkrExtensionToolRequest,
+  extractLkrExtensionToolRequests, extractLookmlBundleFromInteraction, LKR_CLI_BRIDGE_TOOL,
+  LKR_CLI_SITECUSTOMIZE_PY, LKR_DEV_CLI_SPEC, LKR_DEV_CLI_VERSION, LkrCodeMode,
+  LkrExtensionToolRequest, LookmlBundle,
 } from './lookmlTool'
 
 export * from './antigravityPrompts'
 export {
-  buildStudioRoute,
-  classifyStudioUseCase,
-  convertRelativeDateFilterToFixed,
-  extractResolvedUseCase,
-  getAllowedUseCases,
-  getUseCaseLabel,
-  normalizeQueryFiltersToFixedDates,
-  STUDIO_USE_CASE_OPTIONS,
-  studioModeToUseCase,
-  studioUseCaseToMode,
-  useCaseToStudioMode,
+  buildStudioRoute, classifyStudioUseCase, convertRelativeDateFilterToFixed, extractResolvedUseCase,
+  getAllowedUseCases, getUseCaseLabel, isConversationalNoOpPrompt, matchExplicitUseCaseRule,
+  normalizeQueryFiltersToFixedDates, shouldRouteToIsolatedCaSubagent, STUDIO_USE_CASE_OPTIONS,
+  studioModeToUseCase, studioUseCaseToMode, useCaseToStudioMode,
 }
 export type { ResolvedStudioUseCase, StudioUseCase } from './lookerApi'
 export {
@@ -1600,6 +1565,7 @@ export interface AntigravityTurnResult {
   lookmlBundle?: LookmlBundle | null
   tddMarkdown: string | null
   assistantText: string
+  rawOutputText?: string
   resolvedUseCase: ResolvedStudioUseCase
   session: AgentSession
   telemetry: AntigravityTurnTelemetry
@@ -1842,10 +1808,11 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           .join('\n')}`
       : ''
 
+  const isNoOpTurn = isConversationalNoOpPrompt(userPrompt)
   const warmTurnDirective =
-    mode === 'data_app' && toolMode !== 'lookml'
+    !isNoOpTurn && mode === 'data_app' && toolMode !== 'lookml' && Boolean(existingAppCode?.trim())
       ? `[WARM SANDBOX FAST PATH: ${appFilePath} and the discovered Looker schema are already in /workspace. Do NOT re-run run_looker_codemode discovery or re-read guides unless a brand-new explore is requested. Update ${appFilePath} and bundle in ONE code_execution call via: python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\n...\nEOF\nNEVER echo <DATA_APP_BUNDLE> in your text reply.]\n\n`
-      : isDashboardMode && normalizedExistingNative
+      : !isNoOpTurn && isDashboardMode && normalizedExistingNative
       ? `[WARM CONTENT STUDIO FAST PATH: Active Looker ${normalizedExistingNative.contentType} id="${normalizedExistingNative.id}" ("${normalizedExistingNative.title}") and pre-hydrated active_content (element_ids=${JSON.stringify(normalizedExistingNative.elementIds || [])}, filter_names=${JSON.stringify(normalizedExistingNative.filterNames || [])}, lookml_dashboard_id="${normalizedExistingNative.lookmlDashboardId || ''}", project_id="${normalizedExistingNative.projectId || lookmlProjectId || ''}") are pre-injected in run_looker_codemode vars. Execute the update in ONE run_looker_codemode call using upsert_udd / upsert_lookml_dashboard / reflow_24col / pin_to_board / schedule_dashboard + return emit_native_bundle(...). NEVER echo <NATIVE_CONTENT_BUNDLE> in your text reply.]\n\n`
       : ''
 
@@ -1854,16 +1821,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       ? `\n\n[AUTO USE-CASE ROUTING: Consult /workspace/AGENTS.md ("## Use Case Auto-Classification (Turn 1 Routing)"). Allowed use cases for this user: ${JSON.stringify(
           allowedModes && allowedModes.length > 0
             ? allowedModes
-            : [
-                'app',
-                'data-investigator',
-                'dashboard',
-                'lookml',
-                'health-check',
-                'tile',
-                'conversational-analytics',
-              ]
-        )}. Start your response with <USE_CASE>...</USE_CASE> naming the single best allowed use case for this request, then execute that workflow. CRITICAL: (1) Conversational No-Op: when the prompt is a greeting, help request, or conversational message that does not ask for a specific tool or artifact ("hello", "hi", "help", "what can you do?"), call zero tools, reply in chat only, and do NOT create or open any right-pane content item (do NOT run bundle_app.py or emit_native_bundle). (2) Script (tile) Routing for Ad-Hoc Looker Instance / Folder / Space / SDK Queries: route prompts asking to inspect or query Looker spaces, folders, personal spaces, users, permissions, schedules, or instance metadata via SDK (e.g. "tell me what my personal space is", "can you find me all personal spaces that don't have dashboards") to <USE_CASE>tile</USE_CASE> and use run_looker_codemode without creating a Data App or Dashboard. (3) Data Investigator Routing: route prompts asking to "investigate", "find out", "figure out", "dig into", "what drove", or "what caused" across data, metrics, dashboards, Looks, or explores to <USE_CASE>data-investigator</USE_CASE> and follow /workspace/DATA_INVESTIGATOR_GUIDE.md and /workspace/skills/key-driver-analysis/SKILL.md.]`
+            : ['app', 'data-investigator', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics']
+        )}. Start your response with <USE_CASE>...</USE_CASE> naming the single best allowed use case for this request, then execute that workflow. CRITICAL: (1) Conversational & Follow-Up Questions (No-Op): when the prompt is a greeting, help request, meta/error summary ("summarize the errors you experienced", "what went wrong?", "how can I make you better?"), or general follow-up question in an active conversation that does not ask to build or modify a right-pane artifact ("hello", "hi", "help", "what can you do?"), answer directly in chat (calling zero tools for greetings/meta-questions) and do NOT create or open any right-pane content item (do NOT run bundle_app.py, emit_native_bundle, or redirect to an isolated CA sub-agent). (2) Script (tile) Routing for Ad-Hoc Looker Instance / Folder / Space / SDK Queries: route prompts asking to inspect or query Looker spaces, folders, personal spaces, users, permissions, schedules, or instance metadata via SDK (e.g. "tell me what my personal space is", "can you find me all personal spaces that don't have dashboards") to <USE_CASE>tile</USE_CASE> and use run_looker_codemode without creating a Data App or Dashboard. (3) Data Investigator Routing: route prompts asking to "investigate", "find out", "figure out", "dig into", "what drove", or "what caused" across data, metrics, dashboards, Looks, or explores to <USE_CASE>data-investigator</USE_CASE> and follow /workspace/DATA_INVESTIGATOR_GUIDE.md and /workspace/skills/key-driver-analysis/SKILL.md.]`
       : ''
 
   const uploadsSection =
@@ -2417,6 +2376,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     lookmlBundle,
     tddMarkdown,
     resolvedUseCase,
+    rawOutputText: rawText,
     assistantText:
       cleanAssistantText ||
       (bundle
