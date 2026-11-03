@@ -10,42 +10,29 @@ import {
 } from './dataAppPublisher'
 import { rawLookerRequest } from './lookerApi'
 
-export const ARTIFACT_NAMESPACE = 'data_app_builder'
+export const ARTIFACT_NAMESPACE = 'data_app_builder::data_app_builder'
+const UUID_OR_TILE_ID_REGEX = /^(?:db::)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-export type ArtifactExtensionHostLike =
-  | Partial<ExtensionSDK>
-  | { lookerHostData?: { extensionId?: string } }
-  | null
-  | undefined
-
-export type ArtifactRowLike = Partial<IArtifact> & {
-  key?: string
-  value?: unknown
-  version?: number
-  content_type?: string
+export type ArtifactExtensionHostLike = Partial<ExtensionSDK> | { lookerHostData?: { extensionId?: string } } | null | undefined
+export type ArtifactRowLike = Partial<IArtifact> & { key?: string; value?: unknown; version?: number; content_type?: string }
+interface SwrConfigWithDefaultCache {
+  default?: { cache?: { get: (key: string) => unknown; set: (key: string, value: unknown) => void } }
 }
 
-interface SwrConfigWithDefaultCache {
-  default?: {
-    cache?: {
-      get: (key: string) => unknown
-      set: (key: string, value: unknown) => void
-    }
-  }
+export function normalizeArtifactNamespace(raw?: string | null, projectId?: string | null): string {
+  const clean = String(raw || '').trim()
+  if (!clean || clean === 'data_app_builder' || clean.startsWith('db::') || UUID_OR_TILE_ID_REGEX.test(clean)) return ARTIFACT_NAMESPACE
+  if (clean.includes('::')) return clean
+  return `${String(projectId || clean).trim() || clean}::${clean}`
 }
 
 export function getArtifactNamespace(extensionSDK?: ArtifactExtensionHostLike): string {
-  return (
-    String(extensionSDK?.lookerHostData?.extensionId || ARTIFACT_NAMESPACE).trim() ||
-    ARTIFACT_NAMESPACE
-  )
+  return normalizeArtifactNamespace(extensionSDK?.lookerHostData?.extensionId)
 }
 
 export function readSwrCache<T = unknown>(key: unknown): T | undefined {
   try {
-    return (SWRConfig as unknown as SwrConfigWithDefaultCache).default?.cache?.get(
-      unstable_serialize(key)
-    ) as T | undefined
+    return (SWRConfig as unknown as SwrConfigWithDefaultCache).default?.cache?.get(unstable_serialize(key)) as T | undefined
   } catch {
     return undefined
   }
@@ -53,10 +40,7 @@ export function readSwrCache<T = unknown>(key: unknown): T | undefined {
 
 function writeSwrCache(key: unknown, value: unknown): void {
   try {
-    ;(SWRConfig as unknown as SwrConfigWithDefaultCache).default?.cache?.set(
-      unstable_serialize(key),
-      value
-    )
+    ;(SWRConfig as unknown as SwrConfigWithDefaultCache).default?.cache?.set(unstable_serialize(key), value)
   } catch {
     // Ignore cache write errors
   }
@@ -64,32 +48,14 @@ function writeSwrCache(key: unknown, value: unknown): void {
 }
 
 export type StudioToolMode =
-  | 'app'
-  | 'data_app'
-  | 'data-investigator'
-  | 'data_investigator'
-  | 'lookml'
-  | 'tile'
-  | 'script'
-  | 'dashboard'
-  | 'health'
-  | 'health_check'
-  | 'conversational-analytics'
+  | 'app' | 'data_app' | 'data-investigator' | 'data_investigator' | 'lookml'
+  | 'tile' | 'script' | 'dashboard' | 'health' | 'health_check' | 'conversational-analytics'
 
 export type StudioArtifactType = StudioToolMode
 
 const STUDIO_TOOL_MODES = new Set<string>([
-  'app',
-  'data_app',
-  'data-investigator',
-  'data_investigator',
-  'lookml',
-  'tile',
-  'script',
-  'dashboard',
-  'health',
-  'health_check',
-  'conversational-analytics',
+  'app', 'data_app', 'data-investigator', 'data_investigator', 'lookml',
+  'tile', 'script', 'dashboard', 'health', 'health_check', 'conversational-analytics',
 ])
 
 export interface UserArtifactIndexEntry {
@@ -144,16 +110,8 @@ export interface TileScriptBinding {
 }
 
 export type StudioContentItemType =
-  | 'dashboard'
-  | 'lookml_dashboard'
-  | 'look'
-  | 'explore'
-  | 'board'
-  | 'data_app'
-  | 'data-investigator'
-  | 'conversational-analytics'
-  | 'extension'
-  | 'report'
+  | 'dashboard' | 'lookml_dashboard' | 'look' | 'explore' | 'board'
+  | 'data_app' | 'data-investigator' | 'conversational-analytics' | 'extension' | 'report'
 
 export interface StudioContentItem {
   key: string // `${contentType}:${id}`
@@ -169,6 +127,8 @@ export interface StudioContentItem {
   extensionId?: string
   rawCode?: string
   updatedAt?: string
+  source?: 'created' | 'mention'
+  createdInConversation?: boolean
 }
 
 export function formatStudioContentItemTitle(
@@ -180,12 +140,7 @@ export function formatStudioContentItemTitle(
   const cleanTitle = String(rawTitle || '').trim()
   if (cleanTitle && cleanTitle !== cleanId && !/^\d+$/.test(cleanTitle)) return cleanTitle
   if (contentType === 'explore' && cleanId.includes('::')) {
-    const humanize = (s: string) =>
-      s
-        .split(/[_-]+/)
-        .filter(Boolean)
-        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-        .join(' ')
+    const humanize = (s: string) => s.split(/[_-]+/).filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
     const [model, explore] = cleanId.split('::')
     return `${humanize(model)}: ${humanize(explore)}`
   }
@@ -231,13 +186,18 @@ export function normalizeStudioContentItem(
   const key = String(raw.key || `${contentType}:${id}`).trim()
   const title = formatStudioContentItemTitle(contentType, id, raw.title)
   const embedPath = resolveStudioContentEmbedPath(contentType, id, raw.embedPath)
+  const source: 'created' | 'mention' | undefined =
+    raw.source === 'created' || raw.createdInConversation === true
+      ? 'created'
+      : raw.source === 'mention' || raw.createdInConversation === false
+      ? 'mention'
+      : undefined
+  const createdInConversation =
+    raw.createdInConversation !== undefined ? Boolean(raw.createdInConversation) : source !== undefined ? source === 'created' : undefined
   return {
-    ...raw,
-    key,
-    id,
-    contentType,
-    title,
-    embedPath,
+    ...raw, key, id, contentType, title, embedPath,
+    ...(source !== undefined ? { source } : {}),
+    ...(createdInConversation !== undefined ? { createdInConversation } : {}),
   }
 }
 
@@ -249,14 +209,15 @@ export function upsertStudioContentItem(
   const existingIdx = items.findIndex((it) => it.key === normalized.key)
   if (existingIdx >= 0) {
     const prev = items[existingIdx]
+    const isCreated = prev.createdInConversation === true || prev.source === 'created' || normalized.createdInConversation === true || normalized.source === 'created'
+    const createdInConversation = isCreated ? true : (normalized.createdInConversation ?? prev.createdInConversation)
+    const source = isCreated ? ('created' as const) : (normalized.source || prev.source)
     const merged = normalizeStudioContentItem({
-      ...prev,
-      ...nextRaw,
-      title:
-        nextRaw.title && nextRaw.title !== normalized.id && !/^\d+$/.test(nextRaw.title)
-          ? nextRaw.title
-          : prev.title || normalized.title,
+      ...prev, ...nextRaw,
+      title: nextRaw.title && nextRaw.title !== normalized.id && !/^\d+$/.test(nextRaw.title) ? nextRaw.title : prev.title || normalized.title,
       embedPath: nextRaw.embedPath || prev.embedPath || normalized.embedPath,
+      ...(source !== undefined ? { source } : {}),
+      ...(createdInConversation !== undefined ? { createdInConversation } : {}),
     })
     const nextItems = [...items]
     nextItems[existingIdx] = merged
@@ -299,52 +260,23 @@ export interface UserConversationEntry {
   updatedAt: string
 }
 
-export function hydrateConversationContentItems(
-  conv: Partial<UserConversationEntry>
-): StudioContentItem[] {
+export function hydrateConversationContentItems(conv: Partial<UserConversationEntry>): StudioContentItem[] {
   if (Array.isArray(conv.contentItems) && conv.contentItems.length > 0) {
-    return conv.contentItems
-      .filter((it): it is StudioContentItem => Boolean(it && it.id && it.contentType))
-      .map((it) => normalizeStudioContentItem(it))
+    return conv.contentItems.filter((it): it is StudioContentItem => Boolean(it && it.id && it.contentType)).map((it) => normalizeStudioContentItem(it))
   }
   const c = conv.content || {}
   const rawType = String(conv.type || conv.use_case || 'app').trim()
-  if (
-    rawType === 'tile' ||
-    rawType === 'script' ||
-    rawType === 'health' ||
-    rawType === 'health_check' ||
-    rawType === 'health-check' ||
-    rawType === 'lookml'
-  ) {
-    return []
-  }
-  const fallbackTitle =
-    typeof c.title === 'string' && c.title.trim()
-      ? c.title.trim()
-      : conv.label && conv.label !== conv.id
-      ? conv.label
-      : undefined
+  if (['tile', 'script', 'health', 'health_check', 'health-check', 'lookml'].includes(rawType)) return []
+  const fallbackTitle = typeof c.title === 'string' && c.title.trim() ? c.title.trim() : conv.label && conv.label !== conv.id ? conv.label : undefined
   const items: StudioContentItem[] = []
-  const pushItem = (
-    item: Partial<StudioContentItem> & { id: string; contentType: StudioContentItemType }
-  ) => {
+  const pushItem = (item: Partial<StudioContentItem> & { id: string; contentType: StudioContentItemType }) => {
     if (!item.id) return
-    const res = upsertStudioContentItem(items, item)
-    items.splice(0, items.length, ...res.items)
+    items.splice(0, items.length, ...upsertStudioContentItem(items, item).items)
   }
 
   if (rawType === 'conversational-analytics' || rawType === 'ca' || c.caConversationId) {
     const caId = String(c.caConversationId || c.id || conv.objectId || '').trim()
-    if (caId) {
-      pushItem({
-        id: caId,
-        contentType: 'conversational-analytics',
-        title: fallbackTitle,
-        embedPath: c.embedPath,
-        updatedAt: conv.updatedAt,
-      })
-    }
+    if (caId) pushItem({ id: caId, contentType: 'conversational-analytics', title: fallbackTitle, embedPath: c.embedPath, updatedAt: conv.updatedAt })
     return items
   }
 
@@ -353,37 +285,23 @@ export function hydrateConversationContentItems(
     const id = String(c.lookmlDashboardId || c.dashboardId || c.id || conv.objectId || '').trim()
     pushItem({ ...baseMeta, id, contentType: 'lookml_dashboard', lookmlDashboardId: id })
   } else if (c.contentType === 'board') {
-    const id = String(c.id || c.dashboardId || conv.objectId || '').trim()
-    pushItem({ ...baseMeta, id, contentType: 'board' })
+    pushItem({ ...baseMeta, id: String(c.id || c.dashboardId || conv.objectId || '').trim(), contentType: 'board' })
   } else if (c.contentType === 'explore') {
     const id = String(c.id || conv.objectId || '').trim()
     pushItem({ ...baseMeta, id, contentType: 'explore', exploreId: id })
   } else if (c.dashboardId || (c.contentType !== 'look' && (c.id || conv.objectId))) {
     const id = String(c.dashboardId || c.id || conv.objectId || '').trim()
     const contentType: StudioContentItemType =
-      rawType === 'data-investigator' || rawType === 'data_investigator'
-        ? 'data-investigator'
-        : rawType === 'dashboard' || c.contentType === 'dashboard'
-        ? 'dashboard'
-        : 'data_app'
-    pushItem({
-      ...baseMeta,
-      id,
-      contentType,
-      dashboardId: id,
-      extensionId: typeof c.extensionId === 'string' ? c.extensionId : undefined,
-    })
+      rawType === 'data-investigator' || rawType === 'data_investigator' ? 'data-investigator' : rawType === 'dashboard' || c.contentType === 'dashboard' ? 'dashboard' : 'data_app'
+    pushItem({ ...baseMeta, id, contentType, dashboardId: id, extensionId: typeof c.extensionId === 'string' ? c.extensionId : undefined })
   }
 
   if (c.lookId || c.contentType === 'look') {
     const lookId = String(c.lookId || c.id || conv.objectId || '').trim()
     pushItem({
-      id: lookId,
-      contentType: 'look',
-      lookId,
+      id: lookId, contentType: 'look', lookId,
       title: c.dashboardId ? `Look #${lookId}` : fallbackTitle,
-      embedPath:
-        c.contentType === 'look' ? c.embedPath : `/embed/looks/${encodeURIComponent(lookId)}`,
+      embedPath: c.contentType === 'look' ? c.embedPath : `/embed/looks/${encodeURIComponent(lookId)}`,
       updatedAt: conv.updatedAt,
     })
   }
@@ -403,6 +321,7 @@ export interface ConversationRelatedContentInfo {
   lookId?: string
   dashboardIds?: string[]
   lookIds?: string[]
+  relatedLinks?: Array<{ label: string; path: string; itemText: string }>
   summary: string
   items: string[]
 }
@@ -418,21 +337,33 @@ export function resolveConversationRelatedContent(
   )
   const rawType = String(conv.type || conv.use_case || prefixMatch?.[1] || 'app').trim()
   const stripPrefix = (s: string) =>
-    s
-      .replace(
-        /^conv_(?:app|data_app|data-investigator|data_investigator|dashboard|tile|script|health_check|health-check|health|lookml|ca|conversational-analytics)_/,
-        ''
-      )
-      .replace(/^obj_script_/, '')
-      .trim()
-  const uniq = (...vals: Array<string | undefined | false>) =>
-    Array.from(new Set(vals.filter((v): v is string => Boolean(v))))
+    s.replace(/^conv_(?:app|data_app|data-investigator|data_investigator|dashboard|tile|script|health_check|health-check|health|lookml|ca|conversational-analytics)_/, '').replace(/^obj_script_/, '').trim()
+  const uniq = (...vals: Array<string | undefined | false>) => Array.from(new Set(vals.filter((v): v is string => Boolean(v))))
 
-  const enrichWithContentItems = (
-    base: ConversationRelatedContentInfo
-  ): ConversationRelatedContentInfo => {
-    if (!Array.isArray(conv.contentItems) || conv.contentItems.length === 0) {
-      return base
+  const mentionedIds = new Set<string>()
+  for (const msg of conv.messages || []) {
+    const text = String((msg as { text?: unknown })?.text || '')
+    for (const m of text.matchAll(/@(?:dashboard|look|conversation|explore):([^\s,)]+)|\[Referenced Looker (?:Dashboard|Look|Conversation) #?([^\s\]]+)/gi)) {
+      const id = (m[1] || m[2] || '').trim()
+      if (id) mentionedIds.add(id)
+    }
+  }
+
+  const buildRelatedLinks = (itemList: string[]): Array<{ label: string; path: string; itemText: string }> =>
+    itemList.flatMap((itemText) => {
+      const d = itemText.match(/Dashboard #([^\s(]+)/)?.[1]
+      if (d) return [{ label: `Dashboard #${d}`, path: `/dashboards/${encodeURIComponent(d)}`, itemText }]
+      const l = itemText.match(/Saved Look #([^\s(]+)/)?.[1]
+      if (l) return [{ label: `Look #${l}`, path: `/looks/${encodeURIComponent(l)}`, itemText }]
+      const ca = itemText.match(/CA conversation artifact \(obj_ca_([^)]+)\)/)?.[1]
+      return ca ? [{ label: `CA Conversation ${ca}`, path: `/embed/conversations/${encodeURIComponent(ca)}`, itemText }] : []
+    })
+
+  const hasExplicitContentItems = Array.isArray(conv.contentItems) && conv.contentItems.length > 0
+
+  const enrichWithContentItems = (base: ConversationRelatedContentInfo): ConversationRelatedContentInfo => {
+    if (!hasExplicitContentItems) {
+      return { ...base, dashboardIds: base.dashboardId ? [base.dashboardId] : [], lookIds: base.lookId ? [base.lookId] : [], relatedLinks: buildRelatedLinks(base.items) }
     }
     const extraUserKeys: string[] = [...base.userIndexKeys]
     const extraSharedKeys: string[] = [...base.sharedObjectKeys]
@@ -440,18 +371,21 @@ export function resolveConversationRelatedContent(
     const extraLookIds: string[] = base.lookId ? [base.lookId] : []
     const extraItems: string[] = [...base.items]
 
-    for (const rawItem of conv.contentItems) {
-      if (!rawItem || !rawItem.id) continue
+    for (const rawItem of conv.contentItems || []) {
+      if (!rawItem?.id || rawItem.source === 'mention' || rawItem.createdInConversation === false) continue
       const item = normalizeStudioContentItem(rawItem)
       const itemId = item.id
+      const targetId = String(item.dashboardId || item.lookId || item.lookmlDashboardId || itemId).trim()
+      const isCreated = rawItem.createdInConversation === true || rawItem.source === 'created'
+      if (!isCreated && itemId !== base.objectId && targetId !== base.objectId && (mentionedIds.has(itemId) || (targetId && mentionedIds.has(targetId)))) continue
+      if ((rawType === 'conversational-analytics' || rawType === 'ca') && !isCreated && ['dashboard', 'data_app', 'data-investigator', 'look'].includes(item.contentType)) continue
       if (item.contentType === 'dashboard') {
         const dId = String(item.dashboardId || itemId).trim()
         if (dId) {
           extraDashIds.push(dId)
           extraUserKeys.push(`user_${uid}_dashboard_${dId}`)
           extraSharedKeys.push(`obj_dashboard_${dId}`)
-          extraItems.push(`Native Looker Dashboard #${dId} (sdk.delete_dashboard)`)
-          extraItems.push(`Content Studio artifact (obj_dashboard_${dId})`)
+          extraItems.push(`Native Looker Dashboard #${dId} (sdk.delete_dashboard)`, `Content Studio artifact (obj_dashboard_${dId})`)
         }
       } else if (item.contentType === 'look') {
         const lId = String(item.lookId || itemId).trim()
@@ -465,19 +399,12 @@ export function resolveConversationRelatedContent(
         const dId = String(item.dashboardId || itemId).trim()
         if (dId) {
           extraDashIds.push(dId)
-          extraUserKeys.push(`user_${uid}_app_${dId}`, `user_${uid}_data_app_${dId}`)
-          if (item.contentType === 'data-investigator') {
-            extraUserKeys.push(`user_${uid}_data-investigator_${dId}`)
-          }
+          extraUserKeys.push(`user_${uid}_app_${dId}`, `user_${uid}_data_app_${dId}`, ...(item.contentType === 'data-investigator' ? [`user_${uid}_data-investigator_${dId}`] : []))
           extraSharedKeys.push(`obj_app_${dId}`)
-          extraItems.push(`Looker Dashboard #${dId} (sdk.delete_dashboard)`)
-          extraItems.push(`Shared app artifact (obj_app_${dId})`)
+          extraItems.push(`Looker Dashboard #${dId} (sdk.delete_dashboard)`, `Shared app artifact (obj_app_${dId})`)
         }
       } else if (item.contentType === 'conversational-analytics') {
-        extraUserKeys.push(
-          `user_${uid}_conversational-analytics_${itemId}`,
-          `user_${uid}_ca_${itemId}`
-        )
+        extraUserKeys.push(`user_${uid}_conversational-analytics_${itemId}`, `user_${uid}_ca_${itemId}`)
         extraSharedKeys.push(`obj_ca_${itemId}`, `obj_conversational-analytics_${itemId}`)
         extraItems.push(`CA conversation artifact (obj_ca_${itemId})`)
       } else if (item.contentType === 'lookml_dashboard' || item.contentType === 'board') {
@@ -492,50 +419,33 @@ export function resolveConversationRelatedContent(
     const items = uniq(...extraItems)
     return {
       ...base,
+      objectId: base.objectId || dashboardIds[0] || lookIds[0] || '',
       userIndexKeys: uniq(...extraUserKeys),
       sharedObjectKeys: uniq(...extraSharedKeys),
       dashboardId: base.dashboardId || dashboardIds[0],
       lookId: base.lookId || lookIds[0],
-      dashboardIds,
-      lookIds,
-      items,
+      dashboardIds, lookIds, items,
+      relatedLinks: buildRelatedLinks(items),
       summary: items.join(' + ') || base.summary,
     }
   }
 
   if (rawType === 'dashboard') {
-    const contentType =
-      c.contentType || (c.lookId ? 'look' : c.lookmlDashboardId ? 'lookml_dashboard' : 'dashboard')
-    const objectId = stripPrefix(
-      String(conv.objectId || c.dashboardId || c.lookId || c.lookmlDashboardId || c.id || conv.id || '')
-    )
-    const dashboardId = c.dashboardId
-      ? String(c.dashboardId).trim()
-      : contentType === 'dashboard' && objectId
-      ? objectId
-      : undefined
-    const lookId = c.lookId
-      ? String(c.lookId).trim()
-      : contentType === 'look' && objectId
-      ? objectId
-      : undefined
+    const contentType = c.contentType || (c.lookId ? 'look' : c.lookmlDashboardId ? 'lookml_dashboard' : 'dashboard')
+    const explicitObjectId = stripPrefix(String(conv.objectId || c.dashboardId || c.lookId || c.lookmlDashboardId || c.id || ''))
+    const objectId = explicitObjectId || (!hasExplicitContentItems ? stripPrefix(String(conv.id || '')) : '')
+    const dashboardId = c.dashboardId ? String(c.dashboardId).trim() : contentType === 'dashboard' && objectId ? objectId : undefined
+    const lookId = c.lookId ? String(c.lookId).trim() : contentType === 'look' && objectId ? objectId : undefined
     const items = uniq(
       dashboardId && `Native Looker Dashboard #${dashboardId} (sdk.delete_dashboard)`,
       lookId && `Saved Look #${lookId} (sdk.delete_look)`,
       objectId && `Content Studio artifact (obj_dashboard_${objectId})`
     )
     return enrichWithContentItems({
-      mode: 'dashboard',
-      objectId,
-      userIndexKeys: uniq(
-        objectId && `user_${uid}_dashboard_${objectId}`,
-        conv.id && conv.id !== objectId && `user_${uid}_dashboard_${conv.id}`
-      ),
+      mode: 'dashboard', objectId,
+      userIndexKeys: uniq(objectId && `user_${uid}_dashboard_${objectId}`, conv.id && conv.id !== objectId && `user_${uid}_dashboard_${conv.id}`),
       sharedObjectKeys: uniq(objectId && `obj_dashboard_${objectId}`),
-      dashboardId,
-      lookId,
-      summary: items.join(' + ') || 'Content Studio artifact',
-      items,
+      dashboardId, lookId, summary: items.join(' + ') || 'Content Studio artifact', items,
     })
   }
 
@@ -548,16 +458,10 @@ export function resolveConversationRelatedContent(
       dashboardId && `Published wrapper Dashboard #${dashboardId} (sdk.delete_dashboard)`
     )
     return enrichWithContentItems({
-      mode: 'tile',
-      objectId,
-      userIndexKeys: uniq(
-        objectId && `user_${uid}_script_${objectId}`,
-        objectId && `user_${uid}_tile_${objectId}`
-      ),
+      mode: 'tile', objectId,
+      userIndexKeys: uniq(objectId && `user_${uid}_script_${objectId}`, objectId && `user_${uid}_tile_${objectId}`),
       sharedObjectKeys: uniq(objectId && `obj_script_${objectId}`, objectId && `obj_schedule_${objectId}`),
-      dashboardId,
-      summary: items.join(' + ') || 'Python script & schedule artifacts',
-      items,
+      dashboardId, summary: items.join(' + ') || 'Python script & schedule artifacts', items,
     })
   }
 
@@ -565,15 +469,10 @@ export function resolveConversationRelatedContent(
     const objectId = stripPrefix(String(conv.objectId || c.reportId || c.id || conv.id || ''))
     const items = uniq(objectId && `Health Check report artifact (obj_health_${objectId})`)
     return enrichWithContentItems({
-      mode: 'health',
-      objectId,
-      userIndexKeys: uniq(
-        objectId && `user_${uid}_health_check_${objectId}`,
-        objectId && `user_${uid}_health_${objectId}`
-      ),
+      mode: 'health', objectId,
+      userIndexKeys: uniq(objectId && `user_${uid}_health_check_${objectId}`, objectId && `user_${uid}_health_${objectId}`),
       sharedObjectKeys: uniq(objectId && `obj_health_${objectId}`, objectId && `obj_health_check_${objectId}`),
-      summary: items.join(' + ') || 'Health Check report artifact',
-      items,
+      summary: items.join(' + ') || 'Health Check report artifact', items,
     })
   }
 
@@ -581,12 +480,10 @@ export function resolveConversationRelatedContent(
     const objectId = stripPrefix(String(conv.objectId || c.sessionId || c.id || conv.id || ''))
     const items = uniq(objectId && `LookML session artifact (obj_lookml_${objectId})`)
     return enrichWithContentItems({
-      mode: 'lookml',
-      objectId,
+      mode: 'lookml', objectId,
       userIndexKeys: uniq(objectId && `user_${uid}_lookml_${objectId}`),
       sharedObjectKeys: uniq(objectId && `obj_lookml_${objectId}`),
-      summary: items.join(' + ') || 'LookML session artifact',
-      items,
+      summary: items.join(' + ') || 'LookML session artifact', items,
     })
   }
 
@@ -594,40 +491,23 @@ export function resolveConversationRelatedContent(
     const objectId = stripPrefix(String(conv.objectId || c.caConversationId || c.id || conv.id || ''))
     const items = uniq(objectId && `CA conversation artifact (obj_ca_${objectId})`)
     return enrichWithContentItems({
-      mode: 'conversational-analytics',
-      objectId,
-      userIndexKeys: uniq(
-        objectId && `user_${uid}_conversational-analytics_${objectId}`,
-        objectId && `user_${uid}_ca_${objectId}`
-      ),
-      sharedObjectKeys: uniq(
-        objectId && `obj_ca_${objectId}`,
-        objectId && `obj_conversational-analytics_${objectId}`
-      ),
-      summary: items.join(' + ') || 'CA conversation artifact',
-      items,
+      mode: 'conversational-analytics', objectId,
+      userIndexKeys: uniq(objectId && `user_${uid}_conversational-analytics_${objectId}`, objectId && `user_${uid}_ca_${objectId}`),
+      sharedObjectKeys: uniq(objectId && `obj_ca_${objectId}`, objectId && `obj_conversational-analytics_${objectId}`),
+      summary: items.join(' + ') || 'CA conversation artifact', items,
     })
   }
 
-  const objectId = stripPrefix(String(conv.objectId || c.dashboardId || c.id || conv.id || ''))
+  const explicitAppObjectId = stripPrefix(String(conv.objectId || c.dashboardId || c.id || ''))
+  const objectId = explicitAppObjectId || (!hasExplicitContentItems ? stripPrefix(String(conv.id || '')) : '')
   const dashboardId = String(c.dashboardId || objectId || '').trim() || undefined
   const appKey = String(c.appArtifactId || (objectId ? `obj_app_${objectId}` : '')).trim()
-  const items = uniq(
-    dashboardId && `Looker Dashboard #${dashboardId} (sdk.delete_dashboard)`,
-    appKey && `Shared app artifact (${appKey})`
-  )
+  const items = uniq(dashboardId && `Looker Dashboard #${dashboardId} (sdk.delete_dashboard)`, appKey && `Shared app artifact (${appKey})`)
   return enrichWithContentItems({
-    mode: 'app',
-    objectId,
-    userIndexKeys: uniq(
-      objectId && `user_${uid}_app_${objectId}`,
-      objectId && `user_${uid}_data_app_${objectId}`,
-      conv.id && conv.id !== objectId && `user_${uid}_app_${conv.id}`
-    ),
+    mode: 'app', objectId,
+    userIndexKeys: uniq(objectId && `user_${uid}_app_${objectId}`, objectId && `user_${uid}_data_app_${objectId}`, conv.id && conv.id !== objectId && `user_${uid}_app_${conv.id}`),
     sharedObjectKeys: uniq(appKey),
-    dashboardId,
-    summary: items.join(' + ') || 'Data App dashboard & artifact',
-    items,
+    dashboardId, summary: items.join(' + ') || 'Data App dashboard & artifact', items,
   })
 }
 
@@ -739,8 +619,11 @@ export class ArtifactService {
   private readonly userListCache = new Map<string, UserArtifactIndexEntry[]>()
   private readonly scriptsCache = new Map<string, SavedScript[]>()
   private readonly tileScriptCache = new Map<string, TileScriptBinding | null>()
+  readonly namespace: string
 
-  constructor(readonly sdk: Looker40SDK, readonly namespace = ARTIFACT_NAMESPACE) {}
+  constructor(readonly sdk: Looker40SDK, namespace = ARTIFACT_NAMESPACE) {
+    this.namespace = normalizeArtifactNamespace(namespace)
+  }
 
   getCachedVersion(key: string): number | undefined {
     return this.versionByKey.get(key)
@@ -1524,7 +1407,7 @@ export function getArtifactService(
   sdk: Looker40SDK,
   namespace = ARTIFACT_NAMESPACE
 ): ArtifactService {
-  const ns = String(namespace || ARTIFACT_NAMESPACE).trim() || ARTIFACT_NAMESPACE
+  const ns = normalizeArtifactNamespace(namespace)
   const rawCandidate = (sdk as Looker40SDK & { __rawSdk?: object })?.__rawSdk || sdk
   const rawKey =
     rawCandidate && (typeof rawCandidate === 'object' || typeof rawCandidate === 'function')

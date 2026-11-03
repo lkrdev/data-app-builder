@@ -3572,6 +3572,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         }
         await new Promise((r) => setTimeout(r, 60));
 
+        const contentLinkEl = modalEl?.querySelector('[data-testid="delete-modal-content-link-0"]');
+
         return {
           hasCatalogBar,
           hasMyCreationsText,
@@ -3581,6 +3583,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           lookmlVisibleInArchived,
           hasDeleteModal: Boolean(modalEl),
           modalText: modalEl?.innerText || '',
+          contentLinkHref: contentLinkEl?.getAttribute('href') || '',
+          contentLinkTarget: contentLinkEl?.getAttribute('target') || '',
           checkboxChecked: Boolean(checkboxEl?.checked),
           hasCancelBtn: Boolean(document.querySelector('[data-testid="cancel-delete-conv-btn"]')),
           hasConvOnlyBtn: Boolean(document.querySelector('[data-testid="confirm-delete-conv-only-btn"]')),
@@ -3600,12 +3604,14 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       toggleTextAfterExpand: 'Hide Archived (1)',
       lookmlVisibleInArchived: true,
       hasDeleteModal: true,
+      contentLinkTarget: '_blank',
       checkboxChecked: true,
       hasCancelBtn: true,
       hasConvOnlyBtn: true,
       hasConvAndContentBtn: true,
       hasConfirmBtn: true
     })
+    expect(modalOpenRes.result.value.contentLinkHref).toContain('/dashboards/42')
     expect(modalOpenRes.result.value.modalText).toContain('Executive Revenue App')
     expect(modalOpenRes.result.value.modalText).toContain('Looker Dashboard #42 (sdk.delete_dashboard)')
     expect(modalOpenRes.result.value.modalText).toContain('Shared app artifact (obj_app_42)')
