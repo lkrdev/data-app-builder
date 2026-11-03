@@ -57,13 +57,14 @@ import {
   getArtifactService, getUseCaseLabel, hydrateConversationContentItems, hydrateMentionedContext,
   isConversationalNoOpPrompt, listUserArtifacts, loadStoredSelectedFolderId,
   loadUserConversations, loadUserEnvironmentId, matchExplicitUseCaseRule,
-  normalizeArtifactNamespace, normalizeQueryFiltersToFixedDates, normalizeStudioContentItem,
+  normalizeArtifactNamespace, normalizeBusySendAction, normalizeQueryFiltersToFixedDates, normalizeStudioContentItem,
   normalizeStudioThemeMode,
   parseCaAgentSelectionResponse, parseStudioRoute, persistSelectedFolderId, rawLookerRequest,
   readInitialSelectedFolderId, readSwrCache, resolveConversationRelatedContent,
   resolveStudioContentEmbedPath, resolveStudioTheme, resolveSystemTheme, resolveUserCapabilities,
-  saveUserArtifact, saveUserConversation, saveUserEnvironmentId, searchGlobalContentV2,
+  saveStoredBusySendAction, saveUserArtifact, saveUserConversation, saveUserEnvironmentId, searchGlobalContentV2,
   searchLookerFolders, selectCaAgentViaIsolatedSubagent, shouldRouteToIsolatedCaSubagent,
+  DEFAULT_BUSY_SEND_ACTION, loadStoredBusySendAction, STUDIO_BUSY_SEND_ACTION_STORAGE_KEY,
   STUDIO_FOLDER_STORAGE_KEY, STUDIO_MODES, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
   StudioContentItem, SWR_DEDUPED_METHODS, upsertStudioContentItem, UserArtifactIndexItem,
 } from '../lookerApi'
@@ -5084,5 +5085,27 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
     expect(traceMd).toContain('[File] Viewing DATA_INVESTIGATOR_GUIDE.md')
     expect(traceMd).toContain('[Skill] Skill: key-driver-analysis')
     expect(traceMd).toContain('[Code Mode] Executing Looker queries for Order Items...')
+  })
+
+  test('51. Issue #124: persists busySendAction (queue vs interject) in localStorage & extensionSDK and documents Skilled Use Cases in README.md', async () => {
+    expect([STUDIO_BUSY_SEND_ACTION_STORAGE_KEY, DEFAULT_BUSY_SEND_ACTION]).toEqual(['dab_busy_send_action', 'queue'])
+    expect([normalizeBusySendAction(), normalizeBusySendAction(null), normalizeBusySendAction('queue'), normalizeBusySendAction('INTERJECT'), normalizeBusySendAction('unknown')]).toEqual(['queue', 'queue', 'queue', 'interject', 'queue'])
+
+    const extStore = new Map<string, string>()
+    const mockExtStorage = {
+      localStorageGetItem: async (k: string) => extStore.get(k) ?? null,
+      localStorageSetItem: async (k: string, v: string) => void extStore.set(k, v),
+    }
+    expect(await loadStoredBusySendAction(mockExtStorage)).toBe('queue')
+    await saveStoredBusySendAction('interject', mockExtStorage)
+    expect([extStore.get(STUDIO_BUSY_SEND_ACTION_STORAGE_KEY), await loadStoredBusySendAction(mockExtStorage)]).toEqual(['interject', 'interject'])
+    await saveStoredBusySendAction('queue', mockExtStorage)
+    expect([extStore.get(STUDIO_BUSY_SEND_ACTION_STORAGE_KEY), await loadStoredBusySendAction(mockExtStorage)]).toEqual(['queue', 'queue'])
+
+    const readme = readFileSync(path.resolve(__dirname, '../../README.md'), 'utf8')
+    expect(readme).toContain('## Skilled Use Cases')
+    for (const label of ['**Data Apps**:', '**Data Investigator**:', '**Content Studio**:', '**Conversational Analytics**:', '**Agentic LookML**:', '**3-Pillar Health Check**:', '**Script / Python Tile**:']) {
+      expect(readme).toContain(label)
+    }
   })
 })

@@ -85,15 +85,15 @@ export * from './antigravityStarters'
 export * from './antigravityPrompts'
 export {
   buildStudioRoute, clampLeftPaneWidth, classifyStudioUseCase, convertRelativeDateFilterToFixed,
-  DEFAULT_LEFT_PANE_WIDTH, extractResolvedUseCase, getAllowedUseCases, getUseCaseLabel,
-  isConversationalNoOpPrompt, loadStoredLeftPaneWidth, loadStoredRightPaneCollapsed,
+  DEFAULT_BUSY_SEND_ACTION, DEFAULT_LEFT_PANE_WIDTH, extractResolvedUseCase, getAllowedUseCases, getUseCaseLabel,
+  isConversationalNoOpPrompt, loadStoredBusySendAction, loadStoredLeftPaneWidth, loadStoredRightPaneCollapsed,
   matchExplicitUseCaseRule, MAX_LEFT_PANE_WIDTH, MIN_LEFT_PANE_WIDTH,
-  normalizeQueryFiltersToFixedDates, readInitialLeftPaneWidth, readInitialRightPaneCollapsed,
-  saveStoredLeftPaneWidth, saveStoredRightPaneCollapsed, shouldRouteToIsolatedCaSubagent,
-  STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY, STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY,
+  normalizeBusySendAction, normalizeQueryFiltersToFixedDates, readInitialBusySendAction, readInitialLeftPaneWidth, readInitialRightPaneCollapsed,
+  saveStoredBusySendAction, saveStoredLeftPaneWidth, saveStoredRightPaneCollapsed, shouldRouteToIsolatedCaSubagent,
+  STUDIO_BUSY_SEND_ACTION_STORAGE_KEY, STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY, STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY,
   STUDIO_USE_CASE_OPTIONS, studioModeToUseCase, studioUseCaseToMode, useCaseToStudioMode,
 } from './lookerApi'
-export type { ExtensionHostStorageLike, ResolvedStudioUseCase, StudioUseCase } from './lookerApi'
+export type { ExtensionHostStorageLike, ResolvedStudioUseCase, StudioBusySendAction, StudioUseCase } from './lookerApi'
 export {
   BOOTSTRAP_LOOKML_PY,
   BOOTSTRAP_SANDBOX_SH,

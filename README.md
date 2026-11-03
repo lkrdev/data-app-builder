@@ -2,6 +2,16 @@
 
 A Looker Extension (React + TypeScript) that lets you **Use your Looker Agent** to build, analyze, and automate across **Looker Dashboards (Content Studio)**, **Data Apps**, **Conversational Analytics**, **Agentic LookML**, **Python Tiles**, and **3-Pillar Health Checks** directly inside Looker using the **Antigravity Managed Agent** (`antigravity-preview-09-2026` on the Gemini Interactions API) and the **WASM Looker Code Mode** (`LkrCodeMode` Monty Python sandbox).
 
+## Skilled Use Cases
+
+- **Data Apps**: Author and publish interactive Lit web component apps (`<app-kpi>`, `<app-chart>`, `<app-grid>`) into Looker dashboard tiles.
+- **Data Investigator**: Generate root-cause narrative investigations in Google Doc or Presentation format using Key Driver Analysis (`run_key_driver_analysis`) and fixed date ranges.
+- **Content Studio**: Build and update native Looker User-Defined Dashboards (UDDs), LookML Dashboards, Saved Looks, Boards, and Scheduled Plans.
+- **Conversational Analytics**: Ask natural-language analytical questions and route directly to Looker Conversational Analytics (CA) agents.
+- **Agentic LookML**: Author, refactor, validate, and test LookML models, views, explores, and refinements in user dev mode.
+- **3-Pillar Health Check**: Audit Looker System Activity (Pillar 1), LookML 0–4 Transcriber Rubric (Pillar 2), and BigQuery `INFORMATION_SCHEMA` (Pillar 3).
+- **Script / Python Tile**: Run sandboxed `LkrCodeMode` Python scripts against Looker SDKs, render custom dashboard tiles, and schedule script runs.
+
 ---
 
 ## Prerequisites

@@ -14,6 +14,7 @@ import {
   BookOpen,
   Brain,
   Check,
+  ChevronDown,
   Code2,
   Copy,
   CornerDownRight,
@@ -1074,6 +1075,8 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     setPrompt,
     handleSendPrompt,
     queuedPrompts,
+    busySendAction,
+    setBusySendAction,
     handleStopTurn,
     handleQueuePrompt,
     handleRemoveQueuedPrompt,
@@ -1095,9 +1098,11 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const addMenuWrapRef = useRef<HTMLDivElement | null>(null)
+  const busyActionWrapRef = useRef<HTMLDivElement | null>(null)
   const mentionMenuRef = useRef<HTMLDivElement | null>(null)
 
   const [addContextOpen, setAddContextOpen] = useState(false)
+  const [busyActionMenuOpen, setBusyActionMenuOpen] = useState(false)
   const [cursorPos, setCursorPos] = useState<number>(() => prompt.length)
   const [forceMentionCategory, setForceMentionCategory] = useState<StudioContextCategory | 'all' | null>(
     () => (mockExt?.initialComboOpen ? 'explore' : null)
@@ -1142,6 +1147,9 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     const onDocMouseDown = (e: MouseEvent) => {
       if (addMenuWrapRef.current && !addMenuWrapRef.current.contains(e.target as Node)) {
         setAddContextOpen(false)
+      }
+      if (busyActionWrapRef.current && !busyActionWrapRef.current.contains(e.target as Node)) {
+        setBusyActionMenuOpen(false)
       }
       if (
         mentionMenuRef.current &&
@@ -1749,8 +1757,12 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
             if (e.key === 'Escape' && detectedMention.open) { e.preventDefault(); setForceMentionCategory(null); return }
             if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
               e.preventDefault()
-              if (busyStatus) handleQueuePrompt()
-              else void handleSendPrompt()
+              if (busyStatus) {
+                if (busySendAction === 'interject') void handleInterjectPrompt()
+                else handleQueuePrompt()
+              } else {
+                void handleSendPrompt()
+              }
             }
           }}
         />
@@ -1819,12 +1831,41 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
           )}
           {busyStatus ? (
             <>
-              <StudioButton variant="secondary" testId="studio-queue-btn" onClick={handleQueuePrompt} disabled={!prompt.trim() && pastedImages.length === 0} title="Queue message to run automatically when the current turn finishes (Cmd/Ctrl+Enter)">
-                <CornerDownRight size={13} strokeWidth={1.75} aria-hidden="true" /><span>Queue</span>
-              </StudioButton>
-              <StudioButton variant="secondary" testId="studio-interject-btn" onClick={() => handleInterjectPrompt()} disabled={!isAuthenticated || (!prompt.trim() && pastedImages.length === 0)} title="Interrupt the running turn and send this message immediately">
-                <Zap size={13} strokeWidth={1.75} aria-hidden="true" /><span>Interject</span>
-              </StudioButton>
+              <div className="dab-split-action-group" data-testid="studio-busy-action-group" ref={busyActionWrapRef}>
+                <StudioButton
+                  variant="secondary"
+                  testId={busySendAction === 'interject' ? 'studio-interject-btn' : 'studio-queue-btn'}
+                  className="dab-split-action-main"
+                  onClick={() => (busySendAction === 'interject' ? void handleInterjectPrompt() : handleQueuePrompt())}
+                  disabled={(busySendAction === 'interject' && !isAuthenticated) || (!prompt.trim() && pastedImages.length === 0)}
+                  title={busySendAction === 'interject' ? 'Interrupt the running turn and send this message immediately (Cmd/Ctrl+Enter)' : 'Queue message to run automatically when the current turn finishes (Cmd/Ctrl+Enter)'}
+                >
+                  {busySendAction === 'interject' ? <Zap size={13} strokeWidth={1.75} aria-hidden="true" /> : <CornerDownRight size={13} strokeWidth={1.75} aria-hidden="true" />}
+                  <span>{busySendAction === 'interject' ? 'Interject' : 'Queue'}</span>
+                </StudioButton>
+                <button
+                  type="button" data-testid="studio-busy-action-menu-trigger" className="dab-btn dab-btn-secondary dab-split-action-caret"
+                  onClick={() => setBusyActionMenuOpen((prev) => !prev)}
+                  title="Change send action while turn is running" aria-label="Change send action while turn is running" aria-expanded={busyActionMenuOpen}
+                >
+                  <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
+                </button>
+                {busyActionMenuOpen && (
+                  <div className="dab-split-action-menu" data-testid="studio-busy-action-menu" role="menu" aria-label="Send action while turn is running">
+                    {([['queue', 'Queue', CornerDownRight], ['interject', 'Interject', Zap]] as const).map(([act, lbl, Icon]) => (
+                      <button
+                        key={act} type="button" role="menuitemradio" aria-checked={busySendAction === act}
+                        data-testid={`studio-busy-action-option-${act}`}
+                        className={`dab-split-action-option ${busySendAction === act ? 'selected' : ''}`}
+                        onClick={() => { setBusySendAction(act); setBusyActionMenuOpen(false) }}
+                      >
+                        <Icon size={13} strokeWidth={1.75} aria-hidden="true" /><span>{lbl}</span>
+                        {busySendAction === act && <Check size={12} strokeWidth={2} aria-hidden="true" style={{ marginLeft: 'auto' }} />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <StudioButton variant="danger" testId="studio-stop-btn" onClick={handleStopTurn} title="Stop current turn">
                 <Square size={12} strokeWidth={2} aria-hidden="true" /><span>Stop</span>
               </StudioButton>
