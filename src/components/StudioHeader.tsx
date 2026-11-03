@@ -113,6 +113,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     busyStatus,
     messages,
     handleSaveAuthSetup,
+    isLookerDevMode,
   } = ctl
   const [copiedRedirectUri, setCopiedRedirectUri] = useState(false)
   const [copiedSpartanRedirectUri, setCopiedSpartanRedirectUri] = useState(false)
@@ -131,7 +132,6 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
       <header className="dab-topbar">
         <div className="dab-brand">
           <strong>Looker Agent</strong>
-          <span className="dab-badge">Agentic LookML</span>
           <span className="dab-badge">Configuration</span>
         </div>
         <div className="dab-controls">
@@ -140,6 +140,15 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             resolvedTheme={resolvedTheme}
             onChange={setThemeMode}
           />
+          {isLookerDevMode && (
+            <StudioBadge
+              tone="warning"
+              testId="topbar-dev-mode-badge"
+              title="Looker session is in Development Mode"
+            >
+              Dev Mode
+            </StudioBadge>
+          )}
           <FullScreenToggleButton />
         </div>
       </header>
@@ -425,6 +434,8 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     setHealthScope,
     handleRunHealthCheck,
     busyStatus,
+    userDisplayName,
+    isLookerDevMode,
   } = ctl
 
   const mockExt =
@@ -590,10 +601,6 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     <header className="dab-topbar">
       <div className="dab-brand">
         <strong>Looker Agent</strong>
-        <span className="dab-badge">Agentic LookML</span>
-        <span className="dab-badge">
-          {LkrCodeMode?.runPythonCode ? 'WASM CodeMode ✓' : 'WASM CodeMode (pending build)'}
-        </span>
         <div className="dab-env-menu-wrap" ref={envMenuRef}>
           <StudioBadge
             tone={environmentStatus === 'stopped' ? 'neutral' : environmentStatus === 'resetting' ? 'warning' : 'success'}
@@ -859,24 +866,24 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                 onClose={() => setAdvModalOpen(false)}
                 testId="folder-advanced-search-modal"
                 closeTestId="folder-search-modal-close"
-                closeLabel="✕ Close"
+                closeLabel="✕"
                 backdropClassName="dab-folder-modal-backdrop"
                 className="dab-folder-search-modal"
                 title={
                   <>
                     <Search size={14} strokeWidth={1.75} style={{ verticalAlign: -2, marginRight: 5 }} aria-hidden="true" />
-                    Advanced Looker Folder Search (<code>sdk.search_folders</code>)
+                    Advanced Looker Folder Search
                   </>
                 }
-                subtitle="Search across all Looker folders by name, parent_id, personal scope, creator_id, or ID"
+                subtitle="Search across all Looker folders by folder name, parent folder, personal scope, creator, or folder ID"
               >
                 <div className="dab-folder-search-grid">
                   <div className="dab-modal-row">
-                    <label>Folder Name (name)</label>
+                    <label>Folder Name</label>
                     <input
-                      type="text"
+                      type="search"
                       data-testid="folder-search-input-name"
-                      placeholder="e.g. subfolder test or %marketing%..."
+                      placeholder="Search folder name or ID..."
                       value={advName}
                       onChange={(e) => setAdvName(e.target.value)}
                       onKeyDown={(e) => {
@@ -885,46 +892,71 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                     />
                   </div>
                   <div className="dab-modal-row">
-                    <label>Parent Folder ID (parent_id)</label>
+                    <label>Parent Folder</label>
                     <input
-                      type="text"
+                      type="search"
                       data-testid="folder-search-input-parent-id"
-                      placeholder="e.g. 1 or 501..."
+                      list="dab-folder-parent-suggestions"
+                      placeholder="Search parent folder name..."
                       value={advParentId}
                       onChange={(e) => setAdvParentId(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void executeAdvancedSearch()
+                      }}
                     />
+                    <datalist id="dab-folder-parent-suggestions">
+                      {Object.values(folderTreeNodes).map((node) => (
+                        <option key={node.id} value={node.name} />
+                      ))}
+                    </datalist>
                   </div>
                   <div className="dab-modal-row">
-                    <label>Personal Scope (is_personal)</label>
+                    <label>Personal Scope</label>
                     <StudioSelect
                       testId="folder-search-select-personal"
                       value={advPersonal}
                       onChange={(val) => setAdvPersonal(val)}
                       options={[
                         { value: 'any', label: 'Any Folder' },
-                        { value: 'false', label: 'Shared Folders Only (is_personal=false)' },
-                        { value: 'true', label: 'Personal Folders Only (is_personal=true)' },
+                        { value: 'false', label: 'Shared Folders Only' },
+                        { value: 'true', label: 'Personal Folders Only' },
                       ]}
                     />
                   </div>
                   <div className="dab-modal-row">
-                    <label>Creator User ID (creator_id)</label>
+                    <label>Created By</label>
                     <input
-                      type="text"
+                      type="search"
                       data-testid="folder-search-input-creator-id"
-                      placeholder="e.g. 1..."
+                      list="dab-folder-creator-suggestions"
+                      placeholder="Search creator name or ID..."
                       value={advCreatorId}
                       onChange={(e) => setAdvCreatorId(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void executeAdvancedSearch()
+                      }}
                     />
+                    <datalist id="dab-folder-creator-suggestions">
+                      {Array.from(
+                        new Set(
+                          [userDisplayName, ...Object.values(folderTreeNodes).map((n) => n.creator_id)].filter((c): c is string => Boolean(c))
+                        )
+                      ).map((creator) => (
+                        <option key={creator} value={creator} />
+                      ))}
+                    </datalist>
                   </div>
                   <div className="dab-modal-row">
-                    <label>Exact Folder ID (id)</label>
+                    <label>Folder ID</label>
                     <input
-                      type="text"
+                      type="search"
                       data-testid="folder-search-input-id"
-                      placeholder="e.g. 502..."
+                      placeholder="Filter by exact folder ID..."
                       value={advFolderId}
                       onChange={(e) => setAdvFolderId(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void executeAdvancedSearch()
+                      }}
                     />
                   </div>
                   <div
@@ -1068,6 +1100,15 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                 Run 3-Pillar Audit
               </button>
             </>
+          )}
+          {isLookerDevMode && (
+            <StudioBadge
+              tone="warning"
+              testId="topbar-dev-mode-badge"
+              title="Looker session is in Development Mode"
+            >
+              Dev Mode
+            </StudioBadge>
           )}
           <FullScreenToggleButton />
         </div>

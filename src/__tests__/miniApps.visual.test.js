@@ -342,6 +342,9 @@ function buildHtmlPage(scenario) {
         if (!window.location.search.includes('preserveOAuth=1')) {
           window.localStorage.removeItem('dab_oauth_session');
         }
+        if (!window.location.search.includes('preserveFolder=1')) {
+          window.localStorage.removeItem('dab_selected_folder_id');
+        }
       } catch {}
 
       const isTile =
@@ -352,6 +355,12 @@ function buildHtmlPage(scenario) {
       const mockCore40SDK = {
         ok: async (p) => p,
         me: async () => ({ id: '1', display_name: 'Bryan Weber', personal_folder_id: '5' }),
+        session: async () => ({
+          workspace_id: window.location.search.includes('devMode=1') ? 'dev' : 'production'
+        }),
+        update_session: async (body) => ({
+          workspace_id: (body && body.workspace_id) || 'production'
+        }),
         all_lookml_models: async () => [
           {
             name: 'bigquery_information_schema',
@@ -1180,7 +1189,6 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       snapshotName: '01-mode-data-app-and-permission-gate-snap.png',
       expectText: [
         'Agent',
-        'Agentic LookML',
         'Data App',
         'Safe Mode (Ask)',
         'Approve Looker State Mutation?',
@@ -1274,7 +1282,6 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       snapshotName: '08-config-page-setup-snap.png',
       expectText: [
         'Agent',
-        'Agentic LookML',
         'Configuration',
         'Agent & Vertex / Gemini Setup',
         'Google OAuth',
@@ -1405,7 +1412,6 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       snapshotName: '18-studio-dark-theme.png',
       expectText: [
         'Agent',
-        'Agentic LookML',
         'Executive Revenue App',
         'Send Message'
       ]
@@ -3800,6 +3806,52 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         if (advBtn2) advBtn2.click();
         await new Promise((r) => setTimeout(r, 100));
 
+        // 8. Issue #112 checks: Dev Mode badge, removed brand pills, persisted folder ID, clean search modal copy, icon-only close button, and 0px CLS on Personal Scope select
+        const topbarText = document.querySelector('.dab-topbar')?.textContent || '';
+        const hasRemovedBrandPills = !topbarText.includes('Agentic LookML') && !topbarText.includes('WASM CodeMode');
+        await window.__DAB_STUDIO__.handleToggleLookerDevMode('dev');
+        await new Promise((r) => setTimeout(r, 40));
+        const devBadge = document.querySelector('[data-testid="topbar-dev-mode-badge"]');
+        const hasDevModeBadgeWhenDev = Boolean(devBadge && devBadge.textContent?.trim() === 'Dev Mode');
+        await window.__DAB_STUDIO__.handleToggleLookerDevMode('production');
+        await new Promise((r) => setTimeout(r, 40));
+        const devBadgeHiddenInProd = !document.querySelector('[data-testid="topbar-dev-mode-badge"]');
+        const persistedFolderId = window.localStorage.getItem('dab_selected_folder_id');
+
+        const advModal = document.querySelector('[data-testid="folder-advanced-search-modal"]');
+        const advModalText = advModal?.textContent || '';
+        const hasCleanSearchCopy =
+          advModalText.includes('Advanced Looker Folder Search') &&
+          !advModalText.includes('sdk.search_folders') &&
+          !advModalText.includes('parent_id') &&
+          !advModalText.includes('creator_id') &&
+          !advModalText.includes('is_personal');
+        const closeBtn = document.querySelector('[data-testid="folder-search-modal-close"]');
+        const modalCloseBtnText = closeBtn?.textContent?.trim() || '';
+        const modalCloseBtnTitle = closeBtn?.getAttribute('title') || '';
+        const parentInput = document.querySelector('[data-testid="folder-search-input-parent-id"]');
+        const creatorInput = document.querySelector('[data-testid="folder-search-input-creator-id"]');
+        const parentInputHasDatalist = parentInput?.getAttribute('list') === 'dab-folder-parent-suggestions';
+        const creatorInputHasDatalist = creatorInput?.getAttribute('list') === 'dab-folder-creator-suggestions';
+
+        const personalSelectTrigger = document.querySelector('[data-testid="folder-search-select-personal-trigger"]');
+        const wAny = Math.round(personalSelectTrigger.getBoundingClientRect().width);
+        personalSelectTrigger.click();
+        await new Promise((r) => setTimeout(r, 40));
+        document.querySelector('[data-testid="folder-search-select-personal-option-false"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const wShared = Math.round(personalSelectTrigger.getBoundingClientRect().width);
+        personalSelectTrigger.click();
+        await new Promise((r) => setTimeout(r, 40));
+        document.querySelector('[data-testid="folder-search-select-personal-option-true"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const wPersonal = Math.round(personalSelectTrigger.getBoundingClientRect().width);
+        personalSelectTrigger.click();
+        await new Promise((r) => setTimeout(r, 40));
+        document.querySelector('[data-testid="folder-search-select-personal-option-any"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const personalSelectClsPx = Math.max(Math.abs(wShared - wAny), Math.abs(wPersonal - wAny));
+
         return {
           hasDashboardIdInput,
           hasLookmlSessionIdInput,
@@ -3814,7 +3866,17 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           hasHydratedParent501,
           hasHydratedLeaf502,
           personalNodeCount,
-          hasNoHashIdsInTree
+          hasNoHashIdsInTree,
+          hasRemovedBrandPills,
+          hasDevModeBadgeWhenDev,
+          devBadgeHiddenInProd,
+          persistedFolderId,
+          hasCleanSearchCopy,
+          modalCloseBtnText,
+          modalCloseBtnTitle,
+          parentInputHasDatalist,
+          creatorInputHasDatalist,
+          personalSelectClsPx
         };
       })()`,
       awaitPromise: true,
@@ -3835,7 +3897,17 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       hasHydratedParent501: true,
       hasHydratedLeaf502: true,
       personalNodeCount: 1,
-      hasNoHashIdsInTree: true
+      hasNoHashIdsInTree: true,
+      hasRemovedBrandPills: true,
+      hasDevModeBadgeWhenDev: true,
+      devBadgeHiddenInProd: true,
+      persistedFolderId: '502',
+      hasCleanSearchCopy: true,
+      modalCloseBtnText: '✕',
+      modalCloseBtnTitle: 'Close',
+      parentInputHasDatalist: true,
+      creatorInputHasDatalist: true,
+      personalSelectClsPx: 0
     })
 
     const clipRes = await chrome.send('Runtime.evaluate', {

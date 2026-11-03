@@ -137,6 +137,7 @@ export const SWR_DEDUPED_METHODS = [
   'content_summary',
   'search_content',
   'me',
+  'session',
   'all_folders',
   'folder',
   'folder_children',
@@ -186,7 +187,7 @@ export function createDeduplicatedLookerSdkProxy(
           const upper = String(method || 'GET').toUpperCase()
           const isMetaGet =
             upper === 'GET' &&
-            /\/(?:lookml_models|content_search|content_summary|global_search_v2|user|folders)(?:\/|$|\?)/i.test(
+            /\/(?:lookml_models|content_search|content_summary|global_search_v2|user|folders|session)(?:\/|$|\?)/i.test(
               String(path || '')
             )
           const execRaw = () => origRawReq.call(rawTransport, method, path, queryParams, body, ...rest)
@@ -276,6 +277,8 @@ export interface SearchLookerFoldersParams {
   creator_id?: string
   id?: string
   fields?: string
+  knownFolders?: LookerFolderNode[] | Record<string, LookerFolderNode>
+  knownUsers?: Array<{ id: string; display_name?: string | null; email?: string | null }>
 }
 
 export const LOOKER_FOLDER_FIELDS =
@@ -335,6 +338,8 @@ export function buildRootLookerFolders(user?: Partial<IUser> | null): LookerFold
 interface LookerFolderSdkLike {
   ok?: <T>(p: Promise<T>) => Promise<T>
   get?: unknown
+  me?: (fields?: string) => Promise<Partial<IUser>>
+  search_users?: (params: Record<string, unknown>) => Promise<Array<Partial<IUser>>>
   folder?: (...args: unknown[]) => Promise<RawLookerFolderLike>
   folder_ancestors?: (...args: unknown[]) => Promise<RawLookerFolderLike[]>
   folder_children?: (params: { folder_id: string; fields: string }) => Promise<RawLookerFolderLike[]>
@@ -499,64 +504,113 @@ export async function searchLookerFolders(
   sdk: Looker40SDK,
   params: SearchLookerFoldersParams = {}
 ): Promise<LookerFolderNode[]> {
-  const req: Record<string, unknown> = {
-    fields: params.fields || LOOKER_FOLDER_FIELDS,
-  }
-  if (params.name?.trim()) req.name = params.name.trim()
-  if (params.parent_id?.trim()) req.parent_id = params.parent_id.trim()
+  const req: Record<string, unknown> = { fields: params.fields || LOOKER_FOLDER_FIELDS }
+  const rawName = params.name?.trim() || ''
+  const rawParent = params.parent_id?.trim() || ''
+  const rawCreator = params.creator_id?.trim() || ''
+  if (rawName) req.name = rawName
+  if (rawParent) req.parent_id = rawParent
   if (params.id?.trim()) req.id = params.id.trim()
-  if (params.creator_id?.trim()) req.creator_id = params.creator_id.trim()
+  if (rawCreator) req.creator_id = rawCreator
   if (params.is_personal !== undefined && params.is_personal !== '' && params.is_personal !== 'any') {
     req.is_personal = params.is_personal === true || params.is_personal === 'true'
   }
-  if (
-    params.is_personal_descendant !== undefined &&
-    params.is_personal_descendant !== '' &&
-    params.is_personal_descendant !== 'any'
-  ) {
-    req.is_personal_descendant =
-      params.is_personal_descendant === true || params.is_personal_descendant === 'true'
+  if (params.is_personal_descendant !== undefined && params.is_personal_descendant !== '' && params.is_personal_descendant !== 'any') {
+    req.is_personal_descendant = params.is_personal_descendant === true || params.is_personal_descendant === 'true'
   }
+  const knownFoldersList: LookerFolderNode[] = Array.isArray(params.knownFolders)
+    ? params.knownFolders
+    : params.knownFolders && typeof params.knownFolders === 'object'
+    ? Object.values(params.knownFolders)
+    : []
 
   return coalesceLookerMetadataRequest(
     `search_folders:${JSON.stringify(req)}`,
     async () => {
       const s = sdk as unknown as LookerFolderSdkLike
-      if (typeof s?.search_folders === 'function') {
-        try {
-          const rows = await unwrapSdkCall(s, s.search_folders(req))
-          if (Array.isArray(rows)) {
-            return rows.map((r) => normalizeLookerFolderNode(r))
+      const execReq: Record<string, unknown> = { ...req }
+      const safeCall = async <T>(fn: () => Promise<T>): Promise<T | null> => {
+        try { return await fn() } catch { return null }
+      }
+
+      if (rawParent && !/^\d+$/.test(rawParent)) {
+        const parenId = rawParent.match(/\((\d+)\)\s*$/)?.[1]
+        if (parenId) {
+          execReq.parent_id = parenId
+        } else {
+          const parentQ = rawParent.toLowerCase()
+          const matchByName = (list: LookerFolderNode[]) => list.filter((f) => f.name.toLowerCase().includes(parentQ))
+          let candidates = matchByName(knownFoldersList)
+          if (!candidates.length && typeof s?.all_folders === 'function') {
+            const all = await safeCall(() => unwrapSdkCall(s, s.all_folders!(LOOKER_FOLDER_FIELDS)))
+            if (Array.isArray(all)) candidates = matchByName(all.map((r) => normalizeLookerFolderNode(r, undefined, all)))
           }
-        } catch {
-          // Fall back to all_folders when search_folders is not entitled or fails
+          if (!candidates.length && typeof s?.folder_children === 'function') {
+            const ch = await safeCall(() => unwrapSdkCall(s, s.folder_children!({ folder_id: '1', fields: 'id,name,parent_id,child_count,is_personal,can' })))
+            if (Array.isArray(ch)) candidates = matchByName(ch.map((r) => normalizeLookerFolderNode(r, '1')))
+          }
+          if (!candidates.length && typeof s?.search_folders === 'function') {
+            const found = await safeCall(() => unwrapSdkCall(s, s.search_folders!({ name: rawParent, fields: LOOKER_FOLDER_FIELDS })))
+            if (Array.isArray(found)) candidates = matchByName(found.map((r) => normalizeLookerFolderNode(r)))
+          }
+          if (candidates.length > 0) {
+            execReq.parent_id = String((candidates.find((f) => f.name.toLowerCase() === parentQ) || candidates[0]).id)
+          }
         }
       }
+
+      if (rawCreator && !/^\d+$/.test(rawCreator)) {
+        const parenUid = rawCreator.match(/\((\d+)\)\s*$/)?.[1]
+        if (parenUid) {
+          execReq.creator_id = parenUid
+        } else {
+          const creatorQ = rawCreator.toLowerCase()
+          const matchesUser = (u?: { id?: string | number | null; display_name?: string | null; email?: string | null } | null) =>
+            Boolean(u?.display_name?.toLowerCase().includes(creatorQ) || u?.email?.toLowerCase().includes(creatorQ) || String(u?.id ?? '').toLowerCase() === creatorQ)
+          const matchedUser = (params.knownUsers || []).find(matchesUser)
+          if (matchedUser?.id) {
+            execReq.creator_id = String(matchedUser.id)
+          } else if (typeof s?.search_users === 'function') {
+            const users = await safeCall(() => unwrapSdkCall(s, s.search_users!({ display_name: rawCreator })))
+            const u = Array.isArray(users) ? users.find(matchesUser) || users[0] : null
+            if (u?.id != null) execReq.creator_id = String(u.id)
+          } else if (typeof s?.me === 'function') {
+            const meUser = await safeCall(() => unwrapSdkCall(s, s.me!('id,display_name,email')))
+            if (meUser?.id != null && matchesUser(meUser)) execReq.creator_id = String(meUser.id)
+          }
+        }
+      }
+
+      if (typeof s?.search_folders === 'function') {
+        const rows = await safeCall(async () => {
+          let r = await unwrapSdkCall(s, s.search_folders!(execReq))
+          if ((!Array.isArray(r) || r.length === 0) && rawName && /^\d+$/.test(rawName) && !execReq.id) {
+            const { name: _omit, ...byIdReq } = execReq
+            r = await unwrapSdkCall(s, s.search_folders!({ ...byIdReq, id: rawName }))
+          }
+          return r
+        })
+        if (Array.isArray(rows)) return rows.map((r) => normalizeLookerFolderNode(r))
+      }
       if (typeof s?.all_folders === 'function') {
-        try {
-          const rows = await unwrapSdkCall(s, s.all_folders(LOOKER_FOLDER_FIELDS))
-          const rawList = Array.isArray(rows) ? rows : []
-          const all = rawList.map((r) => normalizeLookerFolderNode(r, undefined, rawList))
-          const nameQ = String(req.name || '')
-            .replace(/%/g, '')
-            .trim()
-            .toLowerCase()
+        const rows = await safeCall(() => unwrapSdkCall(s, s.all_folders!(LOOKER_FOLDER_FIELDS)))
+        if (Array.isArray(rows)) {
+          const all = rows.map((r) => normalizeLookerFolderNode(r, undefined, rows))
+          const nameQ = String(execReq.name || '').replace(/%/g, '').trim().toLowerCase()
+          const parentFilter = String(execReq.parent_id || '').trim()
+          const creatorFilter = String(execReq.creator_id || '').trim()
           return all.filter((f) => {
-            if (nameQ && !f.name.toLowerCase().includes(nameQ)) return false
-            if (req.parent_id && String(f.parent_id || '') !== String(req.parent_id)) return false
-            if (req.id && String(f.id) !== String(req.id)) return false
-            if (req.creator_id && String(f.creator_id || '') !== String(req.creator_id)) return false
-            if (typeof req.is_personal === 'boolean' && Boolean(f.is_personal) !== req.is_personal)
-              return false
-            if (
-              typeof req.is_personal_descendant === 'boolean' &&
-              Boolean(f.is_personal_descendant) !== req.is_personal_descendant
-            )
-              return false
+            if (nameQ && !f.name.toLowerCase().includes(nameQ) && String(f.id).toLowerCase() !== nameQ) return false
+            if (parentFilter) {
+              const pNode = all.find((p) => String(p.id) === String(f.parent_id || ''))
+              if (String(f.parent_id || '') !== parentFilter && !pNode?.name.toLowerCase().includes(parentFilter.toLowerCase())) return false
+            }
+            if (execReq.id && String(f.id) !== String(execReq.id)) return false
+            if (creatorFilter && String(f.creator_id || '') !== creatorFilter) return false
+            if (typeof execReq.is_personal === 'boolean' && Boolean(f.is_personal) !== execReq.is_personal) return false
+            if (typeof execReq.is_personal_descendant === 'boolean' && Boolean(f.is_personal_descendant) !== execReq.is_personal_descendant) return false
             return true
           })
-        } catch {
-          // ignore all_folders fallback error
         }
       }
       return []
@@ -569,6 +623,14 @@ export async function searchLookerFolders(
 // ponytail: seed Looker root folder nodes from me (personal_folder_id + home_folder_id + standard roots)
 // instead of calling slow sdk.all_folders() upfront on startup; child folders and ancestors hydrate lazily.
 export async function fetchInitialLookerMetadata(sdk: Looker40SDK) {
+  let workspaceId: 'dev' | 'production' =
+    typeof window !== 'undefined' &&
+    window.__MOCK_LOOKER_EXTENSION__?.initialLookerWorkspaceId === 'dev'
+      ? 'dev'
+      : 'production'
+  const sdkWithSession = sdk as unknown as {
+    session?: () => Promise<{ workspace_id?: string | null }>
+  }
   const [me, models] = await Promise.all([
     coalesceLookerMetadataRequest(
       'meta:me',
@@ -589,6 +651,19 @@ export async function fetchInitialLookerMetadata(sdk: Looker40SDK) {
       LOOKER_METADATA_CACHE_TTL_MS,
       ['looker:models']
     ),
+    typeof sdkWithSession.session === 'function'
+      ? coalesceLookerMetadataRequest(
+          'meta:session',
+          () => sdk.ok(sdkWithSession.session!() as never),
+          LOOKER_METADATA_CACHE_TTL_MS,
+          ['looker:session']
+        )
+          .then((sess: { workspace_id?: string | null } | undefined) => {
+            if (sess?.workspace_id === 'dev') workspaceId = 'dev'
+            else if (sess?.workspace_id === 'production') workspaceId = 'production'
+          })
+          .catch(() => {})
+      : Promise.resolve(),
   ])
   let roles: IRole[] | null = null
   const sdkWithRoles = sdk as unknown as {
@@ -636,6 +711,7 @@ export async function fetchInitialLookerMetadata(sdk: Looker40SDK) {
     folders: rootFolders,
     defaultFolderId,
     capabilities,
+    workspaceId,
   }
 }
 

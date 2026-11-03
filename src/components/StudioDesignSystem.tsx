@@ -96,7 +96,14 @@ export function StudioModal({
           </div>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             {headerRight}
-            <button type="button" data-testid={closeTestId} className="dab-btn dab-btn-secondary" onClick={onClose} aria-label="Close modal">
+            <button
+              type="button"
+              data-testid={closeTestId}
+              className="dab-btn dab-btn-secondary"
+              onClick={onClose}
+              title="Close"
+              aria-label="Close"
+            >
               {closeLabel}
             </button>
           </div>
