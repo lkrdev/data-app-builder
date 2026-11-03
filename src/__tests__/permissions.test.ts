@@ -1106,23 +1106,23 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(savedList[0].content?.agentId).toBe('ca_agent_bq_ops')
   })
 
-  test('13. pins LKR_DEV_CLI_VERSION=0.0.61, bootstraps uv via pip --break-system-packages + uv tool install in new environments, and configures Monday/Thursday PyPI auto-PR workflow', async () => {
+  test('13. pins LKR_DEV_CLI_VERSION=0.0.63, bootstraps uv via pip --break-system-packages + uv tool install in new environments, and configures Monday/Thursday PyPI auto-PR workflow', async () => {
     const repoRoot = path.resolve(__dirname, '../..')
     const versionTxt = readFileSync(path.join(repoRoot, 'lkr-dev-cli-version.txt'), 'utf8').trim()
-    expect(LKR_DEV_CLI_VERSION).toBe('0.0.61')
+    expect(LKR_DEV_CLI_VERSION).toBe('0.0.63')
     expect(versionTxt).toBe(LKR_DEV_CLI_VERSION)
-    expect(LKR_DEV_CLI_SPEC).toBe('lkr-dev-cli[tools,code-mode,parse]==0.0.61')
+    expect(LKR_DEV_CLI_SPEC).toBe('lkr-dev-cli[tools,code-mode,parse]==0.0.63')
 
     expect(BOOTSTRAP_SANDBOX_SH).toContain('pip install --break-system-packages --quiet uv')
     expect(BOOTSTRAP_SANDBOX_SH).toContain(
-      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.61"'
+      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.63"'
     )
     expect(BOOTSTRAP_LOOKML_PY).toContain('"install", "--break-system-packages", "--quiet", "uv"')
     expect(BOOTSTRAP_LOOKML_PY).toContain('"UV_TOOL_BIN_DIR": "/usr/local/bin"')
     expect(BOOTSTRAP_LOOKML_PY).toContain('["uv", "tool", "install", "--force", "--quiet", pkg_spec]')
     expect(AGENTS_MD).toContain('pip install --break-system-packages --quiet uv')
     expect(AGENTS_MD).toContain(
-      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.61"'
+      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.63"'
     )
 
     const workflowYml = readFileSync(
@@ -1165,7 +1165,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(postedBodies[0].input?.[0]?.text).toContain('python3 /workspace/bootstrap_lookml.py cli')
     expect(postedBodies[0].input?.[0]?.text).toContain('pip install --break-system-packages --quiet uv')
     expect(postedBodies[0].input?.[0]?.text).toContain(
-      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.61"'
+      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.63"'
     )
     expect(
       typeof postedBodies[0].environment === 'object' ? postedBodies[0].environment.sources : []
@@ -4350,7 +4350,12 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
   })
 
   test('32. Issue #104: provides CODEMODE_CDN_URL, synchronous LkrCodeMode tool & operation classification, and ensureCodeModeLoaded() runtime loader', async () => {
-    expect(CODEMODE_CDN_URL).toBe('https://cdn.lkr.dev/cli/codemode/latest/codemode.js')
+    expect(CODEMODE_CDN_URL).toBe('https://cdn.lkr.dev/cli/codemode/0.0.63/codemode.js')
+    expect(CODEMODE_CDN_URL).toContain(`/${LKR_DEV_CLI_VERSION}/codemode.js`)
+    const preCommitHook = readFileSync(path.resolve(__dirname, '../../.githooks/pre-commit'), 'utf8')
+    expect(preCommitHook).toContain('lkr-dev-cli-version.txt')
+    expect(preCommitHook).toContain('LKR_DEV_CLI_VERSION')
+    expect(preCommitHook).toContain('CODEMODE_CDN_URL')
     expect(LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.name).toBe('run_looker_codemode')
     expect(LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.required).toEqual(['code', 'thought'])
     expect(LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.parameters.properties.code).toBeDefined()
