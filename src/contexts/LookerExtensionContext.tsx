@@ -50,6 +50,7 @@ declare global {
     __MOCK_LOOKER_EXTENSION__?: MockLookerExtensionContextValue;
     __LOOKER_EMBED_STATE__?: unknown;
     __DAB_STUDIO__?: unknown;
+    __LAST_COPIED_THINKING_TRACE__?: string;
   }
 }
 

@@ -29,6 +29,60 @@ export function persistSelectedFolderId(extensionSDK: Partial<ExtensionSDK> | un
   try { void extensionSDK?.localStorageSetItem?.(STUDIO_FOLDER_STORAGE_KEY, clean) } catch { /* ignore */ }
 }
 
+export type ExtensionHostStorageLike = Partial<Pick<ExtensionSDK, 'localStorageGetItem' | 'localStorageSetItem'>> | null | undefined
+
+export const STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY = 'dab_left_pane_width'
+export const DEFAULT_LEFT_PANE_WIDTH = 380
+export const MIN_LEFT_PANE_WIDTH = 280
+export const MAX_LEFT_PANE_WIDTH = 780
+export const STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY = 'dab_right_pane_collapsed'
+
+export function clampLeftPaneWidth(width: number): number {
+  const n = Number(width)
+  return Number.isFinite(n) ? Math.min(MAX_LEFT_PANE_WIDTH, Math.max(MIN_LEFT_PANE_WIDTH, Math.round(n))) : DEFAULT_LEFT_PANE_WIDTH
+}
+
+const getWinStorage = (key: string): string | null => {
+  try { return typeof window !== 'undefined' ? (window.localStorage?.getItem?.(key) ?? null) : null } catch { return null }
+}
+const setDualStorage = async (key: string, val: string, ext?: ExtensionHostStorageLike | null): Promise<void> => {
+  try { if (typeof window !== 'undefined') window.localStorage?.setItem?.(key, val) } catch { /* ignore */ }
+  try { await ext?.localStorageSetItem?.(key, val) } catch { /* ignore */ }
+}
+
+export function readInitialLeftPaneWidth(): number {
+  const raw = getWinStorage(STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY)
+  return raw == null || String(raw).trim() === '' ? DEFAULT_LEFT_PANE_WIDTH : clampLeftPaneWidth(Number(raw))
+}
+
+export async function loadStoredLeftPaneWidth(extensionSDK?: ExtensionHostStorageLike | null): Promise<number> {
+  try {
+    const raw = (await extensionSDK?.localStorageGetItem?.(STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY)) ?? getWinStorage(STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY)
+    return raw == null || String(raw).trim() === '' ? DEFAULT_LEFT_PANE_WIDTH : clampLeftPaneWidth(Number(raw))
+  } catch { return readInitialLeftPaneWidth() }
+}
+
+export async function saveStoredLeftPaneWidth(width: number, extensionSDK?: ExtensionHostStorageLike | null): Promise<void> {
+  await setDualStorage(STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY, String(clampLeftPaneWidth(width)), extensionSDK)
+}
+
+export function readInitialRightPaneCollapsed(): boolean {
+  const raw = String(getWinStorage(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY) ?? '').trim().toLowerCase()
+  return raw === 'true' || raw === '1'
+}
+
+export async function loadStoredRightPaneCollapsed(extensionSDK?: ExtensionHostStorageLike | null): Promise<boolean> {
+  try {
+    const raw = (await extensionSDK?.localStorageGetItem?.(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY)) ?? getWinStorage(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY)
+    const norm = String(raw ?? '').trim().toLowerCase()
+    return norm === 'true' || norm === '1'
+  } catch { return readInitialRightPaneCollapsed() }
+}
+
+export async function saveStoredRightPaneCollapsed(collapsed: boolean, extensionSDK?: ExtensionHostStorageLike | null): Promise<void> {
+  await setDualStorage(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY, collapsed ? 'true' : 'false', extensionSDK)
+}
+
 export interface Looker404Diagnostic {
   kind: 'role_denied' | 'feature_disabled' | 'not_found'
   status: number

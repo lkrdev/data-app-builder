@@ -15,6 +15,7 @@ import {
   Brain,
   Check,
   Code2,
+  Copy,
   CornerDownRight,
   Database,
   Eye,
@@ -23,6 +24,8 @@ import {
   LayoutDashboard,
   Loader2,
   MessageSquare,
+  PanelRightClose,
+  PanelRightOpen,
   Paperclip,
   Plus,
   Sparkles,
@@ -37,8 +40,12 @@ import {
 import {
   AntigravityActivityStep,
   buildDynamicStarterPrompts,
+  formatThinkingTraceMarkdown,
   handleFileInputSelection,
   handleImageClipboardPaste,
+  MAX_LEFT_PANE_WIDTH,
+  MIN_LEFT_PANE_WIDTH,
+  resolveBuiltinWorkspaceFileContent,
   StarterPromptItem,
   stripStarterPromptEmojis,
   STUDIO_THINKING_LEVEL_OPTIONS,
@@ -55,7 +62,7 @@ import {
   StudioContextCategory,
   StudioContextMention,
 } from '../lookerApi'
-import { LOOKML_TURN_SKILLS, LookmlPreviewPane } from '../lookmlTool'
+import { LOOKML_TURN_SKILLS, LookmlBundle, LookmlPreviewPane } from '../lookmlTool'
 import { StudioController } from '../useStudioController'
 import { TilePreviewPane } from './ScriptStudioView'
 import {
@@ -1683,50 +1690,21 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               </div>
             ) : (
               mentionOptions.map((item, idx) => {
-                const isSelected =
-                  (item.type === 'explore' && selectedExplores.includes(item.id)) ||
-                  mentionedItems.some((m) => m.type === item.type && m.id === item.id)
+                const isSelected = (item.type === 'explore' && selectedExplores.includes(item.id)) || mentionedItems.some((m) => m.type === item.type && m.id === item.id)
                 const isHighlighted = idx === activeMentionIndex
                 return (
                   <div
-                    key={`${item.type}:${item.id}`}
-                    role="option"
-                    aria-selected={isSelected || isHighlighted}
+                    key={`${item.type}:${item.id}`} role="option" aria-selected={isSelected || isHighlighted}
                     data-testid={`composer-mention-option-${item.type}-${item.id}`}
-                    className={`dab-option ${
-                      isSelected || isHighlighted ? 'dab-option-selected' : ''
-                    }`}
+                    className={`dab-option ${isSelected || isHighlighted ? 'dab-option-selected' : ''}`}
                     onMouseEnter={() => setActiveMentionIndex(idx)}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleSelectMentionOption(item)
-                    }}
+                    onClick={(e) => { e.stopPropagation(); handleSelectMentionOption(item) }}
                     title={`${item.type}: ${item.title} (${item.id})`}
                   >
-                    <span
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        minWidth: 0,
-                        overflow: 'hidden',
-                      }}
-                    >
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
                       {renderMentionCategoryIcon(item.type)}
-                      <span
-                        style={{
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {item.title}
-                      </span>
-                      {item.subtitle && (
-                        <span className="dab-muted" style={{ fontSize: 11 }}>
-                          · {item.subtitle}
-                        </span>
-                      )}
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title}</span>
+                      {item.subtitle && <span className="dab-muted" style={{ fontSize: 11 }}>· {item.subtitle}</span>}
                     </span>
                     <span className="dab-muted" style={{ fontSize: 10, textTransform: 'uppercase' }}>
                       {isSelected ? <Check size={13} strokeWidth={2} aria-hidden="true" /> : item.type}
@@ -1739,20 +1717,13 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
         )}
 
         <textarea
-          ref={textareaRef}
-          rows={3}
-          data-testid="studio-prompt-input"
+          ref={textareaRef} rows={3} data-testid="studio-prompt-input"
           placeholder={
-            isHealthCheckMode
-              ? 'Optional custom focus for 3-Pillar Looker & BigQuery Health Check...'
-              : isCaMode || selectedUseCase === 'conversational-analytics'
-              ? 'Ask a natural-language data question for Looker Conversational Analytics...'
-              : isLookmlMode
-              ? 'Describe LookML changes, SQL query to model, or field descriptions/tests to run in your active dev mode...'
-              : activeMode === 'tile'
-              ? 'Describe the Script to generate or update (or paste a screenshot)...'
-              : builderMode === 'dashboard'
-              ? 'Describe a Looker UDD, Look, Board, or Schedule to create or update (type @ to mention context)...'
+            isHealthCheckMode ? 'Optional custom focus for 3-Pillar Looker & BigQuery Health Check...'
+              : isCaMode || selectedUseCase === 'conversational-analytics' ? 'Ask a natural-language data question for Looker Conversational Analytics...'
+              : isLookmlMode ? 'Describe LookML changes, SQL query to model, or field descriptions/tests to run in your active dev mode...'
+              : activeMode === 'tile' ? 'Describe the Script to generate or update (or paste a screenshot)...'
+              : builderMode === 'dashboard' ? 'Describe a Looker UDD, Look, Board, or Schedule to create or update (type @ to mention context)...'
               : 'Ask your Looker Agent what you want to build, analyze, or automate (type @ to mention Explores, Dashboards, Looks, or Conversations)...'
           }
           value={prompt}
@@ -1761,97 +1732,55 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
             setCursorPos(e.target.selectionStart ?? e.target.value.length)
             if (forceMentionCategory !== null) setForceMentionCategory(null)
           }}
-          onClick={(e) => {
-            setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? prompt.length)
-          }}
-          onKeyUp={(e) => {
-            setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? prompt.length)
-          }}
+          onClick={(e) => setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? prompt.length)}
+          onKeyUp={(e) => setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? prompt.length)}
           onPaste={handlePaste}
           onKeyDown={(e) => {
             if (detectedMention.open && mentionOptions.length > 0) {
-              if (e.key === 'ArrowDown') {
+              if (e.key === 'ArrowDown') { e.preventDefault(); setActiveMentionIndex((i) => (i + 1) % mentionOptions.length); return }
+              if (e.key === 'ArrowUp') { e.preventDefault(); setActiveMentionIndex((i) => (i - 1 + mentionOptions.length) % mentionOptions.length); return }
+              if ((e.key === 'Enter' || e.key === 'Tab') && !(e.metaKey || e.ctrlKey)) {
                 e.preventDefault()
-                setActiveMentionIndex((i) => (i + 1) % mentionOptions.length)
+                const picked = mentionOptions[activeMentionIndex] || mentionOptions[0]
+                if (picked) handleSelectMentionOption(picked)
                 return
               }
-              if (e.key === 'ArrowUp') {
-                e.preventDefault()
-                setActiveMentionIndex((i) => (i - 1 + mentionOptions.length) % mentionOptions.length)
-                return
-              }
-              if (e.key === 'Enter' || e.key === 'Tab') {
-                if (!(e.metaKey || e.ctrlKey)) {
-                  e.preventDefault()
-                  const picked = mentionOptions[activeMentionIndex] || mentionOptions[0]
-                  if (picked) handleSelectMentionOption(picked)
-                  return
-                }
-              }
             }
-            if (e.key === 'Escape' && detectedMention.open) {
-              e.preventDefault()
-              setForceMentionCategory(null)
-              return
-            }
+            if (e.key === 'Escape' && detectedMention.open) { e.preventDefault(); setForceMentionCategory(null); return }
             if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
               e.preventDefault()
-              if (busyStatus) {
-                handleQueuePrompt()
-              } else {
-                void handleSendPrompt()
-              }
+              if (busyStatus) handleQueuePrompt()
+              else void handleSendPrompt()
             }
           }}
         />
       </div>
 
       <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        data-testid="composer-file-input"
+        ref={fileInputRef} type="file" multiple data-testid="composer-file-input"
         accept="image/*,application/pdf,.csv,.tsv,.json,.sql,.lkml,.lookml,.md,.py,.js,.ts,.tsx,.txt"
         style={{ display: 'none' }}
-        onChange={(e) => {
-          handleFileInputSelection(e.target.files, setPastedImages)
-          e.target.value = ''
-        }}
+        onChange={(e) => { handleFileInputSelection(e.target.files, setPastedImages); e.target.value = '' }}
       />
 
       <div className="dab-composer-actions">
         <div className="dab-composer-add-wrap" ref={addMenuWrapRef} style={{ position: 'relative' }}>
           <button
-            type="button"
-            data-testid="composer-add-context-btn"
-            className="dab-btn-secondary dab-composer-add-btn"
+            type="button" data-testid="composer-add-context-btn" className="dab-btn-secondary dab-composer-add-btn"
             onClick={() => setAddContextOpen((prev) => !prev)}
             title="Add files or @-mention Looker Explores, Dashboards, Looks, or Conversations"
-            aria-label="Add Context"
-            aria-expanded={addContextOpen}
+            aria-label="Add Context" aria-expanded={addContextOpen}
           >
             <Plus size={14} strokeWidth={1.75} aria-hidden="true" />
           </button>
 
           {addContextOpen && (
-            <div
-              className="dab-composer-add-menu"
-              data-testid="composer-add-context-menu"
-              role="menu"
-              aria-label="Add Context"
-            >
+            <div className="dab-composer-add-menu" data-testid="composer-add-context-menu" role="menu" aria-label="Add Context">
               <button
-                type="button"
-                role="menuitem"
-                data-testid="add-context-files"
-                className="dab-composer-add-item"
-                onClick={() => {
-                  setAddContextOpen(false)
-                  fileInputRef.current?.click()
-                }}
+                type="button" role="menuitem" data-testid="add-context-files" className="dab-composer-add-item"
+                onClick={() => { setAddContextOpen(false); fileInputRef.current?.click() }}
               >
-                <Paperclip size={13} strokeWidth={1.75} aria-hidden="true" />
-                <span>Files</span>
+                <Paperclip size={13} strokeWidth={1.75} aria-hidden="true" /><span>Files</span>
               </button>
               {([
                 ['explore', 'Explores', 'add-context-explores'],
@@ -1859,16 +1788,8 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 ['look', 'Looks', 'add-context-looks'],
                 ['conversation', 'Conversations', 'add-context-conversations'],
               ] as const).map(([cat, label, testId]) => (
-                <button
-                  key={cat}
-                  type="button"
-                  role="menuitem"
-                  data-testid={testId}
-                  className="dab-composer-add-item"
-                  onClick={() => handleInsertScopedPrefix(cat)}
-                >
-                  {renderMentionCategoryIcon(cat)}
-                  <span>{label}</span>
+                <button key={cat} type="button" role="menuitem" data-testid={testId} className="dab-composer-add-item" onClick={() => handleInsertScopedPrefix(cat)}>
+                  {renderMentionCategoryIcon(cat)}<span>{label}</span>
                 </button>
               ))}
             </div>
@@ -1876,104 +1797,45 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
         </div>
 
         <StudioSelect
-          data-testid="composer-model-select"
-          testId="composer-model-select"
-          className="dab-composer-model-select"
-          value={selectedModel}
-          onChange={setSelectedModel}
-          disabled={!!busyStatus}
-          ariaLabel="Select Antigravity model"
-          title="Select Antigravity model for this turn (/v1beta/models)"
+          data-testid="composer-model-select" testId="composer-model-select" className="dab-composer-model-select"
+          value={selectedModel} onChange={setSelectedModel} disabled={!!busyStatus}
+          ariaLabel="Select Antigravity model" title="Select Antigravity model for this turn (/v1beta/models)"
           options={availableModels.map((m) => ({
-            value: m.id,
-            label: m.label,
-            title: m.description,
-            subMenu: {
-              value: thinkingLevel,
-              options: STUDIO_THINKING_LEVEL_OPTIONS,
-              onChange: (lvl) => setThinkingLevel(lvl as StudioThinkingLevel),
-              testId: 'composer-thinking-level-menu',
-            },
+            value: m.id, label: m.label, title: m.description,
+            subMenu: { value: thinkingLevel, options: STUDIO_THINKING_LEVEL_OPTIONS, onChange: (lvl) => setThinkingLevel(lvl as StudioThinkingLevel), testId: 'composer-thinking-level-menu' },
           }))}
         />
 
         <UseCaseInfoTrigger useCase={activeGuideUseCase} onOpen={setInfoModalUseCase} />
 
-        <div
-          className="dab-composer-send-group"
-          style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginLeft: 'auto' }}
-        >
+        <div className="dab-composer-send-group" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginLeft: 'auto' }}>
           {!isAuthenticated && !busyStatus && (
             <button
-              type="button"
-              data-testid="composer-signin-inline-btn"
-              className="dab-inline-signin-btn"
-              onClick={() =>
-                authMode === 'oauth' && clientId.trim()
-                  ? handleOAuthLogin()
-                  : history.push('/config')
-              }
+              type="button" data-testid="composer-signin-inline-btn" className="dab-inline-signin-btn"
+              onClick={() => (authMode === 'oauth' && clientId.trim() ? handleOAuthLogin() : history.push('/config'))}
             >
-              {authMode === 'oauth' && clientId.trim()
-                ? oauthSigningIn
-                  ? 'Signing in… (click to retry)'
-                  : 'Sign in to send'
-                : 'Configure credentials to send'}
+              {authMode === 'oauth' && clientId.trim() ? (oauthSigningIn ? 'Signing in… (click to retry)' : 'Sign in to send') : 'Configure credentials to send'}
             </button>
           )}
           {busyStatus ? (
             <>
-              <StudioButton
-                variant="secondary"
-                testId="studio-queue-btn"
-                onClick={handleQueuePrompt}
-                disabled={!prompt.trim() && pastedImages.length === 0}
-                title="Queue message to run automatically when the current turn finishes (Cmd/Ctrl+Enter)"
-              >
-                <CornerDownRight size={13} strokeWidth={1.75} aria-hidden="true" />
-                <span>Queue</span>
+              <StudioButton variant="secondary" testId="studio-queue-btn" onClick={handleQueuePrompt} disabled={!prompt.trim() && pastedImages.length === 0} title="Queue message to run automatically when the current turn finishes (Cmd/Ctrl+Enter)">
+                <CornerDownRight size={13} strokeWidth={1.75} aria-hidden="true" /><span>Queue</span>
               </StudioButton>
-              <StudioButton
-                variant="secondary"
-                testId="studio-interject-btn"
-                onClick={() => handleInterjectPrompt()}
-                disabled={!isAuthenticated || (!prompt.trim() && pastedImages.length === 0)}
-                title="Interrupt the running turn and send this message immediately"
-              >
-                <Zap size={13} strokeWidth={1.75} aria-hidden="true" />
-                <span>Interject</span>
+              <StudioButton variant="secondary" testId="studio-interject-btn" onClick={() => handleInterjectPrompt()} disabled={!isAuthenticated || (!prompt.trim() && pastedImages.length === 0)} title="Interrupt the running turn and send this message immediately">
+                <Zap size={13} strokeWidth={1.75} aria-hidden="true" /><span>Interject</span>
               </StudioButton>
-              <StudioButton
-                variant="danger"
-                testId="studio-stop-btn"
-                onClick={handleStopTurn}
-                title="Stop current turn"
-              >
-                <Square size={12} strokeWidth={2} aria-hidden="true" />
-                <span>Stop</span>
+              <StudioButton variant="danger" testId="studio-stop-btn" onClick={handleStopTurn} title="Stop current turn">
+                <Square size={12} strokeWidth={2} aria-hidden="true" /><span>Stop</span>
               </StudioButton>
             </>
           ) : (
-            <StudioButton
-              variant="gemini"
-              testId="studio-send-btn"
-              onClick={handleSendPrompt}
-              disabled={!isAuthenticated || (!prompt.trim() && pastedImages.length === 0)}
-            >
+            <StudioButton variant="gemini" testId="studio-send-btn" onClick={handleSendPrompt} disabled={!isAuthenticated || (!prompt.trim() && pastedImages.length === 0)}>
               {isCaMode || selectedUseCase === 'conversational-analytics'
-                ? caConversation
-                  ? 'Ask CA Agent'
-                  : 'Route & Start CA Chat'
-                : isLookmlMode
-                ? lookmlBundle
-                  ? 'Update LookML'
-                  : 'Run Agentic LookML'
-                : activeMode === 'tile'
-                ? 'Ask AI'
-                : builderMode === 'dashboard'
-                ? nativeContent
-                  ? 'Update Content'
-                  : 'Create / Update Content'
+                ? (caConversation ? 'Ask CA Agent' : 'Route & Start CA Chat')
+                : isLookmlMode ? (lookmlBundle ? 'Update LookML' : 'Run Agentic LookML')
+                : activeMode === 'tile' ? 'Ask AI'
+                : builderMode === 'dashboard' ? (nativeContent ? 'Update Content' : 'Create / Update Content')
                 : 'Send Message'}
             </StudioButton>
           )}
@@ -1984,46 +1846,23 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 }
 
 export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
-  const {
-    activeMode,
-    builderMode,
-    isLookmlMode,
-    isHealthCheckMode,
-    selectedUseCase,
-    selectedExplores,
-    starterPrompts,
-    starterPromptsLoading,
-    setPrompt,
-    busyStatus,
-  } = ctl
-
+  const { activeMode, builderMode, isLookmlMode, isHealthCheckMode, selectedUseCase, selectedExplores, starterPrompts, starterPromptsLoading, setPrompt, busyStatus } = ctl
   return (
     <main className="dab-empty-stage-centered" data-testid="centered-empty-prompt">
       <div className="dab-empty-prompt-card" data-testid="studio-empty-stage">
         <div className="dab-empty-hero">
           <h2>
-            {isHealthCheckMode
-              ? 'Run a 3-Pillar Looker & BigQuery Health Check'
-              : isLookmlMode
-              ? 'Author & Validate Agentic LookML'
-              : activeMode === 'tile'
-              ? 'Author & Schedule a Looker Script'
-              : builderMode === 'dashboard'
-              ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)'
+            {isHealthCheckMode ? 'Run a 3-Pillar Looker & BigQuery Health Check'
+              : isLookmlMode ? 'Author & Validate Agentic LookML'
+              : activeMode === 'tile' ? 'Author & Schedule a Looker Script'
+              : builderMode === 'dashboard' ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)'
               : 'Use your Looker Agent'}
           </h2>
           <p className="dab-muted">
             {selectedExplores.length > 0 ? <>Exploring <code>{selectedExplores.join(', ')}</code> — pick a starter prompt below or describe what you want to build.</> : 'Pick a starter prompt below or describe what you want to build, analyze, or automate.'}
           </p>
-          <StarterPromptButtons
-            useCase={selectedUseCase}
-            prompts={starterPrompts}
-            loading={starterPromptsLoading}
-            onSelect={setPrompt}
-            disabled={!!busyStatus}
-          />
+          <StarterPromptButtons useCase={selectedUseCase} prompts={starterPrompts} loading={starterPromptsLoading} onSelect={setPrompt} disabled={!!busyStatus} />
         </div>
-
         <StudioComposer ctl={ctl} />
       </div>
     </main>
@@ -2047,30 +1886,69 @@ function formatActivityStepBadge(step: AntigravityActivityStep): React.ReactNode
   return STEP_BADGES[step.kind] || <><Wrench size={13} strokeWidth={1.75} aria-hidden="true" /> Activity</>
 }
 
-function renderActivityStepsList(steps: AntigravityActivityStep[]) {
+interface ActivityStepContentContext {
+  lookmlBundle?: LookmlBundle | null
+  currentAppCode?: string | null
+  schemaMarkdown?: string | null
+}
+
+function resolveActivityStepContent(step: AntigravityActivityStep, ctx?: ActivityStepContentContext): string {
+  if (step.content?.trim()) return step.content
+  for (const cand of [step.path, step.detail, step.title].map((s) => String(s || '').trim()).filter(Boolean)) {
+    const clean = cand.split('—')[0].trim().replace(/^(?:Viewing|Editing|Skill:)\s+/i, '').trim()
+    const builtin = resolveBuiltinWorkspaceFileContent(cand) || resolveBuiltinWorkspaceFileContent(clean)
+    if (builtin) return builtin
+    const base = clean.split('/').filter(Boolean).pop() || clean
+    const lkml = ctx?.lookmlBundle?.files?.find((f) => f.path === clean || f.path.endsWith(`/${base}`) || f.path === base)?.content
+    if (lkml) return lkml
+    if ((base === 'app.js' || clean.endsWith('/app.js')) && ctx?.currentAppCode) return ctx.currentAppCode
+    if ((base === 'schema.md' || clean.endsWith('/schema.md')) && ctx?.schemaMarkdown) return ctx.schemaMarkdown
+  }
+  return step.detail || step.path || step.title
+}
+
+const ActivityStepsList: React.FC<{ steps: AntigravityActivityStep[]; contentCtx?: ActivityStepContentContext }> = ({ steps, contentCtx }) => {
+  const [expandedKeys, setExpandedKeys] = useState<Record<string, boolean>>({})
+  const toggleKey = (key: string) => setExpandedKeys((prev) => ({ ...prev, [key]: !prev[key] }))
   return (
     <div className="dab-thinking-steps">
       {steps.map((step, sIdx) => {
+        const stepKey = String(step.id || sIdx)
         const hasDetail = Boolean(step.detail && step.detail !== step.title)
         const isCollapsibleThought = step.kind === 'thought' && hasDetail
-        const StepTag = isCollapsibleThought ? 'details' : 'div'
-        const HeaderTag = isCollapsibleThought ? 'summary' : 'div'
+        const isFileOrSkill = step.kind === 'file' || step.kind === 'skill'
+        const isCollapsible = isCollapsibleThought || isFileOrSkill
+        const isOpen = Boolean(expandedKeys[stepKey])
+        const StepTag = isCollapsible ? 'details' : 'div'
+        const HeaderTag = isCollapsible ? 'summary' : 'div'
+        const testId = isCollapsibleThought ? 'thinking-step-thought' : step.kind === 'file' ? 'thinking-step-file' : step.kind === 'skill' ? 'thinking-step-skill' : undefined
+        const resolvedContent = isFileOrSkill ? resolveActivityStepContent(step, contentCtx) : ''
         return (
           <StepTag
-            key={step.id || sIdx}
-            className={`dab-thinking-step dab-thinking-step-${step.kind}`}
-            data-step-kind={step.kind}
-            data-step-status={step.status || 'done'}
-            {...(isCollapsibleThought ? { 'data-testid': 'thinking-step-thought' } : {})}
+            key={stepKey}
+            className={`dab-thinking-step dab-thinking-step-${step.kind} ${isFileOrSkill ? 'dab-thinking-step-interactive' : ''}`}
+            data-step-kind={step.kind} data-step-status={step.status || 'done'}
+            {...(testId ? { 'data-testid': testId } : {})}
+            {...(isCollapsible ? {
+              open: isOpen,
+              onClick: (e: React.MouseEvent<HTMLElement>) => {
+                if ((e.target as HTMLElement).closest('pre')) return
+                e.preventDefault(); toggleKey(stepKey)
+              },
+            } : {})}
           >
-            <HeaderTag className="dab-thinking-step-header">
+            <HeaderTag
+              className="dab-thinking-step-header"
+              {...(isCollapsible ? { onClick: (e: React.MouseEvent<HTMLElement>) => { e.preventDefault(); e.stopPropagation(); toggleKey(stepKey) } } : {})}
+            >
               <span className="dab-thinking-kind-badge">{formatActivityStepBadge(step)}</span>
               <span className="dab-thinking-step-title">{step.title}</span>
-              {step.status === 'running' && (
-                <span className="dab-thinking-step-status">Running…</span>
-              )}
+              {step.status === 'running' && <span className="dab-thinking-step-status">Running…</span>}
             </HeaderTag>
             {hasDetail && <code className="dab-thinking-step-detail">{step.detail}</code>}
+            {isFileOrSkill && isOpen && resolvedContent && (
+              <pre className="dab-thinking-step-content-preview" data-testid="activity-step-content-preview">{resolvedContent}</pre>
+            )}
           </StepTag>
         )
       })}
@@ -2080,279 +1958,190 @@ function renderActivityStepsList(steps: AntigravityActivityStep[]) {
 
 export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
-    messages,
-    builderMode,
-    selectedUseCase,
-    selectedExplores,
-    starterPrompts,
-    starterPromptsLoading,
-    setPrompt,
-    busyStatus,
-    liveActivitySteps,
-    pendingPerm,
-    resolvePermDecision,
+    messages, builderMode, selectedUseCase, selectedExplores, starterPrompts, starterPromptsLoading,
+    setPrompt, busyStatus, liveActivitySteps, pendingPerm, resolvePermDecision,
+    leftPaneWidth, setLeftPaneWidth, rightPaneCollapsed, lookmlBundle, currentAppCode, schemaMarkdown,
   } = ctl
 
+  const leftPaneRef = useRef<HTMLElement | null>(null)
+  const [isResizingSplit, setIsResizingSplit] = useState(false)
+  const [copiedTraceKey, setCopiedTraceKey] = useState<string | null>(null)
+  const contentCtx = useMemo<ActivityStepContentContext>(() => ({ lookmlBundle, currentAppCode, schemaMarkdown }), [lookmlBundle, currentAppCode, schemaMarkdown])
+
+  const handleCopyThinkingTrace = (
+    e: React.MouseEvent<HTMLButtonElement>, traceKey: string, steps: AntigravityActivityStep[],
+    meta?: { thinkingDurationSec?: number; userPrompt?: string; assistantText?: string }
+  ) => {
+    e.preventDefault(); e.stopPropagation()
+    const enriched = steps.map((s) => ((s.kind === 'file' || s.kind === 'skill') && !s.content ? { ...s, content: resolveActivityStepContent(s, contentCtx) } : s))
+    const md = formatThinkingTraceMarkdown(enriched, meta)
+    if (typeof window !== 'undefined') window.__LAST_COPIED_THINKING_TRACE__ = md
+    try { void navigator.clipboard?.writeText?.(md) } catch { /* ignore */ }
+    setCopiedTraceKey(traceKey)
+    setTimeout(() => setCopiedTraceKey((curr) => (curr === traceKey ? null : curr)), 1800)
+  }
+
+  const renderCopyTraceBtn = (traceKey: string, steps: AntigravityActivityStep[], meta?: { thinkingDurationSec?: number; userPrompt?: string; assistantText?: string }) => {
+    const isCopied = copiedTraceKey === traceKey
+    return (
+      <button
+        type="button" data-testid="copy-thinking-trace-btn" data-copied={isCopied ? 'true' : 'false'}
+        className="dab-thinking-copy-btn" title="Copy full chain of thought & activity trace" aria-label="Copy full chain of thought & activity trace"
+        onClick={(e) => handleCopyThinkingTrace(e, traceKey, steps, meta)}
+      >
+        {isCopied ? <><Check size={12} strokeWidth={2} aria-hidden="true" /><span>Copied</span></> : <Copy size={12} strokeWidth={1.75} aria-hidden="true" />}
+      </button>
+    )
+  }
+
   return (
-    <aside className="dab-left-pane">
+    <aside className="dab-left-pane" ref={leftPaneRef}>
       <div className="dab-chat-log">
         {messages.length === 0 && (
           <div className="dab-empty-chat">
-            <p>
-              <strong>
-                {builderMode === 'dashboard'
-                  ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)'
-                  : 'Ask your Looker Agent to build, analyze, or automate across Looker'}
-              </strong>
-            </p>
+            <p><strong>{builderMode === 'dashboard' ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)' : 'Ask your Looker Agent to build, analyze, or automate across Looker'}</strong></p>
             <p className="dab-muted">
               {selectedExplores.length > 0 ? <>Exploring <code>{selectedExplores.join(', ')}</code> — pick a starter prompt below or describe what you want to build.</> : 'Pick a starter prompt below or describe what you want to build, analyze, or automate.'}
             </p>
-            <StarterPromptButtons
-              useCase={selectedUseCase}
-              prompts={starterPrompts}
-              loading={starterPromptsLoading}
-              onSelect={setPrompt}
-              disabled={!!busyStatus}
-            />
+            <StarterPromptButtons useCase={selectedUseCase} prompts={starterPrompts} loading={starterPromptsLoading} onSelect={setPrompt} disabled={!!busyStatus} />
           </div>
         )}
 
-        {messages.map((m, idx) => (
-          <div key={idx} className={`dab-msg dab-msg-${m.role}`}>
-            <div className="dab-msg-header">
-              {m.role === 'user' ? 'You' : m.role === 'error' ? 'Error' : 'Antigravity'}
-              {m.dashboardId && (
-                <span className="dab-msg-pill">
-                  Dashboard #{m.dashboardId}
-                  {typeof m.widgetCount === 'number' ? ` · ${m.widgetCount} queries` : ''}
-                </span>
+        {messages.map((m, idx) => {
+          const prevUserMsg = idx > 0 && messages[idx - 1]?.role === 'user' ? messages[idx - 1]?.text : undefined
+          return (
+            <div key={idx} className={`dab-msg dab-msg-${m.role}`}>
+              <div className="dab-msg-header">
+                {m.role === 'user' ? 'You' : m.role === 'error' ? 'Error' : 'Antigravity'}
+                {m.dashboardId && <span className="dab-msg-pill">Dashboard #{m.dashboardId}{typeof m.widgetCount === 'number' ? ` · ${m.widgetCount} queries` : ''}</span>}
+              </div>
+              {m.role === 'assistant' && m.activitySteps && m.activitySteps.length > 0 && (
+                <details className="dab-thinking-block" data-testid="completed-thinking-block">
+                  <summary className="dab-thinking-summary">
+                    <span className="dab-thinking-summary-label">
+                      Thought for {m.thinkingDurationSec ?? 1}s · {m.activitySteps.length} {m.activitySteps.length === 1 ? 'step' : 'steps'}
+                    </span>
+                    {renderCopyTraceBtn(`completed_${idx}`, m.activitySteps, { thinkingDurationSec: m.thinkingDurationSec ?? 1, userPrompt: prevUserMsg, assistantText: m.text })}
+                  </summary>
+                  <ActivityStepsList steps={m.activitySteps} contentCtx={contentCtx} />
+                </details>
+              )}
+              <div className="dab-msg-body">{m.text}</div>
+              {m.images && m.images.length > 0 && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                  {m.images.map((src, i) => <img key={i} src={src} alt="Attached screenshot" style={{ maxHeight: 80, borderRadius: 4, border: '1px solid #cbd5e1' }} />)}
+                </div>
               )}
             </div>
-            {m.role === 'assistant' && m.activitySteps && m.activitySteps.length > 0 && (
-              <details
-                className="dab-thinking-block"
-                data-testid="completed-thinking-block"
-              >
-                <summary className="dab-thinking-summary">
-                  <span className="dab-thinking-summary-label">
-                    Thought for {m.thinkingDurationSec ?? 1}s · {m.activitySteps.length}{' '}
-                    {m.activitySteps.length === 1 ? 'step' : 'steps'}
-                  </span>
-                </summary>
-                {renderActivityStepsList(m.activitySteps)}
-              </details>
-            )}
-            <div className="dab-msg-body">{m.text}</div>
-            {m.images && m.images.length > 0 && (
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
-                {m.images.map((src, i) => (
-                  <img
-                    key={i}
-                    src={src}
-                    alt="Attached screenshot"
-                    style={{ maxHeight: 80, borderRadius: 4, border: '1px solid #cbd5e1' }}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
+          )
+        })}
 
         {liveActivitySteps && liveActivitySteps.length > 0 && (
-          <details
-            className="dab-thinking-block dab-thinking-live"
-            data-testid="live-thinking-block"
-            open
-          >
+          <details className="dab-thinking-block dab-thinking-live" data-testid="live-thinking-block" open>
             <summary className="dab-thinking-summary">
               <span className="dab-spinner" />
               <span className="dab-thinking-summary-label">
-                Thinking &amp; Activity ·{' '}
-                {liveActivitySteps[liveActivitySteps.length - 1]?.title ||
-                  busyStatus ||
-                  'Working...'}
+                Thinking &amp; Activity · {liveActivitySteps[liveActivitySteps.length - 1]?.title || busyStatus || 'Working...'}
               </span>
-              <span className="dab-thinking-step-count">
-                {liveActivitySteps.length} {liveActivitySteps.length === 1 ? 'step' : 'steps'}
-              </span>
+              <span className="dab-thinking-step-count">{liveActivitySteps.length} {liveActivitySteps.length === 1 ? 'step' : 'steps'}</span>
+              {renderCopyTraceBtn('live', liveActivitySteps)}
             </summary>
-            {renderActivityStepsList(liveActivitySteps)}
+            <ActivityStepsList steps={liveActivitySteps} contentCtx={contentCtx} />
           </details>
         )}
 
         {busyStatus && (!liveActivitySteps || liveActivitySteps.length === 0) && (
-          <div className="dab-status-banner">
-            <span className="dab-spinner" />
-            <span>{busyStatus}</span>
-          </div>
+          <div className="dab-status-banner"><span className="dab-spinner" /><span>{busyStatus}</span></div>
         )}
       </div>
 
       {pendingPerm && (
         <div className="dab-permission-bar">
           <div>
-            <strong>Approve Looker State Mutation?</strong>{' '}
-            <code>{pendingPerm.req.operation}</code> (
-            <code>
-              {pendingPerm.req.httpMethod} {pendingPerm.req.path}
-            </code>
-            )
-            {pendingPerm.req.thought && (
-              <div
-                className="dab-permission-thought"
-                data-testid="permission-request-thought"
-              >
-                {pendingPerm.req.thought}
-              </div>
-            )}
+            <strong>Approve Looker State Mutation?</strong> <code>{pendingPerm.req.operation}</code> (<code>{pendingPerm.req.httpMethod} {pendingPerm.req.path}</code>)
+            {pendingPerm.req.thought && <div className="dab-permission-thought" data-testid="permission-request-thought">{pendingPerm.req.thought}</div>}
           </div>
           <div className="dab-permission-actions">
-            <button
-              type="button"
-              className="dab-btn-primary"
-              onClick={() => resolvePermDecision('allow_once')}
-            >
-              Allow once
-            </button>
-            <button
-              type="button"
-              className="dab-btn-secondary"
-              onClick={() => resolvePermDecision('allow_op')}
-            >
-              Allow all &apos;{pendingPerm.req.operation}&apos; this turn
-            </button>
-            <button
-              type="button"
-              className="dab-btn-secondary"
-              onClick={() => resolvePermDecision('allow_all')}
-            >
-              Allow all mutations this turn
-            </button>
-            <button
-              type="button"
-              className="dab-btn-secondary"
-              onClick={() => resolvePermDecision('deny')}
-            >
-              Deny
-            </button>
+            <button type="button" className="dab-btn-primary" onClick={() => resolvePermDecision('allow_once')}>Allow once</button>
+            <button type="button" className="dab-btn-secondary" onClick={() => resolvePermDecision('allow_op')}>Allow all &apos;{pendingPerm.req.operation}&apos; this turn</button>
+            <button type="button" className="dab-btn-secondary" onClick={() => resolvePermDecision('allow_all')}>Allow all mutations this turn</button>
+            <button type="button" className="dab-btn-secondary" onClick={() => resolvePermDecision('deny')}>Deny</button>
           </div>
         </div>
       )}
 
       <StudioComposer ctl={ctl} />
+      {!rightPaneCollapsed && (
+        <div
+          data-testid="workspace-split-resizer" role="separator" aria-orientation="vertical" aria-label="Resize chat and preview panes"
+          aria-valuenow={leftPaneWidth} aria-valuemin={MIN_LEFT_PANE_WIDTH} aria-valuemax={MAX_LEFT_PANE_WIDTH} tabIndex={0}
+          className={`dab-split-resizer ${isResizingSplit ? 'active' : ''}`}
+          onMouseDown={(e) => {
+            e.preventDefault()
+            const startX = e.clientX
+            const startWidth = leftPaneRef.current?.getBoundingClientRect().width || leftPaneWidth
+            setIsResizingSplit(true)
+            const onMove = (ev: MouseEvent) => setLeftPaneWidth(startWidth + (ev.clientX - startX))
+            const onUp = () => { setIsResizingSplit(false); window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+            window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowLeft') { e.preventDefault(); setLeftPaneWidth((w) => w - 16) }
+            else if (e.key === 'ArrowRight') { e.preventDefault(); setLeftPaneWidth((w) => w + 16) }
+          }}
+        />
+      )}
     </aside>
   )
 }
 
 function renderContentTabIcon(contentType: StudioContentItemType): React.ReactNode {
   switch (contentType) {
-    case 'dashboard':
-    case 'lookml_dashboard':
-      return <LayoutDashboard size={13} strokeWidth={1.75} aria-hidden="true" />
-    case 'look':
-      return <Eye size={13} strokeWidth={1.75} aria-hidden="true" />
-    case 'explore':
-      return <Database size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'look': return <Eye size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'explore': return <Database size={13} strokeWidth={1.75} aria-hidden="true" />
     case 'data_app':
-    case 'data-investigator':
-      return <Sparkles size={13} strokeWidth={1.75} aria-hidden="true" />
-    case 'board':
-      return <Kanban size={13} strokeWidth={1.75} aria-hidden="true" />
-    case 'conversational-analytics':
-      return <MessageSquare size={13} strokeWidth={1.75} aria-hidden="true" />
-    case 'extension':
-      return <Code2 size={13} strokeWidth={1.75} aria-hidden="true" />
-    case 'report':
-      return <FileText size={13} strokeWidth={1.75} aria-hidden="true" />
-    default:
-      return <LayoutDashboard size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'data-investigator': return <Sparkles size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'board': return <Kanban size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'conversational-analytics': return <MessageSquare size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'extension': return <Code2 size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'report': return <FileText size={13} strokeWidth={1.75} aria-hidden="true" />
+    default: return <LayoutDashboard size={13} strokeWidth={1.75} aria-hidden="true" />
   }
 }
 
 export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
-    activeMode,
-    selectedUseCase,
-    isEmptyConversation,
-    isHealthCheckMode,
-    isLookmlMode,
-    isCaMode,
-    builderMode,
-    healthReport,
-    lookmlBundle,
-    caConversation,
-    canDeployLookml,
-    nativeContent,
-    publishedApp,
-    contentItems = [],
-    activeContentTabKey = '',
-    activeContentItem = null,
-    handleSelectContentTab,
-    currentAppCode,
-    embedNonce,
-    extensionSDK,
-    setInfoModalUseCase,
-    busyStatus,
+    activeMode, selectedUseCase, isEmptyConversation, isHealthCheckMode, isLookmlMode, isCaMode,
+    builderMode, healthReport, lookmlBundle, caConversation, canDeployLookml, nativeContent,
+    publishedApp, contentItems = [], activeContentTabKey = '', activeContentItem = null,
+    handleSelectContentTab, currentAppCode, embedNonce, extensionSDK, setInfoModalUseCase,
+    busyStatus, rightPaneCollapsed, setRightPaneCollapsed, scriptId, scriptTitle,
   } = ctl
   const isTileMode = activeMode === 'tile'
-
   const hostUrl = extensionSDK?.lookerHostData?.hostUrl || window.location.origin
-  const mockExt =
-    typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
-  const [tddViewMode, setTddViewMode] = useState<'rendered' | 'raw'>(
-    () => mockExt?.initialTddViewMode || 'rendered'
-  )
+  const mockExt = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
+  const [tddViewMode, setTddViewMode] = useState<'rendered' | 'raw'>(() => mockExt?.initialTddViewMode || 'rendered')
   const [copiedTdd, setCopiedTdd] = useState(false)
   const [showAppCode, setShowAppCode] = useState(false)
   const [iframeRev, setIframeRev] = useState(0)
   const embedContainerRef = useRef<HTMLDivElement | null>(null)
-  const embedControllerRef = useRef<ReturnType<typeof createLookerEmbedPreloadController> | null>(
-    null
-  )
+  const embedControllerRef = useRef<ReturnType<typeof createLookerEmbedPreloadController> | null>(null)
 
   const embedTarget = useMemo(
-    () =>
-      resolveLookerEmbedTarget({
-        isEmptyConversation,
-        isHealthCheckMode,
-        isLookmlMode,
-        isTileMode,
-        isCaMode,
-        builderMode,
-        activeContentItem,
-        caConversation,
-        nativeContent,
-        publishedApp,
-        hostUrl,
-        nonce: (embedNonce || 0) + iframeRev,
-      }),
-    [
-      isEmptyConversation,
-      isHealthCheckMode,
-      isLookmlMode,
-      isTileMode,
-      isCaMode,
-      builderMode,
-      activeContentItem,
-      caConversation,
-      nativeContent,
-      publishedApp,
-      hostUrl,
-      embedNonce,
-      iframeRev,
-    ]
+    () => resolveLookerEmbedTarget({
+      isEmptyConversation, isHealthCheckMode, isLookmlMode, isTileMode, isCaMode,
+      builderMode, activeContentItem, caConversation, nativeContent, publishedApp,
+      hostUrl, nonce: (embedNonce || 0) + iframeRev,
+    }),
+    [isEmptyConversation, isHealthCheckMode, isLookmlMode, isTileMode, isCaMode, builderMode, activeContentItem, caConversation, nativeContent, publishedApp, hostUrl, embedNonce, iframeRev]
   )
 
   useEffect(() => {
     const el = embedContainerRef.current
     if (!el || embedControllerRef.current) return
     embedControllerRef.current = createLookerEmbedPreloadController({
-      hostUrl,
-      container: el,
-      mockPreviewHtml: mockExt?.getMockPreviewHtml
-        ? (mode, objectId) => mockExt.getMockPreviewHtml(mode, objectId)
-        : undefined,
+      hostUrl, container: el,
+      mockPreviewHtml: mockExt?.getMockPreviewHtml ? (mode, objectId) => mockExt.getMockPreviewHtml(mode, objectId) : undefined,
     })
   }, [hostUrl, mockExt])
 
@@ -2364,58 +2153,85 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const handleCopyTddMarkdown = () => {
     if (!healthReport?.tddMarkdown) return
     navigator.clipboard?.writeText(healthReport.tddMarkdown)
-    setCopiedTdd(true)
-    setTimeout(() => setCopiedTdd(false), 1800)
+    setCopiedTdd(true); setTimeout(() => setCopiedTdd(false), 1800)
   }
 
   const handleDownloadTddMarkdown = () => {
     if (!healthReport?.tddMarkdown) return
-    const url = URL.createObjectURL(
-      new Blob([healthReport.tddMarkdown], { type: 'text/markdown;charset=utf-8' })
-    )
-    Object.assign(document.createElement('a'), {
-      href: url,
-      download: 'TECHNICAL_DESIGN_DOCUMENT.md',
-    }).click()
+    const url = URL.createObjectURL(new Blob([healthReport.tddMarkdown], { type: 'text/markdown;charset=utf-8' }))
+    Object.assign(document.createElement('a'), { href: url, download: 'TECHNICAL_DESIGN_DOCUMENT.md' }).click()
     URL.revokeObjectURL(url)
   }
 
-  const activePreviewId =
-    activeContentItem?.id ||
-    (builderMode === 'dashboard' ? nativeContent?.id : publishedApp?.dashboardId)
+  const activePreviewId = activeContentItem?.id || (builderMode === 'dashboard' ? nativeContent?.id : publishedApp?.dashboardId)
   const openInLookerPath = activeContentItem
     ? activeContentItem.embedPath.replace(/^\/embed/, '')
     : builderMode === 'dashboard' && nativeContent
     ? nativeContent.embedPath.replace(/^\/embed/, '')
-    : publishedApp
-    ? `/dashboards/${encodeURIComponent(publishedApp.dashboardId)}`
-    : ''
+    : publishedApp ? `/dashboards/${encodeURIComponent(publishedApp.dashboardId)}` : ''
   const hasActiveEmbed = embedTarget.kind !== 'preload'
-  const showContentTabs =
-    !isTileMode && !isHealthCheckMode && !isLookmlMode && contentItems.length > 0
+  const showContentTabs = !isTileMode && !isHealthCheckMode && !isLookmlMode && contentItems.length > 0
   const resolvedActiveTabKey = activeContentTabKey || activeContentItem?.key || ''
 
+  const railArtifacts = useMemo<Array<{ key: string; title: string; contentType: StudioConversationContentItem['contentType'] }>>(() => {
+    if (contentItems.length > 0) return contentItems.map((item) => ({ key: item.key, title: item.title, contentType: item.contentType }))
+    if (isLookmlMode && lookmlBundle) return [{ key: `lookml:${lookmlBundle.id}`, title: lookmlBundle.title || 'Agentic LookML', contentType: 'extension' }]
+    if (isHealthCheckMode && healthReport) return [{ key: `report:${healthReport.id}`, title: healthReport.title || 'Health Check Report', contentType: 'report' }]
+    if (isTileMode && scriptId) return [{ key: `script:${scriptId}`, title: scriptTitle || scriptId, contentType: 'extension' }]
+    if (caConversation) return [{ key: `ca:${caConversation.caConversationId}`, title: caConversation.title || 'Conversational Analytics', contentType: 'ca' }]
+    if (nativeContent) return [{ key: `${nativeContent.contentType}:${nativeContent.id}`, title: nativeContent.title, contentType: nativeContent.contentType }]
+    if (publishedApp) return [{ key: `data_app:${publishedApp.dashboardId}`, title: publishedApp.title, contentType: 'data_app' }]
+    return []
+  }, [contentItems, isLookmlMode, lookmlBundle, isHealthCheckMode, healthReport, isTileMode, scriptId, scriptTitle, caConversation, nativeContent, publishedApp])
+
+  const collapseToggleBtn = !rightPaneCollapsed ? (
+    <button
+      type="button" data-testid="right-pane-collapse-toggle" className="dab-btn dab-btn-secondary dab-right-collapse-btn"
+      title="Collapse preview pane" aria-label="Collapse preview pane" onClick={() => setRightPaneCollapsed(true)}
+    >
+      <PanelRightClose size={14} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+  ) : null
+
   return (
-    <main className="dab-right-pane" style={isEmptyConversation ? { display: 'none' } : undefined}>
-      {showContentTabs && (
-        <div
-          className="dab-content-tabs"
-          data-testid="studio-content-tabs"
-          role="tablist"
-          aria-label="Conversation Looker content tabs"
-        >
+    <main className={`dab-right-pane ${rightPaneCollapsed ? 'dab-right-pane-collapsed' : ''}`} style={isEmptyConversation ? { display: 'none' } : undefined}>
+      {rightPaneCollapsed && (
+        <div className="dab-right-collapsed-rail" data-testid="right-pane-collapsed-rail" aria-label="Collapsed artifacts rail">
+          <button
+            type="button" data-testid="right-pane-collapse-toggle" className="dab-btn dab-btn-secondary dab-right-rail-toggle-btn"
+            title="Expand preview pane" aria-label="Expand preview pane" onClick={() => setRightPaneCollapsed(false)}
+          >
+            <PanelRightOpen size={14} strokeWidth={1.75} aria-hidden="true" />
+          </button>
+          <div className="dab-right-rail-artifacts">
+            {railArtifacts.map((item) => {
+              const isSelected = item.key === resolvedActiveTabKey || railArtifacts.length === 1
+              return (
+                <button
+                  key={item.key} type="button" data-testid={`right-rail-artifact-${item.key}`}
+                  className={`dab-right-rail-artifact-btn ${isSelected ? 'active' : ''}`}
+                  title={item.title} aria-label={item.title}
+                  onClick={() => {
+                    setRightPaneCollapsed(false)
+                    if (contentItems.some((c) => c.key === item.key)) handleSelectContentTab?.(item.key)
+                  }}
+                >
+                  {renderContentTabIcon(item.contentType)}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+      {!rightPaneCollapsed && showContentTabs && (
+        <div className="dab-content-tabs" data-testid="studio-content-tabs" role="tablist" aria-label="Conversation Looker content tabs">
           {contentItems.map((item) => {
             const isSelected = item.key === resolvedActiveTabKey
             return (
               <button
-                key={item.key}
-                type="button"
-                role="tab"
-                aria-selected={isSelected}
-                data-testid={`studio-content-tab-${item.key}`}
-                className={`dab-content-tab ${isSelected ? 'active' : ''}`}
-                onClick={() => handleSelectContentTab?.(item.key)}
-                title={`${item.title} (${item.contentType}: ${item.id})`}
+                key={item.key} type="button" role="tab" aria-selected={isSelected}
+                data-testid={`studio-content-tab-${item.key}`} className={`dab-content-tab ${isSelected ? 'active' : ''}`}
+                onClick={() => handleSelectContentTab?.(item.key)} title={`${item.title} (${item.contentType}: ${item.id})`}
               >
                 <span className="dab-content-tab-icon">{renderContentTabIcon(item.contentType)}</span>
                 <span className="dab-content-tab-label">{item.title}</span>
@@ -2424,236 +2240,107 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           })}
         </div>
       )}
-      {isTileMode ? (
-        <TilePreviewPane ctl={ctl} />
-      ) : isHealthCheckMode ? (
-        <StudioToolbar
-          title={
-            healthReport ? (
+      {!rightPaneCollapsed && (
+        isTileMode ? (
+          <TilePreviewPane ctl={ctl} />
+        ) : isHealthCheckMode ? (
+          <StudioToolbar
+            title={healthReport ? (
               <>
                 <strong>{healthReport.title}</strong>{' '}
-                <StudioBadge>
-                  Health Score: {healthReport.scores.overallScore}% ({healthReport.scores.grade})
-                </StudioBadge>{' '}
-                <StudioBadge>
-                  Transcriber: {healthReport.scores.transcriberScore}/4.00
-                </StudioBadge>{' '}
-                <span className="dab-muted">
-                  (user_{healthReport.createdBy}_health_check_{healthReport.id} · obj_health_check_
-                  {healthReport.id})
-                </span>
+                <StudioBadge>Health Score: {healthReport.scores.overallScore}% ({healthReport.scores.grade})</StudioBadge>{' '}
+                <StudioBadge>Transcriber: {healthReport.scores.transcriberScore}/4.00</StudioBadge>{' '}
+                <span className="dab-muted">(user_{healthReport.createdBy}_health_check_{healthReport.id} · obj_health_check_{healthReport.id})</span>
               </>
-            ) : (
-              <span className="dab-muted">
-                7-section TECHNICAL_DESIGN_DOCUMENT.md (0–100% health score) will render here
-              </span>
-            )
-          }
-          actions={
-            <>
-              {healthReport && (
-                <>
-                  <button
-                    type="button"
-                    className="dab-btn-secondary"
-                    onClick={() => setTddViewMode((m) => (m === 'rendered' ? 'raw' : 'rendered'))}
-                  >
-                    {tddViewMode === 'rendered' ? '{ } Raw Markdown' : 'Rendered Report'}
-                  </button>
-                  <button
-                    type="button"
-                    className="dab-btn-secondary"
-                    onClick={handleCopyTddMarkdown}
-                  >
-                    {copiedTdd ? '✓ Copied Markdown' : 'Copy Markdown'}
-                  </button>
-                  <button
-                    type="button"
-                    className="dab-btn-gemini"
-                    onClick={handleDownloadTddMarkdown}
-                  >
-                    Download Markdown (.md)
-                  </button>
-                </>
-              )}
-              <UseCaseInfoTrigger useCase="health-check" onOpen={setInfoModalUseCase} />
-            </>
-          }
-        />
-      ) : isLookmlMode ? (
-        <StudioToolbar
-          title={
-            lookmlBundle ? (
-              <>
-                <strong>{lookmlBundle.title}</strong>{' '}
-                <span className="dab-muted">
-                  (Session <code>obj_lookml_{lookmlBundle.id}</code> ·{' '}
-                  {lookmlBundle.files?.length || 0} .lkml files)
-                </span>
-              </>
-            ) : (
-              <span className="dab-muted">
-                Agentic LookML preview (.lkml diffs, validator, run_lookml_test &amp; /sql/:slug +
-                /x/:slug parity)
-              </span>
-            )
-          }
-          actions={<UseCaseInfoTrigger useCase="lookml" onOpen={setInfoModalUseCase} />}
-        />
-      ) : isCaMode || caConversation ? (
-        <>
-          <StudioToolbar
-            testId="ca-preview-toolbar"
-            title={
-              caConversation ? (
-                <>
-                  <strong>{caConversation.title}</strong>{' '}
-                  <StudioBadge testId="ca-selected-agent-badge">
-                    Agent: {caConversation.agentName} ({caConversation.agentId})
-                  </StudioBadge>{' '}
-                  <span className="dab-muted">
-                    (Conversation <code>{caConversation.caConversationId}</code> ·{' '}
-                    <code>{caConversation.embedPath}</code>)
-                  </span>
-                </>
-              ) : (
-                <span className="dab-muted">
-                  Looker Conversational Analytics embedded chat will appear here after routing
-                </span>
-              )
-            }
+            ) : <span className="dab-muted">7-section TECHNICAL_DESIGN_DOCUMENT.md (0–100% health score) will render here</span>}
             actions={
               <>
-                {caConversation && (
+                {healthReport && (
                   <>
-                    <button
-                      type="button"
-                      className="dab-btn-secondary"
-                      onClick={() => setIframeRev((r) => r + 1)}
-                    >
-                      Reload CA Chat
+                    <button type="button" className="dab-btn-secondary" onClick={() => setTddViewMode((m) => (m === 'rendered' ? 'raw' : 'rendered'))}>
+                      {tddViewMode === 'rendered' ? '{ } Raw Markdown' : 'Rendered Report'}
                     </button>
-                    <button
-                      type="button"
-                      className="dab-btn-secondary"
-                      onClick={() =>
-                        extensionSDK.openBrowserWindow(
-                          caConversation.embedPath.replace(/^\/embed/, ''),
-                          '_blank'
-                        )
-                      }
-                    >
-                      Open in Looker ↗
-                    </button>
+                    <button type="button" className="dab-btn-secondary" onClick={handleCopyTddMarkdown}>{copiedTdd ? '✓ Copied Markdown' : 'Copy Markdown'}</button>
+                    <button type="button" className="dab-btn-gemini" onClick={handleDownloadTddMarkdown}>Download Markdown (.md)</button>
                   </>
                 )}
-                <UseCaseInfoTrigger useCase="conversational-analytics" onOpen={setInfoModalUseCase} />
+                <UseCaseInfoTrigger useCase="health-check" onOpen={setInfoModalUseCase} />
+                {collapseToggleBtn}
               </>
             }
           />
-          {caConversation?.selectionRationale && (
-            <div
-              data-testid="ca-selection-rationale"
-              style={{
-                padding: '6px 12px',
-                fontSize: 12,
-                background: 'var(--dab-surface-muted, #f8fafc)',
-                borderBottom: '1px solid var(--dab-border, #e2e8f0)',
-                color: 'var(--dab-text-secondary, #334155)',
-              }}
-            >
-              <strong>Isolated Sub-Agent Selection:</strong> {caConversation.selectionRationale}
-              {caConversation.explores?.length > 0 && (
-                <span style={{ marginLeft: 8, color: 'var(--dab-text-muted, #64748b)' }}>
-                  · Explores: <code>{caConversation.explores.join(', ')}</code>
-                </span>
-              )}
-            </div>
-          )}
-        </>
-      ) : (
-        <StudioToolbar
-          title={
-            activeContentItem &&
-            activeContentItem.contentType !== 'data_app' &&
-            activeContentItem.contentType !== 'data-investigator' ? (
-              <>
-                <strong>{activeContentItem.title}</strong>{' '}
-                <span className="dab-muted">
-                  ({activeContentItem.contentType} #{activeContentItem.id} ·{' '}
-                  <code>{activeContentItem.embedPath}</code>)
-                </span>
-              </>
-            ) : builderMode === 'dashboard' && nativeContent ? (
-              <>
-                <strong>{nativeContent.title}</strong>{' '}
-                <span className="dab-muted">
-                  ({nativeContent.contentType} #{nativeContent.id} ·{' '}
-                  <code>{nativeContent.embedPath}</code>)
-                </span>
-              </>
-            ) : publishedApp ? (
-              <>
-                <strong>{publishedApp.title}</strong>{' '}
-                <span className="dab-muted">
-                  (Dashboard #{publishedApp.dashboardId} · Extension db::
-                  {publishedApp.extensionId.slice(0, 8)}…)
-                </span>
-              </>
-            ) : busyStatus ? (
-              <span className="dab-muted">Thinking...</span>
-            ) : (
-              <span className="dab-muted">
-                Preview will appear here when Looker content is ready
-              </span>
-            )
-          }
-          actions={
-            <>
-              {builderMode !== 'dashboard' && currentAppCode && (
-                <button
-                  type="button"
-                  data-testid="preview-view-code-btn"
-                  className="dab-btn-secondary"
-                  onClick={() => setShowAppCode((v) => !v)}
-                >
-                  {showAppCode ? 'Hide app.js' : '{ } View app.js'}
-                </button>
-              )}
-              {activePreviewId && (
+        ) : isLookmlMode ? (
+          <StudioToolbar
+            title={lookmlBundle ? (
+              <><strong>{lookmlBundle.title}</strong> <span className="dab-muted">(Session <code>obj_lookml_{lookmlBundle.id}</code> · {lookmlBundle.files?.length || 0} .lkml files)</span></>
+            ) : <span className="dab-muted">Agentic LookML preview (.lkml diffs, validator, run_lookml_test &amp; /sql/:slug + /x/:slug parity)</span>}
+            actions={<><UseCaseInfoTrigger useCase="lookml" onOpen={setInfoModalUseCase} />{collapseToggleBtn}</>}
+          />
+        ) : isCaMode || caConversation ? (
+          <>
+            <StudioToolbar
+              testId="ca-preview-toolbar"
+              title={caConversation ? (
                 <>
-                  <button
-                    type="button"
-                    className="dab-btn-secondary"
-                    onClick={() => setIframeRev((r) => r + 1)}
-                  >
-                    Reload Preview
-                  </button>
-                  <button
-                    type="button"
-                    className="dab-btn-secondary"
-                    onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}
-                  >
-                    Open in Looker ↗
-                  </button>
+                  <strong>{caConversation.title}</strong>{' '}
+                  <StudioBadge testId="ca-selected-agent-badge">Agent: {caConversation.agentName} ({caConversation.agentId})</StudioBadge>{' '}
+                  <span className="dab-muted">(Conversation <code>{caConversation.caConversationId}</code> · <code>{caConversation.embedPath}</code>)</span>
                 </>
-              )}
-              <UseCaseInfoTrigger
-                useCase={
-                  builderMode === 'dashboard'
-                    ? 'dashboard'
-                    : selectedUseCase === 'data-investigator'
-                    ? 'data-investigator'
-                    : 'app'
-                }
-                onOpen={setInfoModalUseCase}
-              />
-            </>
-          }
-        />
+              ) : <span className="dab-muted">Looker Conversational Analytics embedded chat will appear here after routing</span>}
+              actions={
+                <>
+                  {caConversation && (
+                    <>
+                      <button type="button" className="dab-btn-secondary" onClick={() => setIframeRev((r) => r + 1)}>Reload CA Chat</button>
+                      <button type="button" className="dab-btn-secondary" onClick={() => extensionSDK.openBrowserWindow(caConversation.embedPath.replace(/^\/embed/, ''), '_blank')}>Open in Looker ↗</button>
+                    </>
+                  )}
+                  <UseCaseInfoTrigger useCase="conversational-analytics" onOpen={setInfoModalUseCase} />
+                  {collapseToggleBtn}
+                </>
+              }
+            />
+            {caConversation?.selectionRationale && (
+              <div data-testid="ca-selection-rationale" style={{ padding: '6px 12px', fontSize: 12, background: 'var(--dab-surface-muted, #f8fafc)', borderBottom: '1px solid var(--dab-border, #e2e8f0)', color: 'var(--dab-text-secondary, #334155)' }}>
+                <strong>Isolated Sub-Agent Selection:</strong> {caConversation.selectionRationale}
+                {caConversation.explores?.length > 0 && <span style={{ marginLeft: 8, color: 'var(--dab-text-muted, #64748b)' }}>· Explores: <code>{caConversation.explores.join(', ')}</code></span>}
+              </div>
+            )}
+          </>
+        ) : (
+          <StudioToolbar
+            title={
+              activeContentItem && activeContentItem.contentType !== 'data_app' && activeContentItem.contentType !== 'data-investigator' ? (
+                <><strong>{activeContentItem.title}</strong> <span className="dab-muted">({activeContentItem.contentType} #{activeContentItem.id} · <code>{activeContentItem.embedPath}</code>)</span></>
+              ) : builderMode === 'dashboard' && nativeContent ? (
+                <><strong>{nativeContent.title}</strong> <span className="dab-muted">({nativeContent.contentType} #{nativeContent.id} · <code>{nativeContent.embedPath}</code>)</span></>
+              ) : publishedApp ? (
+                <><strong>{publishedApp.title}</strong> <span className="dab-muted">(Dashboard #{publishedApp.dashboardId} · Extension db::{publishedApp.extensionId.slice(0, 8)}…)</span></>
+              ) : busyStatus ? <span className="dab-muted">Thinking...</span>
+              : <span className="dab-muted">Preview will appear here when Looker content is ready</span>
+            }
+            actions={
+              <>
+                {builderMode !== 'dashboard' && currentAppCode && (
+                  <button type="button" data-testid="preview-view-code-btn" className="dab-btn-secondary" onClick={() => setShowAppCode((v) => !v)}>
+                    {showAppCode ? 'Hide app.js' : '{ } View app.js'}
+                  </button>
+                )}
+                {activePreviewId && (
+                  <>
+                    <button type="button" className="dab-btn-secondary" onClick={() => setIframeRev((r) => r + 1)}>Reload Preview</button>
+                    <button type="button" className="dab-btn-secondary" onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}>Open in Looker ↗</button>
+                  </>
+                )}
+                <UseCaseInfoTrigger useCase={builderMode === 'dashboard' ? 'dashboard' : selectedUseCase === 'data-investigator' ? 'data-investigator' : 'app'} onOpen={setInfoModalUseCase} />
+                {collapseToggleBtn}
+              </>
+            }
+          />
+        )
       )}
 
-      {showAppCode && currentAppCode && builderMode !== 'dashboard' && (
+      {!rightPaneCollapsed && showAppCode && currentAppCode && builderMode !== 'dashboard' && (
         <div className="dab-code-drawer" data-testid="preview-app-code-drawer" style={{ padding: 12, background: 'var(--dab-code-bg, #0f172a)', color: '#e2e8f0', borderBottom: '1px solid var(--dab-border, #e2e8f0)', maxHeight: 260, overflow: 'auto', fontSize: 12 }}>
           <div className="dab-inspector-bar">
             <strong>app.js ({currentAppCode.length} B)</strong>
@@ -2663,76 +2350,34 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         </div>
       )}
 
-      <div
-        className="dab-iframe-container"
-        data-testid="ca-embed-preview"
-        style={isTileMode ? { display: 'none' } : undefined}
-      >
-        <div
-          ref={embedContainerRef}
-          data-testid="looker-embed-container"
-          className="dab-embed-container"
-          style={{
-            width: '100%',
-            height: '100%',
-            display: hasActiveEmbed ? 'block' : 'none',
-          }}
-        />
+      <div className="dab-iframe-container" data-testid="ca-embed-preview" style={isTileMode || rightPaneCollapsed ? { display: 'none' } : undefined}>
+        <div ref={embedContainerRef} data-testid="looker-embed-container" className="dab-embed-container" style={{ width: '100%', height: '100%', display: hasActiveEmbed ? 'block' : 'none' }} />
         {isHealthCheckMode ? (
           healthReport ? (
             <div className="dab-tdd-viewer">
-              {tddViewMode === 'rendered' ? (
-                <div
-                  className="dab-tdd-rendered"
-                  dangerouslySetInnerHTML={{
-                    __html: renderTddMarkdownToHtml(healthReport.tddMarkdown),
-                  }}
-                />
-              ) : (
-                <pre className="dab-tdd-markdown">{healthReport.tddMarkdown}</pre>
-              )}
+              {tddViewMode === 'rendered' ? <div className="dab-tdd-rendered" dangerouslySetInnerHTML={{ __html: renderTddMarkdownToHtml(healthReport.tddMarkdown) }} /> : <pre className="dab-tdd-markdown">{healthReport.tddMarkdown}</pre>}
             </div>
           ) : (
             <div className="dab-placeholder">
               <p>No 3-Pillar Health Check report loaded yet.</p>
-              <p className="dab-muted">
-                Click <strong>Run 3-Pillar Audit</strong> in the top-right bar or enter a
-                prompt on the left to execute Pillar 1 (System Activity), Pillar 2 (LookML 0–4
-                Transcriber Rubric), and Pillar 3 (BigQuery INFORMATION_SCHEMA) in{' '}
-                <code>LkrCodeMode</code>.
-              </p>
+              <p className="dab-muted">Click <strong>Run 3-Pillar Audit</strong> in the top-right bar or enter a prompt on the left to execute Pillar 1 (System Activity), Pillar 2 (LookML 0–4 Transcriber Rubric), and Pillar 3 (BigQuery INFORMATION_SCHEMA) in <code>LkrCodeMode</code>.</p>
             </div>
           )
         ) : isLookmlMode ? (
-          <LookmlPreviewPane
-            bundle={lookmlBundle}
-            hostUrl={hostUrl}
-            extensionSDK={extensionSDK}
-            canDeploy={canDeployLookml}
-          />
+          <LookmlPreviewPane bundle={lookmlBundle} hostUrl={hostUrl} extensionSDK={extensionSDK} canDeploy={canDeployLookml} />
         ) : isCaMode || caConversation ? (
           !caConversation && (
             <div className="dab-placeholder">
               <p>No active Conversational Analytics chat yet.</p>
-              <p className="dab-muted">
-                Ask a data question on the left — a stateless isolated sub-agent will select the
-                best Looker CA Agent, create the conversation, and embed it here.
-              </p>
+              <p className="dab-muted">Ask a data question on the left — a stateless isolated sub-agent will select the best Looker CA Agent, create the conversation, and embed it here.</p>
             </div>
           )
         ) : (
-          !hasActiveEmbed &&
-            (busyStatus ? (
+          !hasActiveEmbed && (
+            busyStatus ? (
               <div className="dab-placeholder">
-                <div
-                  className="dab-thinking-logo-card"
-                  data-testid="right-pane-thinking-state"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <div className="dab-thinking-logo-orb" aria-hidden="true">
-                    <Sparkles size={26} strokeWidth={1.75} className="dab-thinking-logo-icon" />
-                  </div>
+                <div className="dab-thinking-logo-card" data-testid="right-pane-thinking-state" role="status" aria-live="polite">
+                  <div className="dab-thinking-logo-orb" aria-hidden="true"><Sparkles size={26} strokeWidth={1.75} className="dab-thinking-logo-icon" /></div>
                   <strong className="dab-thinking-logo-title">Thinking...</strong>
                   <span className="dab-muted dab-thinking-logo-subtitle">{busyStatus}</span>
                 </div>
@@ -2740,12 +2385,10 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             ) : (
               <div className="dab-placeholder">
                 <p>Ready when you are</p>
-                <p className="dab-muted">
-                  Ask a question or describe what you want to analyze, build, or automate on the
-                  left.
-                </p>
+                <p className="dab-muted">Ask a question or describe what you want to analyze, build, or automate on the left.</p>
               </div>
-            ))
+            )
+          )
         )}
       </div>
     </main>

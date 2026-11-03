@@ -9,25 +9,30 @@ import type { Looker40SDK } from '@looker/sdk'
 import {
   AGENTS_MD, AntigravityActivityStep, ANTIGRAVITY_ALLOWED_MODELS, authenticateGoogleOAuth,
   BOOTSTRAP_LOOKML_PY, BOOTSTRAP_SANDBOX_SH, buildDynamicStarterPrompts, buildWorkspaceSources,
-  BUNDLE_APP_PY, callInteractionsApi, classifyLookerOperation, clearStarterPromptsCache,
-  clearStoredOAuthSession, CODEMODE_CDN_URL, CodeModePermissionRequest, computeIsAuthenticated,
-  computeLkrExtensionCacheKey, CONCURRENT_POLL_SCHEDULE_MS, CONVERSATION_LABEL_REQUEST_TAG,
-  DASHBOARD_CODEMODE_PREAMBLE_PY, DATA_INVESTIGATOR_GUIDE_MD, DEFAULT_ANTIGRAVITY_MODEL,
-  DEFAULT_THINKING_LEVEL, discoverStarterContentSummaries, discoverStarterExploreContext,
-  ensureCodeModeLoaded, executeLkrExtensionToolRequest, extractInteractionActivitySteps,
-  extractLkrExtensionToolRequests, extractNativeContentFromInteraction, extractThoughtText,
-  generateConversationLabel, generateDynamicStarterPrompts, getCachedStarterPrompts,
-  getInitialStoredOAuthToken, getSharedEnvExploreSchemas, isEnvironmentNotFoundError,
-  isTextAttachmentFile, KDA_SKILL_MD, KDA_TOOLKIT_PY, listAvailableAntigravityModels,
-  LKR_CLI_BRIDGE_TOOL, LKR_CLI_SITECUSTOMIZE_PY, LKR_DEV_CLI_SPEC, LKR_DEV_CLI_VERSION,
-  LkrCodeMode, loadStoredOAuthSession, loadStoredThinkingLevel, loginWithGoogleOAuth,
-  normalizeThinkingLevel, parseStarterPromptsResponse, persistOAuthSession, persistThinkingLevel,
-  prewarmOrWakeAntigravityEnvironment, readInitialThinkingLevel, recordSharedEnvExploreSchema,
-  refreshOAuthSessionIfNeeded, resolveAdaptivePollScheduleMs, resolveLookerOAuthRedirectUri,
-  resolveLookerOAuthRedirectUris, runAntigravityTurn, sanitizeConversationLabel,
-  STARTER_PROMPTS_REQUEST_TAG, stripStarterPromptEmojis, STUDIO_OAUTH_REFRESH_INTERVAL_MS,
-  STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY, STUDIO_THINKING_LEVEL_OPTIONS,
-  STUDIO_THINKING_LEVEL_STORAGE_KEY, StudioAttachedFile, summarizeProgress,
+  BUNDLE_APP_PY, callInteractionsApi, clampLeftPaneWidth, classifyLookerOperation,
+  clearStarterPromptsCache, clearStoredOAuthSession, CODEMODE_CDN_URL, CodeModePermissionRequest,
+  computeIsAuthenticated, computeLkrExtensionCacheKey, CONCURRENT_POLL_SCHEDULE_MS,
+  CONVERSATION_LABEL_REQUEST_TAG, DASHBOARD_CODEMODE_PREAMBLE_PY, DATA_INVESTIGATOR_GUIDE_MD,
+  DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_LEFT_PANE_WIDTH, DEFAULT_THINKING_LEVEL,
+  discoverStarterContentSummaries, discoverStarterExploreContext, ensureCodeModeLoaded,
+  executeLkrExtensionToolRequest, extractInteractionActivitySteps, extractLkrExtensionToolRequests,
+  extractNativeContentFromInteraction, extractThoughtText, formatFriendlyLookerActivityLabel,
+  formatThinkingTraceMarkdown, generateConversationLabel, generateDynamicStarterPrompts,
+  getCachedStarterPrompts, getInitialStoredOAuthToken, getSharedEnvExploreSchemas,
+  isEnvironmentNotFoundError, isTextAttachmentFile, KDA_SKILL_MD, KDA_TOOLKIT_PY,
+  listAvailableAntigravityModels, LKR_CLI_BRIDGE_TOOL, LKR_CLI_SITECUSTOMIZE_PY, LKR_DEV_CLI_SPEC,
+  LKR_DEV_CLI_VERSION, LkrCodeMode, loadStoredLeftPaneWidth, loadStoredOAuthSession,
+  loadStoredRightPaneCollapsed, loadStoredThinkingLevel, loginWithGoogleOAuth, MAX_LEFT_PANE_WIDTH,
+  MIN_LEFT_PANE_WIDTH, normalizeThinkingLevel, parseStarterPromptsResponse, persistOAuthSession,
+  persistThinkingLevel, prewarmOrWakeAntigravityEnvironment, readInitialThinkingLevel,
+  recordSharedEnvExploreSchema, refreshOAuthSessionIfNeeded, resolveAdaptivePollScheduleMs,
+  resolveBuiltinWorkspaceFileContent, resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris,
+  runAntigravityTurn, sanitizeConversationLabel, saveStoredLeftPaneWidth,
+  saveStoredRightPaneCollapsed, STARTER_PROMPTS_REQUEST_TAG, stripStarterPromptEmojis,
+  STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY, STUDIO_OAUTH_REFRESH_INTERVAL_MS,
+  STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY, STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY,
+  STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY, StudioAttachedFile,
+  summarizeProgress,
 } from '../antigravity'
 import {
   StudioBadge, StudioButton, StudioCard, StudioDocPreview, StudioModal,
@@ -5017,5 +5022,62 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
     expect(caRelated.relatedLinks).toEqual([
       { label: 'CA Conversation ca_77', path: '/embed/conversations/ca_77', itemText: 'CA conversation artifact (obj_ca_ca_77)' },
     ])
+  })
+
+  test('50. Issue #119: persists leftPaneWidth & rightPaneCollapsed, formats friendly Looker activity labels without internal Monty/lkr-dev-cli jargon, resolves file/skill paths & contents, and exports Markdown reasoning traces', async () => {
+    expect([STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY, STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY, DEFAULT_LEFT_PANE_WIDTH, MIN_LEFT_PANE_WIDTH, MAX_LEFT_PANE_WIDTH]).toEqual(['dab_left_pane_width', 'dab_right_pane_collapsed', 380, 280, 780])
+    expect([clampLeftPaneWidth(120), clampLeftPaneWidth(460), clampLeftPaneWidth(960), clampLeftPaneWidth(Number.NaN)]).toEqual([280, 460, 780, 380])
+
+    const extStore = new Map<string, string>()
+    const mockExtStorage = {
+      localStorageGetItem: async (k: string) => extStore.get(k) ?? null,
+      localStorageSetItem: async (k: string, v: string) => void extStore.set(k, v),
+    }
+    expect(await loadStoredLeftPaneWidth(mockExtStorage)).toBe(380)
+    await saveStoredLeftPaneWidth(512, mockExtStorage)
+    expect([extStore.get(STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY), await loadStoredLeftPaneWidth(mockExtStorage)]).toEqual(['512', 512])
+    expect(await loadStoredRightPaneCollapsed(mockExtStorage)).toBe(false)
+    await saveStoredRightPaneCollapsed(true, mockExtStorage)
+    expect([extStore.get(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY), await loadStoredRightPaneCollapsed(mockExtStorage)]).toEqual(['true', true])
+    await saveStoredRightPaneCollapsed(false, mockExtStorage)
+    expect(await loadStoredRightPaneCollapsed(mockExtStorage)).toBe(false)
+
+    const queryLabel = formatFriendlyLookerActivityLabel(`sdk.run_inline_query({"model": "agentic_thelook", "view": "order_items", "fields": ["order_items.total_sale_price"]})`)
+    expect(queryLabel).toEqual({ statusText: 'Executing Looker queries for Order Items...', stepTitle: 'Executing Looker queries for Order Items...', targetLabel: 'Order Items', isQuery: true })
+    const apiLabel = formatFriendlyLookerActivityLabel(`sdk.lookml_model_explore("thelook", "users")`)
+    expect(apiLabel).toEqual({ statusText: 'Executing Looker API calls for Users...', stepTitle: 'Executing Looker API calls for Users...', targetLabel: 'Users', isQuery: false })
+    const genericQueryLabel = formatFriendlyLookerActivityLabel(`sdk.run_sql_query("slug_123", "json")`)
+    expect(genericQueryLabel).toMatchObject({ statusText: 'Executing Looker queries...', isQuery: true })
+    const genericApiLabel = formatFriendlyLookerActivityLabel(`sdk.all_lookml_models()`)
+    expect(genericApiLabel).toMatchObject({ statusText: 'Executing Looker API calls...', isQuery: false })
+    for (const lbl of [queryLabel.statusText, apiLabel.statusText, genericQueryLabel.statusText, genericApiLabel.statusText]) {
+      expect(lbl).not.toMatch(/LkrCodeMode|Monty|WASM|bridged lkr-dev-cli/i)
+    }
+
+    const extracted = extractInteractionActivitySteps({
+      steps: [
+        { id: 'step_view_1', type: 'view_file', input: JSON.stringify({ TargetFile: '/workspace/DATA_INVESTIGATOR_GUIDE.md' }) },
+        { id: 'step_view_1_res', type: 'view_file_result', call_id: 'step_view_1', output: '# Data Investigator Guide\nFollow sequential chapters.' },
+        { id: 'step_skill_1', type: 'lookup_skill', arguments: { skill_name: 'skills/key-driver-analysis/SKILL.md' } },
+        { id: 'step_bash_cat', type: 'code_execution', arguments: { command: 'cat /workspace/lookml/views/order_items.view.lkml' } },
+        { id: 'step_bash_cat_res', type: 'tool_result', call_id: 'step_bash_cat', output: 'view: order_items {\n  dimension: id { primary_key: yes }\n}' },
+        { id: 'step_codemode_1', type: 'function_call', name: 'run_looker_codemode', arguments: { code: 'sdk.run_inline_query({"model": "thelook", "view": "order_items"})' } },
+      ],
+    }, true)
+    expect(extracted).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'step_view_1', kind: 'file', title: 'Viewing DATA_INVESTIGATOR_GUIDE.md', path: '/workspace/DATA_INVESTIGATOR_GUIDE.md', content: '# Data Investigator Guide\nFollow sequential chapters.' }),
+      expect.objectContaining({ id: 'step_skill_1', kind: 'skill', title: 'Skill: key-driver-analysis', path: 'skills/key-driver-analysis/SKILL.md' }),
+      expect.objectContaining({ id: 'step_bash_cat', kind: 'file', title: 'Viewing order_items.view.lkml', path: '/workspace/lookml/views/order_items.view.lkml', content: 'view: order_items {\n  dimension: id { primary_key: yes }\n}' }),
+      expect.objectContaining({ id: 'step_codemode_1', kind: 'codemode', title: 'Executing Looker queries for Order Items...' }),
+    ]))
+    expect(resolveBuiltinWorkspaceFileContent('key-driver-analysis')).toContain('Key Driver Analysis')
+    expect(resolveBuiltinWorkspaceFileContent('/workspace/DATA_INVESTIGATOR_GUIDE.md')).toContain('Data Investigator')
+
+    const traceMd = formatThinkingTraceMarkdown(extracted, { thinkingDurationSec: 5, userPrompt: 'Investigate order items revenue' })
+    expect(traceMd).toContain('## Thinking & Activity Trace (5s · 4 steps)')
+    expect(traceMd).toContain('**User Prompt:** Investigate order items revenue')
+    expect(traceMd).toContain('[File] Viewing DATA_INVESTIGATOR_GUIDE.md')
+    expect(traceMd).toContain('[Skill] Skill: key-driver-analysis')
+    expect(traceMd).toContain('[Code Mode] Executing Looker queries for Order Items...')
   })
 })

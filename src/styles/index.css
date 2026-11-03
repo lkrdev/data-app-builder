@@ -210,11 +210,13 @@ body {
 }
 
 .dab-left-pane {
+  position: relative;
   display: flex;
   flex-direction: column;
   background: var(--dab-surface, #ffffff);
   border-right: 1px solid var(--dab-border, #e2e8f0);
   min-height: 0;
+  min-width: 0;
 }
 
 .dab-chat-log {
@@ -997,11 +999,19 @@ body {
 
 /* Collapsible Left Conversations Sidebar & Centered Empty-State Stage */
 .dab-workspace-with-sidebar {
-  grid-template-columns: 230px 380px 1fr;
+  grid-template-columns: 230px var(--dab-left-pane-width, 380px) minmax(0, 1fr);
 }
 
 .dab-workspace-with-sidebar.dab-workspace-sidebar-collapsed {
-  grid-template-columns: 44px 380px 1fr;
+  grid-template-columns: 44px var(--dab-left-pane-width, 380px) minmax(0, 1fr);
+}
+
+.dab-workspace-with-sidebar.dab-workspace-right-collapsed {
+  grid-template-columns: 230px minmax(0, 1fr) 44px;
+}
+
+.dab-workspace-with-sidebar.dab-workspace-sidebar-collapsed.dab-workspace-right-collapsed {
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
 }
 
 .dab-workspace-with-sidebar.dab-workspace-empty {
@@ -1843,7 +1853,21 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
   50% { transform: scale(1.08); opacity: 1; }
 }
 
-
-
-
+/* Issue #119: Draggable split resizer, collapsible right artifact icon rail, clickable file/skill steps & copy reasoning button */
+.dab-split-resizer { position: absolute; top: 0; right: -3px; bottom: 0; width: 6px; cursor: col-resize; z-index: 20; background: transparent; transition: background-color 0.15s ease; user-select: none; }
+.dab-split-resizer:hover, .dab-split-resizer.dragging, .dab-split-resizer:focus-visible { background: var(--dab-accent, #2563eb); outline: none; }
+.dab-right-pane-collapsed { border-left: 1px solid var(--dab-border, #e2e8f0); background: var(--dab-surface-muted, #f8fafc); }
+.dab-right-collapsed-rail { width: 44px; height: 100%; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 4px; background: var(--dab-surface-muted, #f8fafc); box-sizing: border-box; }
+.dab-right-rail-toggle-btn, .dab-right-collapse-btn { width: 28px; height: 28px; min-width: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; }
+.dab-right-rail-artifacts { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 100%; padding-top: 6px; border-top: 1px solid var(--dab-border, #e2e8f0); overflow-y: auto; }
+.dab-right-rail-artifact-btn { width: 32px; height: 32px; min-height: 32px; padding: 0; border-radius: 7px; border: 1px solid var(--dab-border, #e2e8f0); background: var(--dab-surface, #ffffff); color: var(--dab-text-secondary, #475569); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease; }
+.dab-right-rail-artifact-btn:hover { border-color: var(--dab-accent-border, #93c5fd); background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-accent-text, #1d4ed8); }
+.dab-right-rail-artifact-btn.active { border-color: var(--dab-accent, #2563eb); background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-accent-text, #1d4ed8); }
+.dab-thinking-copy-btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 22px; min-width: 22px; padding: 0 6px; border-radius: 5px; border: 1px solid var(--dab-border, #e2e8f0); background: var(--dab-surface, #ffffff); color: var(--dab-text-secondary, #475569); font-size: 11px; font-weight: 600; font-family: inherit; cursor: pointer; flex-shrink: 0; }
+.dab-thinking-copy-btn:hover { border-color: var(--dab-accent-border, #93c5fd); background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-accent-text, #1d4ed8); }
+.dab-thinking-step-interactive > summary.dab-thinking-step-header:hover { color: var(--dab-accent-text, #1d4ed8); }
+.dab-thinking-step-expand-hint { margin-left: auto; font-size: 10px; font-weight: 600; color: var(--dab-accent-text, #2563eb); background: var(--dab-accent-subtle, #eff6ff); border: 1px solid var(--dab-accent-border, #bfdbfe); border-radius: 999px; padding: 0 6px; }
+.dab-thinking-step-content-wrap { margin-top: 4px; display: flex; flex-direction: column; gap: 4px; }
+.dab-thinking-step-content-path { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10.5px; font-weight: 600; color: var(--dab-text-muted, #64748b); }
+.dab-thinking-step-content-preview { margin: 0; max-height: 220px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; line-height: 1.45; color: var(--dab-text, #1e293b); background: var(--dab-surface, #ffffff); border: 1px solid var(--dab-border, #e2e8f0); border-radius: 6px; padding: 6px 8px; white-space: pre-wrap; word-break: break-word; }
 

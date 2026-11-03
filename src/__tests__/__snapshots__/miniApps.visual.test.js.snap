@@ -18,7 +18,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "modeTabs": [],
   "scenario": "chatbar_busy_running",
   "verifiedVisibleText": [
-    "Executing LkrCodeMode Monty Python & validating Looker queries...",
+    "Executing Looker queries for Order Items...",
     "Executive Revenue App",
   ],
 }

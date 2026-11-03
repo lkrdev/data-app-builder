@@ -52,7 +52,10 @@ const StudioMain: React.FC = () => {
       <div
         className={`dab-workspace dab-workspace-with-sidebar ${
           ctl.sidebarCollapsed ? 'dab-workspace-sidebar-collapsed' : ''
-        } ${ctl.isEmptyConversation ? 'dab-workspace-empty' : ''}`}
+        } ${ctl.rightPaneCollapsed ? 'dab-workspace-right-collapsed' : ''} ${
+          ctl.isEmptyConversation ? 'dab-workspace-empty' : ''
+        }`}
+        style={{ '--dab-left-pane-width': `${ctl.leftPaneWidth}px` } as React.CSSProperties}
       >
         <StudioConversationsSidebar ctl={ctl} />
         {ctl.isEmptyConversation ? (
