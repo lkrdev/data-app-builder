@@ -29,6 +29,7 @@ import {
   DASHBOARD_CODEMODE_PREAMBLE_PY,
   DATA_INVESTIGATOR_GUIDE_MD,
   DEFAULT_ANTIGRAVITY_MODEL,
+  DEFAULT_THINKING_LEVEL,
   discoverStarterContentSummaries,
   discoverStarterExploreContext,
   ensureCodeModeLoaded,
@@ -53,10 +54,14 @@ import {
   LKR_DEV_CLI_VERSION,
   LkrCodeMode,
   loadStoredOAuthSession,
+  loadStoredThinkingLevel,
   loginWithGoogleOAuth,
+  normalizeThinkingLevel,
   parseStarterPromptsResponse,
   persistOAuthSession,
+  persistThinkingLevel,
   prewarmOrWakeAntigravityEnvironment,
+  readInitialThinkingLevel,
   recordSharedEnvExploreSchema,
   refreshOAuthSessionIfNeeded,
   resolveAdaptivePollScheduleMs,
@@ -69,6 +74,8 @@ import {
   STUDIO_OAUTH_REFRESH_INTERVAL_MS,
   STUDIO_OAUTH_REFRESH_LOCK_KEY,
   STUDIO_OAUTH_STORAGE_KEY,
+  STUDIO_THINKING_LEVEL_OPTIONS,
+  STUDIO_THINKING_LEVEL_STORAGE_KEY,
   StudioAttachedFile,
   summarizeProgress,
 } from '../antigravity'
@@ -389,18 +396,34 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
   test('6. discovers /v1beta/models, intersects with ANTIGRAVITY_ALLOWED_MODELS, and passes agent_config.model', async () => {
     expect(DEFAULT_ANTIGRAVITY_MODEL).toBe('gemini-3.8-flash')
     expect(ANTIGRAVITY_ALLOWED_MODELS.map((m) => m.id)).toEqual([
-      'gemini-3.8-flash',
       'gemini-4-argon',
+      'gemini-3.8-flash',
       'gemini-3.7-flash',
       'gemini-3.6-flash',
       'gemini-3.5-flash-lite',
     ])
+    expect(DEFAULT_THINKING_LEVEL).toBe('medium')
+    expect(STUDIO_THINKING_LEVEL_STORAGE_KEY).toBe('dab_thinking_level')
+    expect(STUDIO_THINKING_LEVEL_OPTIONS).toEqual([
+      { value: 'low', label: 'Low', testId: 'thinking-level-option-low' },
+      { value: 'medium', label: 'Medium', testId: 'thinking-level-option-medium' },
+      { value: 'high', label: 'High', testId: 'thinking-level-option-high' },
+    ])
+    expect(normalizeThinkingLevel('low')).toBe('low')
+    expect(normalizeThinkingLevel('high')).toBe('high')
+    expect(normalizeThinkingLevel('invalid')).toBe('medium')
+    expect(readInitialThinkingLevel()).toBe('medium')
     expect(await listAvailableAntigravityModels({}, { mode: 'oauth' })).toEqual(
       ANTIGRAVITY_ALLOWED_MODELS
     )
 
+    const storedKv = new Map<string, string>()
     const calls: Array<{ url: string; method?: string; body?: MockInteractionPostBody }> = []
     const mockExtensionSDK = {
+      localStorageGetItem: async (k: string) => storedKv.get(k) ?? null,
+      localStorageSetItem: async (k: string, v: string) => {
+        storedKv.set(k, v)
+      },
       serverProxy: async (url: string, init?: FetchCustomParameters) => {
         calls.push({ url, method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined })
         return {
@@ -427,13 +450,16 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       },
     }
 
+    persistThinkingLevel(mockExtensionSDK, 'high')
+    expect(await loadStoredThinkingLevel(mockExtensionSDK)).toBe('high')
+
     const discovered = await listAvailableAntigravityModels(mockExtensionSDK, { mode: 'apikey' })
     expect(discovered.map((m) => m.id)).toEqual([
-      'gemini-3.8-flash',
       'gemini-4-argon',
+      'gemini-3.8-flash',
       'gemini-3.5-flash-lite',
     ])
-    expect(discovered[1].description).toBe('Live 4 Argon')
+    expect(discovered[0].description).toBe('Live 4 Argon')
 
     const turnRes = await runAntigravityTurn({
       sdk: asSdk({}),
@@ -441,6 +467,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       auth: { mode: 'apikey' },
       session: { toolType: 'app' },
       model: 'gemini-4-argon',
+      thinkingLevel: 'high',
       selectedExplores: ['thelook::order_items'],
       schemaMarkdown: '# Schema',
       userPrompt: 'Build KPI app',
@@ -452,6 +479,12 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       type: 'antigravity',
       model: 'gemini-4-argon',
     })
+    const firstInputText = Array.isArray(postCall?.body?.input)
+      ? String((postCall?.body?.input[0] as { text?: string } | undefined)?.text || '')
+      : ''
+    expect(firstInputText.startsWith('[THINKING LEVEL: HIGH — Reason deeply and verify edge cases thoroughly]')).toBe(
+      true
+    )
     expect(
       typeof postCall?.body?.environment === 'object' ? postCall.body.environment.sources : []
     ).toEqual(
@@ -459,6 +492,24 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         expect.objectContaining({ target: '/workspace/AGENTS.md', content: AGENTS_MD }),
       ])
     )
+
+    await runAntigravityTurn({
+      sdk: asSdk({}),
+      extensionSDK: mockExtensionSDK,
+      auth: { mode: 'apikey' },
+      session: { toolType: 'app' },
+      model: 'gemini-3.8-flash',
+      thinkingLevel: 'low',
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      userPrompt: 'Quick summary',
+      onStatus: () => {},
+    })
+    const lowPostCall = calls.filter((c) => c.method === 'POST' && c.url.endsWith('/v1beta/interactions')).pop()
+    const lowInputText = Array.isArray(lowPostCall?.body?.input)
+      ? String((lowPostCall?.body?.input[0] as { text?: string } | undefined)?.text || '')
+      : ''
+    expect(lowInputText.startsWith('[THINKING LEVEL: LOW — Be concise and minimize exploratory steps]')).toBe(true)
   })
 
   test('7. auto-labels conversations after Turn 1 via stateless side-request (tools=[], no previous_interaction_id) and persists to user_conversations:${me.id}', async () => {

@@ -41,6 +41,8 @@ import {
   handleImageClipboardPaste,
   StarterPromptItem,
   stripStarterPromptEmojis,
+  STUDIO_THINKING_LEVEL_OPTIONS,
+  StudioThinkingLevel,
   StudioUseCase,
 } from '../antigravity'
 import { renderTddMarkdownToHtml } from '../healthCheck'
@@ -1105,6 +1107,8 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     selectedUseCase,
     selectedModel,
     setSelectedModel,
+    thinkingLevel,
+    setThinkingLevel,
     availableModels,
     busyStatus,
     activatedLookmlSkills,
@@ -1936,6 +1940,12 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
             value: m.id,
             label: m.label,
             title: m.description,
+            subMenu: {
+              value: thinkingLevel,
+              options: STUDIO_THINKING_LEVEL_OPTIONS,
+              onChange: (lvl) => setThinkingLevel(lvl as StudioThinkingLevel),
+              testId: 'composer-thinking-level-menu',
+            },
           }))}
         />
 

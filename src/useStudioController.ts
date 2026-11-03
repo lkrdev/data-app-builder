@@ -7,14 +7,16 @@ import useSWR from 'swr'
 import {
   AgentSession, ANTIGRAVITY_ALLOWED_MODELS, AntigravityActivityStep, AntigravityAuth, AntigravityModelOption,
   authenticateGoogleOAuth, buildDynamicStarterPrompts, clearStoredOAuthSession, CodeModePermissionDecision,
-  CodeModePermissionRequest, computeIsAuthenticated, DEFAULT_ANTIGRAVITY_MODEL, discoverStarterExploreContext,
-  ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig, generateConversationLabel,
+  CodeModePermissionRequest, computeIsAuthenticated, DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_THINKING_LEVEL,
+  discoverStarterExploreContext, ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig, generateConversationLabel,
   generateDynamicStarterPrompts, getCachedStarterPrompts, getInitialStoredOAuthSession, getInitialStoredOAuthToken,
-  inFlightEnvProvisionByUser, listAvailableAntigravityModels, LkrCodeMode, loadStoredOAuthSession, loginWithGoogleOAuth,
-  normalizeEnvironmentId, parseValidOAuthSession, PastedImage, prewarmOrWakeAntigravityEnvironment,
-  refreshOAuthSessionIfNeeded, resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris,
+  inFlightEnvProvisionByUser, listAvailableAntigravityModels, LkrCodeMode, loadStoredOAuthSession,
+  loadStoredThinkingLevel, loginWithGoogleOAuth, normalizeEnvironmentId, normalizeThinkingLevel,
+  parseValidOAuthSession, PastedImage, persistThinkingLevel, prewarmOrWakeAntigravityEnvironment,
+  readInitialThinkingLevel, refreshOAuthSessionIfNeeded, resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris,
   resolveTargetExploreFromModels, runAntigravityTurn, sanitizeConversationLabel, sharedEnvExploreSchemas,
   StarterPromptItem, STUDIO_OAUTH_REFRESH_INTERVAL_MS, STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY,
+  STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY, StudioThinkingLevel,
 } from './antigravity'
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
 import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
@@ -50,7 +52,12 @@ import {
 export {
   authenticateGoogleOAuth,
   computeIsAuthenticated,
+  DEFAULT_THINKING_LEVEL,
+  loadStoredThinkingLevel,
   normalizeStudioThemeMode,
+  normalizeThinkingLevel,
+  persistThinkingLevel,
+  readInitialThinkingLevel,
   refreshOAuthSessionIfNeeded,
   resolveLookerOAuthRedirectUri,
   resolveLookerOAuthRedirectUris,
@@ -59,12 +66,15 @@ export {
   STUDIO_OAUTH_REFRESH_LOCK_KEY,
   STUDIO_OAUTH_STORAGE_KEY,
   STUDIO_THEME_STORAGE_KEY,
+  STUDIO_THINKING_LEVEL_OPTIONS,
+  STUDIO_THINKING_LEVEL_STORAGE_KEY,
 }
 export type {
   ResolvedStudioTheme,
   StudioContextCategory,
   StudioContextMention,
   StudioThemeMode,
+  StudioThinkingLevel,
 }
 
 export interface QueuedPromptItem {
@@ -128,6 +138,9 @@ export function useStudioController() {
   )
   const [selectedModel, setSelectedModel] = useState<string>(
     initialCtx?.defaultModel || DEFAULT_ANTIGRAVITY_MODEL
+  )
+  const [thinkingLevel, setThinkingLevelState] = useState<StudioThinkingLevel>(() =>
+    readInitialThinkingLevel()
   )
   const [availableModels, setAvailableModels] = useState<AntigravityModelOption[]>(
     ANTIGRAVITY_ALLOWED_MODELS
@@ -281,10 +294,22 @@ export function useStudioController() {
     void loadStoredStudioThemeMode(extensionSDK).then((stored) => {
       if (mounted && stored) setThemeModeState(stored)
     })
+    void loadStoredThinkingLevel(extensionSDK).then((stored) => {
+      if (mounted && stored) setThinkingLevelState(stored)
+    })
     return () => {
       mounted = false
     }
   }, [extensionSDK])
+
+  const setThinkingLevel = useCallback(
+    (next: StudioThinkingLevel | string) => {
+      const level = normalizeThinkingLevel(next)
+      setThinkingLevelState(level)
+      persistThinkingLevel(extensionSDK, level)
+    },
+    [extensionSDK]
+  )
 
   useEffect(() => {
     const mql = typeof window !== 'undefined' ? window.matchMedia?.('(prefers-color-scheme: dark)') : null
@@ -2001,6 +2026,7 @@ export function useStudioController() {
             auth: { mode: authMode, oauthToken, clientId, projectId, apiKey },
             session: agentSession,
             model: selectedModel,
+            thinkingLevel,
             selectedExplores,
             folderId: selectedFolderId,
             schemaMarkdown,
@@ -2694,6 +2720,7 @@ export function useStudioController() {
         auth,
         session: currentSession,
         model: selectedModel,
+        thinkingLevel,
         mode: effectiveBuilderMode,
         useCase: explicitUseCase,
         allowedModes: allowedUseCases,
@@ -3146,6 +3173,7 @@ export function useStudioController() {
         isAuthenticated, oauthSigningIn, oauthRedirectUri,
         handleOAuthLogin, handleCancelOAuthLogin,
         setSidebarCollapsed, themeMode, resolvedTheme, setThemeMode,
+        selectedModel, setSelectedModel, thinkingLevel, setThinkingLevel,
         selectedUseCase, setSelectedUseCase: handleChangeUseCase,
         isUseCaseLocked, allowedUseCases, useCaseOptions, setCapabilities,
         handleResetNewApp, handleNewConversation, handleSelectConversation,
@@ -3165,13 +3193,14 @@ export function useStudioController() {
         preloadedContent, setPreloadedContent, mentionedItems, setMentionedItems,
       }
     }
-  }, [history, requestCodeModePermission, oauthExpiresAt, triggerSilentOAuthRefresh, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, queuedPrompts, updateQueuedPrompts, handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, environmentStatus, envResetNotice, handleResetEnvironment, handleStopEnvironment, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems])
+  }, [history, requestCodeModePermission, oauthExpiresAt, triggerSilentOAuthRefresh, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleCancelOAuthLogin, themeMode, resolvedTheme, setThemeMode, selectedModel, thinkingLevel, setThinkingLevel, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, queuedPrompts, updateQueuedPrompts, handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, environmentStatus, envResetNotice, handleResetEnvironment, handleStopEnvironment, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems])
 
   return {
     extensionSDK, core40SDK, lookerHostData, history, location, isTileMount,
     themeMode, resolvedTheme, setThemeMode,
     authMode, setAuthMode, clientId, setClientId, projectId, setProjectId,
     disabledModes, setDisabledModes, selectedModel, setSelectedModel,
+    thinkingLevel, setThinkingLevel,
     availableModels, enabledModes, oauthToken, oauthAccessToken, setOauthToken,
     oauthExpiresAt, setOauthExpiresAt, triggerSilentOAuthRefresh, apiKey, setApiKey,
     isAuthenticated, oauthSigningIn, oauthRedirectUri,

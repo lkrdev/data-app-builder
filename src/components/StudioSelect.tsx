@@ -40,6 +40,12 @@ export interface StudioSelectOption<T extends string = string> {
   title?: string
   icon?: React.ReactNode
   badge?: string
+  subMenu?: {
+    value: string
+    options: Array<{ value: string; label: string; testId?: string }>
+    onChange: (val: string) => void
+    testId?: string
+  }
 }
 
 export interface StudioSelectProps<T extends string = string> {
@@ -79,6 +85,7 @@ export function StudioSelect<T extends string = string>({
 }: StudioSelectProps<T>): React.ReactElement {
   const testId = testIdProp || dataTestIdProp
   const [open, setOpen] = useState(false)
+  const [activeSubMenuValue, setActiveSubMenuValue] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const nativeSelectRef = useRef<HTMLSelectElement | null>(null)
   const onChangeRef = useRef(onChange)
@@ -86,6 +93,7 @@ export function StudioSelect<T extends string = string>({
 
   const selectedOption = options.find((o) => o.value === value) || options[0]
   const optPrefix = optionTestIdPrefix || testId
+  const hasSubMenu = options.some((o) => Boolean(o.subMenu))
 
   const setContainerNode = (el: HTMLDivElement | null) => {
     containerRef.current = el
@@ -123,7 +131,7 @@ export function StudioSelect<T extends string = string>({
   }, [])
 
   useEffect(() => {
-    if (!open) return
+    if (!open) return setActiveSubMenuValue(null)
     const onMouseDown = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false)
     }
@@ -207,7 +215,7 @@ export function StudioSelect<T extends string = string>({
       </select>
       {open && (
         <div
-          className={`dab-studio-menu ${align === 'right' ? 'align-right' : ''}`.trim()}
+          className={`dab-studio-menu ${align === 'right' ? 'align-right' : ''} ${hasSubMenu ? 'has-submenu' : ''}`.trim()}
           role="listbox"
           data-testid={testId ? `${testId}-menu` : undefined}
           onClick={(e) => e.stopPropagation()}
@@ -219,31 +227,85 @@ export function StudioSelect<T extends string = string>({
               optionTestIdPrefix && testId && optionTestIdPrefix !== testId
                 ? `${testId}-option-${opt.value}`
                 : undefined
+            const activeSubOption = opt.subMenu?.options.find((so) => so.value === opt.subMenu?.value)
+            const isSubMenuOpen = Boolean(opt.subMenu && activeSubMenuValue === opt.value)
             return (
-              <button
+              <div
                 key={`${opt.value}:${idx}`}
-                type="button"
-                role="option"
-                data-testid={primaryTestId}
-                data-value={opt.value}
-                aria-selected={isSelected}
-                disabled={opt.disabled}
-                title={opt.title}
-                className={`dab-studio-menu-item ${isSelected ? 'selected' : ''} ${opt.disabled ? 'disabled' : ''}`.trim()}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  if (opt.disabled) return
-                  onChange(opt.value)
-                  setOpen(false)
-                }}
+                className="dab-studio-menu-item-row"
+                onMouseEnter={() => !opt.disabled && setActiveSubMenuValue(opt.subMenu ? opt.value : null)}
               >
-                <span className="dab-studio-menu-item-main" data-testid={secondaryTestId}>
-                  {opt.icon && <span className="dab-studio-menu-icon">{opt.icon}</span>}
-                  <span className="dab-studio-menu-text">{opt.label}</span>
-                  {opt.badge && <span className="dab-studio-menu-badge">{opt.badge}</span>}
-                </span>
-                {isSelected && <span className="dab-studio-menu-check" aria-hidden="true">✓</span>}
-              </button>
+                <button
+                  type="button"
+                  role="option"
+                  data-testid={primaryTestId}
+                  data-value={opt.value}
+                  aria-selected={isSelected}
+                  disabled={opt.disabled}
+                  title={opt.title}
+                  className={`dab-studio-menu-item ${isSelected ? 'selected' : ''} ${opt.disabled ? 'disabled' : ''}`.trim()}
+                  onMouseOver={() => !opt.disabled && opt.subMenu && setActiveSubMenuValue(opt.value)}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (!opt.disabled) { onChange(opt.value); setOpen(false) }
+                  }}
+                >
+                  <span className="dab-studio-menu-item-main" data-testid={secondaryTestId}>
+                    {opt.icon && <span className="dab-studio-menu-icon">{opt.icon}</span>}
+                    <span className="dab-studio-menu-text">{opt.label}</span>
+                    {opt.badge && <span className="dab-studio-menu-badge">{opt.badge}</span>}
+                  </span>
+                  <span className="dab-studio-menu-item-right">
+                    {isSelected && <span className="dab-studio-menu-check" aria-hidden="true">✓</span>}
+                    {opt.subMenu && (
+                      <span
+                        className="dab-studio-menu-subtrigger"
+                        data-testid={opt.subMenu.testId ? `${opt.subMenu.testId}-trigger-${opt.value}` : undefined}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (!opt.disabled) setActiveSubMenuValue((prev) => (prev === opt.value ? null : opt.value))
+                        }}
+                      >
+                        <span className="dab-studio-menu-sublabel">{activeSubOption?.label || opt.subMenu.value}</span>
+                        <span className="dab-studio-menu-subchevron" aria-hidden="true">›</span>
+                      </span>
+                    )}
+                  </span>
+                </button>
+                {opt.subMenu && isSubMenuOpen && (
+                  <div
+                    className="dab-studio-submenu"
+                    role="menu"
+                    data-testid={opt.subMenu.testId}
+                    data-parent-value={opt.value}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {opt.subMenu.options.map((subOpt) => {
+                      const isSubSelected = subOpt.value === opt.subMenu!.value
+                      return (
+                        <button
+                          key={subOpt.value}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={isSubSelected}
+                          data-testid={subOpt.testId}
+                          data-value={subOpt.value}
+                          className={`dab-studio-menu-item ${isSubSelected ? 'selected' : ''}`.trim()}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (opt.value !== value) onChange(opt.value)
+                            opt.subMenu!.onChange(subOpt.value)
+                            setOpen(false)
+                          }}
+                        >
+                          <span className="dab-studio-menu-item-main"><span className="dab-studio-menu-text">{subOpt.label}</span></span>
+                          {isSubSelected && <span className="dab-studio-menu-check" aria-hidden="true">✓</span>}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
             )
           })}
         </div>

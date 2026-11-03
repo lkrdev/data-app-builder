@@ -1571,17 +1571,26 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 .dab-studio-select-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dab-studio-select-chevron { font-size: 11px; line-height: 1; color: var(--dab-text-muted, #64748b); flex-shrink: 0; }
 .dab-studio-menu { position: absolute; top: calc(100% + 4px); left: 0; min-width: 100%; width: max-content; max-width: 340px; max-height: 280px; overflow-y: auto; z-index: 600; background: var(--dab-surface-elevated, #ffffff); border: 1px solid var(--dab-border-strong, #cbd5e1); border-radius: 8px; box-shadow: 0 10px 25px rgba(15, 23, 42, 0.16); padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.dab-studio-menu.has-submenu { overflow: visible; max-height: none; }
 :root[data-theme="dark"] .dab-studio-menu, .dab-shell[data-theme="dark"] .dab-studio-menu { box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45); }
 .dab-studio-menu.align-right { left: auto; right: 0; }
+.dab-studio-menu-item-row { position: relative; display: flex; align-items: center; width: 100%; }
 .dab-studio-menu-item { width: 100%; border: none; border-radius: 6px; background: transparent; color: var(--dab-text, #1e293b); font-size: 12px; font-weight: 500; font-family: inherit; padding: 6px 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; text-align: left; }
 .dab-studio-menu-item:hover:not(:disabled) { background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-text-strong, #0f172a); }
 .dab-studio-menu-item.active, .dab-studio-menu-item.selected { background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-accent-text, #1d4ed8); font-weight: 600; }
 .dab-studio-menu-item.disabled, .dab-studio-menu-item:disabled { opacity: 0.55; cursor: not-allowed; }
 .dab-studio-menu-item-main { display: inline-flex; align-items: center; gap: 7px; min-width: 0; flex: 1; }
+.dab-studio-menu-item-right { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; flex-shrink: 0; }
 .dab-studio-menu-icon { display: inline-flex; align-items: center; justify-content: center; color: currentColor; flex-shrink: 0; }
 .dab-studio-menu-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dab-studio-menu-badge { font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 4px; background: var(--dab-surface-subtle, #f1f5f9); color: var(--dab-text-secondary, #475569); flex-shrink: 0; }
 .dab-studio-menu-check { font-size: 11px; font-weight: 700; color: var(--dab-accent, #2563eb); flex-shrink: 0; }
+.dab-studio-menu-subtrigger { display: inline-flex; align-items: center; gap: 4px; padding: 1px 5px; border-radius: 4px; color: var(--dab-text-muted, #64748b); font-size: 11px; font-weight: 500; line-height: 1.2; white-space: nowrap; }
+.dab-studio-menu-subtrigger:hover { background: var(--dab-surface-subtle, #f1f5f9); color: var(--dab-text-strong, #0f172a); }
+.dab-studio-menu-subchevron { font-size: 13px; line-height: 1; color: var(--dab-text-muted, #64748b); }
+.dab-studio-submenu { position: absolute; top: -4px; left: calc(100% + 6px); min-width: 116px; width: max-content; z-index: 620; background: var(--dab-surface-elevated, #ffffff); border: 1px solid var(--dab-border-strong, #cbd5e1); border-radius: 8px; box-shadow: 0 10px 25px rgba(15, 23, 42, 0.16); padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.dab-studio-submenu::before { content: ''; position: absolute; top: 0; bottom: 0; left: -8px; width: 8px; }
+:root[data-theme="dark"] .dab-studio-submenu, .dab-shell[data-theme="dark"] .dab-studio-submenu { box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45); }
 
 /* Studio Design System semantic badges, cards, modals & toolbars */
 .dab-badge-neutral { background: var(--dab-surface-subtle); color: var(--dab-text-secondary); border-color: var(--dab-border-strong); }
