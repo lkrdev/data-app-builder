@@ -10,7 +10,10 @@ import {
 } from './dataAppPublisher'
 import { rawLookerRequest } from './lookerApi'
 
-export const ARTIFACT_NAMESPACE = 'data_app_builder'
+export const ARTIFACT_NAMESPACE = 'data_app_builder::data_app_builder'
+
+const UUID_OR_TILE_ID_REGEX =
+  /^(?:db::)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export type ArtifactExtensionHostLike =
   | Partial<ExtensionSDK>
@@ -34,11 +37,28 @@ interface SwrConfigWithDefaultCache {
   }
 }
 
+export function normalizeArtifactNamespace(
+  raw?: string | null,
+  projectId?: string | null
+): string {
+  const clean = String(raw || '').trim()
+  if (
+    !clean ||
+    clean === 'data_app_builder' ||
+    clean.startsWith('db::') ||
+    UUID_OR_TILE_ID_REGEX.test(clean)
+  ) {
+    return ARTIFACT_NAMESPACE
+  }
+  if (clean.includes('::')) {
+    return clean
+  }
+  const proj = String(projectId || clean).trim() || clean
+  return `${proj}::${clean}`
+}
+
 export function getArtifactNamespace(extensionSDK?: ArtifactExtensionHostLike): string {
-  return (
-    String(extensionSDK?.lookerHostData?.extensionId || ARTIFACT_NAMESPACE).trim() ||
-    ARTIFACT_NAMESPACE
-  )
+  return normalizeArtifactNamespace(extensionSDK?.lookerHostData?.extensionId)
 }
 
 export function readSwrCache<T = unknown>(key: unknown): T | undefined {
@@ -169,6 +189,8 @@ export interface StudioContentItem {
   extensionId?: string
   rawCode?: string
   updatedAt?: string
+  source?: 'created' | 'mention'
+  createdInConversation?: boolean
 }
 
 export function formatStudioContentItemTitle(
@@ -231,6 +253,20 @@ export function normalizeStudioContentItem(
   const key = String(raw.key || `${contentType}:${id}`).trim()
   const title = formatStudioContentItemTitle(contentType, id, raw.title)
   const embedPath = resolveStudioContentEmbedPath(contentType, id, raw.embedPath)
+  const source: 'created' | 'mention' | undefined =
+    raw.source === 'created' || raw.createdInConversation === true
+      ? 'created'
+      : raw.source === 'mention' || raw.createdInConversation === false
+      ? 'mention'
+      : undefined
+  const createdInConversation =
+    raw.createdInConversation !== undefined
+      ? Boolean(raw.createdInConversation)
+      : source === 'created'
+      ? true
+      : source === 'mention'
+      ? false
+      : undefined
   return {
     ...raw,
     key,
@@ -238,6 +274,8 @@ export function normalizeStudioContentItem(
     contentType,
     title,
     embedPath,
+    ...(source !== undefined ? { source } : {}),
+    ...(createdInConversation !== undefined ? { createdInConversation } : {}),
   }
 }
 
@@ -249,6 +287,19 @@ export function upsertStudioContentItem(
   const existingIdx = items.findIndex((it) => it.key === normalized.key)
   if (existingIdx >= 0) {
     const prev = items[existingIdx]
+    const wasCreated = prev.createdInConversation === true || prev.source === 'created'
+    const isNextCreated =
+      normalized.createdInConversation === true || normalized.source === 'created'
+    const preservedCreated =
+      wasCreated || isNextCreated
+        ? true
+        : normalized.createdInConversation !== undefined
+        ? normalized.createdInConversation
+        : prev.createdInConversation
+    const preservedSource =
+      wasCreated || isNextCreated
+        ? ('created' as const)
+        : normalized.source || prev.source
     const merged = normalizeStudioContentItem({
       ...prev,
       ...nextRaw,
@@ -257,6 +308,8 @@ export function upsertStudioContentItem(
           ? nextRaw.title
           : prev.title || normalized.title,
       embedPath: nextRaw.embedPath || prev.embedPath || normalized.embedPath,
+      ...(preservedSource !== undefined ? { source: preservedSource } : {}),
+      ...(preservedCreated !== undefined ? { createdInConversation: preservedCreated } : {}),
     })
     const nextItems = [...items]
     nextItems[existingIdx] = merged
@@ -403,6 +456,7 @@ export interface ConversationRelatedContentInfo {
   lookId?: string
   dashboardIds?: string[]
   lookIds?: string[]
+  relatedLinks?: Array<{ label: string; path: string; itemText: string }>
   summary: string
   items: string[]
 }
@@ -428,11 +482,72 @@ export function resolveConversationRelatedContent(
   const uniq = (...vals: Array<string | undefined | false>) =>
     Array.from(new Set(vals.filter((v): v is string => Boolean(v))))
 
+  const mentionedIds = new Set<string>()
+  if (Array.isArray(conv.messages)) {
+    for (const msg of conv.messages) {
+      const text = String((msg as { text?: unknown })?.text || '')
+      if (!text) continue
+      for (const m of text.matchAll(/@(?:dashboard|look|conversation|explore):([^\s,)]+)/gi)) {
+        if (m[1]) mentionedIds.add(m[1].trim())
+      }
+      for (const m of text.matchAll(
+        /\[Referenced Looker (?:Dashboard|Look|Conversation) #?([^\s\]]+)/gi
+      )) {
+        if (m[1]) mentionedIds.add(m[1].trim())
+      }
+    }
+  }
+
+  const buildRelatedLinks = (
+    itemList: string[]
+  ): Array<{ label: string; path: string; itemText: string }> => {
+    const links: Array<{ label: string; path: string; itemText: string }> = []
+    for (const itemText of itemList) {
+      const dashMatch = itemText.match(/Dashboard #([^\s(]+)/)
+      if (dashMatch?.[1]) {
+        const dId = dashMatch[1]
+        links.push({
+          label: `Dashboard #${dId}`,
+          path: `/dashboards/${encodeURIComponent(dId)}`,
+          itemText,
+        })
+        continue
+      }
+      const lookMatch = itemText.match(/Saved Look #([^\s(]+)/)
+      if (lookMatch?.[1]) {
+        const lId = lookMatch[1]
+        links.push({
+          label: `Look #${lId}`,
+          path: `/looks/${encodeURIComponent(lId)}`,
+          itemText,
+        })
+        continue
+      }
+      const caMatch = itemText.match(/CA conversation artifact \(obj_ca_([^)]+)\)/)
+      if (caMatch?.[1]) {
+        const caId = caMatch[1]
+        links.push({
+          label: `CA Conversation ${caId}`,
+          path: `/embed/conversations/${encodeURIComponent(caId)}`,
+          itemText,
+        })
+      }
+    }
+    return links
+  }
+
+  const hasExplicitContentItems = Array.isArray(conv.contentItems) && conv.contentItems.length > 0
+
   const enrichWithContentItems = (
     base: ConversationRelatedContentInfo
   ): ConversationRelatedContentInfo => {
     if (!Array.isArray(conv.contentItems) || conv.contentItems.length === 0) {
-      return base
+      return {
+        ...base,
+        dashboardIds: base.dashboardId ? [base.dashboardId] : [],
+        lookIds: base.lookId ? [base.lookId] : [],
+        relatedLinks: buildRelatedLinks(base.items),
+      }
     }
     const extraUserKeys: string[] = [...base.userIndexKeys]
     const extraSharedKeys: string[] = [...base.sharedObjectKeys]
@@ -442,8 +557,34 @@ export function resolveConversationRelatedContent(
 
     for (const rawItem of conv.contentItems) {
       if (!rawItem || !rawItem.id) continue
+      if (rawItem.source === 'mention' || rawItem.createdInConversation === false) {
+        continue
+      }
       const item = normalizeStudioContentItem(rawItem)
       const itemId = item.id
+      const targetId = String(
+        item.dashboardId || item.lookId || item.lookmlDashboardId || itemId
+      ).trim()
+      const isExplicitlyCreated =
+        rawItem.createdInConversation === true || rawItem.source === 'created'
+      if (
+        !isExplicitlyCreated &&
+        itemId !== base.objectId &&
+        targetId !== base.objectId &&
+        (mentionedIds.has(itemId) || (targetId && mentionedIds.has(targetId)))
+      ) {
+        continue
+      }
+      if (
+        (rawType === 'conversational-analytics' || rawType === 'ca') &&
+        !isExplicitlyCreated &&
+        (item.contentType === 'dashboard' ||
+          item.contentType === 'data_app' ||
+          item.contentType === 'data-investigator' ||
+          item.contentType === 'look')
+      ) {
+        continue
+      }
       if (item.contentType === 'dashboard') {
         const dId = String(item.dashboardId || itemId).trim()
         if (dId) {
@@ -492,6 +633,7 @@ export function resolveConversationRelatedContent(
     const items = uniq(...extraItems)
     return {
       ...base,
+      objectId: base.objectId || dashboardIds[0] || lookIds[0] || '',
       userIndexKeys: uniq(...extraUserKeys),
       sharedObjectKeys: uniq(...extraSharedKeys),
       dashboardId: base.dashboardId || dashboardIds[0],
@@ -499,6 +641,7 @@ export function resolveConversationRelatedContent(
       dashboardIds,
       lookIds,
       items,
+      relatedLinks: buildRelatedLinks(items),
       summary: items.join(' + ') || base.summary,
     }
   }
@@ -506,9 +649,11 @@ export function resolveConversationRelatedContent(
   if (rawType === 'dashboard') {
     const contentType =
       c.contentType || (c.lookId ? 'look' : c.lookmlDashboardId ? 'lookml_dashboard' : 'dashboard')
-    const objectId = stripPrefix(
-      String(conv.objectId || c.dashboardId || c.lookId || c.lookmlDashboardId || c.id || conv.id || '')
+    const explicitObjectId = stripPrefix(
+      String(conv.objectId || c.dashboardId || c.lookId || c.lookmlDashboardId || c.id || '')
     )
+    const objectId =
+      explicitObjectId || (!hasExplicitContentItems ? stripPrefix(String(conv.id || '')) : '')
     const dashboardId = c.dashboardId
       ? String(c.dashboardId).trim()
       : contentType === 'dashboard' && objectId
@@ -609,7 +754,9 @@ export function resolveConversationRelatedContent(
     })
   }
 
-  const objectId = stripPrefix(String(conv.objectId || c.dashboardId || c.id || conv.id || ''))
+  const explicitAppObjectId = stripPrefix(String(conv.objectId || c.dashboardId || c.id || ''))
+  const objectId =
+    explicitAppObjectId || (!hasExplicitContentItems ? stripPrefix(String(conv.id || '')) : '')
   const dashboardId = String(c.dashboardId || objectId || '').trim() || undefined
   const appKey = String(c.appArtifactId || (objectId ? `obj_app_${objectId}` : '')).trim()
   const items = uniq(
@@ -739,8 +886,11 @@ export class ArtifactService {
   private readonly userListCache = new Map<string, UserArtifactIndexEntry[]>()
   private readonly scriptsCache = new Map<string, SavedScript[]>()
   private readonly tileScriptCache = new Map<string, TileScriptBinding | null>()
+  readonly namespace: string
 
-  constructor(readonly sdk: Looker40SDK, readonly namespace = ARTIFACT_NAMESPACE) {}
+  constructor(readonly sdk: Looker40SDK, namespace = ARTIFACT_NAMESPACE) {
+    this.namespace = normalizeArtifactNamespace(namespace)
+  }
 
   getCachedVersion(key: string): number | undefined {
     return this.versionByKey.get(key)
@@ -1524,7 +1674,7 @@ export function getArtifactService(
   sdk: Looker40SDK,
   namespace = ARTIFACT_NAMESPACE
 ): ArtifactService {
-  const ns = String(namespace || ARTIFACT_NAMESPACE).trim() || ARTIFACT_NAMESPACE
+  const ns = normalizeArtifactNamespace(namespace)
   const rawCandidate = (sdk as Looker40SDK & { __rawSdk?: object })?.__rawSdk || sdk
   const rawKey =
     rawCandidate && (typeof rawCandidate === 'object' || typeof rawCandidate === 'function')

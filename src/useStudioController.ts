@@ -635,7 +635,8 @@ export function useStudioController() {
       next:
         | PublishedAppState
         | null
-        | ((prev: PublishedAppState | null) => PublishedAppState | null)
+        | ((prev: PublishedAppState | null) => PublishedAppState | null),
+      meta?: { source?: 'created' | 'mention'; createdInConversation?: boolean }
     ) => {
       setPublishedAppState((prev) => {
         const resolved = typeof next === 'function' ? next(prev) : next
@@ -652,6 +653,10 @@ export function useStudioController() {
             folderId: resolved.folderId,
             extensionId: resolved.extensionId,
             rawCode: resolved.code,
+            ...(meta?.source ? { source: meta.source } : {}),
+            ...(meta?.createdInConversation !== undefined
+              ? { createdInConversation: meta.createdInConversation }
+              : {}),
           })
         }
         return resolved
@@ -665,7 +670,8 @@ export function useStudioController() {
       next:
         | NativeContentState
         | null
-        | ((prev: NativeContentState | null) => NativeContentState | null)
+        | ((prev: NativeContentState | null) => NativeContentState | null),
+      meta?: { source?: 'created' | 'mention'; createdInConversation?: boolean }
     ) => {
       setNativeContentState((prev) => {
         const resolved = typeof next === 'function' ? next(prev) : next
@@ -683,6 +689,10 @@ export function useStudioController() {
             lookmlDashboardId:
               resolved.lookmlDashboardId ||
               (ct === 'lookml_dashboard' ? String(resolved.id) : undefined),
+            ...(meta?.source ? { source: meta.source } : {}),
+            ...(meta?.createdInConversation !== undefined
+              ? { createdInConversation: meta.createdInConversation }
+              : {}),
           })
         }
         return resolved
@@ -1865,6 +1875,16 @@ export function useStudioController() {
       })
       const nextDash = { dashboardId: pub.dashboardId, elementId: pub.elementId }
       setPublishedTileDash(nextDash)
+      upsertContentItem({
+        id: String(pub.dashboardId),
+        dashboardId: String(pub.dashboardId),
+        contentType: 'dashboard',
+        title: saved.title || `Dashboard #${pub.dashboardId}`,
+        embedPath: `/embed/dashboards/${encodeURIComponent(String(pub.dashboardId))}`,
+        folderId: selectedFolderId,
+        source: 'created',
+        createdInConversation: true,
+      })
       await handleSaveScript(saved.code, saved.messages || [], nextDash)
       setMessages(
         (prev) => [
@@ -1881,7 +1901,7 @@ export function useStudioController() {
       setBusyStatus(mockExt?.initialBusyStatus || null)
       setMessages((prev) => [...prev, { role: 'error', text: getErrorMessage(err) }], 'tile')
     }
-  }, [core40SDK, extHostData?.extensionId, handleSaveScript, mockExt?.initialBusyStatus, publishedTileDash?.dashboardId, selectedFolderId, setMessages])
+  }, [core40SDK, extHostData?.extensionId, handleSaveScript, mockExt?.initialBusyStatus, publishedTileDash?.dashboardId, selectedFolderId, setMessages, upsertContentItem])
 
   const loadCaConversationById = useCallback(
     async (rawId: string, pushRoute = true) => {
@@ -1964,6 +1984,9 @@ export function useStudioController() {
     const auth: AntigravityAuth = { mode: authMode, oauthToken, clientId, projectId, apiKey }
     const isFirstTurn = baseMessages.filter((m) => m.role === 'user').length <= 1
     try {
+      if (isFirstTurn) {
+        setContentItems((prev) => prev.filter((it) => it.createdInConversation === true))
+      }
       const selection = await selectCaAgentViaIsolatedSubagent({
         sdk: core40SDK, extensionSDK, auth, userQuestion, model: selectedModel, onStatus: setBusyStatus,
       })
@@ -1998,6 +2021,8 @@ export function useStudioController() {
         title: created.label,
         embedPath: created.embedPath,
         updatedAt: nextCaState.updatedAt,
+        source: 'created',
+        createdInConversation: true,
       })
       setSelectedUseCase('conversational-analytics')
       setActiveObjectId(created.caConversationId)
@@ -2713,6 +2738,8 @@ export function useStudioController() {
               id: m.id,
               contentType: ct,
               title: m.title,
+              source: 'mention',
+              createdInConversation: false,
               ...(ct === 'explore' ? { exploreId: m.id } : {}),
               ...(ct === 'look' ? { lookId: m.id } : {}),
               ...(ct === 'dashboard' ? { dashboardId: m.id } : {}),
@@ -2963,7 +2990,7 @@ export function useStudioController() {
           )
           lastNativeIdRef.current = savedNative.id
           resolvedUseCaseByIdRef.current[savedNative.id] = 'dashboard'
-          setNativeContent(savedNative)
+          setNativeContent(savedNative, { source: 'created', createdInConversation: true })
           setEmbedNonce((n) => n + 1)
           setActiveObjectId(savedNative.id)
           setLoadDashInput(savedNative.id)
@@ -3011,7 +3038,7 @@ export function useStudioController() {
             resolvedUseCase === 'data-investigator' ? 'data-investigator' : 'app'
           lastPublishedIdRef.current = upserted.dashboardId
           resolvedUseCaseByIdRef.current[upserted.dashboardId] = appUseCaseType
-          setPublishedApp(upserted)
+          setPublishedApp(upserted, { source: 'created', createdInConversation: true })
           setEmbedNonce((n) => n + 1)
           setActiveObjectId(upserted.dashboardId)
           setCurrentAppCode(result.bundle.raw_code)
@@ -3097,7 +3124,7 @@ export function useStudioController() {
                 messages: finalMsgs,
               }
             )
-            setNativeContent(updatedNative)
+            setNativeContent(updatedNative, { source: 'created', createdInConversation: true })
             await refreshCatalog()
             convId = updatedNative.id
             convType = 'dashboard'
@@ -3114,7 +3141,8 @@ export function useStudioController() {
                 lastInteractionId: result.session.lastInteractionId,
                 environmentId: result.session.environmentId,
                 messages: finalMsgs,
-              })
+              }),
+              { source: 'created', createdInConversation: true }
             )
             convId = publishedApp.dashboardId
             convType = 'app'

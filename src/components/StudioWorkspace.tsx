@@ -842,6 +842,11 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
   const relatedInfo = pendingDeleteConv
     ? resolveConversationRelatedContent(pendingDeleteConv, userId)
     : null
+  const hostUrl = (
+    ctl.extensionSDK?.lookerHostData?.hostUrl ||
+    ctl.lookerHostData?.hostUrl ||
+    ''
+  ).replace(/\/$/, '')
 
   return (
     <nav
@@ -965,9 +970,28 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
               <div className="dab-modal-related-box" data-testid="delete-conv-related-summary">
                 <strong>Linked Looker &amp; Shared Artifact Content:</strong>
                 <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-                  {relatedInfo.items.map((item, idx) => (
-                    <li key={idx}>{item}</li>
-                  ))}
+                  {relatedInfo.items.map((item, idx) => {
+                    const matchedLink = relatedInfo.relatedLinks?.find(
+                      (l) => l.itemText === item
+                    )
+                    return (
+                      <li key={idx}>
+                        {matchedLink ? (
+                          <a
+                            data-testid={`delete-modal-content-link-${idx}`}
+                            href={`${hostUrl}${matchedLink.path}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ color: 'var(--dab-accent)', textDecoration: 'underline' }}
+                          >
+                            {item}
+                          </a>
+                        ) : (
+                          item
+                        )}
+                      </li>
+                    )
+                  })}
                 </ul>
               </div>
             )}

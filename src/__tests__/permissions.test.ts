@@ -48,11 +48,12 @@ import {
   deleteUserConversation, extractResolvedUseCase, fetchFolderChildren,
   fetchFolderWithAncestors, fetchInitialLookerMetadata, fetchLookerCaAgentsCatalog,
   fetchPreloadedContentSummary, formatStudioContentItemTitle, formatUserConversationsArtifactKey,
-  formatUserConversationsKey, formatUserEnvArtifactKey, getAllowedUseCases, getArtifactService,
-  getUseCaseLabel, hydrateConversationContentItems, hydrateMentionedContext,
+  formatUserConversationsKey, formatUserEnvArtifactKey, getAllowedUseCases, getArtifactNamespace,
+  getArtifactService, getUseCaseLabel, hydrateConversationContentItems, hydrateMentionedContext,
   isConversationalNoOpPrompt, listUserArtifacts, loadStoredSelectedFolderId,
   loadUserConversations, loadUserEnvironmentId, matchExplicitUseCaseRule,
-  normalizeQueryFiltersToFixedDates, normalizeStudioContentItem, normalizeStudioThemeMode,
+  normalizeArtifactNamespace, normalizeQueryFiltersToFixedDates, normalizeStudioContentItem,
+  normalizeStudioThemeMode,
   parseCaAgentSelectionResponse, parseStudioRoute, persistSelectedFolderId, rawLookerRequest,
   readInitialSelectedFolderId, readSwrCache, resolveConversationRelatedContent,
   resolveStudioContentEmbedPath, resolveStudioTheme, resolveSystemTheme, resolveUserCapabilities,
@@ -4944,5 +4945,226 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
     expect(warmInputs[1]).not.toContain('[WARM SANDBOX FAST PATH:')
     await runAntigravityTurn({ ...baseTurnParams, userPrompt: 'Add a revenue KPI card', existingAppCode: 'export class App {}' })
     expect(warmInputs[2]).toContain('[WARM SANDBOX FAST PATH:')
+  })
+
+  test('49. Issue #120: enforces <projectid>::<extensionid> artifact namespace, excludes @-mentioned content from conversation deletion, and populates clickable Looker content links', async () => {
+    // 1. Artifact namespace strictly follows <projectid>::<extensionid>
+    expect(ARTIFACT_NAMESPACE).toBe('data_app_builder::data_app_builder')
+    expect(normalizeArtifactNamespace(undefined)).toBe('data_app_builder::data_app_builder')
+    expect(normalizeArtifactNamespace('')).toBe('data_app_builder::data_app_builder')
+    expect(normalizeArtifactNamespace('data_app_builder')).toBe('data_app_builder::data_app_builder')
+    expect(normalizeArtifactNamespace('a1b2c3d4-e5f6-7890-abcd-ef1234567890')).toBe(
+      'data_app_builder::data_app_builder'
+    )
+    expect(normalizeArtifactNamespace('db::a1b2c3d4-e5f6-7890-abcd-ef1234567890')).toBe(
+      'data_app_builder::data_app_builder'
+    )
+    expect(normalizeArtifactNamespace('data_app_builder::data_app_builder')).toBe(
+      'data_app_builder::data_app_builder'
+    )
+    expect(normalizeArtifactNamespace('custom_proj::custom_ext')).toBe('custom_proj::custom_ext')
+    expect(normalizeArtifactNamespace('custom_ext', 'custom_proj')).toBe('custom_proj::custom_ext')
+
+    expect(getArtifactNamespace(undefined)).toBe('data_app_builder::data_app_builder')
+    expect(getArtifactNamespace({ lookerHostData: { extensionId: 'data_app_builder' } })).toBe(
+      'data_app_builder::data_app_builder'
+    )
+    expect(
+      getArtifactNamespace({
+        lookerHostData: { extensionId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' },
+      })
+    ).toBe('data_app_builder::data_app_builder')
+    expect(
+      getArtifactNamespace({
+        lookerHostData: { extensionId: 'data_app_builder::data_app_builder' },
+      })
+    ).toBe('data_app_builder::data_app_builder')
+    expect(
+      getArtifactNamespace({ lookerHostData: { extensionId: 'custom_proj::custom_ext' } })
+    ).toBe('custom_proj::custom_ext')
+
+    clearArtifactServiceCache()
+    const deletedDashboards: string[] = []
+    const deletedLooks: string[] = []
+    const seenNamespaces: string[] = []
+    const store = new Map<string, string>()
+    const mockSdk = asSdk({
+      ok: async <T>(p: T) => p,
+      artifact: async ({ namespace, key }: { namespace: string; key: string }) => {
+        seenNamespaces.push(namespace)
+        return key
+          .split(',')
+          .filter((k) => store.has(k))
+          .map((k) => ({ key: k, value: store.get(k)!, version: 1 }))
+      },
+      search_artifacts: async ({ namespace }: { namespace: string }) => {
+        seenNamespaces.push(namespace)
+        return []
+      },
+      update_artifacts: async (ns: string, updates: Array<{ key: string; value: string }>) => {
+        seenNamespaces.push(ns)
+        for (const u of updates) store.set(u.key, u.value)
+        return updates.map((u) => ({ key: u.key, version: 1 }))
+      },
+      delete_artifact: async (ns: string, key: string) => {
+        seenNamespaces.push(ns)
+        for (const k of key.split(',')) store.delete(k.trim())
+        return ''
+      },
+      delete_dashboard: async (id: string) => {
+        deletedDashboards.push(String(id))
+        return ''
+      },
+      delete_look: async (id: string) => {
+        deletedLooks.push(String(id))
+        return ''
+      },
+    })
+
+    expect(new ArtifactService(mockSdk, 'data_app_builder').namespace).toBe(
+      'data_app_builder::data_app_builder'
+    )
+    expect(getArtifactService(mockSdk, 'data_app_builder').namespace).toBe(
+      'data_app_builder::data_app_builder'
+    )
+
+    // 2. upsertStudioContentItem never downgrades createdInConversation: true when later @-mentioned
+    let tabItems: StudioContentItem[] = []
+    tabItems = upsertStudioContentItem(tabItems, {
+      id: '42',
+      dashboardId: '42',
+      contentType: 'data_app',
+      title: 'Created App #42',
+      source: 'created',
+      createdInConversation: true,
+    }).items
+    tabItems = upsertStudioContentItem(tabItems, {
+      id: '42',
+      dashboardId: '42',
+      contentType: 'data_app',
+      title: 'Created App #42',
+      source: 'mention',
+      createdInConversation: false,
+    }).items
+    expect(tabItems[0].source).toBe('created')
+    expect(tabItems[0].createdInConversation).toBe(true)
+
+    // 3. @-mentioned Dashboards (#22) and Looks (#15) are excluded from resolveConversationRelatedContent & deleteUserConversation
+    const convWithMentionsAndCreated = {
+      id: 'conv_app_42',
+      type: 'app',
+      label: 'Executive Revenue App',
+      content: { dashboardId: '42', appArtifactId: 'obj_app_42' },
+      messages: [
+        {
+          role: 'user' as const,
+          text: 'Build a revenue app referencing @dashboard:22 and @look:15 [Referenced Looker Dashboard #22]',
+        },
+        {
+          role: 'assistant' as const,
+          text: 'Created Executive Revenue App (#42) and Saved Look #19.',
+        },
+      ],
+      contentItems: [
+        normalizeStudioContentItem({
+          id: '22',
+          dashboardId: '22',
+          contentType: 'dashboard',
+          title: 'Tagged Dashboard #22',
+          source: 'mention',
+          createdInConversation: false,
+        }),
+        normalizeStudioContentItem({
+          id: '15',
+          lookId: '15',
+          contentType: 'look',
+          title: 'Tagged Look #15',
+        }),
+        normalizeStudioContentItem({
+          id: '42',
+          dashboardId: '42',
+          contentType: 'data_app',
+          title: 'Executive Revenue App',
+          source: 'created',
+          createdInConversation: true,
+        }),
+        normalizeStudioContentItem({
+          id: '19',
+          lookId: '19',
+          contentType: 'look',
+          title: 'Created Look #19',
+          source: 'created',
+          createdInConversation: true,
+        }),
+      ],
+      updatedAt: '2026-11-03T05:00:00Z',
+    }
+
+    const related = resolveConversationRelatedContent(convWithMentionsAndCreated, '1')
+    expect(related.dashboardIds).toEqual(['42'])
+    expect(related.dashboardIds).not.toContain('22')
+    expect(related.lookIds).toEqual(['19'])
+    expect(related.lookIds).not.toContain('15')
+    expect(related.sharedObjectKeys).not.toContain('obj_dashboard_22')
+    expect(related.sharedObjectKeys).not.toContain('obj_dashboard_15')
+    expect(related.items.join(' ')).not.toContain('#22')
+    expect(related.items.join(' ')).not.toContain('#15')
+    expect(related.relatedLinks).toEqual([
+      {
+        label: 'Dashboard #42',
+        path: '/dashboards/42',
+        itemText: 'Looker Dashboard #42 (sdk.delete_dashboard)',
+      },
+      {
+        label: 'Look #19',
+        path: '/looks/19',
+        itemText: 'Saved Look #19 (sdk.delete_look)',
+      },
+    ])
+
+    await saveUserConversation(mockSdk, '1', convWithMentionsAndCreated)
+    expect(seenNamespaces.every((ns) => ns === 'data_app_builder::data_app_builder')).toBe(true)
+
+    await deleteUserConversation(mockSdk, '1', 'conv_app_42', {
+      deleteRelatedContent: true,
+    })
+    expect(deletedDashboards).toEqual(['42'])
+    expect(deletedDashboards).not.toContain('22')
+    expect(deletedLooks).toEqual(['19'])
+    expect(deletedLooks).not.toContain('15')
+
+    // 4. Conversational Analytics conversation ignores non-created dashboard/look items and populates CA relatedLinks
+    const caConv = {
+      id: 'conv_ca_77',
+      type: 'conversational-analytics',
+      label: 'Q3 Margin CA Session',
+      content: { caConversationId: 'ca_77' },
+      contentItems: [
+        normalizeStudioContentItem({
+          id: '22',
+          dashboardId: '22',
+          contentType: 'dashboard',
+          title: 'Stale Dashboard #22',
+        }),
+        normalizeStudioContentItem({
+          id: 'ca_77',
+          contentType: 'conversational-analytics',
+          title: 'Q3 Margin CA Session',
+          source: 'created',
+          createdInConversation: true,
+        }),
+      ],
+      updatedAt: '2026-11-03T05:05:00Z',
+    }
+    const caRelated = resolveConversationRelatedContent(caConv, '1')
+    expect(caRelated.dashboardIds).toEqual([])
+    expect(caRelated.items).toEqual(['CA conversation artifact (obj_ca_ca_77)'])
+    expect(caRelated.relatedLinks).toEqual([
+      {
+        label: 'CA Conversation ca_77',
+        path: '/embed/conversations/ca_77',
+        itemText: 'CA conversation artifact (obj_ca_ca_77)',
+      },
+    ])
   })
 })
