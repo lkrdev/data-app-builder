@@ -2,4 +2,14 @@
 set -euo pipefail
 
 export PATH="/usr/local/google/home/bryanweber/.nvm/versions/node/v24.21.0/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
+
+node -e '
+const fs = require("node:fs");
+const txt = fs.readFileSync("lkr-dev-cli-version.txt", "utf8").trim();
+const bridge = fs.readFileSync("src/lkrCliBridge.ts", "utf8");
+const [, cli] = bridge.match(/export const LKR_DEV_CLI_VERSION = [\x27"]([^\x27"]+)[\x27"]/) || [];
+const [, cdn] = bridge.match(/export const CODEMODE_CDN_URL = [\x27"]https:\/\/cdn\.lkr\.dev\/cli\/codemode\/([^\x27"/]+)\/codemode\.js[\x27"]/) || [];
+if (!txt || txt !== cli || txt !== cdn) { console.error(`Version mismatch: txt=${txt} cli=${cli} cdn=${cdn}`); process.exit(1); }
+'
+
 npm run lint:check
