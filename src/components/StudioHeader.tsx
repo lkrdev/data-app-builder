@@ -27,31 +27,31 @@ export const RipperSurfLoader: React.FC<{
   return (
     <div className="dab-shell dab-ripper-loader-shell" data-theme={theme} data-theme-mode={themeMode} data-testid="ripper-surf-loader" role="status" aria-live="polite">
       <div className="dab-ripper-loader-card">
-        <svg className="dab-ripper-loader-svg" data-testid="ripper-surf-loader-svg" viewBox="0 0 200 140" width="200" height="140" aria-hidden="true">
+        <svg className="dab-ripper-loader-svg" data-testid="ripper-surf-loader-svg" width="96" height="96" viewBox="0 0 96 96" fill="none" aria-hidden="true">
           <defs>
-            <linearGradient id="ripper-barrel-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#0284c7" /><stop offset="55%" stopColor="#0ea5e9" /><stop offset="100%" stopColor="#38bdf8" />
+            <linearGradient id="rcGrad2A" x1="12" y1="64" x2="76" y2="18" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stopColor="#1e3a8a" /><stop offset="100%" stopColor="#0284c7" />
             </linearGradient>
-            <linearGradient id="ripper-lip-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="#38bdf8" /><stop offset="70%" stopColor="#7dd3fc" /><stop offset="100%" stopColor="#e0f2fe" />
+            <linearGradient id="rcGrad2B" x1="16" y1="60" x2="74" y2="22" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stopColor="#0284c7" /><stop offset="100%" stopColor="#22d3ee" />
             </linearGradient>
           </defs>
-          <g className="dab-ripper-barrel-vortex">
-            <circle cx="102" cy="72" r="46" fill="none" stroke="url(#ripper-barrel-grad)" strokeWidth="4" strokeDasharray="64 26" opacity="0.45" />
-            <circle cx="102" cy="72" r="34" fill="none" stroke="url(#ripper-lip-grad)" strokeWidth="3" strokeDasharray="44 20" opacity="0.7" />
-            <circle cx="102" cy="72" r="22" fill="none" stroke="#e0f2fe" strokeWidth="2" strokeDasharray="24 16" opacity="0.85" />
+          <g className="dab-ripper-spin-cw">
+            <circle cx="48" cy="48" r="39" stroke="#0284c7" strokeWidth="2" strokeLinecap="round" strokeDasharray="90 150" opacity="0.38" />
           </g>
-          <path className="dab-ripper-wave-barrel" d="M 18 112 C 26 44, 86 16, 146 36 C 174 46, 180 82, 152 100 C 128 114, 78 116, 46 106" fill="none" stroke="url(#ripper-barrel-grad)" strokeWidth="8" strokeLinecap="round" />
-          <path className="dab-ripper-wave-lip" d="M 38 78 C 52 34, 106 22, 144 46 C 160 58, 156 84, 134 92" fill="none" stroke="url(#ripper-lip-grad)" strokeWidth="4.5" strokeLinecap="round" />
-          <g className="dab-ripper-surfer">
-            <path d="M 74 92 Q 98 84 124 90 Q 102 98 74 92 Z" fill="#f8fafc" stroke="#0284c7" strokeWidth="1.75" />
-            <circle cx="101" cy="64" r="5" fill="#e0f2fe" />
-            <path d="M 92 74 Q 101 69 112 72 M 100 69 L 96 81 L 88 89 M 96 81 L 107 88" fill="none" stroke="#e0f2fe" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+          <g className="dab-ripper-spin-ccw">
+            <circle cx="48" cy="48" r="33" stroke="#22d3ee" strokeWidth="1.6" strokeLinecap="round" strokeDasharray="55 155" opacity="0.32" />
           </g>
-          <g className="dab-ripper-spray">
-            <circle cx="148" cy="48" r="2.5" fill="#e0f2fe" /><circle cx="158" cy="60" r="2" fill="#bae6fd" />
-            <circle cx="68" cy="96" r="2.2" fill="#e0f2fe" /><circle cx="58" cy="102" r="1.8" fill="#7dd3fc" />
+          <path className="dab-ripper-ribbon-1" d="M13 62C12 36 27 16 50 16C66 16 78 26 76 40" stroke="url(#rcGrad2A)" strokeWidth="5.5" strokeLinecap="round" />
+          <path className="dab-ripper-ribbon-2" d="M19 62C19 40 31 23 50 23C63 23 72 31 70 43C69 48 64 51 58 49" stroke="url(#rcGrad2B)" strokeWidth="4.8" strokeLinecap="round" />
+          <path className="dab-ripper-ribbon-3" d="M25 61C26 44 36 30 50 30C60 30 66 36 64 44" stroke="#7dd3fc" strokeWidth="3.2" strokeLinecap="round" />
+          <path className="dab-ripper-trough" d="M16 68C28 76 45 79 62 74C73 71 80 64 84 56" stroke="#38bdf8" strokeWidth="3" strokeLinecap="round" />
+          <g className="dab-ripper-board-ride">
+            <path d="M33 63C40 50 54 43 67 41C64.5 52.5 55 62.5 40.5 66.8C36.5 67.8 32 65.5 33 63Z" fill="#f8fafc" stroke="#0284c7" strokeWidth="2" />
+            <line x1="37" y1="63" x2="64" y2="43" stroke="#06b6d4" strokeWidth="1.5" strokeLinecap="round" />
           </g>
+          <circle className="dab-ripper-spit-a" cx="72" cy="34" r="2.2" fill="#22d3ee" />
+          <circle className="dab-ripper-spit-b" cx="77" cy="42" r="1.8" fill="#7dd3fc" />
         </svg>
         <div className="dab-ripper-loader-title">{displayName}</div>
         <div className="dab-ripper-loader-subtitle">Dropping into your Looker workspace…</div>
