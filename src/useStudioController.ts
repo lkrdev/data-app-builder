@@ -8,10 +8,10 @@ import {
   AgentSession, ANTIGRAVITY_ALLOWED_MODELS, AntigravityActivityStep, AntigravityAuth, AntigravityModelOption,
   authenticateGoogleOAuth, buildDynamicStarterPrompts, clearStoredOAuthSession, CodeModePermissionDecision,
   CodeModePermissionRequest, computeIsAuthenticated, DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_THINKING_LEVEL,
-  discoverStarterExploreContext, ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig, generateConversationLabel,
+  discoverStarterExploreContext, ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig, fetchEnvironmentFile, generateConversationLabel,
   generateDynamicStarterPrompts, getCachedStarterPrompts, getInitialStoredOAuthSession, getInitialStoredOAuthToken,
   inFlightEnvProvisionByUser, listAvailableAntigravityModels, LkrCodeMode, loadStoredOAuthSession,
-  loadStoredThinkingLevel, loginWithGoogleOAuth, normalizeEnvironmentId, normalizeThinkingLevel,
+  loadStoredThinkingLevel, loginWithGoogleOAuth, normalizeEnvironmentId, normalizeSandboxFilePath, normalizeThinkingLevel,
   parseValidOAuthSession, PastedImage, persistThinkingLevel, prewarmOrWakeAntigravityEnvironment,
   readInitialThinkingLevel, refreshOAuthSessionIfNeeded, resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris,
   resolveTargetExploreFromModels, runAntigravityTurn, sanitizeConversationLabel, sharedEnvExploreSchemas,
@@ -808,6 +808,11 @@ export function useStudioController() {
   const [sharedEnvironmentId, setSharedEnvironmentId] = useState('')
   const sharedEnvIdRef = useRef<string>('')
   const userIdRef = useRef<string>('1')
+  const [sandboxMarkdownCache, setSandboxMarkdownCache] = useState<Record<string, string>>({})
+  const sandboxMarkdownCacheRef = useRef<Record<string, string>>({})
+  sandboxMarkdownCacheRef.current = sandboxMarkdownCache
+  const [sandboxMarkdownLoading, setSandboxMarkdownLoading] = useState<Record<string, boolean>>({})
+  const [activeSandboxMarkdownModalPath, setActiveSandboxMarkdownModalPath] = useState<string | null>(null)
   const [environmentStatus, setEnvironmentStatus] = useState<StudioEnvironmentStatus>('active')
   const environmentStatusRef = useRef<StudioEnvironmentStatus>('active')
   environmentStatusRef.current = environmentStatus
@@ -879,6 +884,81 @@ export function useStudioController() {
   activeModeRef.current = activeMode
 
   const agentSession = sessionsByMode[activeMode] || { toolType: activeMode }
+
+  const loadSandboxMarkdownFile = useCallback(
+    async (rawPath: string, opts?: { openModal?: boolean }): Promise<string> => {
+      const normalizedPath = normalizeSandboxFilePath(rawPath)
+      if (!normalizedPath) return ''
+      const displayPath = `/${normalizedPath}`
+      if (opts?.openModal) {
+        setActiveSandboxMarkdownModalPath(displayPath)
+      }
+      const envId =
+        normalizeEnvironmentId(sharedEnvIdRef.current) ||
+        normalizeEnvironmentId(sessionsByModeRef.current[activeModeRef.current]?.environmentId) ||
+        sharedEnvIdRef.current ||
+        sessionsByModeRef.current[activeModeRef.current]?.environmentId ||
+        'mock_env_1'
+      const cacheKey = `${envId}:${normalizedPath}`
+      const cached =
+        sandboxMarkdownCacheRef.current[cacheKey] ??
+        sandboxMarkdownCacheRef.current[normalizedPath] ??
+        sandboxMarkdownCacheRef.current[displayPath]
+      if (typeof cached === 'string' && cached.length > 0) {
+        return cached
+      }
+      setSandboxMarkdownLoading((prev) => ({
+        ...prev,
+        [cacheKey]: true,
+        [normalizedPath]: true,
+        [displayPath]: true,
+      }))
+      try {
+        // Ephemeral remote sandbox retrieval: never persisted to Looker Artifacts
+        const content = await fetchEnvironmentFile({
+          extensionSDK,
+          auth: {
+            mode: authMode,
+            oauthToken,
+            clientId,
+            projectId,
+            apiKey,
+            onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true),
+          },
+          environmentId: envId,
+          path: normalizedPath,
+        })
+        const nextCache = {
+          ...sandboxMarkdownCacheRef.current,
+          [cacheKey]: content,
+          [normalizedPath]: content,
+          [displayPath]: content,
+        }
+        sandboxMarkdownCacheRef.current = nextCache
+        setSandboxMarkdownCache(nextCache)
+        return content
+      } catch (err: unknown) {
+        const fallback = `# Error Loading File\n\nUnable to load \`${displayPath}\` from sandbox environment \`${envId}\`: ${getErrorMessage(err)}`
+        const nextCache = {
+          ...sandboxMarkdownCacheRef.current,
+          [cacheKey]: fallback,
+          [normalizedPath]: fallback,
+          [displayPath]: fallback,
+        }
+        sandboxMarkdownCacheRef.current = nextCache
+        setSandboxMarkdownCache(nextCache)
+        return fallback
+      } finally {
+        setSandboxMarkdownLoading((prev) => ({
+          ...prev,
+          [cacheKey]: false,
+          [normalizedPath]: false,
+          [displayPath]: false,
+        }))
+      }
+    },
+    [extensionSDK, authMode, oauthToken, clientId, projectId, apiKey, triggerSilentOAuthRefresh]
+  )
   const setAgentSession = useCallback(
     (next: AgentSession, targetMode: StudioMode = activeModeRef.current) => {
       const nextShared = normalizeEnvironmentId(next.environmentId)
@@ -3332,9 +3412,11 @@ export function useStudioController() {
         hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders,
         preloadedContent, setPreloadedContent, mentionedItems, setMentionedItems,
         lookerWorkspaceId, isLookerDevMode, setLookerWorkspaceId, handleToggleLookerDevMode,
+        sandboxMarkdownCache, sandboxMarkdownLoading, activeSandboxMarkdownModalPath,
+        setActiveSandboxMarkdownModalPath, loadSandboxMarkdownFile,
       }
     }
-  }, [history, requestCodeModePermission, oauthExpiresAt, triggerSilentOAuthRefresh, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleOAuthLogout, handleCancelOAuthLogin, sidebarCollapsed, leftPaneWidth, setLeftPaneWidth, rightPaneCollapsed, setRightPaneCollapsed, agentName, setAgentName, handleSaveAgentName, appInitializing, busySendAction, setBusySendAction, themeMode, resolvedTheme, setThemeMode, selectedModel, thinkingLevel, setThinkingLevel, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, queuedPrompts, updateQueuedPrompts, handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, environmentStatus, envResetNotice, handleResetEnvironment, handleStopEnvironment, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, setSelectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems, lookerWorkspaceId, isLookerDevMode, handleToggleLookerDevMode])
+  }, [history, requestCodeModePermission, oauthExpiresAt, triggerSilentOAuthRefresh, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleOAuthLogout, handleCancelOAuthLogin, sidebarCollapsed, leftPaneWidth, setLeftPaneWidth, rightPaneCollapsed, setRightPaneCollapsed, agentName, setAgentName, handleSaveAgentName, appInitializing, busySendAction, setBusySendAction, themeMode, resolvedTheme, setThemeMode, selectedModel, thinkingLevel, setThinkingLevel, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, queuedPrompts, updateQueuedPrompts, handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, environmentStatus, envResetNotice, handleResetEnvironment, handleStopEnvironment, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, setSelectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems, lookerWorkspaceId, isLookerDevMode, handleToggleLookerDevMode, sandboxMarkdownCache, sandboxMarkdownLoading, activeSandboxMarkdownModalPath, loadSandboxMarkdownFile])
 
   return {
     extensionSDK, core40SDK, lookerHostData, history, location, isTileMount,
@@ -3400,6 +3482,8 @@ export function useStudioController() {
     handleSendPrompt, handleSend: handleSendPrompt,
     userId, userDisplayName,
     lookerWorkspaceId, isLookerDevMode, setLookerWorkspaceId, handleToggleLookerDevMode,
+    sandboxMarkdownCache, sandboxMarkdownLoading, activeSandboxMarkdownModalPath,
+    setActiveSandboxMarkdownModalPath, loadSandboxMarkdownFile,
     resolveConversationRelatedContent,
   }
 }

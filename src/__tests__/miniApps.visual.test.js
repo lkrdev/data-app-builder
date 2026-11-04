@@ -923,6 +923,10 @@ function buildHtmlPage(scenario) {
             : null,
         openSchedulerModal: scenario === 'python_tile_scheduler_modal',
         forceAppInitializing: scenario === 'ripper_surf_loader',
+        environmentFiles: {
+          '/workspace/analysis.md': '# Q4 Revenue Drop Root-Cause Analysis\\n\\n- **Primary Driver:** Outerwear stockouts in West region (-$420K YoY)\\n- **Secondary Driver:** Shipping carrier delay on express orders',
+          '/workspace/report.md': '# Executive Remediation Report\\n\\n1. Rebalance West warehouse inventory\\n2. Enable fallback regional carrier routing'
+        },
         extensionSDK: mockExtensionSDK,
         core40SDK: mockCore40SDK,
         lookerHostData: mockExtensionSDK.lookerHostData,
@@ -4993,4 +4997,116 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       await chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
     }
   }, 20000)
+
+  test('Issue #130: loads agent-created .md files on click from remote sandbox environment into activity-step-content-preview and sandbox-markdown-preview-modal without writing to Looker artifacts', async () => {
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=data_app` })
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="completed-thinking-block"], .dab-chat-log'))`,
+        returnByValue: true
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 80))
+    }
+
+    const res = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        window.__ARTIFACT_UPDATES__ = [];
+        window.__ENVIRONMENT_FILE_CALLS__ = [];
+        window.__CLIPBOARD_WRITES__ = [];
+        window.__LAST_DOWNLOADED_SANDBOX_MD__ = null;
+
+        window.__DAB_STUDIO__.setMessages([
+          { role: 'user', text: 'Investigate Q4 revenue drop and write /workspace/analysis.md and /workspace/report.md' },
+          {
+            role: 'assistant',
+            text: 'Created root-cause summary in \`/workspace/analysis.md\` and remediation steps in [Executive Remediation Report](/workspace/report.md).',
+            thinkingDurationSec: 4,
+            activitySteps: [
+              { id: 'st_md_1', kind: 'file', title: 'Editing analysis.md', detail: '/workspace/analysis.md', path: '/workspace/analysis.md', status: 'done' }
+            ]
+          }
+        ]);
+        await new Promise((r) => setTimeout(r, 60));
+
+        const completedDetails = document.querySelector('[data-testid="completed-thinking-block"]');
+        completedDetails.querySelector('summary').click();
+        await new Promise((r) => setTimeout(r, 40));
+
+        const fileStep = completedDetails.querySelector('[data-testid="thinking-step-file"]');
+        fileStep.querySelector('summary').click();
+        await new Promise((r) => setTimeout(r, 60));
+
+        const previewEl = fileStep.querySelector('[data-testid="activity-step-content-preview"]');
+        const previewText = (previewEl?.textContent || '').trim();
+        const openModalBtn = fileStep.querySelector('[data-testid="open-sandbox-markdown-modal-btn"]');
+        openModalBtn.click();
+        await new Promise((r) => setTimeout(r, 60));
+
+        const modalEl = document.querySelector('[data-testid="sandbox-markdown-preview-modal"]');
+        const pathBadgeText = (modalEl?.querySelector('[data-testid="sandbox-markdown-path-badge"]')?.textContent || '').trim();
+        const renderedBodyText = (modalEl?.querySelector('[data-testid="sandbox-markdown-rendered-body"]')?.textContent || '').trim();
+
+        const toggleRawBtn = modalEl?.querySelector('[data-testid="sandbox-markdown-toggle-raw"]');
+        toggleRawBtn.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const rawBodyText = (modalEl?.querySelector('[data-testid="sandbox-markdown-raw-body"]')?.textContent || '').trim();
+
+        const copyBtn = modalEl?.querySelector('[data-testid="sandbox-markdown-copy-btn"]');
+        copyBtn.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const copiedAttr = copyBtn?.getAttribute('data-copied');
+
+        const downloadBtn = modalEl?.querySelector('[data-testid="sandbox-markdown-download-btn"]');
+        downloadBtn.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const downloadedAfterStepModal = window.__LAST_DOWNLOADED_SANDBOX_MD__;
+
+        // Now click the inline chat trigger for /workspace/report.md
+        const chatTriggers = Array.from(document.querySelectorAll('[data-testid="sandbox-markdown-file-trigger"]'));
+        chatTriggers[1].click();
+        await new Promise((r) => setTimeout(r, 60));
+        const modalAfterTrigger = document.querySelector('[data-testid="sandbox-markdown-preview-modal"]');
+        const triggerPathBadge = (modalAfterTrigger?.querySelector('[data-testid="sandbox-markdown-path-badge"]')?.textContent || '').trim();
+        const triggerRenderedText = (modalAfterTrigger?.querySelector('[data-testid="sandbox-markdown-rendered-body"]')?.textContent || '').trim();
+
+        return {
+          previewHasRootCause: previewText.includes('Q4 Revenue Drop Root-Cause Analysis'),
+          previewHasOuterwear: previewText.includes('Outerwear stockouts in West region'),
+          hasModal: Boolean(modalEl),
+          pathBadgeText,
+          renderedHasOuterwear: renderedBodyText.includes('Outerwear stockouts in West region'),
+          rawHasMarkdownHeading: rawBodyText.includes('# Q4 Revenue Drop Root-Cause Analysis'),
+          copiedAttr,
+          clipboardHasAnalysis: (window.__CLIPBOARD_WRITES__ || []).some((t) => t.includes('Q4 Revenue Drop Root-Cause Analysis')),
+          downloadedFileName: downloadedAfterStepModal?.fileName || '',
+          chatTriggerCount: chatTriggers.length,
+          triggerPathBadge,
+          triggerHasRemediation: triggerRenderedText.includes('Executive Remediation Report'),
+          envFileCallPaths: (window.__ENVIRONMENT_FILE_CALLS__ || []).map((c) => c.normalizedPath),
+          artifactUpdateCount: (window.__ARTIFACT_UPDATES__ || []).length
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(res.result.value).toEqual({
+      previewHasRootCause: true,
+      previewHasOuterwear: true,
+      hasModal: true,
+      pathBadgeText: '/workspace/analysis.md',
+      renderedHasOuterwear: true,
+      rawHasMarkdownHeading: true,
+      copiedAttr: 'true',
+      clipboardHasAnalysis: true,
+      downloadedFileName: 'analysis.md',
+      chatTriggerCount: 2,
+      triggerPathBadge: '/workspace/report.md',
+      triggerHasRemediation: true,
+      envFileCallPaths: ['workspace/analysis.md', 'workspace/report.md'],
+      artifactUpdateCount: 0
+    })
+  }, 15000)
 })

@@ -81,6 +81,7 @@ Accessible modal dialog shell with backdrop click dismissal, `Escape` key handle
   - `use-case-info-modal` (`closeTestId="use-case-info-close-btn"`)
   - `delete-conv-modal`
   - `tile-schedule-modal`
+  - `sandbox-markdown-preview-modal` (`closeTestId="sandbox-markdown-modal-close"`)
 
 ### `<StudioToolbar>`
 Right-pane preview toolbar with a responsive wrapping title/badge group (`.dab-ds-toolbar-title-block`) and right-aligned action cluster (`.dab-preview-actions`).

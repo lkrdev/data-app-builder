@@ -386,6 +386,22 @@ function extractStepContentFromSources(sources: Array<Record<string, unknown> | 
   return resolveBuiltinWorkspaceFileContent(fallbackPathOrSkill)
 }
 
+export function extractWrittenMarkdownPathFromCode(rawCode: string): string | undefined {
+  const code = String(rawCode || '').trim()
+  if (!code) return undefined
+  const patterns: RegExp[] = [
+    /(?:^|[^0-9&])>>?\s*['"]?([^\s;|&'"<>]+\.md)['"]?/i,
+    /\btee\s+(?:-[a-zA-Z]+\s+)*['"]?([^\s;|&'"<>]+\.md)['"]?/i,
+    /\bopen\(\s*['"]([^'"]+\.md)['"]\s*,\s*['"][wa][+bt]*['"]/i,
+    /\bPath\(\s*['"]([^'"]+\.md)['"]\s*\)\.write_text\b/i,
+  ]
+  for (const re of patterns) {
+    const matched = code.match(re)?.[1]?.trim()
+    if (matched) return matched
+  }
+  return undefined
+}
+
 export function extractInteractionActivitySteps(interaction: AntigravityInteractionPayload | null | undefined): AntigravityActivityStep[] {
   const rawSteps: AntigravityInteractionStep[] = Array.isArray(interaction?.steps) ? interaction.steps : []
   const rawOutputs: AntigravityInteractionOutput[] = Array.isArray(interaction?.outputs) ? interaction.outputs : []
@@ -539,6 +555,25 @@ export function extractInteractionActivitySteps(interaction: AntigravityInteract
           )
           continue
         }
+      }
+
+      const writtenMdPath = extractWrittenMarkdownPathFromCode(rawCode)
+      if (writtenMdPath) {
+        const shortName = writtenMdPath.split('/').filter(Boolean).pop() || writtenMdPath
+        const builtin = resolveBuiltinWorkspaceFileContent(writtenMdPath)
+        upsertStep(
+          {
+            id: stepId,
+            kind: 'file',
+            title: `Editing ${shortName}`,
+            detail: writtenMdPath,
+            path: writtenMdPath,
+            ...(builtin ? { content: builtin } : {}),
+            status: resolveStatus(false),
+          },
+          explicitId
+        )
+        continue
       }
 
       const conciseCmd = firstLine.replace(/\s*<<\s*['"]?\w+['"]?.*$/, '').trim().slice(0, 140) || (language === 'PYTHON' ? 'Running Python script' : 'Running sandbox command')

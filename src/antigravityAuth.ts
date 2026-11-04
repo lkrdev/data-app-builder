@@ -580,3 +580,146 @@ export async function listAvailableAntigravityModels(
     return ANTIGRAVITY_ALLOWED_MODELS
   }
 }
+
+export function normalizeSandboxFilePath(rawPath: string): string {
+  return String(rawPath || '')
+    .trim()
+    .replace(/^file:\/\//i, '')
+    .replace(/^\/+/, '')
+}
+
+export async function fetchEnvironmentFile(params: {
+  extensionSDK: AntigravityExtensionHostLike
+  auth: AntigravityAuth
+  environmentId: string
+  path: string
+}): Promise<string> {
+  const { extensionSDK, auth } = params
+  const envId = String(params.environmentId || '').trim()
+  if (!envId) {
+    throw new Error('Sandbox environmentId is required.')
+  }
+  const normalizedPath = normalizeSandboxFilePath(params.path)
+  if (!normalizedPath) {
+    throw new Error('Sandbox file path is required.')
+  }
+  const encodedPath = normalizedPath
+    .split('/')
+    .filter(Boolean)
+    .map((seg) => encodeURIComponent(seg))
+    .join('/')
+  const url = `https://generativelanguage.googleapis.com/v1beta/environments/${encodeURIComponent(envId)}/files/${encodedPath}?alt=media`
+
+  const mockWin =
+    typeof window !== 'undefined'
+      ? (window as unknown as {
+          __MOCK_LOOKER_EXTENSION__?: { environmentFiles?: Record<string, string> }
+          __ENVIRONMENT_FILE_CALLS__?: Array<{
+            environmentId: string
+            path: string
+            normalizedPath: string
+            url: string
+          }>
+        })
+      : undefined
+  if (mockWin?.__MOCK_LOOKER_EXTENSION__) {
+    mockWin.__ENVIRONMENT_FILE_CALLS__ = mockWin.__ENVIRONMENT_FILE_CALLS__ || []
+    mockWin.__ENVIRONMENT_FILE_CALLS__.push({
+      environmentId: envId,
+      path: String(params.path || '').trim(),
+      normalizedPath,
+      url,
+    })
+    const filesMap = mockWin.__MOCK_LOOKER_EXTENSION__.environmentFiles || {}
+    const rawKey = String(params.path || '').trim()
+    const leadingSlashKey = `/${normalizedPath}`
+    const baseName = normalizedPath.split('/').pop() || normalizedPath
+    const matched =
+      filesMap[`${envId}:${rawKey}`] ??
+      filesMap[`${envId}:${normalizedPath}`] ??
+      filesMap[`${envId}:${leadingSlashKey}`] ??
+      filesMap[rawKey] ??
+      filesMap[normalizedPath] ??
+      filesMap[leadingSlashKey] ??
+      filesMap[baseName]
+    if (typeof matched === 'string') {
+      return matched
+    }
+    return `# ${baseName}\n\nFetched on-demand from remote sandbox \`/${normalizedPath}\` in environment \`${envId}\`.\n\n- **Environment:** \`${envId}\`\n- **Path:** \`/${normalizedPath}\`\n- **Persistence:** Ephemeral in-memory session state (never stored on Looker instance)`
+  }
+
+  if (auth.mode === 'apikey' && extensionSDK?.serverProxy) {
+    const proxyResp = await extensionSDK.serverProxy(url, {
+      method: 'GET',
+      headers: {
+        'x-goog-api-key': auth.apiKey?.trim() || getGeminiSecretKeyTag(extensionSDK),
+      },
+    })
+    if (!proxyResp?.ok || (proxyResp?.status && proxyResp.status >= 400)) {
+      const errBody =
+        typeof proxyResp?.body === 'string'
+          ? proxyResp.body
+          : JSON.stringify(proxyResp?.body || {})
+      throw new Error(
+        `Antigravity file fetch error (${proxyResp?.status}): ${errBody || `HTTP ${proxyResp?.status}`}`
+      )
+    }
+    if (typeof proxyResp?.body === 'string') return proxyResp.body
+    if (proxyResp?.body && typeof proxyResp.body === 'object') {
+      const obj = proxyResp.body as Record<string, unknown>
+      if (typeof obj.content === 'string') return obj.content
+      if (typeof obj.data === 'string') return obj.data
+      if (typeof obj.raw === 'string') return obj.raw
+      return JSON.stringify(proxyResp.body, null, 2)
+    }
+    return ''
+  }
+
+  const headers: Record<string, string> = {}
+  if (auth.mode === 'oauth') {
+    if (!auth.oauthToken?.trim()) {
+      throw new Error('Please sign in with Google OAuth first.')
+    }
+    headers['Authorization'] = `Bearer ${auth.oauthToken.trim()}`
+    if (auth.projectId?.trim()) {
+      headers['x-goog-user-project'] = auth.projectId.trim()
+    }
+  } else {
+    if (!auth.apiKey?.trim()) {
+      throw new Error('Gemini API Key is not configured.')
+    }
+    headers['x-goog-api-key'] = auth.apiKey.trim()
+  }
+
+  const resp = await fetch(url, {
+    method: 'GET',
+    headers,
+  })
+  const text = await resp.text()
+  if (!resp.ok) {
+    if (resp.status === 401) {
+      clearStoredOAuthSession(extensionSDK)
+      if (auth.mode === 'oauth' && typeof auth.onUnauthorizedRefresh === 'function') {
+        const refreshedToken = (await auth.onUnauthorizedRefresh().catch(() => null))?.trim()
+        if (refreshedToken) {
+          return await fetchEnvironmentFile({
+            extensionSDK,
+            auth: { ...auth, oauthToken: refreshedToken, onUnauthorizedRefresh: undefined },
+            environmentId: envId,
+            path: normalizedPath,
+          })
+        }
+        clearStoredOAuthSession(extensionSDK)
+      }
+    }
+    let errMsg = text || `HTTP ${resp.status}`
+    try {
+      const parsed = text ? (JSON.parse(text) as { error?: { message?: string } }) : undefined
+      if (parsed?.error?.message) errMsg = parsed.error.message
+    } catch {
+      // Keep raw text
+    }
+    throw new Error(`Antigravity file fetch error (${resp.status}): ${errMsg}`)
+  }
+  return text
+}

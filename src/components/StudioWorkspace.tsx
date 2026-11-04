@@ -47,6 +47,7 @@ import {
   handleImageClipboardPaste,
   MAX_LEFT_PANE_WIDTH,
   MIN_LEFT_PANE_WIDTH,
+  normalizeSandboxFilePath,
   resolveBuiltinWorkspaceFileContent,
   StarterPromptItem,
   stripStarterPromptEmojis,
@@ -175,7 +176,20 @@ const StudioMarkdownLink: React.FC<{
   )
 }
 
-function renderInlineMarkdown(rawText: string, hostUrl?: string, extensionSDK?: Partial<ExtensionSDK> | null): React.ReactNode[] {
+export function isSandboxMarkdownPath(raw: string): boolean {
+  const trimmed = String(raw || '').trim()
+  if (!trimmed || /\s/.test(trimmed)) return false
+  if (/^(?:https?:|mailto:|tel:|javascript:|data:)/i.test(trimmed)) return false
+  const withoutQueryHash = trimmed.split(/[?#]/)[0] || ''
+  return /^(?:file:\/\/)?(?:\/workspace\/|[a-zA-Z0-9_./-]*\/)?[a-zA-Z0-9_.-]+\.md$/i.test(withoutQueryHash)
+}
+
+function renderInlineMarkdown(
+  rawText: string,
+  hostUrl?: string,
+  extensionSDK?: Partial<ExtensionSDK> | null,
+  onOpenSandboxMarkdownFile?: (path: string) => void
+): React.ReactNode[] {
   const tokenRegex = /`([^`\n]+)`|\[([^\]]+)\]\(([^)\s]+)\)|\*\*([^*]+)\*\*|(https?:\/\/[^\s<)"']+)/g
   const nodes: React.ReactNode[] = []
   let lastIdx = 0
@@ -184,11 +198,57 @@ function renderInlineMarkdown(rawText: string, hostUrl?: string, extensionSDK?: 
   while ((match = tokenRegex.exec(rawText)) !== null) {
     if (match.index > lastIdx) nodes.push(rawText.slice(lastIdx, match.index))
     if (match[1] !== undefined) {
-      nodes.push(<code key={`code_${keyCounter++}`} className="dab-md-inline-code">{match[1]}</code>)
+      const codeToken = match[1].trim()
+      if (isSandboxMarkdownPath(codeToken)) {
+        const mdPath = codeToken.split(/[?#]/)[0] || codeToken
+        nodes.push(
+          <button
+            key={`md_code_${keyCounter++}`}
+            type="button"
+            data-testid="sandbox-markdown-file-trigger"
+            data-md-path={mdPath}
+            className="dab-sandbox-md-trigger"
+            title={`Click to load ${mdPath} from sandbox`}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onOpenSandboxMarkdownFile?.(mdPath)
+            }}
+          >
+            <FileText size={11} strokeWidth={1.75} aria-hidden="true" />
+            <code>{match[1]}</code>
+          </button>
+        )
+      } else {
+        nodes.push(<code key={`code_${keyCounter++}`} className="dab-md-inline-code">{match[1]}</code>)
+      }
     } else if (match[2] !== undefined && match[3] !== undefined) {
-      nodes.push(<StudioMarkdownLink key={`link_${keyCounter++}`} label={match[2]} href={match[3]} hostUrl={hostUrl} extensionSDK={extensionSDK} />)
+      const linkHref = match[3].trim()
+      if (isSandboxMarkdownPath(linkHref)) {
+        const mdPath = linkHref.split(/[?#]/)[0] || linkHref
+        nodes.push(
+          <button
+            key={`md_link_${keyCounter++}`}
+            type="button"
+            data-testid="sandbox-markdown-file-trigger"
+            data-md-path={mdPath}
+            className="dab-sandbox-md-trigger"
+            title={`Click to load ${mdPath} from sandbox`}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onOpenSandboxMarkdownFile?.(mdPath)
+            }}
+          >
+            <FileText size={11} strokeWidth={1.75} aria-hidden="true" />
+            <span>{match[2]}</span>
+          </button>
+        )
+      } else {
+        nodes.push(<StudioMarkdownLink key={`link_${keyCounter++}`} label={match[2]} href={match[3]} hostUrl={hostUrl} extensionSDK={extensionSDK} />)
+      }
     } else if (match[4] !== undefined) {
-      nodes.push(<strong key={`bold_${keyCounter++}`}>{renderInlineMarkdown(match[4], hostUrl, extensionSDK)}</strong>)
+      nodes.push(<strong key={`bold_${keyCounter++}`}>{renderInlineMarkdown(match[4], hostUrl, extensionSDK, onOpenSandboxMarkdownFile)}</strong>)
     } else if (match[5] !== undefined) {
       const bareUrl = match[5].replace(/[.,;:!?]+$/, '')
       const trailing = match[5].slice(bareUrl.length)
@@ -202,8 +262,11 @@ function renderInlineMarkdown(rawText: string, hostUrl?: string, extensionSDK?: 
 }
 
 export const StudioMarkdown: React.FC<{
-  text: string; hostUrl?: string; extensionSDK?: Partial<ExtensionSDK> | null
-}> = ({ text, hostUrl, extensionSDK }) => {
+  text: string
+  hostUrl?: string
+  extensionSDK?: Partial<ExtensionSDK> | null
+  onOpenSandboxMarkdownFile?: (path: string) => void
+}> = ({ text, hostUrl, extensionSDK, onOpenSandboxMarkdownFile }) => {
   const raw = String(text ?? '')
   const segments = raw.split(/(```[\s\S]*?```)/g)
   const blocks: React.ReactNode[] = []
@@ -226,13 +289,13 @@ export const StudioMarkdown: React.FC<{
       if (headingMatch) {
         const level = headingMatch[1].length
         const HeadingTag = (`h${level}` as unknown) as 'h1' | 'h2' | 'h3' | 'h4'
-        blocks.push(<HeadingTag key={`h_${blockKey++}`} className={`dab-md-heading dab-md-h${level}`}>{renderInlineMarkdown(headingMatch[2], hostUrl, extensionSDK)}</HeadingTag>)
+        blocks.push(<HeadingTag key={`h_${blockKey++}`} className={`dab-md-heading dab-md-h${level}`}>{renderInlineMarkdown(headingMatch[2], hostUrl, extensionSDK, onOpenSandboxMarkdownFile)}</HeadingTag>)
         i++; continue
       }
       if (/^[-*]\s+/.test(trimmed)) {
         const items: React.ReactNode[] = []
         while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
-          items.push(<li key={`uli_${items.length}`}>{renderInlineMarkdown(lines[i].trim().replace(/^[-*]\s+/, ''), hostUrl, extensionSDK)}</li>)
+          items.push(<li key={`uli_${items.length}`}>{renderInlineMarkdown(lines[i].trim().replace(/^[-*]\s+/, ''), hostUrl, extensionSDK, onOpenSandboxMarkdownFile)}</li>)
           i++
         }
         blocks.push(<ul key={`ul_${blockKey++}`} className="dab-md-list">{items}</ul>)
@@ -241,7 +304,7 @@ export const StudioMarkdown: React.FC<{
       if (/^\d+\.\s+/.test(trimmed)) {
         const items: React.ReactNode[] = []
         while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
-          items.push(<li key={`oli_${items.length}`}>{renderInlineMarkdown(lines[i].trim().replace(/^\d+\.\s+/, ''), hostUrl, extensionSDK)}</li>)
+          items.push(<li key={`oli_${items.length}`}>{renderInlineMarkdown(lines[i].trim().replace(/^\d+\.\s+/, ''), hostUrl, extensionSDK, onOpenSandboxMarkdownFile)}</li>)
           i++
         }
         blocks.push(<ol key={`ol_${blockKey++}`} className="dab-md-list">{items}</ol>)
@@ -251,7 +314,7 @@ export const StudioMarkdown: React.FC<{
       while (i < lines.length && lines[i].trim() && !/^(#{1,4})\s+/.test(lines[i].trim()) && !/^[-*]\s+/.test(lines[i].trim()) && !/^\d+\.\s+/.test(lines[i].trim())) {
         paraLines.push(lines[i]); i++
       }
-      blocks.push(<p key={`p_${blockKey++}`} className="dab-md-p">{renderInlineMarkdown(paraLines.join('\n'), hostUrl, extensionSDK)}</p>)
+      blocks.push(<p key={`p_${blockKey++}`} className="dab-md-p">{renderInlineMarkdown(paraLines.join('\n'), hostUrl, extensionSDK, onOpenSandboxMarkdownFile)}</p>)
     }
   }
   return <div className="dab-markdown" data-testid="studio-markdown-body">{blocks.length > 0 ? blocks : raw}</div>
@@ -1930,6 +1993,7 @@ export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ 
           <StarterPromptButtons useCase={selectedUseCase} prompts={starterPrompts} loading={starterPromptsLoading} onSelect={setPrompt} disabled={!!busyStatus} />
         </div>
         <StudioComposer ctl={ctl} />
+        <SandboxMarkdownPreviewModal ctl={ctl} />
       </div>
     </main>
   )
@@ -1956,12 +2020,25 @@ interface ActivityStepContentContext {
   lookmlBundle?: LookmlBundle | null
   currentAppCode?: string | null
   schemaMarkdown?: string | null
+  sandboxMarkdownCache?: Record<string, string>
+  sandboxMarkdownLoading?: Record<string, boolean>
+  onLoadSandboxMarkdownFile?: (path: string, opts?: { openModal?: boolean }) => Promise<string>
+  onOpenSandboxMarkdownModal?: (path: string) => void
 }
 
-function resolveActivityStepContent(step: AntigravityActivityStep, ctx?: ActivityStepContentContext): string {
+function extractStepMarkdownPath(step: AntigravityActivityStep): string | undefined {
+  if (step.kind !== 'file' && step.kind !== 'skill') return undefined
+  for (const cand of [step.path, step.detail, step.title].map((s) => String(s || '').trim()).filter(Boolean)) {
+    const clean = cand.split('—')[0].trim().replace(/^(?:Viewing|Editing|Creating|Writing|Skill:)\s+/i, '').trim()
+    if (/\.md$/i.test(clean)) return clean
+  }
+  return undefined
+}
+
+function resolveStaticOrCachedStepContent(step: AntigravityActivityStep, ctx?: ActivityStepContentContext): string | undefined {
   if (step.content?.trim()) return step.content
   for (const cand of [step.path, step.detail, step.title].map((s) => String(s || '').trim()).filter(Boolean)) {
-    const clean = cand.split('—')[0].trim().replace(/^(?:Viewing|Editing|Skill:)\s+/i, '').trim()
+    const clean = cand.split('—')[0].trim().replace(/^(?:Viewing|Editing|Creating|Writing|Skill:)\s+/i, '').trim()
     const builtin = resolveBuiltinWorkspaceFileContent(cand) || resolveBuiltinWorkspaceFileContent(clean)
     if (builtin) return builtin
     const base = clean.split('/').filter(Boolean).pop() || clean
@@ -1969,13 +2046,184 @@ function resolveActivityStepContent(step: AntigravityActivityStep, ctx?: Activit
     if (lkml) return lkml
     if ((base === 'app.js' || clean.endsWith('/app.js')) && ctx?.currentAppCode) return ctx.currentAppCode
     if ((base === 'schema.md' || clean.endsWith('/schema.md')) && ctx?.schemaMarkdown) return ctx.schemaMarkdown
+    const normalized = normalizeSandboxFilePath(clean)
+    const cached =
+      ctx?.sandboxMarkdownCache?.[clean] ??
+      ctx?.sandboxMarkdownCache?.[normalized] ??
+      ctx?.sandboxMarkdownCache?.[normalized ? `/${normalized}` : '']
+    if (typeof cached === 'string' && cached.length > 0) return cached
   }
-  return step.detail || step.path || step.title
+  return undefined
+}
+
+function resolveActivityStepContent(step: AntigravityActivityStep, ctx?: ActivityStepContentContext): string {
+  return resolveStaticOrCachedStepContent(step, ctx) || step.detail || step.path || step.title
+}
+
+export const SandboxMarkdownPreviewModal: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
+  const {
+    activeSandboxMarkdownModalPath,
+    setActiveSandboxMarkdownModalPath,
+    sandboxMarkdownCache = {},
+    sandboxMarkdownLoading = {},
+    loadSandboxMarkdownFile,
+    schemaMarkdown,
+    extensionSDK,
+  } = ctl
+  const [viewMode, setViewMode] = useState<'rendered' | 'raw'>('rendered')
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    setViewMode('rendered')
+    setCopied(false)
+  }, [activeSandboxMarkdownModalPath])
+
+  if (!activeSandboxMarkdownModalPath) return null
+
+  const rawPath = activeSandboxMarkdownModalPath
+  const normalizedPath = normalizeSandboxFilePath(rawPath)
+  const displayPath = normalizedPath ? `/${normalizedPath}` : rawPath
+  const fileName = normalizedPath.split('/').filter(Boolean).pop() || 'document.md'
+  const hostUrl =
+    extensionSDK?.lookerHostData?.hostUrl ||
+    (typeof window !== 'undefined' ? window.location.origin : '')
+
+  const markdownContent =
+    sandboxMarkdownCache[rawPath] ??
+    sandboxMarkdownCache[normalizedPath] ??
+    sandboxMarkdownCache[displayPath] ??
+    resolveBuiltinWorkspaceFileContent(rawPath) ??
+    resolveBuiltinWorkspaceFileContent(normalizedPath) ??
+    ((fileName === 'schema.md' || normalizedPath.endsWith('/schema.md')) && schemaMarkdown ? schemaMarkdown : '')
+
+  const isLoading = Boolean(
+    !markdownContent &&
+      (sandboxMarkdownLoading[rawPath] ||
+        sandboxMarkdownLoading[normalizedPath] ||
+        sandboxMarkdownLoading[displayPath])
+  )
+
+  const handleCopyMarkdown = () => {
+    if (!markdownContent) return
+    void copyLinkWithExtensionSdk(markdownContent, extensionSDK).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1800)
+    })
+  }
+
+  const handleDownloadMarkdown = () => {
+    if (!markdownContent) return
+    if (typeof window !== 'undefined') {
+      ;(
+        window as unknown as {
+          __LAST_DOWNLOADED_SANDBOX_MD__?: { fileName: string; path: string; content: string }
+        }
+      ).__LAST_DOWNLOADED_SANDBOX_MD__ = {
+        fileName,
+        path: displayPath,
+        content: markdownContent,
+      }
+    }
+    try {
+      const url = URL.createObjectURL(new Blob([markdownContent], { type: 'text/markdown;charset=utf-8' }))
+      Object.assign(document.createElement('a'), { href: url, download: fileName }).click()
+      URL.revokeObjectURL(url)
+    } catch {
+      // Ignore download blob errors in headless test environments
+    }
+  }
+
+  return (
+    <StudioModal
+      open={Boolean(activeSandboxMarkdownModalPath)}
+      onClose={() => setActiveSandboxMarkdownModalPath(null)}
+      testId="sandbox-markdown-preview-modal"
+      closeTestId="sandbox-markdown-modal-close"
+      closeLabel="Close"
+      className="dab-sandbox-md-modal"
+      maxWidth={760}
+      title={
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span>{fileName}</span>
+          <StudioBadge tone="accent" testId="sandbox-markdown-path-badge">{displayPath}</StudioBadge>
+        </span>
+      }
+      subtitle="Loaded on demand from remote sandbox environment (never stored on Looker instance)"
+      headerRight={
+        <>
+          <StudioButton
+            variant="secondary"
+            testId="sandbox-markdown-toggle-raw"
+            onClick={() => setViewMode((m) => (m === 'rendered' ? 'raw' : 'rendered'))}
+          >
+            {viewMode === 'rendered' ? (
+              <Code2 size={12} strokeWidth={1.75} aria-hidden="true" />
+            ) : (
+              <Eye size={12} strokeWidth={1.75} aria-hidden="true" />
+            )}
+            <span>{viewMode === 'rendered' ? 'Raw Markdown' : 'Rendered'}</span>
+          </StudioButton>
+          <StudioButton
+            variant="secondary"
+            testId="sandbox-markdown-copy-btn"
+            data-copied={copied ? 'true' : 'false'}
+            onClick={handleCopyMarkdown}
+            disabled={!markdownContent}
+          >
+            {copied ? (
+              <Check size={12} strokeWidth={2} aria-hidden="true" />
+            ) : (
+              <Copy size={12} strokeWidth={1.75} aria-hidden="true" />
+            )}
+            <span>{copied ? 'Copied Markdown' : 'Copy Markdown'}</span>
+          </StudioButton>
+          <StudioButton
+            variant="gemini"
+            testId="sandbox-markdown-download-btn"
+            onClick={handleDownloadMarkdown}
+            disabled={!markdownContent}
+          >
+            <FileText size={12} strokeWidth={1.75} aria-hidden="true" />
+            <span>Download .md</span>
+          </StudioButton>
+        </>
+      }
+    >
+      {isLoading ? (
+        <div className="dab-sandbox-md-modal-loading" data-testid="sandbox-markdown-modal-loading">
+          <StudioSkeleton width="100%" height={32} />
+          <span className="dab-muted">Loading from sandbox...</span>
+        </div>
+      ) : viewMode === 'raw' ? (
+        <pre className="dab-sandbox-md-raw" data-testid="sandbox-markdown-raw-body">
+          {markdownContent}
+        </pre>
+      ) : (
+        <div className="dab-sandbox-md-rendered" data-testid="sandbox-markdown-rendered-body">
+          <StudioMarkdown
+            text={markdownContent}
+            hostUrl={hostUrl}
+            extensionSDK={extensionSDK}
+            onOpenSandboxMarkdownFile={(p) => void loadSandboxMarkdownFile(p, { openModal: true })}
+          />
+        </div>
+      )}
+    </StudioModal>
+  )
 }
 
 const ActivityStepsList: React.FC<{ steps: AntigravityActivityStep[]; contentCtx?: ActivityStepContentContext }> = ({ steps, contentCtx }) => {
   const [expandedKeys, setExpandedKeys] = useState<Record<string, boolean>>({})
-  const toggleKey = (key: string) => setExpandedKeys((prev) => ({ ...prev, [key]: !prev[key] }))
+  const handleToggleStep = (key: string, step: AntigravityActivityStep) => {
+    const willOpen = !expandedKeys[key]
+    setExpandedKeys((prev) => ({ ...prev, [key]: willOpen }))
+    if (willOpen) {
+      const mdPath = extractStepMarkdownPath(step)
+      if (mdPath && !resolveStaticOrCachedStepContent(step, contentCtx)) {
+        void contentCtx?.onLoadSandboxMarkdownFile?.(mdPath)
+      }
+    }
+  }
   return (
     <div className="dab-thinking-steps">
       {steps.map((step, sIdx) => {
@@ -1988,7 +2236,17 @@ const ActivityStepsList: React.FC<{ steps: AntigravityActivityStep[]; contentCtx
         const StepTag = isCollapsible ? 'details' : 'div'
         const HeaderTag = isCollapsible ? 'summary' : 'div'
         const testId = isCollapsibleThought ? 'thinking-step-thought' : step.kind === 'file' ? 'thinking-step-file' : step.kind === 'skill' ? 'thinking-step-skill' : undefined
+        const mdPath = isFileOrSkill ? extractStepMarkdownPath(step) : undefined
+        const staticOrCachedContent = isFileOrSkill ? resolveStaticOrCachedStepContent(step, contentCtx) : undefined
         const resolvedContent = isFileOrSkill ? resolveActivityStepContent(step, contentCtx) : ''
+        const normalizedMdPath = mdPath ? normalizeSandboxFilePath(mdPath) : ''
+        const isLoadingMd = Boolean(
+          normalizedMdPath &&
+            !staticOrCachedContent &&
+            (contentCtx?.sandboxMarkdownLoading?.[mdPath!] ||
+              contentCtx?.sandboxMarkdownLoading?.[normalizedMdPath] ||
+              contentCtx?.sandboxMarkdownLoading?.[`/${normalizedMdPath}`])
+        )
         return (
           <StepTag
             key={stepKey}
@@ -1998,22 +2256,53 @@ const ActivityStepsList: React.FC<{ steps: AntigravityActivityStep[]; contentCtx
             {...(isCollapsible ? {
               open: isOpen,
               onClick: (e: React.MouseEvent<HTMLElement>) => {
-                if ((e.target as HTMLElement).closest('pre')) return
-                e.preventDefault(); toggleKey(stepKey)
+                if ((e.target as HTMLElement).closest('pre, button')) return
+                e.preventDefault(); handleToggleStep(stepKey, step)
               },
             } : {})}
           >
             <HeaderTag
               className="dab-thinking-step-header"
-              {...(isCollapsible ? { onClick: (e: React.MouseEvent<HTMLElement>) => { e.preventDefault(); e.stopPropagation(); toggleKey(stepKey) } } : {})}
+              {...(isCollapsible ? { onClick: (e: React.MouseEvent<HTMLElement>) => { e.preventDefault(); e.stopPropagation(); handleToggleStep(stepKey, step) } } : {})}
             >
               <span className="dab-thinking-kind-badge">{formatActivityStepBadge(step)}</span>
               <span className="dab-thinking-step-title">{step.title}</span>
               {step.status === 'running' && <span className="dab-thinking-step-status">Running…</span>}
             </HeaderTag>
             {hasDetail && <code className="dab-thinking-step-detail">{step.detail}</code>}
-            {isFileOrSkill && isOpen && resolvedContent && (
-              <pre className="dab-thinking-step-content-preview" data-testid="activity-step-content-preview">{resolvedContent}</pre>
+            {isFileOrSkill && isOpen && (
+              isLoadingMd ? (
+                <div className="dab-thinking-step-loading" data-testid="activity-step-loading">
+                  <StudioSkeleton width="100%" height={24} />
+                  <span className="dab-muted">Loading from sandbox...</span>
+                </div>
+              ) : (
+                resolvedContent && (
+                  <div className="dab-thinking-step-content-wrap">
+                    {mdPath && (
+                      <div className="dab-thinking-step-md-actions">
+                        <StudioButton
+                          variant="secondary"
+                          testId="open-sandbox-markdown-modal-btn"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            if (staticOrCachedContent) {
+                              contentCtx?.onOpenSandboxMarkdownModal?.(mdPath)
+                            } else {
+                              void contentCtx?.onLoadSandboxMarkdownFile?.(mdPath, { openModal: true })
+                            }
+                          }}
+                        >
+                          <FileText size={12} strokeWidth={1.75} aria-hidden="true" />
+                          <span>Open Markdown Preview</span>
+                        </StudioButton>
+                      </div>
+                    )}
+                    <pre className="dab-thinking-step-content-preview" data-testid="activity-step-content-preview">{resolvedContent}</pre>
+                  </div>
+                )
+              )
             )}
           </StepTag>
         )
@@ -2028,6 +2317,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     messages, builderMode, selectedUseCase, selectedExplores, starterPrompts, starterPromptsLoading,
     setPrompt, busyStatus, liveActivitySteps, pendingPerm, resolvePermDecision,
     leftPaneWidth, setLeftPaneWidth, rightPaneCollapsed, lookmlBundle, currentAppCode, schemaMarkdown,
+    sandboxMarkdownCache, sandboxMarkdownLoading, loadSandboxMarkdownFile, setActiveSandboxMarkdownModalPath,
   } = ctl
   const agentName = normalizeStudioAgentName(rawAgentName)
   const hostUrl =
@@ -2037,7 +2327,29 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   const leftPaneRef = useRef<HTMLElement | null>(null)
   const [isResizingSplit, setIsResizingSplit] = useState(false)
   const [copiedTraceKey, setCopiedTraceKey] = useState<string | null>(null)
-  const contentCtx = useMemo<ActivityStepContentContext>(() => ({ lookmlBundle, currentAppCode, schemaMarkdown }), [lookmlBundle, currentAppCode, schemaMarkdown])
+  const contentCtx = useMemo<ActivityStepContentContext>(
+    () => ({
+      lookmlBundle,
+      currentAppCode,
+      schemaMarkdown,
+      sandboxMarkdownCache,
+      sandboxMarkdownLoading,
+      onLoadSandboxMarkdownFile: loadSandboxMarkdownFile,
+      onOpenSandboxMarkdownModal: (p: string) => {
+        const normalized = normalizeSandboxFilePath(p)
+        setActiveSandboxMarkdownModalPath(normalized ? `/${normalized}` : p)
+      },
+    }),
+    [
+      lookmlBundle,
+      currentAppCode,
+      schemaMarkdown,
+      sandboxMarkdownCache,
+      sandboxMarkdownLoading,
+      loadSandboxMarkdownFile,
+      setActiveSandboxMarkdownModalPath,
+    ]
+  )
 
   const handleCopyThinkingTrace = (
     e: React.MouseEvent<HTMLButtonElement>, traceKey: string, steps: AntigravityActivityStep[],
@@ -2100,7 +2412,20 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 </details>
               )}
               <div className="dab-msg-body">
-                <StudioMarkdown text={m.text} hostUrl={hostUrl} extensionSDK={extensionSDK} />
+                <StudioMarkdown
+                  text={m.text}
+                  hostUrl={hostUrl}
+                  extensionSDK={extensionSDK}
+                  onOpenSandboxMarkdownFile={(p) => {
+                    const builtin = resolveBuiltinWorkspaceFileContent(p) || resolveBuiltinWorkspaceFileContent(normalizeSandboxFilePath(p))
+                    if (builtin) {
+                      const normalized = normalizeSandboxFilePath(p)
+                      setActiveSandboxMarkdownModalPath(normalized ? `/${normalized}` : p)
+                    } else {
+                      void loadSandboxMarkdownFile(p, { openModal: true })
+                    }
+                  }}
+                />
               </div>
               {m.images && m.images.length > 0 && (
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
@@ -2146,6 +2471,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       )}
 
       <StudioComposer ctl={ctl} />
+      <SandboxMarkdownPreviewModal ctl={ctl} />
       {!rightPaneCollapsed && (
         <div
           data-testid="workspace-split-resizer" role="separator" aria-orientation="vertical" aria-label="Resize chat and preview panes"
