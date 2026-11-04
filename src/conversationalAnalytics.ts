@@ -2,73 +2,22 @@ import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { ILookmlModel, Looker40SDK } from '@looker/sdk'
 import { mutate, SWRConfig, unstable_serialize } from 'swr'
 
-import {
-  AntigravityAuth,
-  callInteractionsApi,
-  DEFAULT_ANTIGRAVITY_MODEL,
-} from './antigravity'
-import {
-  extractResolvedUseCase,
-  formatExploreId,
-  rawLookerRequest,
-  ResolvedStudioUseCase,
-  StudioUseCase,
-} from './lookerApi'
+import { AntigravityAuth, callInteractionsApi, DEFAULT_ANTIGRAVITY_MODEL } from './antigravity'
+import { extractResolvedUseCase, formatExploreId, rawLookerRequest, ResolvedStudioUseCase, StudioUseCase } from './lookerApi'
 
 export const CA_AGENT_SELECTION_REQUEST_TAG = '[CA_AGENT_SELECTION_REQUEST]'
 
-export interface LookerCaGoldenQuery {
-  questions: string[]
-  model?: string
-  explore?: string
-  fields?: string[]
-}
-
-export interface LookerCaAgentSummary {
-  id: string
-  name: string
-  description: string
-  instructions: string
-  explores: string[]
-  goldenQueries: LookerCaGoldenQuery[]
-}
-
-export interface CaAgentSelectionResult {
-  agentId: string
-  agentName: string
-  rationale: string
-  initialQuestion: string
-  explores: string[]
-  catalogSize: number
-  isolatedInteractionId?: string
-}
-
+export interface LookerCaGoldenQuery { questions: string[]; model?: string; explore?: string; fields?: string[] }
+export interface LookerCaAgentSummary { id: string; name: string; description: string; instructions: string; explores: string[]; goldenQueries: LookerCaGoldenQuery[] }
+export interface CaAgentSelectionResult { agentId: string; agentName: string; rationale: string; initialQuestion: string; explores: string[]; catalogSize: number; isolatedInteractionId?: string }
 export interface CaConversationState {
-  id: string
-  caConversationId: string
-  agentId: string
-  agentName: string
-  embedPath: string
-  title: string
-  label: string
-  rationale: string
-  selectionRationale: string
-  initialPrompt: string
-  explores: string[]
-  interactionId?: string
-  updatedAt: string
+  id: string; caConversationId: string; agentId: string; agentName: string; embedPath: string; title: string; label: string
+  rationale: string; selectionRationale: string; initialPrompt: string; explores: string[]; interactionId?: string; updatedAt: string
 }
 
 // ponytail: delegate Turn-1 auto-classification to extractResolvedUseCase in lookerPermissions.ts.
-export function classifyStudioUseCase(
-  userPrompt: string,
-  explicitUseCase: StudioUseCase = 'auto',
-  allowedModes?: string[]
-): ResolvedStudioUseCase {
-  if (explicitUseCase && explicitUseCase !== 'auto') {
-    return explicitUseCase
-  }
-  return extractResolvedUseCase('', userPrompt, allowedModes)
+export function classifyStudioUseCase(userPrompt: string, explicitUseCase: StudioUseCase = 'auto', allowedModes?: string[]): ResolvedStudioUseCase {
+  return explicitUseCase && explicitUseCase !== 'auto' ? explicitUseCase : extractResolvedUseCase('', userPrompt, allowedModes)
 }
 
 export interface RawLookerCaAgent {
@@ -407,17 +356,35 @@ export async function selectCaAgentViaIsolatedSubagent(params: {
   return parseCaAgentSelectionResponse('', catalog, question)
 }
 
-export function resolveCaEmbedPath(
-  agentId: string,
-  caConversationId: string,
-  explicitPath?: string
-): string {
-  if (explicitPath && /^\/(?:embed\/)?(?:conversations|agents)\//.test(explicitPath)) {
-    return explicitPath.startsWith('/embed/') ? explicitPath : `/embed${explicitPath}`
-  }
-  return `/embed/conversations/${encodeURIComponent(
-    caConversationId.trim()
-  )}?agent_id=${encodeURIComponent(agentId.trim())}`
+export const CA_EMBED_COLLAPSE_PARAMS: ReadonlyArray<readonly [string, string]> = [
+  ['hide_sidebar', 'true'], ['hide_data_source_panel', 'true'], ['sidebar_collapsed', 'true'], ['right_panel_collapsed', 'true'],
+]
+
+export function normalizeCaEmbedPath(rawPath: string, agentId?: string): string {
+  const cleanRaw = String(rawPath || '').trim()
+  if (!cleanRaw) return ''
+  const [pathAndQuery, hashPart] = cleanRaw.split('#')
+  const qIdx = pathAndQuery.indexOf('?')
+  let pathname = qIdx >= 0 ? pathAndQuery.slice(0, qIdx) : pathAndQuery
+  if (/^\/(?:conversations|agents)\//.test(pathname)) pathname = `/embed${pathname}`
+  const params = new URLSearchParams(qIdx >= 0 ? pathAndQuery.slice(qIdx + 1) : '')
+  const cleanAgentId = String(agentId || '').trim()
+  if (cleanAgentId && !params.has('agent_id')) params.set('agent_id', cleanAgentId)
+  for (const [k, v] of CA_EMBED_COLLAPSE_PARAMS) if (!params.has(k)) params.set(k, v)
+  const qs = params.toString()
+  return `${pathname}${qs ? `?${qs}` : ''}${hashPart ? `#${hashPart}` : ''}`
+}
+
+export function buildCaEmbedPath(caConversationId: string, agentId?: string): string {
+  const cleanConvId = encodeURIComponent(String(caConversationId || '').trim())
+  const cleanAgentId = String(agentId || '').trim()
+  return normalizeCaEmbedPath(cleanAgentId ? `/embed/conversations/${cleanConvId}?agent_id=${encodeURIComponent(cleanAgentId)}` : `/embed/conversations/${cleanConvId}`, cleanAgentId)
+}
+
+export function resolveCaEmbedPath(agentId: string, caConversationId: string, explicitPath?: string): string {
+  return explicitPath && /^\/(?:embed\/)?(?:conversations|agents)\//.test(explicitPath)
+    ? normalizeCaEmbedPath(explicitPath, agentId)
+    : buildCaEmbedPath(caConversationId, agentId)
 }
 
 export interface CreateCaConversationOptions {

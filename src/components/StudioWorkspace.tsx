@@ -7,6 +7,7 @@ import {
   LookerEmbedExSDK,
   PageChangedEvent,
 } from '@looker/embed-sdk'
+import type { ExtensionSDK } from '@looker/extension-sdk'
 import {
   Archive,
   ArchiveRestore,
@@ -57,6 +58,8 @@ import { renderTddMarkdownToHtml } from '../healthCheck'
 import {
   ConversationRecord,
   formatExploreId,
+  normalizeCaEmbedPath,
+  normalizeStudioAgentName,
   resolveConversationRelatedContent,
   StudioContentItem,
   StudioContentItemType,
@@ -75,6 +78,184 @@ import {
   StudioSkeleton,
   StudioToolbar,
 } from './StudioDesignSystem'
+
+export const ALLOWED_EXTERNAL_WINDOW_PATTERNS: ReadonlyArray<string> = [
+  'https://*.looker.com/*', 'https://*.looker.app/*', 'https://*.google.com/*',
+  'https://cloud.google.com/*', 'https://docs.cloud.google.com/*', 'https://github.com/*',
+]
+
+export function isAllowedExternalWindowUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(String(rawUrl || '').trim())
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false
+    const host = parsed.hostname.toLowerCase()
+    return ['looker.com', 'looker.app', 'google.com', 'cloud.google.com', 'docs.cloud.google.com', 'github.com'].some(
+      (d) => host === d || host.endsWith(`.${d}`)
+    )
+  } catch {
+    return false
+  }
+}
+
+export async function copyLinkWithExtensionSdk(url: string, extensionSDK?: Partial<ExtensionSDK> | null): Promise<boolean> {
+  const clean = String(url || '').trim()
+  if (!clean) return false
+  if (typeof extensionSDK?.clipboardWrite === 'function') {
+    try { await extensionSDK.clipboardWrite(clean); return true } catch { /* fall through */ }
+  }
+  try {
+    if (typeof navigator !== 'undefined' && typeof navigator.clipboard?.writeText === 'function') {
+      await navigator.clipboard.writeText(clean)
+      return true
+    }
+  } catch { /* ignore */ }
+  return false
+}
+
+export async function openOrCopyMarkdownLink(
+  url: string, hostUrl?: string, extensionSDK?: Partial<ExtensionSDK> | null
+): Promise<{ action: 'opened' | 'copied'; targetUrl: string }> {
+  const clean = String(url || '').trim()
+  if (!clean) return { action: 'copied', targetUrl: '' }
+  let hostOrigin = ''
+  if (hostUrl) {
+    try { hostOrigin = new URL(hostUrl).origin.toLowerCase() } catch { hostOrigin = '' }
+  }
+  let targetToOpen: string | null = null
+  if (clean.startsWith('/') && !clean.startsWith('//')) {
+    targetToOpen = clean
+  } else {
+    try {
+      const parsed = new URL(clean)
+      if (hostOrigin && parsed.origin.toLowerCase() === hostOrigin) {
+        targetToOpen = `${parsed.pathname || '/'}${parsed.search || ''}${parsed.hash || ''}`
+      } else if (isAllowedExternalWindowUrl(parsed.href)) {
+        targetToOpen = parsed.href
+      }
+    } catch { /* non-URL falls back to clipboard */ }
+  }
+  if (targetToOpen && typeof extensionSDK?.openBrowserWindow === 'function') {
+    try {
+      extensionSDK.openBrowserWindow(targetToOpen, '_blank')
+      return { action: 'opened', targetUrl: targetToOpen }
+    } catch { /* fall back to clipboard */ }
+  }
+  await copyLinkWithExtensionSdk(clean, extensionSDK)
+  return { action: 'copied', targetUrl: clean }
+}
+
+const StudioMarkdownLink: React.FC<{
+  label: string; href: string; hostUrl?: string; extensionSDK?: Partial<ExtensionSDK> | null
+}> = ({ label, href, hostUrl, extensionSDK }) => {
+  const [copied, setCopied] = useState(false)
+  const markCopied = () => { setCopied(true); setTimeout(() => setCopied(false), 1800) }
+  return (
+    <span className="dab-md-link-group">
+      <a
+        href={href} data-testid="chat-markdown-link" className="dab-md-link" target="_blank" rel="noopener noreferrer"
+        onClick={(e) => {
+          e.preventDefault(); e.stopPropagation()
+          void openOrCopyMarkdownLink(href, hostUrl, extensionSDK).then((res) => { if (res.action === 'copied') markCopied() })
+        }}
+      >
+        {label}
+      </a>
+      <button
+        type="button" data-testid="chat-markdown-link-copy" data-copied={copied ? 'true' : 'false'}
+        className="dab-md-link-copy-btn" title={copied ? 'Copied URL to clipboard' : `Copy link (${href})`}
+        aria-label={copied ? 'Copied link' : `Copy link ${label}`}
+        onClick={(e) => {
+          e.preventDefault(); e.stopPropagation()
+          void copyLinkWithExtensionSdk(href, extensionSDK).then(() => markCopied())
+        }}
+      >
+        {copied ? (<><Check size={11} strokeWidth={2} aria-hidden="true" /><span>Copied!</span></>) : <Copy size={11} strokeWidth={1.75} aria-hidden="true" />}
+      </button>
+    </span>
+  )
+}
+
+function renderInlineMarkdown(rawText: string, hostUrl?: string, extensionSDK?: Partial<ExtensionSDK> | null): React.ReactNode[] {
+  const tokenRegex = /`([^`\n]+)`|\[([^\]]+)\]\(([^)\s]+)\)|\*\*([^*]+)\*\*|(https?:\/\/[^\s<)"']+)/g
+  const nodes: React.ReactNode[] = []
+  let lastIdx = 0
+  let match: RegExpExecArray | null
+  let keyCounter = 0
+  while ((match = tokenRegex.exec(rawText)) !== null) {
+    if (match.index > lastIdx) nodes.push(rawText.slice(lastIdx, match.index))
+    if (match[1] !== undefined) {
+      nodes.push(<code key={`code_${keyCounter++}`} className="dab-md-inline-code">{match[1]}</code>)
+    } else if (match[2] !== undefined && match[3] !== undefined) {
+      nodes.push(<StudioMarkdownLink key={`link_${keyCounter++}`} label={match[2]} href={match[3]} hostUrl={hostUrl} extensionSDK={extensionSDK} />)
+    } else if (match[4] !== undefined) {
+      nodes.push(<strong key={`bold_${keyCounter++}`}>{renderInlineMarkdown(match[4], hostUrl, extensionSDK)}</strong>)
+    } else if (match[5] !== undefined) {
+      const bareUrl = match[5].replace(/[.,;:!?]+$/, '')
+      const trailing = match[5].slice(bareUrl.length)
+      nodes.push(<StudioMarkdownLink key={`bare_${keyCounter++}`} label={bareUrl} href={bareUrl} hostUrl={hostUrl} extensionSDK={extensionSDK} />)
+      if (trailing) nodes.push(trailing)
+    }
+    lastIdx = tokenRegex.lastIndex
+  }
+  if (lastIdx < rawText.length) nodes.push(rawText.slice(lastIdx))
+  return nodes.length > 0 ? nodes : [rawText]
+}
+
+export const StudioMarkdown: React.FC<{
+  text: string; hostUrl?: string; extensionSDK?: Partial<ExtensionSDK> | null
+}> = ({ text, hostUrl, extensionSDK }) => {
+  const raw = String(text ?? '')
+  const segments = raw.split(/(```[\s\S]*?```)/g)
+  const blocks: React.ReactNode[] = []
+  let blockKey = 0
+  for (const segment of segments) {
+    if (!segment) continue
+    if (segment.startsWith('```') && segment.endsWith('```')) {
+      const inner = segment.slice(3, -3)
+      const firstNewline = inner.indexOf('\n')
+      const codeBody = firstNewline >= 0 && /^[a-zA-Z0-9_-]*$/.test(inner.slice(0, firstNewline).trim()) ? inner.slice(firstNewline + 1) : inner
+      blocks.push(<pre key={`pre_${blockKey++}`} className="dab-md-pre"><code className="dab-md-code-block">{codeBody.replace(/^\n+|\n+$/g, '')}</code></pre>)
+      continue
+    }
+    const lines = segment.split('\n')
+    let i = 0
+    while (i < lines.length) {
+      const trimmed = lines[i].trim()
+      if (!trimmed) { i++; continue }
+      const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/)
+      if (headingMatch) {
+        const level = headingMatch[1].length
+        const HeadingTag = (`h${level}` as unknown) as 'h1' | 'h2' | 'h3' | 'h4'
+        blocks.push(<HeadingTag key={`h_${blockKey++}`} className={`dab-md-heading dab-md-h${level}`}>{renderInlineMarkdown(headingMatch[2], hostUrl, extensionSDK)}</HeadingTag>)
+        i++; continue
+      }
+      if (/^[-*]\s+/.test(trimmed)) {
+        const items: React.ReactNode[] = []
+        while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
+          items.push(<li key={`uli_${items.length}`}>{renderInlineMarkdown(lines[i].trim().replace(/^[-*]\s+/, ''), hostUrl, extensionSDK)}</li>)
+          i++
+        }
+        blocks.push(<ul key={`ul_${blockKey++}`} className="dab-md-list">{items}</ul>)
+        continue
+      }
+      if (/^\d+\.\s+/.test(trimmed)) {
+        const items: React.ReactNode[] = []
+        while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
+          items.push(<li key={`oli_${items.length}`}>{renderInlineMarkdown(lines[i].trim().replace(/^\d+\.\s+/, ''), hostUrl, extensionSDK)}</li>)
+          i++
+        }
+        blocks.push(<ol key={`ol_${blockKey++}`} className="dab-md-list">{items}</ol>)
+        continue
+      }
+      const paraLines: string[] = []
+      while (i < lines.length && lines[i].trim() && !/^(#{1,4})\s+/.test(lines[i].trim()) && !/^[-*]\s+/.test(lines[i].trim()) && !/^\d+\.\s+/.test(lines[i].trim())) {
+        paraLines.push(lines[i]); i++
+      }
+      blocks.push(<p key={`p_${blockKey++}`} className="dab-md-p">{renderInlineMarkdown(paraLines.join('\n'), hostUrl, extensionSDK)}</p>)
+    }
+  }
+  return <div className="dab-markdown" data-testid="studio-markdown-body">{blocks.length > 0 ? blocks : raw}</div>
+}
 
 export interface LookerEmbedTarget {
   kind: 'preload' | 'dashboard' | 'look' | 'explore' | 'extension' | 'report' | 'url'
@@ -105,6 +286,9 @@ export function normalizeLookerEmbedUrl(rawUrl: string, hostUrl?: string): strin
   }
   clean = clean.replace(/^https?:\/\/[^/]+/i, '')
   if (!clean.startsWith('/')) clean = `/${clean}`
+  if (/^\/(?:embed\/)?(?:conversations|agents)\//.test(clean)) {
+    return normalizeCaEmbedPath(clean)
+  }
   if (clean === '/preload' || clean.startsWith('/preload?') || clean.startsWith('/embed/')) {
     return clean
   }
@@ -451,8 +635,24 @@ export function createLookerEmbedPreloadController(opts: {
       if (iframeEl) {
         if (next.previewMode === 'conversational-analytics') {
           iframeEl.setAttribute('data-testid', 'ca-embed-iframe')
+          iframeEl.setAttribute('data-ca-panels-collapsed', 'true')
+          try {
+            iframeEl.contentWindow?.postMessage?.(
+              {
+                type: 'looker:ca:layout',
+                hide_sidebar: true,
+                hide_data_source_panel: true,
+                sidebar_collapsed: true,
+                right_panel_collapsed: true,
+              },
+              '*'
+            )
+          } catch {
+            // Ignore cross-origin postMessage errors in sandboxed embeds
+          }
         } else {
           iframeEl.removeAttribute('data-testid')
+          iframeEl.removeAttribute('data-ca-panels-collapsed')
         }
       }
       notify()
@@ -1045,6 +1245,7 @@ function renderMentionCategoryIcon(type: StudioContextCategory) {
 export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
     core40SDK,
+    agentName: rawAgentName,
     models,
     selectedExplores,
     setSelectedExplores,
@@ -1256,128 +1457,65 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       for (const explore of model.explores || []) {
         if (explore.hidden) continue
         const id = formatExploreId(model.name, String(explore.name))
-        map[id] = {
-          id,
-          label: String(explore.label || explore.name),
-          modelLabel: String(model.label || model.name),
-          model: model.name,
-          explore: String(explore.name),
-        }
+        map[id] = { id, label: String(explore.label || explore.name), modelLabel: String(model.label || model.name), model: model.name, explore: String(explore.name) }
       }
     }
     return map
   }, [models])
 
   const mentionOptions = useMemo(() => {
-    const tokens = detectedMention.query
-      .toLowerCase()
-      .split(/\s+/)
-      .filter(Boolean)
-    const matchTokens = (text: string) =>
-      tokens.length === 0 || tokens.every((tk) => text.toLowerCase().includes(tk))
-
+    const tokens = detectedMention.query.toLowerCase().split(/\s+/).filter(Boolean)
+    const matchTokens = (text: string) => tokens.length === 0 || tokens.every((tk) => text.toLowerCase().includes(tk))
     const cat = detectedMention.category
     const seen = new Set<string>()
     const out: StudioContextMention[] = []
     const pushItem = (item: StudioContextMention) => {
       const key = `${item.type}:${item.id}`
-      if (seen.has(key)) return
-      seen.add(key)
-      out.push(item)
+      if (!seen.has(key)) { seen.add(key); out.push(item) }
     }
-
     if (cat === 'all' || cat === 'explore') {
-      for (const group of groupedExplores) {
-        for (const opt of group.options) {
-          pushItem(opt.mention)
-        }
-      }
-      for (const r of remoteSearchResults) {
-        if (r.type === 'explore') pushItem(r)
-      }
+      for (const group of groupedExplores) for (const opt of group.options) pushItem(opt.mention)
+      for (const r of remoteSearchResults) if (r.type === 'explore') pushItem(r)
     }
-
     for (const contentType of ['dashboard', 'look'] as const) {
       if (cat === 'all' || cat === contentType) {
-        for (const item of preloadedContent) {
-          if (item.type === contentType && matchTokens(`${item.title} ${item.id} ${item.description || ''}`)) {
-            pushItem(item)
-          }
-        }
-        for (const r of remoteSearchResults) {
-          if (r.type === contentType) pushItem(r)
-        }
+        for (const item of preloadedContent) if (item.type === contentType && matchTokens(`${item.title} ${item.id} ${item.description || ''}`)) pushItem(item)
+        for (const r of remoteSearchResults) if (r.type === contentType) pushItem(r)
       }
     }
-
     if (cat === 'all' || cat === 'conversation') {
-      const convList = allConversations || conversations || []
-      for (const c of convList) {
+      for (const c of allConversations || conversations || []) {
         const label = c.label || c.id
-        if (matchTokens(`${label} ${c.id} ${c.type || ''}`)) {
-          pushItem({
-            type: 'conversation',
-            id: c.id,
-            title: label,
-            subtitle: c.use_case || c.type || 'conversation',
-          })
-        }
+        if (matchTokens(`${label} ${c.id} ${c.type || ''}`)) pushItem({ type: 'conversation', id: c.id, title: label, subtitle: c.use_case || c.type || 'conversation' })
       }
-      for (const r of remoteSearchResults) {
-        if (r.type === 'conversation') pushItem(r)
-      }
+      for (const r of remoteSearchResults) if (r.type === 'conversation') pushItem(r)
     }
-
     return out
-  }, [
-    detectedMention.category,
-    detectedMention.query,
-    groupedExplores,
-    preloadedContent,
-    remoteSearchResults,
-    allConversations,
-    conversations,
-  ])
+  }, [detectedMention.category, detectedMention.query, groupedExplores, preloadedContent, remoteSearchResults, allConversations, conversations])
 
-  useEffect(() => {
-    setActiveMentionIndex(0)
-  }, [detectedMention.category, detectedMention.query, mentionOptions.length])
+  useEffect(() => { setActiveMentionIndex(0) }, [detectedMention.category, detectedMention.query, mentionOptions.length])
 
   const contextChips = useMemo(() => {
     const seen = new Set<string>()
     const chips: StudioContextMention[] = []
     for (const item of mentionedItems) {
       const key = `${item.type}:${item.id}`
-      if (!seen.has(key)) {
-        seen.add(key)
-        chips.push(item)
-      }
+      if (!seen.has(key)) { seen.add(key); chips.push(item) }
     }
     for (const expId of selectedExplores) {
       const key = `explore:${expId}`
       if (!seen.has(key)) {
         seen.add(key)
         const info = exploreLookup[expId]
-        chips.push({
-          type: 'explore',
-          id: expId,
-          title: info ? `${info.modelLabel}: ${info.label}` : expId,
-          model: info?.model,
-          explore: info?.explore,
-        })
+        chips.push({ type: 'explore', id: expId, title: info ? `${info.modelLabel}: ${info.label}` : expId, model: info?.model, explore: info?.explore })
       }
     }
     return chips
   }, [mentionedItems, selectedExplores, exploreLookup])
 
   const handleSelectMentionOption = (item: StudioContextMention) => {
-    setMentionedItems((prev) => {
-      const exists = prev.some((x) => x.type === item.type && x.id === item.id)
-      return exists ? prev : [...prev, item]
-    })
-    if (item.type === 'explore') {
-      setSelectedExplores((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]))
-    }
+    setMentionedItems((prev) => (prev.some((x) => x.type === item.type && x.id === item.id) ? prev : [...prev, item]))
+    if (item.type === 'explore') setSelectedExplores((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]))
     const replacement = `@${item.type}:${item.title} `
     const prefix = prompt.slice(0, detectedMention.tokenStart)
     const suffix = prompt.slice(detectedMention.tokenEnd)
@@ -1387,21 +1525,12 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     const nextPos = (prefix + (needsLeadingSpace ? ' ' : '') + replacement).length
     setCursorPos(nextPos)
     setForceMentionCategory(null)
-    requestAnimationFrame(() => {
-      if (textareaRef.current) {
-        textareaRef.current.focus()
-        textareaRef.current.setSelectionRange(nextPos, nextPos)
-      }
-    })
+    requestAnimationFrame(() => { if (textareaRef.current) { textareaRef.current.focus(); textareaRef.current.setSelectionRange(nextPos, nextPos) } })
   }
 
   const handleRemoveContextChip = (chip: StudioContextMention) => {
-    setMentionedItems((prev) =>
-      prev.filter((x) => !(x.type === chip.type && x.id === chip.id))
-    )
-    if (chip.type === 'explore') {
-      setSelectedExplores((prev) => prev.filter((id) => id !== chip.id))
-    }
+    setMentionedItems((prev) => prev.filter((x) => !(x.type === chip.type && x.id === chip.id)))
+    if (chip.type === 'explore') setSelectedExplores((prev) => prev.filter((id) => id !== chip.id))
   }
 
   const handleInsertScopedPrefix = (category: StudioContextCategory) => {
@@ -1412,36 +1541,21 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     setPrompt(nextPrompt)
     setCursorPos(nextPrompt.length)
     setForceMentionCategory(category)
-    requestAnimationFrame(() => {
-      if (textareaRef.current) {
-        textareaRef.current.focus()
-        textareaRef.current.setSelectionRange(nextPrompt.length, nextPrompt.length)
-      }
-    })
+    requestAnimationFrame(() => { if (textareaRef.current) { textareaRef.current.focus(); textareaRef.current.setSelectionRange(nextPrompt.length, nextPrompt.length) } })
   }
 
   const activeGuideUseCase: StudioUseCase =
-    isCaMode || caConversation
-      ? 'conversational-analytics'
-      : isHealthCheckMode
-      ? 'health-check'
-      : isLookmlMode
-      ? 'lookml'
-      : activeMode === 'tile'
-      ? 'tile'
-      : builderMode === 'dashboard'
-      ? 'dashboard'
+    isCaMode || caConversation ? 'conversational-analytics'
+      : isHealthCheckMode ? 'health-check'
+      : isLookmlMode ? 'lookml'
+      : activeMode === 'tile' ? 'tile'
+      : builderMode === 'dashboard' ? 'dashboard'
       : selectedUseCase || 'auto'
-  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) =>
-    handleImageClipboardPaste(e, setPastedImages)
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => handleImageClipboardPaste(e, setPastedImages)
 
   return (
     <div className="dab-composer dab-chatbar">
-      <UseCaseInfoModal
-        activeUseCase={infoModalUseCase}
-        onSelectUseCase={setInfoModalUseCase}
-        onClose={() => setInfoModalUseCase(null)}
-      />
+      <UseCaseInfoModal activeUseCase={infoModalUseCase} onSelectUseCase={setInfoModalUseCase} onClose={() => setInfoModalUseCase(null)} />
 
       {isLookmlMode && (
         <div className="dab-skill-bar" aria-label="Activated Turn Skills">
@@ -1450,20 +1564,10 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
             const isActive = activatedLookmlSkills.includes(sk.id)
             return (
               <button
-                key={sk.id}
-                type="button"
-                className={`dab-skill-chip ${isActive ? 'active' : ''}`}
-                title={sk.desc}
-                onClick={() =>
-                  setActivatedLookmlSkills((prev) =>
-                    prev.includes(sk.id)
-                      ? prev.filter((x) => x !== sk.id)
-                      : [...prev, sk.id]
-                  )
-                }
+                key={sk.id} type="button" className={`dab-skill-chip ${isActive ? 'active' : ''}`} title={sk.desc}
+                onClick={() => setActivatedLookmlSkills((prev) => (prev.includes(sk.id) ? prev.filter((x) => x !== sk.id) : [...prev, sk.id]))}
               >
-                {isActive ? '✓ ' : '+ '}
-                {sk.label}
+                {isActive ? '✓ ' : '+ '}{sk.label}
               </button>
             )
           })}
@@ -1471,27 +1575,12 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       )}
 
       {contextChips.length > 0 && (
-        <div
-          className="dab-composer-context-chips"
-          data-testid="composer-context-chips"
-          style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}
-        >
+        <div className="dab-composer-context-chips" data-testid="composer-context-chips" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           {contextChips.map((chip) => (
-            <span
-              key={`${chip.type}:${chip.id}`}
-              className="dab-chip"
-              data-testid={`composer-context-chip-${chip.type}-${chip.id}`}
-              title={`${chip.type}: ${chip.id}`}
-            >
+            <span key={`${chip.type}:${chip.id}`} className="dab-chip" data-testid={`composer-context-chip-${chip.type}-${chip.id}`} title={`${chip.type}: ${chip.id}`}>
               {renderMentionCategoryIcon(chip.type)}
-              <span>
-                @{chip.type}:{chip.title}
-              </span>
-              <button
-                type="button"
-                aria-label={`Remove ${chip.title}`}
-                onClick={() => handleRemoveContextChip(chip)}
-              >
+              <span>@{chip.type}:{chip.title}</span>
+              <button type="button" aria-label={`Remove ${chip.title}`} onClick={() => handleRemoveContextChip(chip)}>
                 <X size={11} strokeWidth={2} aria-hidden="true" />
               </button>
             </span>
@@ -1500,25 +1589,13 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       )}
 
       {pastedImages.length > 0 && (
-        <div
-          className="dab-composer-attached-files"
-          data-testid="composer-attached-files"
-          style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}
-        >
+        <div className="dab-composer-attached-files" data-testid="composer-attached-files" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           {pastedImages.map((img, i) => {
             const isImage = img.mimeType.startsWith('image/')
             return (
-              <div
-                key={img.id || i}
-                className="dab-attached-file-pill"
-                style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}
-              >
+              <div key={img.id || i} className="dab-attached-file-pill" style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
                 {isImage ? (
-                  <img
-                    src={img.dataUrl}
-                    alt={img.name || 'Attached image'}
-                    style={{ height: 52, borderRadius: 4, border: '1px solid var(--dab-border)' }}
-                  />
+                  <img src={img.dataUrl} alt={img.name || 'Attached image'} style={{ height: 52, borderRadius: 4, border: '1px solid var(--dab-border)' }} />
                 ) : (
                   <span className="dab-chip" title={img.name || 'Attached file'}>
                     <FileText size={13} strokeWidth={1.75} aria-hidden="true" />
@@ -1526,27 +1603,12 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                   </span>
                 )}
                 <button
-                  type="button"
-                  aria-label={`Remove ${img.name || 'attachment'}`}
+                  type="button" aria-label={`Remove ${img.name || 'attachment'}`}
                   onClick={() => setPastedImages((prev) => prev.filter((_, idx) => idx !== i))}
                   style={{
-                    position: isImage ? 'absolute' : 'static',
-                    top: -5,
-                    right: -5,
-                    width: 18,
-                    height: 18,
-                    borderRadius: '50%',
-                    border: 'none',
-                    background: '#0f172a',
-                    color: '#fff',
-                    fontSize: 10,
-                    cursor: 'pointer',
-                    lineHeight: '18px',
-                    padding: 0,
-                    marginLeft: isImage ? 0 : 4,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
+                    position: isImage ? 'absolute' : 'static', top: -5, right: -5, width: 18, height: 18, borderRadius: '50%',
+                    border: 'none', background: '#0f172a', color: '#fff', fontSize: 10, cursor: 'pointer', lineHeight: '18px',
+                    padding: 0, marginLeft: isImage ? 0 : 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                   }}
                 >
                   <X size={11} strokeWidth={2} aria-hidden="true" />
@@ -1558,45 +1620,23 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       )}
 
       {queuedPrompts.length > 0 && (
-        <div
-          className="dab-queued-prompts-bar"
-          data-testid="queued-prompts-bar"
-          role="region"
-          aria-label="Queued prompts"
-        >
+        <div className="dab-queued-prompts-bar" data-testid="queued-prompts-bar" role="region" aria-label="Queued prompts">
           {queuedPrompts.map((q) => (
-            <div
-              key={q.id}
-              className="dab-queued-prompt-item"
-              data-testid="queued-prompt-item"
-            >
-              <CornerDownRight
-                size={12}
-                strokeWidth={1.75}
-                aria-hidden="true"
-                className="dab-queued-prompt-icon"
-              />
-              <span className="dab-queued-prompt-text" title={q.text}>
-                {q.text || `${q.images.length} attachment(s)`}
-              </span>
+            <div key={q.id} className="dab-queued-prompt-item" data-testid="queued-prompt-item">
+              <CornerDownRight size={12} strokeWidth={1.75} aria-hidden="true" className="dab-queued-prompt-icon" />
+              <span className="dab-queued-prompt-text" title={q.text}>{q.text || `${q.images.length} attachment(s)`}</span>
               <div className="dab-queued-prompt-actions">
                 <button
-                  type="button"
-                  className="dab-btn-secondary dab-queued-prompt-interject-btn"
-                  data-testid={`queued-prompt-interject-${q.id}`}
-                  onClick={() => handleInterjectPrompt(q.id)}
+                  type="button" className="dab-btn-secondary dab-queued-prompt-interject-btn"
+                  data-testid={`queued-prompt-interject-${q.id}`} onClick={() => handleInterjectPrompt(q.id)}
                   title="Abort current turn and send this queued message immediately"
                 >
                   <Zap size={11} strokeWidth={1.75} aria-hidden="true" />
                   <span>Interject</span>
                 </button>
                 <button
-                  type="button"
-                  className="dab-queued-prompt-remove-btn"
-                  data-testid={`queued-prompt-remove-${q.id}`}
-                  onClick={() => handleRemoveQueuedPrompt(q.id)}
-                  aria-label="Remove queued message"
-                  title="Remove from queue"
+                  type="button" className="dab-queued-prompt-remove-btn" data-testid={`queued-prompt-remove-${q.id}`}
+                  onClick={() => handleRemoveQueuedPrompt(q.id)} aria-label="Remove queued message" title="Remove from queue"
                 >
                   <X size={12} strokeWidth={2} aria-hidden="true" />
                 </button>
@@ -1608,13 +1648,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 
       <div className="dab-composer-input-wrap" style={{ position: 'relative' }}>
         {detectedMention.open && (
-          <div
-            ref={mentionMenuRef}
-            className="dab-at-mention-menu dab-dropdown"
-            data-testid="composer-at-mention-menu"
-            role="listbox"
-            aria-label="Looker context mentions"
-          >
+          <div ref={mentionMenuRef} className="dab-at-mention-menu dab-dropdown" data-testid="composer-at-mention-menu" role="listbox" aria-label="Looker context mentions">
             <div className="dab-at-mention-header">
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                 <AtSign size={12} strokeWidth={1.75} aria-hidden="true" />
@@ -1625,28 +1659,18 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 </span>
               </span>
               {mentionLoading && (
-                <span
-                  data-testid="composer-mention-loading"
-                  className="dab-at-mention-spinner"
-                  title="Searching Looker via global_search_v2..."
-                >
+                <span data-testid="composer-mention-loading" className="dab-at-mention-spinner" title="Searching Looker via global_search_v2...">
                   <Loader2 size={13} strokeWidth={2} className="dab-spin" aria-hidden="true" />
                 </span>
               )}
             </div>
 
-            {selectedExplores.length > 0 &&
-              (detectedMention.category === 'all' || detectedMention.category === 'explore') && (
-                <div
-                  className="dab-option"
-                  style={{ color: 'var(--dab-accent)', fontWeight: 600 }}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setSelectedExplores([])
-                    setMentionedItems((prev) => prev.filter((x) => x.type !== 'explore'))
-                  }}
-                >
-                  <span>Clear selection (let agent decide)</span>
+            {selectedExplores.length > 0 && (detectedMention.category === 'all' || detectedMention.category === 'explore') && (
+              <div
+                className="dab-option" style={{ color: 'var(--dab-accent)', fontWeight: 600 }}
+                onClick={(e) => { e.stopPropagation(); setSelectedExplores([]); setMentionedItems((prev) => prev.filter((x) => x.type !== 'explore')) }}
+              >
+                <span>Clear selection (let agent decide)</span>
                 </div>
               )}
 
@@ -1732,7 +1756,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               : isLookmlMode ? 'Describe LookML changes, SQL query to model, or field descriptions/tests to run in your active dev mode...'
               : activeMode === 'tile' ? 'Describe the Script to generate or update (or paste a screenshot)...'
               : builderMode === 'dashboard' ? 'Describe a Looker UDD, Look, Board, or Schedule to create or update (type @ to mention context)...'
-              : 'Ask your Looker Agent what you want to build, analyze, or automate (type @ to mention Explores, Dashboards, Looks, or Conversations)...'
+              : `Ask ${normalizeStudioAgentName(rawAgentName)} what you want to build, analyze, or automate (type @ to mention Explores, Dashboards, Looks, or Conversations)...`
           }
           value={prompt}
           onChange={(e) => {
@@ -1887,7 +1911,8 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 }
 
 export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
-  const { activeMode, builderMode, isLookmlMode, isHealthCheckMode, selectedUseCase, selectedExplores, starterPrompts, starterPromptsLoading, setPrompt, busyStatus } = ctl
+  const { agentName: rawAgentName, activeMode, builderMode, isLookmlMode, isHealthCheckMode, selectedUseCase, selectedExplores, starterPrompts, starterPromptsLoading, setPrompt, busyStatus } = ctl
+  const agentName = normalizeStudioAgentName(rawAgentName)
   return (
     <main className="dab-empty-stage-centered" data-testid="centered-empty-prompt">
       <div className="dab-empty-prompt-card" data-testid="studio-empty-stage">
@@ -1897,7 +1922,7 @@ export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ 
               : isLookmlMode ? 'Author & Validate Agentic LookML'
               : activeMode === 'tile' ? 'Author & Schedule a Looker Script'
               : builderMode === 'dashboard' ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)'
-              : 'Use your Looker Agent'}
+              : `Use your ${agentName}`}
           </h2>
           <p className="dab-muted">
             {selectedExplores.length > 0 ? <>Exploring <code>{selectedExplores.join(', ')}</code> — pick a starter prompt below or describe what you want to build.</> : 'Pick a starter prompt below or describe what you want to build, analyze, or automate.'}
@@ -1999,10 +2024,15 @@ const ActivityStepsList: React.FC<{ steps: AntigravityActivityStep[]; contentCtx
 
 export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
+    agentName: rawAgentName, extensionSDK,
     messages, builderMode, selectedUseCase, selectedExplores, starterPrompts, starterPromptsLoading,
     setPrompt, busyStatus, liveActivitySteps, pendingPerm, resolvePermDecision,
     leftPaneWidth, setLeftPaneWidth, rightPaneCollapsed, lookmlBundle, currentAppCode, schemaMarkdown,
   } = ctl
+  const agentName = normalizeStudioAgentName(rawAgentName)
+  const hostUrl =
+    extensionSDK?.lookerHostData?.hostUrl ||
+    (typeof window !== 'undefined' ? window.location.origin : '')
 
   const leftPaneRef = useRef<HTMLElement | null>(null)
   const [isResizingSplit, setIsResizingSplit] = useState(false)
@@ -2040,7 +2070,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       <div className="dab-chat-log">
         {messages.length === 0 && (
           <div className="dab-empty-chat">
-            <p><strong>{builderMode === 'dashboard' ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)' : 'Ask your Looker Agent to build, analyze, or automate across Looker'}</strong></p>
+            <p><strong>{builderMode === 'dashboard' ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)' : `Ask ${agentName} to build, analyze, or automate across Looker`}</strong></p>
             <p className="dab-muted">
               {selectedExplores.length > 0 ? <>Exploring <code>{selectedExplores.join(', ')}</code> — pick a starter prompt below or describe what you want to build.</> : 'Pick a starter prompt below or describe what you want to build, analyze, or automate.'}
             </p>
@@ -2053,7 +2083,9 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
           return (
             <div key={idx} className={`dab-msg dab-msg-${m.role}`}>
               <div className="dab-msg-header">
-                {m.role === 'user' ? 'You' : m.role === 'error' ? 'Error' : 'Antigravity'}
+                <span data-testid={m.role === 'assistant' ? 'chat-msg-agent-author' : undefined}>
+                  {m.role === 'user' ? 'You' : m.role === 'error' ? 'Error' : agentName}
+                </span>
                 {m.dashboardId && <span className="dab-msg-pill">Dashboard #{m.dashboardId}{typeof m.widgetCount === 'number' ? ` · ${m.widgetCount} queries` : ''}</span>}
               </div>
               {m.role === 'assistant' && m.activitySteps && m.activitySteps.length > 0 && (
@@ -2067,7 +2099,9 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                   <ActivityStepsList steps={m.activitySteps} contentCtx={contentCtx} />
                 </details>
               )}
-              <div className="dab-msg-body">{m.text}</div>
+              <div className="dab-msg-body">
+                <StudioMarkdown text={m.text} hostUrl={hostUrl} extensionSDK={extensionSDK} />
+              </div>
               {m.images && m.images.length > 0 && (
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
                   {m.images.map((src, i) => <img key={i} src={src} alt="Attached screenshot" style={{ maxHeight: 80, borderRadius: 4, border: '1px solid #cbd5e1' }} />)}

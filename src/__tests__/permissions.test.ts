@@ -40,17 +40,19 @@ import {
   StudioSelect, StudioSkeleton, StudioToolbar,
 } from '../components/StudioDesignSystem'
 import {
+  ALLOWED_EXTERNAL_WINDOW_PATTERNS, copyLinkWithExtensionSdk,
   createLookerEmbedPreloadController, DOC_UI_COMPONENTS, getStarterPromptsForUseCase,
-  normalizeLookerEmbedUrl, renderUseCaseGuideMarkdown, resolveLookerEmbedTarget,
+  isAllowedExternalWindowUrl, normalizeLookerEmbedUrl, openOrCopyMarkdownLink,
+  renderUseCaseGuideMarkdown, resolveLookerEmbedTarget,
   STARTER_PROMPTS_BY_USE_CASE, StarterPromptButtons, USE_CASE_BADGES,
   USE_CASE_GUIDE_ORDER, USE_CASE_GUIDES,
 } from '../components/StudioWorkspace'
 import {
-  archiveUserConversation, ARTIFACT_NAMESPACE, ArtifactService, buildDenseExploreSchema,
+  archiveUserConversation, ARTIFACT_NAMESPACE, ArtifactService, buildCaEmbedPath, buildDenseExploreSchema,
   buildRootLookerFolders, buildStudioRoute, CA_AGENT_SELECTION_REQUEST_TAG,
   classifyLooker404Error, classifyStudioUseCase, clearArtifactServiceCache,
   clearLookerMetadataCache, ConversationRecord, convertRelativeDateFilterToFixed,
-  createDeduplicatedLookerSdkProxy, createLookerCaConversation, deleteUserArtifact,
+  createDeduplicatedLookerSdkProxy, createLookerCaConversation, DEFAULT_STUDIO_AGENT_NAME, deleteUserArtifact,
   deleteUserConversation, extractResolvedUseCase, fetchFolderChildren,
   fetchFolderWithAncestors, fetchInitialLookerMetadata, fetchLookerCaAgentsCatalog,
   fetchPreloadedContentSummary, formatStudioContentItemTitle, formatUserConversationsArtifactKey,
@@ -58,7 +60,8 @@ import {
   getArtifactService, getUseCaseLabel, hydrateConversationContentItems, hydrateMentionedContext,
   isConversationalNoOpPrompt, listUserArtifacts, loadStoredSelectedFolderId,
   loadUserConversations, loadUserEnvironmentId, matchExplicitUseCaseRule,
-  normalizeArtifactNamespace, normalizeBusySendAction, normalizeQueryFiltersToFixedDates, normalizeStudioContentItem,
+  normalizeArtifactNamespace, normalizeBusySendAction, normalizeCaEmbedPath, normalizeQueryFiltersToFixedDates,
+  normalizeStudioAgentName, normalizeStudioContentItem,
   normalizeStudioThemeMode,
   parseCaAgentSelectionResponse, parseStudioRoute, persistSelectedFolderId, rawLookerRequest,
   readInitialSelectedFolderId, readSwrCache, resolveConversationRelatedContent,
@@ -67,7 +70,7 @@ import {
   searchLookerFolders, selectCaAgentViaIsolatedSubagent, shouldRouteToIsolatedCaSubagent,
   DEFAULT_BUSY_SEND_ACTION, loadStoredBusySendAction, STUDIO_BUSY_SEND_ACTION_STORAGE_KEY,
   STUDIO_FOLDER_STORAGE_KEY, STUDIO_MODES, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
-  StudioContentItem, SWR_DEDUPED_METHODS, upsertStudioContentItem, UserArtifactIndexItem,
+  StudioContentItem, SWR_DEDUPED_METHODS, upsertStudioContentItem, UserArtifactIndexItem, userStudioConfigArtifactKey,
 } from '../lookerApi'
 
 interface MockInteractionPostBody {
@@ -1652,7 +1655,9 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
         'https://dev-argolis.looker.com/embed/conversations/ca_1?agent_id=a1',
         'https://dev-argolis.looker.com'
       )
-    ).toBe('/embed/conversations/ca_1?agent_id=a1')
+    ).toBe(
+      '/embed/conversations/ca_1?agent_id=a1&hide_sidebar=true&hide_data_source_panel=true&sidebar_collapsed=true&right_panel_collapsed=true'
+    )
 
     const attrs: Record<string, string> = {}
     const fakeIframe = {
@@ -5180,5 +5185,60 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
       expect(skillDisk).toContain(token)
       expect(LOOKER_PROJECT_ONBOARDING_SKILL_MD).toContain(token)
     }
+  })
+
+  test('53. Issue #126: persists per-user agentName in user_config:${userId} (default "Ripper"), routes/copies Markdown links via extensionSDK, and appends CA embed collapse query params', async () => {
+    expect(DEFAULT_STUDIO_AGENT_NAME).toBe('Ripper')
+    expect([normalizeStudioAgentName(), normalizeStudioAgentName(''), normalizeStudioAgentName('  '), normalizeStudioAgentName('  Maverick  ')]).toEqual(['Ripper', 'Ripper', 'Ripper', 'Maverick'])
+    expect([userStudioConfigArtifactKey('42'), userStudioConfigArtifactKey(''), userStudioConfigArtifactKey('  7 ')]).toEqual(['user_config:42', 'user_config:1', 'user_config:7'])
+
+    const store = new Map<string, { key: string; value: string; version: number }>()
+    const mockSdk = asSdk({
+      ok: async <T>(p: Promise<T> | T) => p,
+      artifact: async ({ key }: { namespace: string; key: string }) => (store.has(key) ? [store.get(key)!] : []),
+      update_artifacts: async (_ns: string, updates: Array<{ key: string; value: string; version?: number }>) =>
+        updates.map((u) => { const next = { key: u.key, value: u.value, version: (store.get(u.key)?.version || 0) + 1 }; store.set(u.key, next); return next }),
+    })
+    const svc = new ArtifactService(mockSdk, ARTIFACT_NAMESPACE)
+    expect(await svc.getUserConfig('42')).toEqual({ userId: '42', agentName: 'Ripper', updatedAt: '' })
+
+    const savedCfg = await svc.saveUserConfig('42', { agentName: '  Point Break  ' })
+    expect([savedCfg.userId, savedCfg.agentName, Boolean(savedCfg.updatedAt)]).toEqual(['42', 'Point Break', true])
+    expect(JSON.parse(store.get('user_config:42')!.value)).toMatchObject({ userId: '42', agentName: 'Point Break' })
+    expect([(await svc.getUserConfig('42')).agentName, (await svc.saveUserConfig('42', { agentName: '   ' })).agentName]).toEqual(['Point Break', 'Ripper'])
+
+    expect(ALLOWED_EXTERNAL_WINDOW_PATTERNS).toEqual(
+      expect.arrayContaining(['https://*.looker.com/*', 'https://*.looker.app/*', 'https://*.google.com/*', 'https://cloud.google.com/*', 'https://docs.cloud.google.com/*', 'https://github.com/*'])
+    )
+    expect([
+      isAllowedExternalWindowUrl('https://docs.cloud.google.com/looker/docs/r/sql/LookML-field'),
+      isAllowedExternalWindowUrl('https://github.com/lkrdev/data-app-builder'),
+      isAllowedExternalWindowUrl('https://unlisted-vendor.example.org/report'),
+    ]).toEqual([true, true, false])
+
+    const openedUrls: Array<{ url: string; target?: string }> = []
+    const copiedUrls: string[] = []
+    const mockExtSdk = {
+      openBrowserWindow: (url: string, target?: string) => { openedUrls.push({ url, target }) },
+      clipboardWrite: async (text: string) => { copiedUrls.push(text) },
+    }
+    expect(await openOrCopyMarkdownLink('/dashboards/42?region=AMER', 'https://dev.looker.com', mockExtSdk)).toEqual({ action: 'opened', targetUrl: '/dashboards/42?region=AMER' })
+    expect(await openOrCopyMarkdownLink('https://dev.looker.com/looks/99#table', 'https://dev.looker.com', mockExtSdk)).toEqual({ action: 'opened', targetUrl: '/looks/99#table' })
+    expect(await openOrCopyMarkdownLink('https://docs.cloud.google.com/looker/docs/r/sql/LookML-field', 'https://dev.looker.com', mockExtSdk)).toEqual({ action: 'opened', targetUrl: 'https://docs.cloud.google.com/looker/docs/r/sql/LookML-field' })
+    expect(await openOrCopyMarkdownLink('https://unlisted-vendor.example.org/report', 'https://dev.looker.com', mockExtSdk)).toEqual({ action: 'copied', targetUrl: 'https://unlisted-vendor.example.org/report' })
+    expect(openedUrls).toEqual([
+      { url: '/dashboards/42?region=AMER', target: '_blank' },
+      { url: '/looks/99#table', target: '_blank' },
+      { url: 'https://docs.cloud.google.com/looker/docs/r/sql/LookML-field', target: '_blank' },
+    ])
+    expect(copiedUrls).toEqual(['https://unlisted-vendor.example.org/report'])
+    expect([await copyLinkWithExtensionSdk('https://github.com/lkrdev/data-app-builder', mockExtSdk), copiedUrls[copiedUrls.length - 1]]).toEqual([true, 'https://github.com/lkrdev/data-app-builder'])
+
+    expect(buildCaEmbedPath('ca_conv_1', 'agent_ecom')).toBe('/embed/conversations/ca_conv_1?agent_id=agent_ecom&hide_sidebar=true&hide_data_source_panel=true&sidebar_collapsed=true&right_panel_collapsed=true')
+    expect(normalizeCaEmbedPath('/conversations/ca_conv_2', 'agent_2')).toBe('/embed/conversations/ca_conv_2?agent_id=agent_2&hide_sidebar=true&hide_data_source_panel=true&sidebar_collapsed=true&right_panel_collapsed=true')
+    expect(resolveStudioContentEmbedPath('conversational-analytics', 'ca_conv_3')).toBe('/embed/conversations/ca_conv_3?hide_sidebar=true&hide_data_source_panel=true&sidebar_collapsed=true&right_panel_collapsed=true')
+
+    const manifestLkml = readFileSync(path.resolve(__dirname, '../../manifest.lkml'), 'utf8')
+    for (const token of ['label: "Ripper"', 'use_clipboard: yes', 'new_window_external_urls:']) expect(manifestLkml).toContain(token)
   })
 })

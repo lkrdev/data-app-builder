@@ -21,6 +21,7 @@ function buildHtmlPage(scenario) {
 <html>
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Agent — Visual Test (${scenario})</title>
   <style>html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }</style>
   <script>
@@ -330,7 +331,8 @@ function buildHtmlPage(scenario) {
         python_tile_scheduler_modal: '/c/conv_tile_demo1',
         conversational_analytics: '/c/ca_conv_streaming_1',
         centered_empty_prompt: '/',
-        studio_dark_theme: '/c/conv_app_42'
+        studio_dark_theme: '/c/conv_app_42',
+        ripper_surf_loader: '/c/conv_app_42'
       };
 
       try {
@@ -802,7 +804,14 @@ function buildHtmlPage(scenario) {
             window.localStorage.setItem(key, value);
           } catch {}
         },
-        openBrowserWindow: () => {},
+        openBrowserWindow: (url, target) => {
+          window.__OPENED_WINDOWS__ = window.__OPENED_WINDOWS__ || [];
+          window.__OPENED_WINDOWS__.push({ url, target });
+        },
+        clipboardWrite: async (text) => {
+          window.__CLIPBOARD_WRITES__ = window.__CLIPBOARD_WRITES__ || [];
+          window.__CLIPBOARD_WRITES__.push(text);
+        },
         oauth2Authenticate: async (authUrl, params, method) => {
           window.__OAUTH_CALLS__ = window.__OAUTH_CALLS__ || [];
           window.__OAUTH_CALLS__.push({ authUrl, params, method });
@@ -831,7 +840,10 @@ function buildHtmlPage(scenario) {
             bodyText: document.body ? (document.body.innerText || '').trim() : ''
           });
         },
-        updateTitle: () => {},
+        updateTitle: (title) => {
+          window.__UPDATED_TITLES__ = window.__UPDATED_TITLES__ || [];
+          window.__UPDATED_TITLES__.push(title);
+        },
         serverProxy: async (url, init) => {
           window.__INTERACTION_CALLS__ = window.__INTERACTION_CALLS__ || [];
           const body = init && init.body ? JSON.parse(init.body) : undefined;
@@ -910,6 +922,7 @@ function buildHtmlPage(scenario) {
             ? 'Looker API Error (422): Field "order_items.unknown_metric" not found in explore "thelook::order_items".'
             : null,
         openSchedulerModal: scenario === 'python_tile_scheduler_modal',
+        forceAppInitializing: scenario === 'ripper_surf_loader',
         extensionSDK: mockExtensionSDK,
         core40SDK: mockCore40SDK,
         lookerHostData: mockExtensionSDK.lookerHostData,
@@ -1195,7 +1208,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       title: '1. Data App Mode + Inline Mutation Permission Gate',
       snapshotName: '01-mode-data-app-and-permission-gate-snap.png',
       expectText: [
-        'Agent',
+        'Ripper',
         'Data App',
         'Safe Mode (Ask)',
         'Approve Looker State Mutation?',
@@ -1408,7 +1421,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       snapshotName: '17-centered-empty-prompt-snap.png',
       clipSelector: '.dab-empty-prompt-card',
       expectText: [
-        'Use your Looker Agent',
+        'Use your Ripper',
         'Send Message'
       ]
     },
@@ -1418,7 +1431,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       title: '18. Studio Dark Theme Mode (Semantic Dark Surface & Text Tokens)',
       snapshotName: '18-studio-dark-theme.png',
       expectText: [
-        'Agent',
+        'Ripper',
         'Executive Revenue App',
         'Send Message'
       ]
@@ -1912,7 +1925,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     expect(step1.result.value.routeOnNew).toBe('/')
     expect(step1.result.value.hasCenteredStage).toBe(true)
     expect(step1.result.value.centeredHeroText).not.toContain('New Conversation')
-    expect(step1.result.value.centeredHeroText).toContain('Use your Looker Agent')
+    expect(step1.result.value.centeredHeroText).toContain('Use your Ripper')
     expect(step1.result.value.cardCenteredHorizontally).toBe(true)
     expect(step1.result.value.cardCenteredVertically).toBe(true)
 
@@ -4747,10 +4760,10 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
   }, 15000)
 
   test('Issue #119: supports draggable split resizer, collapsible right artifact icon rail, clickable file/skill steps, and copy reasoning button', async () => {
-    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=studio_thinking_progress` })
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=data_app` })
     const deadline = Date.now() + 8000
     while (Date.now() < deadline) {
-      const r = await chrome.send('Runtime.evaluate', { expression: `Boolean(document.querySelector('[data-testid="completed-thinking-block"]'))`, returnByValue: true })
+      const r = await chrome.send('Runtime.evaluate', { expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="workspace-split-resizer"]'))`, returnByValue: true })
       if (r.result?.value) break
       await new Promise((res) => setTimeout(res, 80))
     }
@@ -4839,4 +4852,145 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       previewCount: 2, filePreviewHasGuide: true, skillPreviewHasKda: true
     })
   }, 15000)
+
+  test('Issue #126: renders Barrel Tube Vortex surf loader, edits per-user agent name inline with extensionSDK.updateTitle, renders rich Markdown links with openBrowserWindow & clipboardWrite fallback, collapses CA embed panels, and adapts layout on <=768px mobile viewport', async () => {
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=ripper_surf_loader` })
+    const loaderDeadline = Date.now() + 8000
+    while (Date.now() < loaderDeadline) {
+      const r = await chrome.send('Runtime.evaluate', { expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="ripper-surf-loader"]'))`, returnByValue: true })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 80))
+    }
+
+    const loaderRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const loader = document.querySelector('[data-testid="ripper-surf-loader"]');
+        const svg = document.querySelector('[data-testid="ripper-surf-loader-svg"]');
+        const loaderText = loader ? (loader.textContent || '').trim() : '';
+        window.__DAB_STUDIO__.setAppInitializing(false);
+        for (let i = 0; i < 30; i++) {
+          if (document.querySelector('[data-testid="studio-edit-agent-name-btn"]') && document.querySelector('[data-testid="chat-msg-agent-author"]')) break;
+          await new Promise((r) => setTimeout(r, 40));
+        }
+        const labelBefore = (document.querySelector('[data-testid="studio-agent-name-label"]')?.textContent || '').trim();
+        const authorBefore = (document.querySelector('[data-testid="chat-msg-agent-author"]')?.textContent || '').trim();
+        document.querySelector('[data-testid="studio-edit-agent-name-btn"]').click();
+        await new Promise((r) => setTimeout(r, 40));
+        const input = document.querySelector('[data-testid="studio-agent-name-input"]');
+        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, 'Maverick');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 30));
+        document.querySelector('[data-testid="studio-save-agent-name-btn"]').click();
+        await new Promise((r) => setTimeout(r, 80));
+        const labelAfter = (document.querySelector('[data-testid="studio-agent-name-label"]')?.textContent || '').trim();
+        const authorAfter = (document.querySelector('[data-testid="chat-msg-agent-author"]')?.textContent || '').trim();
+        const updatedTitles = window.__UPDATED_TITLES__ || [];
+        const userConfigUpdate = (window.__ARTIFACT_UPDATES__ || []).find((u) => u.key === 'user_config:1');
+
+        window.__OPENED_WINDOWS__ = [];
+        window.__CLIPBOARD_WRITES__ = [];
+        window.__DAB_STUDIO__.setMessages([{
+          role: 'assistant',
+          text: [
+            '### Revenue Breakdown',
+            '- Open [Executive Dashboard](/dashboards/42) or [LookML Field Docs](https://docs.cloud.google.com/looker/docs/r/sql/LookML-field)',
+            '- External vendor link [Vendor Portal](https://unlisted-vendor.example.org/report)',
+            '\`\`\`sql',
+            'SELECT status, COUNT(*) FROM order_items GROUP BY 1;',
+            '\`\`\`'
+          ].join('\\n')
+        }]);
+        await new Promise((r) => setTimeout(r, 80));
+        const mdBody = document.querySelector('[data-testid="studio-markdown-body"]');
+        const links = Array.from(document.querySelectorAll('[data-testid="chat-markdown-link"]'));
+        const copyBtns = Array.from(document.querySelectorAll('[data-testid="chat-markdown-link-copy"]'));
+        links[0].click(); links[1].click(); links[2].click();
+        await new Promise((r) => setTimeout(r, 60));
+        const thirdCopiedAttr = copyBtns[2]?.getAttribute('data-copied');
+        copyBtns[0].click();
+        await new Promise((r) => setTimeout(r, 40));
+        const firstCopiedAttr = copyBtns[0]?.getAttribute('data-copied');
+        return {
+          hasLoader: Boolean(loader), hasSvg: Boolean(svg),
+          loaderHasRipper: loaderText.includes('Ripper'),
+          loaderHasSubtitle: loaderText.includes('Dropping into your Looker workspace'),
+          labelBefore, authorBefore, labelAfter, authorAfter,
+          titleUpdatedToMaverick: updatedTitles.includes('Maverick'),
+          savedUserConfigAgentName: userConfigUpdate ? JSON.parse(userConfigUpdate.value).agentName : null,
+          hasH3: Boolean(mdBody?.querySelector('h3')),
+          hasList: Boolean(mdBody?.querySelector('ul')),
+          hasCodeBlock: Boolean(mdBody?.querySelector('pre code')),
+          linkCount: links.length, copyBtnCount: copyBtns.length,
+          openedWindows: window.__OPENED_WINDOWS__, clipboardWrites: window.__CLIPBOARD_WRITES__,
+          thirdCopiedAttr, firstCopiedAttr
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+
+    expect(loaderRes.result.value).toEqual({
+      hasLoader: true, hasSvg: true, loaderHasRipper: true, loaderHasSubtitle: true,
+      labelBefore: 'Ripper', authorBefore: 'Ripper', labelAfter: 'Maverick', authorAfter: 'Maverick',
+      titleUpdatedToMaverick: true, savedUserConfigAgentName: 'Maverick',
+      hasH3: true, hasList: true, hasCodeBlock: true, linkCount: 3, copyBtnCount: 3,
+      openedWindows: [
+        { url: '/dashboards/42', target: '_blank' },
+        { url: 'https://docs.cloud.google.com/looker/docs/r/sql/LookML-field', target: '_blank' }
+      ],
+      clipboardWrites: ['https://unlisted-vendor.example.org/report', '/dashboards/42'],
+      thirdCopiedAttr: 'true', firstCopiedAttr: 'true'
+    })
+
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=conversational_analytics` })
+    const caDeadline = Date.now() + 8000
+    while (Date.now() < caDeadline) {
+      const r = await chrome.send('Runtime.evaluate', { expression: `Boolean(document.querySelector('[data-testid="ca-embed-iframe"]'))`, returnByValue: true })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 80))
+    }
+
+    const caRes = await chrome.send('Runtime.evaluate', {
+      expression: `(() => {
+        const iframe = document.querySelector('[data-testid="ca-embed-iframe"]');
+        return { embedSrc: iframe?.getAttribute('data-embed-src') || '', panelsCollapsedAttr: iframe?.getAttribute('data-ca-panels-collapsed') || '' };
+      })()`,
+      returnByValue: true
+    })
+    expect(caRes.result.value.embedSrc).toContain('/embed/conversations/ca_conv_streaming_1?agent_id=ca_agent_ecommerce')
+    expect(caRes.result.value.embedSrc).toContain('hide_sidebar=true&hide_data_source_panel=true&sidebar_collapsed=true&right_panel_collapsed=true')
+    expect(caRes.result.value.panelsCollapsedAttr).toBe('true')
+
+    try {
+      await chrome.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
+      await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=centered_empty_prompt` })
+      const mobDeadline = Date.now() + 8000
+      while (Date.now() < mobDeadline) {
+        const r = await chrome.send('Runtime.evaluate', { expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="studio-empty-stage"]'))`, returnByValue: true })
+        if (r.result?.value) break
+        await new Promise((res) => setTimeout(res, 80))
+      }
+
+      const mobRes = await chrome.send('Runtime.evaluate', {
+        expression: `(async () => {
+          const initialCollapsed = window.__DAB_STUDIO__.sidebarCollapsed;
+          window.__DAB_STUDIO__.setSidebarCollapsed(false);
+          await new Promise((r) => setTimeout(r, 50));
+          const sidebarEl = document.querySelector('[data-testid="conversations-sidebar"]');
+          const sidebarPosition = sidebarEl ? window.getComputedStyle(sidebarEl).position : '';
+          await window.__DAB_STUDIO__.handleSelectConversation({
+            id: 'conv_app_42', type: 'app', label: 'Executive Revenue App',
+            content: { dashboardId: '42', appArtifactId: 'obj_app_42' }, updatedAt: '2026-10-30T23:40:00Z'
+          });
+          await new Promise((r) => setTimeout(r, 80));
+          return { initialCollapsed, sidebarPosition, collapsedAfterSelect: window.__DAB_STUDIO__.sidebarCollapsed };
+        })()`,
+        awaitPromise: true,
+        returnByValue: true
+      })
+      expect(mobRes.result.value).toEqual({ initialCollapsed: true, sidebarPosition: 'absolute', collapsedAfterSelect: true })
+    } finally {
+      await chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
+    }
+  }, 20000)
 })

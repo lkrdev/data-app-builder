@@ -3,6 +3,10 @@ import type { IArtifact, IDashboard, IDashboardElement, Looker40SDK } from '@loo
 import { mutate, SWRConfig, unstable_serialize } from 'swr'
 
 import {
+  buildCaEmbedPath,
+  normalizeCaEmbedPath,
+} from './conversationalAnalytics'
+import {
   DashboardStudioMetadata,
   mergeStudioMetadata,
   PersistedChatTurn,
@@ -11,6 +15,11 @@ import {
 import { rawLookerRequest } from './lookerApi'
 
 export const ARTIFACT_NAMESPACE = 'data_app_builder::data_app_builder'
+export const DEFAULT_STUDIO_AGENT_NAME = 'Ripper'
+
+export interface UserStudioConfig { userId: string; agentName: string; updatedAt: string }
+export const normalizeStudioAgentName = (raw?: string | null): string => String(raw ?? '').trim() || DEFAULT_STUDIO_AGENT_NAME
+export const userStudioConfigArtifactKey = (userId: string): string => `user_config:${String(userId || '').trim() || '1'}`
 const UUID_OR_TILE_ID_REGEX = /^(?:db::)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export type ArtifactExtensionHostLike = Partial<ExtensionSDK> | { lookerHostData?: { extensionId?: string } } | null | undefined
@@ -164,14 +173,18 @@ export function resolveStudioContentEmbedPath(
   explicitPath?: string
 ): string {
   const cleanExplicit = String(explicitPath || '').trim()
-  if (cleanExplicit) return cleanExplicit
+  if (cleanExplicit) {
+    return contentType === 'conversational-analytics' || /^\/(?:embed\/)?(?:conversations|agents)\//.test(cleanExplicit)
+      ? normalizeCaEmbedPath(cleanExplicit)
+      : cleanExplicit
+  }
   const cleanId = String(id || '').trim()
   const enc = encodeURIComponent(cleanId)
   const paths: Partial<Record<StudioContentItemType, string>> = {
     look: `/embed/looks/${enc}`,
     explore: `/embed/explore/${cleanId.replace('::', '/')}`,
     board: `/embed/boards/${enc}`,
-    'conversational-analytics': `/embed/conversations/${enc}`,
+    'conversational-analytics': buildCaEmbedPath(cleanId),
     extension: `/embed/extensions/${cleanId}`,
     report: `/embed/reporting/${cleanId}`,
   }
@@ -1029,6 +1042,25 @@ export class ArtifactService {
     await this.delete(formatUserEnvArtifactKey(userId))
   }
 
+  async getUserConfig(userId: string): Promise<UserStudioConfig> {
+    const uid = String(userId || '').trim() || '1'
+    const key = userStudioConfigArtifactKey(uid)
+    const stored = this.valueByKey.has(key) ? this.valueByKey.get(key) : await this.get<Partial<UserStudioConfig> | string>(key)
+    const obj = stored && typeof stored === 'object' ? (stored as Partial<UserStudioConfig>) : undefined
+    return {
+      userId: uid,
+      agentName: normalizeStudioAgentName(typeof stored === 'string' ? stored : obj?.agentName),
+      updatedAt: typeof obj?.updatedAt === 'string' ? obj.updatedAt : '',
+    }
+  }
+
+  async saveUserConfig(userId: string, patch: Partial<Pick<UserStudioConfig, 'agentName'>>): Promise<UserStudioConfig> {
+    const uid = String(userId || '').trim() || '1'
+    const nextConfig: UserStudioConfig = { userId: uid, agentName: normalizeStudioAgentName(patch.agentName), updatedAt: new Date().toISOString() }
+    await this.put([{ key: userStudioConfigArtifactKey(uid), value: nextConfig }])
+    return nextConfig
+  }
+
   async listConversations(userId: string): Promise<UserConversationEntry[]> {
     const uid = String(userId || '1').trim()
     const cached = this.conversationsCache.get(uid)
@@ -1430,81 +1462,26 @@ export function clearArtifactServiceCache(): void {
   servicesBySdk = new WeakMap<object, Map<string, ArtifactService>>()
 }
 
-export async function searchArtifactsRaw(
-  sdk: Looker40SDK,
-  namespace: string,
-  key: string
-): Promise<ArtifactRowLike[]> {
-  return getArtifactService(sdk, namespace).search(key)
-}
-
-export async function searchArtifacts(
-  sdk: Looker40SDK,
-  key: string,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<ArtifactRowLike[]> {
-  return getArtifactService(sdk, namespace).search(key)
-}
-
-export async function getArtifacts(
-  sdk: Looker40SDK,
-  keys: string | string[],
-  namespace = ARTIFACT_NAMESPACE
-): Promise<ArtifactRowLike[]> {
-  const list = Array.isArray(keys) ? keys : String(keys || '').split(',')
-  return getArtifactService(sdk, namespace).getMany(list)
-}
-
+export const searchArtifactsRaw = (sdk: Looker40SDK, namespace: string, key: string): Promise<ArtifactRowLike[]> =>
+  getArtifactService(sdk, namespace).search(key)
+export const searchArtifacts = (sdk: Looker40SDK, key: string, namespace = ARTIFACT_NAMESPACE): Promise<ArtifactRowLike[]> =>
+  getArtifactService(sdk, namespace).search(key)
+export const getArtifacts = (sdk: Looker40SDK, keys: string | string[], namespace = ARTIFACT_NAMESPACE): Promise<ArtifactRowLike[]> =>
+  getArtifactService(sdk, namespace).getMany(Array.isArray(keys) ? keys : String(keys || '').split(','))
 // ponytail: Looker update_artifacts requires the current `version` for existing keys;
 // delegate to ArtifactService so cached `versionByKey` skips redundant `artifact` GET calls.
-export async function putArtifacts(
-  sdk: Looker40SDK,
-  items: Array<{ key: string; value: unknown }>,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<void> {
-  return getArtifactService(sdk, namespace).put(items)
-}
-
-export async function deleteArtifacts(
-  sdk: Looker40SDK,
-  keys: string | string[],
-  namespace = ARTIFACT_NAMESPACE
-): Promise<void> {
-  return getArtifactService(sdk, namespace).delete(keys)
-}
-
-export async function getArtifactJson<T = unknown>(
-  sdk: Looker40SDK,
-  key: string,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<T | null> {
-  return getArtifactService(sdk, namespace).get<T>(key)
-}
-
-export async function loadUserEnvironmentId(
-  sdk: Looker40SDK,
-  userId: string,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<string | null> {
-  return getArtifactService(sdk, namespace).getUserEnvironmentId(userId)
-}
-
-export async function saveUserEnvironmentId(
-  sdk: Looker40SDK,
-  userId: string,
-  environmentId: string,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<void> {
-  return getArtifactService(sdk, namespace).saveUserEnvironmentId(userId, environmentId)
-}
-
-export async function clearUserEnvironmentId(
-  sdk: Looker40SDK,
-  userId: string,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<void> {
-  return getArtifactService(sdk, namespace).clearUserEnvironmentId(userId)
-}
+export const putArtifacts = (sdk: Looker40SDK, items: Array<{ key: string; value: unknown }>, namespace = ARTIFACT_NAMESPACE): Promise<void> =>
+  getArtifactService(sdk, namespace).put(items)
+export const deleteArtifacts = (sdk: Looker40SDK, keys: string | string[], namespace = ARTIFACT_NAMESPACE): Promise<void> =>
+  getArtifactService(sdk, namespace).delete(keys)
+export const getArtifactJson = <T = unknown>(sdk: Looker40SDK, key: string, namespace = ARTIFACT_NAMESPACE): Promise<T | null> =>
+  getArtifactService(sdk, namespace).get<T>(key)
+export const loadUserEnvironmentId = (sdk: Looker40SDK, userId: string, namespace = ARTIFACT_NAMESPACE): Promise<string | null> =>
+  getArtifactService(sdk, namespace).getUserEnvironmentId(userId)
+export const saveUserEnvironmentId = (sdk: Looker40SDK, userId: string, environmentId: string, namespace = ARTIFACT_NAMESPACE): Promise<void> =>
+  getArtifactService(sdk, namespace).saveUserEnvironmentId(userId, environmentId)
+export const clearUserEnvironmentId = (sdk: Looker40SDK, userId: string, namespace = ARTIFACT_NAMESPACE): Promise<void> =>
+  getArtifactService(sdk, namespace).clearUserEnvironmentId(userId)
 
 export type NativeContentType = 'dashboard' | 'lookml_dashboard' | 'look' | 'board'
 
@@ -1771,62 +1748,21 @@ export async function listUserDashboardArtifacts(
   }
 }
 
-export async function saveScriptArtifact(
-  sdk: Looker40SDK,
-  userId: string,
-  script: SavedScript,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<SavedScript> {
-  return getArtifactService(sdk, namespace).saveScript(userId, script)
-}
-
-export async function loadScriptArtifact(
-  sdk: Looker40SDK,
-  scriptId: string,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<SavedScript | null> {
-  return getArtifactService(sdk, namespace).loadScript(scriptId)
-}
-
+export const saveScriptArtifact = (sdk: Looker40SDK, userId: string, script: SavedScript, namespace = ARTIFACT_NAMESPACE): Promise<SavedScript> =>
+  getArtifactService(sdk, namespace).saveScript(userId, script)
+export const loadScriptArtifact = (sdk: Looker40SDK, scriptId: string, namespace = ARTIFACT_NAMESPACE): Promise<SavedScript | null> =>
+  getArtifactService(sdk, namespace).loadScript(scriptId)
 export const loadSingleScriptArtifact = loadScriptArtifact
-
-export async function listSavedScripts(
-  sdk: Looker40SDK,
-  userId?: string,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<SavedScript[]> {
-  return getArtifactService(sdk, namespace).listSavedScripts(userId)
-}
-
+export const listSavedScripts = (sdk: Looker40SDK, userId?: string, namespace = ARTIFACT_NAMESPACE): Promise<SavedScript[]> =>
+  getArtifactService(sdk, namespace).listSavedScripts(userId)
 export const loadSavedScriptsList = listSavedScripts
-
-export async function deleteScriptArtifact(
-  sdk: Looker40SDK,
-  userId: string,
-  scriptId: string,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<void> {
-  return getArtifactService(sdk, namespace).deleteScript(userId, scriptId)
-}
-
-export async function bindTileScriptArtifact(
-  sdk: Looker40SDK,
-  elementId: string,
-  binding: TileScriptBinding,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<TileScriptBinding> {
-  return getArtifactService(sdk, namespace).bindTileScript(elementId, binding)
-}
-
+export const deleteScriptArtifact = (sdk: Looker40SDK, userId: string, scriptId: string, namespace = ARTIFACT_NAMESPACE): Promise<void> =>
+  getArtifactService(sdk, namespace).deleteScript(userId, scriptId)
+export const bindTileScriptArtifact = (sdk: Looker40SDK, elementId: string, binding: TileScriptBinding, namespace = ARTIFACT_NAMESPACE): Promise<TileScriptBinding> =>
+  getArtifactService(sdk, namespace).bindTileScript(elementId, binding)
 export const bindScriptToTileArtifact = bindTileScriptArtifact
-
-export async function loadTileScriptArtifact(
-  sdk: Looker40SDK,
-  elementId: string,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<TileScriptBinding | null> {
-  return getArtifactService(sdk, namespace).loadTileScript(elementId)
-}
+export const loadTileScriptArtifact = (sdk: Looker40SDK, elementId: string, namespace = ARTIFACT_NAMESPACE): Promise<TileScriptBinding | null> =>
+  getArtifactService(sdk, namespace).loadTileScript(elementId)
 
 export async function publishScriptDashboard(
   sdk: Looker40SDK,
@@ -1995,72 +1931,21 @@ export async function listUserArtifacts(
 
 export const loadUserArtifactsList = listUserArtifacts
 
-export async function loadObjectArtifact<T = SharedArtifactPayload>(
-  sdk: Looker40SDK,
-  type: StudioToolMode,
-  id: string,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<T | null> {
-  return getArtifactService(sdk, namespace).loadObjectArtifact<T>(type, id)
-}
-
-export async function deleteUserArtifact(
-  sdk: Looker40SDK,
-  userId: string,
-  type: StudioToolMode,
-  id: string,
-  deleteSharedPayload = false,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<void> {
-  return getArtifactService(sdk, namespace).deleteUserArtifact(
-    userId,
-    type,
-    id,
-    deleteSharedPayload
-  )
-}
-
+export const loadObjectArtifact = <T = SharedArtifactPayload>(sdk: Looker40SDK, type: StudioToolMode, id: string, namespace = ARTIFACT_NAMESPACE): Promise<T | null> =>
+  getArtifactService(sdk, namespace).loadObjectArtifact<T>(type, id)
+export const deleteUserArtifact = (sdk: Looker40SDK, userId: string, type: StudioToolMode, id: string, deleteSharedPayload = false, namespace = ARTIFACT_NAMESPACE): Promise<void> =>
+  getArtifactService(sdk, namespace).deleteUserArtifact(userId, type, id, deleteSharedPayload)
 // ponytail: single per-user JSON array artifact `user_conversations:${me.id}` sorted by updatedAt desc.
-export async function loadUserConversations(
-  sdk: Looker40SDK,
-  userId: string,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<UserConversationEntry[]> {
-  return getArtifactService(sdk, namespace).listConversations(userId)
-}
-
+export const loadUserConversations = (sdk: Looker40SDK, userId: string, namespace = ARTIFACT_NAMESPACE): Promise<UserConversationEntry[]> =>
+  getArtifactService(sdk, namespace).listConversations(userId)
 export const loadConversationsList = loadUserConversations
-
-export async function loadSingleConversationArtifact(
-  sdk: Looker40SDK,
-  conversationId: string,
-  userId = '1',
-  namespace = ARTIFACT_NAMESPACE
-): Promise<UserConversationEntry | null> {
-  return getArtifactService(sdk, namespace).getConversation(conversationId, userId)
-}
-
-export async function saveUserConversation(
-  sdk: Looker40SDK,
-  userId: string,
-  entry: Partial<UserConversationEntry> & { id: string },
-  namespace = ARTIFACT_NAMESPACE
-): Promise<UserConversationEntry[]> {
-  return getArtifactService(sdk, namespace).saveConversation(userId, entry)
-}
-
+export const loadSingleConversationArtifact = (sdk: Looker40SDK, conversationId: string, userId = '1', namespace = ARTIFACT_NAMESPACE): Promise<UserConversationEntry | null> =>
+  getArtifactService(sdk, namespace).getConversation(conversationId, userId)
+export const saveUserConversation = (sdk: Looker40SDK, userId: string, entry: Partial<UserConversationEntry> & { id: string }, namespace = ARTIFACT_NAMESPACE): Promise<UserConversationEntry[]> =>
+  getArtifactService(sdk, namespace).saveConversation(userId, entry)
 export const saveConversationArtifact = saveUserConversation
-
-export async function archiveUserConversation(
-  sdk: Looker40SDK,
-  userId: string,
-  conversationId: string,
-  archived = true,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<UserConversationEntry[]> {
-  return getArtifactService(sdk, namespace).archiveConversation(userId, conversationId, archived)
-}
-
+export const archiveUserConversation = (sdk: Looker40SDK, userId: string, conversationId: string, archived = true, namespace = ARTIFACT_NAMESPACE): Promise<UserConversationEntry[]> =>
+  getArtifactService(sdk, namespace).archiveConversation(userId, conversationId, archived)
 export const archiveConversationArtifact = archiveUserConversation
 
 export async function deleteUserConversation(

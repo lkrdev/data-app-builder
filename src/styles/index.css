@@ -1700,4 +1700,53 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 .dab-split-action-option:hover { background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-accent-text, #1d4ed8); }
 .dab-split-action-option.selected { background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-accent-text, #1d4ed8); font-weight: 600; }
 
+/* Issue #126: Ripper Barrel Tube Vortex loader, inline agent name editor, rich Markdown & mobile responsive layout */
+@keyframes dab-ripper-vortex-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes dab-ripper-surfer-carve { 0%, 100% { transform: translate(0, 0) rotate(-3deg); } 50% { transform: translate(4px, -5px) rotate(4deg); } }
+@keyframes dab-ripper-spray-pulse { 0%, 100% { opacity: 0.45; transform: scale(0.95); } 50% { opacity: 1; transform: scale(1.1); } }
+.dab-ripper-loader-shell { display: flex; align-items: center; justify-content: center; width: 100%; height: 100vh; min-height: 360px; background: var(--dab-bg, #0b1120); color: var(--dab-text, #f8fafc); }
+.dab-ripper-loader-card { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 32px 40px; border-radius: 16px; background: var(--dab-surface, #111827); border: 1px solid var(--dab-border-strong, #334155); box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28); text-align: center; }
+.dab-ripper-loader-svg { display: block; overflow: visible; }
+.dab-ripper-barrel-vortex { transform-origin: 102px 72px; animation: dab-ripper-vortex-spin 3.2s linear infinite; }
+.dab-ripper-surfer { transform-origin: 100px 80px; animation: dab-ripper-surfer-carve 1.8s ease-in-out infinite; }
+.dab-ripper-spray { transform-origin: 102px 72px; animation: dab-ripper-spray-pulse 1.4s ease-in-out infinite; }
+.dab-ripper-loader-title { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; color: var(--dab-text-strong, #f8fafc); }
+.dab-ripper-loader-subtitle { font-size: 12.5px; color: var(--dab-text-muted, #94a3b8); }
+.dab-agent-name-brand { display: inline-flex; align-items: center; gap: 5px; }
+.dab-agent-name-edit-btn { width: 22px; min-width: 22px; height: 22px; min-height: 22px; opacity: 0.82; }
+.dab-agent-name-edit-btn:hover { opacity: 1; }
+.dab-agent-name-editor { display: inline-flex; align-items: center; gap: 4px; }
+.dab-agent-name-input { height: 24px; width: 126px; padding: 0 7px; font-size: 12.5px; font-weight: 600; font-family: inherit; border-radius: 5px; border: 1px solid var(--dab-accent, #2563eb); background: var(--dab-surface, #ffffff); color: var(--dab-text-strong, #0f172a); outline: none; }
+.dab-agent-name-save-btn { width: 24px; min-width: 24px; height: 24px; min-height: 24px; }
+.dab-markdown { display: flex; flex-direction: column; gap: 6px; line-height: 1.5; word-break: break-word; }
+.dab-md-p { margin: 0; white-space: pre-wrap; }
+.dab-md-heading { margin: 4px 0 2px; font-weight: 700; color: var(--dab-text-strong, #0f172a); line-height: 1.3; }
+.dab-md-h1 { font-size: 15px; }
+.dab-md-h2 { font-size: 14px; }
+.dab-md-h3, .dab-md-h4 { font-size: 13px; }
+.dab-md-list { margin: 2px 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+.dab-md-inline-code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11.5px; padding: 1px 5px; border-radius: 4px; background: var(--dab-surface-subtle, #f1f5f9); border: 1px solid var(--dab-border, #e2e8f0); color: var(--dab-text-strong, #0f172a); }
+.dab-md-pre { margin: 4px 0; padding: 8px 10px; border-radius: 6px; background: var(--dab-surface-muted, #f8fafc); border: 1px solid var(--dab-border, #e2e8f0); overflow-x: auto; }
+.dab-md-code-block { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11.5px; line-height: 1.45; white-space: pre; color: var(--dab-text, #1e293b); }
+.dab-md-link-group { display: inline-flex; align-items: center; gap: 4px; vertical-align: baseline; flex-wrap: wrap; }
+.dab-md-link { color: var(--dab-accent-text, #2563eb); text-decoration: underline; text-underline-offset: 2px; font-weight: 500; cursor: pointer; }
+.dab-md-link:hover { color: var(--dab-accent, #1d4ed8); }
+.dab-md-link-copy-btn { display: inline-flex; align-items: center; gap: 3px; height: 19px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--dab-border-strong, #cbd5e1); background: var(--dab-surface, #ffffff); color: var(--dab-text-secondary, #475569); font-size: 10px; font-weight: 600; font-family: inherit; cursor: pointer; line-height: 1; }
+.dab-md-link-copy-btn:hover { border-color: var(--dab-accent-border, #93c5fd); background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-accent-text, #1d4ed8); }
+@media (max-width: 768px) {
+  .dab-topbar { padding: 6px 10px; gap: 6px; flex-wrap: wrap; }
+  .dab-brand { gap: 6px; flex-wrap: wrap; }
+  .dab-controls { gap: 6px; flex-wrap: wrap; width: 100%; justify-content: flex-start; }
+  .dab-folder-trigger-fixed, .dab-combobox { min-width: 0; max-width: 100%; width: auto; flex: 1 1 130px; }
+  .dab-workspace, .dab-workspace.dab-workspace-with-sidebar, .dab-workspace.dab-workspace-with-sidebar.dab-workspace-sidebar-collapsed, .dab-workspace.dab-workspace-with-sidebar.dab-workspace-empty, .dab-workspace.dab-workspace-with-sidebar.dab-workspace-sidebar-collapsed.dab-workspace-empty, .dab-workspace.dab-workspace-with-sidebar.dab-workspace-right-collapsed, .dab-workspace.dab-workspace-with-sidebar.dab-workspace-sidebar-collapsed.dab-workspace-right-collapsed { position: relative; grid-template-columns: 36px minmax(0, 1fr) !important; }
+  .dab-conv-sidebar:not(.collapsed) { position: absolute; inset: 0 auto 0 0; width: min(260px, 82vw); z-index: 400; box-shadow: 4px 0 20px rgba(0, 0, 0, 0.35); }
+  .dab-empty-stage-centered { grid-column: 2; padding: 12px 10px; overflow-y: auto; align-items: flex-start; }
+  .dab-empty-prompt-card { width: 100%; max-width: 100%; gap: 12px; }
+  .dab-starter-prompts, .dab-starter-chips-row { flex-direction: column; align-items: stretch; }
+  .dab-starter-chip { width: 100%; max-width: 100%; justify-content: flex-start; }
+  .dab-split-resizer, .dab-pane-resizer { display: none !important; }
+  .dab-left-pane { grid-column: 2; width: 100% !important; max-width: 100% !important; min-width: 0 !important; border-right: none; }
+  .dab-right-pane { grid-column: 2; min-height: 280px; border-top: 1px solid var(--dab-border, #e2e8f0); }
+}
+
 
