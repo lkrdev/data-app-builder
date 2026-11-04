@@ -6,8 +6,11 @@ import {
   ANTIGRAVITY_ALLOWED_MODELS,
   type AntigravityAuth,
   type AntigravityExtensionHostLike,
+  type AntigravityInteractionOutput,
   type AntigravityInteractionPayload,
+  type AntigravityInteractionStep,
   type AntigravityModelOption,
+  type AntigravityUsageMetadata,
 } from './antigravityTypes'
 import { extractResolvedUseCase, type StudioUseCase } from './lookerApi'
 
@@ -369,11 +372,25 @@ export async function callInteractionsApi(
         })
         return { id: 'int_mock_starter_prompts', status: 'completed', output_text: `<STARTER_PROMPTS>${JSON.stringify(mockPrompts)}</STARTER_PROMPTS>` }
       }
+      if (promptText.includes('[CA_AGENT_SELECTION_REQUEST]')) {
+        const idMatch = promptText.match(/"agent_id"\s*:\s*"([^"]+)"/)
+        const selectedId = idMatch?.[1] || 'ad69f74cd9e2494090e9e9e9c50190c8'
+        return {
+          id: 'int_mock_ca_selection',
+          status: 'completed',
+          output_text: JSON.stringify({
+            agent_id: selectedId,
+            rationale: 'Selected Looker CA agent via direct model stateless routing.',
+          }),
+        }
+      }
+      const isDirectStatelessModel =
+        body?.store === false || (Boolean(body?.model) && !body?.agent)
       const userReqMatch = promptText.match(/User request:\s*([\s\S]*)$/i)
       const inferred = extractResolvedUseCase(undefined, userReqMatch ? userReqMatch[1].trim() : promptText)
       return {
         id: `int_mock_${Date.now().toString(36).slice(-5)}`,
-        environment_id: `env_${inferred}_mock`,
+        ...(isDirectStatelessModel ? {} : { environment_id: `env_${inferred}_mock` }),
         status: 'completed',
         output_text: `<USE_CASE>${inferred}</USE_CASE>\nRouted turn via AGENTS.md to ${inferred}.`,
       }
@@ -517,4 +534,182 @@ export async function fetchEnvironmentFile(params: {
     throw new Error(`Antigravity file fetch error (${resp.status}): ${errMsg}`)
   }
   return text
+}
+
+export interface StreamInteractionOptions {
+  extensionSDK?: AntigravityExtensionHostLike; auth: AntigravityAuth; interactionId: string
+  initialInteraction?: AntigravityInteractionPayload; lastEventId?: string; maxReconnects?: number
+  signal?: AbortSignal; fetchImpl?: typeof fetch; allowMockWindow?: boolean
+  onUpdate?: (interaction: AntigravityInteractionPayload, eventId?: string) => void
+}
+export interface StreamInteractionResult {
+  interaction: AntigravityInteractionPayload | null; streamed: boolean; eventCount: number; lastEventId?: string
+}
+
+export function mergeInteractionSseEvent(
+  current: AntigravityInteractionPayload,
+  eventType: string,
+  rawData: Record<string, unknown>
+): AntigravityInteractionPayload {
+  const data = rawData.interaction && typeof rawData.interaction === 'object'
+    ? { ...rawData, ...(rawData.interaction as Record<string, unknown>) }
+    : rawData
+  const evt = String(eventType || data.type || '').trim()
+  let nextStatus = typeof data.status === 'string' ? data.status : current.status
+  if (!data.status) {
+    if (evt === 'interaction.complete' || evt === 'completed' || evt === 'done') nextStatus = 'completed'
+    else if (evt === 'interaction.requires_action' || evt === 'requires_action') nextStatus = 'requires_action'
+    else if (evt === 'interaction.failed' || evt === 'failed') nextStatus = 'failed'
+  }
+  let nextSteps = Array.isArray(data.steps) ? [...(data.steps as AntigravityInteractionStep[])] : [...(current.steps || [])]
+  if (evt === 'step.delta' || evt === 'step' || Boolean(data.step_delta || data.step)) {
+    const stepObj = (data.step_delta || data.step || data.delta || data) as AntigravityInteractionStep
+    if (stepObj && typeof stepObj === 'object') {
+      const stepId = stepObj.id || stepObj.call_id
+      const idx = stepId ? nextSteps.findIndex((s) => (s.id || s.call_id) === stepId) : -1
+      const append = evt === 'step.delta' || Boolean(data.step_delta || data.delta)
+      if (idx >= 0) {
+        const prev = nextSteps[idx]
+        nextSteps[idx] = {
+          ...prev, ...stepObj,
+          ...(append && typeof prev.text === 'string' && typeof stepObj.text === 'string' ? { text: `${prev.text}${stepObj.text}` } : {}),
+          ...(append && typeof prev.thought === 'string' && typeof stepObj.thought === 'string' ? { thought: `${prev.thought}${stepObj.thought}` } : {}),
+        }
+      } else {
+        nextSteps = [...nextSteps, stepObj]
+      }
+    }
+  }
+  let nextOutputText = current.output_text
+  if (evt === 'content.delta' || Boolean(data.content_delta) || typeof data.text_delta === 'string') {
+    const d = (data.content_delta || data.delta || data) as { text?: string; text_delta?: string }
+    nextOutputText = `${current.output_text || ''}${String(d.text_delta ?? d.text ?? data.text_delta ?? '')}`
+  } else if (typeof data.output_text === 'string') {
+    nextOutputText = data.output_text
+  }
+  return {
+    ...current,
+    ...(typeof data.id === 'string' && data.id ? { id: data.id } : {}),
+    ...(nextStatus ? { status: nextStatus } : {}),
+    ...(typeof data.environment_id === 'string' && data.environment_id ? { environment_id: data.environment_id } : {}),
+    ...(nextOutputText !== undefined ? { output_text: nextOutputText } : {}),
+    ...(Array.isArray(data.outputs) ? { outputs: data.outputs as AntigravityInteractionOutput[] } : {}),
+    ...(nextSteps.length > 0 ? { steps: nextSteps } : {}),
+    ...(data.error && typeof data.error === 'object' ? { error: data.error as { message?: string } } : {}),
+    ...(data.usage && typeof data.usage === 'object' ? { usage: data.usage as AntigravityUsageMetadata } : {}),
+    ...(data.usage_metadata && typeof data.usage_metadata === 'object' ? { usage_metadata: data.usage_metadata as AntigravityUsageMetadata } : {}),
+  }
+}
+
+export async function streamInteractionUntilActionOrDone(options: StreamInteractionOptions): Promise<StreamInteractionResult> {
+  const { auth, interactionId, initialInteraction, lastEventId: initialLastEventId, maxReconnects = 1, signal, fetchImpl, allowMockWindow = false, onUpdate } = options
+  const cleanId = String(interactionId || '').trim()
+  const effectiveFetch = fetchImpl || (typeof fetch === 'function' ? fetch : undefined)
+  if (
+    auth.mode !== 'oauth' || !auth.oauthToken?.trim() || !cleanId || !effectiveFetch ||
+    (typeof window !== 'undefined' && window.__MOCK_LOOKER_EXTENSION__ && !allowMockWindow && !fetchImpl)
+  ) {
+    return { interaction: initialInteraction || null, streamed: false, eventCount: 0, lastEventId: initialLastEventId }
+  }
+  let currentInteraction: AntigravityInteractionPayload = initialInteraction ? { ...initialInteraction, id: initialInteraction.id || cleanId } : { id: cleanId, status: 'in_progress' }
+  let currentLastEventId: string | undefined = initialLastEventId
+  let eventCount = 0
+  const isTerminal = (s?: string) => s === 'completed' || s === 'requires_action' || s === 'failed' || s === 'cancelled'
+
+  for (let attempt = 0; attempt <= maxReconnects && !signal?.aborted; attempt += 1) {
+    const sseUrl = `https://generativelanguage.googleapis.com/v1beta/interactions/${encodeURIComponent(cleanId)}?stream=true&alt=sse${currentLastEventId ? `&last_event_id=${encodeURIComponent(currentLastEventId)}` : ''}`
+    let resp: Response
+    try {
+      resp = await effectiveFetch(sseUrl, {
+        method: 'GET',
+        headers: {
+          Accept: 'text/event-stream',
+          Authorization: `Bearer ${auth.oauthToken.trim()}`,
+          ...(auth.projectId?.trim() ? { 'x-goog-user-project': auth.projectId.trim() } : {}),
+          ...(currentLastEventId ? { 'Last-Event-ID': currentLastEventId } : {}),
+        },
+        signal,
+      })
+    } catch { break }
+    if (!resp?.ok) break
+    const contentType = String(resp.headers?.get?.('content-type') || '').toLowerCase()
+    const hasReader = typeof resp.body?.getReader === 'function'
+    if ((contentType || !hasReader) && !contentType.includes('text/event-stream')) break
+
+    let buffer = ''
+    let frameId: string | undefined
+    let frameEvent = ''
+    let dataLines: string[] = []
+    let sawDone = false
+    const beforeCount = eventCount
+
+    const flushFrame = (): boolean => {
+      if (dataLines.length === 0 && !frameEvent && !frameId) return false
+      if (frameId) currentLastEventId = frameId
+      const rawPayload = dataLines.join('\n').trim()
+      const evt = frameEvent
+      frameId = undefined; frameEvent = ''; dataLines = []
+      if (!rawPayload) return false
+      if (rawPayload === '[DONE]') { sawDone = true; return true }
+      try {
+        const parsed = JSON.parse(rawPayload) as Record<string, unknown>
+        if (parsed && typeof parsed === 'object') {
+          currentInteraction = mergeInteractionSseEvent(currentInteraction, evt, parsed)
+          eventCount += 1
+          onUpdate?.(currentInteraction, currentLastEventId)
+        }
+      } catch { /* ignore non-JSON SSE commentary */ }
+      return isTerminal(currentInteraction.status)
+    }
+
+    const processChunkText = (chunkText: string): boolean => {
+      buffer += chunkText
+      for (let nl = buffer.indexOf('\n'); nl >= 0; nl = buffer.indexOf('\n')) {
+        const line = buffer.slice(0, nl).replace(/\r$/, '')
+        buffer = buffer.slice(nl + 1)
+        if (line === '') {
+          if (flushFrame()) return true
+        } else if (!line.startsWith(':')) {
+          const cIdx = line.indexOf(':')
+          const field = cIdx >= 0 ? line.slice(0, cIdx).trim() : line.trim()
+          const val = cIdx >= 0 ? line.slice(cIdx + 1).replace(/^ /, '') : ''
+          if (field === 'id') frameId = val
+          else if (field === 'event') frameEvent = val
+          else if (field === 'data') dataLines.push(val)
+        }
+      }
+      return false
+    }
+
+    try {
+      if (hasReader && resp.body) {
+        const reader = resp.body.getReader()
+        const decoder = new TextDecoder()
+        try {
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) {
+              const tail = decoder.decode()
+              if (tail) processChunkText(tail)
+              if (buffer.trim()) processChunkText('\n\n')
+              else flushFrame()
+              break
+            }
+            if (processChunkText(typeof value === 'string' ? value : decoder.decode(value, { stream: true }))) {
+              await reader.cancel().catch(() => {})
+              break
+            }
+          }
+        } finally {
+          try { reader.releaseLock() } catch { /* ignore */ }
+        }
+      } else if (typeof resp.text === 'function') {
+        processChunkText(`${await resp.text()}\n\n`)
+      }
+    } catch { /* stream dropped mid-flight; reconnect with last_event_id if available */ }
+
+    if (isTerminal(currentInteraction.status) || sawDone || !currentLastEventId || eventCount === beforeCount) break
+  }
+
+  return { interaction: eventCount > 0 ? currentInteraction : initialInteraction || null, streamed: eventCount > 0, eventCount, lastEventId: currentLastEventId }
 }

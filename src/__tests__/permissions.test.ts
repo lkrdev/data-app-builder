@@ -13,7 +13,7 @@ import {
   clearStarterPromptsCache, clearStoredOAuthSession, CODEMODE_CDN_URL, CodeModePermissionRequest,
   computeIsAuthenticated, computeLkrExtensionCacheKey, CONCURRENT_POLL_SCHEDULE_MS,
   CONVERSATION_LABEL_REQUEST_TAG, DASHBOARD_CODEMODE_PREAMBLE_PY, DATA_INVESTIGATOR_GUIDE_MD,
-  DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_LEFT_PANE_WIDTH, DEFAULT_THINKING_LEVEL,
+  DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_LEFT_PANE_WIDTH, DEFAULT_MAX_TOTAL_TOKENS, DEFAULT_THINKING_LEVEL,
   discoverStarterContentSummaries, discoverStarterExploreContext, ensureCodeModeLoaded,
   executeLkrExtensionToolRequest, extractInteractionActivitySteps, extractLkrExtensionToolRequests,
   extractNativeContentFromInteraction, extractThoughtText, extractWrittenMarkdownPathFromCode, fetchEnvironmentFile, formatFriendlyLookerActivityLabel,
@@ -24,13 +24,15 @@ import {
   LKR_DEV_CLI_VERSION, LkrCodeMode, loadStoredLeftPaneWidth, loadStoredOAuthSession,
   loadStoredRightPaneCollapsed, loadStoredThinkingLevel, loginWithGoogleOAuth,
   LOOKER_PROJECT_ONBOARDING_SKILL_MD, LOOKML_SKILLS_CATALOG, MAX_LEFT_PANE_WIDTH,
-  MIN_LEFT_PANE_WIDTH, normalizeSandboxFilePath, normalizeThinkingLevel, parseStarterPromptsResponse, persistOAuthSession,
-  persistThinkingLevel, prewarmOrWakeAntigravityEnvironment, readInitialThinkingLevel,
-  recordSharedEnvExploreSchema, refreshOAuthSessionIfNeeded, resolveAdaptivePollScheduleMs,
-  resolveBuiltinWorkspaceFileContent, resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris,
-  runAntigravityTurn, SANDBOX_WORKSPACE_SKILL_FILES, sanitizeConversationLabel, saveStoredLeftPaneWidth,
-  saveStoredRightPaneCollapsed, STARTER_PROMPTS_REQUEST_TAG, stripStarterPromptEmojis,
-  STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY, STUDIO_OAUTH_REFRESH_INTERVAL_MS,
+  mergeInteractionSseEvent, MIN_LEFT_PANE_WIDTH, normalizeMaxTotalTokens, normalizeSandboxFilePath,
+  normalizeThinkingLevel, parseStarterPromptsResponse, persistOAuthSession, persistThinkingLevel,
+  prewarmOrWakeAntigravityEnvironment, readInitialThinkingLevel, recordSharedEnvExploreSchema,
+  refreshOAuthSessionIfNeeded, resolveAdaptivePollScheduleMs, resolveBuiltinWorkspaceFileContent,
+  resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, runAntigravityTurn,
+  SANDBOX_WORKSPACE_SKILL_FILES, sanitizeConversationLabel, saveStoredLeftPaneWidth,
+  saveStoredRightPaneCollapsed, STARTER_PROMPTS_REQUEST_TAG, STARTER_PROMPTS_RESPONSE_FORMAT,
+  streamInteractionUntilActionOrDone, stripStarterPromptEmojis, STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY,
+  STUDIO_MAX_TOTAL_TOKENS_OPTIONS, STUDIO_OAUTH_REFRESH_INTERVAL_MS,
   STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY, STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY,
   STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY, StudioAttachedFile,
   summarizeProgress,
@@ -49,7 +51,7 @@ import {
 } from '../components/StudioWorkspace'
 import {
   archiveUserConversation, ARTIFACT_NAMESPACE, ArtifactService, buildCaEmbedPath, buildDenseExploreSchema,
-  buildRootLookerFolders, buildStudioRoute, CA_AGENT_SELECTION_REQUEST_TAG,
+  buildRootLookerFolders, buildStudioRoute, CA_AGENT_SELECTION_REQUEST_TAG, CA_AGENT_SELECTION_RESPONSE_FORMAT,
   classifyLooker404Error, classifyStudioUseCase, clearArtifactServiceCache,
   clearLookerMetadataCache, ConversationRecord, convertRelativeDateFilterToFixed,
   createDeduplicatedLookerSdkProxy, createLookerCaConversation, DEFAULT_STUDIO_AGENT_NAME, deleteUserArtifact,
@@ -74,10 +76,16 @@ import {
 } from '../lookerApi'
 
 interface MockInteractionPostBody {
+  model?: string
+  store?: boolean
+  background?: boolean
+  system_instruction?: string
+  generation_config?: Record<string, unknown>
+  response_format?: Record<string, unknown>
   environment?: string | { type?: string; sources?: Array<{ target: string; content: string }> }
   previous_interaction_id?: string
   tools?: unknown[]
-  agent_config?: { type: string; model: string }
+  agent_config?: { type: string; model: string; max_total_tokens?: string }
   input?: Array<{ type?: string; text?: string }>
 }
 const asSdk = (mock: Record<string, unknown>): Looker40SDK => mock as unknown as Looker40SDK
@@ -308,7 +316,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       'gemini-3.6-flash',
       'gemini-3.5-flash-lite',
     ])
-    expect(DEFAULT_THINKING_LEVEL).toBe('medium')
+    expect(DEFAULT_THINKING_LEVEL).toBe('high')
     expect(STUDIO_THINKING_LEVEL_STORAGE_KEY).toBe('dab_thinking_level')
     expect(STUDIO_THINKING_LEVEL_OPTIONS).toEqual([
       { value: 'low', label: 'Low', testId: 'thinking-level-option-low' },
@@ -317,8 +325,8 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     ])
     expect(normalizeThinkingLevel('low')).toBe('low')
     expect(normalizeThinkingLevel('high')).toBe('high')
-    expect(normalizeThinkingLevel('invalid')).toBe('medium')
-    expect(readInitialThinkingLevel()).toBe('medium')
+    expect(normalizeThinkingLevel('invalid')).toBe('high')
+    expect(readInitialThinkingLevel()).toBe('high')
     expect(await listAvailableAntigravityModels({}, { mode: 'oauth' })).toEqual(
       ANTIGRAVITY_ALLOWED_MODELS
     )
@@ -384,6 +392,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(postCall?.body?.agent_config).toEqual({
       type: 'antigravity',
       model: 'gemini-4-argon',
+      max_total_tokens: '131072',
     })
     const firstInputText = Array.isArray(postCall?.body?.input)
       ? String((postCall?.body?.input[0] as { text?: string } | undefined)?.text || '')
@@ -482,10 +491,16 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
 
     const postReq = apiCalls.find((c) => c.method === 'POST')
     expect(postReq).toBeDefined()
+    expect(postReq?.body?.model).toBe('gemini-3.5-flash-lite')
+    expect(postReq?.body?.store).toBe(false)
+    expect(postReq?.body?.background).toBe(false)
     expect(postReq?.body?.tools).toEqual([])
     expect(postReq?.body?.previous_interaction_id).toBeUndefined()
     expect('previous_interaction_id' in (postReq?.body || {})).toBe(false)
-    expect(postReq?.body?.environment).toBe('env_shared_1')
+    expect(postReq?.body?.environment).toBeUndefined()
+    expect(postReq?.body?.agent_config).toBeUndefined()
+    expect(postReq?.body?.system_instruction).toContain('Return only a single-line concise 3-6 word plain-text title')
+    expect(postReq?.body?.generation_config).toEqual({ thinking_level: 'low', max_output_tokens: 1024 })
     expect(postReq?.body?.input?.[0]?.text).toContain(CONVERSATION_LABEL_REQUEST_TAG)
 
     const store = new Map<string, unknown>()
@@ -1063,11 +1078,18 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       selectedExplores: [],
     })
 
-    // Stateless isolated sub-agent call must NEVER pass previous_interaction_id and must pass tools: []
+    // Stateless isolated sub-agent call must use direct model inference (store: false, background: false, tools: [], response_format)
     expect(capturedPayloads).toHaveLength(1)
+    expect(capturedPayloads[0].model).toBe(DEFAULT_ANTIGRAVITY_MODEL)
+    expect(capturedPayloads[0].store).toBe(false)
+    expect(capturedPayloads[0].background).toBe(false)
     expect(capturedPayloads[0].previous_interaction_id).toBeUndefined()
     expect(capturedPayloads[0].tools).toEqual([])
-    expect(capturedPayloads[0].environment).toBe('env_shared_1')
+    expect(capturedPayloads[0].environment).toBeUndefined()
+    expect(capturedPayloads[0].agent_config).toBeUndefined()
+    expect(capturedPayloads[0].system_instruction).toContain('Select the single best Looker CA agent_id')
+    expect(capturedPayloads[0].generation_config).toEqual({ thinking_level: 'low', max_output_tokens: 1024 })
+    expect(capturedPayloads[0].response_format).toEqual(CA_AGENT_SELECTION_RESPONSE_FORMAT)
     expect(capturedPayloads[0].input?.[0]?.text).toContain(CA_AGENT_SELECTION_REQUEST_TAG)
 
     expect(selection.agentId).toBe('ca_agent_bq_ops')
@@ -3596,8 +3618,16 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       pollScheduleMs: [0],
     })
     expect(capturedBodies).toHaveLength(1)
+    expect(capturedBodies[0].model).toBe(DEFAULT_ANTIGRAVITY_MODEL)
+    expect(capturedBodies[0].store).toBe(false)
+    expect(capturedBodies[0].background).toBe(false)
     expect(capturedBodies[0].tools).toEqual([])
     expect(capturedBodies[0].previous_interaction_id).toBeUndefined()
+    expect(capturedBodies[0].environment).toBeUndefined()
+    expect(capturedBodies[0].agent_config).toBeUndefined()
+    expect(capturedBodies[0].system_instruction).toContain('Synthesize 3-4 concise, tailored Looker Studio starter prompts')
+    expect(capturedBodies[0].generation_config).toEqual({ thinking_level: 'low', max_output_tokens: 1024 })
+    expect(capturedBodies[0].response_format).toEqual(STARTER_PROMPTS_RESPONSE_FORMAT)
     const sentInput = (capturedBodies[0].input as Array<{ text?: string }>)[0]?.text || ''
     expect(sentInput).toContain(STARTER_PROMPTS_REQUEST_TAG)
     expect(sentInput).toContain('retail_ops::store_transactions')
@@ -5325,5 +5355,140 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
       { id: 'step_py_open', kind: 'file', title: 'Editing report.md', detail: '/workspace/report.md', path: '/workspace/report.md', status: 'done' },
       { id: 'step_py_path', kind: 'file', title: 'Editing summary.md', detail: '/workspace/summary.md', path: '/workspace/summary.md', status: 'done' },
     ])
+  })
+
+  test('55. Issue #131: direct model stateless side-requests (store:false, response_format), DEFAULT_MAX_TOTAL_TOKENS=131072, and OAuth SSE streaming with last_event_id resume + polling fallback', async () => {
+    expect(DEFAULT_THINKING_LEVEL).toBe('high')
+    expect(DEFAULT_MAX_TOTAL_TOKENS).toBe(131072)
+    expect(STUDIO_MAX_TOTAL_TOKENS_OPTIONS.map((o) => o.value)).toEqual([32768, 65536, 131072, 262144])
+    expect([normalizeMaxTotalTokens(undefined), normalizeMaxTotalTokens(0), normalizeMaxTotalTokens(65536), normalizeMaxTotalTokens('262144')]).toEqual([
+      131072, 131072, 65536, 262144,
+    ])
+    expect([readInitialThinkingLevel(), readInitialThinkingLevel('low')]).toEqual(['high', 'low'])
+
+    // Raw JSON (response_format) parsing without XML wrapper tags
+    const rawStarterJson = JSON.stringify([
+      { id: 's1', label: 'Revenue by Region Scorecard', prompt: 'Build a revenue scorecard by region.', useCase: 'app' },
+      { id: 's2', label: 'Monthly Order Trend UDD', prompt: 'Create a native UDD for monthly orders.', useCase: 'dashboard' },
+      { id: 's3', label: 'Top Brand Margin Breakdown', prompt: 'What drove brand margin changes?', useCase: 'data-investigator' },
+    ])
+    expect(parseStarterPromptsResponse(rawStarterJson, []).map((p) => p.id)).toEqual(['s1', 's2', 's3'])
+    const rawCaJson = JSON.stringify({
+      agent_id: 'ca_agent_1',
+      agent_name: 'Orders CA Agent',
+      rationale: 'Direct JSON schema match for orders explore.',
+    })
+    expect(
+      parseCaAgentSelectionResponse(
+        rawCaJson,
+        [{ id: 'ca_agent_1', name: 'Orders CA Agent', description: 'Orders', explores: ['thelook::orders'], goldenQueries: [] }],
+        'Orders last month?'
+      )
+    ).toMatchObject({ agentId: 'ca_agent_1', agentName: 'Orders CA Agent', rationale: 'Direct JSON schema match for orders explore.' })
+
+    // Custom maxTotalTokens forwarded in agent_config.max_total_tokens
+    const capturedTurnBodies: MockInteractionPostBody[] = []
+    const mockExtSdk = {
+      serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+        if (init?.body) capturedTurnBodies.push(JSON.parse(String(init.body)) as MockInteractionPostBody)
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({ id: 'int_max_tok_1', environment_id: 'env_tok_1', status: 'completed', output_text: 'Done with 262k budget.' }),
+        }
+      },
+    }
+    await runAntigravityTurn({
+      sdk: asSdk({}),
+      extensionSDK: mockExtSdk,
+      auth: { mode: 'apikey' },
+      session: { toolType: 'app' },
+      model: 'gemini-3.8-flash',
+      maxTotalTokens: 262144,
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      userPrompt: 'Build app',
+      onStatus: () => {},
+    })
+    expect(capturedTurnBodies[0]?.agent_config).toEqual({
+      type: 'antigravity',
+      model: 'gemini-3.8-flash',
+      max_total_tokens: '262144',
+    })
+
+    // SSE frame merging + resumable streamInteractionUntilActionOrDone with last_event_id & fallback
+    const snap = mergeInteractionSseEvent(
+      mergeInteractionSseEvent({ id: 'int_sse_1', status: 'in_progress' }, 'step.delta', {
+        step: { id: 'st_1', type: 'thought', thought: 'Inspecting explore schema...' },
+      }),
+      'content.delta',
+      { delta: { text: 'Hello ' } }
+    )
+    const snap2 = mergeInteractionSseEvent(snap, 'content.delta', { delta: { text: 'world!' } })
+    expect(snap2.output_text).toBe('Hello world!')
+    expect((snap2.steps as Array<{ id?: string }>)[0]?.id).toBe('st_1')
+
+    // Fallback when auth.mode === 'apikey'
+    const fallbackApiKey = await streamInteractionUntilActionOrDone({
+      auth: { mode: 'apikey', apiKey: 'k' },
+      interactionId: 'int_sse_fallback',
+    })
+    expect(fallbackApiKey.streamed).toBe(false)
+
+    // Resumable OAuth SSE stream across 2 connections (dropped after evt_1, resumed with last_event_id=evt_1)
+    const originalFetch = globalThis.fetch
+    const requestedUrls: string[] = []
+    try {
+      let attempt = 0
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input)
+        requestedUrls.push(url)
+        attempt += 1
+        const encoder = new TextEncoder()
+        const frames =
+          attempt === 1
+            ? [
+                'id: evt_1\nevent: step.delta\ndata: {"step":{"id":"s1","type":"thought","thought":"Checking dimensions"}}\n\n',
+              ]
+            : [
+                'id: evt_2\nevent: content.delta\ndata: {"delta":{"text":"Streamed KPI App Ready."}}\n\n',
+                'id: evt_3\nevent: interaction.complete\ndata: {"interaction":{"id":"int_sse_live","status":"completed","environment_id":"env_sse_1"}}\n\n',
+              ]
+        let idx = 0
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (h: string) => (h.toLowerCase() === 'content-type' ? 'text/event-stream' : null) },
+          body: {
+            getReader: () => ({
+              read: async () => {
+                if (idx >= frames.length) return { done: true, value: undefined }
+                const chunk = encoder.encode(frames[idx++])
+                return { done: false, value: chunk }
+              },
+              releaseLock: () => {},
+            }),
+          },
+        } as unknown as Response
+      }) as typeof fetch
+
+      const updates: Array<Record<string, unknown>> = []
+      const sseRes = await streamInteractionUntilActionOrDone({
+        auth: { mode: 'oauth', oauthToken: 'mock-oauth-sse-token' },
+        interactionId: 'int_sse_live',
+        onUpdate: (u) => { updates.push({ ...u }) },
+      })
+      expect(sseRes.streamed).toBe(true)
+      expect(sseRes.lastEventId).toBe('evt_3')
+      expect(sseRes.interaction.status).toBe('completed')
+      expect(sseRes.interaction.output_text).toBe('Streamed KPI App Ready.')
+      expect(requestedUrls).toEqual([
+        'https://generativelanguage.googleapis.com/v1beta/interactions/int_sse_live?stream=true&alt=sse',
+        'https://generativelanguage.googleapis.com/v1beta/interactions/int_sse_live?stream=true&alt=sse&last_event_id=evt_1',
+      ])
+      expect(updates.length).toBeGreaterThanOrEqual(2)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })

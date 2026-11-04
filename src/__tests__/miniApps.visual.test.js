@@ -354,6 +354,9 @@ function buildHtmlPage(scenario) {
         if (!window.location.search.includes('preserveBusyAction=1')) {
           window.localStorage.removeItem('dab_busy_send_action');
         }
+        if (!window.location.search.includes('preserveThinkingLevel=1')) {
+          window.localStorage.removeItem('dab_thinking_level');
+        }
       } catch {}
 
       const isTile =
@@ -1649,6 +1652,14 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const initialDefault = configSelect ? configSelect.value : '';
         const optionIds = configSelect ? Array.from(configSelect.options).map((o) => o.value) : [];
 
+        const thinkingSelect = document.querySelector('[data-testid="config-default-thinking-level-select"]');
+        const initialThinkingDefault = thinkingSelect ? thinkingSelect.value : '';
+        const thinkingOptionIds = thinkingSelect ? Array.from(thinkingSelect.options).map((o) => o.value) : [];
+
+        const maxTokensSelect = document.querySelector('[data-testid="config-max-total-tokens-select"]');
+        const initialMaxTokensDefault = maxTokensSelect ? maxTokensSelect.value : '';
+        const maxTokensOptionIds = maxTokensSelect ? Array.from(maxTokensSelect.options).map((o) => o.value) : [];
+
         const setReactSelect = (sel, val) => {
           const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
           setter.call(sel, val);
@@ -1656,6 +1667,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         };
 
         setReactSelect(configSelect, 'gemini-4-argon');
+        setReactSelect(maxTokensSelect, '262144');
         await new Promise((r) => setTimeout(r, 50));
 
         const saveBtn = Array.from(document.querySelectorAll('button')).find((b) =>
@@ -1725,7 +1737,13 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         return {
           initialDefault,
           optionIds,
+          initialThinkingDefault,
+          thinkingOptionIds,
+          initialMaxTokensDefault,
+          maxTokensOptionIds,
           savedDefaultModel: window.__LAST_SAVED_CONTEXT_DATA__?.defaultModel,
+          savedDefaultThinkingLevel: window.__LAST_SAVED_CONTEXT_DATA__?.defaultThinkingLevel,
+          savedMaxTotalTokens: window.__LAST_SAVED_CONTEXT_DATA__?.maxTotalTokens,
           noTopbarModelSelect,
           noComposerInspector,
           syncedComposerModel,
@@ -1755,7 +1773,13 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         'gemini-3.6-flash',
         'gemini-3.5-flash-lite'
       ],
+      initialThinkingDefault: 'high',
+      thinkingOptionIds: ['low', 'medium', 'high'],
+      initialMaxTokensDefault: '131072',
+      maxTokensOptionIds: ['32768', '65536', '131072', '262144'],
       savedDefaultModel: 'gemini-4-argon',
+      savedDefaultThinkingLevel: 'high',
+      savedMaxTotalTokens: 262144,
       noTopbarModelSelect: true,
       noComposerInspector: true,
       syncedComposerModel: 'gemini-4-argon',
@@ -1768,13 +1792,13 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         'gemini-3.6-flash',
         'gemini-3.5-flash-lite'
       ],
-      argonRowSubLabel: 'Medium',
+      argonRowSubLabel: 'High',
       flyoutOptionIds: [
         'thinking-level-option-low',
         'thinking-level-option-medium',
         'thinking-level-option-high'
       ],
-      mediumInitiallyChecked: true,
+      mediumInitiallyChecked: false,
       afterHighModel: 'gemini-4-argon',
       afterHighThinkingLevel: 'high',
       noTriggerHeightShift: true
