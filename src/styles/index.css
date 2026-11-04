@@ -1733,6 +1733,14 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 .dab-md-link:hover { color: var(--dab-accent, #1d4ed8); }
 .dab-md-link-copy-btn { display: inline-flex; align-items: center; gap: 3px; height: 19px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--dab-border-strong, #cbd5e1); background: var(--dab-surface, #ffffff); color: var(--dab-text-secondary, #475569); font-size: 10px; font-weight: 600; font-family: inherit; cursor: pointer; line-height: 1; }
 .dab-md-link-copy-btn:hover { border-color: var(--dab-accent-border, #93c5fd); background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-accent-text, #1d4ed8); }
+.dab-sandbox-md-trigger { display: inline-flex; align-items: center; gap: 4px; min-height: 22px; padding: 1px 7px; border-radius: 5px; border: 1px solid var(--dab-accent-border, #bfdbfe); background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-accent-text, #1d4ed8); font-size: 11.5px; font-weight: 600; font-family: inherit; cursor: pointer; vertical-align: baseline; white-space: nowrap; }
+.dab-sandbox-md-trigger:hover { border-color: var(--dab-accent, #2563eb); background: var(--dab-surface-hover, #dbeafe); }
+.dab-sandbox-md-trigger code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; color: inherit; background: transparent; border: none; padding: 0; }
+.dab-thinking-step-md-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 2px; }
+.dab-thinking-step-loading, .dab-sandbox-md-modal-loading { display: flex; flex-direction: column; gap: 6px; padding: 8px; font-size: 11.5px; }
+.dab-sandbox-md-modal { width: min(760px, 92vw); max-height: 86vh; overflow: hidden; }
+.dab-sandbox-md-rendered { max-height: 64vh; overflow-y: auto; padding: 12px 14px; border-radius: 8px; background: var(--dab-surface-muted, #f8fafc); border: 1px solid var(--dab-border, #e2e8f0); color: var(--dab-text, #0f172a); font-size: 13px; }
+.dab-sandbox-md-raw { margin: 0; max-height: 64vh; overflow: auto; padding: 12px 14px; border-radius: 8px; background: var(--dab-surface-muted, #f8fafc); border: 1px solid var(--dab-border, #e2e8f0); color: var(--dab-text, #0f172a); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 @media (max-width: 768px) {
   .dab-topbar { padding: 6px 10px; gap: 6px; flex-wrap: wrap; }
   .dab-brand { gap: 6px; flex-wrap: wrap; }

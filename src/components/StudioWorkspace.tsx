@@ -1,82 +1,33 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 
-import {
-  ChattyHostBuilderFactory,
-  getEmbedSDK,
-  ILookerConnection,
-  LookerEmbedExSDK,
-  PageChangedEvent,
-} from '@looker/embed-sdk'
+import { ChattyHostBuilderFactory, getEmbedSDK, ILookerConnection, LookerEmbedExSDK, PageChangedEvent } from '@looker/embed-sdk'
 import type { ExtensionSDK } from '@looker/extension-sdk'
 import {
-  Archive,
-  ArchiveRestore,
-  AtSign,
-  BookOpen,
-  Brain,
-  Check,
-  ChevronDown,
-  Code2,
-  Copy,
-  CornerDownRight,
-  Database,
-  Eye,
-  FileText,
-  Kanban,
-  LayoutDashboard,
-  Loader2,
-  MessageSquare,
-  PanelRightClose,
-  PanelRightOpen,
-  Paperclip,
-  Plus,
-  Sparkles,
-  Square,
-  Terminal,
-  Trash2,
-  Wrench,
-  X,
-  Zap,
+  Archive, ArchiveRestore, AtSign, BookOpen, Brain, Check, ChevronDown, Code2, Copy,
+  CornerDownRight, Database, Eye, FileText, Kanban, LayoutDashboard, Loader2,
+  MessageSquare, PanelRightClose, PanelRightOpen, Paperclip, Plus, Sparkles, Square,
+  Terminal, Trash2, Wrench, X, Zap,
 } from 'lucide-react'
 
 import {
-  AntigravityActivityStep,
-  buildDynamicStarterPrompts,
-  formatThinkingTraceMarkdown,
-  handleFileInputSelection,
-  handleImageClipboardPaste,
-  MAX_LEFT_PANE_WIDTH,
-  MIN_LEFT_PANE_WIDTH,
-  resolveBuiltinWorkspaceFileContent,
-  StarterPromptItem,
-  stripStarterPromptEmojis,
-  STUDIO_THINKING_LEVEL_OPTIONS,
-  StudioThinkingLevel,
-  StudioUseCase,
+  AntigravityActivityStep, buildDynamicStarterPrompts, formatThinkingTraceMarkdown,
+  handleFileInputSelection, handleImageClipboardPaste, MAX_LEFT_PANE_WIDTH,
+  MIN_LEFT_PANE_WIDTH, normalizeSandboxFilePath, resolveBuiltinWorkspaceFileContent,
+  StarterPromptItem, stripStarterPromptEmojis, STUDIO_THINKING_LEVEL_OPTIONS,
+  StudioThinkingLevel, StudioUseCase,
 } from '../antigravity'
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import {
-  ConversationRecord,
-  formatExploreId,
-  normalizeCaEmbedPath,
-  normalizeStudioAgentName,
-  resolveConversationRelatedContent,
-  StudioContentItem,
-  StudioContentItemType,
-  StudioContextCategory,
-  StudioContextMention,
+  ConversationRecord, formatExploreId, normalizeCaEmbedPath, normalizeStudioAgentName,
+  resolveConversationRelatedContent, StudioContentItem, StudioContentItemType,
+  StudioContextCategory, StudioContextMention,
 } from '../lookerApi'
 import { LOOKML_TURN_SKILLS, LookmlBundle, LookmlPreviewPane } from '../lookmlTool'
 import { StudioController } from '../useStudioController'
 import { TilePreviewPane } from './ScriptStudioView'
 import {
-  StudioBadge,
-  StudioButton,
-  StudioDocPreview,
-  StudioModal,
-  StudioSelect,
-  StudioSkeleton,
-  StudioToolbar,
+  StudioBadge, StudioButton, StudioDocPreview, StudioModal,
+  StudioSelect, StudioSkeleton, StudioToolbar,
 } from './StudioDesignSystem'
 
 export const ALLOWED_EXTERNAL_WINDOW_PATTERNS: ReadonlyArray<string> = [
@@ -175,20 +126,45 @@ const StudioMarkdownLink: React.FC<{
   )
 }
 
-function renderInlineMarkdown(rawText: string, hostUrl?: string, extensionSDK?: Partial<ExtensionSDK> | null): React.ReactNode[] {
+export function isSandboxMarkdownPath(raw: string): boolean {
+  const trimmed = String(raw || '').trim()
+  if (!trimmed || /\s/.test(trimmed) || /^(?:https?:|mailto:|tel:|javascript:|data:)/i.test(trimmed)) return false
+  return /^(?:file:\/\/)?(?:\/workspace\/|[a-zA-Z0-9_./-]*\/)?[a-zA-Z0-9_.-]+\.md$/i.test(trimmed.split(/[?#]/)[0] || '')
+}
+
+function renderInlineMarkdown(
+  rawText: string,
+  hostUrl?: string,
+  extensionSDK?: Partial<ExtensionSDK> | null,
+  onOpenSandboxMarkdownFile?: (path: string) => void
+): React.ReactNode[] {
   const tokenRegex = /`([^`\n]+)`|\[([^\]]+)\]\(([^)\s]+)\)|\*\*([^*]+)\*\*|(https?:\/\/[^\s<)"']+)/g
   const nodes: React.ReactNode[] = []
   let lastIdx = 0
   let match: RegExpExecArray | null
   let keyCounter = 0
+  const renderMdTrigger = (rawPath: string, child: React.ReactNode) => {
+    const mdPath = rawPath.split(/[?#]/)[0] || rawPath
+    return (
+      <button
+        key={`md_trig_${keyCounter++}`} type="button" data-testid="sandbox-markdown-file-trigger"
+        data-md-path={mdPath} className="dab-sandbox-md-trigger" title={`Click to load ${mdPath} from sandbox`}
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onOpenSandboxMarkdownFile?.(mdPath) }}
+      >
+        <FileText size={11} strokeWidth={1.75} aria-hidden="true" />{child}
+      </button>
+    )
+  }
   while ((match = tokenRegex.exec(rawText)) !== null) {
     if (match.index > lastIdx) nodes.push(rawText.slice(lastIdx, match.index))
     if (match[1] !== undefined) {
-      nodes.push(<code key={`code_${keyCounter++}`} className="dab-md-inline-code">{match[1]}</code>)
+      const codeToken = match[1].trim()
+      nodes.push(isSandboxMarkdownPath(codeToken) ? renderMdTrigger(codeToken, <code>{match[1]}</code>) : <code key={`code_${keyCounter++}`} className="dab-md-inline-code">{match[1]}</code>)
     } else if (match[2] !== undefined && match[3] !== undefined) {
-      nodes.push(<StudioMarkdownLink key={`link_${keyCounter++}`} label={match[2]} href={match[3]} hostUrl={hostUrl} extensionSDK={extensionSDK} />)
+      const linkHref = match[3].trim()
+      nodes.push(isSandboxMarkdownPath(linkHref) ? renderMdTrigger(linkHref, <span>{match[2]}</span>) : <StudioMarkdownLink key={`link_${keyCounter++}`} label={match[2]} href={match[3]} hostUrl={hostUrl} extensionSDK={extensionSDK} />)
     } else if (match[4] !== undefined) {
-      nodes.push(<strong key={`bold_${keyCounter++}`}>{renderInlineMarkdown(match[4], hostUrl, extensionSDK)}</strong>)
+      nodes.push(<strong key={`bold_${keyCounter++}`}>{renderInlineMarkdown(match[4], hostUrl, extensionSDK, onOpenSandboxMarkdownFile)}</strong>)
     } else if (match[5] !== undefined) {
       const bareUrl = match[5].replace(/[.,;:!?]+$/, '')
       const trailing = match[5].slice(bareUrl.length)
@@ -202,8 +178,8 @@ function renderInlineMarkdown(rawText: string, hostUrl?: string, extensionSDK?: 
 }
 
 export const StudioMarkdown: React.FC<{
-  text: string; hostUrl?: string; extensionSDK?: Partial<ExtensionSDK> | null
-}> = ({ text, hostUrl, extensionSDK }) => {
+  text: string; hostUrl?: string; extensionSDK?: Partial<ExtensionSDK> | null; onOpenSandboxMarkdownFile?: (path: string) => void
+}> = ({ text, hostUrl, extensionSDK, onOpenSandboxMarkdownFile }) => {
   const raw = String(text ?? '')
   const segments = raw.split(/(```[\s\S]*?```)/g)
   const blocks: React.ReactNode[] = []
@@ -226,13 +202,13 @@ export const StudioMarkdown: React.FC<{
       if (headingMatch) {
         const level = headingMatch[1].length
         const HeadingTag = (`h${level}` as unknown) as 'h1' | 'h2' | 'h3' | 'h4'
-        blocks.push(<HeadingTag key={`h_${blockKey++}`} className={`dab-md-heading dab-md-h${level}`}>{renderInlineMarkdown(headingMatch[2], hostUrl, extensionSDK)}</HeadingTag>)
+        blocks.push(<HeadingTag key={`h_${blockKey++}`} className={`dab-md-heading dab-md-h${level}`}>{renderInlineMarkdown(headingMatch[2], hostUrl, extensionSDK, onOpenSandboxMarkdownFile)}</HeadingTag>)
         i++; continue
       }
       if (/^[-*]\s+/.test(trimmed)) {
         const items: React.ReactNode[] = []
         while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
-          items.push(<li key={`uli_${items.length}`}>{renderInlineMarkdown(lines[i].trim().replace(/^[-*]\s+/, ''), hostUrl, extensionSDK)}</li>)
+          items.push(<li key={`uli_${items.length}`}>{renderInlineMarkdown(lines[i].trim().replace(/^[-*]\s+/, ''), hostUrl, extensionSDK, onOpenSandboxMarkdownFile)}</li>)
           i++
         }
         blocks.push(<ul key={`ul_${blockKey++}`} className="dab-md-list">{items}</ul>)
@@ -241,7 +217,7 @@ export const StudioMarkdown: React.FC<{
       if (/^\d+\.\s+/.test(trimmed)) {
         const items: React.ReactNode[] = []
         while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
-          items.push(<li key={`oli_${items.length}`}>{renderInlineMarkdown(lines[i].trim().replace(/^\d+\.\s+/, ''), hostUrl, extensionSDK)}</li>)
+          items.push(<li key={`oli_${items.length}`}>{renderInlineMarkdown(lines[i].trim().replace(/^\d+\.\s+/, ''), hostUrl, extensionSDK, onOpenSandboxMarkdownFile)}</li>)
           i++
         }
         blocks.push(<ol key={`ol_${blockKey++}`} className="dab-md-list">{items}</ol>)
@@ -251,7 +227,7 @@ export const StudioMarkdown: React.FC<{
       while (i < lines.length && lines[i].trim() && !/^(#{1,4})\s+/.test(lines[i].trim()) && !/^[-*]\s+/.test(lines[i].trim()) && !/^\d+\.\s+/.test(lines[i].trim())) {
         paraLines.push(lines[i]); i++
       }
-      blocks.push(<p key={`p_${blockKey++}`} className="dab-md-p">{renderInlineMarkdown(paraLines.join('\n'), hostUrl, extensionSDK)}</p>)
+      blocks.push(<p key={`p_${blockKey++}`} className="dab-md-p">{renderInlineMarkdown(paraLines.join('\n'), hostUrl, extensionSDK, onOpenSandboxMarkdownFile)}</p>)
     }
   }
   return <div className="dab-markdown" data-testid="studio-markdown-body">{blocks.length > 0 ? blocks : raw}</div>
@@ -286,46 +262,21 @@ export function normalizeLookerEmbedUrl(rawUrl: string, hostUrl?: string): strin
   }
   clean = clean.replace(/^https?:\/\/[^/]+/i, '')
   if (!clean.startsWith('/')) clean = `/${clean}`
-  if (/^\/(?:embed\/)?(?:conversations|agents)\//.test(clean)) {
-    return normalizeCaEmbedPath(clean)
-  }
-  if (clean === '/preload' || clean.startsWith('/preload?') || clean.startsWith('/embed/')) {
-    return clean
-  }
+  if (/^\/(?:embed\/)?(?:conversations|agents)\//.test(clean)) return normalizeCaEmbedPath(clean)
+  if (clean === '/preload' || clean.startsWith('/preload?') || clean.startsWith('/embed/')) return clean
   return `/embed${clean}`
 }
 
 export function resolveLookerEmbedTarget(opts: {
-  isEmptyConversation?: boolean
-  isHealthCheckMode?: boolean
-  isLookmlMode?: boolean
-  isTileMode?: boolean
-  isCaMode?: boolean
-  builderMode?: 'data_app' | 'dashboard'
-  activeContentItem?: StudioContentItem | null
+  isEmptyConversation?: boolean; isHealthCheckMode?: boolean; isLookmlMode?: boolean; isTileMode?: boolean; isCaMode?: boolean
+  builderMode?: 'data_app' | 'dashboard'; activeContentItem?: StudioContentItem | null
   caConversation?: { caConversationId: string; embedPath: string } | null
-  nativeContent?: {
-    id: string
-    contentType: string
-    embedPath: string
-    dashboardId?: string
-    lookId?: string
-    lookmlDashboardId?: string
-  } | null
-  publishedApp?: { dashboardId: string } | null
-  hostUrl?: string
-  nonce?: number
+  nativeContent?: { id: string; contentType: string; embedPath: string; dashboardId?: string; lookId?: string; lookmlDashboardId?: string } | null
+  publishedApp?: { dashboardId: string } | null; hostUrl?: string; nonce?: number
 }): LookerEmbedTarget {
   const nonce = opts.nonce || 0
-  const preload: LookerEmbedTarget = {
-    kind: 'preload',
-    target: '/preload',
-    previewMode: 'preload',
-    previewObjectId: '',
-    nonce,
-  }
-  if (opts.isEmptyConversation || opts.isHealthCheckMode || opts.isLookmlMode || opts.isTileMode)
-    return preload
+  const preload: LookerEmbedTarget = { kind: 'preload', target: '/preload', previewMode: 'preload', previewObjectId: '', nonce }
+  if (opts.isEmptyConversation || opts.isHealthCheckMode || opts.isLookmlMode || opts.isTileMode) return preload
 
   const item =
     opts.activeContentItem?.id && opts.activeContentItem?.contentType
@@ -349,13 +300,7 @@ export function resolveLookerEmbedTarget(opts: {
     }
     if (ct === 'explore') {
       const rawId = String(item.exploreId || item.id)
-      return {
-        kind: 'explore',
-        target: rawId.replace('::', '/'),
-        previewMode: 'dashboard',
-        previewObjectId: rawId,
-        nonce,
-      }
+      return { kind: 'explore', target: rawId.replace('::', '/'), previewMode: 'dashboard', previewObjectId: rawId, nonce }
     }
     if (ct === 'extension') {
       const id = String(item.extensionId || item.id)
@@ -367,8 +312,7 @@ export function resolveLookerEmbedTarget(opts: {
     }
     const isCa = ct === 'conversational-analytics'
     const id = String(item.lookmlDashboardId || item.id)
-    const rawUrl =
-      item.embedPath || `/embed/${isCa ? 'conversations' : 'boards'}/${encodeURIComponent(id)}`
+    const rawUrl = item.embedPath || `/embed/${isCa ? 'conversations' : 'boards'}/${encodeURIComponent(id)}`
     return {
       kind: 'url',
       target: normalizeLookerEmbedUrl(rawUrl, opts.hostUrl),
@@ -401,15 +345,8 @@ export function createLookerEmbedPreloadController(opts: {
   mockPreviewHtml?: (mode: string, objectId: string) => string | undefined
 }) {
   const telemetry: LookerEmbedSessionTelemetry = {
-    hostUrl: opts.hostUrl,
-    state: 'preloaded',
-    target: '/preload',
-    running: false,
-    runCount: 0,
-    loadCount: 0,
-    lastPageUrl: '/embed/preload',
-    events: [],
-    calls: [],
+    hostUrl: opts.hostUrl, state: 'preloaded', target: '/preload', running: false,
+    runCount: 0, loadCount: 0, lastPageUrl: '/embed/preload', events: [], calls: [],
   }
   let activePreviewMeta = { mode: 'preload', objectId: '' }
 
@@ -419,67 +356,41 @@ export function createLookerEmbedPreloadController(opts: {
     opts.container?.setAttribute?.('data-embed-running', String(telemetry.running))
     opts.container?.setAttribute?.('data-embed-run-count', String(telemetry.runCount))
     if (typeof window !== 'undefined') {
-      window.__LOOKER_EMBED_STATE__ = {
-        ...telemetry,
-        events: [...telemetry.events],
-        calls: [...telemetry.calls],
-      }
+      window.__LOOKER_EMBED_STATE__ = { ...telemetry, events: [...telemetry.events], calls: [...telemetry.calls] }
     }
   }
 
   if (typeof window === 'undefined') {
     ;(globalThis as Record<string, unknown>).window = {
       location: { origin: opts.hostUrl || 'https://looker.example.com' },
-      setTimeout,
-      clearTimeout,
-      addEventListener: () => {},
-      removeEventListener: () => {},
+      setTimeout, clearTimeout, addEventListener: () => {}, removeEventListener: () => {},
     }
   }
 
   const chattyHostCreator = (initialUrl: string) => {
     const handlers: Record<string, Array<(payload?: Record<string, unknown>) => void>> = {}
     let targetEl: HTMLElement | null = opts.container
-    const emit = (evt: string, payload: Record<string, unknown> = {}) =>
-      (handlers[evt] || []).forEach((fn) => fn(payload))
+    const emit = (evt: string, payload: Record<string, unknown> = {}) => (handlers[evt] || []).forEach((fn) => fn(payload))
     const noop = () => builder
     const builder = {
       on: (evt: string, fn: (payload?: Record<string, unknown>) => void) => {
         ;(handlers[evt] = handlers[evt] || []).push(fn)
         return builder
       },
-      frameBorder: noop,
-      withTargetOrigin: noop,
-      withAriaLabel: noop,
-      withAllowAttribute: noop,
-      withClassName: noop,
-      withFrameAttribute: noop,
-      withSandboxAttribute: noop,
-      appendTo: (el: HTMLElement) => {
-        targetEl = el
-        return builder
-      },
+      frameBorder: noop, withTargetOrigin: noop, withAriaLabel: noop, withAllowAttribute: noop,
+      withClassName: noop, withFrameAttribute: noop, withSandboxAttribute: noop,
+      appendTo: (el: HTMLElement) => { targetEl = el; return builder },
       build: () => {
         const doc = targetEl?.ownerDocument || (typeof document !== 'undefined' ? document : null)
         const iframe: Partial<HTMLIFrameElement> & {
-          setAttribute?: (k: string, v: string) => void
-          removeAttribute?: (k: string) => void
-          getAttribute?: (k: string) => string | null
-          classList?: { add: (c: string) => void }
+          setAttribute?: (k: string, v: string) => void; removeAttribute?: (k: string) => void
+          getAttribute?: (k: string) => string | null; classList?: { add: (c: string) => void }
         } =
           targetEl?.querySelector?.('iframe') ||
-          (doc
-            ? doc.createElement('iframe')
-            : {
-                setAttribute: () => {},
-                removeAttribute: () => {},
-                getAttribute: () => '',
-                classList: { add: () => {} },
-                style: {} as CSSStyleDeclaration,
-                className: '',
-                src: '',
-                srcdoc: '',
-              })
+          (doc ? doc.createElement('iframe') : {
+            setAttribute: () => {}, removeAttribute: () => {}, getAttribute: () => '',
+            classList: { add: () => {} }, style: {} as CSSStyleDeclaration, className: '', src: '', srcdoc: '',
+          })
         if (!iframe.classList) iframe.classList = { add: () => {} }
         iframe.title = 'Looker Live Preview'
         const syncIframe = (rawUrl: string) => {
@@ -489,25 +400,19 @@ export function createLookerEmbedPreloadController(opts: {
           } else {
             const html = opts.mockPreviewHtml?.(activePreviewMeta.mode, activePreviewMeta.objectId)
             if (html) iframe.srcdoc = html
-            if (activePreviewMeta.mode === 'conversational-analytics') {
-              iframe.setAttribute?.('data-testid', 'ca-embed-iframe')
-            } else {
-              iframe.removeAttribute?.('data-testid')
-            }
+            if (activePreviewMeta.mode === 'conversational-analytics') iframe.setAttribute?.('data-testid', 'ca-embed-iframe')
+            else iframe.removeAttribute?.('data-testid')
           }
           iframe.setAttribute?.('data-embed-src', rawUrl)
           iframe.setAttribute?.('src', rawUrl)
         }
         syncIframe(initialUrl)
-        if (doc && targetEl && iframe.parentNode !== targetEl) {
-          targetEl.appendChild(iframe as HTMLIFrameElement)
-        }
+        if (doc && targetEl && iframe.parentNode !== targetEl) targetEl.appendChild(iframe as HTMLIFrameElement)
         const connectedHost = {
           send: (event: string) => {
             if (event === 'dashboard:run') {
               syncIframe(iframe.getAttribute?.('src') || initialUrl)
-              emit('dashboard:run:start')
-              emit('dashboard:run:complete')
+              emit('dashboard:run:start'); emit('dashboard:run:complete')
             }
           },
           sendAndReceive: async (event: string, payload?: { url?: string }) => {
@@ -515,17 +420,12 @@ export function createLookerEmbedPreloadController(opts: {
               const nextUrl = String(payload.url)
               syncIframe(nextUrl)
               setTimeout(() => {
-                const pair = nextUrl.includes('/dashboards/')
-                  ? ['dashboard:loaded', 'dashboard']
-                  : nextUrl.includes('/looks/')
-                  ? ['look:ready', 'look']
-                  : nextUrl.includes('/explore/')
-                  ? ['explore:ready', 'explore']
-                  : null
+                const pair = nextUrl.includes('/dashboards/') ? ['dashboard:loaded', 'dashboard']
+                  : nextUrl.includes('/looks/') ? ['look:ready', 'look']
+                  : nextUrl.includes('/explore/') ? ['explore:ready', 'explore'] : null
                 if (pair) {
                   emit(pair[0], { url: nextUrl })
-                  emit(`${pair[1]}:run:start`)
-                  emit(`${pair[1]}:run:complete`)
+                  emit(`${pair[1]}:run:start`); emit(`${pair[1]}:run:complete`)
                 }
                 emit('page:changed', { page: { url: nextUrl, lookerVersion: '25.20.0' } })
               }, 0)
@@ -535,14 +435,10 @@ export function createLookerEmbedPreloadController(opts: {
         }
         return {
           iframe,
-          connect: () =>
-            Promise.resolve(connectedHost).then((host) => {
-              setTimeout(
-                () => emit('page:changed', { page: { url: initialUrl, lookerVersion: '25.20.0' } }),
-                0
-              )
-              return host
-            }),
+          connect: () => Promise.resolve(connectedHost).then((host) => {
+            setTimeout(() => emit('page:changed', { page: { url: initialUrl, lookerVersion: '25.20.0' } }), 0)
+            return host
+          }),
         }
       },
     }
@@ -583,10 +479,7 @@ export function createLookerEmbedPreloadController(opts: {
     .connect({ waitUntilLoaded: true })
 
   let lastTarget: LookerEmbedTarget | null = null
-  let queue: Promise<ILookerConnection> = connectionPromise.then((conn) => {
-    notify()
-    return conn
-  })
+  let queue: Promise<ILookerConnection> = connectionPromise.then((conn) => { notify(); return conn })
 
   const syncTarget = (next: LookerEmbedTarget): Promise<ILookerConnection> => {
     queue = queue.then(async () => {
@@ -603,9 +496,7 @@ export function createLookerEmbedPreloadController(opts: {
         await p
       }
       if (next.kind === 'preload') {
-        if (prev && prev.kind !== 'preload') {
-          await recordLoad('loadUrl', '/preload', connection.loadUrl({ url: '/preload', options }))
-        }
+        if (prev && prev.kind !== 'preload') await recordLoad('loadUrl', '/preload', connection.loadUrl({ url: '/preload', options }))
       } else if (next.kind === 'dashboard') {
         if (isSameTarget && prev.nonce !== next.nonce) {
           try {
@@ -638,18 +529,10 @@ export function createLookerEmbedPreloadController(opts: {
           iframeEl.setAttribute('data-ca-panels-collapsed', 'true')
           try {
             iframeEl.contentWindow?.postMessage?.(
-              {
-                type: 'looker:ca:layout',
-                hide_sidebar: true,
-                hide_data_source_panel: true,
-                sidebar_collapsed: true,
-                right_panel_collapsed: true,
-              },
+              { type: 'looker:ca:layout', hide_sidebar: true, hide_data_source_panel: true, sidebar_collapsed: true, right_panel_collapsed: true },
               '*'
             )
-          } catch {
-            // Ignore cross-origin postMessage errors in sandboxed embeds
-          }
+          } catch { /* ignore cross-origin postMessage errors */ }
         } else {
           iframeEl.removeAttribute('data-testid')
           iframeEl.removeAttribute('data-ca-panels-collapsed')
@@ -664,11 +547,7 @@ export function createLookerEmbedPreloadController(opts: {
   return {
     connectionPromise,
     syncTarget,
-    getTelemetry: () => ({
-      ...telemetry,
-      events: [...telemetry.events],
-      calls: [...telemetry.calls],
-    }),
+    getTelemetry: () => ({ ...telemetry, events: [...telemetry.events], calls: [...telemetry.calls] }),
   }
 }
 
@@ -689,14 +568,8 @@ export const DOC_UI_COMPONENTS: Record<string, () => React.ReactElement> = {
   RunPythonButton: () => <button type="button" className="dab-btn-gemini" tabIndex={-1}>Run Python</button>,
   ScriptModeSelect: () => (
     <StudioSelect
-      className="dab-select"
-      value="summary"
-      onChange={() => {}}
-      options={[
-        { value: 'summary', label: 'summary' },
-        { value: 'detailed_audit', label: 'detailed_audit' },
-        { value: 'anomaly_alert', label: 'anomaly_alert' },
-      ]}
+      className="dab-select" value="summary" onChange={() => {}}
+      options={[{ value: 'summary', label: 'summary' }, { value: 'detailed_audit', label: 'detailed_audit' }, { value: 'anomaly_alert', label: 'anomaly_alert' }]}
     />
   ),
   ReloadPreviewButton: () => <button type="button" className="dab-btn-secondary" tabIndex={-1}>Reload Preview</button>,
@@ -723,15 +596,9 @@ export const DOC_UI_COMPONENTS: Record<string, () => React.ReactElement> = {
 export const USE_CASE_BADGES: Record<StudioUseCase, { label: string; className: string }> = {
   auto: { label: 'Auto', className: 'dab-use-case-badge-auto' },
   dashboard: { label: 'Content Studio', className: 'dab-use-case-badge-dashboard' },
-  'conversational-analytics': {
-    label: 'Conversational Analytics',
-    className: 'dab-use-case-badge-ca',
-  },
+  'conversational-analytics': { label: 'Conversational Analytics', className: 'dab-use-case-badge-ca' },
   app: { label: 'Data App', className: 'dab-use-case-badge-app' },
-  'data-investigator': {
-    label: 'Data Investigator',
-    className: 'dab-use-case-badge-investigator',
-  },
+  'data-investigator': { label: 'Data Investigator', className: 'dab-use-case-badge-investigator' },
   'health-check': { label: 'Health Check', className: 'dab-use-case-badge-health' },
   lookml: { label: 'LookML', className: 'dab-use-case-badge-lookml' },
   tile: { label: 'Script', className: 'dab-use-case-badge-tile' },
@@ -872,22 +739,15 @@ export function renderUseCaseGuideMarkdown(markdown: string): React.ReactElement
     const renderFn = DOC_UI_COMPONENTS[compName]
     return renderFn ? StudioDocPreview({ key, component: compName, children: renderFn() }) : null
   }
-
   const renderInline = (text: string, keyPrefix: string): React.ReactNode[] =>
     text
       .split(/(`[^`]+`|\*\*[^*]+\*\*|<[A-Z][A-Za-z0-9_]*\s*\/>)/g)
       .filter(Boolean)
       .map((part, idx) => {
-        if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
-          return <code key={`${keyPrefix}-c-${idx}`}>{part.slice(1, -1)}</code>
-        }
-        if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
-          return <strong key={`${keyPrefix}-b-${idx}`}>{part.slice(2, -2)}</strong>
-        }
+        if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) return <code key={`${keyPrefix}-c-${idx}`}>{part.slice(1, -1)}</code>
+        if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) return <strong key={`${keyPrefix}-b-${idx}`}>{part.slice(2, -2)}</strong>
         const tagMatch = part.match(/^<([A-Z][A-Za-z0-9_]*)\s*\/>$/)
-        if (tagMatch && DOC_UI_COMPONENTS[tagMatch[1]]) {
-          return wrapPreview(tagMatch[1], `${keyPrefix}-ui-${idx}`)
-        }
+        if (tagMatch && DOC_UI_COMPONENTS[tagMatch[1]]) return wrapPreview(tagMatch[1], `${keyPrefix}-ui-${idx}`)
         return part
       })
 
@@ -896,28 +756,22 @@ export function renderUseCaseGuideMarkdown(markdown: string): React.ReactElement
   let i = 0
   while (i < lines.length) {
     const trimmed = lines[i].trim()
-    if (!trimmed) {
-      i++
-      continue
-    }
+    if (!trimmed) { i++; continue }
     const standaloneComp = trimmed.match(/^<([A-Z][A-Za-z0-9_]*)\s*\/>$/)
     if (standaloneComp && DOC_UI_COMPONENTS[standaloneComp[1]]) {
       blocks.push(wrapPreview(standaloneComp[1], `block-ui-${i}`))
-      i++
-      continue
+      i++; continue
     }
     const hMatch = trimmed.match(/^(#{1,3})\s+(.*)$/)
     if (hMatch) {
       const tag = `h${hMatch[1].length}`
       blocks.push(React.createElement(tag, { key: `${tag}-${i}` }, renderInline(hMatch[2], `${tag}-${i}`)))
-      i++
-      continue
+      i++; continue
     }
     if (/^[-*]\s+/.test(trimmed)) {
       const items: React.ReactNode[] = []
       while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
-        const itemText = lines[i].trim().replace(/^[-*]\s+/, '')
-        items.push(<li key={`li-${i}`}>{renderInline(itemText, `li-${i}`)}</li>)
+        items.push(<li key={`li-${i}`}>{renderInline(lines[i].trim().replace(/^[-*]\s+/, ''), `li-${i}`)}</li>)
         i++
       }
       blocks.push(<ul key={`ul-${i}`}>{items}</ul>)
@@ -926,49 +780,32 @@ export function renderUseCaseGuideMarkdown(markdown: string): React.ReactElement
     blocks.push(<p key={`p-${i}`}>{renderInline(trimmed, `p-${i}`)}</p>)
     i++
   }
-
   return <div className="dab-tdd-rendered dab-use-case-guide-markdown">{blocks}</div>
 }
 
-export const UseCaseInfoTrigger: React.FC<{
-  useCase: StudioUseCase
-  onOpen: (uc: StudioUseCase) => void
-}> = ({ useCase, onOpen }) => (
+export const UseCaseInfoTrigger: React.FC<{ useCase: StudioUseCase; onOpen: (uc: StudioUseCase) => void }> = ({ useCase, onOpen }) => (
   <button
-    type="button"
-    data-testid="use-case-info-btn"
-    className="dab-btn dab-btn-secondary dab-info-trigger"
-    title="Use case guide & controls reference"
-    onClick={() => onOpen(useCase)}
+    type="button" data-testid="use-case-info-btn" className="dab-btn dab-btn-secondary dab-info-trigger"
+    title="Use case guide & controls reference" onClick={() => onOpen(useCase)}
   >
     ?
   </button>
 )
 
 export const UseCaseInfoModal: React.FC<{
-  activeUseCase: StudioUseCase | null
-  onSelectUseCase: (uc: StudioUseCase) => void
-  onClose: () => void
+  activeUseCase: StudioUseCase | null; onSelectUseCase: (uc: StudioUseCase) => void; onClose: () => void
 }> = ({ activeUseCase, onSelectUseCase, onClose }) => {
   const guide = (activeUseCase && USE_CASE_GUIDES[activeUseCase]) || USE_CASE_GUIDES.auto
   return (
     <StudioModal
-      open={Boolean(activeUseCase)}
-      onClose={onClose}
-      testId="use-case-info-modal"
-      closeTestId="use-case-info-close-btn"
-      closeLabel="Close"
-      className="dab-use-case-info-modal"
-      title={guide.title}
+      open={Boolean(activeUseCase)} onClose={onClose} testId="use-case-info-modal" closeTestId="use-case-info-close-btn"
+      closeLabel="Close" className="dab-use-case-info-modal" title={guide.title}
       subtitle="Interactive guide & live-themed UI controls reference (non-actionable preview)"
     >
       <div className="dab-use-case-guide-tabs" role="tablist" aria-label="Use Case Guides">
         {USE_CASE_GUIDE_ORDER.map((item) => (
           <button
-            key={item.useCase}
-            type="button"
-            role="tab"
-            aria-selected={activeUseCase === item.useCase}
+            key={item.useCase} type="button" role="tab" aria-selected={activeUseCase === item.useCase}
             data-testid={`use-case-guide-tab-${item.useCase}`}
             className={`dab-skill-chip ${activeUseCase === item.useCase ? 'active' : ''}`}
             onClick={() => onSelectUseCase(item.useCase)}
@@ -977,7 +814,6 @@ export const UseCaseInfoModal: React.FC<{
           </button>
         ))}
       </div>
-
       <div className="dab-use-case-guide-body" data-testid="use-case-info-mdx-body">
         {renderUseCaseGuideMarkdown(guide.markdown)}
       </div>
@@ -987,24 +823,11 @@ export const UseCaseInfoModal: React.FC<{
 
 export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
-    conversations,
-    archivedConversations,
-    showArchivedConversations,
-    setShowArchivedConversations,
-    pendingDeleteConv,
-    deleteRelatedContent,
-    setDeleteRelatedContent,
-    activeConversationId,
-    sidebarCollapsed,
-    setSidebarCollapsed,
-    handleSelectConversation,
-    handleToggleArchiveConversation,
-    handleRequestDeleteConversation,
-    handleCancelDeleteConversation,
-    handleConfirmDeleteConversation,
-    handleNewConversation,
-    busyStatus,
-    userId,
+    conversations, archivedConversations, showArchivedConversations, setShowArchivedConversations,
+    pendingDeleteConv, deleteRelatedContent, setDeleteRelatedContent, activeConversationId,
+    sidebarCollapsed, setSidebarCollapsed, handleSelectConversation, handleToggleArchiveConversation,
+    handleRequestDeleteConversation, handleCancelDeleteConversation, handleConfirmDeleteConversation,
+    handleNewConversation, busyStatus, userId,
   } = ctl
 
   const renderConversationRow = (conv: ConversationRecord, isArchived = false) => {
@@ -1012,8 +835,7 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
     const isActive = activeConversationId === conv.id
     return (
       <div
-        key={conv.id}
-        data-testid={`conversation-item-${conv.id}`}
+        key={conv.id} data-testid={`conversation-item-${conv.id}`}
         className={`dab-conv-item ${isActive ? 'active' : ''} ${isArchived ? 'archived' : ''}`}
         onClick={() => handleSelectConversation(conv)}
         title={`${conv.label} (${conv.type}${conv.interactionId ? ` · ${conv.interactionId}` : ''})`}
@@ -1023,20 +845,15 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
           {contentBadge && <span className="dab-conv-content-tag">{contentBadge}</span>}
           <div className="dab-conv-item-actions">
             <button
-              type="button"
-              className="dab-conv-action-btn dab-conv-archive-btn"
-              data-testid={`archive-conv-${conv.id}`}
+              type="button" className="dab-conv-action-btn dab-conv-archive-btn" data-testid={`archive-conv-${conv.id}`}
               onClick={(e) => handleToggleArchiveConversation(e, conv.id, !isArchived)}
               title={isArchived ? 'Unarchive conversation' : 'Archive conversation'}
             >
               {isArchived ? <ArchiveRestore size={14} strokeWidth={1.75} aria-hidden="true" /> : <Archive size={14} strokeWidth={1.75} aria-hidden="true" />}
             </button>
             <button
-              type="button"
-              className="dab-conv-action-btn dab-conv-delete-btn"
-              data-testid={`delete-conv-${conv.id}`}
-              onClick={(e) => handleRequestDeleteConversation(e, conv)}
-              title="Delete conversation"
+              type="button" className="dab-conv-action-btn dab-conv-delete-btn" data-testid={`delete-conv-${conv.id}`}
+              onClick={(e) => handleRequestDeleteConversation(e, conv)} title="Delete conversation"
             >
               <Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />
             </button>
@@ -1129,14 +946,10 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
             )}
             <label className="dab-modal-checkbox-row">
               <input
-                type="checkbox"
-                data-testid="delete-related-content-checkbox"
-                checked={deleteRelatedContent}
-                onChange={(e) => setDeleteRelatedContent(e.target.checked)}
+                type="checkbox" data-testid="delete-related-content-checkbox"
+                checked={deleteRelatedContent} onChange={(e) => setDeleteRelatedContent(e.target.checked)}
               />
-              <span>
-                Also delete related Looker content &amp; shared artifacts ({relatedInfo.summary})
-              </span>
+              <span>Also delete related Looker content &amp; shared artifacts ({relatedInfo.summary})</span>
             </label>
           </div>
         )}
@@ -1149,63 +962,34 @@ export { buildDynamicStarterPrompts, stripStarterPromptEmojis }
 export type { StarterPromptItem }
 
 export const STARTER_PROMPTS_BY_USE_CASE: Record<string, StarterPromptItem[]> = Object.fromEntries(
-  ([
-    'auto',
-    'app',
-    'data-investigator',
-    'dashboard',
-    'conversational-analytics',
-    'health-check',
-    'lookml',
-    'tile',
-  ] as const).map((uc) => [uc, buildDynamicStarterPrompts({ useCase: uc })])
+  (['auto', 'app', 'data-investigator', 'dashboard', 'conversational-analytics', 'health-check', 'lookml', 'tile'] as const).map(
+    (uc) => [uc, buildDynamicStarterPrompts({ useCase: uc })]
+  )
 )
 STARTER_PROMPTS_BY_USE_CASE.health = STARTER_PROMPTS_BY_USE_CASE['health-check']
 STARTER_PROMPTS_BY_USE_CASE.investigator = STARTER_PROMPTS_BY_USE_CASE['data-investigator']
 STARTER_PROMPTS_BY_USE_CASE.data_investigator = STARTER_PROMPTS_BY_USE_CASE['data-investigator']
 
 export function getStarterPromptsForUseCase(
-  useCase?: string,
-  selectedExplores?: string[],
-  permittedUseCases?: StudioUseCase[]
+  useCase?: string, selectedExplores?: string[], permittedUseCases?: StudioUseCase[]
 ): StarterPromptItem[] {
-  if (
-    (selectedExplores && selectedExplores.length > 0) ||
-    (permittedUseCases && permittedUseCases.length > 0)
-  ) {
-    return buildDynamicStarterPrompts({
-      useCase,
-      selectedExplores,
-      permittedUseCases,
-    })
+  if ((selectedExplores && selectedExplores.length > 0) || (permittedUseCases && permittedUseCases.length > 0)) {
+    return buildDynamicStarterPrompts({ useCase, selectedExplores, permittedUseCases })
   }
   const key = String(useCase || 'auto').trim().toLowerCase()
   return STARTER_PROMPTS_BY_USE_CASE[key] || STARTER_PROMPTS_BY_USE_CASE.auto
 }
 
 export const StarterPromptButtons: React.FC<{
-  useCase?: string
-  prompts?: StarterPromptItem[]
-  loading?: boolean
-  onSelect: (promptText: string) => void
-  disabled?: boolean
+  useCase?: string; prompts?: StarterPromptItem[]; loading?: boolean
+  onSelect: (promptText: string) => void; disabled?: boolean
 }> = ({ useCase, prompts, loading, onSelect, disabled }) => {
   const items = prompts && prompts.length > 0 ? prompts : getStarterPromptsForUseCase(useCase)
   if (loading && (!prompts || prompts.length === 0)) {
     return (
-      <div
-        className="dab-starter-prompts"
-        data-testid="studio-starter-prompts-skeleton"
-        aria-busy="true"
-      >
+      <div className="dab-starter-prompts" data-testid="studio-starter-prompts-skeleton" aria-busy="true">
         {[0, 1, 2].map((i) => (
-          <StudioSkeleton
-            key={i}
-            width={188}
-            height={28}
-            style={{ borderRadius: 999 }}
-            label="Loading starter prompt..."
-          />
+          <StudioSkeleton key={i} width={188} height={28} style={{ borderRadius: 999 }} label="Loading starter prompt..." />
         ))}
       </div>
     )
@@ -1215,15 +999,9 @@ export const StarterPromptButtons: React.FC<{
       <div data-testid="starter-prompt-list" style={{ display: 'contents' }}>
         {items.map((item, i) => (
           <StudioButton
-            key={item.id || `starter-${i}`}
-            variant="secondary"
-            testId={`starter-prompt-${i}`}
-            data-prompt-id={item.id}
-            data-use-case={item.useCase || useCase || 'auto'}
-            className="dab-starter-chip"
-            disabled={disabled}
-            onClick={() => onSelect(item.prompt)}
-            title={item.prompt}
+            key={item.id || `starter-${i}`} variant="secondary" testId={`starter-prompt-${i}`}
+            data-prompt-id={item.id} data-use-case={item.useCase || useCase || 'auto'}
+            className="dab-starter-chip" disabled={disabled} onClick={() => onSelect(item.prompt)} title={item.prompt}
           >
             {stripStarterPromptEmojis(item.label)}
           </StudioButton>
@@ -1244,58 +1022,19 @@ function renderMentionCategoryIcon(type: StudioContextCategory) {
 
 export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
-    core40SDK,
-    agentName: rawAgentName,
-    models,
-    selectedExplores,
-    setSelectedExplores,
-    preloadedContent,
-    mentionedItems,
-    setMentionedItems,
-    searchGlobalContentV2,
-    allConversations,
-    conversations,
-    activeMode,
-    builderMode,
-    isLookmlMode,
-    isHealthCheckMode,
-    isCaMode,
-    caConversation,
-    selectedUseCase,
-    selectedModel,
-    setSelectedModel,
-    thinkingLevel,
-    setThinkingLevel,
-    availableModels,
-    busyStatus,
-    activatedLookmlSkills,
-    setActivatedLookmlSkills,
-    pastedImages,
-    setPastedImages,
-    prompt,
-    setPrompt,
-    handleSendPrompt,
-    queuedPrompts,
-    busySendAction,
-    setBusySendAction,
-    handleStopTurn,
-    handleQueuePrompt,
-    handleRemoveQueuedPrompt,
-    handleInterjectPrompt,
-    isAuthenticated,
-    authMode,
-    clientId,
-    oauthSigningIn,
-    handleOAuthLogin,
-    history,
-    lookmlBundle,
-    nativeContent,
-    infoModalUseCase,
-    setInfoModalUseCase,
+    core40SDK, agentName: rawAgentName, models, selectedExplores, setSelectedExplores,
+    preloadedContent, mentionedItems, setMentionedItems, searchGlobalContentV2,
+    allConversations, conversations, activeMode, builderMode, isLookmlMode,
+    isHealthCheckMode, isCaMode, caConversation, selectedUseCase, selectedModel,
+    setSelectedModel, thinkingLevel, setThinkingLevel, availableModels, busyStatus,
+    activatedLookmlSkills, setActivatedLookmlSkills, pastedImages, setPastedImages,
+    prompt, setPrompt, handleSendPrompt, queuedPrompts, busySendAction, setBusySendAction,
+    handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt,
+    isAuthenticated, authMode, clientId, oauthSigningIn, handleOAuthLogin, history,
+    lookmlBundle, nativeContent, infoModalUseCase, setInfoModalUseCase,
   } = ctl
 
-  const mockExt =
-    typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
+  const mockExt = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const addMenuWrapRef = useRef<HTMLDivElement | null>(null)
@@ -1312,9 +1051,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   const [remoteSearchResults, setRemoteSearchResults] = useState<StudioContextMention[]>([])
   const [mentionLoading, setMentionLoading] = useState(false)
 
-  useEffect(() => {
-    setCursorPos((prev) => Math.min(prev, prompt.length))
-  }, [prompt.length])
+  useEffect(() => { setCursorPos((prev) => Math.min(prev, prompt.length)) }, [prompt.length])
 
   const detectedMention = useMemo(() => {
     const uptoCursor = prompt.slice(0, cursorPos || prompt.length)
@@ -1326,38 +1063,22 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       return { open: true, category, query, tokenStart: atIdx >= 0 ? atIdx : uptoCursor.length, tokenEnd: uptoCursor.length }
     }
     return {
-      open: forceMentionCategory !== null,
-      category: forceMentionCategory ?? ('all' as const),
-      query: '',
-      tokenStart: prompt.length,
-      tokenEnd: prompt.length,
+      open: forceMentionCategory !== null, category: forceMentionCategory ?? ('all' as const),
+      query: '', tokenStart: prompt.length, tokenEnd: prompt.length,
     }
   }, [prompt, cursorPos, forceMentionCategory])
 
   useEffect(() => {
-    if (
-      detectedMention.open &&
-      mentionMenuRef.current &&
-      typeof mockExt?.initialExploreScrollTop === 'number'
-    ) {
+    if (detectedMention.open && mentionMenuRef.current && typeof mockExt?.initialExploreScrollTop === 'number') {
       mentionMenuRef.current.scrollTop = mockExt.initialExploreScrollTop
     }
   }, [detectedMention.open, models.length, mockExt?.initialExploreScrollTop])
 
   useEffect(() => {
     const onDocMouseDown = (e: MouseEvent) => {
-      if (addMenuWrapRef.current && !addMenuWrapRef.current.contains(e.target as Node)) {
-        setAddContextOpen(false)
-      }
-      if (busyActionWrapRef.current && !busyActionWrapRef.current.contains(e.target as Node)) {
-        setBusyActionMenuOpen(false)
-      }
-      if (
-        mentionMenuRef.current &&
-        !mentionMenuRef.current.contains(e.target as Node) &&
-        textareaRef.current &&
-        !textareaRef.current.contains(e.target as Node)
-      ) {
+      if (addMenuWrapRef.current && !addMenuWrapRef.current.contains(e.target as Node)) setAddContextOpen(false)
+      if (busyActionWrapRef.current && !busyActionWrapRef.current.contains(e.target as Node)) setBusyActionMenuOpen(false)
+      if (mentionMenuRef.current && !mentionMenuRef.current.contains(e.target as Node) && textareaRef.current && !textareaRef.current.contains(e.target as Node)) {
         setForceMentionCategory(null)
       }
     }
@@ -1367,49 +1088,25 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 
   useEffect(() => {
     if (!detectedMention.open || !detectedMention.query) {
-      setMentionLoading(false)
-      setRemoteSearchResults([])
+      setMentionLoading(false); setRemoteSearchResults([])
       return
     }
     let cancelled = false
     setMentionLoading(true)
     const timer = setTimeout(() => {
-      searchGlobalContentV2(core40SDK, {
-        term: detectedMention.query,
-        category: detectedMention.category,
-        limit: 15,
-      })
-        .then((items) => {
-          if (!cancelled) setRemoteSearchResults(items)
-        })
-        .catch(() => {
-          if (!cancelled) setRemoteSearchResults([])
-        })
-        .finally(() => {
-          if (!cancelled) setMentionLoading(false)
-        })
+      searchGlobalContentV2(core40SDK, { term: detectedMention.query, category: detectedMention.category, limit: 15 })
+        .then((items) => { if (!cancelled) setRemoteSearchResults(items) })
+        .catch(() => { if (!cancelled) setRemoteSearchResults([]) })
+        .finally(() => { if (!cancelled) setMentionLoading(false) })
     }, 250)
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
+    return () => { cancelled = true; clearTimeout(timer) }
   }, [core40SDK, detectedMention.open, detectedMention.query, detectedMention.category, searchGlobalContentV2])
 
   const groupedExplores = useMemo(() => {
-    const tokens = detectedMention.query
-      .toLowerCase()
-      .split(/\s+/)
-      .filter(Boolean)
+    const tokens = detectedMention.query.toLowerCase().split(/\s+/).filter(Boolean)
     return models
       .reduce(
-        (
-          acc: Array<{
-            label: string
-            modelName: string
-            options: Array<{ label: string; value: string; mention: StudioContextMention }>
-          }>,
-          model
-        ) => {
+        (acc: Array<{ label: string; modelName: string; options: Array<{ label: string; value: string; mention: StudioContextMention }> }>, model) => {
           if (model?.explores?.length) {
             const matchingExplores = model.explores.filter((explore) => {
               if (explore.hidden) return false
@@ -1427,16 +1124,11 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                     const value = formatExploreId(model.name, String(explore.name))
                     const label = String(explore.label || explore.name)
                     return {
-                      label,
-                      value,
+                      label, value,
                       mention: {
-                        type: 'explore' as const,
-                        id: value,
-                        title: label,
-                        subtitle: String(model.label || model.name),
-                        model: model.name,
-                        explore: String(explore.name),
-                        description: explore.description ? String(explore.description) : undefined,
+                        type: 'explore' as const, id: value, title: label,
+                        subtitle: String(model.label || model.name), model: model.name,
+                        explore: String(explore.name), description: explore.description ? String(explore.description) : undefined,
                       },
                     }
                   })
@@ -1523,8 +1215,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     const nextPrompt = `${prefix}${needsLeadingSpace ? ' ' : ''}${replacement}${suffix}`
     setPrompt(nextPrompt)
     const nextPos = (prefix + (needsLeadingSpace ? ' ' : '') + replacement).length
-    setCursorPos(nextPos)
-    setForceMentionCategory(null)
+    setCursorPos(nextPos); setForceMentionCategory(null)
     requestAnimationFrame(() => { if (textareaRef.current) { textareaRef.current.focus(); textareaRef.current.setSelectionRange(nextPos, nextPos) } })
   }
 
@@ -1538,9 +1229,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     const token = `@${category}:`
     const trimmed = prompt.replace(/\s+$/, '')
     const nextPrompt = trimmed ? `${trimmed} ${token}` : token
-    setPrompt(nextPrompt)
-    setCursorPos(nextPrompt.length)
-    setForceMentionCategory(category)
+    setPrompt(nextPrompt); setCursorPos(nextPrompt.length); setForceMentionCategory(category)
     requestAnimationFrame(() => { if (textareaRef.current) { textareaRef.current.focus(); textareaRef.current.setSelectionRange(nextPrompt.length, nextPrompt.length) } })
   }
 
@@ -1631,8 +1320,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                   data-testid={`queued-prompt-interject-${q.id}`} onClick={() => handleInterjectPrompt(q.id)}
                   title="Abort current turn and send this queued message immediately"
                 >
-                  <Zap size={11} strokeWidth={1.75} aria-hidden="true" />
-                  <span>Interject</span>
+                  <Zap size={11} strokeWidth={1.75} aria-hidden="true" /><span>Interject</span>
                 </button>
                 <button
                   type="button" className="dab-queued-prompt-remove-btn" data-testid={`queued-prompt-remove-${q.id}`}
@@ -1671,8 +1359,8 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 onClick={(e) => { e.stopPropagation(); setSelectedExplores([]); setMentionedItems((prev) => prev.filter((x) => x.type !== 'explore')) }}
               >
                 <span>Clear selection (let agent decide)</span>
-                </div>
-              )}
+              </div>
+            )}
 
             {detectedMention.category === 'explore' && !remoteSearchResults.length ? (
               groupedExplores.length === 0 ? (
@@ -1683,31 +1371,19 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                     <div className="dab-group-header">{group.label}</div>
                     {group.options.map((opt) => {
                       const isSelected = selectedExplores.includes(opt.value)
-                      const flatIdx = mentionOptions.findIndex(
-                        (m) => m.type === 'explore' && m.id === opt.value
-                      )
+                      const flatIdx = mentionOptions.findIndex((m) => m.type === 'explore' && m.id === opt.value)
                       const isHighlighted = flatIdx === activeMentionIndex
                       return (
                         <div
-                          key={opt.value}
-                          role="option"
-                          aria-selected={isSelected || isHighlighted}
+                          key={opt.value} role="option" aria-selected={isSelected || isHighlighted}
                           data-testid={`composer-mention-option-explore-${opt.value}`}
-                          className={`dab-option ${
-                            isSelected || isHighlighted ? 'dab-option-selected' : ''
-                          }`}
-                          onMouseEnter={() => {
-                            if (flatIdx >= 0) setActiveMentionIndex(flatIdx)
-                          }}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleSelectMentionOption(opt.mention)
-                          }}
+                          className={`dab-option ${isSelected || isHighlighted ? 'dab-option-selected' : ''}`}
+                          onMouseEnter={() => { if (flatIdx >= 0) setActiveMentionIndex(flatIdx) }}
+                          onClick={(e) => { e.stopPropagation(); handleSelectMentionOption(opt.mention) }}
                           title={opt.value}
                         >
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                            <Database size={13} strokeWidth={1.75} aria-hidden="true" />
-                            <span>{opt.label}</span>
+                            <Database size={13} strokeWidth={1.75} aria-hidden="true" /><span>{opt.label}</span>
                           </span>
                           {isSelected && <Check size={13} strokeWidth={2} aria-hidden="true" />}
                         </div>
@@ -1717,9 +1393,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 ))
               )
             ) : mentionOptions.length === 0 ? (
-              <div className="dab-option dab-muted">
-                {mentionLoading ? 'Searching Looker...' : 'No matching Looker items'}
-              </div>
+              <div className="dab-option dab-muted">{mentionLoading ? 'Searching Looker...' : 'No matching Looker items'}</div>
             ) : (
               mentionOptions.map((item, idx) => {
                 const isSelected = (item.type === 'explore' && selectedExplores.includes(item.id)) || mentionedItems.some((m) => m.type === item.type && m.id === item.id)
@@ -1930,6 +1604,7 @@ export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ 
           <StarterPromptButtons useCase={selectedUseCase} prompts={starterPrompts} loading={starterPromptsLoading} onSelect={setPrompt} disabled={!!busyStatus} />
         </div>
         <StudioComposer ctl={ctl} />
+        <SandboxMarkdownPreviewModal ctl={ctl} />
       </div>
     </main>
   )
@@ -1956,12 +1631,25 @@ interface ActivityStepContentContext {
   lookmlBundle?: LookmlBundle | null
   currentAppCode?: string | null
   schemaMarkdown?: string | null
+  sandboxMarkdownCache?: Record<string, string>
+  sandboxMarkdownLoading?: Record<string, boolean>
+  onLoadSandboxMarkdownFile?: (path: string, opts?: { openModal?: boolean }) => Promise<string>
+  onOpenSandboxMarkdownModal?: (path: string) => void
 }
 
-function resolveActivityStepContent(step: AntigravityActivityStep, ctx?: ActivityStepContentContext): string {
+function extractStepMarkdownPath(step: AntigravityActivityStep): string | undefined {
+  if (step.kind !== 'file' && step.kind !== 'skill') return undefined
+  for (const cand of [step.path, step.detail, step.title].map((s) => String(s || '').trim()).filter(Boolean)) {
+    const clean = cand.split('—')[0].trim().replace(/^(?:Viewing|Editing|Creating|Writing|Skill:)\s+/i, '').trim()
+    if (/\.md$/i.test(clean)) return clean
+  }
+  return undefined
+}
+
+function resolveStaticOrCachedStepContent(step: AntigravityActivityStep, ctx?: ActivityStepContentContext): string | undefined {
   if (step.content?.trim()) return step.content
   for (const cand of [step.path, step.detail, step.title].map((s) => String(s || '').trim()).filter(Boolean)) {
-    const clean = cand.split('—')[0].trim().replace(/^(?:Viewing|Editing|Skill:)\s+/i, '').trim()
+    const clean = cand.split('—')[0].trim().replace(/^(?:Viewing|Editing|Creating|Writing|Skill:)\s+/i, '').trim()
     const builtin = resolveBuiltinWorkspaceFileContent(cand) || resolveBuiltinWorkspaceFileContent(clean)
     if (builtin) return builtin
     const base = clean.split('/').filter(Boolean).pop() || clean
@@ -1969,13 +1657,123 @@ function resolveActivityStepContent(step: AntigravityActivityStep, ctx?: Activit
     if (lkml) return lkml
     if ((base === 'app.js' || clean.endsWith('/app.js')) && ctx?.currentAppCode) return ctx.currentAppCode
     if ((base === 'schema.md' || clean.endsWith('/schema.md')) && ctx?.schemaMarkdown) return ctx.schemaMarkdown
+    const normalized = normalizeSandboxFilePath(clean)
+    const cached = ctx?.sandboxMarkdownCache?.[clean] ?? ctx?.sandboxMarkdownCache?.[normalized] ?? ctx?.sandboxMarkdownCache?.[normalized ? `/${normalized}` : '']
+    if (typeof cached === 'string' && cached.length > 0) return cached
   }
-  return step.detail || step.path || step.title
+  return undefined
+}
+
+function resolveActivityStepContent(step: AntigravityActivityStep, ctx?: ActivityStepContentContext): string {
+  return resolveStaticOrCachedStepContent(step, ctx) || step.detail || step.path || step.title
+}
+
+export const SandboxMarkdownPreviewModal: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
+  const {
+    activeSandboxMarkdownModalPath, setActiveSandboxMarkdownModalPath,
+    sandboxMarkdownCache = {}, sandboxMarkdownLoading = {},
+    loadSandboxMarkdownFile, schemaMarkdown, extensionSDK,
+  } = ctl
+  const [viewMode, setViewMode] = useState<'rendered' | 'raw'>('rendered')
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => { setViewMode('rendered'); setCopied(false) }, [activeSandboxMarkdownModalPath])
+  if (!activeSandboxMarkdownModalPath) return null
+
+  const rawPath = activeSandboxMarkdownModalPath
+  const normalizedPath = normalizeSandboxFilePath(rawPath)
+  const displayPath = normalizedPath ? `/${normalizedPath}` : rawPath
+  const fileName = normalizedPath.split('/').filter(Boolean).pop() || 'document.md'
+  const hostUrl = extensionSDK?.lookerHostData?.hostUrl || (typeof window !== 'undefined' ? window.location.origin : '')
+
+  const markdownContent =
+    sandboxMarkdownCache[rawPath] ?? sandboxMarkdownCache[normalizedPath] ?? sandboxMarkdownCache[displayPath] ??
+    resolveBuiltinWorkspaceFileContent(rawPath) ?? resolveBuiltinWorkspaceFileContent(normalizedPath) ??
+    ((fileName === 'schema.md' || normalizedPath.endsWith('/schema.md')) && schemaMarkdown ? schemaMarkdown : '')
+
+  const isLoading = Boolean(
+    !markdownContent && (sandboxMarkdownLoading[rawPath] || sandboxMarkdownLoading[normalizedPath] || sandboxMarkdownLoading[displayPath])
+  )
+
+  const handleCopyMarkdown = () => {
+    if (!markdownContent) return
+    void copyLinkWithExtensionSdk(markdownContent, extensionSDK).then(() => {
+      setCopied(true); setTimeout(() => setCopied(false), 1800)
+    })
+  }
+
+  const handleDownloadMarkdown = () => {
+    if (!markdownContent) return
+    if (typeof window !== 'undefined') {
+      ;(window as unknown as { __LAST_DOWNLOADED_SANDBOX_MD__?: { fileName: string; path: string; content: string } }).__LAST_DOWNLOADED_SANDBOX_MD__ = {
+        fileName, path: displayPath, content: markdownContent,
+      }
+    }
+    try {
+      const url = URL.createObjectURL(new Blob([markdownContent], { type: 'text/markdown;charset=utf-8' }))
+      Object.assign(document.createElement('a'), { href: url, download: fileName }).click()
+      URL.revokeObjectURL(url)
+    } catch { /* ignore headless download errors */ }
+  }
+
+  return (
+    <StudioModal
+      open={Boolean(activeSandboxMarkdownModalPath)} onClose={() => setActiveSandboxMarkdownModalPath(null)}
+      testId="sandbox-markdown-preview-modal" closeTestId="sandbox-markdown-modal-close" closeLabel="Close"
+      className="dab-sandbox-md-modal" maxWidth={760}
+      title={
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span>{fileName}</span>
+          <StudioBadge tone="accent" testId="sandbox-markdown-path-badge">{displayPath}</StudioBadge>
+        </span>
+      }
+      subtitle="Loaded on demand from remote sandbox environment (never stored on Looker instance)"
+      headerRight={
+        <>
+          <StudioButton variant="secondary" testId="sandbox-markdown-toggle-raw" onClick={() => setViewMode((m) => (m === 'rendered' ? 'raw' : 'rendered'))}>
+            {viewMode === 'rendered' ? <Code2 size={12} strokeWidth={1.75} aria-hidden="true" /> : <Eye size={12} strokeWidth={1.75} aria-hidden="true" />}
+            <span>{viewMode === 'rendered' ? 'Raw Markdown' : 'Rendered'}</span>
+          </StudioButton>
+          <StudioButton variant="secondary" testId="sandbox-markdown-copy-btn" data-copied={copied ? 'true' : 'false'} onClick={handleCopyMarkdown} disabled={!markdownContent}>
+            {copied ? <Check size={12} strokeWidth={2} aria-hidden="true" /> : <Copy size={12} strokeWidth={1.75} aria-hidden="true" />}
+            <span>{copied ? 'Copied Markdown' : 'Copy Markdown'}</span>
+          </StudioButton>
+          <StudioButton variant="gemini" testId="sandbox-markdown-download-btn" onClick={handleDownloadMarkdown} disabled={!markdownContent}>
+            <FileText size={12} strokeWidth={1.75} aria-hidden="true" /><span>Download .md</span>
+          </StudioButton>
+        </>
+      }
+    >
+      {isLoading ? (
+        <div className="dab-sandbox-md-modal-loading" data-testid="sandbox-markdown-modal-loading">
+          <StudioSkeleton width="100%" height={32} /><span className="dab-muted">Loading from sandbox...</span>
+        </div>
+      ) : viewMode === 'raw' ? (
+        <pre className="dab-sandbox-md-raw" data-testid="sandbox-markdown-raw-body">{markdownContent}</pre>
+      ) : (
+        <div className="dab-sandbox-md-rendered" data-testid="sandbox-markdown-rendered-body">
+          <StudioMarkdown
+            text={markdownContent} hostUrl={hostUrl} extensionSDK={extensionSDK}
+            onOpenSandboxMarkdownFile={(p) => void loadSandboxMarkdownFile(p, { openModal: true })}
+          />
+        </div>
+      )}
+    </StudioModal>
+  )
 }
 
 const ActivityStepsList: React.FC<{ steps: AntigravityActivityStep[]; contentCtx?: ActivityStepContentContext }> = ({ steps, contentCtx }) => {
   const [expandedKeys, setExpandedKeys] = useState<Record<string, boolean>>({})
-  const toggleKey = (key: string) => setExpandedKeys((prev) => ({ ...prev, [key]: !prev[key] }))
+  const handleToggleStep = (key: string, step: AntigravityActivityStep) => {
+    const willOpen = !expandedKeys[key]
+    setExpandedKeys((prev) => ({ ...prev, [key]: willOpen }))
+    if (willOpen) {
+      const mdPath = extractStepMarkdownPath(step)
+      if (mdPath && !resolveStaticOrCachedStepContent(step, contentCtx)) {
+        void contentCtx?.onLoadSandboxMarkdownFile?.(mdPath)
+      }
+    }
+  }
   return (
     <div className="dab-thinking-steps">
       {steps.map((step, sIdx) => {
@@ -1988,7 +1786,14 @@ const ActivityStepsList: React.FC<{ steps: AntigravityActivityStep[]; contentCtx
         const StepTag = isCollapsible ? 'details' : 'div'
         const HeaderTag = isCollapsible ? 'summary' : 'div'
         const testId = isCollapsibleThought ? 'thinking-step-thought' : step.kind === 'file' ? 'thinking-step-file' : step.kind === 'skill' ? 'thinking-step-skill' : undefined
+        const mdPath = isFileOrSkill ? extractStepMarkdownPath(step) : undefined
+        const staticOrCachedContent = isFileOrSkill ? resolveStaticOrCachedStepContent(step, contentCtx) : undefined
         const resolvedContent = isFileOrSkill ? resolveActivityStepContent(step, contentCtx) : ''
+        const normalizedMdPath = mdPath ? normalizeSandboxFilePath(mdPath) : ''
+        const isLoadingMd = Boolean(
+          normalizedMdPath && !staticOrCachedContent &&
+            (contentCtx?.sandboxMarkdownLoading?.[mdPath!] || contentCtx?.sandboxMarkdownLoading?.[normalizedMdPath] || contentCtx?.sandboxMarkdownLoading?.[`/${normalizedMdPath}`])
+        )
         return (
           <StepTag
             key={stepKey}
@@ -1998,22 +1803,46 @@ const ActivityStepsList: React.FC<{ steps: AntigravityActivityStep[]; contentCtx
             {...(isCollapsible ? {
               open: isOpen,
               onClick: (e: React.MouseEvent<HTMLElement>) => {
-                if ((e.target as HTMLElement).closest('pre')) return
-                e.preventDefault(); toggleKey(stepKey)
+                if ((e.target as HTMLElement).closest('pre, button')) return
+                e.preventDefault(); handleToggleStep(stepKey, step)
               },
             } : {})}
           >
             <HeaderTag
               className="dab-thinking-step-header"
-              {...(isCollapsible ? { onClick: (e: React.MouseEvent<HTMLElement>) => { e.preventDefault(); e.stopPropagation(); toggleKey(stepKey) } } : {})}
+              {...(isCollapsible ? { onClick: (e: React.MouseEvent<HTMLElement>) => { e.preventDefault(); e.stopPropagation(); handleToggleStep(stepKey, step) } } : {})}
             >
               <span className="dab-thinking-kind-badge">{formatActivityStepBadge(step)}</span>
               <span className="dab-thinking-step-title">{step.title}</span>
               {step.status === 'running' && <span className="dab-thinking-step-status">Running…</span>}
             </HeaderTag>
             {hasDetail && <code className="dab-thinking-step-detail">{step.detail}</code>}
-            {isFileOrSkill && isOpen && resolvedContent && (
-              <pre className="dab-thinking-step-content-preview" data-testid="activity-step-content-preview">{resolvedContent}</pre>
+            {isFileOrSkill && isOpen && (
+              isLoadingMd ? (
+                <div className="dab-thinking-step-loading" data-testid="activity-step-loading">
+                  <StudioSkeleton width="100%" height={24} /><span className="dab-muted">Loading from sandbox...</span>
+                </div>
+              ) : (
+                resolvedContent && (
+                  <div className="dab-thinking-step-content-wrap">
+                    {mdPath && (
+                      <div className="dab-thinking-step-md-actions">
+                        <StudioButton
+                          variant="secondary" testId="open-sandbox-markdown-modal-btn"
+                          onClick={(e) => {
+                            e.preventDefault(); e.stopPropagation()
+                            if (staticOrCachedContent) contentCtx?.onOpenSandboxMarkdownModal?.(mdPath)
+                            else void contentCtx?.onLoadSandboxMarkdownFile?.(mdPath, { openModal: true })
+                          }}
+                        >
+                          <FileText size={12} strokeWidth={1.75} aria-hidden="true" /><span>Open Markdown Preview</span>
+                        </StudioButton>
+                      </div>
+                    )}
+                    <pre className="dab-thinking-step-content-preview" data-testid="activity-step-content-preview">{resolvedContent}</pre>
+                  </div>
+                )
+              )
             )}
           </StepTag>
         )
@@ -2028,16 +1857,25 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     messages, builderMode, selectedUseCase, selectedExplores, starterPrompts, starterPromptsLoading,
     setPrompt, busyStatus, liveActivitySteps, pendingPerm, resolvePermDecision,
     leftPaneWidth, setLeftPaneWidth, rightPaneCollapsed, lookmlBundle, currentAppCode, schemaMarkdown,
+    sandboxMarkdownCache, sandboxMarkdownLoading, loadSandboxMarkdownFile, setActiveSandboxMarkdownModalPath,
   } = ctl
   const agentName = normalizeStudioAgentName(rawAgentName)
-  const hostUrl =
-    extensionSDK?.lookerHostData?.hostUrl ||
-    (typeof window !== 'undefined' ? window.location.origin : '')
+  const hostUrl = extensionSDK?.lookerHostData?.hostUrl || (typeof window !== 'undefined' ? window.location.origin : '')
 
   const leftPaneRef = useRef<HTMLElement | null>(null)
   const [isResizingSplit, setIsResizingSplit] = useState(false)
   const [copiedTraceKey, setCopiedTraceKey] = useState<string | null>(null)
-  const contentCtx = useMemo<ActivityStepContentContext>(() => ({ lookmlBundle, currentAppCode, schemaMarkdown }), [lookmlBundle, currentAppCode, schemaMarkdown])
+  const contentCtx = useMemo<ActivityStepContentContext>(
+    () => ({
+      lookmlBundle, currentAppCode, schemaMarkdown, sandboxMarkdownCache, sandboxMarkdownLoading,
+      onLoadSandboxMarkdownFile: loadSandboxMarkdownFile,
+      onOpenSandboxMarkdownModal: (p: string) => {
+        const normalized = normalizeSandboxFilePath(p)
+        setActiveSandboxMarkdownModalPath(normalized ? `/${normalized}` : p)
+      },
+    }),
+    [lookmlBundle, currentAppCode, schemaMarkdown, sandboxMarkdownCache, sandboxMarkdownLoading, loadSandboxMarkdownFile, setActiveSandboxMarkdownModalPath]
+  )
 
   const handleCopyThinkingTrace = (
     e: React.MouseEvent<HTMLButtonElement>, traceKey: string, steps: AntigravityActivityStep[],
@@ -2100,7 +1938,18 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 </details>
               )}
               <div className="dab-msg-body">
-                <StudioMarkdown text={m.text} hostUrl={hostUrl} extensionSDK={extensionSDK} />
+                <StudioMarkdown
+                  text={m.text} hostUrl={hostUrl} extensionSDK={extensionSDK}
+                  onOpenSandboxMarkdownFile={(p) => {
+                    const builtin = resolveBuiltinWorkspaceFileContent(p) || resolveBuiltinWorkspaceFileContent(normalizeSandboxFilePath(p))
+                    if (builtin) {
+                      const normalized = normalizeSandboxFilePath(p)
+                      setActiveSandboxMarkdownModalPath(normalized ? `/${normalized}` : p)
+                    } else {
+                      void loadSandboxMarkdownFile(p, { openModal: true })
+                    }
+                  }}
+                />
               </div>
               {m.images && m.images.length > 0 && (
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
@@ -2146,6 +1995,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       )}
 
       <StudioComposer ctl={ctl} />
+      <SandboxMarkdownPreviewModal ctl={ctl} />
       {!rightPaneCollapsed && (
         <div
           data-testid="workspace-split-resizer" role="separator" aria-orientation="vertical" aria-label="Resize chat and preview panes"
@@ -2248,12 +2098,12 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const showContentTabs = !isTileMode && !isHealthCheckMode && !isLookmlMode && contentItems.length > 0
   const resolvedActiveTabKey = activeContentTabKey || activeContentItem?.key || ''
 
-  const railArtifacts = useMemo<Array<{ key: string; title: string; contentType: StudioConversationContentItem['contentType'] }>>(() => {
+  const railArtifacts = useMemo<Array<{ key: string; title: string; contentType: StudioContentItemType }>>(() => {
     if (contentItems.length > 0) return contentItems.map((item) => ({ key: item.key, title: item.title, contentType: item.contentType }))
     if (isLookmlMode && lookmlBundle) return [{ key: `lookml:${lookmlBundle.id}`, title: lookmlBundle.title || 'Agentic LookML', contentType: 'extension' }]
     if (isHealthCheckMode && healthReport) return [{ key: `report:${healthReport.id}`, title: healthReport.title || 'Health Check Report', contentType: 'report' }]
     if (isTileMode && scriptId) return [{ key: `script:${scriptId}`, title: scriptTitle || scriptId, contentType: 'extension' }]
-    if (caConversation) return [{ key: `ca:${caConversation.caConversationId}`, title: caConversation.title || 'Conversational Analytics', contentType: 'ca' }]
+    if (caConversation) return [{ key: `ca:${caConversation.caConversationId}`, title: caConversation.title || 'Conversational Analytics', contentType: 'conversational-analytics' }]
     if (nativeContent) return [{ key: `${nativeContent.contentType}:${nativeContent.id}`, title: nativeContent.title, contentType: nativeContent.contentType }]
     if (publishedApp) return [{ key: `data_app:${publishedApp.dashboardId}`, title: publishedApp.title, contentType: 'data_app' }]
     return []

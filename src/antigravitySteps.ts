@@ -24,13 +24,7 @@ export function collectInteractionTextCandidates(
   const out: unknown[] = [interaction?.output_text]
   for (const o of interaction?.outputs || []) out.push(o?.text)
   for (const s of interaction?.steps || []) {
-    out.push(
-      s?.output,
-      s?.stdout,
-      s?.result,
-      s?.text,
-      s?.code_execution_result?.output
-    )
+    out.push(s?.output, s?.stdout, s?.result, s?.text, s?.code_execution_result?.output)
   }
   return out.filter((x): x is string => typeof x === 'string').join('\n')
 }
@@ -39,76 +33,49 @@ export function extractBundleFromInteraction(
   interaction: AntigravityInteractionPayload | null | undefined
 ): DataAppBundle | null {
   const matches = Array.from(
-    collectInteractionTextCandidates(interaction).matchAll(
-      /<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g
-    )
+    collectInteractionTextCandidates(interaction).matchAll(/<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g)
   )
-  return matches.length > 0
-    ? (JSON.parse(matches[matches.length - 1][1].trim()) as DataAppBundle)
-    : null
+  return matches.length > 0 ? (JSON.parse(matches[matches.length - 1][1].trim()) as DataAppBundle) : null
 }
 
 export function extractTddFromInteraction(
   interaction: AntigravityInteractionPayload | null | undefined
 ): string | null {
   const combined = collectInteractionTextCandidates(interaction)
-  const matches = Array.from(
-    combined.matchAll(/<HEALTH_CHECK_TDD>([\s\S]*?)<\/HEALTH_CHECK_TDD>/g)
-  )
+  const matches = Array.from(combined.matchAll(/<HEALTH_CHECK_TDD>([\s\S]*?)<\/HEALTH_CHECK_TDD>/g))
   if (matches.length > 0) return matches[matches.length - 1][1].trim()
-  return combined.includes('## 1. Executive Summary') && combined.includes('## 7.')
-    ? combined.trim()
-    : null
+  return combined.includes('## 1. Executive Summary') && combined.includes('## 7.') ? combined.trim() : null
 }
 
 const VALID_NATIVE_CONTENT_TYPES = new Set(['dashboard', 'lookml_dashboard', 'look', 'board'])
 
-function normalizeNativeBundleCandidate(
-  raw: unknown,
-  allowUnwrapped = false
-): NativeContentBundle | null {
+function normalizeNativeBundleCandidate(raw: unknown, allowUnwrapped = false): NativeContentBundle | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const rawObj = raw as Record<string, unknown>
-  const hasBundleEnvelope = Boolean(
-    rawObj.NATIVE_CONTENT_BUNDLE && typeof rawObj.NATIVE_CONTENT_BUNDLE === 'object'
-  )
-  const r = hasBundleEnvelope
-    ? (rawObj.NATIVE_CONTENT_BUNDLE as Record<string, unknown>)
-    : rawObj
+  const hasBundleEnvelope = Boolean(rawObj.NATIVE_CONTENT_BUNDLE && typeof rawObj.NATIVE_CONTENT_BUNDLE === 'object')
+  const r = hasBundleEnvelope ? (rawObj.NATIVE_CONTENT_BUNDLE as Record<string, unknown>) : rawObj
   const explicitType = String(r.content_type || r.contentType || '').trim()
   const hasExplicitContentId = Boolean(
-    r.dashboard_id ||
-      r.lookml_dashboard_id ||
-      r.look_id ||
-      r.board_id ||
+    r.dashboard_id || r.lookml_dashboard_id || r.look_id || r.board_id ||
       (typeof r.embed_path === 'string' && r.embed_path.startsWith('/embed/'))
   )
   if (!allowUnwrapped && !hasBundleEnvelope && !(VALID_NATIVE_CONTENT_TYPES.has(explicitType) && hasExplicitContentId)) {
     return null
   }
-  const id =
-    r.id ||
-    r.lookml_dashboard_id ||
-    r.dashboard_id ||
-    r.look_id ||
-    r.board_id
+  const id = r.id || r.lookml_dashboard_id || r.dashboard_id || r.look_id || r.board_id
   if (!id) return null
   const strId = String(id).trim()
-  const cType = (r.content_type ||
-    r.contentType ||
-    (r.board_id
-      ? 'board'
-      : r.look_id && !r.dashboard_id
-      ? 'look'
-      : strId.includes('::')
-      ? 'lookml_dashboard'
-      : 'dashboard')) as NativeContentBundle['contentType'] & string
+  const cType = (r.content_type || r.contentType ||
+    (r.board_id ? 'board' : r.look_id && !r.dashboard_id ? 'look' : strId.includes('::') ? 'lookml_dashboard' : 'dashboard')
+  ) as NativeContentBundle['contentType'] & string
   const folderId = r.folder_id || r.folderId ? String(r.folder_id || r.folderId) : undefined
   const embedPath = resolveNativeEmbedPath(
     cType,
     strId,
     typeof (r.embed_path || r.url) === 'string' ? String(r.embed_path || r.url) : undefined
   )
+  const asRecord = (v: unknown): Record<string, string> | undefined =>
+    v && typeof v === 'object' ? (v as Record<string, string>) : undefined
   return {
     id: strId,
     content_type: cType,
@@ -130,67 +97,45 @@ function normalizeNativeBundleCandidate(
     layout_id: r.layout_id ? String(r.layout_id) : undefined,
     element_ids: Array.isArray(r.element_ids) ? r.element_ids.map(String) : undefined,
     filter_names: Array.isArray(r.filter_names) ? r.filter_names.map(String) : undefined,
-    layout_component_ids:
-      r.layout_component_ids && typeof r.layout_component_ids === 'object'
-        ? (r.layout_component_ids as Record<string, string>)
-        : undefined,
-    query_cache:
-      r.query_cache && typeof r.query_cache === 'object'
-        ? (r.query_cache as Record<string, string>)
-        : undefined,
-    filter_cache:
-      r.filter_cache && typeof r.filter_cache === 'object'
-        ? (r.filter_cache as Record<string, string>)
-        : undefined,
+    layout_component_ids: asRecord(r.layout_component_ids),
+    query_cache: asRecord(r.query_cache),
+    filter_cache: asRecord(r.filter_cache),
     summary: r.summary ? String(r.summary) : undefined,
-    elements: Array.isArray(r.elements)
-      ? (r.elements as NativeContentBundle['elements'])
-      : undefined,
+    elements: Array.isArray(r.elements) ? (r.elements as NativeContentBundle['elements']) : undefined,
     explores: Array.isArray(r.explores) ? r.explores.map(String) : undefined,
   }
 }
 
 // ponytail: capture NATIVE_CONTENT_BUNDLE directly from run_looker_codemode return value first
-// so the model never has to echo <NATIVE_CONTENT_BUNDLE>{...}</NATIVE_CONTENT_BUNDLE> in output_text.
 export function extractNativeContentFromInteraction(
   interaction: AntigravityInteractionPayload | null | undefined
 ): NativeContentBundle | null {
   for (const step of [...(interaction?.steps || [])].reverse()) {
     if (step?.type === 'function_result' && step?.name === 'run_looker_codemode') {
       const rawStr = typeof step.result === 'string' ? step.result : JSON.stringify(step.result || '')
-      const tagMatches = Array.from(
-        rawStr.matchAll(/<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g)
-      )
+      const tagMatches = Array.from(rawStr.matchAll(/<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g))
       if (tagMatches.length > 0) {
         try {
-          const parsedTag = JSON.parse(tagMatches[tagMatches.length - 1][1].trim())
-          const norm = normalizeNativeBundleCandidate(parsedTag, true)
+          const norm = normalizeNativeBundleCandidate(JSON.parse(tagMatches[tagMatches.length - 1][1].trim()), true)
           if (norm) return norm
-        } catch {
-          // Ignore malformed tag JSON
-        }
+        } catch { /* ignore */ }
       }
       try {
         const parsed = typeof step.result === 'string' ? JSON.parse(step.result) : step.result
         const parsedObj = parsed && typeof parsed === 'object' ? (parsed as { result?: unknown }) : undefined
         const norm = normalizeNativeBundleCandidate(parsedObj?.result ?? parsed)
         if (norm) return norm
-      } catch {
-        // Ignore non-JSON codemode outputs
-      }
+      } catch { /* ignore */ }
     }
   }
-  const combined = collectInteractionTextCandidates(interaction)
   const matches = Array.from(
-    combined.matchAll(/<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g)
+    collectInteractionTextCandidates(interaction).matchAll(/<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g)
   )
   if (matches.length > 0) {
     try {
       const parsed = JSON.parse(matches[matches.length - 1][1].trim())
       return normalizeNativeBundleCandidate(parsed, true) || (parsed as NativeContentBundle)
-    } catch {
-      // Ignore malformed tag JSON
-    }
+    } catch { /* ignore */ }
   }
   return null
 }
@@ -199,13 +144,8 @@ const KNOWN_LOOKER_SDK_CALL_RE =
   /\b(?:sdk\.([a-z_][a-z0-9_]*)|(run_inline_query|run_key_driver_analysis|to_fixed_date_range|lookml_model_explore|lookml_model|all_lookml_models|search_content|search_dashboards|search_looks|create_dashboard|update_dashboard|dashboard_dashboard_layouts|update_dashboard_layout_component|create_dashboard_element|update_dashboard_element|create_dashboard_filter|update_dashboard_filter|create_query|create_look|create_board|update_board|create_board_section|create_board_item|create_scheduled_plan|upsert_udd|upsert_lookml_dashboard|reflow_24col|pin_to_board|schedule_dashboard|emit_native_bundle|validate_project|run_lookml_test|create_sql_query|run_sql_query|all_project_files|get_file_content|create_file|update_file|delete_file|create_project_directory|update_session|git_branch|import_lookml_dashboard|sync_lookml_dashboard|me|user_roles|all_folders))\s*\(/gi
 
 const CODEMODE_MACROS = new Set([
-  'upsert_udd',
-  'upsert_lookml_dashboard',
-  'reflow_24col',
-  'pin_to_board',
-  'schedule_dashboard',
-  'emit_native_bundle',
-  'to_fixed_date_range',
+  'upsert_udd', 'upsert_lookml_dashboard', 'reflow_24col', 'pin_to_board',
+  'schedule_dashboard', 'emit_native_bundle', 'to_fixed_date_range',
 ])
 
 function extractLookerSdkMethodPreview(code: string): string {
@@ -219,15 +159,9 @@ function extractLookerSdkMethodPreview(code: string): string {
 
 export function parseStepArguments(raw: unknown): Record<string, unknown> {
   if (typeof raw === 'string') {
-    try {
-      raw = JSON.parse(raw)
-    } catch {
-      return {}
-    }
+    try { raw = JSON.parse(raw) } catch { return {} }
   }
-  return raw && typeof raw === 'object' && !Array.isArray(raw)
-    ? (raw as Record<string, unknown>)
-    : {}
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
 }
 
 export function extractThoughtText(val: unknown): string {
@@ -386,6 +320,22 @@ function extractStepContentFromSources(sources: Array<Record<string, unknown> | 
   return resolveBuiltinWorkspaceFileContent(fallbackPathOrSkill)
 }
 
+const WRITTEN_MD_RES = [
+  /(?:^|[^0-9&])>>?\s*['"]?([^\s;|&'"<>]+\.md)['"]?/i,
+  /\btee\s+(?:-[a-zA-Z]+\s+)*['"]?([^\s;|&'"<>]+\.md)['"]?/i,
+  /\bopen\(\s*['"]([^'"]+\.md)['"]\s*,\s*['"][wa][+bt]*['"]/i,
+  /\bPath\(\s*['"]([^'"]+\.md)['"]\s*\)\.write_text\b/i,
+]
+
+export function extractWrittenMarkdownPathFromCode(rawCode: string): string | undefined {
+  const code = String(rawCode || '').trim()
+  for (const re of WRITTEN_MD_RES) {
+    const matched = code.match(re)?.[1]?.trim()
+    if (matched) return matched
+  }
+  return undefined
+}
+
 export function extractInteractionActivitySteps(interaction: AntigravityInteractionPayload | null | undefined): AntigravityActivityStep[] {
   const rawSteps: AntigravityInteractionStep[] = Array.isArray(interaction?.steps) ? interaction.steps : []
   const rawOutputs: AntigravityInteractionOutput[] = Array.isArray(interaction?.outputs) ? interaction.outputs : []
@@ -541,6 +491,14 @@ export function extractInteractionActivitySteps(interaction: AntigravityInteract
         }
       }
 
+      const writtenMdPath = extractWrittenMarkdownPathFromCode(rawCode)
+      if (writtenMdPath) {
+        const shortName = writtenMdPath.split('/').filter(Boolean).pop() || writtenMdPath
+        const builtin = resolveBuiltinWorkspaceFileContent(writtenMdPath)
+        upsertStep({ id: stepId, kind: 'file', title: `Editing ${shortName}`, detail: writtenMdPath, path: writtenMdPath, ...(builtin ? { content: builtin } : {}), status: resolveStatus(false) }, explicitId)
+        continue
+      }
+
       const conciseCmd = firstLine.replace(/\s*<<\s*['"]?\w+['"]?.*$/, '').trim().slice(0, 140) || (language === 'PYTHON' ? 'Running Python script' : 'Running sandbox command')
       const detail = rawCode ? rawCode.split('\n').slice(0, 3).join('\n').slice(0, 200) : undefined
       upsertStep({ id: stepId, kind: 'code_execution', title: conciseCmd, ...(detail ? { detail } : {}), language, status: resolveStatus(false) }, explicitId)
@@ -603,11 +561,7 @@ export function extractInteractionTelemetry(
     poll_count: stats.pollCount,
     codemode_exec_ms: stats.codemodeExecMs,
     looker_http_ms: stats.lookerHttpMs,
-    tool_calls: {
-      bash: bashCalls || Number(interaction?.bash_calls || 0),
-      codemode: stats.codemodeCalls,
-      looker_http: stats.lookerHttpCalls,
-    },
+    tool_calls: { bash: bashCalls || Number(interaction?.bash_calls || 0), codemode: stats.codemodeCalls, looker_http: stats.lookerHttpCalls },
     tokens: {
       input: Number(usage.input_tokens ?? usage.prompt_token_count ?? 0),
       output: Number(usage.output_tokens ?? usage.candidates_token_count ?? 0),

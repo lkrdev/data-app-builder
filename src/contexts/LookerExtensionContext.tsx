@@ -46,6 +46,7 @@ export interface MockLookerExtensionContextValue extends LookerExtensionContextS
   initialLiveActivitySteps?: unknown[];
   initialPendingPerm?: { operation: string; httpMethod: string; path: string };
   oauthFocusReturnDelayMs?: number;
+  environmentFiles?: Record<string, string>;
   setTileHostData?: React.Dispatch<React.SetStateAction<ExtensionContextData['tileHostData']>>;
 }
 

@@ -16,7 +16,7 @@ import {
   DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_LEFT_PANE_WIDTH, DEFAULT_THINKING_LEVEL,
   discoverStarterContentSummaries, discoverStarterExploreContext, ensureCodeModeLoaded,
   executeLkrExtensionToolRequest, extractInteractionActivitySteps, extractLkrExtensionToolRequests,
-  extractNativeContentFromInteraction, extractThoughtText, formatFriendlyLookerActivityLabel,
+  extractNativeContentFromInteraction, extractThoughtText, extractWrittenMarkdownPathFromCode, fetchEnvironmentFile, formatFriendlyLookerActivityLabel,
   formatThinkingTraceMarkdown, generateConversationLabel, generateDynamicStarterPrompts,
   getCachedStarterPrompts, getInitialStoredOAuthToken, getSharedEnvExploreSchemas,
   isEnvironmentNotFoundError, isTextAttachmentFile, KDA_SKILL_MD, KDA_TOOLKIT_PY,
@@ -24,7 +24,7 @@ import {
   LKR_DEV_CLI_VERSION, LkrCodeMode, loadStoredLeftPaneWidth, loadStoredOAuthSession,
   loadStoredRightPaneCollapsed, loadStoredThinkingLevel, loginWithGoogleOAuth,
   LOOKER_PROJECT_ONBOARDING_SKILL_MD, LOOKML_SKILLS_CATALOG, MAX_LEFT_PANE_WIDTH,
-  MIN_LEFT_PANE_WIDTH, normalizeThinkingLevel, parseStarterPromptsResponse, persistOAuthSession,
+  MIN_LEFT_PANE_WIDTH, normalizeSandboxFilePath, normalizeThinkingLevel, parseStarterPromptsResponse, persistOAuthSession,
   persistThinkingLevel, prewarmOrWakeAntigravityEnvironment, readInitialThinkingLevel,
   recordSharedEnvExploreSchema, refreshOAuthSessionIfNeeded, resolveAdaptivePollScheduleMs,
   resolveBuiltinWorkspaceFileContent, resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris,
@@ -42,7 +42,7 @@ import {
 import {
   ALLOWED_EXTERNAL_WINDOW_PATTERNS, copyLinkWithExtensionSdk,
   createLookerEmbedPreloadController, DOC_UI_COMPONENTS, getStarterPromptsForUseCase,
-  isAllowedExternalWindowUrl, normalizeLookerEmbedUrl, openOrCopyMarkdownLink,
+  isAllowedExternalWindowUrl, isSandboxMarkdownPath, normalizeLookerEmbedUrl, openOrCopyMarkdownLink,
   renderUseCaseGuideMarkdown, resolveLookerEmbedTarget,
   STARTER_PROMPTS_BY_USE_CASE, StarterPromptButtons, USE_CASE_BADGES,
   USE_CASE_GUIDE_ORDER, USE_CASE_GUIDES,
@@ -5240,5 +5240,90 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
 
     const manifestLkml = readFileSync(path.resolve(__dirname, '../../manifest.lkml'), 'utf8')
     for (const token of ['label: "Ripper"', 'use_clipboard: yes', 'new_window_external_urls:']) expect(manifestLkml).toContain(token)
+  })
+
+  test('54. Issue #130: fetches agent-created .md files on demand from /v1beta/environments/{envId}/files/{path}?alt=media via fetchEnvironmentFile (apikey proxy, oauth bearer + 401 refresh retry, and mock resolution) and detects bash/Python .md writes in extractInteractionActivitySteps with zero Looker artifact storage', async () => {
+    expect(['/workspace/analysis.md', '///workspace/reports/q4_summary.md', 'file:///workspace/notes.md', '  report.md  '].map(normalizeSandboxFilePath)).toEqual([
+      'workspace/analysis.md', 'workspace/reports/q4_summary.md', 'workspace/notes.md', 'report.md',
+    ])
+    expect(['/workspace/analysis.md', 'workspace/reports/q4_summary.md', 'notes.md', 'file:///workspace/report.md', 'https://docs.cloud.google.com/looker/docs/report.md', '/dashboards/42', 'order_items.total_sale_price'].map(isSandboxMarkdownPath)).toEqual([
+      true, true, true, true, false, false, false,
+    ])
+
+    const proxyCalls: Array<{ url: string; init?: FetchCustomParameters }> = []
+    const apiKeyMd = await fetchEnvironmentFile({
+      extensionSDK: {
+        serverProxy: async (url: string, init?: FetchCustomParameters) => {
+          proxyCalls.push({ url, init })
+          return { ok: true, status: 200, body: '# Q4 Margin Root-Cause Analysis\n\nOuterwear drove +18.4% YoY revenue.' }
+        },
+      },
+      auth: { mode: 'apikey', apiKey: 'AIza_test_130' },
+      environmentId: 'env_130_prod',
+      path: '/workspace/reports/analysis.md',
+    })
+    expect(apiKeyMd).toContain('# Q4 Margin Root-Cause Analysis')
+    expect(proxyCalls).toEqual([{
+      url: 'https://generativelanguage.googleapis.com/v1beta/environments/env_130_prod/files/workspace/reports/analysis.md?alt=media',
+      init: { method: 'GET', headers: { 'x-goog-api-key': 'AIza_test_130' } },
+    }])
+
+    const fetchCalls: Array<{ url: string; headers?: Record<string, string> }> = []
+    const globalWithFetch = globalThis as unknown as {
+      fetch?: (url: string, init?: { method?: string; headers?: Record<string, string> }) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>
+      window?: unknown
+    }
+    const prevFetch = globalWithFetch.fetch
+    const prevWin = globalWithFetch.window
+    let attempt = 0
+    globalWithFetch.fetch = async (url, init) => {
+      fetchCalls.push({ url, headers: init?.headers })
+      return ++attempt === 1
+        ? { ok: false, status: 401, text: async () => JSON.stringify({ error: { message: 'Token expired' } }) }
+        : { ok: true, status: 200, text: async () => '# Refreshed OAuth Sandbox Report\n\nVerified after 401 silent refresh.' }
+    }
+    try {
+      const oauthMd = await fetchEnvironmentFile({
+        extensionSDK: {},
+        auth: { mode: 'oauth', oauthToken: 'expired_oauth_tok', projectId: 'looker-demo-proj', onUnauthorizedRefresh: async () => 'refreshed_oauth_tok_130' },
+        environmentId: 'user_env:42',
+        path: '/workspace/summary.md',
+      })
+      expect(oauthMd).toContain('# Refreshed OAuth Sandbox Report')
+      expect(fetchCalls).toEqual([
+        { url: 'https://generativelanguage.googleapis.com/v1beta/environments/user_env%3A42/files/workspace/summary.md?alt=media', headers: { Authorization: 'Bearer expired_oauth_tok', 'x-goog-user-project': 'looker-demo-proj' } },
+        { url: 'https://generativelanguage.googleapis.com/v1beta/environments/user_env%3A42/files/workspace/summary.md?alt=media', headers: { Authorization: 'Bearer refreshed_oauth_tok_130', 'x-goog-user-project': 'looker-demo-proj' } },
+      ])
+
+      globalWithFetch.window = { __MOCK_LOOKER_EXTENSION__: { environmentFiles: { '/workspace/analysis.md': '# Mock Sandbox Analysis\n\n- Gross Margin: 54.2%' } } }
+      expect(await fetchEnvironmentFile({ extensionSDK: {}, auth: { mode: 'oauth', oauthToken: 'mock_tok' }, environmentId: 'env_mock_130', path: '/workspace/analysis.md' })).toBe('# Mock Sandbox Analysis\n\n- Gross Margin: 54.2%')
+      expect(await fetchEnvironmentFile({ extensionSDK: {}, auth: { mode: 'oauth', oauthToken: 'mock_tok' }, environmentId: 'env_mock_130', path: '/workspace/unlisted_notes.md' })).toContain('# unlisted_notes.md')
+    } finally {
+      globalWithFetch.fetch = prevFetch
+      globalWithFetch.window = prevWin
+    }
+
+    const codeSamples = [
+      "cat > /workspace/analysis.md << 'EOF'\n# Root Cause Analysis\nEOF",
+      'echo "# Notes" | tee -a /workspace/notes.md',
+      "with open('/workspace/report.md', 'w') as f:\n    f.write('# Executive Report')",
+      "from pathlib import Path\nPath('/workspace/summary.md').write_text('# Executive Summary')",
+    ]
+    expect(codeSamples.map(extractWrittenMarkdownPathFromCode)).toEqual(['/workspace/analysis.md', '/workspace/notes.md', '/workspace/report.md', '/workspace/summary.md'])
+    const mdSteps = extractInteractionActivitySteps({
+      status: 'completed',
+      steps: [
+        { id: 'step_bash_redir', type: 'code_execution', language: 'BASH', code: codeSamples[0] },
+        { id: 'step_bash_tee', type: 'code_execution', language: 'BASH', code: codeSamples[1] },
+        { id: 'step_py_open', type: 'code_execution', language: 'PYTHON', code: codeSamples[2] },
+        { id: 'step_py_path', type: 'code_execution', language: 'PYTHON', code: codeSamples[3] },
+      ],
+    })
+    expect(mdSteps).toEqual([
+      { id: 'step_bash_redir', kind: 'file', title: 'Editing analysis.md', detail: '/workspace/analysis.md', path: '/workspace/analysis.md', status: 'done' },
+      { id: 'step_bash_tee', kind: 'file', title: 'Editing notes.md', detail: '/workspace/notes.md', path: '/workspace/notes.md', status: 'done' },
+      { id: 'step_py_open', kind: 'file', title: 'Editing report.md', detail: '/workspace/report.md', path: '/workspace/report.md', status: 'done' },
+      { id: 'step_py_path', kind: 'file', title: 'Editing summary.md', detail: '/workspace/summary.md', path: '/workspace/summary.md', status: 'done' },
+    ])
   })
 })

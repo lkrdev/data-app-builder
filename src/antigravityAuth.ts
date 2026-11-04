@@ -1,14 +1,7 @@
 import type { Looker40SDK } from '@looker/sdk'
 
-import {
-  CONVERSATION_LABEL_REQUEST_TAG,
-  STARTER_PROMPTS_REQUEST_TAG,
-} from './antigravityPrompts'
-import {
-  buildDynamicStarterPrompts,
-  sanitizeConversationLabel,
-  type StarterExploreFieldSummary,
-} from './antigravityStarters'
+import { CONVERSATION_LABEL_REQUEST_TAG, STARTER_PROMPTS_REQUEST_TAG } from './antigravityPrompts'
+import { buildDynamicStarterPrompts, sanitizeConversationLabel, type StarterExploreFieldSummary } from './antigravityStarters'
 import {
   ANTIGRAVITY_ALLOWED_MODELS,
   type AntigravityAuth,
@@ -19,10 +12,9 @@ import {
 import { extractResolvedUseCase, type StudioUseCase } from './lookerApi'
 
 export function getGeminiSecretKeyTag(extensionSDK: AntigravityExtensionHostLike): string {
-  if (extensionSDK && typeof extensionSDK.createSecretKeyTag === 'function') {
-    return extensionSDK.createSecretKeyTag('gemini_api_key')
-  }
-  return '{{data_app_builder_data_app_builder_gemini_api_key}}'
+  return typeof extensionSDK?.createSecretKeyTag === 'function'
+    ? extensionSDK.createSecretKeyTag('gemini_api_key')
+    : '{{data_app_builder_data_app_builder_gemini_api_key}}'
 }
 
 export function getGeminiUserAttributeName(extensionSDK: AntigravityExtensionHostLike): string {
@@ -53,11 +45,7 @@ export async function ensureGeminiApiKeyUserAttribute(
         })
       )
     } else if (trimmedKey && existing.id) {
-      await sdk.ok(
-        sdk.update_user_attribute(String(existing.id), {
-          default_value: trimmedKey,
-        })
-      )
+      await sdk.ok(sdk.update_user_attribute(String(existing.id), { default_value: trimmedKey }))
     }
     return attrName
   } catch (err: unknown) {
@@ -86,7 +74,7 @@ export function resolveLookerOAuthRedirectUris(
   hostTypeOrPathname?: string | null
 ): LookerOAuthRedirectUris {
   const base = (
-    (hostUrl && hostUrl.trim()) ||
+    hostUrl?.trim() ||
     fallbackOrigin ||
     (typeof window !== 'undefined' && window.location?.origin) ||
     'https://looker.example.com'
@@ -94,30 +82,16 @@ export function resolveLookerOAuthRedirectUris(
   const extensionUri = `${base}/extensions/oauth2_redirect`
   const spartanUri = `${base}/spartan/oauth2_redirect`
   const pathOrHostType =
-    (hostTypeOrPathname && hostTypeOrPathname.trim()) ||
-    (typeof window !== 'undefined' && window.location?.pathname) ||
-    ''
-  const isSpartan =
-    pathOrHostType === 'spartan' || /^\/spartan(\/|$)/.test(pathOrHostType)
-  return {
-    extensionUri,
-    spartanUri,
-    activeUri: isSpartan ? spartanUri : extensionUri,
-  }
+    hostTypeOrPathname?.trim() || (typeof window !== 'undefined' && window.location?.pathname) || ''
+  const isSpartan = pathOrHostType === 'spartan' || /^\/spartan(\/|$)/.test(pathOrHostType)
+  return { extensionUri, spartanUri, activeUri: isSpartan ? spartanUri : extensionUri }
 }
 
-export function resolveLookerOAuthRedirectUri(
-  hostUrl?: string | null,
-  fallbackOrigin?: string
-): string {
+export function resolveLookerOAuthRedirectUri(hostUrl?: string | null, fallbackOrigin?: string): string {
   return resolveLookerOAuthRedirectUris(hostUrl, fallbackOrigin).extensionUri
 }
 
-export function computeIsAuthenticated(
-  authMode: 'oauth' | 'apikey',
-  oauthToken: string,
-  apiKey: string
-): boolean {
+export function computeIsAuthenticated(authMode: 'oauth' | 'apikey', oauthToken: string, apiKey: string): boolean {
   return authMode === 'apikey' ? Boolean(apiKey.trim()) : Boolean(oauthToken.trim())
 }
 
@@ -148,66 +122,38 @@ export function parseValidOAuthSession(
     const parsed = JSON.parse(raw) as Partial<StoredOAuthSession> | null
     const token = typeof parsed?.token === 'string' ? parsed.token.trim() : ''
     const expiresAt = Number(parsed?.expiresAt)
-    if (!token || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-      return { session: null, expired: true }
-    }
+    if (!token || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) return { session: null, expired: true }
     const storedClientId = typeof parsed?.clientId === 'string' ? parsed.clientId.trim() : ''
     const expectedClientId = clientId?.trim() || ''
-    if (expectedClientId && storedClientId && storedClientId !== expectedClientId) {
-      return { session: null, expired: false }
-    }
-    return {
-      session: { token, expiresAt, ...(storedClientId ? { clientId: storedClientId } : {}) },
-      expired: false,
-    }
+    if (expectedClientId && storedClientId && storedClientId !== expectedClientId) return { session: null, expired: false }
+    return { session: { token, expiresAt, ...(storedClientId ? { clientId: storedClientId } : {}) }, expired: false }
   } catch {
     return { session: null, expired: true }
   }
 }
 
 export function clearStoredOAuthSession(extensionSDK?: AntigravityExtensionHostLike): void {
-  try {
-    if (typeof window !== 'undefined') window.localStorage?.removeItem?.(STUDIO_OAUTH_STORAGE_KEY)
-  } catch {
-    // ignore browser storage removal failure
-  }
+  try { if (typeof window !== 'undefined') window.localStorage?.removeItem?.(STUDIO_OAUTH_STORAGE_KEY) } catch { /* ignore */ }
   try {
     void extensionSDK?.localStorageRemoveItem?.(STUDIO_OAUTH_STORAGE_KEY)
     void extensionSDK?.localStorageSetItem?.(STUDIO_OAUTH_STORAGE_KEY, '')
-  } catch {
-    // ignore extensionSDK storage removal failure
-  }
+  } catch { /* ignore */ }
 }
 
-export function persistOAuthSession(
-  extensionSDK: AntigravityExtensionHostLike | undefined,
-  session: StoredOAuthSession
-): void {
+export function persistOAuthSession(extensionSDK: AntigravityExtensionHostLike | undefined, session: StoredOAuthSession): void {
   const token = String(session?.token || '').trim()
   const expiresAt = Number(session?.expiresAt)
   if (!token || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) return
   const cid = session.clientId?.trim()
   const serialized = JSON.stringify({ token, expiresAt, ...(cid ? { clientId: cid } : {}) })
-  try {
-    if (typeof window !== 'undefined') {
-      window.localStorage?.setItem?.(STUDIO_OAUTH_STORAGE_KEY, serialized)
-    }
-  } catch {
-    // ignore browser storage write failure
-  }
-  try {
-    void extensionSDK?.localStorageSetItem?.(STUDIO_OAUTH_STORAGE_KEY, serialized)
-  } catch {
-    // ignore extensionSDK storage write failure
-  }
+  try { if (typeof window !== 'undefined') window.localStorage?.setItem?.(STUDIO_OAUTH_STORAGE_KEY, serialized) } catch { /* ignore */ }
+  try { void extensionSDK?.localStorageSetItem?.(STUDIO_OAUTH_STORAGE_KEY, serialized) } catch { /* ignore */ }
 }
 
 export function getInitialStoredOAuthSession(clientId?: string): StoredOAuthSession | null {
   try {
     const w = typeof window !== 'undefined' ? window : undefined
-    const mockExt = w?.__MOCK_LOOKER_EXTENSION__ as
-      | { initialOauthToken?: string; initialOauthExpiresAt?: number }
-      | undefined
+    const mockExt = w?.__MOCK_LOOKER_EXTENSION__ as { initialOauthToken?: string; initialOauthExpiresAt?: number } | undefined
     if (mockExt && 'initialOauthToken' in mockExt) {
       const token = String(mockExt.initialOauthToken || '').trim()
       if (!token) return null
@@ -218,10 +164,7 @@ export function getInitialStoredOAuthSession(clientId?: string): StoredOAuthSess
         ...(clientId?.trim() ? { clientId: clientId.trim() } : {}),
       }
     }
-    const { session, expired } = parseValidOAuthSession(
-      w?.localStorage?.getItem?.(STUDIO_OAUTH_STORAGE_KEY),
-      clientId
-    )
+    const { session, expired } = parseValidOAuthSession(w?.localStorage?.getItem?.(STUDIO_OAUTH_STORAGE_KEY), clientId)
     if (expired) clearStoredOAuthSession()
     return session
   } catch {
@@ -239,11 +182,7 @@ export async function loadStoredOAuthSession(
 ): Promise<StoredOAuthSession | null> {
   try {
     const extRaw = await extensionSDK?.localStorageGetItem?.(STUDIO_OAUTH_STORAGE_KEY)
-    const raw =
-      extRaw?.trim() ||
-      (typeof window !== 'undefined'
-        ? window.localStorage?.getItem?.(STUDIO_OAUTH_STORAGE_KEY)
-        : null)
+    const raw = extRaw?.trim() || (typeof window !== 'undefined' ? window.localStorage?.getItem?.(STUDIO_OAUTH_STORAGE_KEY) : null)
     const { session, expired } = parseValidOAuthSession(raw, clientId)
     if (expired) clearStoredOAuthSession(extensionSDK)
     return session
@@ -261,16 +200,13 @@ export async function loginWithGoogleOAuth(
   const timeoutMs = options?.timeoutMs ?? 120000
   let cleanup = () => {}
   try {
-    if (!extensionSDK?.oauth2Authenticate) {
-      throw new Error('Looker Extension SDK oauth2Authenticate is not available.')
-    }
+    if (!extensionSDK?.oauth2Authenticate) throw new Error('Looker Extension SDK oauth2Authenticate is not available.')
     const authPromise = Promise.resolve(
       extensionSDK.oauth2Authenticate(
         'https://accounts.google.com/o/oauth2/v2/auth',
         {
           client_id: clientId.trim(),
-          scope:
-            'https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/generative-language.retriever',
+          scope: 'https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/generative-language.retriever',
           response_type: 'token',
         },
         'GET'
@@ -297,21 +233,12 @@ export async function loginWithGoogleOAuth(
         if (typeof window !== 'undefined') window.removeEventListener?.('focus', onFocus)
       }
     })
-    const res = (await Promise.race([authPromise, guardPromise])) as
-      | { access_token?: string; id_token?: string; expires_in?: number | string }
-      | undefined
+    const res = (await Promise.race([authPromise, guardPromise])) as { access_token?: string; id_token?: string; expires_in?: number | string } | undefined
     const rawToken = res?.access_token
-    if (!rawToken) {
-      throw new Error(`Google OAuth response did not include an access_token: ${JSON.stringify(res)}`)
-    }
+    if (!rawToken) throw new Error(`Google OAuth response did not include an access_token: ${JSON.stringify(res)}`)
     const token = String(rawToken).trim()
-    const expiresAt =
-      Date.now() + Math.max(60, (Number(res?.expires_in) || 3600) - 60) * 1000
-    persistOAuthSession(extensionSDK, {
-      token,
-      expiresAt,
-      clientId: clientId.trim(),
-    })
+    const expiresAt = Date.now() + Math.max(60, (Number(res?.expires_in) || 3600) - 60) * 1000
+    persistOAuthSession(extensionSDK, { token, expiresAt, clientId: clientId.trim() })
     return token
   } finally {
     cleanup()
@@ -337,21 +264,12 @@ export async function refreshOAuthSessionIfNeeded(opts: {
     return { token: '', expiresAt: 0, refreshedByOtherTab: false, deferredUntilVisible: true }
   }
   const stored = await loadStoredOAuthSession(extensionSDK, clientId)
-  if (
-    stored &&
-    stored.expiresAt > Date.now() &&
-    (!force || (Boolean(currentToken?.trim()) && stored.token !== currentToken?.trim()))
-  ) {
+  if (stored && stored.expiresAt > Date.now() && (!force || (Boolean(currentToken?.trim()) && stored.token !== currentToken?.trim()))) {
     return { token: stored.token, expiresAt: stored.expiresAt, refreshedByOtherTab: true, deferredUntilVisible: false }
   }
   const ls = typeof window !== 'undefined' ? window.localStorage : undefined
   const readLock = (): { tabId?: string; expiresAt?: number } | null => {
-    try {
-      const raw = ls?.getItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY)
-      return raw ? (JSON.parse(raw) as { tabId?: string; expiresAt?: number }) : null
-    } catch {
-      return null
-    }
+    try { const raw = ls?.getItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY); return raw ? (JSON.parse(raw) as { tabId?: string; expiresAt?: number }) : null } catch { return null }
   }
   const existingLock = readLock()
   if (existingLock && Number(existingLock.expiresAt) > Date.now() && existingLock.tabId && existingLock.tabId !== effectiveTabId) {
@@ -360,9 +278,7 @@ export async function refreshOAuthSessionIfNeeded(opts: {
     const afterLock = await loadStoredOAuthSession(extensionSDK, clientId)
     return { token: afterLock?.token || '', expiresAt: afterLock?.expiresAt || 0, refreshedByOtherTab: true, deferredUntilVisible: false }
   }
-  try {
-    ls?.setItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY, JSON.stringify({ tabId: effectiveTabId, expiresAt: Date.now() + STUDIO_OAUTH_REFRESH_LOCK_TTL_MS }))
-  } catch { /* ignore lock write failure */ }
+  try { ls?.setItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY, JSON.stringify({ tabId: effectiveTabId, expiresAt: Date.now() + STUDIO_OAUTH_REFRESH_LOCK_TTL_MS })) } catch { /* ignore */ }
 
   const loginPromise = loginWithGoogleOAuth(extensionSDK, clientId, oauthOptions)
   inFlightOAuthRefreshPromise = loginPromise
@@ -372,10 +288,7 @@ export async function refreshOAuthSessionIfNeeded(opts: {
     return { token, expiresAt: refreshed?.expiresAt || Date.now() + STUDIO_OAUTH_REFRESH_INTERVAL_MS, refreshedByOtherTab: false, deferredUntilVisible: false }
   } finally {
     if (inFlightOAuthRefreshPromise === loginPromise) inFlightOAuthRefreshPromise = null
-    try {
-      const curLock = readLock()
-      if (!curLock || curLock.tabId === effectiveTabId) ls?.removeItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY)
-    } catch { /* ignore lock cleanup failure */ }
+    try { const curLock = readLock(); if (!curLock || curLock.tabId === effectiveTabId) ls?.removeItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY) } catch { /* ignore */ }
   }
 }
 
@@ -400,13 +313,7 @@ export async function callInteractionsApi(
     })
     const parsed: AntigravityInteractionPayload =
       typeof proxyResp?.body === 'string'
-        ? (() => {
-            try {
-              return JSON.parse(proxyResp.body) as AntigravityInteractionPayload
-            } catch {
-              return { raw: proxyResp.body }
-            }
-          })()
+        ? (() => { try { return JSON.parse(proxyResp.body) as AntigravityInteractionPayload } catch { return { raw: proxyResp.body } } })()
         : ((proxyResp?.body || {}) as AntigravityInteractionPayload)
     if (!proxyResp?.ok || (proxyResp?.status && proxyResp.status >= 400)) {
       const msg = parsed?.error?.message || JSON.stringify(parsed) || `HTTP ${proxyResp?.status}`
@@ -415,47 +322,24 @@ export async function callInteractionsApi(
     return parsed
   }
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  }
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (auth.mode === 'oauth') {
-    if (!auth.oauthToken?.trim()) {
-      throw new Error('Please sign in with Google OAuth first.')
-    }
+    if (!auth.oauthToken?.trim()) throw new Error('Please sign in with Google OAuth first.')
     if (typeof window !== 'undefined' && window.__MOCK_LOOKER_EXTENSION__) {
-      if (/:cancel$/i.test(path)) {
-        return {
-          id: path.replace(/^interactions\//i, '').replace(/:cancel$/i, ''),
-          status: 'cancelled',
-        }
-      }
-      const inputArr = Array.isArray(body?.input)
-        ? (body?.input as Array<{ text?: string }>)
-        : []
+      if (/:cancel$/i.test(path)) return { id: path.replace(/^interactions\//i, '').replace(/:cancel$/i, ''), status: 'cancelled' }
+      const inputArr = Array.isArray(body?.input) ? (body?.input as Array<{ text?: string }>) : []
       const promptText = String(inputArr[0]?.text || '')
       if (promptText.includes(CONVERSATION_LABEL_REQUEST_TAG)) {
-        return {
-          id: 'int_mock_label',
-          status: 'completed',
-          output_text: sanitizeConversationLabel('', promptText),
-        }
+        return { id: 'int_mock_label', status: 'completed', output_text: sanitizeConversationLabel('', promptText) }
       }
       if (promptText.includes(STARTER_PROMPTS_REQUEST_TAG)) {
         const ucMatch = promptText.match(/Active useCase:\s*([^\r\n]+)/i)?.[1]?.trim() || 'auto'
-        const permittedMatch = promptText
-          .match(/Permitted use cases:\s*([^\r\n]+)/i)?.[1]
-          ?.split(',')
-          .map((s) => s.trim() as StudioUseCase)
-          .filter(Boolean)
-        const targetMatch = promptText.match(
-          /Target explore:\s*([^\s(\r\n]+)(?:\s*\(([^)\r\n]+)\))?/i
-        )
+        const permittedMatch = promptText.match(/Permitted use cases:\s*([^\r\n]+)/i)?.[1]?.split(',').map((s) => s.trim() as StudioUseCase).filter(Boolean)
+        const targetMatch = promptText.match(/Target explore:\s*([^\s(\r\n]+)(?:\s*\(([^)\r\n]+)\))?/i)
         const expKey = targetMatch?.[1]?.trim()
         const expLabel = targetMatch?.[2]?.trim()
         const parseFieldLine = (prefix: string): StarterExploreFieldSummary[] => {
-          const line = promptText
-            .match(new RegExp(`${prefix}:\\s*([^\\r\\n]+)`, 'i'))?.[1]
-            ?.trim()
+          const line = promptText.match(new RegExp(`${prefix}:\\s*([^\\r\\n]+)`, 'i'))?.[1]?.trim()
           if (!line) return []
           return line
             .split(',')
@@ -465,12 +349,7 @@ export async function callInteractionsApi(
             })
             .filter((x): x is StarterExploreFieldSummary => Boolean(x))
         }
-        const [mName = '', eName = ''] =
-          expKey && expKey !== 'none'
-            ? expKey.includes('::')
-              ? expKey.split('::')
-              : expKey.split('/')
-            : ['', '']
+        const [mName = '', eName = ''] = expKey && expKey !== 'none' ? (expKey.includes('::') ? expKey.split('::') : expKey.split('/')) : ['', '']
         const mockPrompts = buildDynamicStarterPrompts({
           useCase: ucMatch,
           selectedExplores: expKey && expKey !== 'none' ? [expKey] : [],
@@ -488,15 +367,10 @@ export async function callInteractionsApi(
                 }
               : null,
         })
-        return {
-          id: 'int_mock_starter_prompts',
-          status: 'completed',
-          output_text: `<STARTER_PROMPTS>${JSON.stringify(mockPrompts)}</STARTER_PROMPTS>`,
-        }
+        return { id: 'int_mock_starter_prompts', status: 'completed', output_text: `<STARTER_PROMPTS>${JSON.stringify(mockPrompts)}</STARTER_PROMPTS>` }
       }
       const userReqMatch = promptText.match(/User request:\s*([\s\S]*)$/i)
-      const effectiveUserText = userReqMatch ? userReqMatch[1].trim() : promptText
-      const inferred = extractResolvedUseCase(undefined, effectiveUserText)
+      const inferred = extractResolvedUseCase(undefined, userReqMatch ? userReqMatch[1].trim() : promptText)
       return {
         id: `int_mock_${Date.now().toString(36).slice(-5)}`,
         environment_id: `env_${inferred}_mock`,
@@ -505,47 +379,28 @@ export async function callInteractionsApi(
       }
     }
     headers['Authorization'] = `Bearer ${auth.oauthToken.trim()}`
-    if (auth.projectId?.trim()) {
-      headers['x-goog-user-project'] = auth.projectId.trim()
-    }
+    if (auth.projectId?.trim()) headers['x-goog-user-project'] = auth.projectId.trim()
   } else {
-    if (!auth.apiKey?.trim()) {
-      throw new Error('Gemini API Key is not configured.')
-    }
+    if (!auth.apiKey?.trim()) throw new Error('Gemini API Key is not configured.')
     headers['x-goog-api-key'] = auth.apiKey.trim()
   }
 
-  const resp = await fetch(url, {
-    method,
-    headers,
-    body: serializedBody,
-  })
+  const resp = await fetch(url, { method, headers, body: serializedBody })
   const text = await resp.text()
   let parsed: AntigravityInteractionPayload
-  try {
-    parsed = text ? (JSON.parse(text) as AntigravityInteractionPayload) : {}
-  } catch {
-    parsed = { raw: text }
-  }
+  try { parsed = text ? (JSON.parse(text) as AntigravityInteractionPayload) : {} } catch { parsed = { raw: text } }
   if (!resp.ok) {
     if (resp.status === 401) {
       clearStoredOAuthSession(extensionSDK)
       if (auth.mode === 'oauth' && typeof auth.onUnauthorizedRefresh === 'function') {
         const refreshedToken = (await auth.onUnauthorizedRefresh().catch(() => null))?.trim()
         if (refreshedToken) {
-          return await callInteractionsApi(
-            extensionSDK,
-            { ...auth, oauthToken: refreshedToken, onUnauthorizedRefresh: undefined },
-            path,
-            method,
-            body
-          )
+          return await callInteractionsApi(extensionSDK, { ...auth, oauthToken: refreshedToken, onUnauthorizedRefresh: undefined }, path, method, body)
         }
         clearStoredOAuthSession(extensionSDK)
       }
     }
-    const msg = parsed?.error?.message || text || `HTTP ${resp.status}`
-    throw new Error(`Antigravity API error (${resp.status}): ${msg}`)
+    throw new Error(`Antigravity API error (${resp.status}): ${parsed?.error?.message || text || `HTTP ${resp.status}`}`)
   }
   return parsed
 }
@@ -554,29 +409,112 @@ export async function listAvailableAntigravityModels(
   extensionSDK: AntigravityExtensionHostLike,
   auth: AntigravityAuth
 ): Promise<AntigravityModelOption[]> {
-  const canQuery =
-    auth.mode === 'oauth'
-      ? Boolean(auth.oauthToken?.trim())
-      : Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy)
+  const canQuery = auth.mode === 'oauth' ? Boolean(auth.oauthToken?.trim()) : Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy)
   if (!canQuery) return ANTIGRAVITY_ALLOWED_MODELS
   try {
     const res = await callInteractionsApi(extensionSDK, auth, 'models', 'GET')
     const byId = new Map<string, { name?: string; displayName?: string; description?: string }>(
-      (Array.isArray(res?.models) ? res.models : []).map((m) => [
-        String(m?.name || '').replace(/^models\//, '').trim(),
-        m,
-      ])
+      (Array.isArray(res?.models) ? res.models : []).map((m) => [String(m?.name || '').replace(/^models\//, '').trim(), m])
     )
     const matched = ANTIGRAVITY_ALLOWED_MODELS.filter((a) => byId.has(a.id)).map((a) => {
       const m = byId.get(a.id)
-      return {
-        id: a.id,
-        label: String(m?.displayName || a.label),
-        description: String(m?.description || a.description),
-      }
+      return { id: a.id, label: String(m?.displayName || a.label), description: String(m?.description || a.description) }
     })
     return matched.length > 0 ? matched : ANTIGRAVITY_ALLOWED_MODELS
   } catch {
     return ANTIGRAVITY_ALLOWED_MODELS
   }
+}
+
+export function normalizeSandboxFilePath(rawPath: string): string {
+  return String(rawPath || '').trim().replace(/^file:\/\//i, '').replace(/^\/+/, '')
+}
+
+export async function fetchEnvironmentFile(params: {
+  extensionSDK: AntigravityExtensionHostLike
+  auth: AntigravityAuth
+  environmentId: string
+  path: string
+}): Promise<string> {
+  const { extensionSDK, auth } = params
+  const envId = String(params.environmentId || '').trim()
+  if (!envId) throw new Error('Sandbox environmentId is required.')
+  const normalizedPath = normalizeSandboxFilePath(params.path)
+  if (!normalizedPath) throw new Error('Sandbox file path is required.')
+  const encodedPath = normalizedPath.split('/').filter(Boolean).map((seg) => encodeURIComponent(seg)).join('/')
+  const url = `https://generativelanguage.googleapis.com/v1beta/environments/${encodeURIComponent(envId)}/files/${encodedPath}?alt=media`
+
+  const mockWin = typeof window !== 'undefined'
+    ? (window as unknown as {
+        __MOCK_LOOKER_EXTENSION__?: { environmentFiles?: Record<string, string> }
+        __ENVIRONMENT_FILE_CALLS__?: Array<{ environmentId: string; path: string; normalizedPath: string; url: string }>
+      })
+    : undefined
+  if (mockWin?.__MOCK_LOOKER_EXTENSION__) {
+    const rawKey = String(params.path || '').trim()
+    ;(mockWin.__ENVIRONMENT_FILE_CALLS__ ||= []).push({ environmentId: envId, path: rawKey, normalizedPath, url })
+    const filesMap = mockWin.__MOCK_LOOKER_EXTENSION__.environmentFiles || {}
+    const slashKey = `/${normalizedPath}`
+    const baseName = normalizedPath.split('/').pop() || normalizedPath
+    const matched =
+      filesMap[`${envId}:${rawKey}`] ?? filesMap[`${envId}:${normalizedPath}`] ?? filesMap[`${envId}:${slashKey}`] ??
+      filesMap[rawKey] ?? filesMap[normalizedPath] ?? filesMap[slashKey] ?? filesMap[baseName]
+    if (typeof matched === 'string') return matched
+    return `# ${baseName}\n\nFetched on-demand from remote sandbox \`/${normalizedPath}\` in environment \`${envId}\`.\n\n- **Environment:** \`${envId}\`\n- **Path:** \`/${normalizedPath}\`\n- **Persistence:** Ephemeral in-memory session state (never stored on Looker instance)`
+  }
+
+  if (auth.mode === 'apikey' && extensionSDK?.serverProxy) {
+    const proxyResp = await extensionSDK.serverProxy(url, {
+      method: 'GET',
+      headers: { 'x-goog-api-key': auth.apiKey?.trim() || getGeminiSecretKeyTag(extensionSDK) },
+    })
+    if (!proxyResp?.ok || (proxyResp?.status && proxyResp.status >= 400)) {
+      const errBody = typeof proxyResp?.body === 'string' ? proxyResp.body : JSON.stringify(proxyResp?.body || {})
+      throw new Error(`Antigravity file fetch error (${proxyResp?.status}): ${errBody || `HTTP ${proxyResp?.status}`}`)
+    }
+    if (typeof proxyResp?.body === 'string') return proxyResp.body
+    if (proxyResp?.body && typeof proxyResp.body === 'object') {
+      const obj = proxyResp.body as Record<string, unknown>
+      for (const k of ['content', 'data', 'raw']) if (typeof obj[k] === 'string') return obj[k] as string
+      return JSON.stringify(proxyResp.body, null, 2)
+    }
+    return ''
+  }
+
+  const headers: Record<string, string> = {}
+  if (auth.mode === 'oauth') {
+    if (!auth.oauthToken?.trim()) throw new Error('Please sign in with Google OAuth first.')
+    headers['Authorization'] = `Bearer ${auth.oauthToken.trim()}`
+    if (auth.projectId?.trim()) headers['x-goog-user-project'] = auth.projectId.trim()
+  } else {
+    if (!auth.apiKey?.trim()) throw new Error('Gemini API Key is not configured.')
+    headers['x-goog-api-key'] = auth.apiKey.trim()
+  }
+
+  const resp = await fetch(url, { method: 'GET', headers })
+  const text = await resp.text()
+  if (!resp.ok) {
+    if (resp.status === 401) {
+      clearStoredOAuthSession(extensionSDK)
+      if (auth.mode === 'oauth' && typeof auth.onUnauthorizedRefresh === 'function') {
+        const refreshedToken = (await auth.onUnauthorizedRefresh().catch(() => null))?.trim()
+        if (refreshedToken) {
+          return await fetchEnvironmentFile({
+            extensionSDK,
+            auth: { ...auth, oauthToken: refreshedToken, onUnauthorizedRefresh: undefined },
+            environmentId: envId,
+            path: normalizedPath,
+          })
+        }
+        clearStoredOAuthSession(extensionSDK)
+      }
+    }
+    let errMsg = text || `HTTP ${resp.status}`
+    try {
+      const parsed = text ? (JSON.parse(text) as { error?: { message?: string } }) : undefined
+      if (parsed?.error?.message) errMsg = parsed.error.message
+    } catch { /* ignore */ }
+    throw new Error(`Antigravity file fetch error (${resp.status}): ${errMsg}`)
+  }
+  return text
 }
