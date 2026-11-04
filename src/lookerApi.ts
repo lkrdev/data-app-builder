@@ -145,6 +145,20 @@ export const SWR_DEDUPED_METHODS = [
   'search_folders',
 ] as const
 
+const serializeLookerBody = (body: unknown): unknown =>
+  body !== undefined && body !== null ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined
+
+function parseLookerRawBody<T = unknown>(rawResp: RawLookerTransportResponse): T {
+  const val = rawResp?.body !== undefined ? rawResp.body : rawResp
+  if (typeof val === 'string') {
+    const trimmed = val.trim()
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try { return JSON.parse(trimmed) as T } catch { return val as unknown as T }
+    }
+  }
+  return val as T
+}
+
 export function createDeduplicatedLookerSdkProxy(
   sdk: Looker40SDK,
   onRawRequest?: (res: RawLookerTransportResponse | undefined, elapsedMs: number, err?: unknown) => void
@@ -152,13 +166,7 @@ export function createDeduplicatedLookerSdkProxy(
   if (!sdk || typeof sdk !== 'object') return sdk
   const sdkRec = sdk as unknown as Record<string, unknown> & {
     __rawSdk?: Looker40SDK
-    authSession?: {
-      transport?: {
-        rawRequest?: LookerRawRequestFn
-        [key: string]: unknown
-      }
-      [key: string]: unknown
-    }
+    authSession?: { transport?: { rawRequest?: LookerRawRequestFn; [key: string]: unknown }; [key: string]: unknown }
   }
   const rawTransport = sdkRec?.authSession?.transport
   const origRawReq = rawTransport?.rawRequest
@@ -167,54 +175,47 @@ export function createDeduplicatedLookerSdkProxy(
   for (const method of SWR_DEDUPED_METHODS) {
     const fn = sdkRec[method]
     if (typeof fn === 'function') {
-      const origFn = (fn as (...args: unknown[]) => unknown).bind(sdk)
-      wrappedSdkMethod(wrappedsdk, method, origFn)
+      const origFn = (fn as (...args: unknown[]) => unknown).bind(wrappedsdk)
+      wrappedsdk[method] = (...args: unknown[]) =>
+        coalesceLookerMetadataRequest(`sdk:${method}:${JSON.stringify(args)}`, () => Promise.resolve(origFn(...args)))
     }
   }
   if (typeof origRawReq === 'function') {
+    const wrappedRawRequest: LookerRawRequestFn = async (method, path, queryParams, body, ...rest) => {
+      const reqStart = Date.now()
+      const isMetaGet =
+        String(method || 'GET').toUpperCase() === 'GET' &&
+        /\/(?:lookml_models|content_search|content_summary|global_search_v2|user|folders|session)(?:\/|$|\?)/i.test(String(path || ''))
+      const execRaw = () => origRawReq.call(rawTransport, method, path, queryParams, body, ...rest)
+      try {
+        const res = isMetaGet
+          ? await coalesceLookerMetadataRequest(`raw:GET:${path}:${JSON.stringify(queryParams || {})}`, execRaw)
+          : await execRaw()
+        onRawRequest?.(res, Date.now() - reqStart)
+        return res
+      } catch (err) {
+        onRawRequest?.(undefined, Date.now() - reqStart, err)
+        throw err
+      }
+    }
     wrappedsdk.authSession = {
       ...sdkRec.authSession,
       transport: {
         ...rawTransport,
-        rawRequest: async (
-          method: string,
-          path: string,
-          queryParams?: Record<string, unknown>,
-          body?: unknown,
-          ...rest: unknown[]
-        ) => {
-          const reqStart = Date.now()
-          const upper = String(method || 'GET').toUpperCase()
-          const isMetaGet =
-            upper === 'GET' &&
-            /\/(?:lookml_models|content_search|content_summary|global_search_v2|user|folders|session)(?:\/|$|\?)/i.test(
-              String(path || '')
-            )
-          const execRaw = () => origRawReq.call(rawTransport, method, path, queryParams, body, ...rest)
-          try {
-            const res = isMetaGet
-              ? await coalesceLookerMetadataRequest(`raw:GET:${path}:${JSON.stringify(queryParams || {})}`, execRaw)
-              : await execRaw()
-            onRawRequest?.(res, Date.now() - reqStart)
-            return res
-          } catch (err) {
-            onRawRequest?.(undefined, Date.now() - reqStart, err)
-            throw err
+        rawRequest: wrappedRawRequest,
+        request: async (method: string, path: string, queryParams?: Record<string, unknown>, body?: unknown, ...rest: unknown[]) => {
+          const rawResp = await wrappedRawRequest(method, path, queryParams, serializeLookerBody(body), ...rest)
+          const status = Number(rawResp?.statusCode ?? rawResp?.status ?? 200)
+          if (rawResp?.ok === false || status >= 400) {
+            const errText = typeof rawResp?.body === 'string' ? rawResp.body : JSON.stringify(rawResp?.body ?? rawResp)
+            return { ok: false, error: new Error(`Looker ${method} ${path} failed (${status}): ${errText}`) }
           }
+          return { ok: true, value: parseLookerRawBody(rawResp) }
         },
       },
     }
   }
   return wrappedsdk as unknown as Looker40SDK
-}
-
-function wrappedSdkMethod(
-  target: Record<string, unknown>,
-  method: string,
-  origFn: (...args: unknown[]) => unknown
-): void {
-  target[method] = (...args: unknown[]) =>
-    coalesceLookerMetadataRequest(`sdk:${method}:${JSON.stringify(args)}`, () => Promise.resolve(origFn(...args)))
 }
 
 // ponytail: use SDK's underlying transport.rawRequest (requires raw_api_request: yes in manifest.lkml)
@@ -227,34 +228,16 @@ export async function rawLookerRequest<T = unknown>(
   body?: unknown
 ): Promise<T> {
   const transport = (sdk.authSession as unknown as { transport: { rawRequest: LookerRawRequestFn } }).transport
-  const rawResp = await transport.rawRequest(
-    method,
-    path,
-    queryParams,
-    body ? JSON.stringify(body) : undefined
-  )
+  const rawResp = await transport.rawRequest(method, path, queryParams, serializeLookerBody(body))
   if (rawResp.ok === false || (rawResp.statusCode && rawResp.statusCode >= 400)) {
     const errBody = typeof rawResp.body === 'string' ? rawResp.body : JSON.stringify(rawResp.body)
     if (Number(rawResp.statusCode) === 404) {
       const diag = classifyLooker404Error(404, path, errBody)
-      throw new Error(
-        `Looker ${method} ${path} failed (404 ${diag.kind}): ${diag.remediation} — ${errBody}`
-      )
+      throw new Error(`Looker ${method} ${path} failed (404 ${diag.kind}): ${diag.remediation} — ${errBody}`)
     }
     throw new Error(`Looker ${method} ${path} failed (${rawResp.statusCode}): ${errBody}`)
   }
-  if (typeof rawResp.body === 'string') {
-    const trimmed = rawResp.body.trim()
-    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-      try {
-        return JSON.parse(trimmed) as T
-      } catch {
-        return rawResp.body as unknown as T
-      }
-    }
-    return rawResp.body as unknown as T
-  }
-  return (rawResp.body ?? rawResp) as T
+  return parseLookerRawBody<T>(rawResp)
 }
 
 export interface LookerFolderNode {
@@ -852,18 +835,10 @@ export async function buildDenseExploreSchema(
 export const fetchExploreSchemaAndSample = buildDenseExploreSchema
 
 export function useLookerMetadata(sdk?: Looker40SDK | null, enabled = true) {
-  return useSWR(
-    sdk && enabled ? ['looker:me'] : null,
-    () => fetchInitialLookerMetadata(sdk!),
-    LOOKER_SWR_CONFIG
-  )
+  return useSWR(sdk && enabled ? ['looker:me'] : null, () => fetchInitialLookerMetadata(sdk!), LOOKER_SWR_CONFIG)
 }
 
-export function useExploreSchema(
-  sdk: Looker40SDK | null | undefined,
-  modelName?: string,
-  exploreName?: string
-) {
+export function useExploreSchema(sdk: Looker40SDK | null | undefined, modelName?: string, exploreName?: string) {
   return useSWR<string>(
     sdk && modelName && exploreName ? ['looker:explore_schema', modelName, exploreName] : null,
     () => buildDenseExploreSchema(sdk!, modelName!, exploreName!),
@@ -874,61 +849,37 @@ export function useExploreSchema(
 export function useLookerDashboard(sdk: Looker40SDK | null | undefined, dashboardId?: string) {
   return useSWR(
     sdk && dashboardId ? ['looker:dashboard', dashboardId] : null,
-    () =>
-      coalesceLookerMetadataRequest(
-        `dashboard:${dashboardId}`,
-        () => sdk!.ok(sdk!.dashboard(dashboardId!)),
-        LOOKER_METADATA_CACHE_TTL_MS,
-        ['looker:dashboard', dashboardId]
-      ),
+    () => coalesceLookerMetadataRequest(`dashboard:${dashboardId}`, () => sdk!.ok(sdk!.dashboard(dashboardId!)), LOOKER_METADATA_CACHE_TTL_MS, ['looker:dashboard', dashboardId]),
     LOOKER_SWR_CONFIG
   )
 }
 
 export function useLookerCaAgents(sdk: Looker40SDK | null | undefined) {
-  return useSWR(
-    sdk ? ['looker:ca_agents'] : null,
-    () => fetchLookerCaAgentsCatalog(sdk!),
-    LOOKER_SWR_CONFIG
-  )
+  return useSWR(sdk ? ['looker:ca_agents'] : null, () => fetchLookerCaAgentsCatalog(sdk!), LOOKER_SWR_CONFIG)
 }
 
 export type StudioThemeMode = 'light' | 'dark' | 'system'
 export type ResolvedStudioTheme = 'light' | 'dark'
-
 export const STUDIO_THEME_STORAGE_KEY = 'dab_theme_mode'
 
 export function normalizeStudioThemeMode(raw: unknown): StudioThemeMode {
   return raw === 'light' || raw === 'dark' || raw === 'system' ? raw : 'system'
 }
 
-export function resolveSystemTheme(
-  mediaQueryList?: { matches?: boolean } | null
-): ResolvedStudioTheme {
+export function resolveSystemTheme(mediaQueryList?: { matches?: boolean } | null): ResolvedStudioTheme {
   try {
-    const mql =
-      mediaQueryList !== undefined
-        ? mediaQueryList
-        : typeof window !== 'undefined'
-        ? window.matchMedia?.('(prefers-color-scheme: dark)')
-        : null
+    const mql = mediaQueryList !== undefined ? mediaQueryList : typeof window !== 'undefined' ? window.matchMedia?.('(prefers-color-scheme: dark)') : null
     return mql?.matches ? 'dark' : 'light'
   } catch {
     return 'light'
   }
 }
 
-export function resolveStudioTheme(
-  mode: StudioThemeMode,
-  systemTheme: ResolvedStudioTheme = resolveSystemTheme()
-): ResolvedStudioTheme {
+export function resolveStudioTheme(mode: StudioThemeMode, systemTheme: ResolvedStudioTheme = resolveSystemTheme()): ResolvedStudioTheme {
   return mode === 'system' ? systemTheme : mode
 }
 
-export function applyStudioDocumentTheme(
-  resolved: ResolvedStudioTheme,
-  mode?: StudioThemeMode
-): void {
+export function applyStudioDocumentTheme(resolved: ResolvedStudioTheme, mode?: StudioThemeMode): void {
   if (typeof document === 'undefined' || !document.documentElement) return
   document.documentElement.setAttribute('data-theme', resolved)
   if (mode) document.documentElement.setAttribute('data-theme-mode', mode)
@@ -938,45 +889,25 @@ export function applyStudioDocumentTheme(
 export function readInitialStudioThemeMode(): StudioThemeMode {
   try {
     const w = typeof window !== 'undefined' ? window : undefined
-    return normalizeStudioThemeMode(
-      w?.__MOCK_LOOKER_EXTENSION__?.initialThemeMode ??
-        w?.localStorage?.getItem?.(STUDIO_THEME_STORAGE_KEY)
-    )
+    return normalizeStudioThemeMode(w?.__MOCK_LOOKER_EXTENSION__?.initialThemeMode ?? w?.localStorage?.getItem?.(STUDIO_THEME_STORAGE_KEY))
   } catch {
     return 'system'
   }
 }
 
-export async function loadStoredStudioThemeMode(
-  extensionSDK?: Partial<ExtensionSDK>
-): Promise<StudioThemeMode | null> {
+export async function loadStoredStudioThemeMode(extensionSDK?: Partial<ExtensionSDK>): Promise<StudioThemeMode | null> {
   try {
     const w = typeof window !== 'undefined' ? window : undefined
-    const raw =
-      (await extensionSDK?.localStorageGetItem?.(STUDIO_THEME_STORAGE_KEY)) ??
-      w?.localStorage?.getItem?.(STUDIO_THEME_STORAGE_KEY)
+    const raw = (await extensionSDK?.localStorageGetItem?.(STUDIO_THEME_STORAGE_KEY)) ?? w?.localStorage?.getItem?.(STUDIO_THEME_STORAGE_KEY)
     return raw === 'light' || raw === 'dark' || raw === 'system' ? raw : null
   } catch {
     return null
   }
 }
 
-export function persistStudioThemeMode(
-  extensionSDK: Partial<ExtensionSDK> | undefined,
-  mode: StudioThemeMode
-): void {
-  try {
-    if (typeof window !== 'undefined') {
-      window.localStorage?.setItem?.(STUDIO_THEME_STORAGE_KEY, mode)
-    }
-  } catch {
-    // ignore storage write failure
-  }
-  try {
-    void extensionSDK?.localStorageSetItem?.(STUDIO_THEME_STORAGE_KEY, mode)
-  } catch {
-    // ignore extensionSDK storage write failure
-  }
+export function persistStudioThemeMode(extensionSDK: Partial<ExtensionSDK> | undefined, mode: StudioThemeMode): void {
+  try { if (typeof window !== 'undefined') window.localStorage?.setItem?.(STUDIO_THEME_STORAGE_KEY, mode) } catch { /* ignore */ }
+  try { void extensionSDK?.localStorageSetItem?.(STUDIO_THEME_STORAGE_KEY, mode) } catch { /* ignore */ }
 }
 
 function parseAnchorUtcDate(anchorDate?: string): Date {
@@ -1103,15 +1034,8 @@ export interface HydratedMentionedContext {
   promptSummary: string
 }
 
-function normalizeRawContentMention(
-  raw: Record<string, unknown>,
-  fallbackCategory?: StudioContextCategory
-): StudioContextMention | null {
-  const rawType = String(
-    raw.content_type || raw.type || raw.section || fallbackCategory || ''
-  )
-    .toLowerCase()
-    .trim()
+function normalizeRawContentMention(raw: Record<string, unknown>, fallbackCategory?: StudioContextCategory): StudioContextMention | null {
+  const rawType = String(raw.content_type || raw.type || raw.section || fallbackCategory || '').toLowerCase().trim()
 
   if (
     rawType.includes('explore') ||
@@ -1120,19 +1044,12 @@ function normalizeRawContentMention(
   ) {
     const model = String(raw.model_name || raw.model || '').trim()
     const explore = String(raw.explore_name || raw.explore || raw.name || '').trim()
-    const id =
-      model && explore
-        ? formatExploreId(model, explore)
-        : String(raw.content_id || raw.id || '').trim()
+    const id = model && explore ? formatExploreId(model, explore) : String(raw.content_id || raw.id || '').trim()
     const parsed = parseExploreId(id)
     if (!parsed) return null
     return {
-      type: 'explore',
-      id,
-      model: parsed.modelName,
-      explore: parsed.exploreName,
-      title: String(raw.title || raw.label || parsed.exploreName).trim(),
-      subtitle: parsed.modelName,
+      type: 'explore', id, model: parsed.modelName, explore: parsed.exploreName,
+      title: String(raw.title || raw.label || parsed.exploreName).trim(), subtitle: parsed.modelName,
       description: raw.description ? String(raw.description) : undefined,
       url: raw.content_url || raw.url ? String(raw.content_url || raw.url) : undefined,
     }
@@ -1142,17 +1059,14 @@ function normalizeRawContentMention(
     const id = String(raw.content_id || raw.id || '').trim()
     if (!id) return null
     return {
-      type: 'conversation',
-      id,
-      title: String(raw.title || raw.label || raw.name || id).trim(),
+      type: 'conversation', id, title: String(raw.title || raw.label || raw.name || id).trim(),
       subtitle: raw.use_case ? String(raw.use_case) : undefined,
       description: raw.description ? String(raw.description) : undefined,
     }
   }
 
   const isLook = rawType === 'look' || rawType === 'looks'
-  const isDash =
-    rawType.includes('dashboard') || (!isLook && fallbackCategory === 'dashboard')
+  const isDash = rawType.includes('dashboard') || (!isLook && fallbackCategory === 'dashboard')
   if (!isLook && !isDash && fallbackCategory !== 'look') return null
 
   const type: StudioContextCategory = isLook || fallbackCategory === 'look' ? 'look' : 'dashboard'
@@ -1163,11 +1077,7 @@ function normalizeRawContentMention(
   const folderId = raw.folder_id ? String(raw.folder_id) : folderObj?.id ? String(folderObj.id) : undefined
   const subtitle = folderObj?.name ? String(folderObj.name) : `${type === 'dashboard' ? 'Dashboard' : 'Look'} #${id}`
   return {
-    type,
-    id,
-    title,
-    subtitle,
-    folderId,
+    type, id, title, subtitle, folderId,
     description: raw.description ? String(raw.description) : undefined,
     url: raw.content_url || raw.url ? String(raw.content_url || raw.url) : undefined,
   }
@@ -1175,28 +1085,20 @@ function normalizeRawContentMention(
 
 function dedupeContextMentions(items: StudioContextMention[]): StudioContextMention[] {
   const seen = new Set<string>()
-  const out: StudioContextMention[] = []
-  for (const item of items) {
+  return items.filter(item => {
     const key = `${item.type}:${item.id}`
-    if (seen.has(key)) continue
+    if (seen.has(key)) return false
     seen.add(key)
-    out.push(item)
-  }
-  return out
+    return true
+  })
 }
 
-export async function fetchPreloadedContentSummary(
-  sdk: Looker40SDK
-): Promise<StudioContextMention[]> {
+export async function fetchPreloadedContentSummary(sdk: Looker40SDK): Promise<StudioContextMention[]> {
   return coalesceLookerMetadataRequest(
     'meta:content_summary',
     async () => {
-      const sdkRec = sdk as unknown as {
-        content_summary?: (params: Record<string, unknown>) => Promise<unknown>
-        ok?: <T>(p: Promise<T> | T) => Promise<T>
-      }
-      const summaryFields =
-        'id,content_type,content_id,content_slug,content_url,title,description,view_count,favorite_count,last_viewed_at'
+      const sdkRec = sdk as unknown as { content_summary?: (params: Record<string, unknown>) => Promise<unknown>; ok?: <T>(p: Promise<T> | T) => Promise<T> }
+      const summaryFields = 'id,content_type,content_id,content_slug,content_url,title,description,view_count,favorite_count,last_viewed_at'
       let rawRows: unknown = null
       if (typeof sdkRec.content_summary === 'function') {
         try {
@@ -1208,23 +1110,14 @@ export async function fetchPreloadedContentSummary(
       }
       if (!Array.isArray(rawRows) || rawRows.length === 0) {
         try {
-          rawRows = await rawLookerRequest<unknown>(sdk, 'GET', '/api/4.0/content_summary', {
-            limit: 30,
-            fields: summaryFields,
-          })
+          rawRows = await rawLookerRequest<unknown>(sdk, 'GET', '/api/4.0/content_summary', { limit: 30, fields: summaryFields })
         } catch {
           rawRows = null
         }
       }
       if (!Array.isArray(rawRows) || rawRows.length === 0) {
         try {
-          rawRows = await sdk.ok(
-            sdk.search_content({
-              terms: '',
-              types: 'dashboard,look',
-              limit: 30,
-            } as Parameters<Looker40SDK['search_content']>[0])
-          )
+          rawRows = await sdk.ok(sdk.search_content({ terms: '', types: 'dashboard,look', limit: 30 } as Parameters<Looker40SDK['search_content']>[0]))
         } catch {
           rawRows = []
         }
@@ -1246,45 +1139,29 @@ export async function fetchPreloadedContentSummary(
 
 export async function searchGlobalContentV2(
   sdk: Looker40SDK,
-  params: {
-    term: string
-    category?: StudioContextCategory | 'all'
-    limit?: number
-  }
+  params: { term: string; category?: StudioContextCategory | 'all'; limit?: number }
 ): Promise<StudioContextMention[]> {
   const cleanTerm = String(params.term || '').trim()
   const limit = params.limit ?? 15
   const category = params.category && params.category !== 'all' ? params.category : undefined
   const sections =
-    category === 'look'
-      ? ['Looks']
-      : category === 'dashboard'
-      ? ['Dashboards', 'LookML Dashboards']
-      : category === 'explore'
-      ? ['Explore', 'Self-Service Explore']
-      : category === 'conversation'
-      ? ['Conversations']
-      : undefined
+    category === 'look' ? ['Looks']
+    : category === 'dashboard' ? ['Dashboards', 'LookML Dashboards']
+    : category === 'explore' ? ['Explore', 'Self-Service Explore']
+    : category === 'conversation' ? ['Conversations']
+    : undefined
 
   let payload: unknown = null
   try {
     payload = await rawLookerRequest<unknown>(sdk, 'GET', '/api/4.0/global_search_v2', {
-      term: cleanTerm,
-      curate: true,
-      limit,
-      ...(sections ? { sections } : {}),
+      term: cleanTerm, curate: true, limit, ...(sections ? { sections } : {}),
     })
   } catch {
     try {
       payload = await sdk.ok(
         sdk.search_content({
-          terms: cleanTerm,
-          limit,
-          ...(category === 'look'
-            ? { types: 'look' }
-            : category === 'dashboard'
-            ? { types: 'dashboard' }
-            : {}),
+          terms: cleanTerm, limit,
+          ...(category === 'look' ? { types: 'look' } : category === 'dashboard' ? { types: 'dashboard' } : {}),
         } as Parameters<Looker40SDK['search_content']>[0])
       )
     } catch {
@@ -1299,22 +1176,17 @@ export async function searchGlobalContentV2(
       const rec = entry as Record<string, unknown>
       if (Array.isArray(rec.items) || Array.isArray(rec.results)) {
         const secName = String(rec.name || rec.title || rec.section || rec.type || '').toLowerCase()
-        const hint: StudioContextCategory | undefined = secName.includes('look') && !secName.includes('lookml')
-          ? 'look'
-          : secName.includes('dashboard')
-          ? 'dashboard'
-          : secName.includes('explore')
-          ? 'explore'
-          : secName.includes('conversation')
-          ? 'conversation'
+        const hint: StudioContextCategory | undefined =
+          secName.includes('look') && !secName.includes('lookml') ? 'look'
+          : secName.includes('dashboard') ? 'dashboard'
+          : secName.includes('explore') ? 'explore'
+          : secName.includes('conversation') ? 'conversation'
           : sectionHint
         collectFromList((rec.items || rec.results) as unknown[], hint)
         continue
       }
       const item = normalizeRawContentMention(rec, sectionHint || category)
-      if (item && (!category || item.type === category)) {
-        mentions.push(item)
-      }
+      if (item && (!category || item.type === category)) mentions.push(item)
     }
   }
 
@@ -1331,23 +1203,15 @@ export async function searchGlobalContentV2(
 }
 
 function sanitizeContextFilename(rawId: string): string {
-  return String(rawId || 'item')
-    .trim()
-    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+  return String(rawId || 'item').trim().replace(/[^a-zA-Z0-9._-]+/g, '_')
 }
 
-function summarizeQuerySpec(
-  q: Record<string, unknown> | null | undefined,
-  fixedDates = false,
-  anchorDate?: string
-) {
+function summarizeQuerySpec(q: Record<string, unknown> | null | undefined, fixedDates = false, anchorDate?: string) {
   if (!q || typeof q !== 'object') return null
   const model = String(q.model || '').trim()
   const view = String(q.view || q.explore || '').trim()
-  const rawFilters =
-    q.filters && typeof q.filters === 'object' ? (q.filters as Record<string, string>) : undefined
-  const filters =
-    rawFilters && fixedDates ? normalizeQueryFiltersToFixedDates(rawFilters, anchorDate) : rawFilters
+  const rawFilters = q.filters && typeof q.filters === 'object' ? (q.filters as Record<string, string>) : undefined
+  const filters = rawFilters && fixedDates ? normalizeQueryFiltersToFixedDates(rawFilters, anchorDate) : rawFilters
   return {
     model: model || undefined,
     view: view || undefined,

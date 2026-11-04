@@ -508,7 +508,7 @@ When handling a Studio turn (\`useCase="auto"\`), classify the current turn's pr
 | \`app\` | **Data App** | Custom interactive Lit web component Data App (\`apps/<name>/app.js\`), metric switchers, custom UI layouts, \`<app-kpi>\`, \`<app-chart>\`, \`<app-grid>\`, or screenshot-to-app conversion |
 | \`data-investigator\` | **Data Investigator** | Point-in-time root-cause narrative Data App in Google Doc (\`doc\`, default) or Google Presentation (\`slides\` / \`presentation\` / \`deck\`) format for prompts asking to \`"investigate"\`, \`"find out"\`, \`"figure out"\`, \`"dig into"\`, \`"what drove"\`, or \`"what caused"\` across data, metrics, dashboards, Looks, or explores using \`skills/key-driver-analysis/SKILL.md\` (\`skills/key-driver-analysis/scripts/kda_toolkit.py\`, \`run_key_driver_analysis\`), LookML \`drill_fields\` (\`limit: '500'\`), fixed date ranges (\`YYYY-MM-DD to YYYY-MM-DD\`), and sequential **Chart -> What This Chart Means -> Next Investigation Path** chapters |
 | \`dashboard\` | **Content Studio** | Native Looker User-Defined Dashboards (UDDs), LookML Dashboards (\`.dashboard.lookml\`), Saved Looks, Boards, or Scheduled Plans (\`upsert_udd\`, \`upsert_lookml_dashboard\`, \`pin_to_board\`, \`schedule_dashboard\`) |
-| \`lookml\` | **Agentic LookML** | Authoring or refactoring LookML models, views, explores, refinements (\`.lkml\`), SQL-to-LookML parity, field curation/descriptions, or LookML data tests (\`.test.lkml\`) |
+| \`lookml\` | **Agentic LookML** | Authoring or refactoring LookML models, views, explores, refinements (\`.lkml\`), onboarding a new Looker project from a database connection (\`skills/looker-project-onboarding/SKILL.md\`), SQL-to-LookML parity, field curation/descriptions, or LookML data tests (\`.test.lkml\`) |
 | \`health-check\` | **Health Check** | 3-Pillar Looker & BigQuery Health Check audit (System Activity Pillar 1, LookML 0–4 Transcriber Rubric Pillar 2, BigQuery \`INFORMATION_SCHEMA\` Pillar 3, \`TECHNICAL_DESIGN_DOCUMENT.md\`) |
 | \`tile\` | **Python Tile** | Custom \`LkrCodeMode\` Monty Python script tile (\`obj_script_<id>\`, \`vars.dashboard_filters\`, custom Python table/markdown/dict output, or script scheduler), plus ad-hoc Looker SDK / instance / space / folder / personal space / user / permission / schedule inspection queries via \`run_looker_codemode\` (e.g. \`"tell me what my personal space is"\`, \`"can you find me all personal spaces that don't have dashboards"\`) |
 | \`conversational-analytics\` | **Conversational Analytics** | Ad-hoc natural-language analytical Q&A, explore data questions, KPI lookups, or trend explanations without building a persistent app or LookML file |
@@ -517,6 +517,47 @@ When handling a Studio turn (\`useCase="auto"\`), classify the current turn's pr
 - **Script (\`tile\`) Routing for Ad-Hoc Looker Instance / Folder / Space / SDK Queries**: Route prompts asking to inspect or query Looker spaces, folders, personal spaces, users, permissions, schedules, or instance metadata via SDK (e.g. \`"tell me what my personal space is"\`, \`"can you find me all personal spaces that don't have dashboards"\`) to \`<USE_CASE>tile</USE_CASE>\` (Script) / \`run_looker_codemode\` without creating a Data App or Dashboard.
 
 Always restrict your \`<USE_CASE>\` choice to the allowed modes list provided in the prompt (\`Allowed use cases for this user: [...]\`). Emit \`<USE_CASE>...</USE_CASE>\` for the current turn's target workflow on every turn so Studio routes dynamically and appends or updates the resulting item in the conversation's \`contentItems\` tabs.
+`
+
+export const APP_BUILDER_SYSTEM_PROMPT = AGENTS_MD
+
+export const LOOKER_PROJECT_ONBOARDING_SKILL_MD = `---
+name: looker-project-onboarding
+description: End-to-end Looker Project Onboarding skill for creating a new LookML project, bare Git repo, model, base views, and 5-layer measure-synthesized refinements from an existing Looker database connection via run_looker_codemode.
+---
+
+# Looker Project Onboarding (\`skills/looker-project-onboarding/SKILL.md\`)
+
+Use this skill when a user asks to onboard a new Looker project, scaffold a new LookML project from a database connection, or model tables/SQL queries into a new LookML project and model. All Looker API calls execute through \`run_looker_codemode\` routed via \`transport.rawRequest\` (\`raw_api_request: yes\`, requiring zero \`core_api_methods\` in \`manifest.lkml\`).
+
+## Step 1: Verify Database Connection & Table Reachability (\`run_looker_codemode\`)
+1. Query connections via \`sdk.all_connections(fields="name,dialect_name,database,schema,snippets")\` and filter out internal Looker system connections (\`not c.get("name", "").startswith("looker__")\`).
+2. Verify table reachability on the target connection via \`sdk.connection_schemas(connection_name)\` (with fallback to \`sdk.connection_databases(connection_name)\` and \`sdk.connection_tables(connection_name, schema_name=..., table_limit=5)\`).
+3. If no reachable connection or tables exist, stop and instruct the user to configure or verify their database connection at \`[Open Looker Connections](/admin/connections)\` (\`/admin/connections\`).
+
+## Step 2: Require \`project_name\` (\`snake_case\`) & Discover Schemas, Tables, or User SQL Queries
+1. \`project_name\` is required before creating any project or model. Normalize any user-supplied project name to strict lowercase \`snake_case\`:
+   \`project_name = re.sub(r'_+', '_', re.sub(r'[^a-z0-9_]', '_', raw_name.strip().lower())).strip('_')\`
+   If the user has not provided a \`project_name\`, ask them for one.
+2. Ask the user which schemas/tables to include or whether they have 1 or more SQL queries from SQL Runner (\`[Open SQL Runner](/sql)\`, \`/sql\`) representing their core reporting workload.
+3. Bound schema/table auto-discovery to at most **5 schemas** and **5 tables per schema** (\`5 × 5\` cap: \`schemas[:5]\` and \`connection_tables(conn_name, schema_name=sname, table_limit=5)\` \`tables[:5]\`) plus \`sdk.connection_columns(conn_name, schema_name=sname, table_names=",".join(tables))\`.
+
+## Step 3: Switch to \`dev\` Workspace, Create Project, Initialize Bare Git Repo, Scaffold Model/Views, and Register LookML Model
+1. Switch session to dev mode: \`sdk.update_session({"workspace_id": "dev"})\`.
+2. Create or fetch the project: \`sdk.create_project({"name": project_name})\` (fallback \`sdk.project(project_name)\`).
+3. Initialize bare Git repo: \`sdk.create_git_deploy_key(project_name)\` and \`sdk.update_project(project_name, {"git_remote_url": f"file:///tmp/{project_name}_bare.git", "git_service_name": "bare"})\`.
+4. Scaffold \`models/<project_name>.model.lkml\`, \`views/base/<table>.view.lkml\`, and \`views/refinements/+<table>.view.lkml\` via \`sdk.create_project_directory\` and \`sdk.create_file\` / \`sdk.update_file\`.
+5. Register the LookML model tied to the connection: \`sdk.create_lookml_model({"name": project_name, "project_name": project_name, "allowed_db_connection_names": [conn_name]})\` (fallback \`sdk.update_lookml_model\`).
+
+## Step 4: Download LookML to \`/workspace\`, Synthesize Measures (\`looker-demo-cli\` 5-Layer Methodology), Push, and Validate
+1. Pull project \`.lkml\` files into \`/workspace/lookml_baseline/\` and \`/workspace/data/$RUN_ID/lookml/<project_name>/\` via \`sdk.all_project_files\` + \`sdk.get_file_content\`.
+2. Follow the 5-layer measure synthesis methodology from \`cloud-gtm/looker-demo-cli\` (\`measure-synthesis\`, \`lookml-architect\`, \`workload-measure-extractor\`):
+   - **Layer 1 — Layered Base vs. Refinement Structure**: Keep \`views/base/<table>.view.lkml\` strictly for raw dimensions (\`primary_key: yes\`, \`dimension_group\`, raw columns, base \`count\`); place all synthesized measures and descriptions in \`views/refinements/+<table>.view.lkml\` (\`view: +<table>\`).
+   - **Layer 2 — Core Statistical Measures per Numeric & Entity Column**: \`count_distinct\` for \`*_id\` keys; \`sum\` (\`total_<col>\`), \`average\` (\`average_<col>\`), \`min\`, \`max\`, \`median\`, and \`percentile\` for numeric facts with \`value_format_name\` and \`drill_fields\`.
+   - **Layer 3 — Data-Grounded Filtered Measures**: Query actual distinct categorical values (\`SELECT DISTINCT <col> FROM <schema>.<table> LIMIT 20\` via \`sdk.create_sql_query\` + \`sdk.run_sql_query\`) before authoring \`filters: [<dim>: "<exact_db_value>"]\`.
+   - **Layer 4 — Portable ANSI Derived Ratios (\`type: number\`)**: Compose ratios from LookML measures via \`1.0 * \${numerator_measure} / NULLIF(\${denominator_measure}, 0)\`.
+   - **Layer 5 — Workload SQL Deconstruction**: Deconstruct user SQL \`SUM\`, \`COUNT(DISTINCT)\`, \`AVG\`, \`CASE WHEN\`, and ratios into base dimensions + refinement measures; only introduce NDT/SDT when one of the 5 irreducible signals is present (\`grain_change_reagg\`, \`window_pre_groupby\`, \`union\`, \`non_equi_join\`, \`filter_dependent_cte\`).
+3. Push curated \`.lkml\` files back to Looker dev mode, validate with \`sdk.validate_project(project_name)\`, and emit \`<LOOKML_BUNDLE>\` via \`python3 /workspace/bootstrap_lookml.py bundle /workspace/data/$RUN_ID\`.
 `
 
 export const DATA_INVESTIGATOR_GUIDE_MD = `# Data Investigator — Narrative Root-Cause Data Apps (Google Doc & Slides)

@@ -7,7 +7,7 @@ import type { FetchCustomParameters } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
 
 import {
-  AGENTS_MD, AntigravityActivityStep, ANTIGRAVITY_ALLOWED_MODELS, authenticateGoogleOAuth,
+  AGENTS_MD, AntigravityActivityStep, ANTIGRAVITY_ALLOWED_MODELS, APP_BUILDER_SYSTEM_PROMPT, authenticateGoogleOAuth,
   BOOTSTRAP_LOOKML_PY, BOOTSTRAP_SANDBOX_SH, buildDynamicStarterPrompts, buildWorkspaceSources,
   BUNDLE_APP_PY, callInteractionsApi, clampLeftPaneWidth, classifyLookerOperation,
   clearStarterPromptsCache, clearStoredOAuthSession, CODEMODE_CDN_URL, CodeModePermissionRequest,
@@ -22,12 +22,13 @@ import {
   isEnvironmentNotFoundError, isTextAttachmentFile, KDA_SKILL_MD, KDA_TOOLKIT_PY,
   listAvailableAntigravityModels, LKR_CLI_BRIDGE_TOOL, LKR_CLI_SITECUSTOMIZE_PY, LKR_DEV_CLI_SPEC,
   LKR_DEV_CLI_VERSION, LkrCodeMode, loadStoredLeftPaneWidth, loadStoredOAuthSession,
-  loadStoredRightPaneCollapsed, loadStoredThinkingLevel, loginWithGoogleOAuth, MAX_LEFT_PANE_WIDTH,
+  loadStoredRightPaneCollapsed, loadStoredThinkingLevel, loginWithGoogleOAuth,
+  LOOKER_PROJECT_ONBOARDING_SKILL_MD, LOOKML_SKILLS_CATALOG, MAX_LEFT_PANE_WIDTH,
   MIN_LEFT_PANE_WIDTH, normalizeThinkingLevel, parseStarterPromptsResponse, persistOAuthSession,
   persistThinkingLevel, prewarmOrWakeAntigravityEnvironment, readInitialThinkingLevel,
   recordSharedEnvExploreSchema, refreshOAuthSessionIfNeeded, resolveAdaptivePollScheduleMs,
   resolveBuiltinWorkspaceFileContent, resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris,
-  runAntigravityTurn, sanitizeConversationLabel, saveStoredLeftPaneWidth,
+  runAntigravityTurn, SANDBOX_WORKSPACE_SKILL_FILES, sanitizeConversationLabel, saveStoredLeftPaneWidth,
   saveStoredRightPaneCollapsed, STARTER_PROMPTS_REQUEST_TAG, stripStarterPromptEmojis,
   STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY, STUDIO_OAUTH_REFRESH_INTERVAL_MS,
   STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY, STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY,
@@ -5106,6 +5107,78 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
     expect(readme).toContain('## Skilled Use Cases')
     for (const label of ['**Data Apps**:', '**Data Investigator**:', '**Content Studio**:', '**Conversational Analytics**:', '**Agentic LookML**:', '**3-Pillar Health Check**:', '**Script / Python Tile**:']) {
       expect(readme).toContain(label)
+    }
+  })
+
+  test('52. Issue #127: enforces raw_api_request: yes with zero core_api_methods in manifest.lkml & .githooks/pre-commit, routes core40SDK and LkrCodeMode calls through transport.rawRequest, and registers skills/looker-project-onboarding/SKILL.md', async () => {
+    clearLookerMetadataCache()
+    const repoRoot = path.resolve(__dirname, '../..')
+    for (const rel of ['manifest.lkml', 'looker/manifest.lkml']) {
+      const m = readFileSync(path.join(repoRoot, rel), 'utf8')
+      expect(m).toMatch(/\braw_api_request\s*:\s*yes\b/)
+      expect(m).not.toMatch(/\bcore_api_methods\s*:/)
+    }
+    const preCommitHook = readFileSync(path.join(repoRoot, '.githooks/pre-commit'), 'utf8')
+    expect(preCommitHook).toEqual(expect.stringContaining('raw_api_request'))
+    expect(preCommitHook).toEqual(expect.stringContaining('core_api_methods'))
+
+    const rawCalls: Array<{ method: string; path: string; queryParams?: unknown; body?: unknown }> = []
+    let legacyRequestCalled = 0
+    const proxiedSdk = createDeduplicatedLookerSdkProxy(asSdk({
+      ok: async <T>(p: Promise<{ ok: boolean; value?: T; error?: Error }>) => {
+        const res = await p
+        if (res && typeof res === 'object' && 'ok' in res) { if (!res.ok) throw res.error; return res.value as T }
+        return res as unknown as T
+      },
+      authSession: {
+        transport: {
+          request: async () => { legacyRequestCalled += 1; throw new Error('invokeCoreSdk must not be called') },
+          rawRequest: async (method: string, reqPath: string, queryParams?: Record<string, unknown>, body?: unknown) => {
+            rawCalls.push({ method, path: reqPath, queryParams, body })
+            return reqPath === '/api/4.0/error'
+              ? { ok: false, statusCode: 403, body: 'Forbidden' }
+              : { ok: true, statusCode: 200, body: JSON.stringify({ id: '42', method, path: reqPath, queryParams, body }) }
+          },
+        },
+      },
+    }))
+    const proxiedTransport = (proxiedSdk as unknown as {
+      authSession: { transport: { request: (m: string, p: string, q?: Record<string, unknown>, b?: unknown) => Promise<{ ok: boolean; value?: unknown; error?: Error }> } }
+    }).authSession.transport
+
+    expect(await proxiedTransport.request('POST', '/api/4.0/projects', { fields: 'name' }, { name: 'sales_analytics' })).toEqual({
+      ok: true,
+      value: { id: '42', method: 'POST', path: '/api/4.0/projects', queryParams: { fields: 'name' }, body: JSON.stringify({ name: 'sales_analytics' }) },
+    })
+    const errResp = await proxiedTransport.request('GET', '/api/4.0/error')
+    expect([errResp.ok, errResp.error?.message.includes('403'), legacyRequestCalled, rawCalls.length]).toEqual([false, true, 0, 2])
+
+    const proxiedFallback = createDeduplicatedLookerSdkProxy(asSdk({
+      authSession: { transport: { request: async (_m: string, p: string) => ({ ok: true, value: { fallbackPath: p } }) } },
+    }))
+    expect(await (proxiedFallback as unknown as typeof proxiedSdk).authSession.transport.request('GET' as never, '/api/4.0/user')).toEqual({
+      ok: true, value: { fallbackPath: '/api/4.0/user' },
+    })
+
+    let invokeCoreSdkCount = 0
+    const cmOut = await LkrCodeMode.runPythonCode({
+      code: 'return me()',
+      sdk: proxiedSdk,
+      extensionSDK: { invokeCoreSdk: async () => { invokeCoreSdkCount += 1; throw new Error('invokeCoreSdk prohibited') } },
+    })
+    expect([invokeCoreSdkCount, JSON.parse(cmOut)]).toEqual([0, expect.objectContaining({ id: '42', method: 'GET', path: '/user' })])
+
+    const skillDisk = readFileSync(path.join(repoRoot, 'skills/looker-project-onboarding/SKILL.md'), 'utf8')
+    expect(LOOKML_SKILLS_CATALOG.find((s) => s.id === 'looker-project-onboarding')).toMatchObject({ id: 'looker-project-onboarding', path: 'skills/looker-project-onboarding/SKILL.md' })
+    expect(SANDBOX_WORKSPACE_SKILL_FILES['/workspace/skills/looker-project-onboarding/SKILL.md']).toBe(LOOKER_PROJECT_ONBOARDING_SKILL_MD)
+    expect(resolveBuiltinWorkspaceFileContent('skills/looker-project-onboarding/SKILL.md')).toBe(LOOKER_PROJECT_ONBOARDING_SKILL_MD)
+    expect(buildWorkspaceSources({ schemaMarkdown: '# Schema' }).find((s) => s.target === '/workspace/skills/looker-project-onboarding/SKILL.md')?.content).toBe(LOOKER_PROJECT_ONBOARDING_SKILL_MD)
+    for (const doc of [APP_BUILDER_SYSTEM_PROMPT, readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8'), readFileSync(path.join(repoRoot, 'upstream/payload/AGENTS.md'), 'utf8')]) {
+      expect(doc).toContain('skills/looker-project-onboarding/SKILL.md')
+    }
+    for (const token of ['Step 1:', 'Step 2:', 'Step 3:', 'Step 4:', '/admin/connections', "re.sub(r'_+', '_', re.sub(r'[^a-z0-9_]', '_', raw_name.strip().lower())).strip('_')", '/sql', '5 × 5', 'create_project', 'create_lookml_model', '1.0 * ${numerator_measure} / NULLIF(${denominator_measure}, 0)', 'grain_change_reagg']) {
+      expect(skillDisk).toContain(token)
+      expect(LOOKER_PROJECT_ONBOARDING_SKILL_MD).toContain(token)
     }
   })
 })

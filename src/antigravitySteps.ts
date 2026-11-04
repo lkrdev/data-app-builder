@@ -5,7 +5,9 @@ import {
   DATA_INVESTIGATOR_GUIDE_MD,
   KDA_SKILL_MD,
   KDA_TOOLKIT_PY,
+  LOOKER_PROJECT_ONBOARDING_SKILL_MD,
 } from './antigravityPrompts'
+export { APP_BUILDER_SYSTEM_PROMPT, LOOKER_PROJECT_ONBOARDING_SKILL_MD } from './antigravityPrompts'
 import {
   type AntigravityActivityStep,
   type AntigravityInteractionOutput,
@@ -251,6 +253,9 @@ export const BUILTIN_SKILLS_FILES: Record<string, string> = {
   '/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py': KDA_TOOLKIT_PY,
   'skills/key-driver-analysis/scripts/kda_toolkit.py': KDA_TOOLKIT_PY,
   'kda_toolkit.py': KDA_TOOLKIT_PY,
+  '/workspace/skills/looker-project-onboarding/SKILL.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
+  'skills/looker-project-onboarding/SKILL.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
+  'looker-project-onboarding': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
   'data-app-creator': DATA_APP_GUIDE_MD,
   'data-investigator': DATA_INVESTIGATOR_GUIDE_MD,
   'lookml-field-curation': '# LookML Field Curation & Descriptions Skill\nCurate business-ready `label`, `description`, `group_label`, `value_format_name`, and `drill_fields` across LookML views and refinements.',
@@ -258,6 +263,8 @@ export const BUILTIN_SKILLS_FILES: Record<string, string> = {
   'lookml-snapshot': '# LookML SQL & Explore Parity Snapshot Skill\nVerify 100% row/value parity between raw SQL (`run_sql_query`) and LookML Explore (`run_inline_query`).',
   'lookml-bronze-view': '# LookML Bronze View & Refinement Skill\nGenerate base `.view.lkml` and layered `.refinement.lkml` files with `primary_key: yes` and symmetric aggregate safety.',
 }
+
+export const SANDBOX_WORKSPACE_SKILL_FILES = BUILTIN_SKILLS_FILES
 
 export const BUILTIN_WORKSPACE_FILES: Record<string, string> = {
   '/workspace/AGENTS.md': AGENTS_MD, 'AGENTS.md': AGENTS_MD,

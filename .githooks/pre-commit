@@ -10,6 +10,11 @@ const bridge = fs.readFileSync("src/lkrCliBridge.ts", "utf8");
 const [, cli] = bridge.match(/export const LKR_DEV_CLI_VERSION = [\x27"]([^\x27"]+)[\x27"]/) || [];
 const [, cdn] = bridge.match(/export const CODEMODE_CDN_URL = [\x27"]https:\/\/cdn\.lkr\.dev\/cli\/codemode\/([^\x27"/]+)\/codemode\.js[\x27"]/) || [];
 if (!txt || txt !== cli || txt !== cdn) { console.error(`Version mismatch: txt=${txt} cli=${cli} cdn=${cdn}`); process.exit(1); }
+const manifest = fs.readFileSync("manifest.lkml", "utf8");
+if (!/\braw_api_request\s*:\s*yes\b/.test(manifest) || /\bcore_api_methods\s*:/.test(manifest)) {
+  console.error("manifest.lkml must declare raw_api_request: yes and must not declare core_api_methods");
+  process.exit(1);
+}
 '
 
 npm run lint:check

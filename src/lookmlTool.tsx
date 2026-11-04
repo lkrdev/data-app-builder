@@ -15,6 +15,7 @@ import {
 } from './lookerApi'
 export { getArtifactNamespace } from './lookerApi'
 export * from './lkrCliBridge'
+export * from './lookmlSkills'
 
 export interface LookmlFileChange {
   path: string
@@ -105,34 +106,6 @@ export function extractLookmlBundleFromInteraction(
   return matches.length ? (JSON.parse(matches[matches.length - 1][1].trim()) as LookmlBundle) : null
 }
 
-export const LOOKML_TURN_SKILLS = [
-  {
-    id: 'lookml-field-curation',
-    label: 'Descriptions & Curation',
-    desc: 'Profile string fields, curate descriptions, group_label & hidden flags',
-  },
-  {
-    id: 'lookml-tests',
-    label: 'Data Tests (.test.lkml)',
-    desc: 'Author & run assert-based LookML data tests via run_lookml_test',
-  },
-  {
-    id: 'lookml-snapshot',
-    label: 'Snapshot & Parity',
-    desc: 'Capture lkr parse lookml snapshot & verify SQL-to-Explore parity',
-  },
-  {
-    id: 'generate-view-from-table',
-    label: 'Bronze View',
-    desc: 'Scaffold or refresh Bronze base views from table metadata',
-  },
-  {
-    id: 'agentic-lookml-workflow',
-    label: 'SQL Workflow',
-    desc: 'Full SQL-to-LookML Bronze refinement + Silver/Gold layer workflow',
-  },
-] as const
-
 export function buildLookmlSystemGuide(params: {
   selectedExplores: string[]
   primaryModel: string
@@ -177,7 +150,7 @@ export function buildLookmlSystemGuide(params: {
       : `See /workspace/schema.md for available models and explores.`,
     `Follow these exact steps:`,
     `1. **Sandbox Bootstrap (\`/workspace\`)**:`,
-    `   Run \`python3 /workspace/bootstrap_lookml.py setup\` in your Linux sandbox to install \`uv\` (\`pip install --break-system-packages --quiet uv\`), \`${LKR_DEV_CLI_SPEC}\` (\`UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"\`), and unpack \`/workspace/.agents/skills/\` (\`agentic-lookml-workflow\`, \`agentic-lookml\`, \`generate-view-from-table\`, \`lookml-field-curation\`, \`lookml\`). Read the SKILL.md files for your Activated Turn Skills (${activeSkillList.join(', ')}).`,
+    `   Run \`python3 /workspace/bootstrap_lookml.py setup\` in your Linux sandbox to install \`uv\` (\`pip install --break-system-packages --quiet uv\`), \`${LKR_DEV_CLI_SPEC}\` (\`UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"\`), and unpack \`/workspace/.agents/skills/\` (\`agentic-lookml-workflow\`, \`agentic-lookml\`, \`generate-view-from-table\`, \`lookml-field-curation\`, \`lookml\`). Read the SKILL.md files for your Activated Turn Skills (${activeSkillList.join(', ')}), or load \`/workspace/skills/looker-project-onboarding/SKILL.md\` when onboarding a brand-new LookML project from a database connection.`,
     `2. **Host-Bridged LookML Sync via Browser WASM \`run_looker_codemode(code, thought, vars)\` (\`allowUpdateSession: true\`)**:`,
     `   - Zero sandbox Looker credentials are needed: \`run_looker_codemode\` runs in the browser extension with \`allowUpdateSession: true\`, requires a concise 1-sentence \`thought\` description, accepts \`vars: {...}\`, and has all \`ExtendedLooker40SDK\` methods pre-bound.`,
     `   - Switch to the user's dev workspace (\`update_session({"workspace_id": "dev"})\`) and use whatever branch/state is already in the user's dev mode (inspect via \`git_branch(project_id)\` — do NOT reset to production or create a new git branch unless explicitly asked). Pull LookML files via \`all_project_files\` + \`get_file_content\` into \`/workspace/lookml_baseline/\` and \`/workspace/data/$RUN_ID/lookml/\`.`,

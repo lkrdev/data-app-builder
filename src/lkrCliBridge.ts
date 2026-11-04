@@ -168,8 +168,16 @@ const runCodeMode: LkrCodeModeRunFn = async (
     /\bto_fixed_date_range\b/.test(rawCode) && !/\bdef\s+to_fixed_date_range\b/.test(rawCode)
       ? DATE_HELPER_PREAMBLE_PY + rawCode
       : rawCode
+  const rawSdk = (baseOpts.sdk || baseOpts.core40SDK) as Looker40SDK | undefined
+  const hasRaw = typeof (rawSdk as { authSession?: { transport?: { rawRequest?: unknown } } } | undefined)?.authSession?.transport?.rawRequest === 'function'
+  const requestHandler = typeof baseOpts.requestHandler === 'function'
+    ? baseOpts.requestHandler
+    : hasRaw && rawSdk
+    ? (m: string, p: string, q?: unknown, b?: unknown) => rawLookerRequest(rawSdk, String(m || 'GET').toUpperCase() as 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', p, (q as Record<string, unknown> | undefined) || undefined, b)
+    : undefined
   const nextOpts: LkrCodeModeRunOptions = {
     ...baseOpts,
+    ...(requestHandler ? { requestHandler } : {}),
     code,
     vars: { INVESTIGATION_ANCHOR_DATE: new Date().toISOString().slice(0, 10), ...(baseOpts.vars || {}) },
     ...(!baseOpts.approvedOperations && /\b(run_key_driver_analysis|kda\/analyze)\b/.test(rawCode)

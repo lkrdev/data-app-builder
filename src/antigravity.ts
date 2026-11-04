@@ -9,6 +9,7 @@ import {
   DATA_INVESTIGATOR_GUIDE_MD,
   KDA_SKILL_MD,
   KDA_TOOLKIT_PY,
+  LOOKER_PROJECT_ONBOARDING_SKILL_MD,
   wrapDashboardCodeMode,
 } from './antigravityPrompts'
 import {
@@ -83,6 +84,7 @@ export * from './antigravityAuth'
 export * from './antigravitySteps'
 export * from './antigravityStarters'
 export * from './antigravityPrompts'
+export * from './lookmlSkills'
 export {
   buildStudioRoute, clampLeftPaneWidth, classifyStudioUseCase, convertRelativeDateFilterToFixed,
   DEFAULT_BUSY_SEND_ACTION, DEFAULT_LEFT_PANE_WIDTH, extractResolvedUseCase, getAllowedUseCases, getUseCaseLabel,
@@ -155,6 +157,11 @@ export function buildWorkspaceSources(params: {
     { type: 'inline', content: DATA_INVESTIGATOR_GUIDE_MD, target: '/workspace/DATA_INVESTIGATOR_GUIDE.md' },
     { type: 'inline', content: KDA_SKILL_MD, target: '/workspace/skills/key-driver-analysis/SKILL.md' },
     { type: 'inline', content: KDA_TOOLKIT_PY, target: '/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py' },
+    {
+      type: 'inline',
+      content: LOOKER_PROJECT_ONBOARDING_SKILL_MD,
+      target: '/workspace/skills/looker-project-onboarding/SKILL.md',
+    },
     { type: 'inline', content: BOOTSTRAP_LOOKML_PY, target: '/workspace/bootstrap_lookml.py' },
     { type: 'inline', content: LKR_CLI_SITECUSTOMIZE_PY, target: '/workspace/sitecustomize.py' },
     {
