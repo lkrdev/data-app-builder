@@ -69,7 +69,7 @@
     "snapshotName": "08-config-page-setup-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "explore_dropdown_open_top",
@@ -127,7 +127,7 @@
     "title": "13. Chat Bar State — Busy / Running Spinner Banner",
     "snapshotName": "13-chatbar-state-busy-running-snap.png",
     "width": 427,
-    "height": 645,
+    "height": 642,
     "clipSelector": [
       ".dab-status-banner",
       ".dab-composer"

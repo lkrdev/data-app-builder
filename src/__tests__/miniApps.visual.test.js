@@ -2499,9 +2499,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           sameIframe: container.querySelector('iframe') === iframe0
         };
 
-        // 2. Click Reload Preview on same Dashboard #42 -> connection.asDashboardConnection().run()
+        // 2. Click Reload Viewer on same Dashboard #42 -> connection.asDashboardConnection().run()
         const reloadBtn = Array.from(document.querySelectorAll('.dab-preview-actions button')).find(
-          (b) => (b.textContent || '').includes('Reload Preview')
+          (b) => (b.textContent || '').includes('Reload Viewer')
         );
         if (reloadBtn) reloadBtn.click();
         await new Promise((r) => setTimeout(r, 120));
@@ -4780,7 +4780,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       },
       idleCheck: {
         hasThinkingState: false,
-        toolbarText: 'Preview will appear here when Looker content is ready',
+        toolbarText: 'Viewer will appear here when Looker content is ready',
         hasReadyCopy: true,
         hasHardcodedDataAppCopy: false
       }
@@ -4834,7 +4834,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           { role: 'assistant', text: 'Completed root-cause investigation.', thinkingDurationSec: 5, activitySteps: [
             { id: 'st_thought', kind: 'thought', title: 'Framing investigation plan', detail: 'Checking key driver skill and DATA_INVESTIGATOR_GUIDE.md.', status: 'done' },
             { id: 'st_file', kind: 'file', title: 'Viewing DATA_INVESTIGATOR_GUIDE.md', detail: '/workspace/DATA_INVESTIGATOR_GUIDE.md', path: '/workspace/DATA_INVESTIGATOR_GUIDE.md', status: 'done' },
-            { id: 'st_skill', kind: 'skill', title: 'Skill: key-driver-analysis', detail: 'skills/key-driver-analysis/SKILL.md', path: 'skills/key-driver-analysis/SKILL.md', status: 'done' },
+            { id: 'st_skill', kind: 'skill', title: 'Reading skill key-driver-analysis', detail: 'skills/key-driver-analysis/SKILL.md', path: 'skills/key-driver-analysis/SKILL.md', status: 'done' },
             { id: 'st_codemode', kind: 'codemode', title: 'Executing Looker queries for Order Items...', detail: 'sdk.run_inline_query', status: 'done' }
           ] }
         ]);
@@ -5098,4 +5098,111 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       triggerHasRemediation: true, envFileCallPaths: ['workspace/analysis.md', 'workspace/report.md'], artifactUpdateCount: 0
     })
   }, 15000)
+
+  test('Issue #132: renames right pane to Viewer, opens skill and file steps in viewer-document-pane, and hides bottom Thinking section on mobile while sliding up Viewer card on object/step click', async () => {
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=data_app` })
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', { expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="workspace-split-resizer"]'))`, returnByValue: true })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 80))
+    }
+
+    const desktopRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const resizerLabel = document.querySelector('[data-testid="workspace-split-resizer"]')?.getAttribute('aria-label') || '';
+        const collapseBtnTitle = document.querySelector('[data-testid="right-pane-collapse-toggle"]')?.getAttribute('title') || '';
+        const reloadViewerBtn = Array.from(document.querySelectorAll('.dab-right-pane button')).some((b) => (b.textContent || '').trim() === 'Reload Viewer');
+        const iframeTitle = document.querySelector('[data-testid="looker-embed-container"] iframe')?.getAttribute('title') || '';
+        window.__DAB_STUDIO__.setMessages([
+          { role: 'user', text: 'Build a revenue Data App and investigate drivers' },
+          {
+            role: 'assistant', text: 'Built app using Data Apps skill and wrote \`/workspace/analysis.md\`.', thinkingDurationSec: 3,
+            activitySteps: [
+              { id: 'st_skill_da', kind: 'skill', title: 'Reading skill data-apps', detail: '/workspace/skills/data-apps/SKILL.md', path: '/workspace/skills/data-apps/SKILL.md', status: 'done' },
+              { id: 'st_file_an', kind: 'file', title: 'Editing analysis.md', detail: '/workspace/analysis.md', path: '/workspace/analysis.md', status: 'done' }
+            ]
+          }
+        ]);
+        await new Promise((r) => setTimeout(r, 60));
+        const completed = document.querySelector('[data-testid="completed-thinking-block"]');
+        completed.querySelector('summary').click();
+        await new Promise((r) => setTimeout(r, 40));
+        completed.querySelector('[data-testid="thinking-step-skill"] summary').click();
+        await new Promise((r) => setTimeout(r, 60));
+        const viewerPaneAfterSkill = document.querySelector('[data-testid="viewer-document-pane"]');
+        const skillPathBadge = (viewerPaneAfterSkill?.querySelector('[data-testid="viewer-document-path-badge"]')?.textContent || '').trim();
+        const skillBodyText = (viewerPaneAfterSkill?.querySelector('[data-testid="viewer-document-body"]')?.textContent || '').trim();
+        completed.querySelector('[data-testid="thinking-step-file"] summary').click();
+        await new Promise((r) => setTimeout(r, 60));
+        const filePathBadge = (document.querySelector('[data-testid="viewer-document-path-badge"]')?.textContent || '').trim();
+        const fileBodyText = (document.querySelector('[data-testid="viewer-document-body"]')?.textContent || '').trim();
+        document.querySelector('[data-testid="viewer-document-close-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        return {
+          resizerLabel, collapseBtnTitle, reloadViewerBtn, iframeTitle,
+          hasViewerPaneAfterSkill: Boolean(viewerPaneAfterSkill), skillPathBadge,
+          skillBodyHasGuide: skillBodyText.includes('Lit Data App') || skillBodyText.includes('data-app.js'),
+          filePathBadge, fileBodyHasAnalysis: fileBodyText.includes('Q4 Revenue Drop Root-Cause Analysis'),
+          viewerClosed: !document.querySelector('[data-testid="viewer-document-pane"]')
+        };
+      })()`,
+      awaitPromise: true, returnByValue: true
+    })
+
+    expect(desktopRes.result.value).toEqual({
+      resizerLabel: 'Resize chat and viewer panes', collapseBtnTitle: 'Collapse viewer', reloadViewerBtn: true, iframeTitle: 'Looker Live Viewer',
+      hasViewerPaneAfterSkill: true, skillPathBadge: '/workspace/skills/data-apps/SKILL.md', skillBodyHasGuide: true,
+      filePathBadge: '/workspace/analysis.md', fileBodyHasAnalysis: true, viewerClosed: true
+    })
+
+    try {
+      await chrome.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
+      await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=data_app` })
+      const mobDeadline = Date.now() + 8000
+      while (Date.now() < mobDeadline) {
+        const r = await chrome.send('Runtime.evaluate', { expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('.dab-right-pane'))`, returnByValue: true })
+        if (r.result?.value) break
+        await new Promise((res) => setTimeout(res, 80))
+      }
+
+      const mobRes = await chrome.send('Runtime.evaluate', {
+        expression: `(async () => {
+          const s = window.__DAB_STUDIO__;
+          const rightPane = document.querySelector('.dab-right-pane');
+          const initialCollapsed = s.rightPaneCollapsed;
+          const initialDisplay = window.getComputedStyle(rightPane).display;
+          s.setPublishedApp(null); s.setContentItems([]); s.setRightPaneCollapsed(false); s.setBusyStatus('Synthesizing Looker query...');
+          await new Promise((r) => setTimeout(r, 60));
+          const displayWhileThinkingNoContent = window.getComputedStyle(rightPane).display;
+          s.setBusyStatus(null);
+          s.setPublishedApp({ dashboardId: '42', title: 'Executive Revenue App', folderId: '1', extensionId: 'data_app_builder::data_app_builder', elementId: '101', code: 'export default class {}' });
+          s.setRightPaneCollapsed(true);
+          await new Promise((r) => setTimeout(r, 60));
+          const chip = document.querySelector('[data-testid="chat-object-viewer-chip-data_app:42"]');
+          chip.click();
+          await new Promise((r) => setTimeout(r, 60));
+          const collapsedAfterChipClick = window.__DAB_STUDIO__.rightPaneCollapsed;
+          const cardPosition = window.getComputedStyle(rightPane).position;
+          const cardDisplay = window.getComputedStyle(rightPane).display;
+          const hasCardHandle = Boolean(document.querySelector('[data-testid="mobile-viewer-card-handle"]'));
+          document.querySelector('[data-testid="mobile-viewer-card-close"]').click();
+          await new Promise((r) => setTimeout(r, 50));
+          return {
+            initialCollapsed, initialDisplay, displayWhileThinkingNoContent,
+            hasObjectChip: Boolean(chip), collapsedAfterChipClick, cardPosition, cardDisplay, hasCardHandle,
+            collapsedAfterClose: window.__DAB_STUDIO__.rightPaneCollapsed
+          };
+        })()`,
+        awaitPromise: true, returnByValue: true
+      })
+
+      expect(mobRes.result.value).toEqual({
+        initialCollapsed: true, initialDisplay: 'none', displayWhileThinkingNoContent: 'none',
+        hasObjectChip: true, collapsedAfterChipClick: false, cardPosition: 'absolute', cardDisplay: 'flex', hasCardHandle: true, collapsedAfterClose: true
+      })
+    } finally {
+      await chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
+    }
+  }, 20000)
 })

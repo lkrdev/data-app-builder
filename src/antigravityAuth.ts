@@ -2,6 +2,7 @@ import type { Looker40SDK } from '@looker/sdk'
 
 import { CONVERSATION_LABEL_REQUEST_TAG, STARTER_PROMPTS_REQUEST_TAG } from './antigravityPrompts'
 import { buildDynamicStarterPrompts, sanitizeConversationLabel, type StarterExploreFieldSummary } from './antigravityStarters'
+import { resolveBuiltinWorkspaceFileContent } from './antigravitySteps'
 import {
   ANTIGRAVITY_ALLOWED_MODELS,
   type AntigravityAuth,
@@ -475,7 +476,8 @@ export async function fetchEnvironmentFile(params: {
     const baseName = normalizedPath.split('/').pop() || normalizedPath
     const matched =
       filesMap[`${envId}:${rawKey}`] ?? filesMap[`${envId}:${normalizedPath}`] ?? filesMap[`${envId}:${slashKey}`] ??
-      filesMap[rawKey] ?? filesMap[normalizedPath] ?? filesMap[slashKey] ?? filesMap[baseName]
+      filesMap[rawKey] ?? filesMap[normalizedPath] ?? filesMap[slashKey] ?? filesMap[baseName] ??
+      resolveBuiltinWorkspaceFileContent(rawKey) ?? resolveBuiltinWorkspaceFileContent(slashKey) ?? resolveBuiltinWorkspaceFileContent(normalizedPath)
     if (typeof matched === 'string') return matched
     return `# ${baseName}\n\nFetched on-demand from remote sandbox \`/${normalizedPath}\` in environment \`${envId}\`.\n\n- **Environment:** \`${envId}\`\n- **Path:** \`/${normalizedPath}\`\n- **Persistence:** Ephemeral in-memory session state (never stored on Looker instance)`
   }

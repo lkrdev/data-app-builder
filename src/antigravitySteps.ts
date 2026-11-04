@@ -1,46 +1,28 @@
 import {
-  AGENTS_MD,
-  BUNDLE_APP_PY,
-  DATA_APP_GUIDE_MD,
-  DATA_INVESTIGATOR_GUIDE_MD,
-  KDA_SKILL_MD,
-  KDA_TOOLKIT_PY,
-  LOOKER_PROJECT_ONBOARDING_SKILL_MD,
+  AGENTS_MD, BUNDLE_APP_PY, DATA_APP_GUIDE_MD, DATA_INVESTIGATOR_GUIDE_MD,
+  KDA_SKILL_MD, KDA_TOOLKIT_PY, LOOKER_PROJECT_ONBOARDING_SKILL_MD,
 } from './antigravityPrompts'
 export { APP_BUILDER_SYSTEM_PROMPT, LOOKER_PROJECT_ONBOARDING_SKILL_MD } from './antigravityPrompts'
 import {
-  type AntigravityActivityStep,
-  type AntigravityInteractionOutput,
-  type AntigravityInteractionPayload,
-  type AntigravityInteractionStep,
-  type AntigravityTurnTelemetry,
+  type AntigravityActivityStep, type AntigravityInteractionOutput,
+  type AntigravityInteractionPayload, type AntigravityInteractionStep, type AntigravityTurnTelemetry,
 } from './antigravityTypes'
 import { type DataAppBundle, type NativeContentBundle, resolveNativeEmbedPath } from './lookerApi'
 import { BOOTSTRAP_LOOKML_PY, LKR_CLI_SITECUSTOMIZE_PY } from './lookmlTool'
 
-export function collectInteractionTextCandidates(
-  interaction: AntigravityInteractionPayload | null | undefined
-): string {
+export function collectInteractionTextCandidates(interaction: AntigravityInteractionPayload | null | undefined): string {
   const out: unknown[] = [interaction?.output_text]
   for (const o of interaction?.outputs || []) out.push(o?.text)
-  for (const s of interaction?.steps || []) {
-    out.push(s?.output, s?.stdout, s?.result, s?.text, s?.code_execution_result?.output)
-  }
+  for (const s of interaction?.steps || []) out.push(s?.output, s?.stdout, s?.result, s?.text, s?.code_execution_result?.output)
   return out.filter((x): x is string => typeof x === 'string').join('\n')
 }
 
-export function extractBundleFromInteraction(
-  interaction: AntigravityInteractionPayload | null | undefined
-): DataAppBundle | null {
-  const matches = Array.from(
-    collectInteractionTextCandidates(interaction).matchAll(/<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g)
-  )
+export function extractBundleFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): DataAppBundle | null {
+  const matches = Array.from(collectInteractionTextCandidates(interaction).matchAll(/<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g))
   return matches.length > 0 ? (JSON.parse(matches[matches.length - 1][1].trim()) as DataAppBundle) : null
 }
 
-export function extractTddFromInteraction(
-  interaction: AntigravityInteractionPayload | null | undefined
-): string | null {
+export function extractTddFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): string | null {
   const combined = collectInteractionTextCandidates(interaction)
   const matches = Array.from(combined.matchAll(/<HEALTH_CHECK_TDD>([\s\S]*?)<\/HEALTH_CHECK_TDD>/g))
   if (matches.length > 0) return matches[matches.length - 1][1].trim()
@@ -56,12 +38,9 @@ function normalizeNativeBundleCandidate(raw: unknown, allowUnwrapped = false): N
   const r = hasBundleEnvelope ? (rawObj.NATIVE_CONTENT_BUNDLE as Record<string, unknown>) : rawObj
   const explicitType = String(r.content_type || r.contentType || '').trim()
   const hasExplicitContentId = Boolean(
-    r.dashboard_id || r.lookml_dashboard_id || r.look_id || r.board_id ||
-      (typeof r.embed_path === 'string' && r.embed_path.startsWith('/embed/'))
+    r.dashboard_id || r.lookml_dashboard_id || r.look_id || r.board_id || (typeof r.embed_path === 'string' && r.embed_path.startsWith('/embed/'))
   )
-  if (!allowUnwrapped && !hasBundleEnvelope && !(VALID_NATIVE_CONTENT_TYPES.has(explicitType) && hasExplicitContentId)) {
-    return null
-  }
+  if (!allowUnwrapped && !hasBundleEnvelope && !(VALID_NATIVE_CONTENT_TYPES.has(explicitType) && hasExplicitContentId)) return null
   const id = r.id || r.lookml_dashboard_id || r.dashboard_id || r.look_id || r.board_id
   if (!id) return null
   const strId = String(id).trim()
@@ -69,22 +48,11 @@ function normalizeNativeBundleCandidate(raw: unknown, allowUnwrapped = false): N
     (r.board_id ? 'board' : r.look_id && !r.dashboard_id ? 'look' : strId.includes('::') ? 'lookml_dashboard' : 'dashboard')
   ) as NativeContentBundle['contentType'] & string
   const folderId = r.folder_id || r.folderId ? String(r.folder_id || r.folderId) : undefined
-  const embedPath = resolveNativeEmbedPath(
-    cType,
-    strId,
-    typeof (r.embed_path || r.url) === 'string' ? String(r.embed_path || r.url) : undefined
-  )
-  const asRecord = (v: unknown): Record<string, string> | undefined =>
-    v && typeof v === 'object' ? (v as Record<string, string>) : undefined
+  const embedPath = resolveNativeEmbedPath(cType, strId, typeof (r.embed_path || r.url) === 'string' ? String(r.embed_path || r.url) : undefined)
+  const asRecord = (v: unknown): Record<string, string> | undefined => (v && typeof v === 'object' ? (v as Record<string, string>) : undefined)
   return {
-    id: strId,
-    content_type: cType,
-    contentType: cType,
-    title: String(r.title || `Native ${cType} #${strId}`),
-    folder_id: folderId,
-    folderId,
-    embed_path: embedPath,
-    url: embedPath,
+    id: strId, content_type: cType, contentType: cType, title: String(r.title || `Native ${cType} #${strId}`),
+    folder_id: folderId, folderId, embed_path: embedPath, url: embedPath,
     tile_count: typeof r.tile_count === 'number' ? r.tile_count : Array.isArray(r.elements) ? r.elements.length : undefined,
     filter_count: typeof r.filter_count === 'number' ? r.filter_count : Array.isArray(r.filter_names) ? r.filter_names.length : undefined,
     schedule_id: r.schedule_id ? String(r.schedule_id) : undefined,
@@ -97,9 +65,7 @@ function normalizeNativeBundleCandidate(raw: unknown, allowUnwrapped = false): N
     layout_id: r.layout_id ? String(r.layout_id) : undefined,
     element_ids: Array.isArray(r.element_ids) ? r.element_ids.map(String) : undefined,
     filter_names: Array.isArray(r.filter_names) ? r.filter_names.map(String) : undefined,
-    layout_component_ids: asRecord(r.layout_component_ids),
-    query_cache: asRecord(r.query_cache),
-    filter_cache: asRecord(r.filter_cache),
+    layout_component_ids: asRecord(r.layout_component_ids), query_cache: asRecord(r.query_cache), filter_cache: asRecord(r.filter_cache),
     summary: r.summary ? String(r.summary) : undefined,
     elements: Array.isArray(r.elements) ? (r.elements as NativeContentBundle['elements']) : undefined,
     explores: Array.isArray(r.explores) ? r.explores.map(String) : undefined,
@@ -180,18 +146,29 @@ export function extractThoughtText(val: unknown): string {
 const stripThoughtHeading = (line: string): string =>
   line.trim().replace(/^#+\s*/, '').replace(/^\*\*(.+?)\*\*:?\s*$|^\*\*|\*\*$/g, '$1').trim()
 
+export function extractSkillNameFromPath(rawPath?: string): string | null {
+  const raw = String(rawPath || '').trim()
+  if (!raw) return null
+  if (/(?:^|\/)DATA_APP_GUIDE\.md$/i.test(raw)) return 'data-apps'
+  if (/(?:^|\/)DATA_INVESTIGATOR_GUIDE\.md$/i.test(raw)) return 'data-investigator'
+  const match = raw.match(/(?:^|\/)skills\/([^/\s]+)(?:\/SKILL\.md)?$/i)
+  return match?.[1] ? match[1].toLowerCase() : null
+}
+
 export const BUILTIN_SKILLS_FILES: Record<string, string> = {
-  '/workspace/skills/key-driver-analysis/SKILL.md': KDA_SKILL_MD,
-  'skills/key-driver-analysis/SKILL.md': KDA_SKILL_MD,
-  'key-driver-analysis': KDA_SKILL_MD,
-  '/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py': KDA_TOOLKIT_PY,
-  'skills/key-driver-analysis/scripts/kda_toolkit.py': KDA_TOOLKIT_PY,
-  'kda_toolkit.py': KDA_TOOLKIT_PY,
-  '/workspace/skills/looker-project-onboarding/SKILL.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
-  'skills/looker-project-onboarding/SKILL.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
-  'looker-project-onboarding': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
-  'data-app-creator': DATA_APP_GUIDE_MD,
+  '/workspace/skills/data-apps/SKILL.md': DATA_APP_GUIDE_MD, 'skills/data-apps/SKILL.md': DATA_APP_GUIDE_MD,
+  '/workspace/skills/data-apps/skill.md': DATA_APP_GUIDE_MD, 'skills/data-apps/skill.md': DATA_APP_GUIDE_MD,
+  'data-apps': DATA_APP_GUIDE_MD, 'data-app-creator': DATA_APP_GUIDE_MD,
+  '/workspace/skills/data-investigator/SKILL.md': DATA_INVESTIGATOR_GUIDE_MD, 'skills/data-investigator/SKILL.md': DATA_INVESTIGATOR_GUIDE_MD,
+  '/workspace/skills/data-investigator/skill.md': DATA_INVESTIGATOR_GUIDE_MD, 'skills/data-investigator/skill.md': DATA_INVESTIGATOR_GUIDE_MD,
   'data-investigator': DATA_INVESTIGATOR_GUIDE_MD,
+  '/workspace/skills/key-driver-analysis/SKILL.md': KDA_SKILL_MD, 'skills/key-driver-analysis/SKILL.md': KDA_SKILL_MD,
+  '/workspace/skills/key-driver-analysis/skill.md': KDA_SKILL_MD, 'skills/key-driver-analysis/skill.md': KDA_SKILL_MD,
+  'key-driver-analysis': KDA_SKILL_MD,
+  '/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py': KDA_TOOLKIT_PY, 'skills/key-driver-analysis/scripts/kda_toolkit.py': KDA_TOOLKIT_PY, 'kda_toolkit.py': KDA_TOOLKIT_PY,
+  '/workspace/skills/looker-project-onboarding/SKILL.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD, 'skills/looker-project-onboarding/SKILL.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
+  '/workspace/skills/looker-project-onboarding/skill.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD, 'skills/looker-project-onboarding/skill.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
+  'looker-project-onboarding': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
   'lookml-field-curation': '# LookML Field Curation & Descriptions Skill\nCurate business-ready `label`, `description`, `group_label`, `value_format_name`, and `drill_fields` across LookML views and refinements.',
   'lookml-tests': '# LookML Data Tests (.test.lkml) Skill\nAuthor `test:` blocks with `explore_source` and `assert:` expressions and validate via `run_lookml_test`.',
   'lookml-snapshot': '# LookML SQL & Explore Parity Snapshot Skill\nVerify 100% row/value parity between raw SQL (`run_sql_query`) and LookML Explore (`run_inline_query`).',
@@ -214,7 +191,8 @@ export function resolveBuiltinWorkspaceFileContent(pathOrName?: string): string 
   const raw = String(pathOrName || '').trim()
   if (!raw) return undefined
   if (BUILTIN_WORKSPACE_FILES[raw]) return BUILTIN_WORKSPACE_FILES[raw]
-  const skill = raw.match(/(?:^|\/)skills\/([^/\s]+)(?:\/SKILL\.md)?$/i)?.[1]
+  if (BUILTIN_WORKSPACE_FILES[raw.toLowerCase()]) return BUILTIN_WORKSPACE_FILES[raw.toLowerCase()]
+  const skill = extractSkillNameFromPath(raw)
   return (skill && BUILTIN_SKILLS_FILES[skill]) || BUILTIN_WORKSPACE_FILES[raw.split('/').filter(Boolean).pop() || raw]
 }
 
@@ -418,10 +396,18 @@ export function extractInteractionActivitySteps(interaction: AntigravityInteract
       const targetPath = pickFirstStringField([stepObj, nested, args, pairedResultParsed, pairedResultObj], FILE_PATH_KEYS, FILE_TOOL_FN_RE)
       const desc = String(step.description || nested.description || args.description || '').trim()
       const isEdit = /edit|write/.test(`${sType}:${fnName}`)
+      const skillName = !isEdit ? extractSkillNameFromPath(targetPath) : null
+      const content = extractStepContentFromSources([args, pairedResultParsed, pairedResultObj, stepObj], targetPath)
+      if (skillName) {
+        const skillPath = targetPath || `/workspace/skills/${skillName}/SKILL.md`
+        const title = desc ? `Reading skill ${skillName} — ${desc}` : `Reading skill ${skillName}`
+        const detail = desc || skillPath || undefined
+        upsertStep({ id: stepId, kind: 'skill', title, ...(detail ? { detail } : {}), path: skillPath, ...(content ? { content } : {}), status: resolveStatus(true) }, explicitId)
+        continue
+      }
       const shortName = targetPath ? targetPath.split('/').filter(Boolean).pop() || targetPath : ''
       const title = targetPath && desc ? `${targetPath} — ${desc}` : shortName ? `${isEdit ? 'Editing' : 'Viewing'} ${shortName}` : desc || (isEdit ? 'Editing file' : 'Viewing file')
       const detail = desc || targetPath || undefined
-      const content = extractStepContentFromSources([args, pairedResultParsed, pairedResultObj, stepObj], targetPath)
       upsertStep({ id: stepId, kind: 'file', title, ...(detail ? { detail } : {}), ...(targetPath ? { path: targetPath } : {}), ...(content ? { content } : {}), status: resolveStatus(true) }, explicitId)
       continue
     }
@@ -431,12 +417,13 @@ export function extractInteractionActivitySteps(interaction: AntigravityInteract
       const stepObj = step as unknown as Record<string, unknown>
       const args = { ...parseStepArguments(step.input ?? nested.input), ...parseStepArguments(step.arguments ?? step.args ?? nested.arguments ?? nested.args) }
       const rawSkill = pickFirstStringField([stepObj, nested, args, pairedResultParsed, pairedResultObj], SKILL_NAME_KEYS, SKILL_TOOL_FN_RE)
-      const skillName = rawSkill.match(/(?:^|\/)skills\/([^/\s]+)(?:\/SKILL\.md)?$/i)?.[1] || rawSkill
+      const skillName = (extractSkillNameFromPath(rawSkill) || rawSkill).toLowerCase()
+      const skillPath = rawSkill.includes('/') ? rawSkill : skillName ? `/workspace/skills/${skillName}/SKILL.md` : ''
       const desc = String(step.description || nested.description || args.description || '').trim()
-      const title = skillName && desc ? `${skillName} — ${desc}` : skillName ? `Skill: ${skillName}` : desc || 'Skill lookup'
-      const detail = desc || rawSkill || skillName || undefined
-      const content = extractStepContentFromSources([pairedResultParsed, pairedResultObj, args, stepObj], rawSkill || skillName)
-      upsertStep({ id: stepId, kind: 'skill', title, ...(detail ? { detail } : {}), ...(rawSkill || skillName ? { path: rawSkill || skillName } : {}), ...(content ? { content } : {}), status: resolveStatus(true) }, explicitId)
+      const title = skillName && desc ? `Reading skill ${skillName} — ${desc}` : skillName ? `Reading skill ${skillName}` : desc || 'Skill lookup'
+      const detail = desc || skillPath || skillName || undefined
+      const content = extractStepContentFromSources([pairedResultParsed, pairedResultObj, args, stepObj], skillPath || rawSkill || skillName)
+      upsertStep({ id: stepId, kind: 'skill', title, ...(detail ? { detail } : {}), ...(skillPath || skillName ? { path: skillPath || skillName } : {}), ...(content ? { content } : {}), status: resolveStatus(true) }, explicitId)
       continue
     }
 
@@ -478,12 +465,12 @@ export function extractInteractionActivitySteps(interaction: AntigravityInteract
       if (language === 'BASH' && /^\s*(?:cat|head|tail|sed)\b/.test(firstLine) && !/[>|]|\btee\b|<<\s*['"]?\w+/.test(firstLine)) {
         const matchedPath = firstLine.match(/((?:\/workspace\/[^\s'"|;&><]+)|(?:[a-zA-Z0-9_./-]*skills\/[a-zA-Z0-9_.-]+\/SKILL\.md)|(?:[a-zA-Z0-9_./-]+\.(?:lkml|lookml|md|py|js)))\b/)?.[1]?.trim()
         if (matchedPath) {
-          const skillName = matchedPath.match(/(?:^|\/)skills\/([^/\s]+)\/SKILL\.md$/i)?.[1]
+          const skillName = extractSkillNameFromPath(matchedPath)
           const content = extractStepContentFromSources([pairedResultParsed, pairedResultObj, (step.code_execution_result || {}) as Record<string, unknown>, stepObj], matchedPath)
           const shortName = matchedPath.split('/').filter(Boolean).pop() || matchedPath
           upsertStep(
             skillName
-              ? { id: stepId, kind: 'skill', title: `Skill: ${skillName}`, detail: matchedPath, path: matchedPath, ...(content ? { content } : {}), status: resolveStatus(false) }
+              ? { id: stepId, kind: 'skill', title: `Reading skill ${skillName}`, detail: matchedPath, path: matchedPath, ...(content ? { content } : {}), status: resolveStatus(false) }
               : { id: stepId, kind: 'file', title: `Viewing ${shortName}`, detail: matchedPath, path: matchedPath, ...(content ? { content } : {}), status: resolveStatus(false) },
             explicitId
           )

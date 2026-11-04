@@ -1741,6 +1741,18 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 .dab-sandbox-md-modal { width: min(760px, 92vw); max-height: 86vh; overflow: hidden; }
 .dab-sandbox-md-rendered { max-height: 64vh; overflow-y: auto; padding: 12px 14px; border-radius: 8px; background: var(--dab-surface-muted, #f8fafc); border: 1px solid var(--dab-border, #e2e8f0); color: var(--dab-text, #0f172a); font-size: 13px; }
 .dab-sandbox-md-raw { margin: 0; max-height: 64vh; overflow: auto; padding: 12px 14px; border-radius: 8px; background: var(--dab-surface-muted, #f8fafc); border: 1px solid var(--dab-border, #e2e8f0); color: var(--dab-text, #0f172a); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+/* Issue #132: Viewer document pane, clickable object viewer chips & mobile slide-up Viewer card */
+.dab-chat-object-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 4px 0; }
+.dab-chat-object-chip { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; font-family: inherit; transition: border-color 0.14s ease, background 0.14s ease; }
+.dab-chat-object-chip:hover, .dab-chat-object-chip.active { border-color: var(--dab-accent, #2563eb); background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-accent-text, #1d4ed8); }
+.dab-viewer-document-pane { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; background: var(--dab-surface, #ffffff); color: var(--dab-text, #0f172a); }
+.dab-viewer-document-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--dab-border, #e2e8f0); background: var(--dab-surface-muted, #f8fafc); }
+.dab-viewer-document-title-group { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; font-size: 12.5px; }
+.dab-viewer-document-actions { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.dab-viewer-document-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px; }
+.dab-viewer-document-markdown { font-size: 13px; line-height: 1.55; color: var(--dab-text, #0f172a); }
+.dab-viewer-document-code { margin: 0; padding: 12px 14px; border-radius: 8px; background: var(--dab-surface-muted, #f8fafc); border: 1px solid var(--dab-border, #e2e8f0); color: var(--dab-text, #0f172a); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.dab-mobile-viewer-card-handle { display: none; }
 @media (max-width: 768px) {
   .dab-topbar { padding: 6px 10px; gap: 6px; flex-wrap: wrap; }
   .dab-brand { gap: 6px; flex-wrap: wrap; }
@@ -1754,7 +1766,13 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
   .dab-starter-chip { width: 100%; max-width: 100%; justify-content: flex-start; }
   .dab-split-resizer, .dab-pane-resizer { display: none !important; }
   .dab-left-pane { grid-column: 2; width: 100% !important; max-width: 100% !important; min-width: 0 !important; border-right: none; }
-  .dab-right-pane { grid-column: 2; min-height: 280px; border-top: 1px solid var(--dab-border, #e2e8f0); }
+  .dab-right-pane.dab-right-pane-collapsed, .dab-right-pane[data-has-viewer-content="false"] { display: none !important; }
+  .dab-right-pane { position: absolute; inset: auto 0 0 0; height: min(82vh, calc(100% - 16px)); max-height: 85vh; z-index: 450; border-radius: 16px 16px 0 0; box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.45); background: var(--dab-surface, #ffffff); border-top: 1px solid var(--dab-border-strong, #cbd5e1); overflow: hidden; display: flex; flex-direction: column; }
+  .dab-mobile-viewer-card-handle { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 12px 6px; border-bottom: 1px solid var(--dab-border, #e2e8f0); background: var(--dab-surface-muted, #f8fafc); flex-shrink: 0; }
+  .dab-mobile-viewer-grab-bar { width: 38px; height: 4px; border-radius: 999px; background: var(--dab-border-strong, #cbd5e1); }
+  .dab-mobile-viewer-card-header { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 8px; }
+  .dab-mobile-viewer-card-title { font-size: 12.5px; font-weight: 700; color: var(--dab-text-strong, #0f172a); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dab-mobile-viewer-close-btn { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; font-size: 11px; flex-shrink: 0; }
 }
 
 
