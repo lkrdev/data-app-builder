@@ -1,6 +1,7 @@
 import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
 
+import { fetchLookerCaAgentsCatalog, LookerCaAgentSummary, normalizeCaAgent } from './conversationalAnalytics'
 import { rawLookerRequest } from './lookerApi'
 
 export const CODEMODE_CDN_URL = 'https://cdn.lkr.dev/cli/codemode/0.0.63/codemode.js'
@@ -94,12 +95,73 @@ const DATE_HELPER_PREAMBLE_PY = [
   '',
 ].join('\n')
 
+const SEARCH_AGENTS_PREAMBLE_PY = [
+  'def search_agents(**kw):',
+  '    cat = list(__ca_agents_catalog__ or [])',
+  "    q = str(kw.get('name') or kw.get('query') or kw.get('term') or '').strip().lower()",
+  "    return [a for a in cat if q in str(a.get('name', '')).lower() or q in str(a.get('description', '')).lower()] if q else cat",
+  'agents_search = search_agents',
+  '',
+].join('\n')
+
+const FORMAT_CONTENT_INVENTORY_PREAMBLE_PY = [
+  "def format_content_inventory(entries, max_short=5, max_per_folder=2, overflow_path='/workspace/content_inventory.md'):",
+  '    groups = []',
+  '    by_id = {}',
+  '    for raw in (entries or []):',
+  '        if not isinstance(raw, dict): continue',
+  "        fid = str(raw.get('id') or raw.get('folder_id') or '1').strip()",
+  "        fname = str(raw.get('name') or raw.get('folder_name') or raw.get('title') or ('Folder ' + fid)).strip()",
+  "        if isinstance(raw.get('dashboards'), list) or isinstance(raw.get('looks'), list) or isinstance(raw.get('items'), list):",
+  '            g = by_id.get(fid)',
+  '            if not g:',
+  "                g = {'id': fid, 'name': fname, 'items': []}; by_id[fid] = g; groups.append(g)",
+  "            for d in (raw.get('dashboards') or []):",
+  "                if isinstance(d, dict) and d.get('id') is not None: g['items'].append({'id': str(d.get('id')), 'title': str(d.get('title') or d.get('name') or d.get('id')), 'type': 'dashboard'})",
+  "            for l in (raw.get('looks') or []):",
+  "                if isinstance(l, dict) and l.get('id') is not None: g['items'].append({'id': str(l.get('id')), 'title': str(l.get('title') or l.get('name') or l.get('id')), 'type': 'look'})",
+  "            for it in (raw.get('items') or []):",
+  "                if isinstance(it, dict) and it.get('id') is not None:",
+  "                    tp = 'look' if 'look' in str(it.get('type') or it.get('content_type') or '').lower() else 'dashboard'",
+  "                    g['items'].append({'id': str(it.get('id')), 'title': str(it.get('title') or it.get('name') or it.get('id')), 'type': tp})",
+  '        else:',
+  "            fobj = raw.get('folder') if isinstance(raw.get('folder'), dict) else {}",
+  "            fid2 = str(raw.get('folder_id') or fobj.get('id') or '1').strip()",
+  "            fname2 = str(raw.get('folder_name') or fobj.get('name') or ('Folder ' + fid2)).strip()",
+  '            g = by_id.get(fid2)',
+  '            if not g:',
+  "                g = {'id': fid2, 'name': fname2, 'items': []}; by_id[fid2] = g; groups.append(g)",
+  "            tp = 'look' if 'look' in str(raw.get('type') or raw.get('content_type') or '').lower() else 'dashboard'",
+  "            iid = str(raw.get('content_id') or raw.get('id') or '').strip()",
+  "            if iid: g['items'].append({'id': iid, 'title': str(raw.get('title') or raw.get('name') or iid), 'type': tp})",
+  "    active = [g for g in groups if len(g['items']) > 0]",
+  "    total = sum(len(g['items']) for g in active)",
+  '    def _lnk(it): return "- [" + it["title"] + "](/" + ("looks" if it["type"] == "look" else "dashboards") + "/" + it["id"] + ")"',
+  '    def _cnt(items):',
+  '        dc = len([x for x in items if x["type"] == "dashboard"]); lc = len([x for x in items if x["type"] == "look"])',
+  '        p = ([str(dc) + " dashboard" + ("" if dc == 1 else "s")] if dc else []) + ([str(lc) + " Look" + ("" if lc == 1 else "s")] if lc else [])',
+  '        return ", ".join(p) if p else "0 items"',
+  '    if total == 0: return {"summary_markdown": "No dashboards or Looks found.", "full_markdown": "No dashboards or Looks found.", "truncated": False, "total_items": 0, "folder_count": 0}',
+  '    full_blocks = ["**[" + g["name"] + "](/folders/" + g["id"] + ")** (" + _cnt(g["items"]) + ")\\n" + "\\n".join([_lnk(x) for x in g["items"]]) for g in active]',
+  '    full_md = "\\n\\n".join(full_blocks)',
+  '    if total <= max_short and len(active) <= 1:',
+  '        return {"summary_markdown": full_md, "full_markdown": full_md, "truncated": False, "total_items": total, "folder_count": len(active)}',
+  '    sum_blocks = []',
+  '    for g in active:',
+  '        lines = ["**[" + g["name"] + "](/folders/" + g["id"] + ")** (" + _cnt(g["items"]) + ")"] + [_lnk(x) for x in g["items"][:max_per_folder]]',
+  '        if len(g["items"]) > max_per_folder: lines.append("- See all " + str(len(g["items"])) + " items in [" + g["name"] + "](/folders/" + g["id"] + ")")',
+  '        sum_blocks.append("\\n".join(lines))',
+  '    sum_blocks.append("Full unfiltered inventory (" + str(total) + " items across " + str(len(active)) + " folder" + ("" if len(active) == 1 else "s") + ") saved to `" + overflow_path + "`.")',
+  '    return {"summary_markdown": "\\n\\n".join(sum_blocks), "full_markdown": full_md, "overflow_file_path": overflow_path, "truncated": True, "total_items": total, "folder_count": len(active)}',
+  '',
+].join('\n')
+
 function getCodeModeToolDefinition(name = 'run_looker_codemode'): LkrCodeModeToolDefinition {
   return {
     type: 'function',
     name,
     description:
-      'Execute Python code in the browser Looker Code Mode WASM (Monty) sandbox with direct access to all Looker 4.0 SDK methods (e.g. `lookml_model_explore(target_model, target_explore)`, `run_inline_query("json", {...})`, `run_key_driver_analysis({...})`, `to_fixed_date_range("last 30 days")`, `INVESTIGATION_ANCHOR_DATE`, `me()`, `search_dashboards()`, `help("*query*")`, `lookup("run_inline_query")`, `lookup_type("WriteQuery")`). Variables passed in `vars` (such as `target_model`, `target_explore`, `target_folder_id`, and `INVESTIGATION_ANCHOR_DATE`) are pre-injected. Return a compact dict/list instead of raw multi-MB responses.',
+      'Execute Python code in the browser Looker Code Mode WASM (Monty) sandbox with direct access to all Looker 4.0 SDK methods (e.g. `search_agents()`, `lookml_model_explore(target_model, target_explore)`, `run_inline_query("json", {...})`, `run_key_driver_analysis({...})`, `format_content_inventory(folders)`, `to_fixed_date_range("last 30 days")`, `INVESTIGATION_ANCHOR_DATE`, `me()`, `search_folders()`, `folder_children()`, `search_dashboards()`, `search_looks()`, `help("*query*")`, `lookup("run_inline_query")`, `lookup_type("WriteQuery")`). Variables passed in `vars` (such as `target_model`, `target_explore`, `target_folder_id`, and `INVESTIGATION_ANCHOR_DATE`) are pre-injected. Return a compact dict/list instead of raw multi-MB responses.',
     parameters: {
       type: 'object',
       properties: {
@@ -163,11 +225,10 @@ const runCodeMode: LkrCodeModeRunFn = async (
   const runtime = await ensureCodeModeLoaded()
   const isObj = Boolean(codeOrParams && typeof codeOrParams === 'object')
   const baseOpts: LkrCodeModeRunOptions = isObj ? { ...(codeOrParams as LkrCodeModeRunOptions) } : { ...(options || {}) }
-  const rawCode = String(isObj ? baseOpts.code || '' : codeOrParams || '')
-  const code =
-    /\bto_fixed_date_range\b/.test(rawCode) && !/\bdef\s+to_fixed_date_range\b/.test(rawCode)
-      ? DATE_HELPER_PREAMBLE_PY + rawCode
-      : rawCode
+  const rawCode = String(isObj ? baseOpts.code || '' : codeOrParams || '').replace(
+    /\bsdk\.(search_agents|agents_search|format_content_inventory)\s*\(/g,
+    '$1('
+  )
   const rawSdk = (baseOpts.sdk || baseOpts.core40SDK) as Looker40SDK | undefined
   const hasRaw = typeof (rawSdk as { authSession?: { transport?: { rawRequest?: unknown } } } | undefined)?.authSession?.transport?.rawRequest === 'function'
   const requestHandler = typeof baseOpts.requestHandler === 'function'
@@ -175,11 +236,46 @@ const runCodeMode: LkrCodeModeRunFn = async (
     : hasRaw && rawSdk
     ? (m: string, p: string, q?: unknown, b?: unknown) => rawLookerRequest(rawSdk, String(m || 'GET').toUpperCase() as 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', p, (q as Record<string, unknown> | undefined) || undefined, b)
     : undefined
+
+  let caAgentsCatalog: LookerCaAgentSummary[] | undefined
+  const usesSearchAgents = /\b(search_agents|agents_search)\b/.test(rawCode) && !/\bdef\s+search_agents\b/.test(rawCode)
+  if (usesSearchAgents) {
+    if (Array.isArray(baseOpts.vars?.__ca_agents_catalog__)) {
+      caAgentsCatalog = baseOpts.vars.__ca_agents_catalog__ as LookerCaAgentSummary[]
+    } else if (rawSdk) {
+      caAgentsCatalog = await fetchLookerCaAgentsCatalog(rawSdk, [], { allowEmpty: true })
+    } else if (typeof requestHandler === 'function') {
+      try {
+        const res = await requestHandler('GET', '/api/4.0/agents/search', undefined, undefined, undefined)
+        caAgentsCatalog = Array.isArray(res) ? res.map(normalizeCaAgent).filter((a): a is LookerCaAgentSummary => Boolean(a)) : []
+      } catch {
+        caAgentsCatalog = []
+      }
+    } else {
+      caAgentsCatalog = []
+    }
+  }
+
+  let code = rawCode
+  if (/\bto_fixed_date_range\b/.test(rawCode) && !/\bdef\s+to_fixed_date_range\b/.test(rawCode)) {
+    code = DATE_HELPER_PREAMBLE_PY + code
+  }
+  if (/\bformat_content_inventory\b/.test(rawCode) && !/\bdef\s+format_content_inventory\b/.test(rawCode)) {
+    code = FORMAT_CONTENT_INVENTORY_PREAMBLE_PY + code
+  }
+  if (usesSearchAgents) {
+    code = SEARCH_AGENTS_PREAMBLE_PY + code
+  }
+
   const nextOpts: LkrCodeModeRunOptions = {
     ...baseOpts,
     ...(requestHandler ? { requestHandler } : {}),
     code,
-    vars: { INVESTIGATION_ANCHOR_DATE: new Date().toISOString().slice(0, 10), ...(baseOpts.vars || {}) },
+    vars: {
+      INVESTIGATION_ANCHOR_DATE: new Date().toISOString().slice(0, 10),
+      ...(usesSearchAgents ? { __ca_agents_catalog__: caAgentsCatalog } : {}),
+      ...(baseOpts.vars || {}),
+    },
     ...(!baseOpts.approvedOperations && /\b(run_key_driver_analysis|kda\/analyze)\b/.test(rawCode)
       ? { approvedOperations: new Set(['read_internal_kda_analyze', 'create_internal']) }
       : {}),

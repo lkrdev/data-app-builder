@@ -646,6 +646,17 @@ chmod +x "${fakeBinDir}/uv"
     '.githooks/pre-commit must exist, be executable, and run lint:check'
   )
 
+  const pkgJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
+  assert.equal(pkgJson.scripts?.eval, 'node scripts/run-evals.mjs', 'package.json must define "eval": "node scripts/run-evals.mjs"')
+  assert(
+    statSync(path.join(repoRoot, 'scripts/run-evals.mjs')).isFile() &&
+      antigravityTs.includes('extractInteractionOutputText') &&
+      antigravityTs.includes('formatContentInventoryMarkdown') &&
+      readFileSync(path.join(repoRoot, 'src/lkrCliBridge.ts'), 'utf8').includes('SEARCH_AGENTS_PREAMBLE_PY') &&
+      readFileSync(path.join(repoRoot, 'src/lkrCliBridge.ts'), 'utf8').includes('FORMAT_CONTENT_INVENTORY_PREAMBLE_PY'),
+    'Evals #1-#10: scripts/run-evals.mjs, extractInteractionOutputText, formatContentInventoryMarkdown, and Monty WASM search_agents()/format_content_inventory() must be present'
+  )
+
   console.log('✓ test-bundle.mjs: all assertions passed!')
 } finally {
   rmSync(workDir, { recursive: true, force: true })

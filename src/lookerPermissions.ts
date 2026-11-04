@@ -317,13 +317,25 @@ export function isConversationalNoOpPrompt(text?: string): boolean {
   return CONVERSATIONAL_NOOP_RE.test(clean) || CONVERSATIONAL_META_RE.test(clean)
 }
 
+export const EXPLICIT_SCRIPT_CREATION_RE =
+  /\b(python\s*tile|python\s*script|codemode\s*script|obj_script|monty\s*python\s*tile|(?:run|execute|use)\s+(?:a\s+)?python\s+(?:script|code|calculation)|(?:create|write|build|save|make|turn\s+(?:it|this|that)\s+into)\s+(?:a\s+|this\s+|that\s+|as\s+a\s+)?(?:reusable\s+)?(?:python\s+)?(?:script|tile))\b/i
+
+const CONTENT_CREATION_VERB_RE =
+  /\b(?:build|create|author|make|design|generate|update|edit|refactor|pin|schedule|convert|onboard)\b/i
+
+export const LOOKER_INSTANCE_API_QUERY_RE =
+  /\b(?:personal\s*(?:space|folder)s?|shared\s*(?:space|folder)s?|(?:in|from|inside|under)\s+my\s+personal\b|(?:my|our)\s+favou?rite\s+(?:dashboards?|looks?|content|folders?)|(?:dashboards?|looks?)\s+(?:in\s+my\s+(?:personal|shared|favou?rites?|folder|space)|that\s+I\s+favou?rited)|(?:my|our|all|empty|unused|list|find|inspect|search|query)\s+(?:looker\s+)?(?:personal\s+|shared\s+)?(?:spaces|folders)\b|(?:my|our)\s+(?:looker\s+)?(?:space|folder)\b|(?:spaces|folders)\s+(?:that|which|without|with\s+no)|folder_children|all_folders|search_folders|search_dashboards|search_looks|looker\s*sdk|instance\s*metadata|(?:what|which|query|inspect|list|find|check|show)\s+(?:looker\s+)?(?:users?|roles?|permissions?|groups?|scheduled\s*plans?|schedules?|instance\s*metadata)\b(?:\s+(?:have|with|in|on|for|are|who|that))?|(?:users?|roles?)\s+have\s+(?:admin|developer|viewer)|admin\s+roles?\b)/i
+
+export function isLookerInstanceMetadataQuery(text?: string): boolean {
+  const clean = String(text || '').replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '').trim()
+  if (!clean || EXPLICIT_SCRIPT_CREATION_RE.test(clean) || CONTENT_CREATION_VERB_RE.test(clean)) return false
+  return LOOKER_INSTANCE_API_QUERY_RE.test(clean)
+}
+
 const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
   ['health-check', /\b(3-pillar|three-pillar|health\s*check|transcriber\s*rubric|technical_design_document)\b/i],
   ['lookml', /\b(lookml|\.lkml|dimension\s*:|measure\s*:|explore\s*:|refinement|data\s*test|model\.lkml|view\.lkml)\b/i],
-  [
-    'tile',
-    /\b(python\s*tile|python\s*script|codemode\s*script|obj_script|monty\s*python\s*tile|personal\s*(?:space|folder)s?|shared\s*(?:space|folder)s?|(?:my|our|all|empty|unused|list|find|inspect|search|query)\s+(?:looker\s+)?(?:personal\s+|shared\s+)?(?:spaces|folders)\b|(?:my|our)\s+(?:looker\s+)?(?:space|folder)\b|(?:spaces|folders)\s+(?:that|which|without|with\s+no)|folder_children|all_folders|search_folders|looker\s*sdk|instance\s*metadata|(?:query|inspect|list|find|check)\s+(?:looker\s+)?(?:users|roles|permissions|scheduled\s*plans|schedules|instance\s*metadata))\b/i,
-  ],
+  ['tile', new RegExp(`${EXPLICIT_SCRIPT_CREATION_RE.source}|${LOOKER_INSTANCE_API_QUERY_RE.source}`, 'i')],
   ['dashboard', /\b(udd|user[- ]defined\s*dashboard|native\s*dashboard|saved\s*look|lookml\s*dashboard|pin\s*to\s*board|schedule\s*dashboard|content\s*studio)\b/i],
   [
     'data-investigator',
@@ -352,9 +364,22 @@ export function shouldRouteToIsolatedCaSubagent({
   prompt: string; explicitUseCase: StudioUseCase; isCaMode?: boolean; isFirstTurn?: boolean; assistantOutput?: string; allowedModes?: string[]
 }): boolean {
   if (explicitUseCase === 'conversational-analytics' || (explicitUseCase !== 'auto' && Boolean(isCaMode))) return true
-  if (explicitUseCase !== 'auto' || !resolveAllowedUseCases(allowedModes).has('conversational-analytics') || isConversationalNoOpPrompt(prompt)) return false
+  if (
+    explicitUseCase !== 'auto' ||
+    !resolveAllowedUseCases(allowedModes).has('conversational-analytics') ||
+    isConversationalNoOpPrompt(prompt) ||
+    isLookerInstanceMetadataQuery(prompt) ||
+    EXPLICIT_SCRIPT_CREATION_RE.test(String(prompt || ''))
+  ) {
+    return false
+  }
   if (assistantOutput === undefined) return isFirstTurn !== false && /\b(conversational\s*analytics|ca\s*agent|looker\s+ca)\b/i.test(String(prompt || ''))
   const rawOut = String(assistantOutput || '')
+  const caSel = rawOut.match(/<CA_AGENT_SELECTION>([\s\S]*?)<\/CA_AGENT_SELECTION>/i)?.[1]
+  if (caSel) {
+    const agentId = caSel.match(/"(?:agent_id|agentId|id)"\s*:\s*"([^"]*)"/i)?.[1]?.trim()
+    return Boolean(agentId && !/^(?:none|null)$/i.test(agentId))
+  }
   const stripped = rawOut.replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '').trim()
   return /<USE_CASE>\s*conversational[-_\s]?analytics\s*<\/USE_CASE>/i.test(rawOut) && (!stripped || /^(?:completed|done)\.?$/i.test(stripped))
 }
@@ -379,6 +404,7 @@ export function matchExplicitUseCaseRule(
   }
   if (isConversationalNoOpPrompt(rawText)) return null
   for (const [candidate, re] of USE_CASE_RULES) {
+    if (candidate === 'tile' && CONTENT_CREATION_VERB_RE.test(rawText) && !EXPLICIT_SCRIPT_CREATION_RE.test(rawText)) continue
     if (allowedSet.has(candidate) && re.test(rawText)) return candidate
   }
   return null

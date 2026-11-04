@@ -57,7 +57,10 @@ export interface HealthCheckReportPayload {
 // using zero local CLI binaries (system__activity inline queries + LookML project files/validation + BigQuery SQL).
 export const THREE_PILLAR_CODEMODE_PY = `
 me_info = me("id,display_name,email")
-active_scope = health_scope if "health_scope" in dir() and health_scope else "all"
+try:
+    active_scope = health_scope or "all"
+except Exception:
+    active_scope = "all"
 
 # --- PILLAR 1: Looker Performance & Governance (system__activity) ---
 p1 = {}
@@ -124,7 +127,10 @@ p2 = {
 }
 try:
     projects = all_projects(fields="id,name") or []
-    preferred = target_project if "target_project" in dir() and target_project else ""
+    try:
+        preferred = target_project or ""
+    except Exception:
+        preferred = ""
     if not preferred and projects:
         for pr in projects:
             pid = pr.get("id") or ""

@@ -977,7 +977,9 @@ assert(bundlePyMatch, 'Could not extract BUNDLE_APP_PY from src/antigravity.ts')
 const guideMatch = antigravityTs.match(/export const DATA_APP_GUIDE_MD = `([\s\S]*?)`\n/)
 assert(guideMatch, 'Could not extract DATA_APP_GUIDE_MD from src/antigravity.ts')
 
-const lookmlToolTsx = readFileSync(path.join(repoRoot, 'src/lookmlTool.tsx'), 'utf8')
+const lookmlToolTsx = ['src/lookmlTool.tsx', 'src/lkrCliBridge.ts']
+  .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
+  .join('\n')
 const bootstrapLookmlMatch = lookmlToolTsx.match(/export const BOOTSTRAP_LOOKML_PY = `([\s\S]*?)`\n/)
 assert(bootstrapLookmlMatch, 'Could not extract BOOTSTRAP_LOOKML_PY from src/lookmlTool.tsx')
 
@@ -1158,8 +1160,10 @@ return {"hits": hits, "exp": exp, "sample": sample}
   const baseWasmExecMs = Math.max(5, Math.round(performance.now() - wasmT0))
   assert.equal(wasmCallCount, 3, 'Single-script discovery must execute 3 Looker HTTP calls in 1 CodeMode run')
 
-  // 3. Run live dev-argolis verification
-  const liveVerification = runLiveDevArgolisVerification(realBundles)
+  // 3. Run live dev-argolis verification when --live is passed
+  const liveVerification = process.argv.includes('--live')
+    ? runLiveDevArgolisVerification(realBundles)
+    : { skipped: true, mode: 'offline' }
 
   // 4. Compute per-iteration, per-turn telemetry across Iterations 1..10
   const outDir = path.join(repoRoot, 'tmp/bench')

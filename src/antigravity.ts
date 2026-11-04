@@ -16,6 +16,7 @@ import {
   collectInteractionTextCandidates,
   extractBundleFromInteraction,
   extractInteractionActivitySteps,
+  extractInteractionOutputText,
   extractInteractionTelemetry,
   extractNativeContentFromInteraction,
   extractTddFromInteraction,
@@ -30,7 +31,6 @@ import {
   type AntigravityActivityStep,
   type AntigravityAuth,
   type AntigravityExtensionHostLike,
-  type AntigravityInteractionOutput,
   type AntigravityInteractionPayload,
   type AntigravityInteractionStep,
   type AntigravityToolType,
@@ -88,8 +88,9 @@ export * from './antigravityPrompts'
 export * from './lookmlSkills'
 export {
   buildStudioRoute, clampLeftPaneWidth, classifyStudioUseCase, convertRelativeDateFilterToFixed,
-  DEFAULT_BUSY_SEND_ACTION, DEFAULT_LEFT_PANE_WIDTH, extractResolvedUseCase, getAllowedUseCases, getUseCaseLabel,
-  isConversationalNoOpPrompt, loadStoredBusySendAction, loadStoredLeftPaneWidth, loadStoredRightPaneCollapsed,
+  DEFAULT_BUSY_SEND_ACTION, DEFAULT_LEFT_PANE_WIDTH, EXPLICIT_SCRIPT_CREATION_RE, extractResolvedUseCase,
+  formatContentInventoryMarkdown, getAllowedUseCases, getUseCaseLabel,
+  isConversationalNoOpPrompt, isLookerInstanceMetadataQuery, loadStoredBusySendAction, loadStoredLeftPaneWidth, loadStoredRightPaneCollapsed,
   matchExplicitUseCaseRule, MAX_LEFT_PANE_WIDTH, MIN_LEFT_PANE_WIDTH,
   normalizeBusySendAction, normalizeQueryFiltersToFixedDates, readInitialBusySendAction, readInitialLeftPaneWidth, readInitialRightPaneCollapsed,
   saveStoredBusySendAction, saveStoredLeftPaneWidth, saveStoredRightPaneCollapsed, shouldRouteToIsolatedCaSubagent,
@@ -400,7 +401,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
   const autoRoutingDirective =
     useCase === 'auto'
-      ? `\n\n[AUTO USE-CASE ROUTING: Consult /workspace/AGENTS.md ("## Use Case Auto-Classification (Turn 1 Routing)"). Allowed use cases for this user: ${JSON.stringify(allowedModes && allowedModes.length > 0 ? allowedModes : ['app', 'data-investigator', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics'])}. Start your response with <USE_CASE>...</USE_CASE> naming the single best allowed use case for this request, then execute that workflow. CRITICAL: (1) Conversational & Follow-Up Questions (No-Op): when the prompt is a greeting, help request, meta/error summary ("summarize the errors you experienced", "what went wrong?", "how can I make you better?"), or general follow-up question in an active conversation that does not ask to build or modify a right-pane artifact ("hello", "hi", "help", "what can you do?"), answer directly in chat (calling zero tools for greetings/meta-questions) and do NOT create or open any right-pane content item (do NOT run bundle_app.py, emit_native_bundle, or redirect to an isolated CA sub-agent). (2) Script (tile) Routing for Ad-Hoc Looker Instance / Folder / Space / SDK Queries: route prompts asking to inspect or query Looker spaces, folders, personal spaces, users, permissions, schedules, or instance metadata via SDK (e.g. "tell me what my personal space is", "can you find me all personal spaces that don't have dashboards") to <USE_CASE>tile</USE_CASE> and use run_looker_codemode without creating a Data App or Dashboard. (3) Data Investigator Routing: route prompts asking to "investigate", "find out", "figure out", "dig into", "what drove", or "what caused" across data, metrics, dashboards, Looks, or explores to <USE_CASE>data-investigator</USE_CASE> and follow /workspace/skills/data-investigator/SKILL.md and /workspace/skills/key-driver-analysis/SKILL.md.]`
+      ? `\n\n[AUTO USE-CASE ROUTING: Consult /workspace/AGENTS.md ("## Use Case Auto-Classification (Turn 1 Routing)"). Allowed use cases for this user: ${JSON.stringify(allowedModes && allowedModes.length > 0 ? allowedModes : ['app', 'data-investigator', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics'])}. Start your response with <USE_CASE>...</USE_CASE> naming the single best allowed use case for this request, then execute that workflow. CRITICAL: (1) Conversational & Follow-Up Questions (No-Op): when the prompt is a greeting, help request, meta/error summary ("summarize the errors you experienced", "what went wrong?", "how can I make you better?"), or general follow-up question in an active conversation that does not ask to build or modify a right-pane artifact ("hello", "hi", "help", "what can you do?"), answer directly in chat (calling zero tools for greetings/meta-questions) and do NOT create or open any right-pane content item (do NOT run bundle_app.py, emit_native_bundle, or redirect to an isolated CA sub-agent). (2) Ad-Hoc Looker Instance / Folder / Content Inventory / SDK Queries (<USE_CASE>tile</USE_CASE>): route prompts asking to inspect or query Looker spaces, folders, personal spaces, favorite dashboards, dashboards/Looks in folders, users, permissions, schedules, or instance metadata via SDK (e.g. "tell me what my personal space is", "What dashboards are in my personal", "what are my favorite dashboards", "can you find me all personal spaces that don't have dashboards") to <USE_CASE>tile</USE_CASE> and call run_looker_codemode (using format_content_inventory(folders) to format clickable /dashboards/<id>, /looks/<id>, /folders/<id> links, capped at 2 items per folder when >5 total items or multiple folders, with full list saved to /workspace/content_inventory.md). Answer directly in chat without creating a right-pane Script unless explicitly requested, and ask if the user wants to save it as a reusable Script. (3) Open-Ended Analytical Questions & search_agents() in CodeMode: for open-ended analytical questions without a pre-selected explore, call search_agents() inside run_looker_codemode to inspect accessible Looker Conversational Analytics (CA) agents, their explores, description, and golden_queries; if a CA agent covers the question, emit <USE_CASE>conversational-analytics</USE_CASE> and <CA_AGENT_SELECTION>{"agent_id":"<matched_id>","rationale":"<1-sentence reason>"}</CA_AGENT_SELECTION>; if no CA agent matches, answer directly via run_inline_query in run_looker_codemode. (4) Data Investigator Routing: route prompts asking to "investigate", "find out", "figure out", "dig into", "what drove", or "what caused" across data, metrics, dashboards, Looks, or explores to <USE_CASE>data-investigator</USE_CASE> and follow /workspace/skills/data-investigator/SKILL.md and /workspace/skills/key-driver-analysis/SKILL.md.]`
       : ''
 
   const uploadsSection = uploadedFileNotices.length > 0 ? `\n\nAttached files in /workspace/uploads:\n${uploadedFileNotices.join('\n')}` : ''
@@ -840,10 +841,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : null
   const lookmlBundle = extractLookmlBundleFromInteraction(interaction)
   const tddMarkdown = extractTddFromInteraction(interaction)
-  const rawText =
-    interaction.output_text ||
-    (interaction.outputs || []).map((o: AntigravityInteractionOutput) => o.text || '').join('\n') ||
-    'Completed.'
+  const rawText = extractInteractionOutputText(interaction)
   const combinedOutput = `${rawText}\n${collectInteractionTextCandidates(interaction)}`
   const hasExplicitUseCaseTag = /<USE_CASE>\s*[^<]+?\s*<\/USE_CASE>/i.test(combinedOutput)
   const inferredFromOutput = extractResolvedUseCase(
@@ -869,6 +867,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : inferredFromOutput
   const cleanAssistantText = rawText
     .replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '')
+    .replace(/<CA_AGENT_SELECTION>[\s\S]*?<\/CA_AGENT_SELECTION>/gi, '')
     .replace(/<DATA_APP_BUNDLE>[\s\S]*?<\/DATA_APP_BUNDLE>/g, '')
     .replace(/<NATIVE_CONTENT_BUNDLE>[\s\S]*?<\/NATIVE_CONTENT_BUNDLE>/g, '')
     .replace(/<LOOKML_BUNDLE>[\s\S]*?<\/LOOKML_BUNDLE>/g, '')

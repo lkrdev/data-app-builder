@@ -8,7 +8,7 @@ import { extractResolvedUseCase, formatExploreId, rawLookerRequest, ResolvedStud
 export const CA_AGENT_SELECTION_REQUEST_TAG = '[CA_AGENT_SELECTION_REQUEST]'
 
 export interface LookerCaGoldenQuery { questions: string[]; model?: string; explore?: string; fields?: string[] }
-export interface LookerCaAgentSummary { id: string; name: string; description: string; instructions: string; explores: string[]; goldenQueries: LookerCaGoldenQuery[] }
+export interface LookerCaAgentSummary { id: string; name: string; description: string; instructions: string; explores: string[]; goldenQueries: LookerCaGoldenQuery[]; golden_queries?: LookerCaGoldenQuery[] }
 export interface CaAgentSelectionResult { agentId: string; agentName: string; rationale: string; initialQuestion: string; explores: string[]; catalogSize: number; isolatedInteractionId?: string }
 export interface CaConversationState {
   id: string; caConversationId: string; agentId: string; agentName: string; embedPath: string; title: string; label: string
@@ -85,12 +85,13 @@ export function normalizeCaAgent(raw: unknown): LookerCaAgentSummary | null {
     }
   }
 
-  return { id, name, description, instructions, explores: Array.from(exploreSet), goldenQueries }
+  return { id, name, description, instructions, explores: Array.from(exploreSet), goldenQueries, golden_queries: goldenQueries }
 }
 
 export async function fetchLookerCaAgentsCatalog(
   sdk: Looker40SDK,
-  _fallbackModels?: Array<Partial<ILookmlModel>>
+  _fallbackModels?: Array<Partial<ILookmlModel>>,
+  options?: { allowEmpty?: boolean }
 ): Promise<LookerCaAgentSummary[]> {
   let rawList: unknown[] = []
   try {
@@ -101,13 +102,14 @@ export async function fetchLookerCaAgentsCatalog(
     if (Array.isArray(res)) rawList = res
   } catch { rawList = [] }
   const normalized = rawList.map(normalizeCaAgent).filter((a): a is LookerCaAgentSummary => Boolean(a))
-  const result = normalized.length > 0
+  const result = normalized.length > 0 || options?.allowEmpty
     ? normalized
     : [{
         id: 'ad69f74cd9e2494090e9e9e9c50190c8', name: 'eCommerce',
         description: 'eCommerce Order Items & Fulfillment Analytics Agent',
         instructions: 'Answer eCommerce revenue, order status, and customer questions on thelook::order_items.',
         explores: ['thelook::order_items'], goldenQueries: [{ questions: ['what are our shipping statuses?'] }],
+        golden_queries: [{ questions: ['what are our shipping statuses?'] }],
       }]
   const swrDefault = (SWRConfig as unknown as { default?: { cache?: { set?: (k: string, v: unknown) => void } } }).default
   swrDefault?.cache?.set?.(unstable_serialize(['looker:ca_agents']), result)
@@ -213,15 +215,18 @@ export const CA_AGENT_SELECTION_RESPONSE_FORMAT = {
 // previous_interaction_id omitted, and tools: []) so the full CA agents catalog never enters the main conversation history.
 export async function selectCaAgentViaIsolatedSubagent(params: {
   sdk?: Looker40SDK; extensionSDK?: Partial<ExtensionSDK>; auth: AntigravityAuth; environmentId?: string
-  userQuestion?: string; userPrompt?: string; model?: string
+  userQuestion?: string; userPrompt?: string; model?: string; preselectedOutput?: string
   agentsCatalog?: LookerCaAgentSummary[]; agents?: LookerCaAgentSummary[]; selectedExplores?: string[]
   onStatus?: (statusText: string) => void
 }): Promise<CaAgentSelectionResult> {
-  const { sdk, extensionSDK, auth, userQuestion, userPrompt, model = DEFAULT_ANTIGRAVITY_MODEL, agentsCatalog, agents, selectedExplores = [], onStatus } = params
+  const { sdk, extensionSDK, auth, userQuestion, userPrompt, model = DEFAULT_ANTIGRAVITY_MODEL, preselectedOutput, agentsCatalog, agents, selectedExplores = [], onStatus } = params
   const question = String(userQuestion || userPrompt || '').trim()
   const providedAgents = agents || agentsCatalog
   onStatus?.('Discovering Looker Conversational Analytics agents...')
   const catalog = providedAgents && providedAgents.length > 0 ? providedAgents : sdk ? await fetchLookerCaAgentsCatalog(sdk) : []
+  if (preselectedOutput && /<CA_AGENT_SELECTION>[\s\S]*?<\/CA_AGENT_SELECTION>/i.test(preselectedOutput)) {
+    return parseCaAgentSelectionResponse(preselectedOutput, catalog, question)
+  }
   const canCallApi = auth.mode === 'oauth' ? Boolean(auth.oauthToken?.trim()) : Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy)
 
   if (canCallApi && catalog.length > 0) {
