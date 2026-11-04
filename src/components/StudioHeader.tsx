@@ -6,7 +6,10 @@ import {
 } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 
-import { getGeminiUserAttributeName, resolveLookerOAuthRedirectUris } from '../antigravity'
+import {
+  getGeminiUserAttributeName, resolveLookerOAuthRedirectUris,
+  STUDIO_MAX_TOTAL_TOKENS_OPTIONS, STUDIO_THINKING_LEVEL_OPTIONS, StudioThinkingLevel,
+} from '../antigravity'
 import { useLookerExtension } from '../contexts/LookerExtensionContext'
 import { LookerFolderNode, normalizeStudioAgentName } from '../lookerApi'
 import { ResolvedStudioTheme, StudioController, StudioThemeMode } from '../useStudioController'
@@ -138,6 +141,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const {
     themeMode, resolvedTheme, setThemeMode, authMode, setAuthMode, clientId, setClientId,
     projectId, setProjectId, disabledModes, setDisabledModes, selectedModel, setSelectedModel,
+    defaultThinkingLevel, setDefaultThinkingLevel, maxTotalTokens, setMaxTotalTokens,
     availableModels, enabledModes, apiKey, setApiKey, oauthRedirectUri, capabilities,
     extensionSDK, busyStatus, messages, handleSaveAuthSetup, isLookerDevMode,
   } = ctl
@@ -234,6 +238,18 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             <StudioSelect
               testId="config-default-model-select" value={selectedModel} onChange={setSelectedModel}
               options={availableModels.map((m) => ({ value: m.id, label: `${m.label} (${m.id})`, title: m.description }))}
+            />
+            <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Default Thinking Level:</strong>
+            <StudioSelect
+              testId="config-default-thinking-level-select" value={defaultThinkingLevel}
+              onChange={(val) => setDefaultThinkingLevel(val as StudioThinkingLevel)}
+              options={STUDIO_THINKING_LEVEL_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            />
+            <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Max Tokens Budget:</strong>
+            <StudioSelect
+              testId="config-max-total-tokens-select" value={String(maxTotalTokens)}
+              onChange={(val) => setMaxTotalTokens(Number(val))}
+              options={STUDIO_MAX_TOTAL_TOKENS_OPTIONS.map((o) => ({ value: String(o.value), label: o.label }))}
             />
           </div>
           <div style={{ borderTop: '1px solid var(--dab-border, #e2e8f0)', paddingTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 12 }}>

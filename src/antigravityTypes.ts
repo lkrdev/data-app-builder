@@ -17,7 +17,7 @@ export const ANTIGRAVITY_ALLOWED_MODELS: AntigravityModelOption[] = [
 ]
 
 export type StudioThinkingLevel = 'low' | 'medium' | 'high'
-export const DEFAULT_THINKING_LEVEL: StudioThinkingLevel = 'medium'
+export const DEFAULT_THINKING_LEVEL: StudioThinkingLevel = 'high'
 export const STUDIO_THINKING_LEVEL_STORAGE_KEY = 'dab_thinking_level'
 export const STUDIO_THINKING_LEVEL_OPTIONS: Array<{ value: StudioThinkingLevel; label: string; testId: string }> = [
   { value: 'low', label: 'Low', testId: 'thinking-level-option-low' },
@@ -25,19 +25,32 @@ export const STUDIO_THINKING_LEVEL_OPTIONS: Array<{ value: StudioThinkingLevel; 
   { value: 'high', label: 'High', testId: 'thinking-level-option-high' },
 ]
 
+export const DEFAULT_MAX_TOTAL_TOKENS = 131072
+export const STUDIO_MAX_TOTAL_TOKENS_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 32768, label: '32,768 tokens' },
+  { value: 65536, label: '65,536 tokens' },
+  { value: 131072, label: '131,072 tokens (Default — High)' },
+  { value: 262144, label: '262,144 tokens (Max)' },
+]
+
+export function normalizeMaxTotalTokens(raw: unknown): number {
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_MAX_TOTAL_TOKENS
+}
+
 export function normalizeThinkingLevel(raw: unknown): StudioThinkingLevel {
   return raw === 'low' || raw === 'medium' || raw === 'high' ? raw : DEFAULT_THINKING_LEVEL
 }
 
-export function readInitialThinkingLevel(): StudioThinkingLevel {
+export function readInitialThinkingLevel(fallback: StudioThinkingLevel = DEFAULT_THINKING_LEVEL): StudioThinkingLevel {
   try {
     const w = typeof window !== 'undefined' ? window : undefined
-    return normalizeThinkingLevel(
+    const raw =
       (w?.__MOCK_LOOKER_EXTENSION__ as { initialThinkingLevel?: string } | undefined)?.initialThinkingLevel ??
-        w?.localStorage?.getItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY)
-    )
+      w?.localStorage?.getItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY)
+    return raw === 'low' || raw === 'medium' || raw === 'high' ? raw : normalizeThinkingLevel(fallback)
   } catch {
-    return DEFAULT_THINKING_LEVEL
+    return normalizeThinkingLevel(fallback)
   }
 }
 
@@ -63,6 +76,8 @@ export interface ExtensionAuthContextConfig {
   projectId?: string
   disabledModes?: AntigravityToolType[]
   defaultModel?: string
+  defaultThinkingLevel?: StudioThinkingLevel
+  maxTotalTokens?: number
 }
 
 export interface AntigravityAuth {

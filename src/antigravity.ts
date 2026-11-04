@@ -1,6 +1,6 @@
 import type { Looker40SDK } from '@looker/sdk'
 
-import { callInteractionsApi } from './antigravityAuth'
+import { callInteractionsApi, streamInteractionUntilActionOrDone } from './antigravityAuth'
 import {
   AGENTS_MD,
   buildNativeContentGuide,
@@ -38,6 +38,7 @@ import {
   type CodeModePermissionDecision,
   type CodeModePermissionRequest,
   DEFAULT_ANTIGRAVITY_MODEL,
+  DEFAULT_MAX_TOTAL_TOKENS,
   DEFAULT_POLL_SCHEDULE_MS,
   DEFAULT_THINKING_LEVEL,
   getSharedEnvExploreSchemas,
@@ -210,6 +211,7 @@ export interface RunAntigravityTurnOptions {
   session: AgentSession
   model?: string
   thinkingLevel?: StudioThinkingLevel
+  maxTotalTokens?: number
   mode?: 'data_app' | 'dashboard'
   useCase?: StudioUseCase
   allowedModes?: string[]
@@ -263,7 +265,7 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
 
   const {
     sdk, extensionSDK, userId, environmentId, conversationId: rawConversationId, onEnvironmentUpdated, auth, session,
-    model = DEFAULT_ANTIGRAVITY_MODEL, thinkingLevel = DEFAULT_THINKING_LEVEL, mode = 'data_app', useCase = 'auto',
+    model = DEFAULT_ANTIGRAVITY_MODEL, thinkingLevel = DEFAULT_THINKING_LEVEL, maxTotalTokens = DEFAULT_MAX_TOTAL_TOKENS, mode = 'data_app', useCase = 'auto',
     allowedModes, selectedExplores, folderId, toolMode = 'data_app', lookmlProjectId, activatedLookmlSkills,
     developableProjects, canDeploy, schemaMarkdown, userPrompt, images, existingAppCode, existingNativeContent,
     customSystemGuide, extraSources, priorMessages, requirePermission = true, approvedOperations, onPermissionRequest,
@@ -419,7 +421,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   ]
 
   const activeModel = model || DEFAULT_ANTIGRAVITY_MODEL
-  const agentConfig = { type: 'antigravity', model: activeModel }
+  const resolvedMaxTokens = Number(maxTotalTokens) > 0 ? Number(maxTotalTokens) : DEFAULT_MAX_TOTAL_TOKENS
+  const agentConfig = { type: 'antigravity', model: activeModel, max_total_tokens: String(resolvedMaxTokens) }
   const buildFreshPayload = (): Record<string, unknown> => ({
     agent: 'antigravity-preview-09-2026', agent_config: agentConfig, background: true, tools: activeTools,
     input: buildInputItems(true), environment: { type: 'remote', sources },
@@ -645,6 +648,39 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         }
 
         onStatus(summarizeProgress(interaction))
+        if (
+          auth.mode === 'oauth' &&
+          interaction.id &&
+          (interaction.status === 'in_progress' || interaction.status === 'queued')
+        ) {
+          const streamRes = await streamInteractionUntilActionOrDone({
+            extensionSDK,
+            auth,
+            interactionId: interaction.id,
+            initialInteraction: interaction,
+            signal,
+            onUpdate: (snap) => {
+              interaction = snap
+              if (snap.environment_id) trackedEnvId = snap.environment_id
+              emitProgressSteps(snap)
+              onStatus(summarizeProgress(snap))
+            },
+          })
+          if (streamRes.streamed && streamRes.interaction) {
+            interaction = streamRes.interaction
+            await throwIfAborted(interaction.id)
+            if (interaction.environment_id) trackedEnvId = interaction.environment_id
+            const curStepCount = (interaction.steps || []).length
+            if (curStepCount !== prevStepCount || interaction.status !== prevStatus) {
+              pollIdx = 0
+              prevStepCount = curStepCount
+              prevStatus = interaction.status
+            }
+            if (interaction.status !== 'in_progress' && interaction.status !== 'queued') {
+              continue
+            }
+          }
+        }
         const schedule = resolveAdaptivePollScheduleMs(pollScheduleMs, trackedEnvId, envConcurrencySlot)
         const sleepMs = schedule[Math.min(pollIdx, schedule.length - 1)]
         pollIdx += 1
@@ -901,6 +937,7 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
   auth: AntigravityAuth
   toolType: AntigravityToolType
   model?: string
+  maxTotalTokens?: number
   environmentId?: string
   conversationId?: string
   existingSession?: AgentSession
@@ -921,6 +958,7 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
     auth,
     toolType,
     model = DEFAULT_ANTIGRAVITY_MODEL,
+    maxTotalTokens = DEFAULT_MAX_TOTAL_TOKENS,
     environmentId,
     conversationId: rawConversationId,
     existingSession,
@@ -998,9 +1036,14 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
       toolType === 'dashboard'
         ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
         : [{ type: 'code_execution' }, LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
+    const resolvedMaxTokens = Number(maxTotalTokens) > 0 ? Number(maxTotalTokens) : DEFAULT_MAX_TOTAL_TOKENS
     const prewarmBase = {
       agent: 'antigravity-preview-09-2026',
-      agent_config: { type: 'antigravity', model: model || DEFAULT_ANTIGRAVITY_MODEL },
+      agent_config: {
+        type: 'antigravity',
+        model: model || DEFAULT_ANTIGRAVITY_MODEL,
+        max_total_tokens: String(resolvedMaxTokens),
+      },
       background: true,
       tools: prewarmTools,
       input: [

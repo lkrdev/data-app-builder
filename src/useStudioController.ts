@@ -7,16 +7,17 @@ import useSWR from 'swr'
 import {
   AgentSession, ANTIGRAVITY_ALLOWED_MODELS, AntigravityActivityStep, AntigravityAuth, AntigravityModelOption,
   authenticateGoogleOAuth, buildDynamicStarterPrompts, clearStoredOAuthSession, CodeModePermissionDecision,
-  CodeModePermissionRequest, computeIsAuthenticated, DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_THINKING_LEVEL,
-  discoverStarterExploreContext, ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig, fetchEnvironmentFile, generateConversationLabel,
-  generateDynamicStarterPrompts, getCachedStarterPrompts, getInitialStoredOAuthSession, getInitialStoredOAuthToken,
-  inFlightEnvProvisionByUser, listAvailableAntigravityModels, LkrCodeMode, loadStoredOAuthSession,
-  loadStoredThinkingLevel, loginWithGoogleOAuth, normalizeEnvironmentId, normalizeSandboxFilePath, normalizeThinkingLevel,
-  parseValidOAuthSession, PastedImage, persistThinkingLevel, prewarmOrWakeAntigravityEnvironment,
-  readInitialThinkingLevel, refreshOAuthSessionIfNeeded, resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris,
-  resolveTargetExploreFromModels, runAntigravityTurn, sanitizeConversationLabel, sharedEnvExploreSchemas,
-  StarterPromptItem, STUDIO_OAUTH_REFRESH_INTERVAL_MS, STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY,
-  STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY, StudioThinkingLevel,
+  CodeModePermissionRequest, computeIsAuthenticated, DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_MAX_TOTAL_TOKENS,
+  DEFAULT_THINKING_LEVEL, discoverStarterExploreContext, ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig,
+  fetchEnvironmentFile, generateConversationLabel, generateDynamicStarterPrompts, getCachedStarterPrompts,
+  getInitialStoredOAuthSession, getInitialStoredOAuthToken, inFlightEnvProvisionByUser, listAvailableAntigravityModels,
+  LkrCodeMode, loadStoredOAuthSession, loadStoredThinkingLevel, loginWithGoogleOAuth, normalizeEnvironmentId,
+  normalizeMaxTotalTokens, normalizeSandboxFilePath, normalizeThinkingLevel, parseValidOAuthSession, PastedImage,
+  persistThinkingLevel, prewarmOrWakeAntigravityEnvironment, readInitialThinkingLevel, refreshOAuthSessionIfNeeded,
+  resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, resolveTargetExploreFromModels,
+  runAntigravityTurn, sanitizeConversationLabel, sharedEnvExploreSchemas, StarterPromptItem,
+  STUDIO_MAX_TOTAL_TOKENS_OPTIONS, STUDIO_OAUTH_REFRESH_INTERVAL_MS, STUDIO_OAUTH_REFRESH_LOCK_KEY,
+  STUDIO_OAUTH_STORAGE_KEY, STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY, StudioThinkingLevel,
 } from './antigravity'
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
 import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
@@ -53,12 +54,14 @@ import {
 } from './lookmlTool'
 
 export {
-  authenticateGoogleOAuth, computeIsAuthenticated, DEFAULT_BUSY_SEND_ACTION, DEFAULT_THINKING_LEVEL,
-  loadStoredBusySendAction, loadStoredSelectedFolderId,
-  loadStoredThinkingLevel, normalizeBusySendAction, normalizeStudioThemeMode, normalizeThinkingLevel, persistSelectedFolderId,
-  persistThinkingLevel, readInitialBusySendAction, readInitialSelectedFolderId, readInitialThinkingLevel, refreshOAuthSessionIfNeeded,
+  authenticateGoogleOAuth, computeIsAuthenticated, DEFAULT_BUSY_SEND_ACTION, DEFAULT_MAX_TOTAL_TOKENS,
+  DEFAULT_THINKING_LEVEL, loadStoredBusySendAction, loadStoredSelectedFolderId,
+  loadStoredThinkingLevel, normalizeBusySendAction, normalizeMaxTotalTokens, normalizeStudioThemeMode,
+  normalizeThinkingLevel, persistSelectedFolderId, persistThinkingLevel, readInitialBusySendAction,
+  readInitialSelectedFolderId, readInitialThinkingLevel, refreshOAuthSessionIfNeeded,
   resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, resolveStudioTheme, resolveSystemTheme,
-  saveStoredBusySendAction, STUDIO_BUSY_SEND_ACTION_STORAGE_KEY, STUDIO_FOLDER_STORAGE_KEY, STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY,
+  saveStoredBusySendAction, STUDIO_BUSY_SEND_ACTION_STORAGE_KEY, STUDIO_FOLDER_STORAGE_KEY,
+  STUDIO_MAX_TOTAL_TOKENS_OPTIONS, STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY,
   STUDIO_THEME_STORAGE_KEY, STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY,
 }
 export type {
@@ -127,8 +130,14 @@ export function useStudioController() {
   const [selectedModel, setSelectedModel] = useState<string>(
     initialCtx?.defaultModel || DEFAULT_ANTIGRAVITY_MODEL
   )
+  const [defaultThinkingLevel, setDefaultThinkingLevelState] = useState<StudioThinkingLevel>(() =>
+    normalizeThinkingLevel(initialCtx?.defaultThinkingLevel || DEFAULT_THINKING_LEVEL)
+  )
+  const [maxTotalTokens, setMaxTotalTokensState] = useState<number>(() =>
+    normalizeMaxTotalTokens(initialCtx?.maxTotalTokens)
+  )
   const [thinkingLevel, setThinkingLevelState] = useState<StudioThinkingLevel>(() =>
-    readInitialThinkingLevel()
+    readInitialThinkingLevel(initialCtx?.defaultThinkingLevel || DEFAULT_THINKING_LEVEL)
   )
   const [availableModels, setAvailableModels] = useState<AntigravityModelOption[]>(
     ANTIGRAVITY_ALLOWED_MODELS
@@ -320,6 +329,16 @@ export function useStudioController() {
     setThinkingLevelState(level)
     persistThinkingLevel(extensionSDK, level)
   }, [extensionSDK])
+
+  const setDefaultThinkingLevel = useCallback((next: StudioThinkingLevel | string) => {
+    const level = normalizeThinkingLevel(next)
+    setDefaultThinkingLevelState(level)
+    setThinkingLevelState(level)
+  }, [])
+
+  const setMaxTotalTokens = useCallback((next: number | string) => {
+    setMaxTotalTokensState(normalizeMaxTotalTokens(next))
+  }, [])
 
   useEffect(() => {
     const mql = typeof window !== 'undefined' ? window.matchMedia?.('(prefers-color-scheme: dark)') : null
@@ -1029,6 +1048,7 @@ export function useStudioController() {
           auth: { mode: authMode, oauthToken, clientId, projectId, apiKey },
           toolType: modeToWake,
           model: selectedModel,
+          maxTotalTokens,
           environmentId: forceFresh
             ? undefined
             : sharedEnvIdRef.current || existingSession?.environmentId,
@@ -1065,7 +1085,7 @@ export function useStudioController() {
         // Ignore prewarm errors
       }
     },
-    [core40SDK, userId, extensionSDK, authMode, oauthToken, clientId, projectId, apiKey, selectedModel, syncSharedEnvironmentId]
+    [core40SDK, userId, extensionSDK, authMode, oauthToken, clientId, projectId, apiKey, selectedModel, maxTotalTokens, syncSharedEnvironmentId]
   )
 
   useEffect(() => {
@@ -1203,6 +1223,8 @@ export function useStudioController() {
         projectId: projectId.trim(),
         disabledModes,
         defaultModel: selectedModel,
+        defaultThinkingLevel,
+        maxTotalTokens,
       })
       setIsConfigured(true)
       setBusyStatus(null)
@@ -2212,6 +2234,7 @@ export function useStudioController() {
             session: agentSession,
             model: selectedModel,
             thinkingLevel,
+            maxTotalTokens,
             selectedExplores,
             folderId: selectedFolderId,
             schemaMarkdown,
@@ -2897,6 +2920,7 @@ export function useStudioController() {
         session: currentSession,
         model: selectedModel,
         thinkingLevel,
+        maxTotalTokens,
         mode: effectiveBuilderMode,
         useCase: explicitUseCase,
         allowedModes: allowedUseCases,
@@ -3356,6 +3380,7 @@ export function useStudioController() {
         busySendAction, setBusySendAction,
         themeMode, resolvedTheme, setThemeMode,
         selectedModel, setSelectedModel, thinkingLevel, setThinkingLevel,
+        defaultThinkingLevel, setDefaultThinkingLevel, maxTotalTokens, setMaxTotalTokens,
         selectedUseCase, setSelectedUseCase: handleChangeUseCase,
         isUseCaseLocked, allowedUseCases, useCaseOptions, setCapabilities,
         handleResetNewApp, handleNewConversation, handleSelectConversation,
@@ -3378,7 +3403,7 @@ export function useStudioController() {
         setActiveSandboxMarkdownModalPath, loadSandboxMarkdownFile,
       }
     }
-  }, [history, requestCodeModePermission, oauthExpiresAt, triggerSilentOAuthRefresh, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleOAuthLogout, handleCancelOAuthLogin, sidebarCollapsed, leftPaneWidth, setLeftPaneWidth, rightPaneCollapsed, setRightPaneCollapsed, agentName, setAgentName, handleSaveAgentName, appInitializing, busySendAction, setBusySendAction, themeMode, resolvedTheme, setThemeMode, selectedModel, thinkingLevel, setThinkingLevel, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, queuedPrompts, updateQueuedPrompts, handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, environmentStatus, envResetNotice, handleResetEnvironment, handleStopEnvironment, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, setSelectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems, lookerWorkspaceId, isLookerDevMode, handleToggleLookerDevMode, sandboxMarkdownCache, sandboxMarkdownLoading, activeSandboxMarkdownModalPath, loadSandboxMarkdownFile])
+  }, [history, requestCodeModePermission, oauthExpiresAt, triggerSilentOAuthRefresh, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleOAuthLogout, handleCancelOAuthLogin, sidebarCollapsed, leftPaneWidth, setLeftPaneWidth, rightPaneCollapsed, setRightPaneCollapsed, agentName, setAgentName, handleSaveAgentName, appInitializing, busySendAction, setBusySendAction, themeMode, resolvedTheme, setThemeMode, selectedModel, thinkingLevel, setThinkingLevel, defaultThinkingLevel, setDefaultThinkingLevel, maxTotalTokens, setMaxTotalTokens, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, queuedPrompts, updateQueuedPrompts, handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, environmentStatus, envResetNotice, handleResetEnvironment, handleStopEnvironment, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, setSelectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems, lookerWorkspaceId, isLookerDevMode, handleToggleLookerDevMode, sandboxMarkdownCache, sandboxMarkdownLoading, activeSandboxMarkdownModalPath, loadSandboxMarkdownFile])
 
   return {
     extensionSDK, core40SDK, lookerHostData, history, location, isTileMount,
@@ -3387,6 +3412,7 @@ export function useStudioController() {
     authMode, setAuthMode, clientId, setClientId, projectId, setProjectId,
     disabledModes, setDisabledModes, selectedModel, setSelectedModel,
     thinkingLevel, setThinkingLevel,
+    defaultThinkingLevel, setDefaultThinkingLevel, maxTotalTokens, setMaxTotalTokens,
     availableModels, enabledModes, oauthToken, oauthAccessToken, setOauthToken,
     oauthExpiresAt, setOauthExpiresAt, triggerSilentOAuthRefresh, apiKey, setApiKey,
     isAuthenticated, oauthSigningIn, oauthRedirectUri,
