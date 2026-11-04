@@ -890,71 +890,33 @@ export function useStudioController() {
       const normalizedPath = normalizeSandboxFilePath(rawPath)
       if (!normalizedPath) return ''
       const displayPath = `/${normalizedPath}`
-      if (opts?.openModal) {
-        setActiveSandboxMarkdownModalPath(displayPath)
-      }
-      const envId =
-        normalizeEnvironmentId(sharedEnvIdRef.current) ||
-        normalizeEnvironmentId(sessionsByModeRef.current[activeModeRef.current]?.environmentId) ||
-        sharedEnvIdRef.current ||
-        sessionsByModeRef.current[activeModeRef.current]?.environmentId ||
-        'mock_env_1'
+      if (opts?.openModal) setActiveSandboxMarkdownModalPath(displayPath)
+      const activeEnv = sessionsByModeRef.current[activeModeRef.current]?.environmentId
+      const envId = normalizeEnvironmentId(sharedEnvIdRef.current) || normalizeEnvironmentId(activeEnv) || sharedEnvIdRef.current || activeEnv || 'mock_env_1'
       const cacheKey = `${envId}:${normalizedPath}`
-      const cached =
-        sandboxMarkdownCacheRef.current[cacheKey] ??
-        sandboxMarkdownCacheRef.current[normalizedPath] ??
-        sandboxMarkdownCacheRef.current[displayPath]
-      if (typeof cached === 'string' && cached.length > 0) {
-        return cached
+      const cached = sandboxMarkdownCacheRef.current[cacheKey] ?? sandboxMarkdownCacheRef.current[normalizedPath] ?? sandboxMarkdownCacheRef.current[displayPath]
+      if (typeof cached === 'string' && cached.length > 0) return cached
+      const setLoading = (flag: boolean) => setSandboxMarkdownLoading((p) => ({ ...p, [cacheKey]: flag, [normalizedPath]: flag, [displayPath]: flag }))
+      const storeCache = (val: string) => {
+        const next = { ...sandboxMarkdownCacheRef.current, [cacheKey]: val, [normalizedPath]: val, [displayPath]: val }
+        sandboxMarkdownCacheRef.current = next
+        setSandboxMarkdownCache(next)
+        return val
       }
-      setSandboxMarkdownLoading((prev) => ({
-        ...prev,
-        [cacheKey]: true,
-        [normalizedPath]: true,
-        [displayPath]: true,
-      }))
+      setLoading(true)
       try {
         // Ephemeral remote sandbox retrieval: never persisted to Looker Artifacts
         const content = await fetchEnvironmentFile({
           extensionSDK,
-          auth: {
-            mode: authMode,
-            oauthToken,
-            clientId,
-            projectId,
-            apiKey,
-            onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true),
-          },
+          auth: { mode: authMode, oauthToken, clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true) },
           environmentId: envId,
           path: normalizedPath,
         })
-        const nextCache = {
-          ...sandboxMarkdownCacheRef.current,
-          [cacheKey]: content,
-          [normalizedPath]: content,
-          [displayPath]: content,
-        }
-        sandboxMarkdownCacheRef.current = nextCache
-        setSandboxMarkdownCache(nextCache)
-        return content
+        return storeCache(content)
       } catch (err: unknown) {
-        const fallback = `# Error Loading File\n\nUnable to load \`${displayPath}\` from sandbox environment \`${envId}\`: ${getErrorMessage(err)}`
-        const nextCache = {
-          ...sandboxMarkdownCacheRef.current,
-          [cacheKey]: fallback,
-          [normalizedPath]: fallback,
-          [displayPath]: fallback,
-        }
-        sandboxMarkdownCacheRef.current = nextCache
-        setSandboxMarkdownCache(nextCache)
-        return fallback
+        return storeCache(`# Error Loading File\n\nUnable to load \`${displayPath}\` from sandbox environment \`${envId}\`: ${getErrorMessage(err)}`)
       } finally {
-        setSandboxMarkdownLoading((prev) => ({
-          ...prev,
-          [cacheKey]: false,
-          [normalizedPath]: false,
-          [displayPath]: false,
-        }))
+        setLoading(false)
       }
     },
     [extensionSDK, authMode, oauthToken, clientId, projectId, apiKey, triggerSilentOAuthRefresh]

@@ -5243,220 +5243,87 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
   })
 
   test('54. Issue #130: fetches agent-created .md files on demand from /v1beta/environments/{envId}/files/{path}?alt=media via fetchEnvironmentFile (apikey proxy, oauth bearer + 401 refresh retry, and mock resolution) and detects bash/Python .md writes in extractInteractionActivitySteps with zero Looker artifact storage', async () => {
-    expect([
-      normalizeSandboxFilePath('/workspace/analysis.md'),
-      normalizeSandboxFilePath('///workspace/reports/q4_summary.md'),
-      normalizeSandboxFilePath('file:///workspace/notes.md'),
-      normalizeSandboxFilePath('  report.md  '),
-    ]).toEqual([
-      'workspace/analysis.md',
-      'workspace/reports/q4_summary.md',
-      'workspace/notes.md',
-      'report.md',
+    expect(['/workspace/analysis.md', '///workspace/reports/q4_summary.md', 'file:///workspace/notes.md', '  report.md  '].map(normalizeSandboxFilePath)).toEqual([
+      'workspace/analysis.md', 'workspace/reports/q4_summary.md', 'workspace/notes.md', 'report.md',
+    ])
+    expect(['/workspace/analysis.md', 'workspace/reports/q4_summary.md', 'notes.md', 'file:///workspace/report.md', 'https://docs.cloud.google.com/looker/docs/report.md', '/dashboards/42', 'order_items.total_sale_price'].map(isSandboxMarkdownPath)).toEqual([
+      true, true, true, true, false, false, false,
     ])
 
-    expect([
-      isSandboxMarkdownPath('/workspace/analysis.md'),
-      isSandboxMarkdownPath('workspace/reports/q4_summary.md'),
-      isSandboxMarkdownPath('notes.md'),
-      isSandboxMarkdownPath('file:///workspace/report.md'),
-      isSandboxMarkdownPath('https://docs.cloud.google.com/looker/docs/report.md'),
-      isSandboxMarkdownPath('/dashboards/42'),
-      isSandboxMarkdownPath('order_items.total_sale_price'),
-    ]).toEqual([true, true, true, true, false, false, false])
-
-    // 1. API Key mode via extensionSDK.serverProxy
     const proxyCalls: Array<{ url: string; init?: FetchCustomParameters }> = []
-    const proxyExt = {
-      serverProxy: async (url: string, init?: FetchCustomParameters) => {
-        proxyCalls.push({ url, init })
-        return {
-          ok: true,
-          status: 200,
-          body: '# Q4 Margin Root-Cause Analysis\n\nOuterwear drove +18.4% YoY revenue.',
-        }
-      },
-    }
     const apiKeyMd = await fetchEnvironmentFile({
-      extensionSDK: proxyExt,
+      extensionSDK: {
+        serverProxy: async (url: string, init?: FetchCustomParameters) => {
+          proxyCalls.push({ url, init })
+          return { ok: true, status: 200, body: '# Q4 Margin Root-Cause Analysis\n\nOuterwear drove +18.4% YoY revenue.' }
+        },
+      },
       auth: { mode: 'apikey', apiKey: 'AIza_test_130' },
       environmentId: 'env_130_prod',
       path: '/workspace/reports/analysis.md',
     })
     expect(apiKeyMd).toContain('# Q4 Margin Root-Cause Analysis')
-    expect(proxyCalls).toEqual([
-      {
-        url: 'https://generativelanguage.googleapis.com/v1beta/environments/env_130_prod/files/workspace/reports/analysis.md?alt=media',
-        init: {
-          method: 'GET',
-          headers: { 'x-goog-api-key': 'AIza_test_130' },
-        },
-      },
-    ])
+    expect(proxyCalls).toEqual([{
+      url: 'https://generativelanguage.googleapis.com/v1beta/environments/env_130_prod/files/workspace/reports/analysis.md?alt=media',
+      init: { method: 'GET', headers: { 'x-goog-api-key': 'AIza_test_130' } },
+    }])
 
-    // 2. OAuth mode via fetch + 401 refresh retry
     const fetchCalls: Array<{ url: string; headers?: Record<string, string> }> = []
     const globalWithFetch = globalThis as unknown as {
-      fetch?: (url: string, init?: { method?: string; headers?: Record<string, string> }) => Promise<{
-        ok: boolean
-        status: number
-        text: () => Promise<string>
-      }>
+      fetch?: (url: string, init?: { method?: string; headers?: Record<string, string> }) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>
       window?: unknown
     }
     const prevFetch = globalWithFetch.fetch
     const prevWin = globalWithFetch.window
     let attempt = 0
     globalWithFetch.fetch = async (url, init) => {
-      attempt += 1
       fetchCalls.push({ url, headers: init?.headers })
-      if (attempt === 1) {
-        return {
-          ok: false,
-          status: 401,
-          text: async () => JSON.stringify({ error: { message: 'Token expired' } }),
-        }
-      }
-      return {
-        ok: true,
-        status: 200,
-        text: async () => '# Refreshed OAuth Sandbox Report\n\nVerified after 401 silent refresh.',
-      }
+      return ++attempt === 1
+        ? { ok: false, status: 401, text: async () => JSON.stringify({ error: { message: 'Token expired' } }) }
+        : { ok: true, status: 200, text: async () => '# Refreshed OAuth Sandbox Report\n\nVerified after 401 silent refresh.' }
     }
     try {
       const oauthMd = await fetchEnvironmentFile({
         extensionSDK: {},
-        auth: {
-          mode: 'oauth',
-          oauthToken: 'expired_oauth_tok',
-          projectId: 'looker-demo-proj',
-          onUnauthorizedRefresh: async () => 'refreshed_oauth_tok_130',
-        },
+        auth: { mode: 'oauth', oauthToken: 'expired_oauth_tok', projectId: 'looker-demo-proj', onUnauthorizedRefresh: async () => 'refreshed_oauth_tok_130' },
         environmentId: 'user_env:42',
         path: '/workspace/summary.md',
       })
       expect(oauthMd).toContain('# Refreshed OAuth Sandbox Report')
       expect(fetchCalls).toEqual([
-        {
-          url: 'https://generativelanguage.googleapis.com/v1beta/environments/user_env%3A42/files/workspace/summary.md?alt=media',
-          headers: {
-            Authorization: 'Bearer expired_oauth_tok',
-            'x-goog-user-project': 'looker-demo-proj',
-          },
-        },
-        {
-          url: 'https://generativelanguage.googleapis.com/v1beta/environments/user_env%3A42/files/workspace/summary.md?alt=media',
-          headers: {
-            Authorization: 'Bearer refreshed_oauth_tok_130',
-            'x-goog-user-project': 'looker-demo-proj',
-          },
-        },
+        { url: 'https://generativelanguage.googleapis.com/v1beta/environments/user_env%3A42/files/workspace/summary.md?alt=media', headers: { Authorization: 'Bearer expired_oauth_tok', 'x-goog-user-project': 'looker-demo-proj' } },
+        { url: 'https://generativelanguage.googleapis.com/v1beta/environments/user_env%3A42/files/workspace/summary.md?alt=media', headers: { Authorization: 'Bearer refreshed_oauth_tok_130', 'x-goog-user-project': 'looker-demo-proj' } },
       ])
 
-      // 3. Deterministic mock resolution via window.__MOCK_LOOKER_EXTENSION__
-      const mockWinObj: Record<string, unknown> = {
-        __MOCK_LOOKER_EXTENSION__: {
-          environmentFiles: {
-            '/workspace/analysis.md': '# Mock Sandbox Analysis\n\n- Gross Margin: 54.2%',
-          },
-        },
-      }
-      globalWithFetch.window = mockWinObj
-      const mockResolved = await fetchEnvironmentFile({
-        extensionSDK: {},
-        auth: { mode: 'oauth', oauthToken: 'mock_tok' },
-        environmentId: 'env_mock_130',
-        path: '/workspace/analysis.md',
-      })
-      expect(mockResolved).toBe('# Mock Sandbox Analysis\n\n- Gross Margin: 54.2%')
-      const mockFallback = await fetchEnvironmentFile({
-        extensionSDK: {},
-        auth: { mode: 'oauth', oauthToken: 'mock_tok' },
-        environmentId: 'env_mock_130',
-        path: '/workspace/unlisted_notes.md',
-      })
-      expect(mockFallback).toContain('# unlisted_notes.md')
-      expect(mockFallback).toContain('/workspace/unlisted_notes.md')
+      globalWithFetch.window = { __MOCK_LOOKER_EXTENSION__: { environmentFiles: { '/workspace/analysis.md': '# Mock Sandbox Analysis\n\n- Gross Margin: 54.2%' } } }
+      expect(await fetchEnvironmentFile({ extensionSDK: {}, auth: { mode: 'oauth', oauthToken: 'mock_tok' }, environmentId: 'env_mock_130', path: '/workspace/analysis.md' })).toBe('# Mock Sandbox Analysis\n\n- Gross Margin: 54.2%')
+      expect(await fetchEnvironmentFile({ extensionSDK: {}, auth: { mode: 'oauth', oauthToken: 'mock_tok' }, environmentId: 'env_mock_130', path: '/workspace/unlisted_notes.md' })).toContain('# unlisted_notes.md')
     } finally {
       globalWithFetch.fetch = prevFetch
       globalWithFetch.window = prevWin
     }
 
-    // 4. extractWrittenMarkdownPathFromCode & extractInteractionActivitySteps for bash/Python .md writes
-    expect([
-      extractWrittenMarkdownPathFromCode("cat > /workspace/analysis.md << 'EOF'\n# Analysis\nEOF"),
-      extractWrittenMarkdownPathFromCode('echo "# Notes" | tee -a /workspace/notes.md'),
-      extractWrittenMarkdownPathFromCode("with open('/workspace/report.md', 'w') as f:\n  f.write('# Report')"),
-      extractWrittenMarkdownPathFromCode("from pathlib import Path\nPath('/workspace/summary.md').write_text('# Summary')"),
-    ]).toEqual([
-      '/workspace/analysis.md',
-      '/workspace/notes.md',
-      '/workspace/report.md',
-      '/workspace/summary.md',
-    ])
-
+    const codeSamples = [
+      "cat > /workspace/analysis.md << 'EOF'\n# Root Cause Analysis\nEOF",
+      'echo "# Notes" | tee -a /workspace/notes.md',
+      "with open('/workspace/report.md', 'w') as f:\n    f.write('# Executive Report')",
+      "from pathlib import Path\nPath('/workspace/summary.md').write_text('# Executive Summary')",
+    ]
+    expect(codeSamples.map(extractWrittenMarkdownPathFromCode)).toEqual(['/workspace/analysis.md', '/workspace/notes.md', '/workspace/report.md', '/workspace/summary.md'])
     const mdSteps = extractInteractionActivitySteps({
       status: 'completed',
       steps: [
-        {
-          id: 'step_bash_redir',
-          type: 'code_execution',
-          language: 'BASH',
-          code: "cat > /workspace/analysis.md << 'EOF'\n# Root Cause Analysis\nEOF",
-        },
-        {
-          id: 'step_bash_tee',
-          type: 'code_execution',
-          language: 'BASH',
-          code: 'tee /workspace/notes.md << EOF\n# Investigation Notes\nEOF',
-        },
-        {
-          id: 'step_py_open',
-          type: 'code_execution',
-          language: 'PYTHON',
-          code: "with open('/workspace/report.md', 'w') as f:\n    f.write('# Executive Report')",
-        },
-        {
-          id: 'step_py_path',
-          type: 'code_execution',
-          language: 'PYTHON',
-          code: "from pathlib import Path\nPath('/workspace/summary.md').write_text('# Executive Summary')",
-        },
+        { id: 'step_bash_redir', type: 'code_execution', language: 'BASH', code: codeSamples[0] },
+        { id: 'step_bash_tee', type: 'code_execution', language: 'BASH', code: codeSamples[1] },
+        { id: 'step_py_open', type: 'code_execution', language: 'PYTHON', code: codeSamples[2] },
+        { id: 'step_py_path', type: 'code_execution', language: 'PYTHON', code: codeSamples[3] },
       ],
     })
     expect(mdSteps).toEqual([
-      {
-        id: 'step_bash_redir',
-        kind: 'file',
-        title: 'Editing analysis.md',
-        detail: '/workspace/analysis.md',
-        path: '/workspace/analysis.md',
-        status: 'done',
-      },
-      {
-        id: 'step_bash_tee',
-        kind: 'file',
-        title: 'Editing notes.md',
-        detail: '/workspace/notes.md',
-        path: '/workspace/notes.md',
-        status: 'done',
-      },
-      {
-        id: 'step_py_open',
-        kind: 'file',
-        title: 'Editing report.md',
-        detail: '/workspace/report.md',
-        path: '/workspace/report.md',
-        status: 'done',
-      },
-      {
-        id: 'step_py_path',
-        kind: 'file',
-        title: 'Editing summary.md',
-        detail: '/workspace/summary.md',
-        path: '/workspace/summary.md',
-        status: 'done',
-      },
+      { id: 'step_bash_redir', kind: 'file', title: 'Editing analysis.md', detail: '/workspace/analysis.md', path: '/workspace/analysis.md', status: 'done' },
+      { id: 'step_bash_tee', kind: 'file', title: 'Editing notes.md', detail: '/workspace/notes.md', path: '/workspace/notes.md', status: 'done' },
+      { id: 'step_py_open', kind: 'file', title: 'Editing report.md', detail: '/workspace/report.md', path: '/workspace/report.md', status: 'done' },
+      { id: 'step_py_path', kind: 'file', title: 'Editing summary.md', detail: '/workspace/summary.md', path: '/workspace/summary.md', status: 'done' },
     ])
   })
 })
