@@ -4894,6 +4894,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       expression: `(async () => {
         const loader = document.querySelector('[data-testid="ripper-surf-loader"]');
         const svg = document.querySelector('[data-testid="ripper-surf-loader-svg"]');
+        const hasThreeRipCurlRibbons = Boolean(svg?.querySelector('.dab-ripper-ribbon-1') && svg?.querySelector('.dab-ripper-ribbon-2') && svg?.querySelector('.dab-ripper-ribbon-3') && svg?.querySelector('.dab-ripper-board-ride'));
         const loaderText = loader ? (loader.textContent || '').trim() : '';
         window.__DAB_STUDIO__.setAppInitializing(false);
         for (let i = 0; i < 30; i++) {
@@ -4939,7 +4940,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         await new Promise((r) => setTimeout(r, 40));
         const firstCopiedAttr = copyBtns[0]?.getAttribute('data-copied');
         return {
-          hasLoader: Boolean(loader), hasSvg: Boolean(svg),
+          hasLoader: Boolean(loader), hasSvg: Boolean(svg), hasThreeRipCurlRibbons,
           loaderHasRipper: loaderText.includes('Ripper'),
           loaderHasSubtitle: loaderText.includes('Dropping into your Looker workspace'),
           labelBefore, authorBefore, labelAfter, authorAfter,
@@ -4958,7 +4959,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     })
 
     expect(loaderRes.result.value).toEqual({
-      hasLoader: true, hasSvg: true, loaderHasRipper: true, loaderHasSubtitle: true,
+      hasLoader: true, hasSvg: true, hasThreeRipCurlRibbons: true, loaderHasRipper: true, loaderHasSubtitle: true,
       labelBefore: 'Ripper', authorBefore: 'Ripper', labelAfter: 'Maverick', authorAfter: 'Maverick',
       titleUpdatedToMaverick: true, savedUserConfigAgentName: 'Maverick',
       hasH3: true, hasList: true, hasCodeBlock: true, linkCount: 3, copyBtnCount: 3,

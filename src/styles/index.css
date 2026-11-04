@@ -1700,16 +1700,23 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 .dab-split-action-option:hover { background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-accent-text, #1d4ed8); }
 .dab-split-action-option.selected { background: var(--dab-accent-subtle, #eff6ff); color: var(--dab-accent-text, #1d4ed8); font-weight: 600; }
 
-/* Issue #126: Ripper Barrel Tube Vortex loader, inline agent name editor, rich Markdown & mobile responsive layout */
-@keyframes dab-ripper-vortex-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-@keyframes dab-ripper-surfer-carve { 0%, 100% { transform: translate(0, 0) rotate(-3deg); } 50% { transform: translate(4px, -5px) rotate(4deg); } }
-@keyframes dab-ripper-spray-pulse { 0%, 100% { opacity: 0.45; transform: scale(0.95); } 50% { opacity: 1; transform: scale(1.1); } }
+/* Issue #126: Ripper 1B (1A-2 Layered 3-Ribbon Rip Curl) loader, inline agent name editor, rich Markdown & mobile responsive layout */
+@keyframes dab-ripper-spin-cw { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes dab-ripper-ribbon-peel { 0% { stroke-dasharray: 190; stroke-dashoffset: 190; opacity: 0; } 15% { opacity: 1; } 50% { stroke-dasharray: 190; stroke-dashoffset: 0; opacity: 1; } 85%, 100% { stroke-dasharray: 190; stroke-dashoffset: -190; opacity: 0; } }
+@keyframes dab-ripper-trough-sweep { 0%, 8% { stroke-dasharray: 140; stroke-dashoffset: 140; opacity: 0; } 22% { opacity: 0.85; } 55% { stroke-dasharray: 140; stroke-dashoffset: 0; opacity: 0.85; } 88%, 100% { stroke-dasharray: 140; stroke-dashoffset: -140; opacity: 0; } }
+@keyframes dab-ripper-board-ride { 0%, 100% { transform: translate(-4px, 4px) rotate(-8deg); } 45% { transform: translate(3px, -3px) rotate(-18deg); } 72% { transform: translate(5px, 0px) rotate(-6deg); } }
+@keyframes dab-ripper-spit-timed { 0%, 42% { opacity: 0; transform: translate(-5px, 3px) scale(0.4); } 58% { opacity: 1; transform: translate(3px, -2px) scale(1.1); } 85%, 100% { opacity: 0; transform: translate(13px, -7px) scale(1.4); } }
 .dab-ripper-loader-shell { display: flex; align-items: center; justify-content: center; width: 100%; height: 100vh; min-height: 360px; background: var(--dab-bg, #0b1120); color: var(--dab-text, #f8fafc); }
 .dab-ripper-loader-card { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 32px 40px; border-radius: 16px; background: var(--dab-surface, #111827); border: 1px solid var(--dab-border-strong, #334155); box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28); text-align: center; }
 .dab-ripper-loader-svg { display: block; overflow: visible; }
-.dab-ripper-barrel-vortex { transform-origin: 102px 72px; animation: dab-ripper-vortex-spin 3.2s linear infinite; }
-.dab-ripper-surfer { transform-origin: 100px 80px; animation: dab-ripper-surfer-carve 1.8s ease-in-out infinite; }
-.dab-ripper-spray { transform-origin: 102px 72px; animation: dab-ripper-spray-pulse 1.4s ease-in-out infinite; }
+.dab-ripper-spin-cw, .dab-ripper-spin-ccw { transform-origin: 48px 48px; animation: dab-ripper-spin-cw 4.2s linear infinite; }
+.dab-ripper-spin-ccw { animation-duration: 3.2s; animation-direction: reverse; }
+.dab-ripper-ribbon-1, .dab-ripper-ribbon-2, .dab-ripper-ribbon-3 { animation: dab-ripper-ribbon-peel 2.5s cubic-bezier(0.38, 0, 0.22, 1) infinite; }
+.dab-ripper-trough { animation: dab-ripper-trough-sweep 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+.dab-ripper-board-ride { transform-origin: 48px 56px; animation: dab-ripper-board-ride 2.4s ease-in-out infinite; }
+.dab-ripper-spit-a, .dab-ripper-spit-b { animation: dab-ripper-spit-timed 2.4s ease-out infinite; }
+.dab-ripper-ribbon-2, .dab-ripper-spit-b { animation-delay: 0.14s; }
+.dab-ripper-ribbon-3 { animation-delay: 0.28s; }
 .dab-ripper-loader-title { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; color: var(--dab-text-strong, #f8fafc); }
 .dab-ripper-loader-subtitle { font-size: 12.5px; color: var(--dab-text-muted, #94a3b8); }
 .dab-agent-name-brand { display: inline-flex; align-items: center; gap: 5px; }
