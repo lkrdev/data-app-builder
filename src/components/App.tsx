@@ -5,20 +5,12 @@ import { MemoryRouter } from 'react-router-dom'
 import { SWRConfig } from 'swr'
 
 import type { AntigravityActivityStep } from '../antigravity'
-import {
-  LookerExtensionProvider,
-  MockLookerExtensionProvider,
-} from '../contexts/LookerExtensionContext'
+import { LookerExtensionProvider, MockLookerExtensionProvider } from '../contexts/LookerExtensionContext'
 import { parseStudioRoute, STUDIO_MODES, type StudioMode } from '../lookerApi'
 import { useStudioController } from '../useStudioController'
 import { PythonTile } from './PythonTile'
-import { ConfigSetupView, StudioTopbar } from './StudioHeader'
-import {
-  StudioCenteredEmptyStage,
-  StudioConversationsSidebar,
-  StudioLeftPane,
-  StudioRightPane,
-} from './StudioWorkspace'
+import { ConfigSetupView, RipperSurfLoader, StudioTopbar } from './StudioHeader'
+import { StudioCenteredEmptyStage, StudioConversationsSidebar, StudioLeftPane, StudioRightPane } from './StudioWorkspace'
 import '../styles/index.css'
 
 export { parseStudioRoute, STUDIO_MODES }
@@ -27,42 +19,25 @@ export type { StudioMode }
 const PythonTileMount: React.FC = () => <PythonTile />
 
 export interface ChatMessage {
-  role: 'user' | 'assistant' | 'error'
-  text: string
-  images?: string[]
-  interactionId?: string
-  dashboardId?: string
-  widgetCount?: number
-  activitySteps?: AntigravityActivityStep[]
-  thinkingDurationSec?: number
+  role: 'user' | 'assistant' | 'error'; text: string; images?: string[]; interactionId?: string
+  dashboardId?: string; widgetCount?: number; activitySteps?: AntigravityActivityStep[]; thinkingDurationSec?: number
 }
 
 const StudioMain: React.FC = () => {
   const ctl = useStudioController()
-
   if (ctl.isTileMount) return <PythonTileMount />
-
-  if (ctl.location.pathname === '/config') {
-    return <ConfigSetupView ctl={ctl} />
-  }
+  if (ctl.appInitializing) return <RipperSurfLoader agentName={ctl.agentName} theme={ctl.resolvedTheme} themeMode={ctl.themeMode} />
+  if (ctl.location.pathname === '/config') return <ConfigSetupView ctl={ctl} />
 
   return (
     <div className="dab-shell" data-theme={ctl.resolvedTheme} data-theme-mode={ctl.themeMode}>
       <StudioTopbar ctl={ctl} />
       <div
-        className={`dab-workspace dab-workspace-with-sidebar ${
-          ctl.sidebarCollapsed ? 'dab-workspace-sidebar-collapsed' : ''
-        } ${ctl.rightPaneCollapsed ? 'dab-workspace-right-collapsed' : ''} ${
-          ctl.isEmptyConversation ? 'dab-workspace-empty' : ''
-        }`}
+        className={`dab-workspace dab-workspace-with-sidebar ${ctl.sidebarCollapsed ? 'dab-workspace-sidebar-collapsed' : ''} ${ctl.rightPaneCollapsed ? 'dab-workspace-right-collapsed' : ''} ${ctl.isEmptyConversation ? 'dab-workspace-empty' : ''}`}
         style={{ '--dab-left-pane-width': `${ctl.leftPaneWidth}px` } as React.CSSProperties}
       >
         <StudioConversationsSidebar ctl={ctl} />
-        {ctl.isEmptyConversation ? (
-          <StudioCenteredEmptyStage ctl={ctl} />
-        ) : (
-          <StudioLeftPane ctl={ctl} />
-        )}
+        {ctl.isEmptyConversation ? <StudioCenteredEmptyStage ctl={ctl} /> : <StudioLeftPane ctl={ctl} />}
         <StudioRightPane ctl={ctl} />
       </div>
     </div>
@@ -70,22 +45,15 @@ const StudioMain: React.FC = () => {
 }
 
 export const App = () => {
-  const mockCtx =
-    typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
+  const mockCtx = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
   return (
     <SWRConfig value={{ revalidateOnFocus: false, dedupingInterval: 15000 }}>
       {mockCtx ? (
         <MemoryRouter initialEntries={[mockCtx.initialRoute || '/']}>
-          <MockLookerExtensionProvider value={mockCtx}>
-            <StudioMain />
-          </MockLookerExtensionProvider>
+          <MockLookerExtensionProvider value={mockCtx}><StudioMain /></MockLookerExtensionProvider>
         </MemoryRouter>
       ) : (
-        <ExtensionProvider>
-          <LookerExtensionProvider>
-            <StudioMain />
-          </LookerExtensionProvider>
-        </ExtensionProvider>
+        <ExtensionProvider><LookerExtensionProvider><StudioMain /></LookerExtensionProvider></ExtensionProvider>
       )}
     </SWRConfig>
   )

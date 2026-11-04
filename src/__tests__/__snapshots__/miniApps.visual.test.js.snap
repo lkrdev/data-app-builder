@@ -6,7 +6,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "modeTabs": [],
   "scenario": "centered_empty_prompt",
   "verifiedVisibleText": [
-    "Use your Looker Agent",
+    "Use your Ripper",
     "Send Message",
   ],
 }
@@ -114,7 +114,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "modeTabs": [],
   "scenario": "data_app",
   "verifiedVisibleText": [
-    "Agent",
+    "Ripper",
     "Data App",
     "Safe Mode (Ask)",
     "Approve Looker State Mutation?",
@@ -233,7 +233,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "modeTabs": [],
   "scenario": "studio_dark_theme",
   "verifiedVisibleText": [
-    "Agent",
+    "Ripper",
     "Executive Revenue App",
     "Send Message",
   ],
