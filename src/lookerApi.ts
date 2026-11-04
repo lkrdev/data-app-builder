@@ -1415,3 +1415,107 @@ export async function hydrateMentionedContext(params: {
         : '',
   }
 }
+
+export interface ContentInventoryItem {
+  id: string
+  title: string
+  type: 'dashboard' | 'look'
+  folderId?: string
+  folderName?: string
+}
+
+export interface ContentInventoryFolder {
+  id: string
+  name: string
+  dashboards?: Array<{ id?: string | number | null; title?: string | null; name?: string | null }>
+  looks?: Array<{ id?: string | number | null; title?: string | null; name?: string | null }>
+  items?: Array<{ id?: string | number | null; title?: string | null; name?: string | null; type?: string | null; content_type?: string | null }>
+}
+
+export interface FormattedContentInventory {
+  summaryMarkdown: string
+  fullMarkdown: string
+  overflowFilePath?: string
+  truncated: boolean
+  totalItems: number
+  folderCount: number
+}
+
+// ponytail: deterministic Markdown formatter for Looker folder & content inventory queries
+// (<= 5 items in 1 folder -> full links; > 5 items or > 1 folder -> max 2 links per folder + /workspace/content_inventory.md).
+export function formatContentInventoryMarkdown(
+  foldersOrItems: ReadonlyArray<Record<string, unknown> | ContentInventoryFolder | ContentInventoryItem>,
+  options: { maxShortItems?: number; maxPerFolder?: number; overflowFilePath?: string } = {}
+): FormattedContentInventory {
+  const maxShort = options.maxShortItems ?? 5
+  const maxPerFolder = options.maxPerFolder ?? 2
+  const overflowFilePath = options.overflowFilePath ?? '/workspace/content_inventory.md'
+  const groups = new Map<string, { id: string; name: string; items: ContentInventoryItem[] }>()
+
+  const addItem = (fId: string, fName: string, raw: Record<string, unknown>, defaultType: 'dashboard' | 'look') => {
+    const id = String(raw.content_id ?? raw.content_slug ?? raw.id ?? '').trim()
+    if (!id) return
+    const rawType = String(raw.type ?? raw.content_type ?? defaultType).toLowerCase()
+    const type: 'dashboard' | 'look' = rawType.includes('look') && !rawType.includes('lookml') ? 'look' : 'dashboard'
+    const title = String(raw.title ?? raw.name ?? raw.label ?? `${type === 'look' ? 'Look' : 'Dashboard'} ${id}`).trim()
+    const key = fId || fName || '1'
+    const group = groups.get(key) || { id: fId || '1', name: fName || `Folder ${fId || '1'}`, items: [] }
+    if (!group.items.some((x) => x.type === type && x.id === id)) {
+      group.items.push({ id, title, type, folderId: group.id, folderName: group.name })
+    }
+    groups.set(key, group)
+  }
+
+  for (const rawEntry of foldersOrItems || []) {
+    if (!rawEntry || typeof rawEntry !== 'object') continue
+    const rec = rawEntry as Record<string, unknown>
+    if (Array.isArray(rec.dashboards) || Array.isArray(rec.looks) || Array.isArray(rec.items)) {
+      const fId = String(rec.id ?? rec.folder_id ?? rec.folderId ?? '1').trim()
+      const fName = String(rec.name ?? rec.folder_name ?? rec.folderName ?? rec.title ?? `Folder ${fId}`).trim()
+      if (!groups.has(fId)) groups.set(fId, { id: fId, name: fName, items: [] })
+      for (const d of (rec.dashboards as Record<string, unknown>[]) || []) if (d && typeof d === 'object') addItem(fId, fName, d, 'dashboard')
+      for (const l of (rec.looks as Record<string, unknown>[]) || []) if (l && typeof l === 'object') addItem(fId, fName, l, 'look')
+      for (const it of (rec.items as Record<string, unknown>[]) || []) if (it && typeof it === 'object') addItem(fId, fName, it, 'dashboard')
+    } else {
+      const folderObj = (rec.folder && typeof rec.folder === 'object' ? rec.folder : undefined) as Record<string, unknown> | undefined
+      const fId = String(rec.folder_id ?? rec.folderId ?? folderObj?.id ?? '1').trim()
+      const fName = String(rec.folder_name ?? rec.folderName ?? folderObj?.name ?? `Folder ${fId}`).trim()
+      addItem(fId, fName, rec, 'dashboard')
+    }
+  }
+
+  const folderList = Array.from(groups.values()).filter((g) => g.items.length > 0)
+  const totalItems = folderList.reduce((sum, g) => sum + g.items.length, 0)
+  const formatLink = (it: ContentInventoryItem) => `- [${it.title}](/${it.type === 'look' ? 'looks' : 'dashboards'}/${it.id})`
+  const formatCounts = (items: ContentInventoryItem[]) => {
+    const dCount = items.filter((i) => i.type === 'dashboard').length, lCount = items.length - dCount
+    return [dCount && `${dCount} dashboard${dCount === 1 ? '' : 's'}`, lCount && `${lCount} Look${lCount === 1 ? '' : 's'}`].filter(Boolean).join(', ') || '0 items'
+  }
+
+  if (totalItems === 0) {
+    return { summaryMarkdown: 'No dashboards or Looks found.', fullMarkdown: 'No dashboards or Looks found.', truncated: false, totalItems: 0, folderCount: 0 }
+  }
+
+  const fullMarkdown = folderList.map((g) => [`**[${g.name}](/folders/${g.id})** (${formatCounts(g.items)})`, ...g.items.map(formatLink)].join('\n')).join('\n\n')
+  if (totalItems <= maxShort && folderList.length <= 1) {
+    return { summaryMarkdown: fullMarkdown, fullMarkdown, truncated: false, totalItems, folderCount: folderList.length }
+  }
+
+  const summaryBlocks = folderList.map((g) => {
+    const shown = g.items.slice(0, maxPerFolder).map(formatLink)
+    if (g.items.length > maxPerFolder) {
+      shown.push(`- See all ${g.items.length} items in [${g.name}](/folders/${g.id})`)
+    }
+    return [`**[${g.name}](/folders/${g.id})** (${formatCounts(g.items)})`, ...shown].join('\n')
+  })
+  summaryBlocks.push(`\nFull unfiltered inventory (${totalItems} items across ${folderList.length} folder${folderList.length === 1 ? '' : 's'}) saved to \`${overflowFilePath}\`.`)
+
+  return {
+    summaryMarkdown: summaryBlocks.join('\n\n'),
+    fullMarkdown,
+    overflowFilePath,
+    truncated: true,
+    totalItems,
+    folderCount: folderList.length,
+  }
+}

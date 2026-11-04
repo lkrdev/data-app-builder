@@ -2092,7 +2092,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     busyStatus, rightPaneCollapsed, setRightPaneCollapsed, scriptId, scriptTitle,
     activeViewerDocument = null, setActiveViewerDocument, openViewerDocument,
   } = ctl
-  const isTileMode = activeMode === 'tile'
+  const isTileMode = activeMode === 'tile' && Boolean(ctl.loadedScript || ctl.explicitUseCase === 'tile')
   const hostUrl = extensionSDK?.lookerHostData?.hostUrl || window.location.origin
   const mockExt = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
   const [tddViewMode, setTddViewMode] = useState<'rendered' | 'raw'>(() => mockExt?.initialTddViewMode || 'rendered')

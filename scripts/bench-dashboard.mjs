@@ -635,8 +635,10 @@ async function main() {
   const wasmVerification = await verifyMontyWasmMacros()
   console.log('   WASM Monty verification:', JSON.stringify(wasmVerification))
 
-  console.log('2. Running live 4-turn Looker 4.0 SDK prototype on dev-argolis (with try/finally cleanup)...')
-  const liveVerification = runLiveDevArgolisPrototype()
+  console.log('2. Running live 4-turn Looker 4.0 SDK prototype on dev-argolis (when --live is passed)...')
+  const liveVerification = process.argv.includes('--live')
+    ? runLiveDevArgolisPrototype()
+    : { skipped: true, mode: 'offline' }
   console.log('   Live dev-argolis prototype:', JSON.stringify(liveVerification))
 
   const compiled = ITERATIONS.map((it) => {

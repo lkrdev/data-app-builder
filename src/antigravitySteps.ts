@@ -12,9 +12,48 @@ import { BOOTSTRAP_LOOKML_PY, LKR_CLI_SITECUSTOMIZE_PY } from './lookmlTool'
 
 export function collectInteractionTextCandidates(interaction: AntigravityInteractionPayload | null | undefined): string {
   const out: unknown[] = [interaction?.output_text]
-  for (const o of interaction?.outputs || []) out.push(o?.text)
+  for (const o of interaction?.outputs || []) {
+    out.push(o?.text)
+    if (o && o.type !== 'thought' && o.type !== 'thinking' && !o.thought) {
+      out.push(extractThoughtText(o.content ?? o.parts))
+    }
+  }
   for (const s of interaction?.steps || []) out.push(s?.output, s?.stdout, s?.result, s?.text, s?.code_execution_result?.output)
-  return out.filter((x): x is string => typeof x === 'string').join('\n')
+  return out.filter((x): x is string => typeof x === 'string' && x.length > 0).join('\n')
+}
+
+export function extractInteractionOutputText(interaction: AntigravityInteractionPayload | null | undefined): string {
+  if (typeof interaction?.output_text === 'string' && interaction.output_text.trim()) return interaction.output_text.trim()
+  const nonThoughtText = (item?: AntigravityInteractionOutput | AntigravityInteractionStep | null) =>
+    item && typeof item === 'object' && item.type !== 'thought' && item.type !== 'thinking' && !item.thought
+      ? (typeof item.text === 'string' && item.text.trim()) || extractThoughtText((item as Record<string, unknown>).content ?? (item as Record<string, unknown>).parts)
+      : ''
+  const outputLines = (interaction?.outputs || []).map(nonThoughtText).filter(Boolean)
+  if (outputLines.length > 0) return outputLines.join('\n').trim()
+
+  const stepLines = (interaction?.steps || [])
+    .filter((s) => /^(?:message|text|assistant)$/.test(String(s?.type || '').trim()) || (!s?.type && typeof s?.text === 'string'))
+    .map(nonThoughtText)
+    .filter(Boolean)
+  if (stepLines.length > 0) return stepLines.join('\n').trim()
+
+  for (const s of [...(interaction?.steps || [])].reverse()) {
+    if (s?.type === 'function_result' && (s?.name === 'run_looker_codemode' || !s?.name)) {
+      const rawRes = typeof s.result === 'string' ? s.result.trim() : s.result ? JSON.stringify(s.result) : ''
+      if (!rawRes) continue
+      try {
+        const parsed = JSON.parse(rawRes) as Record<string, unknown>
+        const inner = (parsed && typeof parsed.result === 'object' && parsed.result !== null ? parsed.result : parsed) as Record<string, unknown>
+        for (const k of ['summary_markdown', 'summaryMarkdown', 'markdown', 'summary', 'text', 'answer']) {
+          if (typeof inner?.[k] === 'string' && String(inner[k]).trim()) return String(inner[k]).trim()
+        }
+        if (typeof parsed?.result === 'string' && parsed.result.trim()) return parsed.result.trim()
+      } catch {
+        return rawRes
+      }
+    }
+  }
+  return 'Completed.'
 }
 
 export function extractBundleFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): DataAppBundle | null {
@@ -107,11 +146,12 @@ export function extractNativeContentFromInteraction(
 }
 
 const KNOWN_LOOKER_SDK_CALL_RE =
-  /\b(?:sdk\.([a-z_][a-z0-9_]*)|(run_inline_query|run_key_driver_analysis|to_fixed_date_range|lookml_model_explore|lookml_model|all_lookml_models|search_content|search_dashboards|search_looks|create_dashboard|update_dashboard|dashboard_dashboard_layouts|update_dashboard_layout_component|create_dashboard_element|update_dashboard_element|create_dashboard_filter|update_dashboard_filter|create_query|create_look|create_board|update_board|create_board_section|create_board_item|create_scheduled_plan|upsert_udd|upsert_lookml_dashboard|reflow_24col|pin_to_board|schedule_dashboard|emit_native_bundle|validate_project|run_lookml_test|create_sql_query|run_sql_query|all_project_files|get_file_content|create_file|update_file|delete_file|create_project_directory|update_session|git_branch|import_lookml_dashboard|sync_lookml_dashboard|me|user_roles|all_folders))\s*\(/gi
+  /\b(?:sdk\.([a-z_][a-z0-9_]*)|(search_agents|agents_search|format_content_inventory|run_inline_query|run_key_driver_analysis|to_fixed_date_range|lookml_model_explore|lookml_model|all_lookml_models|search_content|search_dashboards|search_looks|search_folders|folder_children|folder_ancestors|content_favorite|search_content_favorites|create_dashboard|update_dashboard|dashboard_dashboard_layouts|update_dashboard_layout_component|create_dashboard_element|update_dashboard_element|create_dashboard_filter|update_dashboard_filter|create_query|create_look|create_board|update_board|create_board_section|create_board_item|create_scheduled_plan|upsert_udd|upsert_lookml_dashboard|reflow_24col|pin_to_board|schedule_dashboard|emit_native_bundle|validate_project|run_lookml_test|create_sql_query|run_sql_query|all_project_files|get_file_content|create_file|update_file|delete_file|create_project_directory|update_session|git_branch|import_lookml_dashboard|sync_lookml_dashboard|me|user_roles|all_folders))\s*\(/gi
 
 const CODEMODE_MACROS = new Set([
   'upsert_udd', 'upsert_lookml_dashboard', 'reflow_24col', 'pin_to_board',
   'schedule_dashboard', 'emit_native_bundle', 'to_fixed_date_range',
+  'search_agents', 'agents_search', 'format_content_inventory',
 ])
 
 function extractLookerSdkMethodPreview(code: string): string {
@@ -256,7 +296,10 @@ export function formatFriendlyLookerActivityLabel(
     if (targetLabel) break
   }
   const isQuery = LOOKER_QUERY_EXEC_RE.test(codeStr) || /\/(?:queries|sql_queries)\b|run_inline_query|run_query|run_sql_query/i.test(String(args?.path || ''))
-  const statusText = isQuery
+  const isAgentSearch = !isQuery && /\b(?:search_agents|agents_search)\b|\/agents\/search\b/i.test(`${codeStr} ${String(args?.path || '')}`)
+  const statusText = isAgentSearch
+    ? 'Searching accessible Looker Conversational Analytics agents and golden queries...'
+    : isQuery
     ? (targetLabel ? `Executing Looker queries for ${targetLabel}...` : 'Executing Looker queries...')
     : (targetLabel ? `Executing Looker API calls for ${targetLabel}...` : 'Executing Looker API calls...')
   return { statusText, stepTitle: statusText, ...(targetLabel ? { targetLabel } : {}), isQuery }

@@ -29,7 +29,7 @@ import {
 import {
   applyStudioDocumentTheme, archiveUserConversation, buildAvailableExploresCatalog, buildDenseExploreSchema,
   buildRootLookerFolders, CaConversationState, clampLeftPaneWidth, ConversationRecord, createLookerCaConversation,
-  DEFAULT_BUSY_SEND_ACTION, DEFAULT_STUDIO_AGENT_NAME, deleteUserConversation, extractExploreIdsFromCode, extractResolvedUseCase,
+  DEFAULT_BUSY_SEND_ACTION, DEFAULT_STUDIO_AGENT_NAME, deleteUserConversation, EXPLICIT_SCRIPT_CREATION_RE, extractExploreIdsFromCode, extractResolvedUseCase,
   fetchFolderChildren, fetchFolderWithAncestors, fetchInitialLookerMetadata,
   fetchPreloadedContentSummary, formatExploreId,
   getAllowedUseCases, getArtifactNamespace, getArtifactService, getUseCaseLabel,
@@ -1673,6 +1673,7 @@ export function useStudioController() {
     async (rawId: string, pushRoute = true) => {
       const id = rawId.trim()
       if (!id) return
+      lastPublishedIdRef.current = id
       await runWithBusy(`Loading Data App from dashboard #${id}...`, `Could not load dashboard #${id}`, async () => {
         const loaded = await loadExistingDashboardApp(core40SDK, id)
         lastPublishedIdRef.current = loaded.dashboardId
@@ -1705,6 +1706,7 @@ export function useStudioController() {
     async (rawId: string, pushRoute = true) => {
       const id = rawId.trim()
       if (!id) return
+      lastNativeIdRef.current = id
       await runWithBusy(`Loading native Looker content #${id}...`, `Could not load native content #${id}`, async () => {
         const loaded = await loadNativeContentById(core40SDK, extensionSDK, id)
         lastNativeIdRef.current = loaded.id
@@ -1724,6 +1726,7 @@ export function useStudioController() {
     async (rawId: string, pushRoute = true) => {
       const id = rawId.trim()
       if (!id) return
+      lastHealthIdRef.current = id
       await runWithBusy(`Loading Health Check report "${id}"...`, `Could not load Health Check "${id}"`, async () => {
         const loaded = await loadHealthCheckArtifact(core40SDK, extensionSDK, id)
         lastHealthIdRef.current = loaded.id
@@ -1743,6 +1746,7 @@ export function useStudioController() {
     async (rawId: string, pushRoute = true) => {
       const id = rawId.trim()
       if (!id) return
+      lastLookmlIdRef.current = id
       await runWithBusy(`Loading LookML session "${id}"...`, `Could not load LookML session "${id}"`, async () => {
         const loaded = await loadLookmlSessionArtifact(core40SDK, extensionSDK, id)
         lastLookmlIdRef.current = loaded.id
@@ -1872,6 +1876,7 @@ export function useStudioController() {
     async (rawId: string, pushRoute = true) => {
       const id = rawId.trim()
       if (!id) return
+      lastCaIdRef.current = id
       await runWithBusy(
         `Loading Conversational Analytics session "${id}"...`,
         `Could not load Conversational Analytics session "${id}"`,
@@ -1927,13 +1932,13 @@ export function useStudioController() {
     [conversations, core40SDK, extensionSDK, hydrateLoadedArtifact, runWithBusy, upsertContentItem]
   )
 
-  const handleRunConversationalAnalytics = async (userQuestion: string, baseMessages: ChatMessage[]) => {
+  const handleRunConversationalAnalytics = async (userQuestion: string, baseMessages: ChatMessage[], preselectedOutput?: string) => {
     const auth: AntigravityAuth = { mode: authMode, oauthToken, clientId, projectId, apiKey }
     const isFirstTurn = baseMessages.filter((m) => m.role === 'user').length <= 1
     try {
       if (isFirstTurn) setContentItems((prev) => prev.filter((it) => it.createdInConversation === true))
       const selection = await selectCaAgentViaIsolatedSubagent({
-        sdk: core40SDK, extensionSDK, auth, userQuestion, model: selectedModel, onStatus: setBusyStatus,
+        sdk: core40SDK, extensionSDK, auth, userQuestion, preselectedOutput, model: selectedModel, onStatus: setBusyStatus,
       })
       setBusyStatus(`Creating Looker CA conversation with "${selection.agentName}"...`)
       const created = await createLookerCaConversation(core40SDK, selection.agentId, userQuestion, selection.agentName)
@@ -2120,6 +2125,20 @@ export function useStudioController() {
     if (isTileMount || location.pathname === '/config' || disabledModes.includes(activeMode)) return
     const id = parsedRoute.objectId
     if (!id) return
+    if ((id === activeConversationId || id === agentSession.lastInteractionId) && !activeObjectId) return
+    const convMatch = conversations.find((c) => c.id === id)
+    const convTargetId = String(
+      convMatch?.content?.dashboardId ||
+        convMatch?.content?.lookId ||
+        convMatch?.content?.lookmlDashboardId ||
+        convMatch?.content?.reportId ||
+        convMatch?.content?.sessionId ||
+        convMatch?.content?.scriptId ||
+        convMatch?.content?.caConversationId ||
+        convMatch?.content?.id ||
+        ''
+    )
+    if (convMatch && !convTargetId && !catalogItems.some((it) => it.id === id)) return
     const loadedPair: [string | undefined, string] = isCaMode
       ? [caConversation?.caConversationId, lastCaIdRef.current]
       : activeMode === 'lookml'
@@ -2143,6 +2162,7 @@ export function useStudioController() {
     isTileMount, location.pathname, activeMode, disabledModes, parsedRoute.objectId, parsedRoute.useCase,
     inferredRouteUseCase, isCaMode, publishedApp?.dashboardId, nativeContent?.id, lookmlBundle?.id,
     healthReport?.id, caConversation?.caConversationId, loadedScript, scriptId, openArtifactByMode,
+    activeConversationId, activeObjectId, agentSession.lastInteractionId, conversations, catalogItems,
   ])
 
   const handleLoadExistingDashboard = async () => {
@@ -2285,6 +2305,8 @@ export function useStudioController() {
         setActiveObjectId(targetId)
         await openArtifactByMode(conv.type, targetId, true)
       } else {
+        setLoadedScript(false)
+        setActiveObjectId('')
         const targetPath = `/c/${encodeURIComponent(conv.id)}`
         if (location.pathname !== targetPath) history.push(targetPath)
       }
@@ -2683,9 +2705,7 @@ export function useStudioController() {
         userPrompt:
           explicitUseCase === 'tile' ||
           loadedScript ||
-          /\b(python\s*tile|python\s*script|codemode\s*script|obj_script|monty\s*python\s*tile)\b/i.test(
-            effectivePrompt
-          )
+          EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
             ? `Write a LkrCodeMode Python script for the user's request. Return the Python snippet inside a \`\`\`python code block.\n\nCurrent script:\n\`\`\`python\n${scriptCode}\n\`\`\`\n\nUser request: ${turnPromptWithContext}`
             : turnPromptWithContext,
         images: attachedImages,
@@ -2711,7 +2731,7 @@ export function useStudioController() {
             extractResolvedUseCase(result.assistantText, effectivePrompt, allowedUseCases)
       setSelectedUseCase(resolvedUseCase)
       if (shouldRouteToIsolatedCaSubagent({ ...caRouteBase, assistantOutput: result.rawOutputText ?? result.assistantText })) {
-        await handleRunConversationalAnalytics(effectivePrompt, messagesWithUser)
+        await handleRunConversationalAnalytics(effectivePrompt, messagesWithUser, result.rawOutputText ?? result.assistantText)
         return
       }
       const resolvedMode: StudioMode = studioUseCaseToMode(resolvedUseCase)
@@ -2781,13 +2801,22 @@ export function useStudioController() {
         setAgentSession({ ...result.session, explores: turnExplores }, 'lookml')
         setMessages(finalMsgs, 'lookml')
       } else if (resolvedUseCase === 'tile') {
+        const isExplicitScriptRequest =
+          explicitUseCase === 'tile' ||
+          loadedScript ||
+          EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
         const pyMatch = (result.assistantText || '').match(/```(?:python|py)?\s*\n([\s\S]*?)```/i)
         const extractedPy = pyMatch ? pyMatch[1].trim() : ''
+        const baseReply = result.assistantText || (isExplicitScriptRequest ? 'Updated script and executed Looker queries.' : 'Executed Looker API calls.')
+        const replyText =
+          !isExplicitScriptRequest && !/\b(?:save|reusable|turn\s+(?:this|it)\s+into)\b[\s\S]{0,60}\b(?:script|tile)\b/i.test(baseReply)
+            ? `${baseReply}\n\nWould you like me to save this Looker API lookup as a reusable **Script**?`
+            : baseReply
         finalMsgs = [
           ...messagesWithUser,
           {
             role: 'assistant',
-            text: result.assistantText || 'Updated script and executed Looker queries.',
+            text: replyText,
             interactionId: result.session.lastInteractionId,
             activitySteps: result.activitySteps,
             thinkingDurationSec: result.thinkingDurationSec,
@@ -2795,7 +2824,7 @@ export function useStudioController() {
         ]
         setAgentSession({ ...result.session, explores: turnExplores }, 'tile')
         setMessages(finalMsgs, 'tile')
-        if (extractedPy || explicitUseCase === 'tile' || loadedScript) {
+        if (isExplicitScriptRequest && (extractedPy || explicitUseCase === 'tile' || loadedScript)) {
           const nextCode = extractedPy || scriptCode
           if (extractedPy) setScriptCode(extractedPy)
           await handleRunPython(nextCode, filtersJson)
@@ -3023,6 +3052,7 @@ export function useStudioController() {
       if (convId && resolvedUseCase) {
         resolvedUseCaseByIdRef.current[convId] = resolvedUseCase
       }
+      setActiveConversationId(convId)
       const nextConvRoute = `/c/${encodeURIComponent(convId)}`
       if (location.pathname !== nextConvRoute) {
         history.replace(nextConvRoute)
@@ -3040,7 +3070,7 @@ export function useStudioController() {
         isFirstTurn,
         userPrompt: effectivePrompt,
         assistantText: result.assistantText,
-        updateArtifactIndex: true,
+        updateArtifactIndex: Boolean(convContent),
       })
     } catch (err: unknown) {
       if ((err instanceof Error && err.name === 'AbortError') || abortController.signal.aborted) {
@@ -3185,7 +3215,8 @@ export function useStudioController() {
     activeContentItem, upsertContentItem, handleSelectContentTab,
     embedNonce, bumpEmbedNonce,
     healthReport, healthScope, setHealthScope, caConversation,
-    savedScripts, scriptId, setScriptId, scriptTitle, setScriptTitle,
+    savedScripts, loadedScript, setLoadedScript, explicitUseCase: explicitUseCaseRef.current,
+    scriptId, setScriptId, scriptTitle, setScriptTitle,
     scriptCode, setScriptCode, filtersJson, setFiltersJson,
     scriptOutput, setScriptOutput, scriptMode, setScriptMode,
     publishedTileDash, setPublishedTileDash, schedulerOpen, setSchedulerOpen,

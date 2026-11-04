@@ -15,11 +15,13 @@ import {
   CONVERSATION_LABEL_REQUEST_TAG, DASHBOARD_CODEMODE_PREAMBLE_PY, DATA_APP_GUIDE_MD, DATA_INVESTIGATOR_GUIDE_MD,
   DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_LEFT_PANE_WIDTH, DEFAULT_MAX_TOTAL_TOKENS, DEFAULT_THINKING_LEVEL,
   discoverStarterContentSummaries, discoverStarterExploreContext, ensureCodeModeLoaded,
-  executeLkrExtensionToolRequest, extractInteractionActivitySteps, extractLkrExtensionToolRequests,
-  extractNativeContentFromInteraction, extractSkillNameFromPath, extractThoughtText, extractWrittenMarkdownPathFromCode, fetchEnvironmentFile, formatFriendlyLookerActivityLabel,
+  executeLkrExtensionToolRequest, EXPLICIT_SCRIPT_CREATION_RE, extractInteractionActivitySteps,
+  extractInteractionOutputText, extractLkrExtensionToolRequests,
+  extractNativeContentFromInteraction, extractSkillNameFromPath, extractThoughtText, extractWrittenMarkdownPathFromCode,
+  fetchEnvironmentFile, formatContentInventoryMarkdown, formatFriendlyLookerActivityLabel,
   formatThinkingTraceMarkdown, generateConversationLabel, generateDynamicStarterPrompts,
   getCachedStarterPrompts, getInitialStoredOAuthToken, getSharedEnvExploreSchemas,
-  isEnvironmentNotFoundError, isTextAttachmentFile, KDA_SKILL_MD, KDA_TOOLKIT_PY,
+  isEnvironmentNotFoundError, isLookerInstanceMetadataQuery, isTextAttachmentFile, KDA_SKILL_MD, KDA_TOOLKIT_PY,
   listAvailableAntigravityModels, LKR_CLI_BRIDGE_TOOL, LKR_CLI_SITECUSTOMIZE_PY, LKR_DEV_CLI_SPEC,
   LKR_DEV_CLI_VERSION, LkrCodeMode, loadStoredLeftPaneWidth, loadStoredOAuthSession,
   loadStoredRightPaneCollapsed, loadStoredThinkingLevel, loginWithGoogleOAuth,
@@ -5493,5 +5495,135 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
     } finally {
       g.window = prevWin
     }
+  })
+
+  test('57. Evals #1 & #2: formatContentInventoryMarkdown, extractInteractionOutputText, Monty WASM search_agents() & format_content_inventory(), and ad-hoc Looker API vs CA routing', async () => {
+    // 1. All 5 content & folder inventory prompt variants route to tile (CodeMode) and never to isolated CA sub-agent
+    const inventoryPrompts = [
+      'tell me what my personal space is',
+      "can you find me all personal spaces that don't have dashboards",
+      'what are my favorite dashboards',
+      'What dashboards are in my personal',
+      'List all dashboards and Looks across all shared folders',
+    ]
+    for (const p of inventoryPrompts) {
+      expect(isLookerInstanceMetadataQuery(p)).toBe(true)
+      expect(extractResolvedUseCase('', p)).toBe('tile')
+      expect(shouldRouteToIsolatedCaSubagent({ prompt: p, explicitUseCase: 'auto', isCaMode: false, isFirstTurn: true })).toBe(false)
+      expect(EXPLICIT_SCRIPT_CREATION_RE.test(p)).toBe(false)
+    }
+    expect(EXPLICIT_SCRIPT_CREATION_RE.test('create a reusable python script tile for revenue')).toBe(true)
+
+    // 2. formatContentInventoryMarkdown: short list (<= 5 items in 1 folder) vs long list (> 5 items across multiple folders)
+    const shortInv = formatContentInventoryMarkdown([
+      {
+        id: '42',
+        name: 'My Personal Folder',
+        dashboards: [{ id: '101', title: 'Executive KPI Pulse' }, { id: '102', title: 'Retention Cohort' }],
+        looks: [{ id: '201', title: 'Top 25 Brands' }],
+      },
+    ])
+    expect([shortInv.truncated, shortInv.totalItems, shortInv.folderCount]).toEqual([false, 3, 1])
+    expect(shortInv.summaryMarkdown).toContain('**[My Personal Folder](/folders/42)** (2 dashboards, 1 Look)')
+    expect(shortInv.summaryMarkdown).toContain('- [Executive KPI Pulse](/dashboards/101)')
+    expect(shortInv.summaryMarkdown).toContain('- [Top 25 Brands](/looks/201)')
+
+    const longInv = formatContentInventoryMarkdown([
+      {
+        id: '42',
+        name: 'My Personal Folder',
+        dashboards: [
+          { id: '101', title: 'Dash 1' },
+          { id: '102', title: 'Dash 2' },
+          { id: '103', title: 'Dash 3' },
+          { id: '104', title: 'Dash 4' },
+        ],
+        looks: [{ id: '201', title: 'Look 1' }, { id: '202', title: 'Look 2' }],
+      },
+      {
+        id: '88',
+        name: 'Shared Finance',
+        dashboards: [{ id: '105', title: 'Finance 1' }, { id: '106', title: 'Finance 2' }, { id: '107', title: 'Finance 3' }],
+      },
+    ])
+    expect([longInv.truncated, longInv.totalItems, longInv.folderCount, longInv.overflowFilePath]).toEqual([
+      true,
+      9,
+      2,
+      '/workspace/content_inventory.md',
+    ])
+    expect(longInv.summaryMarkdown).toContain('**[My Personal Folder](/folders/42)** (4 dashboards, 2 Looks)')
+    expect(longInv.summaryMarkdown).toContain('- See all 6 items in [My Personal Folder](/folders/42)')
+    expect(longInv.summaryMarkdown).toContain('- See all 3 items in [Shared Finance](/folders/88)')
+    expect(longInv.summaryMarkdown).not.toContain('(/dashboards/103)')
+    expect(longInv.fullMarkdown).toContain('(/dashboards/103)')
+
+    // 3. extractInteractionOutputText: extracts nested outputs[0].content[0].text & function_result fallback instead of 'Completed.'
+    expect(
+      extractInteractionOutputText({
+        status: 'completed',
+        outputs: [{ type: 'message', content: [{ type: 'output_text', text: 'Nested content markdown link: [Dash 1](/dashboards/101)' }] } as never],
+      })
+    ).toBe('Nested content markdown link: [Dash 1](/dashboards/101)')
+    expect(
+      extractInteractionOutputText({
+        status: 'completed',
+        steps: [{ type: 'function_result', name: 'run_looker_codemode', result: JSON.stringify({ result: { summary_markdown: '**[Folder 42](/folders/42)**' } }) }],
+      })
+    ).toBe('**[Folder 42](/folders/42)**')
+
+    // 4. Monty WASM search_agents(), sdk.search_agents(), and format_content_inventory()
+    const mockSdk = {
+      search_agents: async () => [
+        {
+          id: 'ca_agent_rev',
+          name: 'Revenue & Margin Agent',
+          description: 'Covers gross margin, order revenue, and return rates.',
+          explores: ['thelook::order_items'],
+          golden_queries: [{ questions: ['What is our gross margin by category?'] }],
+        },
+      ],
+      ok: async <T>(p: Promise<T> | T) => p,
+      authSession: {
+        transport: {
+          rawRequest: async () => ({ statusCode: 200, ok: true, body: [] }),
+        },
+      },
+    } as unknown as Looker40SDK
+
+    const cmOut = JSON.parse(
+      await LkrCodeMode.runPythonCode({
+        code: `agents = sdk.search_agents()
+inv = format_content_inventory([{"id": "42", "name": "My Folder", "dashboards": [{"id": "10", "title": "Revenue Pulse"}]}])
+return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["questions"][0], "md": inv["summary_markdown"]}`,
+        sdk: mockSdk,
+      })
+    )
+    const cmRes = cmOut.result || cmOut
+    expect([cmRes.agent_id, cmRes.gq]).toEqual(['ca_agent_rev', 'What is our gross margin by category?'])
+    expect(cmRes.md).toContain('[Revenue Pulse](/dashboards/10)')
+
+    // 5. Activity label & CA preselectedOutput fast-path
+    expect(formatFriendlyLookerActivityLabel('agents = search_agents()').statusText).toBe(
+      'Searching accessible Looker Conversational Analytics agents and golden queries...'
+    )
+    const preselectedOut =
+      '<USE_CASE>conversational-analytics</USE_CASE>\n<CA_AGENT_SELECTION>{"agent_id":"ca_agent_rev","rationale":"Matches gross margin golden query."}</CA_AGENT_SELECTION>'
+    expect(
+      shouldRouteToIsolatedCaSubagent({
+        prompt: 'What is our gross margin by category?',
+        explicitUseCase: 'auto',
+        isCaMode: false,
+        isFirstTurn: true,
+        assistantOutput: preselectedOut,
+      })
+    ).toBe(true)
+    const fastSelected = await selectCaAgentViaIsolatedSubagent({
+      sdk: mockSdk,
+      auth: { mode: 'oauth', oauthToken: '' },
+      userQuestion: 'What is our gross margin by category?',
+      preselectedOutput: preselectedOut,
+    })
+    expect([fastSelected.agentId, fastSelected.rationale]).toEqual(['ca_agent_rev', 'Matches gross margin golden query.'])
   })
 })
