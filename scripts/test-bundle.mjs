@@ -131,13 +131,10 @@ assert(
 )
 const manifestLkml = readFileSync(path.join(repoRoot, 'manifest.lkml'), 'utf8')
 assert(
-  manifestLkml.includes('"create_look"') &&
-    manifestLkml.includes('"create_board"') &&
-    manifestLkml.includes('"create_dashboard_filter"') &&
-    manifestLkml.includes('"create_scheduled_plan"') &&
-    manifestLkml.includes('"update_artifacts"') &&
+  /\braw_api_request\s*:\s*yes\b/.test(manifestLkml) &&
+    !/\bcore_api_methods\s*:/.test(manifestLkml) &&
     manifestLkml.includes('"https://cdn.lkr.dev"'),
-  'manifest.lkml must declare native content, artifact core_api_methods, and https://cdn.lkr.dev in external_api_urls'
+  'manifest.lkml must declare raw_api_request: yes, zero core_api_methods, and https://cdn.lkr.dev in external_api_urls'
 )
 const pythonTileTsx = [
   'src/components/PythonTile.tsx',

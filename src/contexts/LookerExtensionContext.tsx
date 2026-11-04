@@ -5,6 +5,8 @@ import React, { createContext, useContext, ReactNode } from 'react';
 import { ExtensionContext, ExtensionContextData } from '@looker/extension-sdk-react';
 import type { Looker40SDK } from '@looker/sdk';
 
+import { createDeduplicatedLookerSdkProxy } from '../lookerApi';
+
 export interface LookerExtensionContextState {
   extensionSDK: ExtensionContextData['extensionSDK'];
   core40SDK: Looker40SDK;
@@ -76,6 +78,13 @@ export const MockLookerExtensionProvider: React.FC<{
 
 export const LookerExtensionProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const extensionContext = useContext(ExtensionContext) as ExtensionContextData;
+  const core40SDK = React.useMemo(
+    () =>
+      extensionContext?.core40SDK
+        ? createDeduplicatedLookerSdkProxy(extensionContext.core40SDK)
+        : extensionContext?.core40SDK,
+    [extensionContext?.core40SDK]
+  );
   const mockOverride =
     typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined;
   if (mockOverride) {
@@ -88,7 +97,7 @@ export const LookerExtensionProvider: React.FC<{ children: ReactNode }> = ({ chi
 
   const contextValue: LookerExtensionContextState = {
     extensionSDK: extensionContext.extensionSDK,
-    core40SDK: extensionContext.core40SDK,
+    core40SDK,
     tileHostData: extensionContext.tileHostData,
     tileSDK: extensionContext.tileSDK,
     lookerHostData:
