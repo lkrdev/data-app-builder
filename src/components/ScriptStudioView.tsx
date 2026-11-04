@@ -224,8 +224,8 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                 data-testid="right-pane-collapse-toggle"
                 className="dab-btn dab-btn-secondary dab-right-collapse-btn"
                 onClick={() => ctl.setRightPaneCollapsed(true)}
-                title="Collapse preview pane"
-                aria-label="Collapse preview pane"
+                title="Collapse viewer"
+                aria-label="Collapse viewer"
               >
                 <PanelRightClose size={14} strokeWidth={1.75} aria-hidden="true" />
               </button>

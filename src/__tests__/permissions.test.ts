@@ -12,11 +12,11 @@ import {
   BUNDLE_APP_PY, callInteractionsApi, clampLeftPaneWidth, classifyLookerOperation,
   clearStarterPromptsCache, clearStoredOAuthSession, CODEMODE_CDN_URL, CodeModePermissionRequest,
   computeIsAuthenticated, computeLkrExtensionCacheKey, CONCURRENT_POLL_SCHEDULE_MS,
-  CONVERSATION_LABEL_REQUEST_TAG, DASHBOARD_CODEMODE_PREAMBLE_PY, DATA_INVESTIGATOR_GUIDE_MD,
+  CONVERSATION_LABEL_REQUEST_TAG, DASHBOARD_CODEMODE_PREAMBLE_PY, DATA_APP_GUIDE_MD, DATA_INVESTIGATOR_GUIDE_MD,
   DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_LEFT_PANE_WIDTH, DEFAULT_MAX_TOTAL_TOKENS, DEFAULT_THINKING_LEVEL,
   discoverStarterContentSummaries, discoverStarterExploreContext, ensureCodeModeLoaded,
   executeLkrExtensionToolRequest, extractInteractionActivitySteps, extractLkrExtensionToolRequests,
-  extractNativeContentFromInteraction, extractThoughtText, extractWrittenMarkdownPathFromCode, fetchEnvironmentFile, formatFriendlyLookerActivityLabel,
+  extractNativeContentFromInteraction, extractSkillNameFromPath, extractThoughtText, extractWrittenMarkdownPathFromCode, fetchEnvironmentFile, formatFriendlyLookerActivityLabel,
   formatThinkingTraceMarkdown, generateConversationLabel, generateDynamicStarterPrompts,
   getCachedStarterPrompts, getInitialStoredOAuthToken, getSharedEnvExploreSchemas,
   isEnvironmentNotFoundError, isTextAttachmentFile, KDA_SKILL_MD, KDA_TOOLKIT_PY,
@@ -26,7 +26,7 @@ import {
   LOOKER_PROJECT_ONBOARDING_SKILL_MD, LOOKML_SKILLS_CATALOG, MAX_LEFT_PANE_WIDTH,
   mergeInteractionSseEvent, MIN_LEFT_PANE_WIDTH, normalizeMaxTotalTokens, normalizeSandboxFilePath,
   normalizeThinkingLevel, parseStarterPromptsResponse, persistOAuthSession, persistThinkingLevel,
-  prewarmOrWakeAntigravityEnvironment, readInitialThinkingLevel, recordSharedEnvExploreSchema,
+  prewarmOrWakeAntigravityEnvironment, readInitialRightPaneCollapsed, readInitialThinkingLevel, recordSharedEnvExploreSchema,
   refreshOAuthSessionIfNeeded, resolveAdaptivePollScheduleMs, resolveBuiltinWorkspaceFileContent,
   resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, runAntigravityTurn,
   SANDBOX_WORKSPACE_SKILL_FILES, sanitizeConversationLabel, saveStoredLeftPaneWidth,
@@ -5107,8 +5107,8 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
       ],
     }, true)
     expect(extracted).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'step_view_1', kind: 'file', title: 'Viewing DATA_INVESTIGATOR_GUIDE.md', path: '/workspace/DATA_INVESTIGATOR_GUIDE.md', content: '# Data Investigator Guide\nFollow sequential chapters.' }),
-      expect.objectContaining({ id: 'step_skill_1', kind: 'skill', title: 'Skill: key-driver-analysis', path: 'skills/key-driver-analysis/SKILL.md' }),
+      expect.objectContaining({ id: 'step_view_1', kind: 'skill', title: 'Reading skill data-investigator', path: '/workspace/DATA_INVESTIGATOR_GUIDE.md', content: '# Data Investigator Guide\nFollow sequential chapters.' }),
+      expect.objectContaining({ id: 'step_skill_1', kind: 'skill', title: 'Reading skill key-driver-analysis', path: 'skills/key-driver-analysis/SKILL.md' }),
       expect.objectContaining({ id: 'step_bash_cat', kind: 'file', title: 'Viewing order_items.view.lkml', path: '/workspace/lookml/views/order_items.view.lkml', content: 'view: order_items {\n  dimension: id { primary_key: yes }\n}' }),
       expect.objectContaining({ id: 'step_codemode_1', kind: 'codemode', title: 'Executing Looker queries for Order Items...' }),
     ]))
@@ -5118,8 +5118,8 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
     const traceMd = formatThinkingTraceMarkdown(extracted, { thinkingDurationSec: 5, userPrompt: 'Investigate order items revenue' })
     expect(traceMd).toContain('## Thinking & Activity Trace (5s · 4 steps)')
     expect(traceMd).toContain('**User Prompt:** Investigate order items revenue')
-    expect(traceMd).toContain('[File] Viewing DATA_INVESTIGATOR_GUIDE.md')
-    expect(traceMd).toContain('[Skill] Skill: key-driver-analysis')
+    expect(traceMd).toContain('[Skill] Reading skill data-investigator')
+    expect(traceMd).toContain('[Skill] Reading skill key-driver-analysis')
     expect(traceMd).toContain('[Code Mode] Executing Looker queries for Order Items...')
   })
 
@@ -5358,114 +5358,72 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
   })
 
   test('55. Issue #131: direct model stateless side-requests (store:false, response_format), DEFAULT_MAX_TOTAL_TOKENS=131072, and OAuth SSE streaming with last_event_id resume + polling fallback', async () => {
-    expect(DEFAULT_THINKING_LEVEL).toBe('high')
-    expect(DEFAULT_MAX_TOTAL_TOKENS).toBe(131072)
-    expect(STUDIO_MAX_TOTAL_TOKENS_OPTIONS.map((o) => o.value)).toEqual([32768, 65536, 131072, 262144])
+    expect([DEFAULT_THINKING_LEVEL, DEFAULT_MAX_TOTAL_TOKENS, STUDIO_MAX_TOTAL_TOKENS_OPTIONS.map((o) => o.value)]).toEqual([
+      'high', 131072, [32768, 65536, 131072, 262144],
+    ])
     expect([normalizeMaxTotalTokens(undefined), normalizeMaxTotalTokens(0), normalizeMaxTotalTokens(65536), normalizeMaxTotalTokens('262144')]).toEqual([
       131072, 131072, 65536, 262144,
     ])
     expect([readInitialThinkingLevel(), readInitialThinkingLevel('low')]).toEqual(['high', 'low'])
 
-    // Raw JSON (response_format) parsing without XML wrapper tags
     const rawStarterJson = JSON.stringify([
       { id: 's1', label: 'Revenue by Region Scorecard', prompt: 'Build a revenue scorecard by region.', useCase: 'app' },
       { id: 's2', label: 'Monthly Order Trend UDD', prompt: 'Create a native UDD for monthly orders.', useCase: 'dashboard' },
       { id: 's3', label: 'Top Brand Margin Breakdown', prompt: 'What drove brand margin changes?', useCase: 'data-investigator' },
     ])
     expect(parseStarterPromptsResponse(rawStarterJson, []).map((p) => p.id)).toEqual(['s1', 's2', 's3'])
-    const rawCaJson = JSON.stringify({
-      agent_id: 'ca_agent_1',
-      agent_name: 'Orders CA Agent',
-      rationale: 'Direct JSON schema match for orders explore.',
-    })
+    const rawCaJson = JSON.stringify({ agent_id: 'ca_agent_1', agent_name: 'Orders CA Agent', rationale: 'Direct JSON schema match for orders explore.' })
     expect(
       parseCaAgentSelectionResponse(
-        rawCaJson,
-        [{ id: 'ca_agent_1', name: 'Orders CA Agent', description: 'Orders', explores: ['thelook::orders'], goldenQueries: [] }],
-        'Orders last month?'
+        rawCaJson, [{ id: 'ca_agent_1', name: 'Orders CA Agent', description: 'Orders', explores: ['thelook::orders'], goldenQueries: [] }], 'Orders last month?'
       )
     ).toMatchObject({ agentId: 'ca_agent_1', agentName: 'Orders CA Agent', rationale: 'Direct JSON schema match for orders explore.' })
 
-    // Custom maxTotalTokens forwarded in agent_config.max_total_tokens
     const capturedTurnBodies: MockInteractionPostBody[] = []
     const mockExtSdk = {
       serverProxy: async (_url: string, init?: FetchCustomParameters) => {
         if (init?.body) capturedTurnBodies.push(JSON.parse(String(init.body)) as MockInteractionPostBody)
-        return {
-          ok: true,
-          status: 200,
-          body: JSON.stringify({ id: 'int_max_tok_1', environment_id: 'env_tok_1', status: 'completed', output_text: 'Done with 262k budget.' }),
-        }
+        return { ok: true, status: 200, body: JSON.stringify({ id: 'int_max_tok_1', environment_id: 'env_tok_1', status: 'completed', output_text: 'Done with 262k budget.' }) }
       },
     }
     await runAntigravityTurn({
-      sdk: asSdk({}),
-      extensionSDK: mockExtSdk,
-      auth: { mode: 'apikey' },
-      session: { toolType: 'app' },
-      model: 'gemini-3.8-flash',
-      maxTotalTokens: 262144,
-      selectedExplores: ['thelook::order_items'],
-      schemaMarkdown: '# Schema',
-      userPrompt: 'Build app',
-      onStatus: () => {},
+      sdk: asSdk({}), extensionSDK: mockExtSdk, auth: { mode: 'apikey' }, session: { toolType: 'app' },
+      model: 'gemini-3.8-flash', maxTotalTokens: 262144, selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema', userPrompt: 'Build app', onStatus: () => {},
     })
-    expect(capturedTurnBodies[0]?.agent_config).toEqual({
-      type: 'antigravity',
-      model: 'gemini-3.8-flash',
-      max_total_tokens: '262144',
-    })
+    expect(capturedTurnBodies[0]?.agent_config).toEqual({ type: 'antigravity', model: 'gemini-3.8-flash', max_total_tokens: '262144' })
 
-    // SSE frame merging + resumable streamInteractionUntilActionOrDone with last_event_id & fallback
     const snap = mergeInteractionSseEvent(
-      mergeInteractionSseEvent({ id: 'int_sse_1', status: 'in_progress' }, 'step.delta', {
-        step: { id: 'st_1', type: 'thought', thought: 'Inspecting explore schema...' },
-      }),
-      'content.delta',
-      { delta: { text: 'Hello ' } }
+      mergeInteractionSseEvent({ id: 'int_sse_1', status: 'in_progress' }, 'step.delta', { step: { id: 'st_1', type: 'thought', thought: 'Inspecting explore schema...' } }),
+      'content.delta', { delta: { text: 'Hello ' } }
     )
     const snap2 = mergeInteractionSseEvent(snap, 'content.delta', { delta: { text: 'world!' } })
-    expect(snap2.output_text).toBe('Hello world!')
-    expect((snap2.steps as Array<{ id?: string }>)[0]?.id).toBe('st_1')
+    expect([snap2.output_text, (snap2.steps as Array<{ id?: string }>)[0]?.id]).toEqual(['Hello world!', 'st_1'])
 
-    // Fallback when auth.mode === 'apikey'
-    const fallbackApiKey = await streamInteractionUntilActionOrDone({
-      auth: { mode: 'apikey', apiKey: 'k' },
-      interactionId: 'int_sse_fallback',
-    })
+    const fallbackApiKey = await streamInteractionUntilActionOrDone({ auth: { mode: 'apikey', apiKey: 'k' }, interactionId: 'int_sse_fallback' })
     expect(fallbackApiKey.streamed).toBe(false)
 
-    // Resumable OAuth SSE stream across 2 connections (dropped after evt_1, resumed with last_event_id=evt_1)
     const originalFetch = globalThis.fetch
     const requestedUrls: string[] = []
     try {
       let attempt = 0
       globalThis.fetch = (async (input: RequestInfo | URL) => {
-        const url = String(input)
-        requestedUrls.push(url)
+        requestedUrls.push(String(input))
         attempt += 1
         const encoder = new TextEncoder()
-        const frames =
-          attempt === 1
-            ? [
-                'id: evt_1\nevent: step.delta\ndata: {"step":{"id":"s1","type":"thought","thought":"Checking dimensions"}}\n\n',
-              ]
-            : [
-                'id: evt_2\nevent: content.delta\ndata: {"delta":{"text":"Streamed KPI App Ready."}}\n\n',
-                'id: evt_3\nevent: interaction.complete\ndata: {"interaction":{"id":"int_sse_live","status":"completed","environment_id":"env_sse_1"}}\n\n',
-              ]
+        const frames = attempt === 1
+          ? ['id: evt_1\nevent: step.delta\ndata: {"step":{"id":"s1","type":"thought","thought":"Checking dimensions"}}\n\n']
+          : [
+              'id: evt_2\nevent: content.delta\ndata: {"delta":{"text":"Streamed KPI App Ready."}}\n\n',
+              'id: evt_3\nevent: interaction.complete\ndata: {"interaction":{"id":"int_sse_live","status":"completed","environment_id":"env_sse_1"}}\n\n',
+            ]
         let idx = 0
         return {
-          ok: true,
-          status: 200,
+          ok: true, status: 200,
           headers: { get: (h: string) => (h.toLowerCase() === 'content-type' ? 'text/event-stream' : null) },
           body: {
             getReader: () => ({
-              read: async () => {
-                if (idx >= frames.length) return { done: true, value: undefined }
-                const chunk = encoder.encode(frames[idx++])
-                return { done: false, value: chunk }
-              },
+              read: async () => (idx >= frames.length ? { done: true, value: undefined } : { done: false, value: encoder.encode(frames[idx++]) }),
               releaseLock: () => {},
             }),
           },
@@ -5474,14 +5432,12 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
 
       const updates: Array<Record<string, unknown>> = []
       const sseRes = await streamInteractionUntilActionOrDone({
-        auth: { mode: 'oauth', oauthToken: 'mock-oauth-sse-token' },
-        interactionId: 'int_sse_live',
+        auth: { mode: 'oauth', oauthToken: 'mock-oauth-sse-token' }, interactionId: 'int_sse_live',
         onUpdate: (u) => { updates.push({ ...u }) },
       })
-      expect(sseRes.streamed).toBe(true)
-      expect(sseRes.lastEventId).toBe('evt_3')
-      expect(sseRes.interaction.status).toBe('completed')
-      expect(sseRes.interaction.output_text).toBe('Streamed KPI App Ready.')
+      expect([sseRes.streamed, sseRes.lastEventId, sseRes.interaction.status, sseRes.interaction.output_text]).toEqual([
+        true, 'evt_3', 'completed', 'Streamed KPI App Ready.',
+      ])
       expect(requestedUrls).toEqual([
         'https://generativelanguage.googleapis.com/v1beta/interactions/int_sse_live?stream=true&alt=sse',
         'https://generativelanguage.googleapis.com/v1beta/interactions/int_sse_live?stream=true&alt=sse&last_event_id=evt_1',
@@ -5489,6 +5445,53 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
       expect(updates.length).toBeGreaterThanOrEqual(2)
     } finally {
       globalThis.fetch = originalFetch
+    }
+  })
+
+  test('56. Issue #132: mounts use-case guides under /workspace/skills/data-apps/SKILL.md & /workspace/skills/data-investigator/SKILL.md, formats skill steps as "Reading skill <name>", and defaults mobile rightPaneCollapsed to true', async () => {
+    const sources = buildWorkspaceSources({ schemaMarkdown: '# Schema' })
+    expect(sources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ target: '/workspace/skills/data-apps/SKILL.md', content: DATA_APP_GUIDE_MD }),
+        expect.objectContaining({ target: '/workspace/skills/data-investigator/SKILL.md', content: DATA_INVESTIGATOR_GUIDE_MD }),
+        expect.objectContaining({ target: '/workspace/skills/key-driver-analysis/SKILL.md', content: KDA_SKILL_MD }),
+        expect.objectContaining({ target: '/workspace/skills/looker-project-onboarding/SKILL.md', content: LOOKER_PROJECT_ONBOARDING_SKILL_MD }),
+      ])
+    )
+    expect(AGENTS_MD).toContain('skills/data-apps/SKILL.md')
+    expect(AGENTS_MD).toContain('skills/data-investigator/SKILL.md')
+
+    for (const p of ['/workspace/skills/data-apps/SKILL.md', 'skills/data-apps/SKILL.md', 'skills/data-apps/skill.md', '/workspace/skills/data-apps/skill.md', '/workspace/DATA_APP_GUIDE.md']) {
+      expect([extractSkillNameFromPath(p), resolveBuiltinWorkspaceFileContent(p)]).toEqual(['data-apps', DATA_APP_GUIDE_MD])
+    }
+    for (const p of ['/workspace/skills/data-investigator/SKILL.md', 'skills/data-investigator/SKILL.md', 'skills/data-investigator/skill.md', '/workspace/skills/data-investigator/skill.md', '/workspace/DATA_INVESTIGATOR_GUIDE.md']) {
+      expect([extractSkillNameFromPath(p), resolveBuiltinWorkspaceFileContent(p)]).toEqual(['data-investigator', DATA_INVESTIGATOR_GUIDE_MD])
+    }
+    expect([extractSkillNameFromPath('/workspace/skills/key-driver-analysis/SKILL.md'), extractSkillNameFromPath('/workspace/apps/current/app.js')]).toEqual(['key-driver-analysis', null])
+
+    const steps = extractInteractionActivitySteps({
+      status: 'completed',
+      steps: [
+        { id: 'st_view_da', type: 'view_file', input: JSON.stringify({ TargetFile: '/workspace/skills/data-apps/SKILL.md' }) },
+        { id: 'st_lookup_di', type: 'lookup_skill', arguments: { skill_name: 'data-investigator' } },
+        { id: 'st_bash_kda', type: 'code_execution', language: 'BASH', code: 'cat /workspace/skills/key-driver-analysis/SKILL.md' },
+      ],
+    })
+    expect(steps).toEqual([
+      expect.objectContaining({ id: 'st_view_da', kind: 'skill', title: 'Reading skill data-apps', path: '/workspace/skills/data-apps/SKILL.md' }),
+      expect.objectContaining({ id: 'st_lookup_di', kind: 'skill', title: 'Reading skill data-investigator', path: '/workspace/skills/data-investigator/SKILL.md' }),
+      expect.objectContaining({ id: 'st_bash_kda', kind: 'skill', title: 'Reading skill key-driver-analysis', path: '/workspace/skills/data-investigator/SKILL.md'.replace('data-investigator', 'key-driver-analysis') }),
+    ])
+
+    const g = globalThis as unknown as { window?: { innerWidth?: number } }
+    const prevWin = g.window
+    try {
+      g.window = { innerWidth: 390 }
+      expect([readInitialRightPaneCollapsed(), await loadStoredRightPaneCollapsed()]).toEqual([true, true])
+      g.window = { innerWidth: 1440 }
+      expect(readInitialRightPaneCollapsed()).toBe(false)
+    } finally {
+      g.window = prevWin
     }
   })
 })

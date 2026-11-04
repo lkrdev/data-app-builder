@@ -392,7 +392,7 @@ export function createLookerEmbedPreloadController(opts: {
             classList: { add: () => {} }, style: {} as CSSStyleDeclaration, className: '', src: '', srcdoc: '',
           })
         if (!iframe.classList) iframe.classList = { add: () => {} }
-        iframe.title = 'Looker Live Preview'
+        iframe.title = 'Looker Live Viewer'
         const syncIframe = (rawUrl: string) => {
           if (rawUrl.includes('/preload')) {
             iframe.srcdoc = '<!doctype html><html><body data-preload="true" style="margin:0"></body></html>'
@@ -572,7 +572,7 @@ export const DOC_UI_COMPONENTS: Record<string, () => React.ReactElement> = {
       options={[{ value: 'summary', label: 'summary' }, { value: 'detailed_audit', label: 'detailed_audit' }, { value: 'anomaly_alert', label: 'anomaly_alert' }]}
     />
   ),
-  ReloadPreviewButton: () => <button type="button" className="dab-btn-secondary" tabIndex={-1}>Reload Preview</button>,
+  ReloadPreviewButton: () => <button type="button" className="dab-btn-secondary" tabIndex={-1}>Reload Viewer</button>,
   OpenInLookerButton: () => <button type="button" className="dab-btn-secondary" tabIndex={-1}>Open in Looker ↗</button>,
   LookmlTurnSkills: () => (
     <div className="dab-skill-bar">
@@ -632,7 +632,7 @@ export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: s
       'Toggle specialized skills before sending your prompt to steer field descriptions, data test assertions, Explore parity verification, or layered view refinements.',
       '## Review Diffs & Update LookML',
       '<PushLookmlButton />',
-      '- Inspect side-by-side LookML diffs, validator results, and query parity checks in the preview pane.',
+      '- Inspect side-by-side LookML diffs, validator results, and query parity checks in the viewer.',
       '- Push validated updates directly to your active Looker development branch.',
     ].join('\n'),
   },
@@ -642,9 +642,9 @@ export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: s
     markdown: [
       '# Native Looker Content Studio',
       'Create, organize, and update native Looker User-Defined Dashboards (UDDs), Saved Looks, Boards, and Scheduled Plans directly from natural-language prompts.',
-      '## Preview & Refresh Controls',
+      '## Viewer & Refresh Controls',
       '<ReloadPreviewButton />',
-      'Refreshes the embedded Looker dashboard or Saved Look in the live preview pane after changes are applied.',
+      'Refreshes the embedded Looker dashboard or Saved Look in the live viewer after changes are applied.',
       '### Open Native Content in Looker',
       '<OpenInLookerButton />',
       '- Launches your dashboard, Look, or Board in a new Looker browser tab.',
@@ -659,7 +659,7 @@ export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: s
       'Ask ad-hoc analytical questions in plain language, automatically match with the best Looker Conversational Analytics agent for your data, and explore interactive answers.',
       '## Embedded Conversation Controls',
       '<ReloadPreviewButton />',
-      'Reloads the embedded Looker Conversational Analytics session in the preview pane.',
+      'Reloads the embedded Looker Conversational Analytics session in the viewer.',
       '### Open Conversation in Looker',
       '<OpenInLookerButton />',
       '- Opens the full Looker Conversational Analytics thread in a new browser tab.',
@@ -672,9 +672,9 @@ export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: s
     markdown: [
       '# Interactive Looker Data Apps',
       'Build custom interactive applications with KPI scorecards, dynamic charts, data grids, and metric switchers published directly into a Looker dashboard tile.',
-      '## Live Preview Controls',
+      '## Live Viewer Controls',
       '<ReloadPreviewButton />',
-      'Re-runs the live Looker dashboard preview in place so you can test interactive filters and controls immediately.',
+      'Re-runs the live Looker dashboard viewer in place so you can test interactive filters and controls immediately.',
       '### Open Published App in Looker',
       '<OpenInLookerButton />',
       '- Opens the published Looker dashboard hosting your Data App in a new browser tab.',
@@ -691,7 +691,7 @@ export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: s
       '<DataInvestigatorPreview />',
       '- **Doc View (Default)**: Renders an executive overview followed by sequential **Chart -> What This Chart Means -> Next Investigation Path** chapters and a 500-row evidence grid.',
       '- **Slides View**: Mention `slides`, `presentation`, or `deck` in your prompt (or toggle in the app header) to present each drill step as a self-contained slide with keyboard arrow navigation.',
-      '### Live Preview & Looker Launch Controls',
+      '### Live Viewer & Looker Launch Controls',
       '<ReloadPreviewButton />',
       '<OpenInLookerButton />',
     ].join('\n'),
@@ -1635,21 +1635,38 @@ interface ActivityStepContentContext {
   sandboxMarkdownLoading?: Record<string, boolean>
   onLoadSandboxMarkdownFile?: (path: string, opts?: { openModal?: boolean }) => Promise<string>
   onOpenSandboxMarkdownModal?: (path: string) => void
+  onOpenViewerDocument?: (input: { path: string; title?: string; kind?: 'skill' | 'file'; content?: string }) => Promise<string>
+}
+
+function extractStepFilePath(step: AntigravityActivityStep): string | undefined {
+  if (step.kind !== 'file' && step.kind !== 'skill') return undefined
+  for (const cand of [step.path, step.detail, step.title].map((s) => String(s || '').trim()).filter(Boolean)) {
+    const clean = cand
+      .split('—')[0]
+      .trim()
+      .replace(/^(?:Viewing|Editing|Creating|Writing|Reading\s+skill|Skill:)\s+/i, '')
+      .trim()
+    if (!clean) continue
+    if (step.kind === 'skill' && !clean.includes('/') && !/\.[a-z0-9]+$/i.test(clean)) {
+      return `/workspace/skills/${clean.toLowerCase()}/SKILL.md`
+    }
+    if (clean.includes('/') || /\.(?:md|lkml|lookml|py|js|ts|tsx|json|sql|sh|txt|css|html)$/i.test(clean)) {
+      return clean
+    }
+  }
+  return undefined
 }
 
 function extractStepMarkdownPath(step: AntigravityActivityStep): string | undefined {
-  if (step.kind !== 'file' && step.kind !== 'skill') return undefined
-  for (const cand of [step.path, step.detail, step.title].map((s) => String(s || '').trim()).filter(Boolean)) {
-    const clean = cand.split('—')[0].trim().replace(/^(?:Viewing|Editing|Creating|Writing|Skill:)\s+/i, '').trim()
-    if (/\.md$/i.test(clean)) return clean
-  }
-  return undefined
+  const filePath = extractStepFilePath(step)
+  if (!filePath) return undefined
+  return step.kind === 'skill' || /\.md$/i.test(filePath) ? filePath : undefined
 }
 
 function resolveStaticOrCachedStepContent(step: AntigravityActivityStep, ctx?: ActivityStepContentContext): string | undefined {
   if (step.content?.trim()) return step.content
   for (const cand of [step.path, step.detail, step.title].map((s) => String(s || '').trim()).filter(Boolean)) {
-    const clean = cand.split('—')[0].trim().replace(/^(?:Viewing|Editing|Creating|Writing|Skill:)\s+/i, '').trim()
+    const clean = cand.split('—')[0].trim().replace(/^(?:Viewing|Editing|Creating|Writing|Reading\s+skill|Skill:)\s+/i, '').trim()
     const builtin = resolveBuiltinWorkspaceFileContent(cand) || resolveBuiltinWorkspaceFileContent(clean)
     if (builtin) return builtin
     const base = clean.split('/').filter(Boolean).pop() || clean
@@ -1767,10 +1784,14 @@ const ActivityStepsList: React.FC<{ steps: AntigravityActivityStep[]; contentCtx
   const handleToggleStep = (key: string, step: AntigravityActivityStep) => {
     const willOpen = !expandedKeys[key]
     setExpandedKeys((prev) => ({ ...prev, [key]: willOpen }))
-    if (willOpen) {
-      const mdPath = extractStepMarkdownPath(step)
-      if (mdPath && !resolveStaticOrCachedStepContent(step, contentCtx)) {
-        void contentCtx?.onLoadSandboxMarkdownFile?.(mdPath)
+    if (step.kind === 'file' || step.kind === 'skill') {
+      const filePath = extractStepFilePath(step)
+      const staticContent = resolveStaticOrCachedStepContent(step, contentCtx)
+      if (filePath && contentCtx?.onOpenViewerDocument) {
+        void contentCtx.onOpenViewerDocument({ path: filePath, title: step.title, kind: step.kind, content: staticContent })
+      } else if (willOpen) {
+        const mdPath = extractStepMarkdownPath(step)
+        if (mdPath && !staticContent) void contentCtx?.onLoadSandboxMarkdownFile?.(mdPath)
       }
     }
   }
@@ -1856,8 +1877,11 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     agentName: rawAgentName, extensionSDK,
     messages, builderMode, selectedUseCase, selectedExplores, starterPrompts, starterPromptsLoading,
     setPrompt, busyStatus, liveActivitySteps, pendingPerm, resolvePermDecision,
-    leftPaneWidth, setLeftPaneWidth, rightPaneCollapsed, lookmlBundle, currentAppCode, schemaMarkdown,
+    leftPaneWidth, setLeftPaneWidth, rightPaneCollapsed, setRightPaneCollapsed,
+    contentItems = [], activeContentTabKey = '', handleSelectContentTab, publishedApp, nativeContent,
+    lookmlBundle, currentAppCode, schemaMarkdown,
     sandboxMarkdownCache, sandboxMarkdownLoading, loadSandboxMarkdownFile, setActiveSandboxMarkdownModalPath,
+    openViewerDocument, setActiveViewerDocument,
   } = ctl
   const agentName = normalizeStudioAgentName(rawAgentName)
   const hostUrl = extensionSDK?.lookerHostData?.hostUrl || (typeof window !== 'undefined' ? window.location.origin : '')
@@ -1873,9 +1897,16 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
         const normalized = normalizeSandboxFilePath(p)
         setActiveSandboxMarkdownModalPath(normalized ? `/${normalized}` : p)
       },
+      onOpenViewerDocument: openViewerDocument,
     }),
-    [lookmlBundle, currentAppCode, schemaMarkdown, sandboxMarkdownCache, sandboxMarkdownLoading, loadSandboxMarkdownFile, setActiveSandboxMarkdownModalPath]
+    [lookmlBundle, currentAppCode, schemaMarkdown, sandboxMarkdownCache, sandboxMarkdownLoading, loadSandboxMarkdownFile, setActiveSandboxMarkdownModalPath, openViewerDocument]
   )
+  const chatViewerObjects = useMemo<Array<{ key: string; title: string; contentType: StudioContentItemType }>>(() => {
+    if (contentItems.length > 0) return contentItems.map((item) => ({ key: item.key, title: item.title, contentType: item.contentType }))
+    if (nativeContent) return [{ key: `${nativeContent.contentType}:${nativeContent.id}`, title: nativeContent.title, contentType: nativeContent.contentType }]
+    if (publishedApp) return [{ key: `data_app:${publishedApp.dashboardId}`, title: publishedApp.title, contentType: 'data_app' }]
+    return []
+  }, [contentItems, nativeContent, publishedApp])
 
   const handleCopyThinkingTrace = (
     e: React.MouseEvent<HTMLButtonElement>, traceKey: string, steps: AntigravityActivityStep[],
@@ -1924,7 +1955,11 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 <span data-testid={m.role === 'assistant' ? 'chat-msg-agent-author' : undefined}>
                   {m.role === 'user' ? 'You' : m.role === 'error' ? 'Error' : agentName}
                 </span>
-                {m.dashboardId && <span className="dab-msg-pill">Dashboard #{m.dashboardId}{typeof m.widgetCount === 'number' ? ` · ${m.widgetCount} queries` : ''}</span>}
+                {m.dashboardId && (
+                  <button type="button" className="dab-msg-pill" onClick={() => { setActiveViewerDocument?.(null); setRightPaneCollapsed(false) }}>
+                    Dashboard #{m.dashboardId}{typeof m.widgetCount === 'number' ? ` · ${m.widgetCount} queries` : ''}
+                  </button>
+                )}
               </div>
               {m.role === 'assistant' && m.activitySteps && m.activitySteps.length > 0 && (
                 <details className="dab-thinking-block" data-testid="completed-thinking-block">
@@ -1941,13 +1976,9 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 <StudioMarkdown
                   text={m.text} hostUrl={hostUrl} extensionSDK={extensionSDK}
                   onOpenSandboxMarkdownFile={(p) => {
-                    const builtin = resolveBuiltinWorkspaceFileContent(p) || resolveBuiltinWorkspaceFileContent(normalizeSandboxFilePath(p))
-                    if (builtin) {
-                      const normalized = normalizeSandboxFilePath(p)
-                      setActiveSandboxMarkdownModalPath(normalized ? `/${normalized}` : p)
-                    } else {
-                      void loadSandboxMarkdownFile(p, { openModal: true })
-                    }
+                    const normalized = normalizeSandboxFilePath(p)
+                    setActiveSandboxMarkdownModalPath(normalized ? `/${normalized}` : p)
+                    void openViewerDocument?.({ path: p })
                   }}
                 />
               </div>
@@ -1977,6 +2008,24 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
         {busyStatus && (!liveActivitySteps || liveActivitySteps.length === 0) && (
           <div className="dab-status-banner"><span className="dab-spinner" /><span>{busyStatus}</span></div>
         )}
+
+        {chatViewerObjects.length > 0 && (
+          <div className="dab-chat-object-chips" data-testid="chat-object-viewer-chips">
+            {chatViewerObjects.map((item) => (
+              <button
+                key={item.key} type="button" data-testid={`chat-object-viewer-chip-${item.key}`}
+                className={`dab-msg-pill dab-chat-object-chip ${item.key === activeContentTabKey ? 'active' : ''}`}
+                onClick={() => {
+                  setActiveViewerDocument?.(null)
+                  if (contentItems.some((c) => c.key === item.key)) handleSelectContentTab?.(item.key)
+                  setRightPaneCollapsed(false)
+                }}
+              >
+                {renderContentTabIcon(item.contentType)}<span>{item.title}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {pendingPerm && (
@@ -1998,7 +2047,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       <SandboxMarkdownPreviewModal ctl={ctl} />
       {!rightPaneCollapsed && (
         <div
-          data-testid="workspace-split-resizer" role="separator" aria-orientation="vertical" aria-label="Resize chat and preview panes"
+          data-testid="workspace-split-resizer" role="separator" aria-orientation="vertical" aria-label="Resize chat and viewer panes"
           aria-valuenow={leftPaneWidth} aria-valuemin={MIN_LEFT_PANE_WIDTH} aria-valuemax={MAX_LEFT_PANE_WIDTH} tabIndex={0}
           className={`dab-split-resizer ${isResizingSplit ? 'active' : ''}`}
           onMouseDown={(e) => {
@@ -2041,6 +2090,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     publishedApp, contentItems = [], activeContentTabKey = '', activeContentItem = null,
     handleSelectContentTab, currentAppCode, embedNonce, extensionSDK, setInfoModalUseCase,
     busyStatus, rightPaneCollapsed, setRightPaneCollapsed, scriptId, scriptTitle,
+    activeViewerDocument = null, setActiveViewerDocument, openViewerDocument,
   } = ctl
   const isTileMode = activeMode === 'tile'
   const hostUrl = extensionSDK?.lookerHostData?.hostUrl || window.location.origin
@@ -2112,19 +2162,44 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const collapseToggleBtn = !rightPaneCollapsed ? (
     <button
       type="button" data-testid="right-pane-collapse-toggle" className="dab-btn dab-btn-secondary dab-right-collapse-btn"
-      title="Collapse preview pane" aria-label="Collapse preview pane" onClick={() => setRightPaneCollapsed(true)}
+      title="Collapse viewer" aria-label="Collapse viewer" onClick={() => setRightPaneCollapsed(true)}
     >
       <PanelRightClose size={14} strokeWidth={1.75} aria-hidden="true" />
     </button>
   ) : null
 
+  const hasViewerContent = Boolean(
+    activeViewerDocument || hasActiveEmbed || (isHealthCheckMode && healthReport) ||
+    (isLookmlMode && lookmlBundle) || ((isCaMode || caConversation) && caConversation) || isTileMode
+  )
+
   return (
-    <main className={`dab-right-pane ${rightPaneCollapsed ? 'dab-right-pane-collapsed' : ''}`} style={isEmptyConversation ? { display: 'none' } : undefined}>
+    <main
+      className={`dab-right-pane ${rightPaneCollapsed ? 'dab-right-pane-collapsed' : ''}`}
+      data-has-viewer-content={hasViewerContent ? 'true' : 'false'}
+      style={isEmptyConversation && !activeViewerDocument ? { display: 'none' } : undefined}
+    >
+      {!rightPaneCollapsed && (
+        <div className="dab-mobile-viewer-card-handle" data-testid="mobile-viewer-card-handle">
+          <div className="dab-mobile-viewer-grab-bar" aria-hidden="true" />
+          <div className="dab-mobile-viewer-card-header">
+            <span className="dab-mobile-viewer-card-title">
+              {activeViewerDocument?.title || activeContentItem?.title || publishedApp?.title || nativeContent?.title || lookmlBundle?.title || healthReport?.title || caConversation?.title || 'Viewer'}
+            </span>
+            <button
+              type="button" data-testid="mobile-viewer-card-close" className="dab-btn dab-btn-secondary dab-mobile-viewer-close-btn"
+              title="Collapse viewer" aria-label="Collapse viewer" onClick={() => setRightPaneCollapsed(true)}
+            >
+              <PanelRightClose size={14} strokeWidth={1.75} aria-hidden="true" /><span>Close</span>
+            </button>
+          </div>
+        </div>
+      )}
       {rightPaneCollapsed && (
         <div className="dab-right-collapsed-rail" data-testid="right-pane-collapsed-rail" aria-label="Collapsed artifacts rail">
           <button
             type="button" data-testid="right-pane-collapse-toggle" className="dab-btn dab-btn-secondary dab-right-rail-toggle-btn"
-            title="Expand preview pane" aria-label="Expand preview pane" onClick={() => setRightPaneCollapsed(false)}
+            title="Expand viewer" aria-label="Expand viewer" onClick={() => setRightPaneCollapsed(false)}
           >
             <PanelRightOpen size={14} strokeWidth={1.75} aria-hidden="true" />
           </button>
@@ -2198,7 +2273,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           <StudioToolbar
             title={lookmlBundle ? (
               <><strong>{lookmlBundle.title}</strong> <span className="dab-muted">(Session <code>obj_lookml_{lookmlBundle.id}</code> · {lookmlBundle.files?.length || 0} .lkml files)</span></>
-            ) : <span className="dab-muted">Agentic LookML preview (.lkml diffs, validator, run_lookml_test &amp; /sql/:slug + /x/:slug parity)</span>}
+            ) : <span className="dab-muted">Agentic LookML Viewer (.lkml diffs, validator, run_lookml_test &amp; /sql/:slug + /x/:slug parity)</span>}
             actions={<><UseCaseInfoTrigger useCase="lookml" onOpen={setInfoModalUseCase} />{collapseToggleBtn}</>}
           />
         ) : isCaMode || caConversation ? (
@@ -2242,7 +2317,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               ) : publishedApp ? (
                 <><strong>{publishedApp.title}</strong> <span className="dab-muted">(Dashboard #{publishedApp.dashboardId} · Extension db::{publishedApp.extensionId.slice(0, 8)}…)</span></>
               ) : busyStatus ? <span className="dab-muted">Thinking...</span>
-              : <span className="dab-muted">Preview will appear here when Looker content is ready</span>
+              : <span className="dab-muted">Viewer will appear here when Looker content is ready</span>
             }
             actions={
               <>
@@ -2253,7 +2328,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                 )}
                 {activePreviewId && (
                   <>
-                    <button type="button" className="dab-btn-secondary" onClick={() => setIframeRev((r) => r + 1)}>Reload Preview</button>
+                    <button type="button" className="dab-btn-secondary" onClick={() => setIframeRev((r) => r + 1)}>Reload Viewer</button>
                     <button type="button" className="dab-btn-secondary" onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}>Open in Looker ↗</button>
                   </>
                 )}
@@ -2275,7 +2350,36 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         </div>
       )}
 
-      <div className="dab-iframe-container" data-testid="ca-embed-preview" style={isTileMode || rightPaneCollapsed ? { display: 'none' } : undefined}>
+      {!rightPaneCollapsed && activeViewerDocument && (
+        <div className="dab-viewer-document-pane" data-testid="viewer-document-pane">
+          <div className="dab-viewer-document-header">
+            <div className="dab-viewer-document-title-group">
+              <strong data-testid="viewer-document-title">{activeViewerDocument.title}</strong>
+              <StudioBadge tone="accent" testId="viewer-document-path-badge">{activeViewerDocument.displayPath}</StudioBadge>
+            </div>
+            <div className="dab-viewer-document-actions">
+              <button type="button" data-testid="viewer-document-close-btn" className="dab-btn dab-btn-secondary" onClick={() => setActiveViewerDocument?.(null)}>
+                Close Document
+              </button>
+            </div>
+          </div>
+          <div className="dab-viewer-document-body" data-testid="viewer-document-body">
+            {activeViewerDocument.loading ? (
+              <div className="dab-viewer-document-loading" data-testid="viewer-document-loading">
+                <StudioSkeleton width="100%" height={32} /><span className="dab-muted">Loading from sandbox...</span>
+              </div>
+            ) : activeViewerDocument.isMarkdown ? (
+              <div className="dab-viewer-document-markdown" data-testid="viewer-document-markdown">
+                <StudioMarkdown text={activeViewerDocument.content} hostUrl={hostUrl} extensionSDK={extensionSDK} onOpenSandboxMarkdownFile={(p) => void openViewerDocument?.({ path: p })} />
+              </div>
+            ) : (
+              <pre className="dab-viewer-document-code" data-testid="viewer-document-code"><code>{activeViewerDocument.content}</code></pre>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="dab-iframe-container" data-testid="ca-embed-preview" style={isTileMode || rightPaneCollapsed || Boolean(activeViewerDocument) ? { display: 'none' } : undefined}>
         <div ref={embedContainerRef} data-testid="looker-embed-container" className="dab-embed-container" style={{ width: '100%', height: '100%', display: hasActiveEmbed ? 'block' : 'none' }} />
         {isHealthCheckMode ? (
           healthReport ? (

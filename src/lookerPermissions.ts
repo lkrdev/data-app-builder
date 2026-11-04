@@ -64,10 +64,12 @@ export async function saveStoredLeftPaneWidth(width: number, extensionSDK?: Exte
   await setDualStorage(STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY, String(clampLeftPaneWidth(width)), extensionSDK)
 }
 export function readInitialRightPaneCollapsed(): boolean {
+  if (typeof window !== 'undefined' && typeof window.innerWidth === 'number' && window.innerWidth <= 768) return true
   const raw = String(getWinStorage(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY) ?? '').trim().toLowerCase()
   return raw === 'true' || raw === '1'
 }
 export async function loadStoredRightPaneCollapsed(extensionSDK?: ExtensionHostStorageLike | null): Promise<boolean> {
+  if (typeof window !== 'undefined' && typeof window.innerWidth === 'number' && window.innerWidth <= 768) return true
   try {
     const norm = String(((await extensionSDK?.localStorageGetItem?.(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY)) ?? getWinStorage(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY)) ?? '').trim().toLowerCase()
     return norm === 'true' || norm === '1'

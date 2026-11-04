@@ -9,12 +9,12 @@ import {
   authenticateGoogleOAuth, buildDynamicStarterPrompts, clearStoredOAuthSession, CodeModePermissionDecision,
   CodeModePermissionRequest, computeIsAuthenticated, DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_MAX_TOTAL_TOKENS,
   DEFAULT_THINKING_LEVEL, discoverStarterExploreContext, ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig,
-  fetchEnvironmentFile, generateConversationLabel, generateDynamicStarterPrompts, getCachedStarterPrompts,
+  extractSkillNameFromPath, fetchEnvironmentFile, generateConversationLabel, generateDynamicStarterPrompts, getCachedStarterPrompts,
   getInitialStoredOAuthSession, getInitialStoredOAuthToken, inFlightEnvProvisionByUser, listAvailableAntigravityModels,
   LkrCodeMode, loadStoredOAuthSession, loadStoredThinkingLevel, loginWithGoogleOAuth, normalizeEnvironmentId,
   normalizeMaxTotalTokens, normalizeSandboxFilePath, normalizeThinkingLevel, parseValidOAuthSession, PastedImage,
   persistThinkingLevel, prewarmOrWakeAntigravityEnvironment, readInitialThinkingLevel, refreshOAuthSessionIfNeeded,
-  resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, resolveTargetExploreFromModels,
+  resolveBuiltinWorkspaceFileContent, resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, resolveTargetExploreFromModels,
   runAntigravityTurn, sanitizeConversationLabel, sharedEnvExploreSchemas, StarterPromptItem,
   STUDIO_MAX_TOTAL_TOKENS_OPTIONS, STUDIO_OAUTH_REFRESH_INTERVAL_MS, STUDIO_OAUTH_REFRESH_LOCK_KEY,
   STUDIO_OAUTH_STORAGE_KEY, STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY, StudioThinkingLevel,
@@ -68,89 +68,55 @@ export type {
   ResolvedStudioTheme, StudioBusySendAction, StudioContextCategory, StudioContextMention, StudioThemeMode, StudioThinkingLevel,
 }
 
-export interface QueuedPromptItem {
-  id: string
-  text: string
-  images: PastedImage[]
-  mentions: StudioContextMention[]
-}
-
+export interface QueuedPromptItem { id: string; text: string; images: PastedImage[]; mentions: StudioContextMention[] }
 export type StudioEnvironmentStatus = 'active' | 'resetting' | 'stopped'
-
-type HostDataWithMount = {
-  mountType?: string
-  mountPoint?: string
-  hostUrl?: string
-  extensionId?: string
+export interface StudioViewerDocument {
+  path: string; displayPath: string; title: string; kind: 'skill' | 'file'; isMarkdown: boolean; content: string; loading?: boolean
 }
-
+type HostDataWithMount = { mountType?: string; mountPoint?: string; hostUrl?: string; extensionId?: string }
 interface StoredCaArtifactPayload extends Partial<CaConversationState> {
-  agent_id?: string
-  agent_name?: string
-  lastInteractionId?: string
-  studio?: { lastInteractionId?: string; messages?: ChatMessage[] }
-  messages?: ChatMessage[]
+  agent_id?: string; agent_name?: string; lastInteractionId?: string
+  studio?: { lastInteractionId?: string; messages?: ChatMessage[] }; messages?: ChatMessage[]
 }
 
-const getErrorMessage = (err: unknown): string =>
-  err instanceof Error ? err.message : String(err || '')
+const getErrorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err || ''))
 
 export function useStudioController() {
   const { extensionSDK, core40SDK, tileHostData, lookerHostData } = useLookerExtension()
   const history = useHistory()
   const location = useLocation()
-  const extHostData = (extensionSDK as { lookerHostData?: HostDataWithMount } | undefined)
-    ?.lookerHostData
+  const extHostData = (extensionSDK as { lookerHostData?: HostDataWithMount } | undefined)?.lookerHostData
   const hostData = (lookerHostData as HostDataWithMount | undefined) || extHostData
-  const mountType =
-    hostData?.mountType ||
-    extHostData?.mountType ||
-    lookerHostData?.mountPoint ||
-    extHostData?.mountPoint
+  const mountType = hostData?.mountType || extHostData?.mountType || lookerHostData?.mountPoint || extHostData?.mountPoint
   const isTileMount =
-    mountType === 'dashboard_tile' ||
-    mountType === 'dashboard-tile' ||
-    Boolean(tileHostData?.elementId || tileHostData?.dashboardId)
+    mountType === 'dashboard_tile' || mountType === 'dashboard-tile' || Boolean(tileHostData?.elementId || tileHostData?.dashboardId)
 
   const initialCtx = (() => {
-    try {
-      return (extensionSDK.getContextData() as ExtensionAuthContextConfig | undefined) || undefined
-    } catch {
-      return undefined
-    }
+    try { return (extensionSDK.getContextData() as ExtensionAuthContextConfig | undefined) || undefined } catch { return undefined }
   })()
-  const mockExt =
-    typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
+  const mockExt = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
   const [authMode, setAuthMode] = useState<'oauth' | 'apikey'>(initialCtx?.authMode || 'oauth')
   const [clientId, setClientId] = useState(initialCtx?.clientId || '')
   const [projectId, setProjectId] = useState(initialCtx?.projectId || '')
   const [disabledModes, setDisabledModes] = useState<StudioMode[]>(() =>
     Array.isArray(initialCtx?.disabledModes) ? (initialCtx.disabledModes as StudioMode[]) : []
   )
-  const [selectedModel, setSelectedModel] = useState<string>(
-    initialCtx?.defaultModel || DEFAULT_ANTIGRAVITY_MODEL
-  )
+  const [selectedModel, setSelectedModel] = useState<string>(initialCtx?.defaultModel || DEFAULT_ANTIGRAVITY_MODEL)
   const [defaultThinkingLevel, setDefaultThinkingLevelState] = useState<StudioThinkingLevel>(() =>
     normalizeThinkingLevel(initialCtx?.defaultThinkingLevel || DEFAULT_THINKING_LEVEL)
   )
-  const [maxTotalTokens, setMaxTotalTokensState] = useState<number>(() =>
-    normalizeMaxTotalTokens(initialCtx?.maxTotalTokens)
-  )
+  const [maxTotalTokens, setMaxTotalTokensState] = useState<number>(() => normalizeMaxTotalTokens(initialCtx?.maxTotalTokens))
   const [thinkingLevel, setThinkingLevelState] = useState<StudioThinkingLevel>(() =>
     readInitialThinkingLevel(initialCtx?.defaultThinkingLevel || DEFAULT_THINKING_LEVEL)
   )
-  const [availableModels, setAvailableModels] = useState<AntigravityModelOption[]>(
-    ANTIGRAVITY_ALLOWED_MODELS
-  )
+  const [availableModels, setAvailableModels] = useState<AntigravityModelOption[]>(ANTIGRAVITY_ALLOWED_MODELS)
   const enabledModes = useMemo(() => {
     const list = STUDIO_MODES.filter((m) => !disabledModes.includes(m.mode))
     return list.length > 0 ? list : [STUDIO_MODES[0]]
   }, [disabledModes])
   const initialClientId = initialCtx?.clientId || ''
   const initialOAuthSession = getInitialStoredOAuthSession(initialClientId)
-  const [oauthToken, setOauthToken] = useState(
-    () => initialOAuthSession?.token || getInitialStoredOAuthToken(initialClientId)
-  )
+  const [oauthToken, setOauthToken] = useState(() => initialOAuthSession?.token || getInitialStoredOAuthToken(initialClientId))
   const [oauthExpiresAt, setOauthExpiresAt] = useState<number>(
     () => initialOAuthSession?.expiresAt || (initialOAuthSession?.token ? Date.now() + STUDIO_OAUTH_REFRESH_INTERVAL_MS : 0)
   )
@@ -165,9 +131,7 @@ export function useStudioController() {
     (err: unknown): string => {
       const msg = getErrorMessage(err)
       if (authMode === 'oauth' && /\b401\b|UNAUTHENTICATED/i.test(msg)) {
-        clearStoredOAuthSession(extensionSDK)
-        setOauthToken('')
-        setOauthExpiresAt(0)
+        clearStoredOAuthSession(extensionSDK); setOauthToken(''); setOauthExpiresAt(0)
       }
       return msg
     },
@@ -183,16 +147,9 @@ export function useStudioController() {
       }
       try {
         const res = await refreshOAuthSessionIfNeeded({
-          extensionSDK,
-          clientId,
-          tabId: tabIdRef.current,
-          force,
-          currentToken: oauthToken,
+          extensionSDK, clientId, tabId: tabIdRef.current, force, currentToken: oauthToken,
         })
-        if (res?.deferredUntilVisible) {
-          oauthPendingRefreshRef.current = true
-          return null
-        }
+        if (res?.deferredUntilVisible) { oauthPendingRefreshRef.current = true; return null }
         if (res?.token) {
           oauthPendingRefreshRef.current = false
           setOauthToken(res.token)
@@ -201,9 +158,7 @@ export function useStudioController() {
         }
         return null
       } catch {
-        clearStoredOAuthSession(extensionSDK)
-        setOauthToken('')
-        setOauthExpiresAt(0)
+        clearStoredOAuthSession(extensionSDK); setOauthToken(''); setOauthExpiresAt(0)
         return null
       }
     },
@@ -218,9 +173,7 @@ export function useStudioController() {
       setOauthToken((prev) => prev || stored.token)
       setOauthExpiresAt((prev) => prev || stored.expiresAt)
     })
-    return () => {
-      mounted = false
-    }
+    return () => { mounted = false }
   }, [extensionSDK, initialClientId, mockExt])
 
   useEffect(() => {
@@ -228,16 +181,11 @@ export function useStudioController() {
     const onStorage = (e: StorageEvent) => {
       if (e.key && e.key !== STUDIO_OAUTH_STORAGE_KEY) return
       if (!e.newValue) {
-        oauthPendingRefreshRef.current = false
-        setOauthToken('')
-        setOauthExpiresAt(0)
-        return
+        oauthPendingRefreshRef.current = false; setOauthToken(''); setOauthExpiresAt(0); return
       }
       const { session } = parseValidOAuthSession(e.newValue, clientId)
       if (session) {
-        oauthPendingRefreshRef.current = false
-        setOauthToken(session.token)
-        setOauthExpiresAt(session.expiresAt)
+        oauthPendingRefreshRef.current = false; setOauthToken(session.token); setOauthExpiresAt(session.expiresAt)
       }
     }
     window.addEventListener('storage', onStorage)
@@ -249,8 +197,7 @@ export function useStudioController() {
     const maybeRefresh = () => {
       if (Date.now() < oauthExpiresAt && !oauthPendingRefreshRef.current) return
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-        oauthPendingRefreshRef.current = true
-        return
+        oauthPendingRefreshRef.current = true; return
       }
       oauthPendingRefreshRef.current = false
       void triggerSilentOAuthRefresh(false)
@@ -265,26 +212,18 @@ export function useStudioController() {
     }
   }, [authMode, oauthToken, clientId, oauthExpiresAt, triggerSilentOAuthRefresh])
   const oauthRedirectUri = useMemo(
-    () =>
-      resolveLookerOAuthRedirectUri(
-        lookerHostData?.hostUrl || extHostData?.hostUrl
-      ),
+    () => resolveLookerOAuthRedirectUri(lookerHostData?.hostUrl || extHostData?.hostUrl),
     [lookerHostData?.hostUrl, extHostData?.hostUrl]
   )
   const [isConfigured, setIsConfigured] = useState(() =>
     Boolean(initialCtx?.authMode && (initialCtx.authMode === 'apikey' || initialCtx.clientId))
   )
-  const [themeMode, setThemeModeState] = useState<StudioThemeMode>(() =>
-    readInitialStudioThemeMode()
-  )
+  const [themeMode, setThemeModeState] = useState<StudioThemeMode>(() => readInitialStudioThemeMode())
   const [systemTheme, setSystemTheme] = useState<ResolvedStudioTheme>(() => resolveSystemTheme())
   const resolvedTheme: ResolvedStudioTheme = resolveStudioTheme(themeMode, systemTheme)
 
   applyStudioDocumentTheme(resolvedTheme, themeMode)
-
-  useEffect(() => {
-    applyStudioDocumentTheme(resolvedTheme, themeMode)
-  }, [resolvedTheme, themeMode])
+  useEffect(() => { applyStudioDocumentTheme(resolvedTheme, themeMode) }, [resolvedTheme, themeMode])
 
   const [leftPaneWidth, setLeftPaneWidthState] = useState<number>(() => readInitialLeftPaneWidth())
   const [rightPaneCollapsed, setRightPaneCollapsedState] = useState<boolean>(() => readInitialRightPaneCollapsed())
@@ -769,11 +708,7 @@ export function useStudioController() {
 
   const activeContentItem = useMemo<StudioContentItem | null>(() => {
     if (contentItems.length === 0) return null
-    return (
-      contentItems.find((it) => it.key === activeContentTabKey) ||
-      contentItems[contentItems.length - 1] ||
-      null
-    )
+    return contentItems.find((it) => it.key === activeContentTabKey) || contentItems[contentItems.length - 1] || null
   }, [contentItems, activeContentTabKey])
 
   const [embedNonce, setEmbedNonce] = useState<number>(0)
@@ -790,36 +725,20 @@ export function useStudioController() {
   const [filtersJson, setFiltersJson] = useState('{}')
   const [scriptOutput, setScriptOutput] = useState('')
   const [scriptMode, setScriptMode] = useState('summary')
-  const [publishedTileDash, setPublishedTileDash] = useState<{
-    dashboardId: string
-    elementId: string
-  } | null>(null)
-  const [schedulerOpen, setSchedulerOpen] = useState(() =>
-    Boolean(mockExt?.openSchedulerModal)
-  )
+  const [publishedTileDash, setPublishedTileDash] = useState<{ dashboardId: string; elementId: string } | null>(null)
+  const [schedulerOpen, setSchedulerOpen] = useState(() => Boolean(mockExt?.openSchedulerModal))
   const [infoModalUseCase, setInfoModalUseCase] = useState<StudioUseCase | null>(() =>
     (mockExt?.initialInfoModalUseCase as StudioUseCase) || null
   )
   const [scheduleConfig, setScheduleConfig] = useState<{
-    name: string
-    cron: string
-    mode: string
-    customVarsJson: string
-    destination: 'artifact_snapshot' | 'webhook' | 'looker_scheduled_plan'
-    targetUrlOrEmail: string
-    enabled: boolean
+    name: string; cron: string; mode: string; customVarsJson: string
+    destination: 'artifact_snapshot' | 'webhook' | 'looker_scheduled_plan'; targetUrlOrEmail: string; enabled: boolean
   }>({
-    name: 'Daily Morning Explore & Filter Snapshot',
-    cron: '0 8 * * *',
-    mode: 'summary',
-    customVarsJson: '{"region":"AMER","threshold":0.95}',
-    destination: 'artifact_snapshot',
-    targetUrlOrEmail: 'https://hooks.example.com/looker-script-webhook',
-    enabled: true,
+    name: 'Daily Morning Explore & Filter Snapshot', cron: '0 8 * * *', mode: 'summary',
+    customVarsJson: '{"region":"AMER","threshold":0.95}', destination: 'artifact_snapshot',
+    targetUrlOrEmail: 'https://hooks.example.com/looker-script-webhook', enabled: true,
   })
-  const [savedScheduleBadge, setSavedScheduleBadge] = useState<string | null>(
-    '0 8 * * * · summary'
-  )
+  const [savedScheduleBadge, setSavedScheduleBadge] = useState<string | null>('0 8 * * * · summary')
   const [loadedScript, setLoadedScript] = useState(false)
   const lastScriptIdRef = useRef<string>('')
   const [currentAppCode, setCurrentAppCode] = useState('')
@@ -830,8 +749,10 @@ export function useStudioController() {
   const [sandboxMarkdownCache, setSandboxMarkdownCache] = useState<Record<string, string>>({})
   const sandboxMarkdownCacheRef = useRef<Record<string, string>>({})
   sandboxMarkdownCacheRef.current = sandboxMarkdownCache
+  const inFlightSandboxFilesRef = useRef<Record<string, Promise<string> | undefined>>({})
   const [sandboxMarkdownLoading, setSandboxMarkdownLoading] = useState<Record<string, boolean>>({})
   const [activeSandboxMarkdownModalPath, setActiveSandboxMarkdownModalPath] = useState<string | null>(null)
+  const [activeViewerDocument, setActiveViewerDocument] = useState<StudioViewerDocument | null>(null)
   const [environmentStatus, setEnvironmentStatus] = useState<StudioEnvironmentStatus>('active')
   const environmentStatusRef = useRef<StudioEnvironmentStatus>('active')
   environmentStatusRef.current = environmentStatus
@@ -844,8 +765,7 @@ export function useStudioController() {
 
   const updateQueuedPrompts = useCallback(
     (updater: QueuedPromptItem[] | ((prev: QueuedPromptItem[]) => QueuedPromptItem[])) => {
-      const next =
-        typeof updater === 'function' ? updater(queuedPromptsRef.current) : updater
+      const next = typeof updater === 'function' ? updater(queuedPromptsRef.current) : updater
       queuedPromptsRef.current = next
       setQueuedPrompts(next)
     },
@@ -865,17 +785,9 @@ export function useStudioController() {
 
   const [messagesByMode, setMessagesByMode] = useState<Record<StudioMode, ChatMessage[]>>(() => {
     if (Array.isArray(mockExt?.initialMessages)) {
-      return {
-        app: mockExt.initialMessages as ChatMessage[],
-        dashboard: [],
-        lookml: [],
-        health: [],
-        tile: [],
-      }
+      return { app: mockExt.initialMessages as ChatMessage[], dashboard: [], lookml: [], health: [], tile: [] }
     }
-    const initialErr = mockExt?.initialError
-      ? [{ role: 'error' as const, text: String(mockExt.initialError) }]
-      : []
+    const initialErr = mockExt?.initialError ? [{ role: 'error' as const, text: String(mockExt.initialError) }] : []
     return { app: initialErr, dashboard: [], lookml: [], health: [], tile: [] }
   })
   const messagesByModeRef = useRef<Record<StudioMode, ChatMessage[]>>(messagesByMode)
@@ -915,6 +827,8 @@ export function useStudioController() {
       const cacheKey = `${envId}:${normalizedPath}`
       const cached = sandboxMarkdownCacheRef.current[cacheKey] ?? sandboxMarkdownCacheRef.current[normalizedPath] ?? sandboxMarkdownCacheRef.current[displayPath]
       if (typeof cached === 'string' && cached.length > 0) return cached
+      const inFlight = inFlightSandboxFilesRef.current[cacheKey]
+      if (inFlight) return inFlight
       const setLoading = (flag: boolean) => setSandboxMarkdownLoading((p) => ({ ...p, [cacheKey]: flag, [normalizedPath]: flag, [displayPath]: flag }))
       const storeCache = (val: string) => {
         const next = { ...sandboxMarkdownCacheRef.current, [cacheKey]: val, [normalizedPath]: val, [displayPath]: val }
@@ -923,41 +837,67 @@ export function useStudioController() {
         return val
       }
       setLoading(true)
-      try {
-        // Ephemeral remote sandbox retrieval: never persisted to Looker Artifacts
-        const content = await fetchEnvironmentFile({
-          extensionSDK,
-          auth: { mode: authMode, oauthToken, clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true) },
-          environmentId: envId,
-          path: normalizedPath,
-        })
-        return storeCache(content)
-      } catch (err: unknown) {
-        return storeCache(`# Error Loading File\n\nUnable to load \`${displayPath}\` from sandbox environment \`${envId}\`: ${getErrorMessage(err)}`)
-      } finally {
-        setLoading(false)
-      }
+      const reqPromise = (async () => {
+        try {
+          // Ephemeral remote sandbox retrieval: never persisted to Looker Artifacts
+          const content = await fetchEnvironmentFile({
+            extensionSDK,
+            auth: { mode: authMode, oauthToken, clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true) },
+            environmentId: envId, path: normalizedPath,
+          })
+          return storeCache(content)
+        } catch (err: unknown) {
+          return storeCache(`# Error Loading File\n\nUnable to load \`${displayPath}\` from sandbox environment \`${envId}\`: ${getErrorMessage(err)}`)
+        } finally {
+          delete inFlightSandboxFilesRef.current[cacheKey]
+          setLoading(false)
+        }
+      })()
+      inFlightSandboxFilesRef.current[cacheKey] = reqPromise
+      return reqPromise
     },
     [extensionSDK, authMode, oauthToken, clientId, projectId, apiKey, triggerSilentOAuthRefresh]
+  )
+
+  const openViewerDocument = useCallback(
+    async (input: { path: string; title?: string; kind?: 'skill' | 'file'; content?: string }): Promise<string> => {
+      const raw = String(input.path || '').trim()
+      if (!raw) return ''
+      const skillName = extractSkillNameFromPath(raw)
+      const resolvedRawPath = !raw.includes('/') && skillName ? `/workspace/skills/${skillName}/SKILL.md` : raw
+      const normalizedPath = normalizeSandboxFilePath(resolvedRawPath)
+      const displayPath = normalizedPath ? `/${normalizedPath}` : resolvedRawPath
+      const kind: 'skill' | 'file' = input.kind || (skillName ? 'skill' : 'file')
+      const isMarkdown = kind === 'skill' || /\.md$/i.test(displayPath)
+      const title = input.title || (skillName ? `Reading skill ${skillName}` : displayPath.split('/').filter(Boolean).pop() || displayPath)
+      const initialContent =
+        (typeof input.content === 'string' && input.content.trim()) ||
+        sandboxMarkdownCacheRef.current[normalizedPath] ||
+        sandboxMarkdownCacheRef.current[displayPath] ||
+        resolveBuiltinWorkspaceFileContent(resolvedRawPath) ||
+        resolveBuiltinWorkspaceFileContent(displayPath) ||
+        ''
+      const docBase = { path: normalizedPath || resolvedRawPath, displayPath, title, kind, isMarkdown }
+      setRightPaneCollapsed(false)
+      setActiveViewerDocument({ ...docBase, content: initialContent, loading: !initialContent })
+      const finalContent = (await loadSandboxMarkdownFile(resolvedRawPath)) || initialContent
+      setActiveViewerDocument({ ...docBase, content: finalContent, loading: false })
+      return finalContent
+    },
+    [loadSandboxMarkdownFile, setRightPaneCollapsed]
   )
   const setAgentSession = useCallback(
     (next: AgentSession, targetMode: StudioMode = activeModeRef.current) => {
       const nextShared = normalizeEnvironmentId(next.environmentId)
       if (nextShared && nextShared !== sharedEnvIdRef.current && next.lastInteractionId) {
-        sharedEnvIdRef.current = nextShared
-        setSharedEnvironmentId(nextShared)
+        sharedEnvIdRef.current = nextShared; setSharedEnvironmentId(nextShared)
       }
       setSessionsByMode((prev) => {
         const updated = {
           ...prev,
           [targetMode]: {
-            ...next,
-            toolType: targetMode,
-            environmentId:
-              sharedEnvIdRef.current ||
-              next.environmentId ||
-              prev[targetMode]?.environmentId ||
-              `env_${targetMode}_isolated`,
+            ...next, toolType: targetMode,
+            environmentId: sharedEnvIdRef.current || next.environmentId || prev[targetMode]?.environmentId || `env_${targetMode}_isolated`,
           },
         }
         sessionsByModeRef.current = updated
@@ -967,19 +907,12 @@ export function useStudioController() {
     []
   )
 
-  const messages = useMemo(
-    () => messagesByMode[activeMode] || [],
-    [messagesByMode, activeMode]
-  )
+  const messages = useMemo(() => messagesByMode[activeMode] || [], [messagesByMode, activeMode])
   const setMessages = useCallback(
-    (
-      updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[]),
-      targetMode?: StudioMode
-    ) => {
+    (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[]), targetMode?: StudioMode) => {
       const mode = targetMode ?? activeModeRef.current
       const cur = messagesByModeRef.current[mode] || []
-      const next = typeof updater === 'function' ? updater(cur) : updater
-      const updated = { ...messagesByModeRef.current, [mode]: next }
+      const updated = { ...messagesByModeRef.current, [mode]: typeof updater === 'function' ? updater(cur) : updater }
       messagesByModeRef.current = updated
       setMessagesByMode(updated)
     },
@@ -987,21 +920,13 @@ export function useStudioController() {
   )
 
   const [prompt, setPrompt] = useState(() => String(mockExt?.initialPrompt || ''))
-  const [pastedImages, setPastedImages] = useState<PastedImage[]>(
-    () => (mockExt?.initialPastedImages as PastedImage[] | undefined) || []
-  )
-  const [busyStatus, setBusyStatus] = useState<string | null>(
-    () => mockExt?.initialBusyStatus || null
-  )
-  const [liveActivitySteps, setLiveActivitySteps] = useState<AntigravityActivityStep[]>(
-    () =>
-      Array.isArray(mockExt?.initialLiveActivitySteps)
-        ? (mockExt.initialLiveActivitySteps as AntigravityActivityStep[])
-        : []
+  const [pastedImages, setPastedImages] = useState<PastedImage[]>(() => (mockExt?.initialPastedImages as PastedImage[] | undefined) || [])
+  const [busyStatus, setBusyStatus] = useState<string | null>(() => mockExt?.initialBusyStatus || null)
+  const [liveActivitySteps, setLiveActivitySteps] = useState<AntigravityActivityStep[]>(() =>
+    Array.isArray(mockExt?.initialLiveActivitySteps) ? (mockExt.initialLiveActivitySteps as AntigravityActivityStep[]) : []
   )
   const liveActivityStepsRef = useRef<AntigravityActivityStep[]>(liveActivitySteps)
   liveActivityStepsRef.current = liveActivitySteps
-
   const isUseCaseLocked = false
 
   useEffect(() => {
@@ -1573,65 +1498,35 @@ export function useStudioController() {
 
       if (hasOAuth) {
         const refined = await generateDynamicStarterPrompts({
-          sdk: core40SDK,
-          extensionSDK,
+          sdk: core40SDK, extensionSDK,
           auth: { mode: 'oauth', oauthToken: oauthAccessToken, clientId, projectId, apiKey },
           environmentId: sharedEnvIdRef.current || undefined,
-          useCase: selectedUseCase,
-          selectedExplores,
-          permittedUseCases: allowedUseCases,
-          availableModels: models,
-          exploreContext,
-          model: selectedModel,
+          useCase: selectedUseCase, selectedExplores, permittedUseCases: allowedUseCases,
+          availableModels: models, exploreContext, model: selectedModel,
         })
-        if (mounted && refined.length > 0) {
-          setStarterPrompts(refined)
-        }
+        if (mounted && refined.length > 0) setStarterPrompts(refined)
       }
     })()
 
-    return () => {
-      mounted = false
-    }
+    return () => { mounted = false }
   }, [
-    core40SDK,
-    extensionSDK,
-    selectedUseCase,
-    selectedExplores,
-    allowedUseCases,
-    models,
-    availableModels,
-    oauthAccessToken,
-    loadingMetadata,
-    clientId,
-    projectId,
-    apiKey,
-    selectedModel,
-    mockExt?.forceStarterPromptsSkeleton,
+    core40SDK, extensionSDK, selectedUseCase, selectedExplores, allowedUseCases,
+    models, availableModels, oauthAccessToken, loadingMetadata, clientId,
+    projectId, apiKey, selectedModel, mockExt?.forceStarterPromptsSkeleton,
   ])
 
   const handleCancelOAuthLogin = useCallback(() => {
-    oauthAbortRef.current?.abort()
-    oauthAbortRef.current = null
-    setOauthSigningIn(false)
+    oauthAbortRef.current?.abort(); oauthAbortRef.current = null; setOauthSigningIn(false)
   }, [])
 
   const handleOAuthLogout = useCallback(() => {
-    oauthAbortRef.current?.abort()
-    oauthAbortRef.current = null
-    oauthPendingRefreshRef.current = false
-    setOauthSigningIn(false)
-    clearStoredOAuthSession(extensionSDK)
-    setOauthToken('')
-    setOauthExpiresAt(0)
+    oauthAbortRef.current?.abort(); oauthAbortRef.current = null; oauthPendingRefreshRef.current = false
+    setOauthSigningIn(false); clearStoredOAuthSession(extensionSDK); setOauthToken(''); setOauthExpiresAt(0)
   }, [extensionSDK])
 
   const handleOAuthLogin = useCallback(async () => {
     if (!clientId.trim()) {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'error', text: 'Enter your Google Web OAuth 2.0 Client ID first.' },
-      ])
+      setMessages((prev) => [...prev, { role: 'error', text: 'Enter your Google Web OAuth 2.0 Client ID first.' }])
       return
     }
     oauthAbortRef.current?.abort()
@@ -1641,10 +1536,7 @@ export function useStudioController() {
     try {
       const token = await loginWithGoogleOAuth(extensionSDK, clientId, {
         signal: controller.signal,
-        focusReturnDelayMs:
-          typeof mockExt?.oauthFocusReturnDelayMs === 'number'
-            ? mockExt.oauthFocusReturnDelayMs
-            : 1500,
+        focusReturnDelayMs: typeof mockExt?.oauthFocusReturnDelayMs === 'number' ? mockExt.oauthFocusReturnDelayMs : 1500,
       })
       if (oauthAbortRef.current === controller) {
         oauthPendingRefreshRef.current = false
@@ -1654,31 +1546,20 @@ export function useStudioController() {
       }
     } catch (err: unknown) {
       if (oauthAbortRef.current === controller && !controller.signal.aborted) {
-        setMessages((prev) => [
-          ...prev,
-          { role: 'error', text: `Google OAuth failed: ${getErrorMessage(err)}` },
-        ])
+        setMessages((prev) => [...prev, { role: 'error', text: `Google OAuth failed: ${getErrorMessage(err)}` }])
       }
     } finally {
-      if (oauthAbortRef.current === controller) {
-        oauthAbortRef.current = null
-        setOauthSigningIn(false)
-      }
+      if (oauthAbortRef.current === controller) { oauthAbortRef.current = null; setOauthSigningIn(false) }
     }
   }, [clientId, extensionSDK, mockExt?.oauthFocusReturnDelayMs, setMessages])
 
   const runWithBusy = useCallback(
     async (statusText: string, errPrefix: string, fn: () => Promise<void>) => {
       try {
-        setBusyStatus(statusText)
-        await fn()
-        setBusyStatus(mockExt?.initialBusyStatus || null)
+        setBusyStatus(statusText); await fn(); setBusyStatus(mockExt?.initialBusyStatus || null)
       } catch (err: unknown) {
         setBusyStatus(mockExt?.initialBusyStatus || null)
-        setMessages((prev) => [
-          ...prev,
-          { role: 'error', text: `${errPrefix}: ${getErrorMessage(err)}` },
-        ])
+        setMessages((prev) => [...prev, { role: 'error', text: `${errPrefix}: ${getErrorMessage(err)}` }])
       }
     },
     [mockExt?.initialBusyStatus, setMessages]
@@ -1689,14 +1570,10 @@ export function useStudioController() {
       mode: StudioMode; id: string; route: string; pushRoute: boolean; convTypes: string[]
       convId?: string; explores?: string[]
       studio?: {
-        explores?: string[]
-        messages?: unknown[]
-        lastInteractionId?: string
-        environmentId?: string
+        explores?: string[]; messages?: unknown[]; lastInteractionId?: string; environmentId?: string
         lastSession?: { lastInteractionId?: string; environmentId?: string }
       } | null
-      lastInteractionId?: string
-      environmentId?: string; defaultEnvId: string; messages?: ChatMessage[]
+      lastInteractionId?: string; environmentId?: string; defaultEnvId: string; messages?: ChatMessage[]
       fallbackText: string; dashboardId?: string
     }) => {
       const explores = opts.explores ?? opts.studio?.explores?.filter(Boolean)
@@ -1710,13 +1587,8 @@ export function useStudioController() {
         return cid === opts.id && opts.convTypes.includes(c.type)
       })
       if (matchedConv) {
-        const fromConv = hydrateConversationContentItems(matchedConv)
-        for (const item of fromConv) {
-          upsertContentItem(item, false)
-        }
-        if (matchedConv.activeContentTabKey) {
-          setActiveContentTabKey(matchedConv.activeContentTabKey)
-        }
+        for (const item of hydrateConversationContentItems(matchedConv)) upsertContentItem(item, false)
+        if (matchedConv.activeContentTabKey) setActiveContentTabKey(matchedConv.activeContentTabKey)
       }
       setActiveObjectId(opts.id)
       setActiveConversationId((prev) => {
@@ -1729,16 +1601,12 @@ export function useStudioController() {
         {
           lastInteractionId: opts.lastInteractionId || opts.studio?.lastInteractionId || opts.studio?.lastSession?.lastInteractionId,
           environmentId: sharedEnvIdRef.current || opts.environmentId || opts.studio?.environmentId || opts.studio?.lastSession?.environmentId || opts.defaultEnvId,
-          conversationId: opts.id,
-          explores,
-          toolType: opts.mode,
+          conversationId: opts.id, explores, toolType: opts.mode,
         },
         opts.mode
       )
       setMessages(
-        msgs?.length
-          ? msgs
-          : [{ role: 'assistant', text: opts.fallbackText, ...(opts.dashboardId ? { dashboardId: opts.dashboardId } : {}) }],
+        msgs?.length ? msgs : [{ role: 'assistant', text: opts.fallbackText, ...(opts.dashboardId ? { dashboardId: opts.dashboardId } : {}) }],
         opts.mode
       )
       if (opts.pushRoute && location.pathname !== opts.route) history.replace(opts.route)
@@ -1809,22 +1677,13 @@ export function useStudioController() {
         const loaded = await loadExistingDashboardApp(core40SDK, id)
         lastPublishedIdRef.current = loaded.dashboardId
         const existingUc = resolvedUseCaseByIdRef.current[loaded.dashboardId]
-        const targetUc: ResolvedStudioUseCase =
-          existingUc === 'data-investigator' ? 'data-investigator' : 'app'
+        const targetUc: ResolvedStudioUseCase = existingUc === 'data-investigator' ? 'data-investigator' : 'app'
         resolvedUseCaseByIdRef.current[loaded.dashboardId] = targetUc
-        setSelectedUseCase(targetUc)
-        setPublishedApp(loaded)
-        setCurrentAppCode(loaded.code)
-        setLoadDashInput(loaded.dashboardId)
-        setSelectedFolderId(loaded.folderId)
+        setSelectedUseCase(targetUc); setPublishedApp(loaded); setCurrentAppCode(loaded.code)
+        setLoadDashInput(loaded.dashboardId); setSelectedFolderId(loaded.folderId)
         const studioExplores = loaded.studio?.explores?.filter(Boolean) || []
-        const legacyExplore =
-          loaded.studio?.modelName && loaded.studio?.exploreName
-            ? [formatExploreId(loaded.studio.modelName, loaded.studio.exploreName)]
-            : []
-        const queryExplores = Array.from(
-          new Set((loaded.manifestQueries || []).filter((q) => q.model && q.explore).map((q) => formatExploreId(q.model, q.explore)))
-        )
+        const legacyExplore = loaded.studio?.modelName && loaded.studio?.exploreName ? [formatExploreId(loaded.studio.modelName, loaded.studio.exploreName)] : []
+        const queryExplores = Array.from(new Set((loaded.manifestQueries || []).filter((q) => q.model && q.explore).map((q) => formatExploreId(q.model, q.explore))))
         const resolvedExplores =
           studioExplores.length > 0 ? studioExplores
           : legacyExplore.length > 0 ? legacyExplore
@@ -1850,14 +1709,10 @@ export function useStudioController() {
         const loaded = await loadNativeContentById(core40SDK, extensionSDK, id)
         lastNativeIdRef.current = loaded.id
         resolvedUseCaseByIdRef.current[loaded.id] = 'dashboard'
-        setSelectedUseCase('dashboard')
-        setNativeContent(loaded)
-        setLoadDashInput(loaded.id)
-        setSelectedFolderId(loaded.folderId)
+        setSelectedUseCase('dashboard'); setNativeContent(loaded); setLoadDashInput(loaded.id); setSelectedFolderId(loaded.folderId)
         hydrateLoadedArtifact({
           mode: 'dashboard', id: loaded.id, route: `/c/${encodeURIComponent(loaded.id)}`,
-          pushRoute, convTypes: ['dashboard'], studio: loaded.studio, defaultEnvId: 'env_dashboard_7',
-          dashboardId: loaded.id,
+          pushRoute, convTypes: ['dashboard'], studio: loaded.studio, defaultEnvId: 'env_dashboard_7', dashboardId: loaded.id,
           fallbackText: `Loaded native Looker ${loaded.contentType} "${loaded.title}" (#${loaded.id}). Ask for tiles, filters, looks, boards, or schedules to update it via CodeMode.`,
         })
       })
@@ -1873,13 +1728,10 @@ export function useStudioController() {
         const loaded = await loadHealthCheckArtifact(core40SDK, extensionSDK, id)
         lastHealthIdRef.current = loaded.id
         resolvedUseCaseByIdRef.current[loaded.id] = 'health-check'
-        setSelectedUseCase('health-check')
-        setHealthReport(loaded)
-        setLoadDashInput(loaded.id)
+        setSelectedUseCase('health-check'); setHealthReport(loaded); setLoadDashInput(loaded.id)
         hydrateLoadedArtifact({
           mode: 'health', id: loaded.id, route: `/c/${encodeURIComponent(loaded.id)}`,
-          pushRoute, convTypes: ['health', 'health-check', 'health_check'], studio: loaded,
-          defaultEnvId: `env_health_${loaded.id}`,
+          pushRoute, convTypes: ['health', 'health-check', 'health_check'], studio: loaded, defaultEnvId: `env_health_${loaded.id}`,
           fallbackText: `Loaded "${loaded.title}" (Health Score: ${loaded.scores.overallScore}%, Transcriber: ${loaded.scores.transcriberScore}/4.00) from obj_health_check_${loaded.id}.`,
         })
       })
@@ -1895,9 +1747,7 @@ export function useStudioController() {
         const loaded = await loadLookmlSessionArtifact(core40SDK, extensionSDK, id)
         lastLookmlIdRef.current = loaded.id
         resolvedUseCaseByIdRef.current[loaded.id] = 'lookml'
-        setSelectedUseCase('lookml')
-        setLookmlBundle(loaded.bundle)
-        setLoadLookmlInput(loaded.id)
+        setSelectedUseCase('lookml'); setLookmlBundle(loaded.bundle); setLoadLookmlInput(loaded.id)
         if (loaded.bundle?.project_id) setLookmlProjectId(loaded.bundle.project_id)
         setSelectedExplores(loaded.studio?.explores?.filter(Boolean) || [])
         hydrateLoadedArtifact({
@@ -1915,20 +1765,12 @@ export function useStudioController() {
       try {
         setBusyStatus('Executing Looker queries...')
         let parsedFilters: Record<string, string> = {}
-        try {
-          parsedFilters = JSON.parse(rawFilters || '{}')
-        } catch {
-          parsedFilters = {}
-        }
+        try { parsedFilters = JSON.parse(rawFilters || '{}') } catch { parsedFilters = {} }
         const out = await LkrCodeMode.runPythonCode({
-          code: codeToRun,
-          sdk: core40SDK,
-          extensionSDK,
+          code: codeToRun, sdk: core40SDK, extensionSDK,
           vars: {
-            mode: scriptMode,
-            dashboard_filters: { script_mode: scriptMode, ...parsedFilters },
-            target_explores: selectedExplores,
-            target_folder_id: selectedFolderId,
+            mode: scriptMode, dashboard_filters: { script_mode: scriptMode, ...parsedFilters },
+            target_explores: selectedExplores, target_folder_id: selectedFolderId,
           },
         })
         setScriptOutput(out)
@@ -1950,18 +1792,12 @@ export function useStudioController() {
       if (!id) return
       lastScriptIdRef.current = id
       resolvedUseCaseByIdRef.current[id] = 'tile'
-      setSelectedUseCase('tile')
-      setLoadedScript(true)
-      setScriptId(id)
+      setSelectedUseCase('tile'); setLoadedScript(true); setScriptId(id)
       const loaded = await loadScriptArtifact(core40SDK, id)
       const effectiveCode = loaded?.code || scriptCode
       if (loaded) {
-        setScriptId(loaded.id)
-        setScriptTitle(loaded.title || loaded.id)
-        setScriptCode(loaded.code || DEFAULT_PYTHON_SCRIPT)
-        if (loaded.dashboardId) {
-          setPublishedTileDash({ dashboardId: loaded.dashboardId, elementId: loaded.elementId || '' })
-        }
+        setScriptId(loaded.id); setScriptTitle(loaded.title || loaded.id); setScriptCode(loaded.code || DEFAULT_PYTHON_SCRIPT)
+        if (loaded.dashboardId) setPublishedTileDash({ dashboardId: loaded.dashboardId, elementId: loaded.elementId || '' })
       }
       hydrateLoadedArtifact({
         mode: 'tile', id: loaded?.id || id, route: `/c/${encodeURIComponent(loaded?.id || id)}`,
@@ -1980,19 +1816,14 @@ export function useStudioController() {
       setBusyStatus(`Saving script "${cleanId}" to Looker Artifacts...`)
       try {
         const saved = await saveScriptArtifact(core40SDK, userId, {
-          id: cleanId,
-          title: scriptTitle.trim() || cleanId,
-          code: overrideCode,
-          messages: overrideMsgs,
+          id: cleanId, title: scriptTitle.trim() || cleanId, code: overrideCode, messages: overrideMsgs,
           updatedAt: new Date().toISOString(),
           ...(dashInfo?.dashboardId ? { dashboardId: dashInfo.dashboardId } : {}),
           ...(dashInfo?.elementId ? { elementId: dashInfo.elementId } : {}),
         })
         lastScriptIdRef.current = saved.id
         resolvedUseCaseByIdRef.current[saved.id] = 'tile'
-        setLoadedScript(true)
-        setScriptId(saved.id)
-        setSavedScripts(await listSavedScripts(core40SDK, userId))
+        setLoadedScript(true); setScriptId(saved.id); setSavedScripts(await listSavedScripts(core40SDK, userId))
         await refreshCatalog()
         const targetRoute = `/c/${encodeURIComponent(saved.id)}`
         if (location.pathname !== targetRoute) history.replace(targetRoute)
@@ -2010,10 +1841,7 @@ export function useStudioController() {
       setBusyStatus('Publishing extension-layout Looker dashboard & binding tile artifact...')
       const extId = extHostData?.extensionId || 'data_app_builder::data_app_builder'
       const pub = await publishScriptDashboard(core40SDK, {
-        script: saved,
-        folderId: selectedFolderId,
-        extensionId: extId,
-        existingDashboardId: publishedTileDash?.dashboardId,
+        script: saved, folderId: selectedFolderId, extensionId: extId, existingDashboardId: publishedTileDash?.dashboardId,
       })
       const nextDash = { dashboardId: pub.dashboardId, elementId: pub.elementId }
       setPublishedTileDash(nextDash)
@@ -2050,8 +1878,7 @@ export function useStudioController() {
         async () => {
           const loaded = await loadObjectArtifact<StoredCaArtifactPayload>(core40SDK, 'conversational-analytics', id, getArtifactNamespace(extensionSDK))
           const convFromList = conversations.find((c) => c.id === id || String(c.content?.caConversationId || c.content?.id || '') === id)
-          const content: StoredCaArtifactPayload =
-            loaded || (convFromList?.content as StoredCaArtifactPayload | undefined) || {}
+          const content: StoredCaArtifactPayload = loaded || (convFromList?.content as StoredCaArtifactPayload | undefined) || {}
           const agentId = String(content.agentId || content.agent_id || 'ad69f74cd9e2494090e9e9e9c50190c8')
           const agentName = String(content.agentName || content.agent_name || 'Looker CA Agent')
           const caConvId = String(content.caConversationId || content.id || id)
@@ -2061,15 +1888,9 @@ export function useStudioController() {
             content.selectionRationale || content.rationale || `Routed to Looker CA agent "${agentName}" (${agentId}) via isolated sub-agent.`
           )
           const state: CaConversationState = {
-            id: caConvId,
-            caConversationId: caConvId,
-            agentId,
-            agentName,
+            id: caConvId, caConversationId: caConvId, agentId, agentName,
             embedPath: content.embedPath || resolveCaEmbedPath(agentId, caConvId),
-            title: resolvedTitle,
-            label: resolvedTitle,
-            rationale: resolvedRationale,
-            selectionRationale: resolvedRationale,
+            title: resolvedTitle, label: resolvedTitle, rationale: resolvedRationale, selectionRationale: resolvedRationale,
             initialPrompt: String(content.initialPrompt || content.title || convFromList?.label || id),
             explores,
             interactionId: content.studio?.lastInteractionId || content.lastInteractionId || convFromList?.interactionId,
@@ -2079,25 +1900,14 @@ export function useStudioController() {
           resolvedUseCaseByIdRef.current[caConvId] = 'conversational-analytics'
           setCaConversation(state)
           upsertContentItem({
-            id: caConvId,
-            contentType: 'conversational-analytics',
-            title: state.title,
-            embedPath: state.embedPath,
-            updatedAt: state.updatedAt,
+            id: caConvId, contentType: 'conversational-analytics', title: state.title, embedPath: state.embedPath, updatedAt: state.updatedAt,
           })
-          setSelectedUseCase('conversational-analytics')
-          setLoadDashInput(caConvId)
+          setSelectedUseCase('conversational-analytics'); setLoadDashInput(caConvId)
           const msgs = content.studio?.messages || content.messages || convFromList?.messages
           hydrateLoadedArtifact({
-            mode: 'app',
-            id: caConvId,
-            route: `/c/${encodeURIComponent(caConvId)}`,
-            pushRoute,
-            convTypes: ['conversational-analytics'],
-            convId: convFromList?.id || caConvId,
-            explores,
-            lastInteractionId: state.interactionId,
-            defaultEnvId: 'env_app_isolated',
+            mode: 'app', id: caConvId, route: `/c/${encodeURIComponent(caConvId)}`, pushRoute,
+            convTypes: ['conversational-analytics'], convId: convFromList?.id || caConvId, explores,
+            lastInteractionId: state.interactionId, defaultEnvId: 'env_app_isolated',
             messages:
               Array.isArray(msgs) && msgs.length > 0
                 ? msgs
@@ -2146,62 +1956,37 @@ export function useStudioController() {
         id: created.caConversationId, contentType: 'conversational-analytics', title: created.label,
         embedPath: created.embedPath, updatedAt: nextCaState.updatedAt, source: 'created', createdInConversation: true,
       })
-      setSelectedUseCase('conversational-analytics')
-      setActiveObjectId(created.caConversationId)
-      setLoadDashInput(created.caConversationId)
+      setSelectedUseCase('conversational-analytics'); setActiveObjectId(created.caConversationId); setLoadDashInput(created.caConversationId)
       if (selection.explores.length > 0) setSelectedExplores(selection.explores)
       setMessages(nextMsgs, 'app')
       const targetRoute = `/c/${encodeURIComponent(created.caConversationId)}`
-      if (location.pathname !== targetRoute) {
-        history.replace(targetRoute)
-      }
+      if (location.pathname !== targetRoute) history.replace(targetRoute)
 
       const namespace = getArtifactNamespace(extensionSDK)
       await saveUserArtifact(
-        core40SDK,
-        userId,
+        core40SDK, userId,
         {
-          id: created.caConversationId,
-          type: 'conversational-analytics',
-          title: created.label,
-          label: created.label,
-          explores: nextCaState.explores,
-          lastInteractionId: selection.isolatedInteractionId,
-          updatedAt: nextCaState.updatedAt,
-          createdBy: userId,
+          id: created.caConversationId, type: 'conversational-analytics', title: created.label, label: created.label,
+          explores: nextCaState.explores, lastInteractionId: selection.isolatedInteractionId, updatedAt: nextCaState.updatedAt, createdBy: userId,
         },
         {
-          ...nextCaState,
-          type: 'conversational-analytics',
-          title: created.label,
-          studio: { explores: nextCaState.explores, lastInteractionId: selection.isolatedInteractionId, messages: nextMsgs },
-          createdBy: userId,
+          ...nextCaState, type: 'conversational-analytics', title: created.label,
+          studio: { explores: nextCaState.explores, lastInteractionId: selection.isolatedInteractionId, messages: nextMsgs }, createdBy: userId,
         },
         namespace
       ).catch(() => {})
       await persistConversationAndLabel({
-        id: created.caConversationId,
-        type: 'conversational-analytics',
-        interactionId: selection.isolatedInteractionId,
-        environmentId: sharedEnvIdRef.current || agentSession.environmentId,
-        label: created.label,
-        explores: nextCaState.explores,
+        id: created.caConversationId, type: 'conversational-analytics', interactionId: selection.isolatedInteractionId,
+        environmentId: sharedEnvIdRef.current || agentSession.environmentId, label: created.label, explores: nextCaState.explores,
         content: {
-          agentId: selection.agentId,
-          agentName: selection.agentName,
-          caConversationId: created.caConversationId,
-          embedPath: created.embedPath,
-          rationale: selection.rationale,
+          agentId: selection.agentId, agentName: selection.agentName, caConversationId: created.caConversationId,
+          embedPath: created.embedPath, rationale: selection.rationale,
         },
-        messages: nextMsgs,
-        isFirstTurn,
-        userPrompt: userQuestion,
-        assistantText,
+        messages: nextMsgs, isFirstTurn, userPrompt: userQuestion, assistantText,
       })
       await refreshCatalog()
     } catch (err: unknown) {
-      const msg = resetOAuthOnUnauthorized(err)
-      setMessages((prev) => [...prev, { role: 'error', text: msg }], 'app')
+      setMessages((prev) => [...prev, { role: 'error', text: resetOAuthOnUnauthorized(err) }], 'app')
     } finally {
       setBusyStatus(null)
     }
@@ -2211,67 +1996,39 @@ export function useStudioController() {
     const activeMsgs = baseMessages || messages
     try {
       const baseRes = await runThreePillarHealthCheckViaCodeMode({
-        sdk: core40SDK,
-        extensionSDK,
-        reportId: healthReport?.id || loadDashInput.trim() || undefined,
-        targetProject: lookmlProjectId || availableLookmlProjects[0],
-        healthScope,
-        customFocus,
-        messages: activeMsgs,
-        onStatus: setBusyStatus,
+        sdk: core40SDK, extensionSDK, reportId: healthReport?.id || loadDashInput.trim() || undefined,
+        targetProject: lookmlProjectId || availableLookmlProjects[0], healthScope, customFocus, messages: activeMsgs, onStatus: setBusyStatus,
       })
       let finalReport = baseRes.report
       if (customFocus && (authMode === 'apikey' || oauthToken)) {
         try {
           const turnRes = await runAntigravityTurn({
-            sdk: core40SDK,
-            extensionSDK,
-            userId,
-            environmentId: sharedEnvIdRef.current || agentSession.environmentId,
-            conversationId: finalReport.id,
-            onEnvironmentUpdated: syncSharedEnvironmentId,
-            auth: { mode: authMode, oauthToken, clientId, projectId, apiKey },
-            session: agentSession,
-            model: selectedModel,
-            thinkingLevel,
-            maxTotalTokens,
-            selectedExplores,
-            folderId: selectedFolderId,
-            schemaMarkdown,
-            userPrompt: customFocus,
-            images,
-            customSystemGuide: HEALTH_CHECK_SYSTEM_GUIDE,
+            sdk: core40SDK, extensionSDK, userId, environmentId: sharedEnvIdRef.current || agentSession.environmentId,
+            conversationId: finalReport.id, onEnvironmentUpdated: syncSharedEnvironmentId,
+            auth: { mode: authMode, oauthToken, clientId, projectId, apiKey }, session: agentSession,
+            model: selectedModel, thinkingLevel, maxTotalTokens, selectedExplores, folderId: selectedFolderId,
+            schemaMarkdown, userPrompt: customFocus, images, customSystemGuide: HEALTH_CHECK_SYSTEM_GUIDE,
             extraSources: [
               { type: 'inline', content: THREE_PILLAR_CODEMODE_PY, target: '/workspace/three_pillar_audit.py' },
               { type: 'inline', content: finalReport.tddMarkdown, target: '/workspace/TECHNICAL_DESIGN_DOCUMENT.md' },
             ],
-            priorMessages: messages,
-            onStatus: setBusyStatus,
+            priorMessages: messages, onStatus: setBusyStatus,
           })
           setAgentSession(turnRes.session)
           if (turnRes.tddMarkdown) {
             finalReport = {
-              ...finalReport,
-              tddMarkdown: turnRes.tddMarkdown,
-              lastInteractionId: turnRes.session.lastInteractionId,
-              environmentId: turnRes.session.environmentId,
-              updatedAt: new Date().toISOString(),
+              ...finalReport, tddMarkdown: turnRes.tddMarkdown, lastInteractionId: turnRes.session.lastInteractionId,
+              environmentId: turnRes.session.environmentId, updatedAt: new Date().toISOString(),
             }
             await saveHealthCheckArtifact(core40SDK, extensionSDK, userId, finalReport)
           }
-        } catch {
-          // Ignore optional Antigravity refinement failure
-        }
+        } catch { /* ignore */ }
       }
       lastHealthIdRef.current = finalReport.id
       resolvedUseCaseByIdRef.current[finalReport.id] = 'health-check'
-      setHealthReport(finalReport)
-      setActiveObjectId(finalReport.id)
-      setLoadDashInput(finalReport.id)
+      setHealthReport(finalReport); setActiveObjectId(finalReport.id); setLoadDashInput(finalReport.id)
       const targetRoute = `/c/${encodeURIComponent(finalReport.id)}`
-      if (location.pathname !== targetRoute) {
-        history.replace(targetRoute)
-      }
+      if (location.pathname !== targetRoute) history.replace(targetRoute)
       const nextHealthMsgs: ChatMessage[] = [
         ...activeMsgs,
         {
@@ -2283,17 +2040,13 @@ export function useStudioController() {
       const convId = activeConversationId.startsWith('conv_health_') ? activeConversationId : `conv_health_${finalReport.id}`
       setSelectedUseCase('health-check')
       void persistConversationAndLabel({
-        id: convId,
-        type: 'health-check',
+        id: convId, type: 'health-check',
         interactionId: finalReport.lastInteractionId || agentSession.lastInteractionId,
         environmentId: finalReport.environmentId || agentSession.environmentId,
-        label: finalReport.title,
-        explores: selectedExplores,
+        label: finalReport.title, explores: selectedExplores,
         content: {
-          reportId: finalReport.id,
-          projectId: finalReport.projectId,
-          overallScore: finalReport.scores.overallScore,
-          grade: finalReport.scores.grade,
+          reportId: finalReport.id, projectId: finalReport.projectId,
+          overallScore: finalReport.scores.overallScore, grade: finalReport.scores.grade,
         },
         messages: nextHealthMsgs,
       })
@@ -2308,23 +2061,15 @@ export function useStudioController() {
     async (typeOrMode: string, id: string, pushRoute: boolean) => {
       if (!id) return
       const loaders: Record<string, (id: string, pushRoute: boolean) => Promise<void>> = {
-        'conversational-analytics': loadCaConversationById,
-        app: loadDashboardById,
-        'data-investigator': loadDashboardById,
-        data_investigator: loadDashboardById,
-        dashboard: loadNativeById,
-        lookml: loadLookmlSessionById,
-        health: loadHealthCheckById,
-        tile: loadScriptById,
+        'conversational-analytics': loadCaConversationById, app: loadDashboardById,
+        'data-investigator': loadDashboardById, data_investigator: loadDashboardById,
+        dashboard: loadNativeById, lookml: loadLookmlSessionById, health: loadHealthCheckById, tile: loadScriptById,
       }
       if (typeOrMode === 'auto') {
         const ns = getArtifactNamespace(extensionSDK)
         const probes: Array<[StudioToolMode, string]> = [
-          ['conversational-analytics', 'conversational-analytics'],
-          ['lookml', 'lookml'],
-          ['health_check', 'health'],
-          ['script', 'tile'],
-          ['dashboard', 'dashboard'],
+          ['conversational-analytics', 'conversational-analytics'], ['lookml', 'lookml'],
+          ['health_check', 'health'], ['script', 'tile'], ['dashboard', 'dashboard'],
         ]
         for (const [artifactType, loaderKey] of probes) {
           if (await loadObjectArtifact(core40SDK, artifactType, id, ns)) {
@@ -2420,6 +2165,7 @@ export function useStudioController() {
       setActiveConversationId(`conv_${Date.now()}`)
       setPublishedAppState(null)
       setNativeContentState(null)
+      setActiveViewerDocument(null)
       setContentItems([])
       setActiveContentTabKey('')
       setLookmlBundle(null)
@@ -2462,6 +2208,7 @@ export function useStudioController() {
 
   const handleSelectContentTab = useCallback(
     (key: string) => {
+      setActiveViewerDocument(null)
       setActiveContentTabKey(key)
       const item = contentItemsRef.current.find((it) => it.key === key)
       if (!item) return
@@ -2505,6 +2252,7 @@ export function useStudioController() {
 
   const handleSelectConversation = useCallback(
     async (conv: ConversationRecord) => {
+      setActiveViewerDocument(null)
       if (typeof window !== 'undefined' && window.innerWidth <= 768) {
         setSidebarCollapsed(true)
       }
@@ -3401,9 +3149,10 @@ export function useStudioController() {
         lookerWorkspaceId, isLookerDevMode, setLookerWorkspaceId, handleToggleLookerDevMode,
         sandboxMarkdownCache, sandboxMarkdownLoading, activeSandboxMarkdownModalPath,
         setActiveSandboxMarkdownModalPath, loadSandboxMarkdownFile,
+        activeViewerDocument, setActiveViewerDocument, openViewerDocument,
       }
     }
-  }, [history, requestCodeModePermission, oauthExpiresAt, triggerSilentOAuthRefresh, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleOAuthLogout, handleCancelOAuthLogin, sidebarCollapsed, leftPaneWidth, setLeftPaneWidth, rightPaneCollapsed, setRightPaneCollapsed, agentName, setAgentName, handleSaveAgentName, appInitializing, busySendAction, setBusySendAction, themeMode, resolvedTheme, setThemeMode, selectedModel, thinkingLevel, setThinkingLevel, defaultThinkingLevel, setDefaultThinkingLevel, maxTotalTokens, setMaxTotalTokens, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, queuedPrompts, updateQueuedPrompts, handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, environmentStatus, envResetNotice, handleResetEnvironment, handleStopEnvironment, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, setSelectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems, lookerWorkspaceId, isLookerDevMode, handleToggleLookerDevMode, sandboxMarkdownCache, sandboxMarkdownLoading, activeSandboxMarkdownModalPath, loadSandboxMarkdownFile])
+  }, [history, requestCodeModePermission, oauthExpiresAt, triggerSilentOAuthRefresh, isAuthenticated, oauthSigningIn, oauthRedirectUri, handleOAuthLogin, handleOAuthLogout, handleCancelOAuthLogin, sidebarCollapsed, leftPaneWidth, setLeftPaneWidth, rightPaneCollapsed, setRightPaneCollapsed, agentName, setAgentName, handleSaveAgentName, appInitializing, busySendAction, setBusySendAction, themeMode, resolvedTheme, setThemeMode, selectedModel, thinkingLevel, setThinkingLevel, defaultThinkingLevel, setDefaultThinkingLevel, maxTotalTokens, setMaxTotalTokens, selectedUseCase, handleChangeUseCase, isUseCaseLocked, allowedUseCases, useCaseOptions, handleResetNewApp, handleNewConversation, handleSelectConversation, setNativeContent, setPublishedApp, bumpEmbedNonce, contentItems, setContentItems, activeContentTabKey, setActiveContentTabKey, activeContentItem, upsertContentItem, handleSelectContentTab, setMessages, queuedPrompts, updateQueuedPrompts, handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, environmentStatus, envResetNotice, handleResetEnvironment, handleStopEnvironment, infoModalUseCase, loadingMetadata, starterPrompts, starterPromptsLoading, selectedFolderId, setSelectedFolderId, hydrateFolderAncestors, toggleExpandFolder, handleSearchFolders, preloadedContent, mentionedItems, lookerWorkspaceId, isLookerDevMode, handleToggleLookerDevMode, sandboxMarkdownCache, sandboxMarkdownLoading, activeSandboxMarkdownModalPath, loadSandboxMarkdownFile, activeViewerDocument, openViewerDocument])
 
   return {
     extensionSDK, core40SDK, lookerHostData, history, location, isTileMount,
@@ -3472,6 +3221,7 @@ export function useStudioController() {
     lookerWorkspaceId, isLookerDevMode, setLookerWorkspaceId, handleToggleLookerDevMode,
     sandboxMarkdownCache, sandboxMarkdownLoading, activeSandboxMarkdownModalPath,
     setActiveSandboxMarkdownModalPath, loadSandboxMarkdownFile,
+    activeViewerDocument, setActiveViewerDocument, openViewerDocument,
     resolveConversationRelatedContent,
   }
 }
