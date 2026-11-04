@@ -4894,12 +4894,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       expression: `(async () => {
         const loader = document.querySelector('[data-testid="ripper-surf-loader"]');
         const svg = document.querySelector('[data-testid="ripper-surf-loader-svg"]');
-        const hasThreeRipCurlRibbons = Boolean(
-          svg?.querySelector('.dab-ripper-ribbon-1') &&
-          svg?.querySelector('.dab-ripper-ribbon-2') &&
-          svg?.querySelector('.dab-ripper-ribbon-3') &&
-          svg?.querySelector('.dab-ripper-board-ride')
-        );
+        const hasThreeRipCurlRibbons = Boolean(svg?.querySelector('.dab-ripper-ribbon-1') && svg?.querySelector('.dab-ripper-ribbon-2') && svg?.querySelector('.dab-ripper-ribbon-3') && svg?.querySelector('.dab-ripper-board-ride'));
         const loaderText = loader ? (loader.textContent || '').trim() : '';
         window.__DAB_STUDIO__.setAppInitializing(false);
         for (let i = 0; i < 30; i++) {
