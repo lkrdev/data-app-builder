@@ -39,7 +39,15 @@ const lkrCliBridgeTs = readFileSync(path.join(repoRoot, 'src/lkrCliBridge.ts'), 
 const lookerPermissionsTs = readFileSync(path.join(repoRoot, 'src/lookerPermissions.ts'), 'utf8')
 const lookerApiTs = readFileSync(path.join(repoRoot, 'src/lookerApi.ts'), 'utf8')
 const conversationalAnalyticsTs = readFileSync(path.join(repoRoot, 'src/conversationalAnalytics.ts'), 'utf8')
-const useStudioControllerTs = readFileSync(path.join(repoRoot, 'src/useStudioController.ts'), 'utf8')
+const useStudioControllerTs = [
+  'src/useStudioController.ts',
+  'src/studioControllerAuth.ts',
+  'src/studioControllerMetadata.ts',
+  'src/studioControllerLoaders.ts',
+  'src/studioControllerTurn.ts',
+]
+  .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
+  .join('\n')
 const studioWorkspaceTsx = readFileSync(path.join(repoRoot, 'src/components/StudioWorkspace.tsx'), 'utf8')
 const healthCheckTs = readFileSync(path.join(repoRoot, 'src/healthCheck.ts'), 'utf8')
 
