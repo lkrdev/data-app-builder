@@ -4,7 +4,7 @@ import type { Looker40SDK } from '@looker/sdk'
 import { fetchLookerCaAgentsCatalog, LookerCaAgentSummary, normalizeCaAgent } from './conversationalAnalytics'
 import { rawLookerRequest } from './lookerApi'
 
-export const CODEMODE_CDN_URL = 'https://cdn.lkr.dev/cli/codemode/0.0.63/codemode.js'
+export const CODEMODE_CDN_URL = 'https://cdn.lkr.dev/cli/codemode/0.0.64/codemode.js'
 
 export interface LkrCodeModeToolDefinition {
   type: string
@@ -297,7 +297,7 @@ export const LkrCodeMode: LkrCodeModeRuntime = {
   executeLookerCodeMode: (a: LkrCodeModeRunOptions & string, b?: LkrCodeModeRunOptions) => LkrCodeMode.runPythonCode(a, b),
 }
 
-export const LKR_DEV_CLI_VERSION = '0.0.63'
+export const LKR_DEV_CLI_VERSION = '0.0.64'
 export const LKR_DEV_CLI_SPEC = `lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}`
 export const BOOTSTRAP_SANDBOX_SH = `command -v uv >/dev/null 2>&1 || pip install --break-system-packages --quiet uv || python3 -m pip install --break-system-packages --quiet uv; lkr --version 2>/dev/null | grep -q "${LKR_DEV_CLI_VERSION}" || UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"`
 
@@ -606,7 +606,7 @@ CACHE_DIR = WORKSPACE_DIR / ".lkr_extension_cache"
 _PINNED_CLI_VERSION = "${LKR_DEV_CLI_VERSION}"
 LKR_DEV_CLI_VERSION = os.environ.get(
     "LKR_DEV_CLI_VERSION",
-    "0.0.63" if _PINNED_CLI_VERSION.startswith("$") else _PINNED_CLI_VERSION,
+    "0.0.64" if _PINNED_CLI_VERSION.startswith("$") else _PINNED_CLI_VERSION,
 )
 CLI_TARBALL_URL = os.environ.get(
     "LKR_CLI_TARBALL_URL",
