@@ -1,5 +1,7 @@
 # Changelog
 
+> **Agents updating from 1.2.0 or older:** do not migrate or re-publish apps in bulk after this update. Apps are now upgraded one at a time, only when their author asks to change them. Re-read `skills/toolkit-updater/SKILL.md` and run `python3 skills/toolkit-updater/tools/check-for-update.py --force` before you continue so any intermediate host-migration update continues straight to the latest version.
+
 All notable changes to the Looker Data Apps runtime and devtools will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
@@ -10,14 +12,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 | Bump | What you have to do |
 | --- | --- |
 | **patch** (`1.0.0` → `1.0.1`) | Nothing. Every app you have published keeps working. |
-| **minor** (`1.0.0` → `1.1.0`) | Migrate your apps to the new runtime before you re-publish them. Your agent does this with the `toolkit-updater` skill, which applies the Breaking entries below. |
+| **minor** (`1.0.0` → `1.1.0`) | Nothing until you edit an app. An app you edit is first upgraded to the new runtime, one app at a time, by your agent with the `toolkit-updater` skill, which applies the Breaking entries below. |
 | **major** (`1.0.0` → `2.0.0`) | Same as a minor, and worth reading the entry in full. |
 
-Upgrading the toolkit never changes a dashboard that is already live: published
-apps are pinned to the runtime version they were published against. A migration
-matters only for apps you choose to re-publish.
+Upgrading the toolkit never changes your apps or a dashboard that is already
+live: an app tagged `@toolkit-version` 1.3.0 or later keeps previewing on the
+runtime named in its tag, apps with no tag or an older tag preview on the
+installed toolkit, and published apps stay on the runtime they were published
+against. An app is upgraded only when you edit it.
 
-To upgrade an app, apply every **Breaking** entry newer than its `@toolkit-version` tag, from oldest to newest. An app with no `@toolkit-version` tag gets every Breaking entry in this file. An app older than the oldest entry is rewritten with the `data-app-creator` skill, keeping its queries, layout intent, and publish metadata. Legacy HTML Canvas Dashboards (`*.canvasdashboard.html`) use the `data-app-upgrader` skill instead.
+Agents: summarize only `Added`, `Changed`, `Removed`, and `Fixed` for the user, and apply `Upgrade steps for AI agents` silently when upgrading an app on edit. After `self-update.py` finishes, run `python3 skills/toolkit-updater/tools/check-for-update.py --force` so any intermediate host-migration release continues straight to the latest version. To upgrade an app on edit, read every **Breaking** entry newer than its `@toolkit-version` tag from oldest to newest, combine chained rules (`A -> B` followed by `B -> C` becomes `A -> C`), and apply the final changes in a single pass. An app with no `@toolkit-version` tag gets every Breaking entry in this file combined into a single pass. An app older than the oldest entry is rewritten with the `data-app-creator` skill, keeping its queries, layout intent, and publish metadata. Legacy HTML Canvas Dashboards (`*.canvasdashboard.html`) use the `data-app-upgrader` skill instead.
+
+## [1.3.0] - 2026-10-29
+
+### Added
+
+- Data Apps follow the Looker dashboard Refresh and "Clear cache and refresh" actions.
+- The toolkit installer, setup, and updater run directly with Python, including on Windows Command Prompt and PowerShell.
+- The local preview gallery cards and app footer now show each app's toolkit version, and the app footer stamp omits the "powered by Looker Data Apps" prefix.
+
+### Changed
+
+- Toolkit updates no longer change your apps, and the agent upgrades an app only when you ask it to change that app. From 1.3.0 on, each app records the toolkit version it was built with and keeps previewing on that version after later updates. Apps made with older versions preview on the installed toolkit until you edit them (untouched apps from 1.1.2 or older that use the old positional table column helpers show empty table columns in local preview until edited and upgraded).
+- Third-party libraries (Lit, Highcharts, AG Grid, and the Looker Extension SDK) now load from gstatic in local preview as well as in published tiles, so toolkit installs no longer download a local vendor copy and inspect mode loads a single copy of Lit. Local preview now needs internet access (or a configured `browser_assets_url`).
+- Edited and published apps always use the latest installed toolkit, so released fixes reach every app you update. An app with no version tag is upgraded before it can be published. Toolkit updates also preserve your own files inside the Claude settings folder.
+- Generating a Data App is faster and uses fewer tokens, especially on large explores such as System Activity and on dashboards with several filters.
+- Toolkit update notes show plain-English highlights instead of internal migration rules.
+
+### Fixed
+
+- Toolkit updates now jump directly to the latest release across download host migrations, and app upgrades on edit combine intermediate version changes into a single pass.
+- A wrong Looker client ID or secret is reported as bad credentials instead of a wrong instance URL.
 
 ## [1.2.0] - 2026-10-22
 
@@ -155,6 +180,7 @@ To upgrade an app, apply every **Breaking** entry newer than its `@toolkit-versi
 ### Removed
 - **Breaking — migrate your apps before you re-publish them.** Coordinate grid layout classes and helpers (`.lit-coord-grid`, `.lit-coord-tile`, `computeLayoutModel`, `collectCoordTiles`, `flattenIntoCoordGrid`, `LAYOUT_COORD_HOST_CLASS`, `LAYOUT_GRID_DEFAULTS`, `LAYOUT_ROW_SHAPES`). Lay out tiles with `.app-grid` or with CSS grid rules in the app's `<style>`.
 
+[1.3.0]: https://dl.google.com/looker-data-apps/versions/1.3.0
 [1.2.0]: https://dl.google.com/looker-data-apps/versions/1.2.0
 [1.1.2]: https://dl.google.com/looker-data-apps/versions/1.1.2
 [1.1.1]: https://dl.google.com/looker-data-apps/versions/1.1.1

@@ -18,6 +18,9 @@ Publishing creates real, persistent resources on the customer's Looker instance 
 Publishing requires configuration from `data-apps-config.json` (written during bootstrap):
 - **`data-apps-config.json`** (repo root) — Looker instance `base_url`, `client_id`, `client_secret`, and `publish_folder_id`.
 
+**Toolkit Version Requirement:**
+Publishing requires the app to be on the installed toolkit version. If the app's `@toolkit-version` pin does not match the installed toolkit version (`VERSION`), or if the app has no `@toolkit-version` tag, `publish-data-app.py` refuses to publish (exit 1) before making any network calls. If the app has no `@toolkit-version` tag, upgrade it first using `skills/toolkit-updater/SKILL.md` ("Upgrade one app"), because an app without a tag may come from any version since 1.0.0. If the app's pin is older than `VERSION`, upgrade the app using `skills/toolkit-updater/SKILL.md` ("Upgrade one app") before publishing. If the app's pin is newer than `VERSION`, update the toolkit first using `skills/toolkit-updater/SKILL.md` (Gate 1 / Gate 2) before publishing.
+
 To verify the instance supports inline extensions before publishing (on Windows where `python3` is absent or points to the Microsoft Store stub, substitute `python` or `py -3` in all `python3` commands below):
 ```bash
 python3 scripts/verify-install.py
@@ -94,6 +97,7 @@ Never present localhost or proxy URLs.
 
 `publish-data-app.py` outputs structured JSON error envelopes on failure (`ERROR_ENVELOPE_JSON: <json>`):
 
+* **`toolkit_version_mismatch`:** The app's `@toolkit-version` pin does not match the installed toolkit version, or the app has no `@toolkit-version` tag. If the app has no tag, upgrade it first using `skills/toolkit-updater/SKILL.md` ("Upgrade one app"); if the pin is older than `VERSION`, upgrade the app using `skills/toolkit-updater/SKILL.md` ("Upgrade one app") before publishing; if the pin is newer than `VERSION`, update the toolkit first using `skills/toolkit-updater/SKILL.md` (Gate 1 / Gate 2).
 * **`user_mismatch`:** The current Looker user does not match the dashboard's last updater (or original author). The agent must NOT self-correct or automatically retry with `--confirm-replace`. It must prompt the human user for explicit confirmation before re-running with `--confirm-replace`. (Note: in shared folders, non-owners with edit access can update the app using `--confirm-replace`; apps in personal folders can only be updated by their owner, an admin, or a developer. This check is best effort: it compares display names; when the deployed bundle has no author tags or cannot be read, it falls back to the dashboard's last updater or creator from Looker, which can be missing or out of date.)
 * **`def_too_large`:** The app definition exceeds the payload size limit (default 900 KB). Trim inline mock data or base64 assets.
 * **`looker_http_401`:** The Looker API key is invalid or expired.

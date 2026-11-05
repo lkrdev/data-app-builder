@@ -24,11 +24,15 @@ The short version: **Data Apps run as native extensions within your Looker insta
   Query payloads, LookML definitions, warehouse data rows, and widget titles are
   strictly excluded and never transmitted in telemetry.
 - **No external phone-home.** Neither the runtime nor the devtools POST to any
-  service controlled by third-party vendors. The only network calls made are:
+  service controlled by third-party vendors. No requests are sent to third-party
+  vendor CDNs. Browsers fetch pinned runtime and vendor bundles from Google's
+  `www.gstatic.com/looker-data-apps/` static host (both in Looker tiles and in local
+  preview). Browsers send Looker queries only to the customer's Looker instance
+  (via `/api/query` on localhost during preview, or via the Looker Extension SDK
+  in a published tile). The only network calls made are:
   - **Tile runtime calls:** (a) to your own Looker instance for query execution
-    and Extension SDK communication, and (b) to `storage.googleapis.com` to load
-    the runtime bundle itself (which includes vendored copies of dependencies
-    and the Looker Extension SDK).
+    and Extension SDK communication, and (b) to `www.gstatic.com` (or the configured
+    `browser_assets_url`) to load the runtime bundle and vendored dependencies.
   - **Local devtools calls:** (c) daily, cached version discovery checks against
     `dl.google.com` by `check-for-update.py` on the author's machine
     (querying `looker-data-apps/latest-version.txt` carrying
@@ -36,6 +40,10 @@ The short version: **Data Apps run as native extensions within your Looker insta
     toolkit updates (can be disabled via `"update_check": false` in
     `data-apps-config.json` or `DATA_APPS_NO_UPDATE_CHECK=1`). `CHANGELOG.md` is
     fetched on demand only when an update is found and presented to the author.
+    (d) previewing an app tagged with another toolkit version (1.3.0 or later)
+    fetches that runtime from `www.gstatic.com` (or the configured
+    `browser_assets_url`). Untagged apps, apps tagged before 1.3.0, and apps
+    matching the installed version use the local runtime.
     Full list in `SECURITY.md`.
 - **No customer data in the runtime bundle's logs.** The runtime is
   static JS hosted in a public-read GCS bucket; we have no way to
@@ -50,9 +58,13 @@ The toolkit writes:
   `client_id`, API `client_secret`, and publish settings.
 - `.update-check.json` — timestamp, latest version, and dismissal
   state of the daily, cached version discovery check.
-- `backups/` — local snapshot backups of the toolkit (`backups/toolkit/`)
-  and customer apps (`backups/apps/`) created prior to upgrades or migrations.
-  Toolkit backups contain a copy of `data-apps-config.json`, credentials included.
+- `backups/` — customer app snapshots (`backups/apps/`) created prior to upgrading
+  an app on edit. During a devtools update, a temporary `backups/rollback-*` folder
+  holds a rollback copy (including `data-apps-config.json`) and is removed when the
+  update finishes; an interrupted update or failed restore can leave a
+  `backups/rollback-*` folder with a copy of `data-apps-config.json` that the user
+  can delete. Older timestamped toolkit backups may also hold a copy of
+  `data-apps-config.json` and can be deleted by the user.
 - `.update.lock` — ephemeral concurrency lockfile preventing
   simultaneous toolkit updates.
 - AI Agent configurations (e.g. `.claude/skills/data-app-creator`)
@@ -82,7 +94,7 @@ them at any time.
 ## Verifying
 
 Open DevTools → Network tab while viewing a Data App tile.
-Confirm requests go only to: your Looker host and the runtime bundle's GCS path.
+Confirm requests go only to your Looker host and https://www.gstatic.com/looker-data-apps/.
 Filter on the network panel by domain; there should be nothing else.
 
 ---

@@ -55,7 +55,140 @@ def _find_repo_root(start_path):
     return curr.parent
 
 ROOT = _find_repo_root(Path(__file__).parent)
+ROOT_RESOLVED = ROOT.resolve()
 CONFIG_PATH = ROOT / "data-apps-config.json"
+
+for _vu_dir in (
+    ROOT / "skills" / "toolkit-updater" / "tools",
+    ROOT / "dist" / "skills" / "toolkit-updater" / "tools",
+):
+    if _vu_dir.is_dir() and str(_vu_dir) not in sys.path:
+        sys.path.insert(0, str(_vu_dir))
+import version_utils
+
+_INDEX_ROUTES = frozenset({
+    "",
+    "/",
+    "/index.html",
+    "/preview-server",
+    "/preview-server/index.html",
+    "/dist/preview-server",
+    "/dist/preview-server/index.html",
+})
+
+
+def _resolve_safe_app_path(app_path, root=None):
+    """Resolve an app URL/relative path inside `root` (or `root/dist`).
+    Raises ValueError if the path attempts directory traversal outside `root`."""
+    if not app_path:
+        return None
+    raw = str(app_path).split("#", 1)[0].split("?", 1)[0].strip()
+    if not raw:
+        return None
+    if "\x00" in raw:
+        raise ValueError("Invalid null byte in app path")
+    norm = raw.replace("\\", "/")
+    parts = [p for p in norm.split("/") if p and p != "."]
+    if ".." in parts:
+        raise ValueError("Path traversal is not allowed in app path")
+    rel = "/".join(parts)
+    if not rel:
+        return None
+    base_root = (Path(root) if root is not None else ROOT).resolve()
+    root_str = str(base_root)
+    for search_base in (base_root, base_root / "dist"):
+        cand = (search_base / rel).resolve()
+        try:
+            if os.path.commonpath([root_str, str(cand)]) != root_str:
+                raise ValueError("App path resolves outside workspace root")
+        except ValueError:
+            raise ValueError("App path resolves outside workspace root")
+        if cand.is_file():
+            return cand
+        if cand.is_dir():
+            app_js = (cand / "app.js").resolve()
+            try:
+                if os.path.commonpath([root_str, str(app_js)]) == root_str and app_js.is_file():
+                    return app_js
+            except ValueError:
+                pass
+    return None
+
+
+def _read_browser_assets_url(base_root):
+    base_resolved = Path(base_root).resolve()
+    if base_resolved == ROOT_RESOLVED and isinstance(_config, dict):
+        return _config.get("browser_assets_url") or None
+    try:
+        cfg = json.loads((base_resolved / "data-apps-config.json").read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    return (cfg.get("browser_assets_url") or None) if isinstance(cfg, dict) else None
+
+
+def resolve_app_runtime(app_path=None, root=None):
+    """Return `{"toolkit_version", "installed_version", "runtime_base"}` for an app path."""
+    base_root = (Path(root) if root is not None else ROOT).resolve()
+    installed_version = version_utils.read_installed_version(base_root) or "0.0.0"
+    pin = None
+    if app_path:
+        app_file = _resolve_safe_app_path(app_path, root=base_root)
+        if app_file is not None:
+            try:
+                pin = version_utils.read_pin(app_file.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                pin = None
+    toolkit_version = pin or installed_version
+    if not version_utils.tag_is_trusted(pin) or version_utils.compare(installed_version, pin) == 0:
+        runtime_base = "/runtime"
+    else:
+        assets = version_utils.assets_root(_read_browser_assets_url(base_root))
+        runtime_base = f"{assets}/versions/{pin}"
+    return {
+        "toolkit_version": toolkit_version,
+        "installed_version": installed_version,
+        "runtime_base": runtime_base,
+    }
+
+
+def _find_index_html_path(root=None):
+    base = Path(root) if root is not None else ROOT
+    for cand in (
+        base / "preview-server" / "index.html",
+        base / "dist" / "preview-server" / "index.html",
+        Path(__file__).resolve().parent / "index.html",
+    ):
+        if cand.is_file():
+            return cand
+    return None
+
+
+def render_index_html(app_path=None, root=None):
+    """Render index.html with the server-injected import map for `?app=`
+    (or the installed version when opening the gallery)."""
+    base_root = Path(root) if root is not None else ROOT
+    tpl_path = _find_index_html_path(base_root)
+    if tpl_path is None:
+        return ""
+    html_text = tpl_path.read_text(encoding="utf-8")
+    try:
+        info = resolve_app_runtime(app_path, root=base_root)
+    except ValueError:
+        info = resolve_app_runtime(None, root=base_root)
+    clean_base = info["runtime_base"].rstrip("/")
+    assets = version_utils.assets_root(_read_browser_assets_url(base_root))
+    vendor_base = f"{assets}/vendor"
+    import_map = json.dumps({
+        "imports": {
+            "/runtime/": f"{clean_base}/",
+            "/vendor/": f"{vendor_base}/",
+        }
+    }).replace("<", "\\u003c")
+    importmap_re = re.compile(r'<script\b[^>]*type="importmap"[^>]*>[\s\S]*?</script>')
+    tag = f'<script type="importmap">{import_map}</script>'
+    if importmap_re.search(html_text):
+        return importmap_re.sub(lambda _m: tag, html_text, count=1)
+    return html_text.replace("</head>", f"{tag}\n</head>", 1)
 
 # Config is loaded on first use, not at import. Everything in this module that
 # doesn't touch Looker -- the error-shaping helpers, the fan-out detector, the
@@ -74,7 +207,7 @@ def get_config():
         cfg = {}
         if CONFIG_PATH.exists():
             try:
-                cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+                cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
             except Exception:
                 cfg = {}
 
@@ -92,7 +225,7 @@ def get_config():
         if not (base_url and client_id and client_secret):
             sys.stderr.write(f"error: Looker credentials not found.\n")
             sys.stderr.write("Please set LOOKERSDK_BASE_URL, LOOKERSDK_CLIENT_ID, LOOKERSDK_CLIENT_SECRET in your environment\n")
-            sys.stderr.write(f"or create {CONFIG_PATH} via scripts/bootstrap.sh.\n")
+            sys.stderr.write(f"or create {CONFIG_PATH} via python3 scripts/bootstrap.py (or scripts/bootstrap.sh).\n")
             raise SystemExit(1)
 
         cfg["base_url"] = str(base_url).rstrip("/")
@@ -563,15 +696,13 @@ class Handler(SimpleHTTPRequestHandler):
     def translate_path(self, path):
         clean_path = path.split("?", 1)[0]
         clean_stripped = clean_path.rstrip("/")
-        if clean_stripped in ("", "/", "/index.html", "/preview-server"):
-            cand = ROOT / "preview-server" / "index.html"
-            if not cand.exists():
-                cand = ROOT / "dist" / "preview-server" / "index.html"
-            if cand.exists():
+        if clean_stripped in _INDEX_ROUTES:
+            cand = _find_index_html_path(ROOT)
+            if cand is not None:
                 return str(cand)
 
         rel = clean_path.lstrip("/")
-        root_str = str(ROOT_RESOLVED)
+        root_str = str(ROOT.resolve())
         for base in (ROOT, ROOT / "dist", ROOT / "dist" / "preview-server", ROOT / "preview-server"):
             cand = (base / rel).resolve()
             try:
@@ -625,6 +756,23 @@ class Handler(SimpleHTTPRequestHandler):
         if clean_path.startswith("/api/") and not self._guard():
             return
 
+        if clean_path == "/api/app-runtime":
+            parsed = urllib.parse.urlsplit(self.path)
+            qs = urllib.parse.parse_qs(parsed.query)
+            app_param = (qs.get("app") or qs.get("path") or [None])[0]
+            try:
+                info = resolve_app_runtime(app_param, root=ROOT)
+            except ValueError as e:
+                self._send_json(400, _error_envelope(
+                    error_type="invalid_app_path",
+                    message=str(e),
+                    hint="The app path must stay within the workspace root.",
+                    suggested_action="Pass a path under apps/, examples/, or backups/apps/.",
+                ))
+                return
+            self._send_json(200, info)
+            return
+
         if clean_path == "/api/apps":
             def scan_dir(sub_dir, exclude_prefix=None):
                 results = []
@@ -649,8 +797,10 @@ class Handler(SimpleHTTPRequestHandler):
                         raw_name = p.name[:-7] if p.name.endswith(".app.js") else p.stem
                     title = raw_name.replace("-", " ").replace("_", " ").title()
                     desc = f"Data App component in {sub_dir}"
+                    toolkit_version = None
                     try:
                         content = p.read_text(encoding="utf-8")
+                        toolkit_version = version_utils.read_pin(content)
                         import re
                         model_match = re.search(r"(?:lookerModel|const MODEL)\s*=\s*['\"]([^'\"]+)['\"]", content)
                         explore_match = re.search(r"(?:explore|const EXPLORE)\s*=\s*['\"]([^'\"]+)['\"]", content)
@@ -704,6 +854,7 @@ class Handler(SimpleHTTPRequestHandler):
                         "desc": desc,
                         "mtime": fs_mtime,
                         "published_at": published_epoch if published_epoch > 0 else None,
+                        "toolkit_version": toolkit_version,
                     })
                 # Order from most recently modified to oldest
                 results.sort(key=lambda item: item.get("mtime", 0), reverse=True)
@@ -717,6 +868,28 @@ class Handler(SimpleHTTPRequestHandler):
                 "evals": scan_dir("evals", exclude_prefix="evals/.venv"),
             })
             return
+
+        clean_stripped = clean_path.rstrip("/")
+        if clean_stripped in _INDEX_ROUTES:
+            parsed = urllib.parse.urlsplit(self.path)
+            qs = urllib.parse.parse_qs(parsed.query)
+            app_param = (qs.get("app") or qs.get("path") or [None])[0]
+            is_inspect = any(v in ("1", "true") for v in (qs.get("inspect") or []))
+            # Only inspect mode mounts the app in the top document; sandbox mode mounts inside
+            # an isolated srcdoc iframe that injects its own per-app import map.
+            app_to_render = app_param if is_inspect else None
+            html_out = render_index_html(app_to_render, root=ROOT)
+            if html_out:
+                try:
+                    body = html_out.encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
 
         # Everything else is a static file served from the repo root.
         return super().do_GET()

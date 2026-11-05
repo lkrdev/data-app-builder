@@ -7,7 +7,19 @@ description: |
 
 You are managing and verifying the local preview experience for a Looker Data App.
 The preview server runs locally on port 8765, proxying Looker queries through
-credentials in `data-apps-config.json`.
+credentials in `data-apps-config.json`. The server automatically resolves the
+appropriate runtime for each app based on its `@toolkit-version` pin: apps tagged
+with another version from 1.3.0 on preview on that version loaded from gstatic
+(or the configured `browser_assets_url`), while untagged apps, apps tagged before
+1.3.0, and apps matching the installed `VERSION` use the local runtime. Both
+upgraded apps and pre-upgrade snapshots preview on their pinned runtime.
+
+Local preview (both default sandbox mode and `?inspect=1` mode) loads third-party
+vendor libraries from `https://www.gstatic.com/looker-data-apps/vendor/` (or
+`<browser_assets_url>/vendor/`). It loads pinned runtimes (`@toolkit-version` 1.3.0+
+differing from installed `VERSION`) from `<browser_assets_url>/versions/<V>/`.
+Therefore local preview requires internet access (or a reachable `browser_assets_url`
+that sends `Access-Control-Allow-Origin` and `Cross-Origin-Resource-Policy: cross-origin`).
 
 ## 1. Start the Preview Server
 
@@ -55,6 +67,7 @@ Understanding how the preview server mounts an app is essential for LLM agents a
 Present clickable links and report concrete observations from the dataset:
 
 * **Live App Preview:** `http://localhost:8765/preview-server/?app=apps/<app-name>/app.js`
+* **Pre-Upgrade Snapshot:** `http://localhost:8765/preview-server/?app=backups/apps/<snapshot>/app.js`
 * **Tile Parity Sandbox:** `http://localhost:8765/preview-server/?app=apps/<app-name>/app.js&sandbox=true`
 * **App Gallery:** `http://localhost:8765/preview-server/`
 

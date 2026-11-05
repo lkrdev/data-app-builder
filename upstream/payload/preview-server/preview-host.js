@@ -666,7 +666,94 @@ function formatTimeAgo(epochSec, action = 'Updated') {
   return `${action} ${d.toLocaleDateString()}`;
 }
 
+function escapeHtmlHost(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function parseSemverTuple(ver) {
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(ver || '').trim());
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
 export class PreviewHost extends LitElement {
+  _removeInspectAppCss() {
+    if (typeof document === 'undefined' || !document.head || typeof document.head.querySelectorAll !== 'function') return;
+    for (const link of Array.from(document.head.querySelectorAll('link[href$="/data-app.css"]'))) {
+      if (typeof link.remove === 'function') link.remove();
+      else if (link.parentNode) link.parentNode.removeChild(link);
+    }
+  }
+
+  _getConfiguredVendorBase() {
+    try {
+      const el = (typeof document !== 'undefined') &&
+        (document.querySelector?.('script[type="importmap"]') || document.head?.querySelector?.('script[type="importmap"]'));
+      if (el && el.textContent) {
+        const parsed = JSON.parse(el.textContent);
+        const v = parsed?.imports?.['/vendor/'];
+        if (typeof v === 'string' && v.trim()) {
+          return v.trim().replace(/\/+$/, '');
+        }
+      }
+    } catch (_) {}
+    return 'https://www.gstatic.com/looker-data-apps/vendor';
+  }
+
+  _loadRuntimeModule() {
+    return import('/runtime/data-app.js');
+  }
+
+  _formatRemoteRuntimeHint(toolkitVersion, runtimeBase, installedVersion) {
+    if (!runtimeBase || !/^https?:\/\//i.test(runtimeBase)) {
+      return '';
+    }
+    const pinTuple = parseSemverTuple(toolkitVersion);
+    const instTuple = parseSemverTuple(installedVersion);
+    const pinNewer = Boolean(
+      pinTuple &&
+      instTuple &&
+      installedVersion !== '0.0.0' &&
+      (pinTuple[0] > instTuple[0] ||
+        (pinTuple[0] === instTuple[0] &&
+          (pinTuple[1] > instTuple[1] ||
+            (pinTuple[1] === instTuple[1] && pinTuple[2] > instTuple[2]))))
+    );
+    let hint = pinNewer
+      ? `This app is tagged @toolkit-version ${toolkitVersion}, so its runtime loads from ${runtimeBase}/data-app.js. Update your toolkit to v${toolkitVersion} or newer, or check your internet connection.`
+      : `This app is tagged @toolkit-version ${toolkitVersion}, so its runtime loads from ${runtimeBase}/data-app.js. Check your internet connection, or upgrade the app to the installed toolkit.`;
+    if (!runtimeBase.startsWith('https://www.gstatic.com/')) {
+      hint += ' If you set a custom browser_assets_url, check that the host sends Access-Control-Allow-Origin and Cross-Origin-Resource-Policy: cross-origin.';
+    }
+    return hint;
+  }
+
+  _renderLoadErrorHtml({ summaryText, codePath, hintText, detailText }) {
+    const galleryHref = (typeof window !== 'undefined' && window.location && window.location.pathname) || '/preview-server/';
+    let htmlStr = '<div class="preview-load-error">\n';
+    htmlStr += '  <h3>Error Loading Data App</h3>\n';
+    if (codePath) {
+      htmlStr += `  <p>${escapeHtmlHost(summaryText)} <code>${escapeHtmlHost(codePath)}</code></p>\n`;
+    } else if (summaryText) {
+      htmlStr += `  <p>${escapeHtmlHost(summaryText)}</p>\n`;
+    }
+    if (hintText) {
+      htmlStr += `  <p>${escapeHtmlHost(hintText)}</p>\n`;
+    }
+    if (detailText) {
+      htmlStr += `  <pre>${escapeHtmlHost(detailText)}</pre>\n`;
+    }
+    htmlStr += '  <div class="preview-load-error-actions">\n';
+    htmlStr += `    <a href="${escapeHtmlHost(galleryHref)}">← Return to App Gallery</a>\n`;
+    htmlStr += '  </div>\n';
+    htmlStr += '</div>';
+    return htmlStr;
+  }
+
   createRenderRoot() {
     return this; // Light DOM by contract so head styles cascade in
   }
@@ -698,6 +785,7 @@ export class PreviewHost extends LitElement {
     this._errSeq = 0;
     this._mountId = 0;
     this._activeApp = null;
+    this._serverMappedApp = null;
     this._sandboxBridge = null;
     this._sandboxErrorListener = null;
     this._sandboxMounted = false;
@@ -717,6 +805,9 @@ export class PreviewHost extends LitElement {
   connectedCallback() {
     injectStyles();
     super.connectedCallback();
+    const initParams = new URLSearchParams(window.location.search);
+    const initInspect = initParams.get('inspect') === '1' || initParams.get('inspect') === 'true';
+    this._serverMappedApp = initInspect ? (initParams.get('app') || initParams.get('path') || null) : null;
     this._onPopState = () => this.handleRoute();
     window.addEventListener('popstate', this._onPopState);
 
@@ -733,8 +824,20 @@ export class PreviewHost extends LitElement {
     this._onLinkClick = (e) => {
       const link = e.target.closest('a[href^="?"], a.gallery-back-pill, a[href="' + window.location.pathname + '"]');
       if (link && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-        e.preventDefault();
         const targetHref = link.getAttribute('href');
+        try {
+          const targetUrl = new URL(targetHref, window.location.href);
+          const targetParams = targetUrl.searchParams;
+          const targetApp = targetParams.get('app') || targetParams.get('path');
+          const targetInspect = targetParams.get('inspect') === '1' || targetParams.get('inspect') === 'true';
+          // Browsers freeze <script type="importmap"> once the first ES module loads,
+          // so switching apps in same-origin inspect mode needs a full page load for
+          // the server to inject the new app's runtime import map.
+          if (targetApp && targetInspect && targetApp !== this._serverMappedApp) {
+            return;
+          }
+        } catch (_) {}
+        e.preventDefault();
         history.pushState({}, '', targetHref);
         this.handleRoute();
       }
@@ -916,10 +1019,16 @@ export class PreviewHost extends LitElement {
       document.title = 'Data Apps Gallery';
       this.currentViewport = '100%';
       this.applyViewport('100%');
-      const topCssLink = document.head.querySelector('link[href*="data-app.css"]');
-      if (topCssLink) topCssLink.href = '/runtime/data-app.css';
+      this._removeInspectAppCss();
 
       await this.loadAppsData();
+      return;
+    }
+
+    // Browsers freeze <script type="importmap"> after the first module loads,
+    // so switching to a different app in inspect mode reloads from the server.
+    if (!isSandboxed && this._serverMappedApp !== rawApp) {
+      window.location.assign(window.location.href);
       return;
     }
 
@@ -944,13 +1053,66 @@ export class PreviewHost extends LitElement {
     }
     appRoot.innerHTML = '';
 
-    let appPath = this.rawApp;
-    if (!appPath.startsWith('/') && !appPath.startsWith('http')) {
-      appPath = '/' + appPath;
+    const rawTrimmed = String(this.rawApp || '').trim();
+    const rawBeforeQuery = rawTrimmed.split('#')[0].split('?')[0];
+    const expectedOrigin = new URL(
+      (window.location && (window.location.origin || window.location.href)) || 'http://localhost:8765',
+      'http://localhost:8765'
+    ).origin;
+    let appPath = rawTrimmed.startsWith('/') ? rawTrimmed : '/' + rawTrimmed;
+    let resolvedAppUrl = null;
+    try {
+      resolvedAppUrl = new URL(appPath, expectedOrigin);
+    } catch (_) {}
+    if (
+      !rawTrimmed ||
+      /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rawTrimmed) ||
+      rawTrimmed.startsWith('//') ||
+      appPath.startsWith('//') ||
+      rawBeforeQuery.includes('\\') ||
+      !resolvedAppUrl ||
+      resolvedAppUrl.origin !== expectedOrigin
+    ) {
+      const rejectMsg = `App path must be a workspace-relative path on this server: ${rawTrimmed || '(empty)'}`;
+      this.addSandboxError('Preview Load Error', rejectMsg);
+      this.writeDiagnosticsNode();
+      this._removeInspectAppCss();
+      appRoot.innerHTML = this._renderLoadErrorHtml({
+        summaryText: 'Refused cross-origin or invalid app path:',
+        codePath: rawTrimmed || '(empty)',
+        detailText: rejectMsg,
+      });
+      return;
+    }
+    appPath = resolvedAppUrl.pathname;
+    if (!appPath.toLowerCase().endsWith('.js') && /^\/(?:apps|examples|dist\/examples|backups\/apps)\/.+/.test(appPath)) {
+      appPath = appPath.replace(/\/+$/, '') + '/app.js';
     }
     const cleanPath = appPath + `?t=${Date.now()}`;
 
+    let runtimeInfo = null;
+    try {
+      const rtRes = await fetch(`/api/app-runtime?app=${encodeURIComponent(appPath)}`);
+      if (rtRes.ok) {
+        runtimeInfo = await rtRes.json();
+      }
+    } catch (_) {}
+    if (mountId !== this._mountId) return;
+
+    const runtimeBase = runtimeInfo && runtimeInfo.runtime_base
+      ? String(runtimeInfo.runtime_base).replace(/\/+$/, '')
+      : null;
+    const toolkitVersion = (runtimeInfo && runtimeInfo.toolkit_version) || '';
+    const installedVersion = (runtimeInfo && runtimeInfo.installed_version) || '';
+    const remoteHint = this._formatRemoteRuntimeHint(toolkitVersion, runtimeBase, installedVersion);
+
+    const activeRuntimeVersion = (!runtimeBase || runtimeBase === '/runtime')
+      ? (installedVersion || toolkitVersion)
+      : (toolkitVersion || installedVersion);
     let appMeta = {};
+    if (activeRuntimeVersion && activeRuntimeVersion !== '0.0.0') {
+      appMeta.toolkitVersion = activeRuntimeVersion.replace(/^v/i, '');
+    }
     try {
       const srcRes = await fetch(cleanPath);
       if (srcRes.ok) {
@@ -965,33 +1127,41 @@ export class PreviewHost extends LitElement {
           const pubMatch = jsdoc.match(/@published-at\s+([^\r\n*]+)/i);
           const activeDate = updMatch ? updMatch[1].trim() : (crtMatch ? crtMatch[1].trim() : (pubMatch ? pubMatch[1].trim() : ''));
           if (activeDate) appMeta.publishedAt = activeDate;
+          if (!appMeta.toolkitVersion) {
+            const verMatch = jsdoc.match(/^[ \t]*\*[ \t]*@toolkit-version[ \t]+((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))[ \t]*$/m);
+            if (verMatch && verMatch[1] !== '0.0.0') appMeta.toolkitVersion = verMatch[1];
+          }
         }
       }
     } catch (_) {}
+    if (mountId !== this._mountId) return;
     window.__lookerDataAppMeta = appMeta;
     document.title = appMeta.title ? `${appMeta.title} - Data Apps Gallery` : 'Data Apps Gallery';
 
-    const backupMatch = appPath.match(/^\/?(backups\/apps\/[^/]+)\//);
-    let runtimeCssPath = backupMatch
-      ? `/${backupMatch[1]}/.runtime/data-app.css`
-      : '/runtime/data-app.css';
-
-    if (backupMatch) {
-      try {
-        const tkRes = await fetch('/' + backupMatch[1] + '/.toolkit-backup');
-        if (tkRes.ok) {
-          const tkName = (await tkRes.text()).trim();
-          if (tkName) {
-            runtimeCssPath = '/backups/toolkit/' + tkName + '/runtime/data-app.css';
-          }
-        }
-      } catch (_) {}
-    }
-
     if (this.isSandboxed) {
       this.teardownSandboxBridge();
+      this._removeInspectAppCss();
       const nonce = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random())).replace(/-/g, '');
-      const ORIGIN = window.location.origin;
+      const ORIGIN = (window.location && window.location.origin) || expectedOrigin;
+      const base = new URL(runtimeBase || '/runtime', ORIGIN);
+      const resolvedBase = base.href.replace(/\/+$/, '');
+      const vendorUrlObj = new URL(this._getConfiguredVendorBase(), ORIGIN);
+      const resolvedVendor = vendorUrlObj.href.replace(/\/+$/, '');
+      const extraOrigins = Array.from(
+        new Set([base.origin, vendorUrlObj.origin].filter((o) => o && o !== 'null' && o !== ORIGIN))
+      );
+      const extraOrigin = extraOrigins.length ? ' ' + extraOrigins.join(' ') : '';
+      const importMapJson = JSON.stringify({
+        imports: {
+          [`${ORIGIN}/runtime/`]: `${resolvedBase}/`,
+          [`${ORIGIN}/vendor/`]: `${resolvedVendor}/`,
+        },
+      }).replace(/</g, '\\u003c');
+      const importMapTag = `<script type="importmap" nonce="${nonce}">${importMapJson}<\/script>`;
+      const appMetaJson = JSON.stringify(appMeta).replace(/</g, '\\u003c');
+      const runtimeSpecJson = JSON.stringify(`${ORIGIN}/runtime/data-app.js`).replace(/</g, '\\u003c');
+      const appSpecJson = JSON.stringify(`${ORIGIN}${cleanPath}`).replace(/</g, '\\u003c');
+      const hintTextJson = JSON.stringify(remoteHint).replace(/</g, '\\u003c');
 
       const iframe = document.createElement('iframe');
       iframe.id = 'canvas-sandbox-frame';
@@ -1062,8 +1232,14 @@ export class PreviewHost extends LitElement {
         if (e.source !== iframe.contentWindow) return;
         const m = e.data;
         if (!m || m.__canvasSandboxError !== true) return;
-        console.error('[sandbox] ' + m.kind + ': ' + m.message + (m.stack ? '\n' + m.stack : ''));
-        this.addSandboxError(m.kind, m.message);
+        let msg = m.message;
+        if (m.kind === 'Sandbox Load Error' && remoteHint && m.remoteBootstrapFailed === true) {
+          if (!msg.includes(remoteHint)) {
+            msg = msg ? `${msg}\n${remoteHint}` : remoteHint;
+          }
+        }
+        console.error('[sandbox] ' + m.kind + ': ' + msg + (m.stack ? '\n' + m.stack : ''));
+        this.addSandboxError(m.kind, msg);
       };
       window.addEventListener('message', this._sandboxErrorListener);
 
@@ -1072,17 +1248,9 @@ export class PreviewHost extends LitElement {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}' ${ORIGIN}; style-src 'unsafe-inline' ${ORIGIN}; font-src ${ORIGIN} data:; img-src data: blob: ${ORIGIN}; connect-src 'none';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}' ${ORIGIN}${extraOrigin}; style-src 'unsafe-inline' ${ORIGIN}${extraOrigin}; font-src ${ORIGIN}${extraOrigin} data:; img-src data: blob: ${ORIGIN}${extraOrigin}; connect-src 'none';">
   <title>Looker Data App (Sandboxed)</title>
-  <link rel="stylesheet" href="${ORIGIN}${runtimeCssPath}">
-  <link rel="stylesheet" href="${ORIGIN}/vendor/ag-grid/31.3.4/ag-grid.css">
-  <link rel="stylesheet" href="${ORIGIN}/vendor/ag-grid/31.3.4/ag-theme-quartz.css">
-  <script nonce="${nonce}" src="${ORIGIN}/vendor/ag-grid/31.3.4/ag-grid-community.min.js"><\/script>
-  <script nonce="${nonce}" src="${ORIGIN}/vendor/highcharts/11.4.8/highcharts.js"><\/script>
-  <script nonce="${nonce}" src="${ORIGIN}/vendor/highcharts/11.4.8/highcharts-more.js"><\/script>
-  <script nonce="${nonce}" src="${ORIGIN}/vendor/highcharts/11.4.8/highcharts-solid-gauge.js"><\/script>
-  <script nonce="${nonce}" src="${ORIGIN}/vendor/highcharts/11.4.8/highcharts-funnel.js"><\/script>
-  <script nonce="${nonce}" src="${ORIGIN}/vendor/highcharts/11.4.8/highcharts-treemap.js"><\/script>
+  ${importMapTag}
   <style>
     body.vp-device-mode, body.vp-device-mode #sandboxed-app-root, body.vp-device-mode .da-container {
       overflow-x: hidden;
@@ -1112,7 +1280,7 @@ export class PreviewHost extends LitElement {
     })();
   <\/script>
   <script type="module" nonce="${nonce}">
-    window.__lookerDataAppMeta = ${JSON.stringify(appMeta)};
+    window.__lookerDataAppMeta = ${appMetaJson};
     const inflight = new Map();
     let seq = 0;
     window.addEventListener('message', (e) => {
@@ -1160,8 +1328,14 @@ export class PreviewHost extends LitElement {
       });
     };
 
+    let runtimeReady = false;
     try {
-      const module = await import('${ORIGIN}${cleanPath}');
+      const rt = await import(${runtimeSpecJson});
+      if (rt && typeof rt.loadVendors === 'function') {
+        await rt.loadVendors();
+      }
+      runtimeReady = true;
+      const module = await import(${appSpecJson});
       const root = document.getElementById('sandboxed-app-root');
 
       let CustomClass = module.default;
@@ -1214,6 +1388,8 @@ export class PreviewHost extends LitElement {
       });
     } catch (err) {
       console.error('Sandboxed Lit App Load Error:', err);
+      const isRemote = !runtimeReady && ${JSON.stringify(Boolean(remoteHint))};
+      const hintText = ${hintTextJson};
       try {
         // nosemgrep: looker-internal.javascript.browser.security.wildcard-postmessage-configuration
         parent.postMessage({
@@ -1221,7 +1397,8 @@ export class PreviewHost extends LitElement {
           type: 'LOOKER_DATA_APP_CRITICAL_ERROR',
           kind: 'Sandbox Load Error',
           scope: 'sandbox-bootstrap',
-          message: err && err.message ? err.message : String(err),
+          remoteBootstrapFailed: isRemote,
+          message: isRemote ? ((err && err.message ? err.message : String(err)) + String.fromCharCode(10) + hintText) : (err && err.message ? err.message : String(err)),
           stack: err && err.stack ? err.stack : '',
         }, '*');
       } catch (_) {}
@@ -1231,7 +1408,13 @@ export class PreviewHost extends LitElement {
       wrap.style.cssText = 'padding:24px;color:#ef4444;font-family:sans-serif';
       const h = document.createElement('h3');
       h.textContent = 'Sandbox Load Error';
-      wrap.appendChild(h); wrap.appendChild(pre);
+      wrap.appendChild(h);
+      if (isRemote) {
+        const hintEl = document.createElement('p');
+        hintEl.textContent = hintText;
+        wrap.appendChild(hintEl);
+      }
+      wrap.appendChild(pre);
       document.body.appendChild(wrap);
     }
   <\/script>
@@ -1246,9 +1429,76 @@ export class PreviewHost extends LitElement {
     // Same-origin Inspect mode
     this.teardownSandboxBridge();
 
-    const topCssLink = document.head.querySelector('link[href*="data-app.css"]');
-    if (topCssLink) {
-      topCssLink.href = runtimeCssPath;
+    if (runtimeBase !== null) {
+      const importMapEl = document.querySelector?.('script[type="importmap"]')
+        || document.head?.querySelector?.('script[type="importmap"]');
+      let mappedRuntime = null;
+      let mappedVendor = null;
+      if (importMapEl && importMapEl.textContent) {
+        try {
+          const parsedMap = JSON.parse(importMapEl.textContent);
+          const rawMapped = parsedMap && parsedMap.imports && parsedMap.imports['/runtime/'];
+          if (typeof rawMapped === 'string') {
+            mappedRuntime = rawMapped.replace(/\/+$/, '');
+          }
+          const rawVendor = parsedMap && parsedMap.imports && parsedMap.imports['/vendor/'];
+          if (typeof rawVendor === 'string') {
+            mappedVendor = rawVendor;
+          }
+        } catch (_) {}
+      }
+      const expectedVendorBase = new URL(this._getConfiguredVendorBase(), expectedOrigin).href.replace(/\/+$/, '');
+      const currentVendorBase = mappedVendor ? new URL(mappedVendor, expectedOrigin).href.replace(/\/+$/, '') : '';
+      const vendorMismatched = Boolean(expectedVendorBase && (!currentVendorBase || currentVendorBase !== expectedVendorBase));
+      // One reload per app and runtime; appPath has no cache-busting query, so the key is stable across reloads.
+      const reloadKey = `preview-importmap-reload:${appPath}::${runtimeBase}`;
+      if (mappedRuntime !== runtimeBase || vendorMismatched) {
+        let alreadyReloaded = false;
+        try {
+          alreadyReloaded = Boolean(window.sessionStorage?.getItem(reloadKey));
+        } catch (_) {}
+
+        const errorMsg = 'The preview could not switch this page to the runtime for this app. Reload the page, or open the app in sandbox mode.';
+        if (!importMapEl || alreadyReloaded) {
+          try {
+            window.sessionStorage?.removeItem(reloadKey);
+          } catch (_) {}
+          this.addSandboxError('Preview Load Error', errorMsg);
+          this.writeDiagnosticsNode();
+          this._removeInspectAppCss();
+          appRoot.innerHTML = this._renderLoadErrorHtml({
+            summaryText: errorMsg,
+          });
+          return;
+        }
+
+        let persisted = false;
+        try {
+          window.sessionStorage?.setItem(reloadKey, '1');
+          persisted = window.sessionStorage?.getItem(reloadKey) === '1';
+        } catch (_) {}
+
+        if (!persisted) {
+          this.addSandboxError('Preview Load Error', errorMsg);
+          this.writeDiagnosticsNode();
+          this._removeInspectAppCss();
+          appRoot.innerHTML = this._renderLoadErrorHtml({
+            summaryText: errorMsg,
+          });
+          return;
+        }
+
+        if (typeof window.location?.reload === 'function') {
+          window.location.reload();
+        } else if (typeof window.location?.assign === 'function') {
+          window.location.assign(window.location.href);
+        }
+        return;
+      } else {
+        try {
+          window.sessionStorage?.removeItem(reloadKey);
+        } catch (_) {}
+      }
     }
 
     this._diagnosticsMessageListener = (e) => {
@@ -1279,7 +1529,16 @@ export class PreviewHost extends LitElement {
       </div>
     `;
 
+    let runtimeReady = false;
     try {
+      const rt = await this._loadRuntimeModule();
+      if (mountId !== this._mountId) return;
+      if (rt && typeof rt.loadVendors === 'function') {
+        await rt.loadVendors();
+      }
+      if (mountId !== this._mountId) return;
+      runtimeReady = true;
+
       let module;
       try {
         module = await import(cleanPath);
@@ -1337,18 +1596,21 @@ export class PreviewHost extends LitElement {
     } catch (err) {
       if (mountId !== this._mountId) return;
       console.error('Failed to load Data App:', err);
-      this.addSandboxError('Preview Load Error', err && err.message ? err.message : String(err));
+      let errMsg = (err && (err.message || err.stack)) ? (err.message || String(err)) : String(err);
+      const activeHint = runtimeReady ? '' : remoteHint;
+      const failedPath = runtimeReady ? cleanPath : `${runtimeBase || '/runtime'}/data-app.js`;
+      if (activeHint && !errMsg.includes(activeHint)) {
+        errMsg = errMsg ? `${errMsg}\n${activeHint}` : activeHint;
+      }
+      this.addSandboxError('Preview Load Error', errMsg);
       this.writeDiagnosticsNode();
-      appRoot.innerHTML = `
-        <div class="preview-load-error">
-          <h3>Error Loading Data App</h3>
-          <p>Failed to import module: <code>${cleanPath}</code></p>
-          <pre>${err.stack || err.message}</pre>
-          <div class="preview-load-error-actions">
-            <a href="${window.location.pathname}">← Return to App Gallery</a>
-          </div>
-        </div>
-      `;
+      this._removeInspectAppCss();
+      appRoot.innerHTML = this._renderLoadErrorHtml({
+        summaryText: 'Failed to import module:',
+        codePath: failedPath,
+        hintText: activeHint,
+        detailText: (err && (err.stack || err.message)) || String(err),
+      });
     }
   }
 
@@ -1357,9 +1619,8 @@ export class PreviewHost extends LitElement {
     const iconBg = app.iconBg || 'rgba(99, 102, 241, 0.12)';
     const updatedStr = app.mtime ? formatTimeAgo(app.mtime, 'Updated') : '';
     const publishedStr = app.published_at ? formatTimeAgo(app.published_at, 'Published') : '';
-    const timeLabel = (updatedStr && publishedStr)
-      ? `${updatedStr} · ${publishedStr}`
-      : (updatedStr || publishedStr);
+    const versionStr = app.toolkit_version ? `v${String(app.toolkit_version).replace(/^v/i, '')}` : '';
+    const timeLabel = [updatedStr, publishedStr, versionStr].filter(Boolean).join(' · ');
     return html`
       <div class="gallery-card" data-name="${app.name}">
         <a href="?app=${encodeURIComponent(app.path)}" class="gallery-card-link">
@@ -1409,7 +1670,8 @@ export class PreviewHost extends LitElement {
 
     const matchesQuery = (app) => {
       if (!q) return true;
-      const haystack = `${app.title || ''} ${app.path || ''} ${app.desc || ''} ${app.name || ''}`.toLowerCase();
+      const verToken = app.toolkit_version ? `v${String(app.toolkit_version).replace(/^v/i, '')}` : '';
+      const haystack = `${app.title || ''} ${app.path || ''} ${app.desc || ''} ${app.name || ''} ${verToken}`.toLowerCase();
       return haystack.includes(q);
     };
 

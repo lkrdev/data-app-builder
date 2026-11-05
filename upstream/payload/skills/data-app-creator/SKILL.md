@@ -49,8 +49,9 @@ to die. Keep it short and cheap:
 
 ## Run order
 
-1. **Check for toolkit updates (cached daily).**
-   Run `python3 skills/toolkit-updater/tools/check-for-update.py`. If an update is available, follow `skills/toolkit-updater/SKILL.md` before continuing.
+1. **Check for toolkit updates & pin before editing.**
+   - Run `python3 skills/toolkit-updater/tools/check-for-update.py`. If an update is available, follow `skills/toolkit-updater/SKILL.md` before continuing.
+   - **Check app pin before editing:** When editing an existing app, inspect its header comment for `@toolkit-version`. If the tag is missing or older than the installed `VERSION` (read from `./VERSION` or `./dist/VERSION`), follow `skills/toolkit-updater/SKILL.md` ("Upgrade one app") to upgrade it before making edits. If the pin is newer than the installed `VERSION`, update the toolkit first using `skills/toolkit-updater/SKILL.md` (Gate 1 / Gate 2).
 
 2. **Verify Looker credentials first (MANDATORY HITL GATE).**
    Before brainstorming, discovering explores, inspecting files, or writing any code, verify that Looker credentials work:
@@ -65,12 +66,12 @@ to die. Keep it short and cheap:
      * **Wait for human confirmation and instructions before resuming.**
    - **If this check PASSES (Exit Code 0):** Review the available LookML models, explores, and the current local ISO timestamp output by the tool, then proceed to discovery.
 
-   `bootstrap.sh` writes `data-apps-config.json` at the repo root:
+   `bootstrap.py` writes `data-apps-config.json` at the repo root:
    - **`data-apps-config.json`** (repo root) — the Looker instance URL (`base_url`),
      API credentials (`client_id`/`client_secret`), and publish settings (`publish_folder_id`).
    - *Optionally* `default_model` / `default_explores` may be present. These are
      **optional defaults, not a constraint**: if omitted, or if a dashboard
-     targets another model, call `explore-model.py --list-models` to discover available models.
+     targets another model, pick it from the model list that `check-credentials.py` prints (see step 3, Step A).
 
 ---
 
@@ -78,10 +79,10 @@ to die. Keep it short and cheap:
 
 | Component | Reactive Properties | Built-in Styling Contract | Auto Features |
 | :--- | :--- | :--- | :--- |
-| `<app-kpi>` | `label`, `value`, `format` (`percent1`, `usd`, `int`), `change`, `change-type` (`positive`/`negative`), `polarity` (`higher-better`/`lower-better`), `subtitle`, `sparkline`, `sparkline-agg` (`sum`/`avg`/`last`), `color`, `query`, `filters`, `queryField`, `bare`, `cell` | **Self-contained card**: border, radius (16px), background, padding, shadow — or none of it, with `bare`. | Fetches single measure, formats decimal ratios (`0.0–1.0` -> `79.2%`). When `sparkline` is set, accepts a 2-field query (`[dim, measure]`) or numeric array, renders mini trendline, and auto-computes delta (`sparkline-agg="sum|avg|last"` configures headline aggregation). |
-| `<app-chart>` | `type` (`line`, `spline`, `areaspline`, `area`, `bar`, `column`, `donut`, `pie`, `scatter`, `solidgauge`, `gauge`, `treemap`, `funnel`, `pyramid`), `title`, `height`, `explore`, `query`, `filters`, `sorts`, `limit`, `value-format`, `color`, `options`, `selected-value`, `cross-filter`, `pivot-by`, `y-scale-group`, `bare`, `cell` | **Self-contained card**: adapts to CSS container height (falling back to 300px default inline height on collapsed/unconstrained containers; overridable via `--app-chart-min-height`), title bar, loading skeleton, error banner. | **2-Dim Auto-Pivot** (`[date, suite, cov]` -> multi-series), declarative `cross-filter` (`cross-filter` or `cross-filter="view.field"`), `@app-chart-click` events, click-to-gray selection, in-place `.setData()` updates. |
+| `<app-kpi>` | `label`, `value`, `format` (`percent1`, `usd`, `int`), `change`, `change-type` (`positive`/`negative`), `polarity` (`higher-better`/`lower-better`), `subtitle`, `sparkline`, `sparkline-agg` (`sum`/`avg`/`last`), `color`, `query`, `filters`, `queryField`, `bare`, `cell`, `hide-actions` | **Self-contained card**: border, radius (16px), background, padding, shadow — or none of it, with `bare`. | Fetches single measure, formats decimal ratios (`0.0–1.0` -> `79.2%`). When `sparkline` is set, accepts a 2-field query (`[dim, measure]`) or numeric array, renders mini trendline, and auto-computes delta (`sparkline-agg="sum|avg|last"` configures headline aggregation). |
+| `<app-chart>` | `type` (`line`, `spline`, `areaspline`, `area`, `bar`, `column`, `donut`, `pie`, `scatter`, `solidgauge`, `gauge`, `treemap`, `funnel`, `pyramid`), `title`, `height`, `explore`, `query`, `filters`, `sorts`, `limit`, `value-format`, `color`, `options`, `selected-value`, `cross-filter`, `pivot-by`, `y-scale-group`, `bare`, `cell`, `hide-actions` | **Self-contained card**: adapts to CSS container height (falling back to 300px default inline height on collapsed/unconstrained containers; overridable via `--app-chart-min-height`), title bar, loading skeleton, error banner. | **2-Dim Auto-Pivot** (`[date, suite, cov]` -> multi-series), declarative `cross-filter` (`cross-filter` or `cross-filter="view.field"`), `@app-chart-click` events, click-to-gray selection, in-place `.setData()` updates. |
 | `<app-select>` | `label`, `value`, `options` (strings or `{label, value}`), `placeholder`, `disabled` | Labelled `<select>`; inherits the filter-bar styling. | Emits `@change` once per selection with `detail: { value }`. |
-| `<app-grid>` | `title`, `explore`, `query`, `filters`, `sorts`, `limit`, `height`, `columnDefs`, `gridOptions`, `data`, `bare`, `cell`, `show-row-count`, `@app-grid-row-click` | **Self-contained table card**: AG Grid wrapper, optional header, scrollable table with no footer by default (`min-height: 360px`; opt in to a row count footer with `show-row-count`, opt in to pagination via `gridOptions`). | **Dynamic `columnDefs` reactivity** (updates live on metric toggles), auto-normalizes dotted LookML getters (`data['view.field']`), emits `@app-grid-row-click` `CustomEvent` (`detail: { row, rowIndex, mouseEvent }`, where `rowIndex` is the position after sorting and filtering, so read `detail.row`). |
+| `<app-grid>` | `title`, `explore`, `query`, `filters`, `sorts`, `limit`, `height`, `columnDefs`, `gridOptions`, `data`, `bare`, `cell`, `hide-actions`, `show-row-count`, `@app-grid-row-click` | **Self-contained table card**: AG Grid wrapper, optional header, scrollable table with no footer by default (`min-height: 360px`; opt in to a row count footer with `show-row-count`, opt in to pagination via `gridOptions`). | **Dynamic `columnDefs` reactivity** (updates live on metric toggles), auto-normalizes dotted LookML getters (`data['view.field']`), emits `@app-grid-row-click` `CustomEvent` (`detail: { row, rowIndex, mouseEvent }`, where `rowIndex` is the position after sorting and filtering, so read `detail.row`). |
 
 Attribute names are exact. An attribute the component doesn't declare does not
 error — it lands as an inert HTML attribute and the feature silently doesn't
@@ -91,7 +92,12 @@ bind `id=${...}` per item for widgets rendered in a loop. Write variants (metric
 toggles, tabs, one card per metric) as separate widgets or as a `.map()` over a
 static `const` array so publishing can register a query for "Explore from here"
 for each widget (`verify-app.py` warns during Stage 2 QA when a widget's query
-cannot be statically extracted). When unsure, check `reference/LIT_DATA_APPS.md`.
+cannot be statically extracted). Set `hide-actions` on a specific widget
+(`<app-kpi>`, `<app-chart>`, `<app-grid>`) or on an ancestor container (such as
+`<section class="da-kpi-grid" hide-actions>`, `<div class="da-container" hide-actions>`,
+or the app root) when the user asks to hide "Explore from here" or widget
+actions on a widget, section, or the entire Data App. When unsure, check
+`reference/LIT_DATA_APPS.md`.
 
 #### Tag & Namespace Conventions: `app-*` vs `da-*`
 
@@ -197,14 +203,17 @@ See the **grid-layout** recipe for the full reference.
    reference must exist — inventing one is the single most common way a build
    fails late.
 
-   - **Step A: Instance Overview:** Run `python3 skills/data-app-creator/tools/explore-model.py` (with no arguments) to inspect all active models, explores, and joined views across the instance in a single concise call. Identify the single primary explore that matches your prompt's domain (if the prompt names no specific model/explore, check `data-apps-config.json` for `default_model` and `default_explores`; otherwise pick the single best-matching explore from the instance overview and do not probe unrelated models). Focus on a single primary explore for most dashboards; combine multiple explores only when your prompt explicitly spans distinct business domains.
-   - **Step B: Get Complete Explore Schema (1 call):** Run `python3 skills/data-app-creator/tools/explore-model.py <model> <explore>` to fetch the complete, untruncated field list (all dimensions and measures with types, SQL formulas, and descriptions) for your chosen explore.
+   - **Step A: Target the Right Model & Explore:**
+     * **If the prompt names the target model and explore, or the prompt's subject clearly matches a model and explore in the `check-credentials.py` output (`Default Target` or model list), skip `explore-model.py` with no arguments** and go straight to Step B (`python3 skills/data-app-creator/tools/explore-model.py <model> <explore>`), or run `python3 skills/data-app-creator/tools/explore-model.py <model>` if you only know the model name. For Looker internal telemetry (query history, PDT builds, API usage), target `system__activity` directly (`explore-model.py system__activity` or `explore-model.py system__activity history`).
+     * **Only run `python3 skills/data-app-creator/tools/explore-model.py` (with no arguments)** when the prompt does not identify a model and you need an instance-wide overview of active models, explores, and joined views. Pick the single best-matching explore from the overview.
+     * **In both cases, stay on one explore:** once an explore has the fields the prompt needs, do not inspect other models or explores. Combine explores only when the prompt explicitly spans distinct business domains.
+   - **Step B: Get Complete Explore Schema (1 call):** Run `python3 skills/data-app-creator/tools/explore-model.py <model> <explore>` to fetch the field list (all dimensions and measures with types, SQL formulas, and descriptions) for your chosen explore. The explore's own dimensions and all measures are printed at the bottom of the output, so they stay visible on large explores; on wide explores with many joined views, you can pass `--view <view1,view2>` to filter the schema output to specific views.
    - **Preflight probing and dropdown values (batch in 1 call, always include `--fields` with `--probe`):**
-     If you want to preflight test candidate fields or need distinct values for a dropdown filter, pass `--probe --fields <f1,f2>` and `--values <dim>` in a single call (`--fields` is required with `--probe`; `--sample` selects representative fields automatically):
+     If you want to preflight test candidate fields or need distinct values for dropdown filters, pass `--probe --fields <f1,f2>` and comma-separated dimensions in `--values <dim1,dim2>` (including any date dimension to inspect recent dates, which sort newest-first automatically) in a single call (`--fields` is required with `--probe`):
      ```bash
      python3 skills/data-app-creator/tools/explore-model.py <model> <explore> \
        --probe --fields orders.count,orders.total_revenue,users.state \
-       --values users.state
+       --values users.state,orders.status
      ```
 
 ---
@@ -273,7 +282,7 @@ needs no `<app-select>`, and adding one anyway is a defect.
    - **Default to cross-filtering on charts:** Always add `cross-filter` (or `cross-filter="field.name"`) to every `<app-chart>` widget displaying categorical or breakdown data (column, bar, donut, pie, treemap, funnel, pyramid) by default unless explicitly instructed otherwise. Users expect clicking bars, slices, and tiles to cross-filter the dashboard automatically without having to ask. If a chart has a custom click action (such as opening a detail drawer on @app-chart-click), either omit cross-filter or call e.preventDefault() in @app-chart-click (or in options.plotOptions.series.point.events.click) to cancel automatic cross-filtering.
    - **KPI sparklines (`sparkline`):** When the headline is a per-period metric and the explore has a date or month dimension, add `sparkline` and a 2-field `[date_dimension, measure]` query filtered to complete periods (e.g. `'12 months ago for 12 months'`) and sorted by the time field (`sorts: ['<date_dim> desc']`) on `<app-kpi>` cards. The headline shows the latest period in the series, while `.value` replaces it with a total (see `kpi-strip` recipe).
    - **Standard primitives do not require recipes:** Standard KPI strips, `<app-select>` filter dropdowns, and basic charts are already demonstrated in the MVP template in Step 7 below.
-   - **Batch recipe retrieval (1 command):** If your dashboard needs specific visual patterns, fetch the full recipe documentation in a single command using `get-recipe.py <pattern...>` (e.g. `python3 skills/data-app-creator/tools/get-recipe.py line-trend filter-dropdown`).
+   - **Batch recipe retrieval (1 command):** If your dashboard needs specific visual patterns, fetch the full recipe documentation in a single command using `get-recipe.py <pattern...>` (e.g. `python3 skills/data-app-creator/tools/get-recipe.py line-trend filter-dropdown`). If multiple recipes exceed the output limit, the command prints the first recipes in full and lists any deferred recipes to fetch individually.
      * **Trends & Time-Series:** `line-trend` (areaspline/line trends), `small-multiples` (comparing category trends with shared Y-axis scale), `multi-series-and-stacked` (grouped/stacked columns), `stacked-bar` (100% share bars).
      * **Proportions & Hierarchy:** `donut-with-constraint` (breakdowns with center totals), `treemap` (relative category size), `funnel` (conversion stages), `gauge` (dial goal tracking).
      * **Interactive & Advanced:** `metric-switcher` (swapping queried measure on a single chart card), `column-with-cross-filter` (point-click filter updates), `column-conditional-format` (threshold colors), `filter-dropdown` (`<app-select>` multi-select).
@@ -296,14 +305,23 @@ needs no `<app-select>`, and adding one anyway is a defect.
 7. **Write the Data App (`apps/<dashboard-name>/app.js`).**
 
    - **Author cleanly in a single pass:** When creating a new app, write the complete, self-contained implementation into `apps/<dashboard-name>/app.js` using `write_to_file` (with `Overwrite: true`) rather than building it up through multiple partial edits. For subsequent iterations, targeted fixes, or self-healing adjustments, use `replace_file_content`.
-   - Every `app.js` starts with this header:
+   - Every `app.js` starts with this header (with `@toolkit-version` set to the installed `VERSION` from `./VERSION` or `./dist/VERSION`):
    ```javascript
    /**
     * @title <Dashboard Name>
     * @description <one sentence: purpose, domain, primary metrics>
+    * @toolkit-version <installed VERSION>
     */
    ```
-   When published, `publish-data-app.py` appends publish metadata tags (`@looker-dashboard-id`, `@looker-instance`, `@created-at`, `@created-by`, `@toolkit-version`) to this header. Always preserve these tags during subsequent edits.
+   When published, `publish-data-app.py` appends publish metadata tags (`@looker-dashboard-id`, `@looker-instance`, `@created-at`, `@created-by`) to this header. Always preserve these tags and `@toolkit-version` during subsequent edits.
+
+   **Available Pinned Libraries (Loaded Automatically from gstatic):**
+   - App code must import only `/runtime/data-app.js` (for example, `import { DataApp, html, css } from '/runtime/data-app.js';`). Never import raw `https://www.gstatic.com/...` or `/vendor/...` URLs directly in `app.js`.
+   - `/runtime/data-app.js` provides and loads these pinned libraries from `https://www.gstatic.com/looker-data-apps/vendor/` (or `<browser_assets_url>/vendor/`):
+     - **Lit 3.3.1** (`vendor/lit/3.3.1/lit.mjs`): re-exported by `/runtime/data-app.js` (`LitElement`, `html`, `css`, `nothing`, `noChange`, `keyed`).
+     - **Highcharts 11.4.8** (`vendor/highcharts/11.4.8/highcharts.js`, `highcharts-more.js`, `highcharts-solid-gauge.js`, `highcharts-funnel.js`, `highcharts-treemap.js`): used by `<app-chart>` and exposed as `window.Highcharts`.
+     - **AG Grid Community 31.3.4** (`vendor/ag-grid/31.3.4/ag-grid-community.min.js`, `ag-grid.css`, `ag-theme-quartz.css`): used by `<app-grid>` and exposed as `window.agGrid`.
+     - **Looker Extension SDK 24.20.0** (`vendor/extension-sdk/24.20.0/...`): used automatically by the tile runtime in Looker.
 
    **Standard MVP Template:**
    ```javascript
@@ -406,16 +424,15 @@ needs no `<app-select>`, and adding one anyway is a defect.
    export default MyDataApp;
    ```
 
-8. **Automated QA Verification (MANDATORY SUBAGENT DELEGATION):**
+8. **Automated QA Verification:**
    Before presenting your code, automated QA verification must be performed.
 
    - **Strict Post-Write Sequence Rule:** Automated QA verification is strictly a post-implementation gate. **DO NOT** run `verify-app.py` or `check-tile-safety.py` before `apps/<name>/app.js` has been completely written in Step 7. Running verification against an empty or incomplete scaffold generates spurious syntax and structure failures that pollute your context.
-   - **Subagent Policy:** If you have subagent or child-agent capabilities (such as `invoke_subagent`, `Task`, or equivalent), you **MUST NOT** run verification directly in your main thread. Delegate this to a subagent so that verification logs and self-healing iterations stay isolated.
-   - **Subagent Task:** Instruct the subagent to run `python3 skills/data-app-creator/tools/verify-app.py apps/<name>/app.js`, inspect any failure hints, edit `apps/<name>/app.js` to fix them, and repeat until all stages pass cleanly.
+   - **Run Directly in Main Thread:** Run `python3 skills/data-app-creator/tools/verify-app.py apps/<name>/app.js` directly in your terminal after writing `apps/<name>/app.js` (do not delegate verification to a background subagent, which can hang on interactive terminal permission prompts). Inspect any failure hints, edit `apps/<name>/app.js` to fix them, and re-run until all stages pass cleanly.
    - **Browser Hang & Timeout Fallback (`--no-browser`):** If `verify-app.py` runs for more than 30 seconds or Stage 4 fails with a headless browser timeout, stop the stuck run and re-run with `python3 skills/data-app-creator/tools/verify-app.py apps/<name>/app.js --no-browser` so Stages 1–3 finish without blocking delivery. Never retry headless Chrome after a timeout, debug browser processes, or create browser wrapper scripts.
-   - **Single-Agent Fallback:** Only if your environment does not have any subagent or child-task capabilities may you run `python3 skills/data-app-creator/tools/verify-app.py apps/<name>/app.js` directly in your terminal.
 
    **What `verify-app.py` checks:**
+   - **Pre-flight Gate (Toolkit Pin):** Confirms `@toolkit-version` exists and matches the installed `VERSION` (fails before running stages if missing or mismatched so an untagged or older app is upgraded first, or an older toolkit is updated first).
    - **Stage 1 (Syntax):** JavaScript syntax validity (catches unescaped quotes like `'O\'Hare'`).
    - **Stage 2 (Tile Safety):** AST sandbox constraints (no `localStorage`, no `onclick`, no second imports), composition warnings (missing detail table, thin app, hardcoded `yAxis.max`), and static widget query extraction (warns if any widget's query cannot be registered for "Explore from here").
    - **Stage 3 (Query Dry-Run):** Probes your queries against Looker (catches `Model Not Found`, HTTP 422 bad fields, 0-row empties).

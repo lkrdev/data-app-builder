@@ -2,8 +2,8 @@
 name: toolkit-updater
 description: |
   Check for, report, and perform safe in-place upgrades of the Looker Data Apps devtools
-  and runtime, manage toolkit backups, and coordinate local app migrations.
-  Trigger when checking for updates, upgrading the toolkit, or upgrading existing Lit apps in `apps/` to the latest runtime. Legacy HTML Canvas Dashboards use `data-app-upgrader`.
+  and runtime, and upgrade individual Lit apps on edit.
+  Trigger when checking for updates, upgrading devtools, or upgrading an existing Lit app in `apps/` to the installed runtime. Legacy HTML Canvas Dashboards use `data-app-upgrader`.
 ---
 
 # Toolkit Updater
@@ -14,26 +14,25 @@ This skill defines the authoritative workflow for discovering, reporting, and ex
 
 ## Universal Safety Invariants
 
-1. **Nothing destructive happens before the backup completes.** Every upgrade and migration creates a full snapshot before modifying any files on disk.
-2. **Nothing moves; backups are copies.** `apps/` is never relocated. Declining an upgrade or migration leaves all files in place and fully functional.
-3. **Each gate is a separate turn requiring explicit human confirmation.** Never combine a report and an upgrade into the same turn.
+1. **Nothing destructive happens before the backup completes.** Every devtools upgrade creates a temporary rollback snapshot before modifying files on disk, removed on success. Every app upgrade creates a snapshot of the app before editing.
+2. **Nothing moves; backups are copies.** `apps/` is never relocated. Declining an upgrade leaves all files in place and fully functional.
+3. **Actions require explicit human confirmation.** Never combine a report and an upgrade into the same turn. Prompt before devtools update, and prompt once before upgrading an app on edit. Once the user confirms a devtools upgrade in Gate 1, Gate 2 completes the upgrade to the latest available release (including across an intermediate distribution host migration if one occurs) without stopping mid-way.
 4. **Live published tiles are unaffected.** A published Looker tile imports its runtime bundle directly from `looker-data-apps/versions/<VERSION>/data-app.js`, frozen at publish time. Upgrading local devtools changes nothing in Looker until a dashboard is selectively re-published.
 
 ---
 
-## The Four Gates Protocol
+## The Update Protocol
 
 ```
 Gate 1: Version Check & Changelog Report  ──[User says Yes]──►  Gate 2: Devtools Self-Update
-                  │                                                       │
-         [User says No / Dismiss]                                         ▼
-                  │                                             Gate 3: App Snapshot & Migration
-                  ▼                                                       │
-           Resume Task                                            [User says Yes]
-                                                                          │
-                                                                          ▼
-                                                                Gate 4: Preview & Selective Re-Publish
+                  │
+         [User says No / Dismiss]
+                  │
+                  ▼
+            Resume Task
 ```
+
+The installer never changes apps. Updating devtools replaces the local `runtime/` and devtools (and removes any legacy local `vendor/` directory from 1.2.0 or older, since vendor libraries now load from gstatic). Apps tagged with another version from 1.3.0 on preview on that version from gstatic; untagged apps, apps tagged before 1.3.0, and apps tagged with the installed `VERSION` use the local runtime. Apps are upgraded individually when edited (see **Upgrade One App** below).
 
 ---
 
@@ -49,13 +48,13 @@ python3 skills/toolkit-updater/tools/check-for-update.py
   Proceed immediately with the user's primary task.
 - **If `update_available` is true:**
   1. Inspect the remote `CHANGELOG.md` via `changelog_url` (or fetch from the stable release bucket).
-  2. Summarize changes in the range `(installed_version, latest_version]` in plain English.
+  2. Summarize only the human-facing sections (`### Added`, `### Changed`, `### Removed`, `### Fixed`) across `(installed_version, latest_version]` in plain English. Do not display `### Upgrade steps for AI agents` or raw `**Breaking**` symbol, attribute, or CSS rename lists to the user. The migration rules are applied later, when an app is upgraded on edit.
   3. **Classify the bump** by comparing `installed_version` with `latest_version`, and say which it is in your report:
-     - **patch** (`1.0.0` → `1.0.1`) — every published app keeps working. Gate 3 will have nothing to do.
-     - **minor** (`1.0.0` → `1.1.0`) or **major** (`1.0.0` → `2.0.0`) — apps must be migrated to the new runtime before they are re-published. Tell the user this *before* they consent, so they are agreeing to the migration and not only to the download.
+     - **patch** (`1.0.0` → `1.0.1`): every published app keeps working.
+     - **minor** (`1.0.0` → `1.1.0`) or **major** (`1.0.0` → `2.0.0`): the update replaces the local `runtime/`. Apps tagged with another version from 1.3.0 on preview on that version from gstatic; untagged apps, apps tagged before 1.3.0, and apps tagged with the installed `VERSION` use the local runtime. The installer never changes apps. When an author later edits an app, the agent upgrades that app to the installed runtime before making changes.
 
      Read this from the version numbers and the changelog's own preamble, which states the contract. Do not infer it from how large the diff looks.
-  4. Inform the user of the new version and its highlights.
+  4. Inform the user of the new version and its human-facing highlights. Existing tagged apps keep previewing on their tagged version until they are edited.
   5. **STOP AND ASK:** Prompt the user if they would like to upgrade devtools in place. **Never execute the upgrade in the same turn as the report.**
   6. **If the user declines:**
      ```bash
@@ -69,104 +68,96 @@ python3 skills/toolkit-updater/tools/check-for-update.py
 
 When the user explicitly confirms the devtools upgrade:
 
-1. Run the self-update engine:
+1. Run the self-update engine (on Windows use `python skills\toolkit-updater\tools\self-update.py`):
    ```bash
-   bash skills/toolkit-updater/tools/self-update.sh --target <latest_version>
+   python3 skills/toolkit-updater/tools/self-update.py
    ```
+   The command queries the live release pointer and follows any distribution host migration directly to the latest version.
 2. The script executes the following automated sequence:
-   - Takes a full snapshot of the toolkit into `backups/toolkit/<TIMESTAMP>_v<OLD_VERSION>/`.
-   - Downloads the target version's `install.sh`. The installer carries the directory it was published from, and `bootstrap.sh` advances `browser_assets_url` in `data-apps-config.json` to match (omitted when canonical) — leaving a self-hosted bucket, a dev channel, or a deliberate older pin exactly as it found them.
-   - Executes the installer unattended (`DATA_APPS_SKIP_VERIFY=1` skips `bootstrap.sh`'s Looker capability probe, not the tarball checksum, which `install.sh` still verifies; input from `/dev/null`).
-   - Verifies the installed `VERSION` matches the target.
-   - On error, automatically rolls back from `backups/toolkit/<TIMESTAMP>_v<OLD_VERSION>/`.
-   - On success, prunes older toolkit backups to keep the 3 newest.
+   - Resolves the live `latest-version.txt` pointer first and automatically continues across distribution host migrations (up to 3 hops) inside one rollback snapshot.
+   - Takes a temporary rollback snapshot of the toolkit under `backups/` (everything except `apps/`, `backups/`, `.update.lock`, and `.git`).
+   - Downloads the target version's installer (`install.py`, or fallback `install.sh`), which replaces the local `runtime/` and devtools (and removes any legacy local `vendor/` directory from 1.2.0 or older, since vendor libraries now load from gstatic).
+   - Executes the installer unattended (input from `/dev/null`).
+   - Verifies the installed `VERSION` matches the target and checks `runtime/data-app.js` and `preview-server/serve.py`.
+   - On error, automatically rolls back from the temporary snapshot.
+   - On success, removes the temporary rollback snapshot. Older backups in `backups/` are left untouched.
+   - The installer never changes apps in `apps/`. Apps tagged with another version from 1.3.0 on preview on that version from gstatic; untagged apps, apps tagged before 1.3.0, and apps tagged with the installed `VERSION` use the local runtime.
 3. **If the script exits non-zero:**
    Report the failure verbatim. Do not retry, and do not claim a rollback happened
-   unless the output says so. Several failures happen *before* anything is modified —
+   unless the output says so. Several failures happen *before* anything is modified:
    a refusal to run against `/` or `$HOME`, a refusal to run inside a development
    checkout, a missing configuration file, another update already holding
-   `.update.lock`, or a failed installer download — and in those cases the
+   `.update.lock`, or a failed installer download. In those cases the
    installation was never touched. A rollback only occurs once the script has
-   started the installer, and when it does the script prints the backup directory it
-   restored from. Report that path when it is present, and tell the user the backup
-   is retained under `backups/toolkit/` either way.
+   started the installer. If automatic restore fails, the script preserves the
+   temporary backup and prints its path. Report that path when it is present.
 4. **If the script succeeds:**
-   Note the `Current:` version printed in `self-update.sh`'s output (you can pass this as the label for the app snapshot in Gate 3), then proceed to Gate 3.
+   After `self-update.py` succeeds, run `python3 skills/toolkit-updater/tools/check-for-update.py --force` using the newly installed script (and re-read `skills/toolkit-updater/SKILL.md` if the minor or major version changed). If `update_available` is still `true` (for example, when upgrading from an older toolkit whose updater stepped onto an intermediate release that switched download hosts), immediately run `python3 skills/toolkit-updater/tools/self-update.py` again (up to 3 hops total) in the same turn without re-prompting the user. Inform the user once devtools reach the final latest version, summarizing any additional human-facing highlights (`### Added`, `### Changed`, `### Removed`, `### Fixed`) across `(initial_version, final_version]`. Do not paste the raw `CHANGELOG_SECTION_START` .. `CHANGELOG_SECTION_END` block to the user.
 
-**Which targets are accepted.** The script installs the target only if it is newer
-than, or the same as, what is installed. A target older than the installed version is
-refused and there is no override — downgrades are not supported. Passing the version
-that is *already* installed is allowed on purpose and reinstalls it: that is the
-supported way to repair an installation that lost files, and it still takes a backup
-first.
-
----
-
-### Gate 3: App Snapshot & Migration
-
-If the user only asks to upgrade existing apps (no toolkit update), start at Gate 3.
-
-After devtools are upgraded, prompt the user:
-
-> *Devtools have been upgraded to `<latest_version>`. Would you also like to update your local apps in `apps/` for compatibility with the new runtime? (Live Looker dashboards keep running their pinned runtime until you selectively re-publish).*
-
-- **If the user declines:**
-  Stop here. Local apps remain untouched.
-- **If the user approves:**
-  1. Snapshot all local apps before making any edits:
-     ```bash
-     bash skills/toolkit-updater/tools/snapshot-apps.sh --label pre-migration
-     ```
-     *(Or pass `--label v<OLD_VERSION>`). If `--label` is omitted, it defaults to `pre-migration`. Note: App snapshots in `backups/apps/` are **never pruned**.*
-  2. Migrate from `CHANGELOG.md`:
-     - **Starting version:** read each app's `@toolkit-version` tag. Apply every **Breaking** entry newer than it, from oldest to newest, because a later entry can rename a name an earlier one produced. No tag: apply every Breaking entry in the file. Older than the oldest entry: rewrite the app with `skills/data-app-creator/SKILL.md`, keeping its queries, layout intent, and publish metadata.
-     - **Inventory first:** count the apps and list which old names each one uses. Report the count before editing.
-     - **Renames:** use a one-off script in your scratch directory (never checked in) only for exact 1:1 renames. Inspect structural changes per app.
-     - **Batches:** about 5 apps per subagent when there are more than 5 apps or any app is large. Verify each batch (step 4) before the next. If verification fails only because the app's Looker model or explore is missing on this instance, keep the changes when the tile-safety and syntax stages pass. Restore from the snapshot only when an edit broke the app and cannot be fixed.
-     - **Legacy HTML dashboards** (`*.canvasdashboard.html`) use `skills/data-app-upgrader/SKILL.md` instead.
-     - **Let the bump decide, then confirm against the changelog.** A **patch** bump requires no source changes: say so and go straight to Gate 4. A **minor** or **major** bump means migration is expected, so a Breaking entry in `CHANGELOG.md` should exist for a minor or major bump. If none does, do not quietly skip it. Report the mismatch to the user, because either the release was numbered wrong or a Breaking entry is missing, and both are worth knowing before apps are re-published.
-  3. **Preserve publish metadata:** Ensure all structured JSDoc header tags (`@looker-dashboard-id`, `@looker-instance`, `@created-at`, `@created-by`, `@updated-at`, `@updated-by`, `@toolkit-version`, and legacy `@published-at`, `@published-by`) survive migration untouched.
-  4. Verify syntax, safety, queries, and visual rendering across each batch of migrated apps before the next batch:
-     Start the preview server if needed (`python3 skills/data-app-previewer/tools/start-preview.py`), then run QA verification on each app in the batch:
-     ```bash
-     python3 skills/data-app-creator/tools/verify-app.py apps/<name>/app.js
-     ```
-     Inspect `apps/<name>/preview.png` with `view_file` for each migrated app to confirm visual layout.
+**Downgrades and repairs.** The script installs the release only if it is newer
+than, or the same as, what is installed. Downgrades to an older version are
+refused. Re-running `self-update.py` when already at the latest version
+reinstalls that version in place (after taking a temporary rollback snapshot) to
+repair an installation that lost files.
 
 ---
 
-### Gate 4: Side-by-Side Preview & Selective Re-Publish
+## Upgrade One App (Upgrade on Edit)
 
-Once migration is complete:
+Editing or publishing an app with a missing or older `@toolkit-version` tag is not supported. Published and edited apps always target the installed toolkit.
 
-1. **Side-by-Side Preview:** Both the modernized app and the pre-migration snapshot can be viewed simultaneously on the local preview server:
-   - **Modernized app:** `http://localhost:8765/preview-server/?app=apps/<name>/app.js`
-   - **Pre-migration snapshot:** `http://localhost:8765/preview-server/?app=backups/apps/<snapshot>/<name>/app.js`
-   *(The preview server only reads app files; it never writes to backups or anywhere else.)*
+### Trigger & Prompt
 
-2. **Selective Re-Publish:**
-   - Read the JSDoc header in each migrated `apps/<name>/app.js`.
-   - Identify apps containing `@looker-dashboard-id`.
-   - Report published apps to the user:
-     > *Migrated `<N>` apps. The following apps are currently published in Looker:*
-     > - **Sales Overview** (Dashboard #42, last published on toolkit 0.9.1)
-     > - **Ops Daily** (Dashboard #57, last published on toolkit 0.9.5)
-     >
-     > *Please preview them and let me know which ones you would like to update in Looker.*
-   - For each app the user selects to update, re-publish in place:
-     ```bash
-     python3 skills/data-app-publisher/tools/publish-data-app.py \
-       --def apps/<name>/app.js \
-       --dashboard-id <id>
-     ```
-     *(Note: `--dashboard-id` automatically preserves the existing dashboard title from Looker; pass `--title "<New Title>"` only if you want to rename it. Never pass `--confirm-replace` on the first run; if `user_mismatch` occurs because another user last updated the dashboard, prompt the user for confirmation before re-running with `--confirm-replace`.)*
-   - Apps not selected remain live on their existing pinned runtime in Looker.
+This flow runs when the user asks to change an existing app in `apps/<name>/` whose `@toolkit-version` tag in the top JSDoc is **missing** or **different** from the installed `VERSION`:
 
-3. **Restoring an app from snapshot:**
-   If a user prefers to revert a specific app to its pre-migration state:
+- **Tag newer than installed `VERSION`:** Update the toolkit first with Gate 1 using `python3 skills/toolkit-updater/tools/check-for-update.py --force` (a cached check can report up to date).
+- **Tag older than installed `VERSION`, or missing:**
+  1. **Say upgrading the app is required and ask once:**
+     - If tagged: *"App `<name>` is tagged `@toolkit-version <old_version>`, but toolkit `<installed_version>` is installed. Upgrading the app is required before editing. Would you like to upgrade it now?"*
+     - If untagged: *"App `<name>` has no `@toolkit-version` tag, and toolkit `<installed_version>` is installed. Upgrading the app to `<installed_version>` is required before editing. Would you like to upgrade it now?"*
+  2. **If the user declines:**
+     Stop. Do not modify the app.
+  3. **If the user approves:**
+     Proceed with the upgrade procedure below.
+
+### Upgrade Procedure
+
+1. **Snapshot the app before editing** (on Windows where `python3` is absent or points to the Microsoft Store stub, substitute `python` or `py -3` in all `python3` commands below):
    ```bash
-   cp backups/apps/<snapshot>/<name>/app.js apps/<name>/app.js
+   python3 skills/toolkit-updater/tools/snapshot-app.py apps/<name>
    ```
-   > [!NOTE]
-   > Restoring `app.js` directly from a snapshot also reverts in-file JSDoc publish metadata headers (`@looker-dashboard-id`, `@created-at`, `@updated-at`, `@toolkit-version`) to the state at the time of the snapshot. If the app was published after the snapshot was taken, restore only the code body or carry the `@looker-dashboard-id` header forward to avoid creating an unintended duplicate dashboard upon next publish.
+   This copies the app as is to `backups/apps/<name>-v<tag>-<YYYYMMDD-HHMMSS>/` (`<name>-untagged-<YYYYMMDD-HHMMSS>/` when the app has no tag; for a nested app the name is its path under `apps/` with `/` replaced by `__`).
+
+2. **Migrate code using `CHANGELOG.md`:**
+   - **Tag older than installed `VERSION`:** Read all **Breaking** entries (under `### Upgrade steps for AI agents`, and under `### Changed` or `### Removed` in earlier releases) in `(tag, installed_version]` from oldest to newest before editing `apps/<name>/app.js`. Merge and compose chained rules into their final target state (`A -> B` in an earlier version followed by `B -> C` in a later version becomes `A -> C` directly, and intermediate renames of items removed in a later version are skipped; keep an intermediate step only when a later rule depends on it). Apply the composed changes to `apps/<name>/app.js` in a single pass rather than stepping through intermediate versions one by one. A tag older than 1.3.0 can be older than the code, because toolkits before 1.3.0 wrote it only at publish. Applying a Breaking entry the code already follows changes nothing. When `(tag, installed_version]` has no **Breaking** entries, only the `@toolkit-version` tag changes.
+   - **No tag:** The app may come from any version since `1.0.0`. Read the whole `CHANGELOG.md` from oldest to newest, compose all **Breaking** entries into their final target state (`A -> C`), and apply them in a single pass.
+   - **Older than the oldest changelog entry:** Rewrite the app with `skills/data-app-creator/SKILL.md`, preserving its queries, layout intent, and publish metadata.
+   - **Preserve metadata:** Keep all structured JSDoc header tags (`@title`, `@description`, `@looker-dashboard-id`, `@looker-instance`, `@created-at`, `@created-by`, `@updated-at`, `@updated-by`, and legacy `@published-at`, `@published-by`). Do not show raw rename lists to the user unless asked.
+
+3. **Set the tag to the installed `VERSION`:**
+   Set `@toolkit-version` in the top JSDoc header of `apps/<name>/app.js`:
+   ```javascript
+   * @toolkit-version <installed_version>
+   ```
+
+4. **Apply the user's requested edit:**
+   Make the changes the user asked for in `apps/<name>/app.js`.
+
+5. **Verify the upgraded app:**
+   ```bash
+   python3 skills/data-app-creator/tools/verify-app.py apps/<name>/app.js
+   ```
+
+6. **Side-by-side preview:**
+   Share both preview links with the user so they can compare the upgraded app and the pre-upgrade snapshot:
+   - **Upgraded app:** `http://localhost:8765/preview-server/?app=apps/<name>/app.js`
+   - **Pre-upgrade snapshot:** `http://localhost:8765/preview-server/?app=backups/apps/<snapshot>/app.js`
+
+7. **Restoring from snapshot:**
+   If the upgrade needs to be reverted:
+   ```bash
+   cp backups/apps/<snapshot>/app.js apps/<name>/app.js
+   ```
+   (On Windows use `copy`.)
+
 

@@ -457,7 +457,7 @@ def check_tile_safety(path: Path) -> list[dict]:
                         if res_f is not None:
                             fields_body, _ = res_f
                             fields_no_str = _strip_string_literals(fields_body)
-                            if "..." not in fields_no_str and "${" not in fields_body and not re.search(r"[A-Za-z_$]", fields_no_str):
+                            if "..." not in fields_no_str and "${" not in fields_body:
                                 query_fields = re.findall(r"""['"`]([^'"`]+)['"`]""", fields_body)
         if not query_fields and not has_query_fields_key:
             f_attr = re.search(r"""\bfields\s*=\s*["']([^"']+)["']""", grid_text)
@@ -1212,6 +1212,13 @@ def run_headless_browser(browser_type: str, preview_url: str, screenshot_path: s
                 "hint": "Check for Cartesian fan-out, hanging queries, or unhandled JS promise rejections.",
             })
 
+        if not visual_errors and not diag_count_match and "<preview-host" in dom:
+            visual_errors.append({
+                "type": "load_error",
+                "message": "Preview host did not initialize diagnostics (preview-host.js or vendor Lit failed to load).",
+                "hint": "Check your internet connection or browser_assets_url configuration.",
+            })
+
         state = parse_sandbox_state(dom)
         if state is not None and not any(e["type"] in ("runtime_error", "sandbox_error", "load_error") for e in visual_errors):
             hint = "Check for slow or hanging queries. If the inspect pass renders, the app may be waiting on something the tile sandbox blocks."
@@ -1251,6 +1258,95 @@ def run_headless_browser(browser_type: str, preview_url: str, screenshot_path: s
 # Main Runner
 # ----------------------------------------------------------------------
 
+def _load_version_utils():
+    if "version_utils" in sys.modules:
+        return sys.modules["version_utils"]
+    skills_dir = Path(__file__).resolve().parent.parent.parent
+    path = skills_dir / "toolkit-updater" / "tools" / "version_utils.py"
+    spec = importlib.util.spec_from_file_location("version_utils", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["version_utils"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _check_toolkit_pin_gate(p: Path) -> dict | None:
+    # Only apps/ is gated: examples/ are overwritten by upgrades, and backups/apps/ holds
+    # frozen snapshots (its parent folder has no VERSION, so the lookup below finds none).
+    vutils = _load_version_utils()
+    apps_dir = next(
+        (
+            a
+            for a in Path(p).absolute().parents
+            if a.name == "apps" and vutils.read_installed_version(a.parent)
+        ),
+        None,
+    )
+    if apps_dir is None:
+        return None
+
+    installed_ver = vutils.read_installed_version(apps_dir.parent)
+    if not installed_ver:
+        return None
+
+    try:
+        code = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    pin = vutils.read_pin(code)
+
+    if not pin:
+        has_comment_tag, val = vutils.find_comment_tag(code)
+        if has_comment_tag:
+            shown = f"@toolkit-version {val}" if val else "@toolkit-version"
+            return {
+                "ok": False,
+                "pin": None,
+                "installed_version": installed_ver,
+                "error": (
+                    f"found `{shown}`, but the tag must be a plain X.Y.Z version "
+                    f"on its own ` * ` line in the JSDoc header at the very top of app.js"
+                ),
+                "hint": "The tag was not recognized in the leading JSDoc block.",
+                "action": "Fix the tag line in the top JSDoc header, then run verify-app.py again.",
+            }
+        return {
+            "ok": False,
+            "pin": None,
+            "installed_version": installed_ver,
+            "error": (
+                f"no @toolkit-version tag: upgrade the app with toolkit-updater 'Upgrade one app' "
+                f"(installed toolkit is v{installed_ver})."
+            ),
+            "hint": "An untagged app may come from any version since 1.0.0 and must be upgraded before editing or verification.",
+            "action": "Upgrade the app using the toolkit-updater skill ('Upgrade one app').",
+        }
+
+    cmp = vutils.compare(installed_ver, pin)
+    if cmp > 0:
+        return {
+            "ok": False,
+            "pin": pin,
+            "installed_version": installed_ver,
+            "error": f"App is pinned to toolkit v{pin}, which is newer than installed toolkit v{installed_ver}.",
+            "hint": "This app targets a newer toolkit version than the one installed in this workspace.",
+            "action": (
+                "Update the toolkit first using the toolkit-updater skill "
+                "(run `check-for-update.py --force` for Gate 1 / Gate 2, because a cached check can say up to date)."
+            ),
+        }
+    if cmp < 0:
+        return {
+            "ok": False,
+            "pin": pin,
+            "installed_version": installed_ver,
+            "error": f"App is pinned to toolkit v{pin}, but installed toolkit is v{installed_ver}.",
+            "hint": "Apps under apps/ must be upgraded before editing or verification.",
+            "action": "Upgrade the app using the toolkit-updater skill ('Upgrade one app').",
+        }
+    return None
+
+
 def _resolve_preview_app_param(p: Path, raw_app_path: str = "") -> str | None:
     # Mirror serve.py's _find_repo_root: ?app= resolves against the first
     # ancestor holding data-apps-config.json or looker-config.json.
@@ -1278,6 +1374,7 @@ def verify_app(app_path: str, run_browser: bool = True, port: int = 8765) -> dic
 
     results = {
         "app": str(p),
+        "toolkit_pin": {},
         "syntax": {},
         "safety": [],
         "warnings": [],
@@ -1286,6 +1383,18 @@ def verify_app(app_path: str, run_browser: bool = True, port: int = 8765) -> dic
         "visual": {},
         "passed": False,
     }
+
+    # 0. Toolkit Version Pin Static Gate
+    # Keep lexical path segments (do not call .resolve()) so a symlinked app inside
+    # <root>/apps/<slug>/app.js still matches the <root>/apps/ toolkit-version gate.
+    abs_app = Path(app_path).absolute()
+    pin_failure = _check_toolkit_pin_gate(abs_app)
+    if pin_failure:
+        results["toolkit_pin"] = pin_failure
+        results["passed"] = False
+        return results
+    else:
+        results["toolkit_pin"] = {"ok": True}
 
     # 1. Syntax Check
     results["syntax"] = check_syntax(p)
@@ -1413,6 +1522,17 @@ def main(argv=None):
     if res.get("error"):
         print(f"\n✗ ERROR: {res['error']}")
         print("\nAgent action: Check the file path and re-run verify-app.py.\n")
+        return 1
+
+    pin_res = res.get("toolkit_pin", {})
+    if pin_res and not pin_res.get("ok"):
+        pin_label = f"v{pin_res['pin']}" if pin_res.get("pin") else "none (missing @toolkit-version)"
+        print("\n✗ STATIC GATE FAILED: Toolkit Version Mismatch")
+        print(f"  App Pin:           {pin_label}")
+        print(f"  Installed Toolkit: v{pin_res.get('installed_version')}")
+        print(f"  Error:             {pin_res.get('error')}")
+        print(f"  Hint:              {pin_res.get('hint')}")
+        print(f"\nAgent action: {pin_res.get('action')}\n")
         return 1
 
     # 1. Syntax

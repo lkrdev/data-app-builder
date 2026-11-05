@@ -15,8 +15,8 @@ model contents.
 ```
 Looker tile  ─── Extension SDK ───►  your Looker API  ───►  your warehouse
      │
-     └── imports its runtime from gs://canvas-dashboards-shared/looker-data-apps/versions/<version>/
-         and vendored libraries from .../looker-data-apps/vendor/
+     └── imports its runtime from https://www.gstatic.com/looker-data-apps/versions/<version>/
+         and vendored libraries from https://www.gstatic.com/looker-data-apps/vendor/
 ```
 
 Data App code (the JavaScript ES module that describes a dashboard) is stored
@@ -36,10 +36,11 @@ At install and update:
   `User-Agent: looker-data-apps/<installed_version>`) to notify authors of toolkit
   updates. Can be disabled via `"update_check": false` in `data-apps-config.json`
   or `DATA_APPS_NO_UPDATE_CHECK=1`.
-- `dl.google.com/looker-data-apps/install.sh` (along with versioned installers at
-  `.../versions/<version>/install.sh`) — the install entry point and the versioned
-  installer it delegates to. `self-update.sh` fetches the versioned one directly
-  during an in-place devtools upgrade.
+- `dl.google.com/looker-data-apps/install.sh` and `install.py` (along with versioned
+  installers at `.../versions/<version>/install.sh` and `install.py`) — the install
+  entry points and the versioned installers they delegate to. `self-update.py`
+  (and `self-update.sh`) fetches the versioned installer directly during an
+  in-place devtools upgrade.
 - `dl.google.com/looker-data-apps/versions/<version>/looker-data-apps.tar.gz` —
   the curated tarball with the skills, scripts, and runtime sources.
 - `dl.google.com/looker-data-apps/CHANGELOG.md` —
@@ -47,18 +48,26 @@ At install and update:
 - Your configured Looker base URL — to validate credentials, create Data App
   extensions, and publish dashboards.
 
+During local preview:
+
+- `www.gstatic.com/looker-data-apps/versions/<V>/` (or the configured
+  `browser_assets_url`) — the local preview loads the runtime of an app tagged
+  with another toolkit version (1.3.0 or later).
+
 
 At runtime, inside the Looker tile iframe:
 
-- `storage.googleapis.com/canvas-dashboards-shared/looker-data-apps/versions/<version>/*` —
+- `www.gstatic.com/looker-data-apps/versions/<version>/*`:
   the immutable runtime bundle (`data-app.js`, `data-app.css`).
-- `storage.googleapis.com/canvas-dashboards-shared/looker-data-apps/vendor/*` —
-  the vendored dependencies, shared by every version and never overwritten.
-- **That is the whole list.** Every dependency — AG Grid, Highcharts and
-  its modules, Lit, the Looker Extension SDK — is vendored on the same
-  bucket, so the bundle host is the single trust root and the tile makes
-  no third-party request at all.
-- Your Looker instance — for `run_inline_query`, `dashboard`, and
+- `www.gstatic.com/looker-data-apps/vendor/*` (Google's first-party static content host,
+  or a customer-configured `browser_assets_url`): the vendored dependencies, shared by
+  every version and never overwritten. Both local preview and published tiles load pinned
+  third-party libraries from that host with zero public third-party package CDNs (no jsDelivr,
+  unpkg, or npm registry fetches at runtime).
+- **That is the whole list.** Every dependency (AG Grid, Highcharts and its modules, Lit,
+  the Looker Extension SDK) is vendored on the same host, so the bundle host is the single
+  trust root and the tile makes no third-party request at all.
+- Your Looker instance: for `run_inline_query`, `dashboard`, and
   `dashboard_element` calls via the Extension SDK.
 
 No analytics, no telemetry, no error reporting, no GA, no Sentry, no
@@ -69,12 +78,16 @@ panel.
 
 Looker API credentials (`client_id`, `client_secret`) are written to
 `./data-apps-config.json` on the customer's machine after bootstrap, with
-owner-only permissions (`0600`). They
+owner-only permissions (`0600` on macOS and Linux; on Windows, access is
+governed by the parent directory's NTFS ACLs, such as your user profile
+directory). They
 never leave it except to authenticate against the Looker instance you
 configured. If you keep the installation inside a version-controlled
 directory, exclude `data-apps-config.json` and `backups/` yourself — the
-toolkit ships no `.gitignore`, and `backups/toolkit/` retains copies of the
-credential file from previous versions. It is read by:
+toolkit ships no `.gitignore`. (`backups/` holds app snapshots and, during an
+update, a temporary rollback copy; an interrupted update or failed restore can
+leave a `backups/rollback-*` folder with a copy of `data-apps-config.json` that
+the user can delete; older timestamped toolkit backups may also hold a copy). It is read by:
 
 - `serve.py` — the local preview server, server-side only. The browser
   never sees the secret; the preview server proxies inline-query
@@ -141,7 +154,7 @@ there is no public issue tracker.
 
 ## Local toolkit
 
-Your Looker API credentials (client ID and client secret) are stored locally in the `data-apps-config.json` file at the install root, which bootstrap creates with owner-only permissions (`0600`), and `backups/toolkit/` retains copies of it from the versions you upgraded away from. The toolkit does not ship a `.gitignore`: if you keep the installation inside a git repository, exclude `data-apps-config.json` and `backups/` yourself.
+Your Looker API credentials (client ID and client secret) are stored locally in the `data-apps-config.json` file at the install root, which bootstrap creates with owner-only permissions (`0600` on macOS and Linux; on Windows, access is governed by the parent directory's NTFS ACLs). The `backups/` directory holds app snapshots and, during an update, a temporary rollback copy. Temporary `backups/rollback-*` copies are removed upon update completion, though an interrupted update or failed restore can leave a `backups/rollback-*` folder with a copy of `data-apps-config.json` that the user can delete (as can timestamped toolkit backups made by older versions). The toolkit does not ship a `.gitignore`: if you keep the installation inside a git repository, exclude `data-apps-config.json` and `backups/` yourself.
 
 ## Data Handling
 - **Credentials:** Your API keys are only used to authenticate your local session against the Looker instance you specify.

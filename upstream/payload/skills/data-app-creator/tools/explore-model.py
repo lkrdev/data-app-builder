@@ -167,10 +167,28 @@ def api_call(base_url, token, path, method="GET", body=None):
         f"transient network error after 4 tries (last: {last_err})") from last_err
 
 
-def render_dense_schema(model: str, explore: str, explore_meta: dict, notes: str | None = None, scopes: list | None = None) -> str:
+def _filter_views(fields: list, views: str | None) -> list:
+    """Keep the fields whose view is listed in the comma-separated `views` (all fields when empty)."""
+    allowed = {v.strip() for v in (views or "").split(",") if v.strip()}
+    return [f for f in fields if f.get("name", "").split(".")[0] in allowed] if allowed else fields
+
+
+def render_dense_schema(
+    model: str,
+    explore: str,
+    explore_meta: dict,
+    notes: str | None = None,
+    scopes: list | None = None,
+    views: str | None = None,
+) -> str:
     fields = explore_meta.get("fields", {})
     dims = [d for d in fields.get("dimensions", []) if not d.get("hidden")]
     measures = [m for m in fields.get("measures", []) if not m.get("hidden")]
+
+    dims = _filter_views(dims, views)
+    measures = _filter_views(measures, views)
+    # Put the explore's own dimensions last, right above Measures, so a tail-truncated read keeps them.
+    dims.sort(key=lambda d: d.get("name", "").split(".")[0] == explore)
 
     lines = [f"\n# Explore: `{model}.{explore}`"]
     label = explore_meta.get("label", explore)
@@ -213,6 +231,17 @@ def render_dense_schema(model: str, explore: str, explore_meta: dict, notes: str
             f"`{x.get('field')} {x.get('condition')}`" for x in fl if isinstance(x, dict)
         ) + "]"
 
+    lines.append("\n## Dimensions (Attributes & Groupings):")
+    if not dims:
+        lines.append("  (none)")
+    for d in dims:
+        name = d.get("name", "")
+        d_type = d.get("type", "string")
+        label = d.get("label_short") or d.get("label", name)
+        desc = d.get("description")
+        desc_str = f" - {desc}" if desc else (f" - {label}" if label and label != name else "")
+        lines.append(f"  • `{name}` ({d_type}){desc_str}")
+
     lines.append("\n## Measures (Metrics):")
     if not measures:
         lines.append("  (none)")
@@ -226,16 +255,11 @@ def render_dense_schema(model: str, explore: str, explore_meta: dict, notes: str
         flt_str = f" {_filters_of(m)}" if _filters_of(m) else ""
         lines.append(f"  • `{name}` ({m_type}){desc_str}{sql_str}{flt_str}")
 
-    lines.append("\n## Dimensions (Attributes & Groupings):")
-    if not dims:
-        lines.append("  (none)")
-    for d in dims:
-        name = d.get("name", "")
-        d_type = d.get("type", "string")
-        label = d.get("label_short") or d.get("label", name)
-        desc = d.get("description")
-        desc_str = f" - {desc}" if desc else (f" - {label}" if label and label != name else "")
-        lines.append(f"  • `{name}` ({d_type}){desc_str}")
+    views_footer = ", ".join(f"`{s}`" for s in scopes) if scopes else f"`{explore}`"
+    footer = f"\n**Explore:** `{model}.{explore}` | **Joined Views:** {views_footer}"
+    if scopes and len(scopes) > 1 and not views:
+        footer += " | **Tip:** Pass --view <view1,view2> to filter to specific joined views"
+    lines.append(footer)
 
     return "\n".join(lines)
 
@@ -276,6 +300,7 @@ def main():
     )
     parser.add_argument("model", nargs="?", help="LookML model name (e.g. ecommerce, sales_analytics)")
     parser.add_argument("explore", nargs="?", help="Explore name (e.g. orders, users)")
+    parser.add_argument("--view", default=None, metavar="V1,V2", help="Comma-separated view names to filter schema output to (e.g. history,query)")
     parser.add_argument("--probe", action="store_true", help="Preflight check fields with a live 1-row query each to verify SQL validity. One query PER FIELD -- scope it with --fields on wide explores.")
     parser.add_argument("--fields", default=None, metavar="A,B,C", help="Comma-separated field names to limit --probe to (e.g. orders.count,users.state). Strongly recommended: unscoped --probe runs one live query for every field in the explore.")
     parser.add_argument("--values", default=None, metavar="A,B",
@@ -309,7 +334,10 @@ def main():
     if args.list_models:
         if not token:
             sys.exit("error: Direct Looker credentials required in data-apps-config.json to list all models.")
-        models = api_call(base_url, token, "/lookml_models")
+        try:
+            models = api_call(base_url, token, "/lookml_models?include_internal=true")
+        except Exception:
+            models = api_call(base_url, token, "/lookml_models")
         if args.json:
             print(json.dumps(models, indent=2))
             return
@@ -327,18 +355,25 @@ def main():
         # Instance catalog across all active models
         if not token:
             sys.exit("error: Direct Looker credentials required to explore models.")
-        models_data = api_call(base_url, token, "/lookml_models?fields=name,explores")
+        try:
+            models_data = api_call(base_url, token, "/lookml_models?fields=name,explores&include_internal=true")
+        except Exception:
+            models_data = api_call(base_url, token, "/lookml_models?fields=name,explores")
         active = []
+        internal_models = []
         for m in (models_data or []):
             name = m.get("name")
             if not name:
                 continue
             explores = [e.get("name") for e in m.get("explores", []) if not e.get("hidden")]
             if explores:
-                active.append((name, sorted(explores)))
+                if name.startswith("system__"):
+                    internal_models.append((name, sorted(explores)))
+                else:
+                    active.append((name, sorted(explores)))
         active.sort(key=lambda x: x[0])
 
-        if not active:
+        if not active and not internal_models:
             print("No active models or explores found.")
             return
 
@@ -369,6 +404,12 @@ def main():
                     print()
                 else:
                     print(f"• `{m}.{e}`\n")
+
+        if internal_models:
+            for im_name, im_explores in internal_models:
+                preview = ", ".join(f"`{e}`" for e in im_explores[:5])
+                more = f" (+{len(im_explores) - 5} more)" if len(im_explores) > 5 else ""
+                print(f"• Built-in `{im_name}` ({len(im_explores)} explores: {preview}{more}) — run `explore-model.py {im_name}` to list explores.")
         return
 
     if not args.explore:
@@ -443,7 +484,7 @@ def main():
             emeta = results_map.get(ename)
             if emeta:
                 enotes = cfg.get("explore_notes", {}).get(f"{args.model}.{ename}") or cfg.get("known_gotchas", {}).get(f"{args.model}.{ename}")
-                print(render_dense_schema(args.model, ename, emeta, enotes, scopes=emeta.get("scopes")))
+                print(render_dense_schema(args.model, ename, emeta, enotes, scopes=emeta.get("scopes"), views=args.view))
                 print("\n" + "=" * 60)
             else:
                 print(f"\n# Explore: `{args.model}.{ename}`")
@@ -451,17 +492,28 @@ def main():
         return
 
     # Introspect explore
+    # The schema is not printed for `--probe --fields`, or for `--values` without `--probe`,
+    # so those requests only need field names and types.
+    skip_schema = bool(args.probe and args.fields)
+    lightweight_meta = not args.json and not args.sample and (skip_schema or bool(args.values and not args.probe))
     explore_meta = None
     if token:
         try:
-            explore_meta = api_call(base_url, token, f"/lookml_models/{args.model}/explores/{args.explore}")
-            if explore_meta and "scopes" not in explore_meta:
-                try:
-                    s_res = api_call(base_url, token, f"/lookml_models/{args.model}/explores/{args.explore}?fields=scopes")
-                    if s_res and "scopes" in s_res:
-                        explore_meta["scopes"] = s_res["scopes"]
-                except Exception:
-                    pass
+            if lightweight_meta:
+                explore_meta = api_call(
+                    base_url,
+                    token,
+                    f"/lookml_models/{args.model}/explores/{args.explore}?fields=fields(dimensions(name,type,hidden),measures(name,type,hidden))",
+                )
+            else:
+                explore_meta = api_call(base_url, token, f"/lookml_models/{args.model}/explores/{args.explore}")
+                if explore_meta and "scopes" not in explore_meta:
+                    try:
+                        s_res = api_call(base_url, token, f"/lookml_models/{args.model}/explores/{args.explore}?fields=scopes")
+                        if s_res and "scopes" in s_res:
+                            explore_meta["scopes"] = s_res["scopes"]
+                    except Exception:
+                        pass
         except Exception as e:
             sys.stderr.write(f"API explore fetch error: {e}\n")
 
@@ -486,13 +538,13 @@ def main():
                 "type": m.get("type", "number"),
                 "label": m.get("label_short") or m.get("label", m.get("name")),
                 "description": m.get("description"),
-            } for m in measures],
+            } for m in _filter_views(measures, args.view)],
             "dimensions": [{
                 "name": d.get("name"),
                 "type": d.get("type", "string"),
                 "label": d.get("label_short") or d.get("label", d.get("name")),
                 "description": d.get("description"),
-            } for d in dims],
+            } for d in _filter_views(dims, args.view)],
         }
         print(json.dumps(payload, indent=2))
         return
@@ -504,38 +556,44 @@ def main():
         print(f"# Filter Values: `{args.model}.{args.explore}`\n")
         wanted = [f.strip() for f in args.values.split(",") if f.strip()]
         known = {f.get("name") for f in dims + measures}
-        for fname in wanted:
+        dim_types = {d.get("name"): d.get("type", "string") for d in dims}
+
+        def _fetch_values(fname: str) -> str:
             if fname not in known:
-                print(f"### `{fname}`\n\n> Not a field in this explore.\n")
-                continue
+                return f"### `{fname}`\n\n> Not a field in this explore.\n"
+            sort_expr = f"{fname} desc" if str(dim_types.get(fname, "")).startswith(("date", "time")) else fname
             try:
                 rows = api_call(base_url, token, "/queries/run/json", method="POST", body={
                     "model": args.model,
                     "view": args.explore,
                     "fields": [fname],
-                    "sorts": [fname],
+                    "sorts": [sort_expr],
                     "limit": str(VALUES_LIMIT),
                 })
             except Exception as e:
-                print(f"### `{fname}`\n\n> Query failed: `{str(e).splitlines()[0]}`\n")
-                continue
+                return f"### `{fname}`\n\n> Query failed: `{str(e).splitlines()[0]}`\n"
             vals = [r.get(fname) for r in (rows or [])]
             vals = [v for v in vals if v is not None]
-            print(f"### `{fname}` — {len(vals)} value(s)"
-                  + (f", showing first {VALUES_LIMIT}" if len(vals) >= VALUES_LIMIT else "") + "\n")
+            lines = [
+                f"### `{fname}` — {len(vals)} value(s)"
+                + (f", showing first {VALUES_LIMIT}" if len(vals) >= VALUES_LIMIT else "")
+                + "\n"
+            ]
             if not vals:
-                print("> No values returned (the column may be entirely null).\n")
+                lines.append("> No values returned (the column may be entirely null).\n")
             else:
-                print(", ".join(f"`{v}`" for v in vals) + "\n")
+                lines.append(", ".join(f"`{v}`" for v in vals) + "\n")
+            return "\n".join(lines)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(_fetch_values, fname) for fname in wanted]
+            for fut in futures:
+                print(fut.result())
         if not args.probe:
             return
 
-    # When --probe and --fields are provided, skip dumping the 300-line schema
-    # tables so that field verification stays surgical and token-efficient.
-    skip_schema = bool(args.probe and args.fields)
-
     if not skip_schema:
-        print(render_dense_schema(args.model, args.explore, explore_meta, notes, scopes=explore_meta.get("scopes")))
+        print(render_dense_schema(args.model, args.explore, explore_meta, notes, scopes=explore_meta.get("scopes"), views=args.view))
 
     if args.probe and token:
         print("\n## Field Health Preflight Probing (`--probe`)\n")

@@ -28,7 +28,7 @@ Lit Data Apps run directly in standard modern browsers without a build step (Web
      - `createPercentageCol({ field, headerName, format = 'percent', colorScale = false, warningThreshold = 0.60, goodThreshold = 0.80, width, flex = 1, minWidth = 140, type = 'rightAligned', sortable = true, filter = true, ...colDef })`
      - `createBadgeCol({ field, headerName, badgeClassMap = {}, width, flex = 1, minWidth = 140, sortable = true, filter = true, ...colDef })` (where `badgeClassMap` maps raw cell values to `'badge-green' | 'badge-amber' | 'badge-red' | 'badge-blue' | 'badge-neutral'`)
    - **`DataApp` Instance Properties & Methods:**
-     - `this.lookerModel`, `this.dashboardFilters`, `this.crossFilters`, `this.isDark`
+     - `this.lookerModel`, `this.dashboardFilters`, `this.crossFilters`, `this.isDark`, `this.hideActions`
      - `this.getEffectiveFilters(localFilters = {})`
      - `this.runQuery({ model, explore, fields, filters, sorts, limit = '500' }, signal)`
      - `this.mergeQueries({ queries, on, signal })`
@@ -48,6 +48,7 @@ Data Apps are interactive, executive-grade web applications. Compose rich visual
 /**
  * @title Operations Command Center
  * @description Executive ecommerce performance monitoring with real-time conversion and order fulfillment tracking.
+ * @toolkit-version <installed VERSION>
  */
 
 import { DataApp, html, nothing } from '/runtime/data-app.js';
@@ -325,6 +326,7 @@ in-place series diffing); the design is yours. See SKILL.md § *Design freedom*.
 | `color` | `String` | Custom sparkline stroke/fill color (defaults to `var(--app-chart-1, #4285f4)`) |
 | `subtitle` | `String` | Secondary qualifier (2–4 words, max ~25 chars) rendered on a dedicated muted `11px` line below the headline value without parentheses |
 | `bare` | `Boolean` | Drops the card chrome (background, border, radius, shadow, padding), leaving just the metric. For placing inside your own panel. |
+| `hide-actions` | `Boolean` | Suppresses host-offered widget action buttons (such as "Explore from here") on this widget. Setting `hide-actions` on an ancestor container or the app root suppresses widget actions across all descendant widgets. |
 
 #### KPI Header & Subtitle
 `subtitle` renders on a dedicated muted `11px` line below the headline value without parentheses. Keep `label` short (1 to 3 words, max ~20 chars) so it fits on one line in compact cards; secondary context belongs in `subtitle` (2 to 4 words, max ~25 chars). Do not use emojis or `icon` attributes in KPI cards or titles; match Looker's clean typography.
@@ -365,6 +367,7 @@ in-place series diffing); the design is yours. See SKILL.md § *Design freedom*.
 | `.data` | `Array` | Optional override array of rows (for local sample preview or client-side calculation) |
 | `.options` | `Object` | Highcharts options override (deep-merged into the generated config; arrays are replaced, so never pass `series`) |
 | `bare` | `Boolean` | Drops the card chrome, leaving just the visualization. For full-bleed tiles and custom panels. |
+| `hide-actions` | `Boolean` | Suppresses host-offered widget action buttons (such as "Explore from here") on this widget (or across all descendant widgets when set on an ancestor container). |
 | `@app-chart-click` | `CustomEvent` | Dispatched on point/column/bar click (`cancelable: true`). Detail: `{ field, value, y, mouseEvent, chartComponent }`. Calling `e.preventDefault()` cancels automatic `cross-filter` toggling. Custom `options.plotOptions.series.point.events.click` callbacks also run and can call `e.preventDefault()` (or return `false`) to cancel `cross-filter`. |
 
 **Container sizing & default floors.** `<app-chart>` sizes dynamically to its
@@ -441,6 +444,7 @@ default.
 | `.gridOptions` | `Object` | AG Grid options pass-through override (`{ rowHeight: 32, domLayout: 'autoHeight', pagination: true, paginationPageSize: 20 }`). Pagination defaults to `false` (scrollable table). |
 | `show-row-count` | `Boolean` | Opt in to a row count footer beneath the table (e.g. `142 rows`, or `Showing first 500 rows` when the returned rows equal the query limit). Off by default. |
 | `bare` | `Boolean` | Drops the card chrome, leaving just the table. |
+| `hide-actions` | `Boolean` | Suppresses host-offered widget action buttons (such as "Explore from here") on this widget (or across all descendant widgets when set on an ancestor container). |
 | `@app-grid-row-click` | `CustomEvent` | Dispatched when a user clicks a data row (after any `gridOptions.onRowClicked` callback). Detail: `{ row, rowIndex, mouseEvent }`, where `row` is the clicked row's data object and `rowIndex` is the position after sorting and filtering, so authors should read `detail.row`. |
 
 > [!TIP]

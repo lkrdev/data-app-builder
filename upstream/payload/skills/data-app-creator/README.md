@@ -30,7 +30,7 @@ tools/
 
 ## Configuration
 
-Run `scripts/bootstrap.sh` once per machine. It creates `data-apps-config.json`
+Run `python3 scripts/bootstrap.py` (or `python scripts\bootstrap.py` on Windows) once per machine. It creates `data-apps-config.json`
 at the repo root with the customer's Looker instance URL, API credentials,
 target publish folder, and runtime bundle URL.
 
