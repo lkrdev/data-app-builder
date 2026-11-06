@@ -8,8 +8,8 @@ import type { Looker40SDK } from '@looker/sdk'
 
 import {
   AGENTS_MD, AntigravityActivityStep, ANTIGRAVITY_ALLOWED_MODELS, APP_BUILDER_SYSTEM_PROMPT, authenticateGoogleOAuth,
-  BOOTSTRAP_LOOKML_PY, BOOTSTRAP_SANDBOX_SH, buildDynamicStarterPrompts, buildWorkspaceSources,
-  BUNDLE_APP_PY, callInteractionsApi, clampLeftPaneWidth, classifyLookerOperation,
+  BOOTSTRAP_LOOKML_PY, BOOTSTRAP_SANDBOX_SH, buildDynamicStarterPrompts, buildNativeContentGuide, buildWorkspaceSources,
+  BUNDLE_APP_PY, BUILTIN_SKILLS_FILES, callInteractionsApi, clampLeftPaneWidth, classifyLookerOperation,
   clearStarterPromptsCache, clearStoredOAuthSession, CODEMODE_CDN_URL, CodeModePermissionRequest,
   computeIsAuthenticated, computeLkrExtensionCacheKey, CONCURRENT_POLL_SCHEDULE_MS,
   CONVERSATION_LABEL_REQUEST_TAG, DASHBOARD_CODEMODE_PREAMBLE_PY, DATA_APP_GUIDE_MD, DATA_INVESTIGATOR_GUIDE_MD,
@@ -25,8 +25,8 @@ import {
   listAvailableAntigravityModels, LKR_CLI_BRIDGE_TOOL, LKR_CLI_SITECUSTOMIZE_PY, LKR_DEV_CLI_SPEC,
   LKR_DEV_CLI_VERSION, LkrCodeMode, loadStoredLeftPaneWidth, loadStoredOAuthSession,
   loadStoredRightPaneCollapsed, loadStoredThinkingLevel, loginWithGoogleOAuth,
-  LOOKER_PROJECT_ONBOARDING_SKILL_MD, LOOKML_SKILLS_CATALOG, MAX_LEFT_PANE_WIDTH,
-  mergeInteractionSseEvent, MIN_LEFT_PANE_WIDTH, normalizeMaxTotalTokens, normalizeSandboxFilePath,
+  LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD, LOOKER_PROJECT_ONBOARDING_SKILL_MD, LOOKML_SKILLS_CATALOG, MAX_LEFT_PANE_WIDTH,
+  mergeInteractionSseEvent, MIN_LEFT_PANE_WIDTH, NATIVE_CONTENT_GUIDE_MD, normalizeMaxTotalTokens, normalizeSandboxFilePath,
   normalizeThinkingLevel, parseStarterPromptsResponse, persistOAuthSession, persistThinkingLevel,
   prewarmOrWakeAntigravityEnvironment, readInitialRightPaneCollapsed, readInitialThinkingLevel, recordSharedEnvExploreSchema,
   refreshOAuthSessionIfNeeded, resolveAdaptivePollScheduleMs, resolveBuiltinWorkspaceFileContent,
@@ -5627,5 +5627,77 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
       preselectedOutput: preselectedOut,
     })
     expect([fastSelected.agentId, fastSelected.rationale]).toEqual(['ca_agent_rev', 'Matches gross margin golden query.'])
+  })
+
+  test('58. Issue #145: collates unified looker-dashboard skill, promotes looker-field-profiler (profile_fields), mounts both in sandbox & Viewer, and integrates profile_fields across Studio use cases & skills', () => {
+    const repoRoot = path.resolve(__dirname, '../..')
+    const dashSkillDisk = readFileSync(path.join(repoRoot, 'skills/looker-dashboard/SKILL.md'), 'utf8')
+    const dashSkillAgentsDisk = readFileSync(path.join(repoRoot, '.agents/skills/looker-dashboard/SKILL.md'), 'utf8')
+    const profSkillDisk = readFileSync(path.join(repoRoot, 'skills/looker-field-profiler/SKILL.md'), 'utf8')
+    const profSkillAgentsDisk = readFileSync(path.join(repoRoot, '.agents/skills/looker-field-profiler/SKILL.md'), 'utf8')
+
+    expect(LOOKER_DASHBOARD_SKILL_MD).toBe(dashSkillDisk)
+    expect(LOOKER_DASHBOARD_SKILL_MD).toBe(dashSkillAgentsDisk)
+    expect(LOOKER_FIELD_PROFILER_SKILL_MD).toBe(profSkillDisk)
+    expect(LOOKER_FIELD_PROFILER_SKILL_MD).toBe(profSkillAgentsDisk)
+
+    for (const token of ['profile_fields', 'upsert_udd', 'tabs:', 'business_pulse', 'y_axes', 'advanced_vis_config', 'lookml-dashboard-to-query']) {
+      expect(LOOKER_DASHBOARD_SKILL_MD).toContain(token)
+    }
+
+    const sources = buildWorkspaceSources({ schemaMarkdown: '# Schema' })
+    expect(sources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ target: '/workspace/skills/looker-dashboard/SKILL.md', content: LOOKER_DASHBOARD_SKILL_MD }),
+        expect.objectContaining({ target: '/workspace/skills/looker-field-profiler/SKILL.md', content: LOOKER_FIELD_PROFILER_SKILL_MD }),
+      ])
+    )
+
+    for (const k of ['looker-dashboard', 'creating-looker-dashboard', 'skills/looker-dashboard/SKILL.md', '/workspace/skills/looker-dashboard/SKILL.md']) {
+      expect(BUILTIN_SKILLS_FILES[k]).toBe(LOOKER_DASHBOARD_SKILL_MD)
+      expect(resolveBuiltinWorkspaceFileContent(k)).toBe(LOOKER_DASHBOARD_SKILL_MD)
+    }
+    for (const k of ['looker-field-profiler', 'skills/looker-field-profiler/SKILL.md', '/workspace/skills/looker-field-profiler/SKILL.md']) {
+      expect(BUILTIN_SKILLS_FILES[k]).toBe(LOOKER_FIELD_PROFILER_SKILL_MD)
+      expect(resolveBuiltinWorkspaceFileContent(k)).toBe(LOOKER_FIELD_PROFILER_SKILL_MD)
+    }
+
+    expect(LOOKML_SKILLS_CATALOG.find((s) => s.id === 'looker-field-profiler')).toEqual({
+      id: 'looker-field-profiler',
+      label: 'Field Value Profiler',
+      desc: 'Profile string, number, yesno & datetime distributions, spikiness & LookML curation snippets via profile_fields',
+      path: 'skills/looker-field-profiler/SKILL.md',
+    })
+
+    const profLabel = formatFriendlyLookerActivityLabel('return profile_fields(model="thelook", view="order_items", fields=["order_items.status"])')
+    expect(profLabel).toMatchObject({
+      title: 'Profiling Explore field distributions',
+      stepTitle: 'Profiling Explore field distributions',
+      statusText: 'Profiling Explore field distributions, cardinality, and temporal spikiness...',
+      targetLabel: 'Order Items',
+      isQuery: true,
+    })
+
+    const skillSteps = extractInteractionActivitySteps({
+      status: 'completed',
+      steps: [
+        { id: 'st_dash', type: 'view_file', input: JSON.stringify({ TargetFile: 'skills/looker-dashboard/SKILL.md' }) },
+        { id: 'st_prof', type: 'lookup_skill', arguments: { skill_name: 'looker-field-profiler' } },
+      ],
+    })
+    expect(skillSteps).toEqual([
+      expect.objectContaining({ id: 'st_dash', kind: 'skill', title: 'Reading skill looker-dashboard', path: 'skills/looker-dashboard/SKILL.md', content: LOOKER_DASHBOARD_SKILL_MD }),
+      expect.objectContaining({ id: 'st_prof', kind: 'skill', title: 'Reading skill looker-field-profiler', path: '/workspace/skills/looker-field-profiler/SKILL.md', content: LOOKER_FIELD_PROFILER_SKILL_MD }),
+    ])
+
+    const nativeGuide = buildNativeContentGuide({ selectedExplores: ['thelook::order_items'], primaryModel: 'thelook', primaryExplore: 'order_items' })
+    for (const doc of [NATIVE_CONTENT_GUIDE_MD, nativeGuide, DATA_APP_GUIDE_MD, DATA_INVESTIGATOR_GUIDE_MD, KDA_SKILL_MD, LOOKER_PROJECT_ONBOARDING_SKILL_MD]) {
+      expect(doc).toContain('looker-field-profiler')
+      expect(doc).toContain('profile_fields')
+    }
+    for (const doc of [AGENTS_MD, readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8'), readFileSync(path.join(repoRoot, 'upstream/payload/AGENTS.md'), 'utf8')]) {
+      expect(doc).toContain('skills/looker-dashboard/SKILL.md')
+      expect(doc).toContain('skills/looker-field-profiler/SKILL.md')
+    }
   })
 })

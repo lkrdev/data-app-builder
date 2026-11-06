@@ -132,6 +132,7 @@ print_kda_summary(out)
    - **Timeframe Collision Stripping**: Strips any relative date filter in `base_filters` (`90 days`, `12 months`, `7 days`) when `baseline_filters` or `breach_filters` specifies a timeframe filter.
    - **Macro-First Dimension Ranking**: Excludes leaf SKUs/item names/addresses and ranks macro business dimensions ahead of `yesno` flags.
    - **Adaptive `min_support`**: Uses `min_support=0.05` in Pass 1 and `min_support=0.02` in Pass 2 drill-downs so granular dimensions (`category`, `brand`, `state`) aren't blanked out by native KDA's `0.10` threshold.
+   - **Pre-KDA Field Profiling (`profile_fields` in `skills/looker-field-profiler/SKILL.md`)**: When cohort dates or candidate dimensions are unknown, run `profile_fields` first to inspect `stats.spikiness[grain]` (`peak_period`, `trough_period`, `spikiness_ratio`, `cv`) on `datetime` fields to select anomaly windows for `breach_filters` vs. `baseline_filters`, and prune `profile:uuid_or_hash`, `profile:json_payload`, `profile:empty_or_null_only`, and `profile:constant_value` dimensions before calling `run_key_driver_analysis`.
 
 ---
 

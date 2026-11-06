@@ -17,6 +17,8 @@ than guessing or hand-crafting commands:
 | **Publish to Looker** | `skills/data-app-publisher/SKILL.md` | Publishing or updating extension tiles in Looker (tools in `skills/data-app-publisher/tools/`) |
 | **Convert HTML dashboards** | `skills/data-app-upgrader/SKILL.md` | Converting legacy HTML Canvas Dashboards (`*.canvasdashboard.html`) into Data Apps |
 | **Check or run updates** | `skills/toolkit-updater/SKILL.md` | Checking for toolkit updates, changelog narration, backing up, upgrading, and upgrading existing Lit apps from `CHANGELOG.md` (tools in `skills/toolkit-updater/tools/`) |
+| **Create or update Looker Dashboards** | `skills/looker-dashboard/SKILL.md` | Unified Looker Dashboarding skill: `profile_fields` distribution discovery, 1-call Code Mode (`upsert_udd`, `upsert_lookml_dashboard`, `reflow_24col`, `pin_to_board`, `schedule_dashboard`, `emit_native_bundle`), 24-column `newspaper` layout, native `tabs:`, 4 canonical archetypes, 22 visualization types (`y_axes[].series` objects), Highcharts `advanced_vis_config`, and `lookml-dashboard-to-query` SQL verification |
+| **Profile Explore fields (`profile_fields`)** | `skills/looker-field-profiler/SKILL.md` | Profiling `string`, `number`, `yesno`, and `datetime` distributions, cardinality, temporal spikiness (`stats.spikiness`), `profile:*` semantic tags, and ready-to-paste `curation.lookml_snippet` refinements via `profile_fields` |
 | **Onboard a new Looker project** | `skills/looker-project-onboarding/SKILL.md` | End-to-end Looker Project Onboarding from an existing database connection: connection & table reachability check (`/admin/connections`), `snake_case` `project_name` normalization, bounded `5 × 5` schema/table discovery (`/sql`), `dev` workspace bare Git project & model creation, and 5-layer measure synthesis (`<LOOKML_BUNDLE>`) |
 
 Detailed component properties, methods, and styling variables live in
@@ -52,8 +54,8 @@ When handling a Studio turn (`useCase="auto"`), classify the current turn's prom
 | Use Case ID | Label | Routing Intent & Trigger Signals |
 | --- | --- | --- |
 | `app` | **Data App** | Custom interactive Lit web component Data App (`apps/<name>/app.js`), metric switchers, custom UI layouts, `<app-kpi>`, `<app-chart>`, `<app-grid>`, or screenshot-to-app conversion |
-| `dashboard` | **Content Studio** | Native Looker User-Defined Dashboards (UDDs), LookML Dashboards (`.dashboard.lookml`), Saved Looks, Boards, or Scheduled Plans (`upsert_udd`, `upsert_lookml_dashboard`, `pin_to_board`, `schedule_dashboard`) |
-| `lookml` | **Agentic LookML** | Authoring or refactoring LookML models, views, explores, refinements (`.lkml`), SQL-to-LookML parity, field curation/descriptions, or LookML data tests (`.test.lkml`) |
+| `dashboard` | **Content Studio** | Native Looker User-Defined Dashboards (UDDs), LookML Dashboards (`.dashboard.lookml`), Saved Looks, Boards, or Scheduled Plans (`skills/looker-dashboard/SKILL.md`, `skills/looker-field-profiler/SKILL.md`, `upsert_udd`, `upsert_lookml_dashboard`, `pin_to_board`, `schedule_dashboard`) |
+| `lookml` | **Agentic LookML** | Authoring or refactoring LookML models, views, explores, refinements (`.lkml`), SQL-to-LookML parity, field profiling/curation/descriptions (`skills/looker-field-profiler/SKILL.md`), or LookML data tests (`.test.lkml`) |
 | `health-check` | **Health Check** | 3-Pillar Looker & BigQuery Health Check audit (System Activity Pillar 1, LookML 0–4 Transcriber Rubric Pillar 2, BigQuery `INFORMATION_SCHEMA` Pillar 3, `TECHNICAL_DESIGN_DOCUMENT.md`) |
 | `tile` | **Python Tile** | Custom `LkrCodeMode` Monty Python script tile (`obj_script_<id>`, `vars.dashboard_filters`, custom Python table/markdown/dict output, or script scheduler) |
 | `conversational-analytics` | **Conversational Analytics** | Ad-hoc natural-language analytical Q&A, explore data questions, KPI lookups, or trend explanations without building a persistent app or LookML file |

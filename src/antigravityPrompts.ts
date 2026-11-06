@@ -427,6 +427,8 @@ export function wrapDashboardCodeMode(code: string): string {
 
 export const NATIVE_CONTENT_GUIDE_MD = `# Native Looker Content Studio (/dashboard) — Compact Recipe Guide
 
+See \`/workspace/skills/looker-dashboard/SKILL.md\` and \`/workspace/skills/looker-field-profiler/SKILL.md\` for full dashboarding & field profiling specifications.
+
 ## 1. Pre-Injected Monty Python Helpers in \`run_looker_codemode\`
 - \`upsert_udd(title, folder_id, filters=[...], tiles=[...], dashboard_id=None)\`: Creates/updates a User-Defined Dashboard (UDD), deduplicates \`create_query\`, wires \`create_dashboard_filter\` + \`result_maker.filterables[].listen\`, and positions all tiles on Looker's 24-column grid via \`dashboard_dashboard_layouts\` + \`update_dashboard_layout_component\`.
 - \`upsert_lookml_dashboard(project_id, model, dashboard_name, title, tiles=[...], filters=[...], yaml_content=None, folder_id=None, sync_udd_id=None)\`: Writes \`dashboards/<name>.dashboard.lookml\` (\`create_file\` / \`update_file\`) with \`- dashboard:\`, \`layout: newspaper\`, \`filters:\`, \`elements:\`, \`listen:\`, and 24-col \`row\`/\`col\`/\`width\`/\`height\`, ensures \`include: "*.dashboard.lookml"\` in \`{model}.model.lkml\`, and imports/syncs a linked UDD into \`folder_id\` (\`import_lookml_dashboard\` / \`sync_lookml_dashboard\` / \`upsert_udd\`). Never call \`update_session\` in \`run_looker_codemode\`.
@@ -434,10 +436,11 @@ export const NATIVE_CONTENT_GUIDE_MD = `# Native Looker Content Studio (/dashboa
 - \`pin_to_board(title, description, section_title, dashboard_id=..., lookml_dashboard_id=..., look_id=...)\`: Creates a Board + Section (\`create_board\`, \`create_board_section\`, \`create_board_item\`) pinning UDDs, LookML Dashboards (\`lookml_dashboard_id\`), and Saved Looks (\`create_look\`).
 - \`schedule_dashboard(dashboard_id, name, crontab="0 9 * * 1", email="...", fmt="wysiwyg_pdf", filters_string="...")\`: Attaches a weekly Scheduled Plan (\`create_scheduled_plan\`) with normalized \`scheduled_plan_destination\` defaults.
 - \`emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", id=..., title=..., **extra)\`: Returns \`NATIVE_CONTENT_BUNDLE\` directly from \`run_looker_codemode\` so the host captures it with zero LLM echo tokens.
+- \`profile_fields(model=m, view=e, fields=[...])\`: Profiles candidate fields (\`/workspace/skills/looker-field-profiler/SKILL.md\`) — use \`profile:low_cardinality_enum\` for \`pivots:\`, \`looker_pie\` donuts (\`limit: 6\`), and \`button_toggles\`/\`dropdown_menu\` filters grounded in \`stats.top_values\`; \`profile:medium_cardinality_categorical\` for \`looker_bar\` without pivots; \`profile:nullable\` for \`-NULL\` filters; and \`profile:spiky_*\` (\`stats.spikiness[grain]["trough_period"]\`) for complete-period date filters.
 
 ## 2. 24-Column Grid & Visualization Standards
 - Row 0 (\`height: 4\`): 3 KPI scorecards at \`col: 0, 8, 16, width: 8\` (\`type: "single_value"\`, \`value_format: "$#,##0"\`, \`show_comparison: True\`, \`comparison_type: "change"\`).
-- Row 4 (\`height: 8\`): 2 side-by-side Cartesian charts at \`col: 0, width: 12\` and \`col: 12, width: 12\` (\`looker_line\` / \`looker_column\`, dual unpinned Y-axes \`y_axis_combined: False\`, \`reference_lines\`, \`advanced_vis_config\` JSON string with \`defaults_version: 1\`).
+- Row 4 (\`height: 8\`): 2 side-by-side Cartesian charts at \`col: 0, width: 12\` and \`col: 12, width: 12\` (\`looker_line\` / \`looker_column\`, dual unpinned Y-axes \`y_axis_combined: False\`, \`y_axes[].series\` MUST be objects \`[{"id": "view.m", "name": "Label", "axisId": "view.m"}]\` and never plain strings, \`reference_lines\`, \`advanced_vis_config\` JSON string with \`defaults_version: 1\`).
 - Row 12 (\`height: 8\`): Full-width \`looker_grid\` at \`col: 0, width: 24\` (or 2 cross-explore tiles at \`row: 12, col: 0/12, width: 12\` + full-width \`looker_grid\` reflowed to \`row: 20, col: 0, width: 24, height: 8\`).
 - Filter & element \`name\` identifiers must NEVER contain periods (\`.\`); use underscores (e.g. \`date_range\`, \`order_status\`, \`min_sale_price\`).
 `
@@ -523,8 +526,8 @@ When handling a Studio turn (\`useCase="auto"\`), classify the current turn's pr
 | --- | --- | --- |
 | \`app\` | **Data App** | Custom interactive Lit web component Data App (\`apps/<name>/app.js\`, \`skills/data-apps/SKILL.md\`), metric switchers, custom UI layouts, \`<app-kpi>\`, \`<app-chart>\`, \`<app-grid>\`, or screenshot-to-app conversion |
 | \`data-investigator\` | **Data Investigator** | Point-in-time root-cause narrative Data App in Google Doc (\`doc\`, default) or Google Presentation (\`slides\` / \`presentation\` / \`deck\`) format for prompts asking to \`"investigate"\`, \`"find out"\`, \`"figure out"\`, \`"dig into"\`, \`"what drove"\`, or \`"what caused"\` across data, metrics, dashboards, Looks, or explores using \`skills/data-investigator/SKILL.md\` and \`skills/key-driver-analysis/SKILL.md\` (\`skills/key-driver-analysis/scripts/kda_toolkit.py\`, \`run_key_driver_analysis\`), LookML \`drill_fields\` (\`limit: '500'\`), fixed date ranges (\`YYYY-MM-DD to YYYY-MM-DD\`), and sequential **Chart -> What This Chart Means -> Next Investigation Path** chapters |
-| \`dashboard\` | **Content Studio** | Native Looker User-Defined Dashboards (UDDs), LookML Dashboards (\`.dashboard.lookml\`), Saved Looks, Boards, or Scheduled Plans (\`upsert_udd\`, \`upsert_lookml_dashboard\`, \`pin_to_board\`, \`schedule_dashboard\`) |
-| \`lookml\` | **Agentic LookML** | Authoring or refactoring LookML models, views, explores, refinements (\`.lkml\`), onboarding a new Looker project from a database connection (\`skills/looker-project-onboarding/SKILL.md\`), SQL-to-LookML parity, field curation/descriptions, or LookML data tests (\`.test.lkml\`) |
+| \`dashboard\` | **Content Studio** | Native Looker User-Defined Dashboards (UDDs), LookML Dashboards (\`.dashboard.lookml\`), Saved Looks, Boards, or Scheduled Plans (\`skills/looker-dashboard/SKILL.md\`, \`skills/looker-field-profiler/SKILL.md\`, \`upsert_udd\`, \`upsert_lookml_dashboard\`, \`pin_to_board\`, \`schedule_dashboard\`) |
+| \`lookml\` | **Agentic LookML** | Authoring or refactoring LookML models, views, explores, refinements (\`.lkml\`), onboarding a new Looker project from a database connection (\`skills/looker-project-onboarding/SKILL.md\`), SQL-to-LookML parity, field profiling/curation/descriptions (\`skills/looker-field-profiler/SKILL.md\`), or LookML data tests (\`.test.lkml\`) |
 | \`health-check\` | **Health Check** | 3-Pillar Looker & BigQuery Health Check audit (System Activity Pillar 1, LookML 0–4 Transcriber Rubric Pillar 2, BigQuery \`INFORMATION_SCHEMA\` Pillar 3, \`TECHNICAL_DESIGN_DOCUMENT.md\`) |
 | \`tile\` | **Python Tile** | Custom \`LkrCodeMode\` Monty Python script tile (\`obj_script_<id>\`, \`vars.dashboard_filters\`, custom Python table/markdown/dict output, or script scheduler), plus ad-hoc Looker SDK / instance / space / folder / personal space / user / permission / schedule inspection queries via \`run_looker_codemode\` (e.g. \`"tell me what my personal space is"\`, \`"can you find me all personal spaces that don't have dashboards"\`) |
 | \`conversational-analytics\` | **Conversational Analytics** | Ad-hoc natural-language analytical Q&A, explore data questions, KPI lookups, or trend explanations without building a persistent app or LookML file |
@@ -604,7 +607,7 @@ Use this skill when a user asks to onboard or create a new Looker project, scaff
        fields[t] = cols
    return {"schema": schema, "tables": core_tables, "fields": fields}
    \`\`\`
-3. Next, in **ONE** \`code_execution\` call using a single-quoted Python heredoc (\`python3 - << 'PYEOF'\`, never \`python3 -c "..."\`, so bash never interpolates BigQuery backticks \`\\\`...\\\`\` or LookML \`\${TABLE}\` references; do **not** create refinements or \`silver/\` files yet), write \`/workspace/lookml/\` from the discovered \`fields\`, validate offline with \`lkr parse\`, push via \`lkr --dev tools lookml push\` (which registers the model via \`create_lookml_model\` / \`update_lookml_model\` and skips overwriting remote \`# AUTOGENERATED\` views), and emit \`<LOOKML_BUNDLE>\`:
+3. Next, in **ONE** \`code_execution\` call using a single-quoted Python heredoc (\`python3 - << 'PYEOF'\`, never \`python3 -c "..."\`, so bash never interpolates BigQuery backticks \`\` \`...\` \`\` or LookML \`\${TABLE}\` references; do **not** create refinements or \`silver/\` files yet), write \`/workspace/lookml/\` from the discovered \`fields\`, validate offline with \`lkr parse\`, push via \`lkr --dev tools lookml push\` (which registers the model via \`create_lookml_model\` / \`update_lookml_model\` and skips overwriting remote \`# AUTOGENERATED\` views), and emit \`<LOOKML_BUNDLE>\`:
    \`\`\`bash
    python3 /workspace/bootstrap_lookml.py setup
    python3 - << 'PYEOF'
@@ -617,7 +620,7 @@ Use this skill when a user asks to onboard or create a new Looker project, scaff
    (root / f"{project_id}.model.lkml").write_text(f'connection: "{conn}"\\ninclude: "/bronze/*.view.lkml"\\ninclude: "/bronze/explores/*.explore.lkml"\\n')
    (root / "bronze/explores/order_items_base.explore.lkml").write_text('include: "/bronze/*.view.lkml"\\nexplore: order_items_base {\\n  view_name: order_items\\n  label: "Order Items (Bronze)"\\n}\\n')
    for t, cols in fields.items():
-       lines = ["# AUTOGENERATED BY LKR CLI", f"view: {t} {{", f"  sql_table_name: \\\`{schema}.{t}\\\` ;;"]
+       lines = ["# AUTOGENERATED BY LKR CLI", f"view: {t} {{", f"  sql_table_name: \`{schema}.{t}\` ;;"]
        for kind, cname, ctype in cols:
            if kind == "dimension_group":
                lines.append(f"  dimension_group: {cname} {{ type: time timeframes: [raw, time, date, week, month, quarter, year] sql: \${{TABLE}}.{cname}_at ;; }}")
@@ -643,6 +646,7 @@ Use this skill when a user asks to onboard or create a new Looker project, scaff
      - \`measure: return_count { type: count filters: [status: "Returned"] label: "Return Count" }\`
      - \`measure: cancel_count { type: count filters: [status: "Cancelled"] label: "Cancel Count" }\`
      - \`measure: completed_order_count { type: count filters: [status: "Complete"] label: "Completed Order Count" }\`
+     - Ground filtered measure literals in \`stats.top_values\` from \`profile_fields\` (\`skills/looker-field-profiler/SKILL.md\`), apply \`curation.lookml_snippet\` (\`recommended_hidden\`, \`recommended_suggestable\`, \`suggested_tags\`, \`recommended_description\`) in \`bronze/<table>.refinement.lkml\`, guard \`profile:has_zeros\` denominators with \`NULLIF\`, and use \`profile:unique_key_candidate\` / \`profile:nullable\` to author \`.test.lkml\` assertions when requested.
    - **Layer 4 — Portable ANSI Derived Ratios (\`type: number\`)**: Compose ratios from LookML measures via \`1.0 * \${numerator_measure} / NULLIF(\${denominator_measure}, 0)\` (e.g. \`return_rate\`, \`cancel_rate\`, \`average_order_value\`).
    - **Layer 5 — Silver Explores with Joins (\`silver/explores/order_items.explore.lkml\`)**: Deconstruct workload SQL (\`grain_change_reagg\`, \`window_pre_groupby\`, \`union\`, \`non_equi_join\`, \`filter_dependent_cte\`) and create \`/workspace/lookml/silver/explores/order_items.explore.lkml\` (\`include: "/bronze/*.view.lkml"\`, \`include: "/bronze/*.refinement.lkml"\`, \`include: "/bronze/explores/*.explore.lkml"\`, \`explore: order_items { extends: [order_items_base] hidden: no view_name: order_items ... }\`) joining \`users\` (\`\${order_items.user_id} = \${users.id}\`, \`many_to_one\`), \`products\` (\`\${order_items.product_id} = \${products.id}\`, \`many_to_one\`), and \`distribution_centers\` (\`\${products.distribution_center_id} = \${distribution_centers.id}\`, \`many_to_one\`). Update \`/workspace/lookml/<project_name>.model.lkml\` to include \`"/bronze/*.refinement.lkml"\` and \`"/silver/explores/*.explore.lkml"\`.
 3. In **ONE** \`code_execution\` call, write \`/workspace/lookml/bronze/order_items.refinement.lkml\`, \`/workspace/lookml/silver/explores/order_items.explore.lkml\`, and \`/workspace/lookml/<project_name>.model.lkml\` via \`python3 - << 'PYEOF'\`, validate offline with \`lkr parse\`, push via \`lkr --dev tools lookml push\`, and emit \`<LOOKML_BUNDLE>\` (so Turn 4 uses only **1** \`code_execution\` call followed by **1** \`run_looker_codemode\` call):
@@ -717,8 +721,9 @@ When building a **Data Investigator** (\`data-investigator\`) app, author a self
 - **Key Driver Analysis Skill & Toolkit**: \`/workspace/skills/key-driver-analysis/SKILL.md\` and \`/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py\` (\`resolve_source\`, \`inspect_explore_for_kda\`, \`analyze_target\`, \`run_kda\`, \`drill_top_driver\`, \`print_kda_summary\`) are pre-seeded in \`/workspace\`. Load \`/workspace/skills/key-driver-analysis/SKILL.md\` when running multi-target or recursive KDA across Explores, Queries, Looks, Dashboards, or Conversations.
 - **Prioritize Predefined LookML \`drill_fields\`**: Inspect \`[Drills: \`...\`]\` annotations in \`/workspace/schema.md\` (or \`f.get("drill_fields")\` from \`lookml_model_explore\`) and follow the measure/dimension \`drill_fields\` hierarchy and related explore dimensions along the investigation path.
 - **Enforce \`limit: '500'\`**: Set \`limit: '500'\` on all drill, breakdown, and evidence queries in \`data-investigator\` mode (\`run_inline_query("json", { ..., "limit": "500" })\` and \`.query=\${{ ..., limit: '500' }}\`).
-- **Pre-Injected \`run_key_driver_analysis(body)\` (\`POST /api/4.0/internal/kda/analyze\`)**:
-  - Available directly in \`run_looker_codemode\` as a read-only helper (\`requiresPermission: false\`).
+- **Pre-Injected \`run_key_driver_analysis(body)\` (\`POST /api/4.0/internal/kda/analyze\`) & \`profile_fields\` (\`skills/looker-field-profiler/SKILL.md\`)**:
+  - Available directly in \`run_looker_codemode\` as read-only helpers (\`requiresPermission: false\`).
+  - Use \`profile_fields\` \`stats.spikiness[grain]\` (\`peak_period\`, \`trough_period\`, \`spikiness_ratio\`, \`cv\`) on \`datetime\` fields (\`skills/looker-field-profiler/SKILL.md\`) to identify anomaly windows for \`breach_filters\` vs. \`baseline_filters\`, and prune \`profile:uuid_or_hash\`, \`profile:json_payload\`, \`profile:empty_or_null_only\`, and \`profile:constant_value\` dimensions before calling \`run_key_driver_analysis\`.
   - Call \`run_key_driver_analysis({ "data_source": { "model_name": m, "explore_name": e }, "contribution_metric": "<view.measure>", "dimensions": ["<dim1>", "<dim2>"], "base_filters": { ... }, "baseline_filters": { "<date_dim>": "<fixed_baseline_range>" }, "breach_filters": { "<date_dim>": "<fixed_breach_range>" } })\` (up to 6 dimensions, or \`"data_source": { "query_id": qid }\`) to rank the dimensional segments driving the metric change. If KDA is unavailable on the instance, gracefully fall back to \`run_inline_query\` breakdowns across the top \`drill_fields\` dimensions with \`limit: "500"\`.
 
 ## 3. Strict Point-in-Time Fixed Dates Rule (\`YYYY-MM-DD to YYYY-MM-DD\`)
@@ -740,6 +745,7 @@ export const DATA_APP_GUIDE_MD = `# Looker Lit Data Apps — Compact Sandbox Gui
 - \`<app-chart>\`: \`title\`, \`type="areaspline|line|column|bar|donut|pie|treemap|funnel|gauge"\`, \`value-format="usd|int|percent1"\`, \`color="var(--app-primary)"\`, \`cross-filter\` (or \`cross-filter="view.dim"\` on segmented charts: \`column|bar|donut|pie|treemap|funnel\`), \`pivot-by="view.dim2"\`, \`.query=\${{ fields: [...], filters: ..., sorts: [...], limit: '500' }}\`, \`.filters=\${this.getEffectiveFilters()}\`, \`.options=\${{ chart: { spacing: [10, 15, 10, 10] } }}\`, \`bare\`, \`cell\`.
 - \`<app-grid>\`: \`title\`, \`height="420px"\`, \`show-row-count\`, \`.query=\${{ fields: [...], filters: ..., sorts: [...], limit: '50' }}\`, \`.filters=\${this.getEffectiveFilters()}\`, \`.columnDefs=\${[ { field: 'view.id', headerName: 'ID', width: 110 }, createCurrencyCol({ field: 'view.revenue', headerName: 'Revenue' }) ]}\`, \`@app-grid-row-click=\${(e) => { this.selectedRow = e.detail.row; }}\`.
 - \`<app-select>\`: \`label\`, \`.value=\${this.val}\`, \`.options=\${['All', ...]}\` or \`[{ label, value }]\`, \`@change=\${(e) => { this.val = e.detail.value; }}\`.
+- **Field Value Profiling (\`profile_fields\` in \`skills/looker-field-profiler/SKILL.md\`)**: Use \`profile_fields(model=m, view=e, fields=[...])\` in \`run_looker_codemode\` to populate \`<app-select>\` options from \`stats.top_values\`, select \`<app-chart type="...">\` from \`subtype\`/\`approx_count_distinct\` (\`donut\` only when \`<= 6\` categories), and choose default date grains from \`span_days\` / \`subtotals_by_grain\`.
 
 ## 3. Layout & Dark Theme (\`.da-*\`)
 - Layout wrappers use standard HTML elements: \`.da-container\`, \`.da-header\`, \`.da-filter-bar\`, \`.da-tabs\`, \`.da-tab-btn\` (\`.active\`), \`.da-kpi-grid\`, \`.da-grid-1\`, \`.da-grid-2\`, \`.da-grid-3\`, \`.da-grid-2-1\`, \`.da-grid-1-2\`, \`.da-section-card\`.
@@ -967,6 +973,7 @@ print_kda_summary(out)
    - **Timeframe Collision Stripping**: Strips any relative date filter in \`base_filters\` (\`90 days\`, \`12 months\`, \`7 days\`) when \`baseline_filters\` or \`breach_filters\` specifies a timeframe filter.
    - **Macro-First Dimension Ranking**: Excludes leaf SKUs/item names/addresses and ranks macro business dimensions ahead of \`yesno\` flags.
    - **Adaptive \`min_support\`**: Uses \`min_support=0.05\` in Pass 1 and \`min_support=0.02\` in Pass 2 drill-downs so granular dimensions (\`category\`, \`brand\`, \`state\`) aren't blanked out by native KDA's \`0.10\` threshold.
+   - **Pre-KDA Field Profiling (\`profile_fields\` in \`skills/looker-field-profiler/SKILL.md\`)**: When cohort dates or candidate dimensions are unknown, run \`profile_fields\` first to inspect \`stats.spikiness[grain]\` (\`peak_period\`, \`trough_period\`, \`spikiness_ratio\`, \`cv\`) on \`datetime\` fields to select anomaly windows for \`breach_filters\` vs. \`baseline_filters\`, and prune \`profile:uuid_or_hash\`, \`profile:json_payload\`, \`profile:empty_or_null_only\`, and \`profile:constant_value\` dimensions before calling \`run_key_driver_analysis\`.
 
 ---
 
@@ -1508,4 +1515,343 @@ def print_kda_summary(out):
                     for q_idx, q_txt in enumerate(dr.get("follow_up_questions") or []):
                         print(f"  Q{q_idx + 1}|{q_txt}")
 
+`
+
+export const LOOKER_DASHBOARD_SKILL_MD = `---
+name: looker-dashboard
+description: >
+  Unified Looker Dashboarding skill (\`skills/looker-dashboard/SKILL.md\`) collating \`looker-open-source/looker-skills\`
+  (\`creating-looker-dashboard\`, \`looker-architect\`), \`googleapis/genai-toolbox\` Looker MCP (\`make_dashboard\`,
+  \`add_dashboard_filter\`, \`add_dashboard_element\`, \`get_lookml_dashboard_examples\`, \`create_lookml_dashboard\`),
+  \`lkrdev/looker-embed-demo\` (\`lookml-dashboard\`, \`lookml-dashboard-to-query\`), \`gcloud_gtm/looker-demo-cli\`
+  (\`looker-visualizations\`, \`looker-vis-cartesian\`, \`looker-vis-tabular-kpi\`, \`looker-vis-specialty-maps\`,
+  \`looker-vis-advanced-config\`), \`looker-field-profiler\` (\`profile_fields\`), and \`lkrdev/data-app-builder\`
+  Code Mode helpers (\`upsert_udd\`, \`upsert_lookml_dashboard\`, \`reflow_24col\`, \`pin_to_board\`, \`schedule_dashboard\`,
+  \`emit_native_bundle\`).
+---
+
+# Unified Looker Dashboarding Skill (\`looker-dashboard\`)
+
+Use this skill whenever creating, updating, refactoring, or validating Looker User-Defined Dashboards (UDDs), LookML Dashboards (\`.dashboard.lookml\`), Saved Looks, Boards, or Scheduled Plans across Looker Studio Code Mode (\`run_looker_codemode\`), Looker MCP Toolbox, or \`lkr-dev-cli\`.
+
+---
+
+## Step 1 — Field & Distribution Discovery with \`profile_fields\` (\`skills/looker-field-profiler/SKILL.md\`)
+
+Before choosing chart types, pivots, filter controls, or date windows, profile candidate dimensions and measures via \`profile_fields(model=m, view=e, fields=[...])\` in \`run_looker_codemode\` (or \`lkr code-mode sandbox\`) and map its \`suggested_tags\` (\`profile:*\`) and \`stats\` directly to dashboard decisions:
+
+| \`profile_fields\` Tag / Signal | Dashboard Visualization & Filter Action |
+| :--- | :--- |
+| \`profile:low_cardinality_enum\` ($\\le 15$ distinct) | Safe for **\`pivots:\`**, stacked column/area series, \`looker_pie\` donuts (\`limit: 6\`), and \`button_toggles\` / \`dropdown_menu\` filters grounded in exact literals from \`stats.top_values\`. |
+| \`profile:medium_cardinality_categorical\` ($16\\text{–}100$) | Render as horizontal \`looker_bar\` or \`looker_grid\` with \`limit: "20"\`; **never pivot** (causes wide-table column explosion); use \`dropdown_menu\` or \`tag_list\` filter. |
+| \`profile:searchable_entity_label\` ($> 100$) | Use only in top-$N$ ranked \`looker_grid\` / \`looker_bar\` leaderboards (\`sorts: ["measure desc"]\`, \`limit: "25"\`); configure filter with \`ui_config: {type: "advanced", display: "popover"}\`. |
+| \`profile:skewed_distribution\` ($\\frac{\\|\\text{avg}-\\text{median}\\|}{\\|\\text{median}\\|} \\ge 0.5$) | Pair \`type: average\` KPI scorecards with a \`type: median\` (\`percentile\` / \`APPROX_QUANTILES\`) measure so outliers do not distort executive scorecards. |
+| \`profile:nullable\` (\`null_pct > 0\`) | Add element-level \`filters: {"view.dim": "-NULL"}\` on dimensional ranking/breakdown tiles so unmapped \`null\` buckets do not claim the #1 rank. |
+| \`profile:has_zeros\` | Guard custom ratio denominators in LookML or table calculations with \`nullif(\${view.field}, 0)\`. |
+| \`profile:rare_or_skewed_boolean\` ($< 5\\%$) | Use a filtered measure (\`filters: [flag: "Yes"]\`) or anomaly-rate \`single_value\` KPI instead of a 50/50 split chart where the minority slice is invisible. |
+| \`profile:spiky_year\` / \`profile:spiky_month\` / \`profile:spiky_day\` | Inspect \`stats.spikiness[grain]["trough_period"]\` to exclude incomplete trailing periods in dashboard date filters (e.g. \`"12 complete months"\`) and overlay moving-average \`reference_lines\`. |
+
+---
+
+## Step 2 — Execution Workflows (Studio Code Mode, MCP Toolbox, & LookML CLI)
+
+1. **Studio Code Mode (\`run_looker_codemode\`)**:
+   - Execute the entire dashboard workflow in **ONE** \`run_looker_codemode\` call using pre-injected helpers:
+     - \`upsert_udd(title, folder_id, filters=[...], tiles=[...], dashboard_id=None)\`: Creates/updates a UDD, deduplicates \`create_query\`, wires \`create_dashboard_filter\` + \`result_maker.filterables[].listen\`, and positions all tiles on the 24-column grid via \`dashboard_dashboard_layouts\` + \`update_dashboard_layout_component\`.
+     - \`upsert_lookml_dashboard(project_id, model, dashboard_name, title, tiles=[...], filters=[...], yaml_content=None, folder_id=None, sync_udd_id=None)\`: Writes \`dashboards/<slug>.dashboard.lookml\` (\`create_file\` / \`update_file\`), ensures \`include: "/dashboards/*.dashboard.lookml"\` (or \`include: "*.dashboard.lookml"\`) in \`{model}.model.lkml\`, and imports/syncs a linked UDD into \`folder_id\` via \`import_lookml_dashboard\` / \`sync_lookml_dashboard\`.
+     - \`reflow_24col(dashboard_id, boxes)\`: Reflows 24-column \`dashboard_layout_components\` in place.
+     - \`pin_to_board(title, description, section_title, dashboard_id=..., lookml_dashboard_id=..., look_id=...)\`: Pins UDDs, LookML Dashboards, and Saved Looks to a Looker Board.
+     - \`schedule_dashboard(dashboard_id, name, crontab="0 9 * * 1", email="...", fmt="wysiwyg_pdf", filters_string="...")\`: Attaches a Scheduled Plan (\`create_scheduled_plan\`).
+     - \`emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", id=..., title=..., **extra)\`: Returns \`NATIVE_CONTENT_BUNDLE\` directly from \`run_looker_codemode\` (never call \`update_session\` inside \`run_looker_codemode\`).
+2. **Looker MCP Toolbox (\`looker.yaml\` / \`looker-dev.yaml\`)**:
+   - **UDD 3-Step Sequence**: \`make_dashboard\` -> \`add_dashboard_filter\` (\`field_filter\` requires \`model\`, \`explore\`, and \`dimension\`) -> \`add_dashboard_element\` (every element name in \`listens_to_filters\` must already exist on the dashboard).
+   - **LookML Dashboard Sequence**: \`dev_mode(true)\` -> \`get_lookml_dashboard_examples\` -> \`create_lookml_dashboard(project_id, file_path="dashboards/<name>.dashboard.lookml", content=...)\` -> \`validate_project(project_id)\`.
+3. **Local LookML CLI (\`lkr-dev-cli\`)**:
+   - Validate offline and push to Looker dev workspace:
+     \`\`\`bash
+     lkr parse lookml-to-api --path /workspace/lookml --validate
+     lkr --dev tools lookml push /workspace/lookml --project-id <project_id> --file dashboards/<name>.dashboard.lookml --no-reset
+     \`\`\`
+
+---
+
+## Step 3 — 24-Column \`newspaper\` Layout & Native Tabbed Architecture (\`tabs:\` + \`tab_name:\`)
+
+1. **24-Column Grid (\`layout: newspaper\`, \`preferred_viewer: dashboards-next\`, \`col + width <= 24\`)**:
+   - **Row 0 (\`height: 4\`)**: 3 (\`width: 8\` at \`col: 0, 8, 16\`) or 4 (\`width: 6\` at \`col: 0, 6, 12, 18\`) \`single_value\` KPI scorecards.
+   - **Row 4 (\`height: 8\`)**: 2 side-by-side (\`width: 12\` at \`col: 0, 12\`) or \`16 + 8\` primary velocity/trend charts (\`looker_line\`, \`looker_area\`, dual-axis \`looker_column\`).
+   - **Row 12 (\`height: 8\`)**: 2 (\`width: 12\`) or 3 (\`width: 8\`) segment breakdowns (\`looker_bar\`, \`looker_pie\` donut, \`looker_funnel\`, \`looker_google_map\`).
+   - **Row 20 (\`height: 8\`)**: Full-width (\`col: 0, width: 24\`) \`looker_grid\` detail table (\`table_theme: modern\`).
+2. **Native Tabbed Architecture (\`tabs:\` + \`tab_name:\`)**:
+   - Consolidate multi-topic dashboards or dashboards with $> 25$ tiles into 2–4 native \`tabs: [{name, label}]\` at the dashboard root and assign each element \`tab_name: <tab_id>\`.
+   - Each tab has its own independent 24-column coordinate system starting at \`row: 0, col: 0\`.
+   - **Strictly prohibit HTML navigation bars** in \`type: text\` tiles.
+
+---
+
+## Step 4 — Four Canonical Dashboard Archetypes (\`get_lookml_dashboard_examples\`)
+
+1. **Executive Pulse (\`business_pulse\`)**:
+   - Row 0: 4 \`single_value\` KPI scorecards (\`width: 6, height: 4\`) with PoP comparison and sparklines.
+   - Row 4: \`looker_area\` trend (\`width: 16, height: 8\`) + \`looker_pie\` donut share (\`width: 8, height: 8\`).
+   - Row 12: \`looker_column\` cohort breakdown (\`width: 12, height: 8\`) + \`looker_google_map\` (\`width: 12, height: 8\`).
+   - Row 20: Full-width \`looker_grid\` (\`width: 24, height: 8\`) with \`series_cell_visualizations\`.
+2. **Entity / Brand Deep-Dive (\`brand_lookup\`)**:
+   - Parameterized entity filter (\`brand\`, \`account\`, \`merchant\`) with top-line performance scorecards, category affinity bars, regional heatmap, and item-level leaderboard.
+3. **360° Single-Entity Inspector (\`customer_lookup\` with \`looker_single_record\`)**:
+   - Combines a \`looker_single_record\` profile card (\`show_null_labels: false\`, \`width: 8, height: 8\`) with lifetime value KPIs and chronological order/activity \`looker_grid\` history.
+4. **Funnel & Conversion Overview (\`web_analytics_overview\` with \`looker_funnel\`)**:
+   - Pairs a stage-drop-off \`looker_funnel\` (\`percent_type: percent_of_previous\` or \`percent_of_max\`) with session/conversion trend lines and traffic-source attribution tables.
+
+---
+
+## Step 5 — Visualization Selection Matrix & Query Shape Rules (All 22 Types)
+
+- **\`single_value\`**:
+  - **Pattern A (Timeframe Row Comparison + Sparkline)**: 1 date dimension + 1 measure (\`sorts: [date desc]\`, \`limit: 2\`, \`show_comparison: true\`, \`comparison_type: change_percentage\`, \`comparison_row: first\`, \`show_chart_component: true\`).
+  - **Pattern B (Two-Measure PoP Comparison)**: 0 dimensions, 2 measures (\`[current_measure, change_measure]\`, \`show_comparison: true\`, \`comparison_type: change\`, \`comparison_reverse_colors: true\` when lower is better such as error rate, latency, or returns).
+- **\`looker_grid\`**:
+  - Always set \`table_theme: modern\`, \`show_view_names: false\`, \`size_to_fit: true\`, \`enable_conditional_formatting: true\`, and \`series_cell_visualizations\` on primary measures.
+- **Cartesian Dual Y-Axes Rule (\`looker_line\`, \`looker_column\`, \`looker_area\`, \`looker_bar\`, \`looker_scatter\`)**:
+  - When plotting 2 measures with different units (e.g. Revenue \`$\` and Margin \`%\`), set \`y_axis_combined: false\`, \`y_axis_unpinned: true\`, and \`y_axes[].series\` **MUST** be objects \`[{id: "view.m", name: "Label", axisId: "view.m"}]\` — **never** plain strings, which crash the Looker frontend with \`Cannot create property 'id' on string\`.
+  - Valid \`legend_position\` values: \`center\`, \`top\`, \`right\`, \`none\` (**never** \`bottom\` or \`left\`).
+- **Donut (\`looker_pie\`)**:
+  - Strictly 1 dimension, 1 measure, 0 pivots, \`limit: 6\`, \`show_donut: true\`, \`inner_radius: 50\`, \`value_labels: legend\`, \`label_type: labPer\` (never use \`looker_donut_multiples\` for a single unpivoted measure).
+- **Maps (\`looker_google_map\`, \`looker_map\`, \`looker_geo_choropleth\`, \`looker_geo_coordinates\`)**:
+  - Always bound marker sizes (\`map_marker_radius_min: 3\`, \`map_marker_radius_max: 25\`, \`map_plot_mode: automagic_heatmap\` or \`points\`) to prevent outlier bubbles from obscuring the map.
+- **Additional Supported Types**: \`looker_waterfall\`, \`looker_boxplot\`, \`looker_histogram\`, \`looker_funnel\`, \`looker_timeline\`, \`looker_sankey\`, \`treemap\`, \`sunburst\`, \`looker_wordcloud\`, \`looker_bullet\`, \`looker_single_record\`, \`table\`.
+
+---
+
+## Step 6 — Highcharts \`advanced_vis_config\` Guardrails
+
+1. **Allowed vs. Forbidden Visualization Types**:
+   - **Allowed (14 Highcharts types only)**: \`looker_column\`, \`looker_bar\`, \`looker_line\`, \`looker_area\`, \`looker_scatter\`, \`looker_pie\`, \`looker_funnel\`, \`looker_timeline\`, \`looker_waterfall\`, \`looker_boxplot\`, \`looker_wordcloud\`, \`looker_histogram\`, \`looker_bullet\`, \`looker_sankey\`.
+   - **Forbidden**: Never attach \`advanced_vis_config\` to \`single_value\`, \`looker_grid\`, \`table\`, \`looker_single_record\`, \`looker_google_map\`, \`looker_map\`, \`looker_geo_choropleth\`, or \`looker_geo_coordinates\`.
+2. **Strict JSON & Security Rules**:
+   - Always set \`defaults_version: 1\` on the element and pass valid JSON (no trailing commas, no comments).
+   - **No JavaScript functions or \`formatter\` keys**: Looker strips executable JS. Use Highcharts \`format\` template strings (e.g. \`"{point.y:,.0f}"\`) or Looker's declarative \`formatters: [{"select": "max", "style": {"color": "#10B981"}}]\`.
+   - Use rounded bar geometry (\`borderRadius: 8\`) and transparent chart backgrounds (\`"backgroundColor": "rgba(0, 0, 0, 0)"\`) so embedded dashboards inherit Light/Dark host themes cleanly.
+
+---
+
+## Step 7 — Filter Architecture, YAML Safety & Self-Healing Query Verification (\`lookml-dashboard-to-query\`)
+
+1. **YAML Quoting & Identifier Rules**:
+   - Double-quote all user-facing strings (\`title\`, \`name\`, \`tab_name\`, \`label\`, \`subtitle\`) so colons (\`:\`) or \`#\` never break YAML parsing.
+   - Filter and element \`name:\` identifiers must **never** contain periods (\`.\`); use \`snake_case\` underscores (e.g. \`date_range\`, \`order_status\`).
+2. **Filter Wiring & RLS Governance**:
+   - Set root \`crossfilter_enabled: true\`.
+   - Use \`type: field_filter\` with explicit \`model\`, \`explore\`, \`field\`, and \`ui_config\` (\`display: inline\` for primary filters, \`display: popover\` for secondary filters), cascading dependent filters via \`listens_to_filters\`.
+   - Omit UI dashboard filters for fields already enforced by model-level \`access_filter\` (Row-Level Security).
+3. **Self-Healing SQL Query Verification (\`lookml-dashboard-to-query\`)**:
+   - \`validate_project\` checks LookML syntax only. To guarantee zero runtime tile errors, extract every element's query (and deconstruct \`result_maker.query_IDs\` for Merge Results) and verify SQL generation via \`run_inline_query("sql", body)\` (or \`run_query(query_id, "json", limit=5)\`).
+   - If a tile references a missing field, self-heal by adding the dimension or measure to \`bronze/<table>.refinement.lkml\` (never hand-editing \`# AUTOGENERATED\` \`bronze/<table>.view.lkml\`), re-running \`validate_project\`, and syncing via \`sync_lookml_dashboard\`.
+`
+
+export const LOOKER_FIELD_PROFILER_SKILL_MD = `---
+name: looker-field-profiler
+description: >
+  Profile Looker Explore fields (\`string\`, \`number\`, \`yesno\`, \`datetime\`) using \`profile_fields\` in
+  \`lkr code-mode sandbox\` or \`ExtendedLooker40SDK\`. Classifies root types and subtypes, computes
+  \`APPROX_COUNT_DISTINCT\` and \`APPROX_QUANTILES\` totals (\`limit=5000\`, \`total=True\`), expands date/time
+  fields into multi-grain subtotals (\`year\`/\`month\`/\`day\` or \`date\`/\`hour\`) to measure temporal
+  spikiness, walks measure dependencies to profile underlying leaf dimensions, and emits \`profile:*\`
+  \`suggested_tags\`, an explicit \`decisions\` trace, and ready-to-paste LookML refinement snippets.
+  Use when profiling Explore data, auditing field distributions, diagnosing spiky time series,
+  selecting chart types or filter grains, or curating LookML descriptions, \`tags:\`, \`hidden:\`, and \`suggestable:\`.
+---
+
+# Looker Field Value Profiler (\`looker-field-profiler\`)
+
+\`profile_fields\` is a built-in Extended Looker SDK and Monty Code Mode sandbox function that profiles dimensions and measures on any Looker Explore (\`model\` + \`view\`) while respecting Looker's \`5000\` row limit (\`limit="5000"\`, \`total=True\`).
+
+---
+
+## 1. Invoking \`profile_fields\`
+
+Inside \`lkr code-mode sandbox\`, \`profile_fields\` is pre-bound as a global function (no imports or \`sdk.\` prefix required):
+
+\`\`\`bash
+# Fast metadata-only type bucketing (zero SQL queries):
+uv run lkr code-mode sandbox --code='
+return profile_fields(
+    model="agentic_thelook",
+    view="order_items",
+    fields=["order_items.status", "order_items.sale_price", "order_items.is_delivered", "order_items.created_date"],
+    types_only=True,
+)
+'
+
+# Full value profiling (per-field queries, default group_fields=False):
+uv run lkr code-mode sandbox --code='
+return profile_fields(
+    model="agentic_thelook",
+    view="order_items",
+    fields=[
+        "order_items.status",
+        "products.brand",
+        "users.email",
+        "order_items.days_to_deliver",
+        "order_items.is_delivered",
+        "order_items.created_date",
+        "order_items.created_time",
+        "order_items.total_sale_price",
+    ],
+    filters={"order_items.created_date": "7 years"},
+)
+'
+
+# Multi-dimensional grouped profiling (1 combined query for all non-datetime fields):
+uv run lkr code-mode sandbox --code='
+return profile_fields(
+    body={
+        "model": "agentic_thelook",
+        "view": "order_items",
+        "fields": ["order_items.status", "order_items.is_delivered", "order_items.total_sale_price"],
+        "group_fields": True,
+        "limit": 5000,
+    }
+)
+'
+\`\`\`
+
+### Signature & Parameters
+
+\`\`\`python
+profile_fields(
+    body: dict[str, object] | WriteQuery | None = None,
+    model: str | None = None,
+    view: str | None = None,          # Explore name (matches WriteQuery.view)
+    fields: list[str] | None = None,  # Defaults to visible dimensions on base_view when omitted
+    filters: dict[str, str] | None = None,
+    types_only: bool = False,         # Metadata-only classification (0 SQL queries)
+    group_fields: bool = False,       # Group non-datetime fields into 1 query and return grouped_rows
+    limit: int | str = 5000,          # Capped at 5000 to match Looker's standard inline query limit
+) -> dict[str, object]
+\`\`\`
+
+- **Measures in \`fields\`**: When a measure (such as \`order_items.total_sale_price\`) is included in \`fields\`, \`profile_fields\` evaluates its scalar aggregate in \`"measures"\` **and** recursively walks its \`\${...}\` / \`\${TABLE}.col\` dependencies to profile its underlying leaf dimensions (\`order_items.sale_price\`).
+- **\`dimension_group\` names in \`fields\`**: Passing a bare \`dimension_group\` name (such as \`order_items.created\`) automatically resolves to its \`_date\` or \`_time\` timeframe.
+
+---
+
+## 2. Output Structure
+
+\`profile_fields\` returns a dictionary with:
+
+- **\`type_buckets\`**: \`{"string": [...], "number": [...], "yesno": [...], "datetime": [...]}\`
+- **\`profiles\`**: Per-dimension profile objects keyed by qualified field name (\`view.field\`):
+  - \`root_type\`: \`"string"\` | \`"number"\` | \`"yesno"\` | \`"datetime"\`
+  - \`subtype\`: Specific data distribution subtype (see Section 3)
+  - \`total_rows\`, \`approx_count_distinct\` (via BigQuery/warehouse \`APPROX_COUNT_DISTINCT\`), \`null_count\`, \`null_pct\`
+  - \`stats\`: Type-specific distribution statistics, \`top_values\` (\`value\`, \`count\`, \`pct\`), and for \`datetime\` fields: \`min_date\`, \`max_date\`, \`span_days\`, \`expanded_fields\`, \`spikiness\`, and \`subtotals_by_grain\`
+  - \`suggested_tags\`: List of \`profile:*\` semantic tags (such as \`["profile:nullable", "profile:searchable_entity_label"]\`)
+  - \`decisions\`: Step-by-step audit strings explaining every threshold or rule that selected \`root_type\`, \`subtype\`, \`suggested_tags\`, \`recommended_hidden\`, and \`recommended_suggestable\`
+  - \`curation\`: LookML refinement recommendations (\`recommended_hidden\`, \`recommended_suggestable\`, \`recommended_description\`, \`suggested_tags\`, and a ready-to-paste \`lookml_snippet\`)
+- **\`measures\`**: Scalar values and \`leaf_dimensions\` for any measures passed in \`fields\`
+- **\`grouped_rows\`**: Top 50 joint combinations when \`group_fields=True\`
+
+---
+
+## 3. Root Types, Subtypes, and Decision Rules
+
+### Cross-Type Rules (Evaluated on Every Field)
+| \`suggested_tags\` value | Trigger condition |
+| :--- | :--- |
+| \`profile:foreign_key\` | \`primary_key\` is \`False\` and short field name ends with \`_id\` or \`_fk\` |
+| \`profile:nullable\` | \`null_count > 0\` (from \`totals_data\` filtered measure \`is_null(\${field})\`) |
+| \`profile:unique_key_candidate\` | \`total_rows > 0\`, \`approx_count_distinct == total_rows\`, and \`null_count == 0\` |
+
+### A. \`string\` Subtypes & Tags (First Match Wins)
+| Priority | \`subtype\` | \`suggested_tags\` added | Detection rule / threshold | \`hidden\` | \`suggestable\` |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 1 | \`tier\` / \`location\` | \`profile:tier\` or \`profile:location\` | LookML \`type\` is \`tier\` or \`location\` | \`no\` | \`yes\` (\`tier\`), \`no\` (\`location\`) |
+| 2 | \`json\` | \`profile:json_payload\` | \`JSON_\` in \`sql\`, name has \`json\`/\`payload\`/\`raw_event\`, or $\\ge 50\\%$ of top values start/end with \`{...}\` or \`[...]\` | \`yes\` | \`no\` |
+| 3 | \`id_or_code\` | \`profile:uuid_or_hash\` | Name has \`uuid\`/\`guid\`/\`hash\`/\`md5\`/\`sha256\`, or $\\ge 80\\%$ of top values match 36-char UUID or 32–64 char hex | \`yes\` | \`no\` |
+| 4 | \`id_or_code\` | \`profile:foreign_key\` (if \`*_id\`/\`*_fk\`) | \`primary_key=True\`, system prefix (\`_fivetran_\`, \`_airbyte_\`, \`_sdc_\`, \`etl_\`), helper dim, or \`id\`/\`*_id\` with \`approx_count_distinct > 100\` | \`yes\` | \`no\` |
+| 5 | \`empty_or_null\` | \`profile:empty_or_null_only\` | \`approx_count_distinct == 0\` and \`total_rows > 0\` | \`yes\` | \`no\` |
+| 6 | \`free_text\` | \`profile:opaque_code_or_free_text\` | \`max_length > 120\`, \`avg_length > 60\`, or name ends with \`comment(s)\`/\`note(s)\`/\`description\`/\`message\`/\`body\`/\`transcript\` | \`no\` | \`no\` |
+| 7 | \`id_or_code\` | \`profile:opaque_code_or_free_text\` | \`lookml_type == "zipcode"\` or name ends with \`sku\`/\`code\`/\`zip\`/\`postal\`/\`phone\`/\`email\`/\`url\`/\`uri\`/\`ip\`/\`token\`/\`tracking_number\` | \`no\` | \`no\` |
+| 8 | \`enum\` | \`profile:low_cardinality_enum\` | $1 \\le \\text{approx\\_count\\_distinct} \\le 15$ | \`no\` | \`yes\` |
+| 9 | \`categorical\` | \`profile:medium_cardinality_categorical\` | $16 \\le \\text{approx\\_count\\_distinct} \\le 100$ | \`no\` | \`yes\` |
+| 10 | \`entity_label\` | \`profile:searchable_entity_label\` | $\\text{approx\\_count\\_distinct} > 100$ | \`no\` | \`yes\` |
+
+- **Additional PII tags on strings**:
+  - \`profile:pii\` + \`profile:email\`: \`"email"\` in field name or $\\ge 50\\%$ of sample values match \`*@*.*\`
+  - \`profile:pii\` + \`profile:phone\`: \`"phone"\`, \`"mobile"\`, or \`"telephone"\` in field name
+  - \`profile:pii\`: \`"ssn"\`, \`"tax_id"\`, \`"passport"\`, \`"first_name"\`, \`"last_name"\`, \`"full_name"\`, \`"street_address"\`, or \`"ip_address"\` in field name
+
+### B. \`number\` Subtypes & Tags
+| Priority | \`subtype\` | \`suggested_tags\` added | Detection rule / threshold |
+| :--- | :--- | :--- | :--- |
+| 1 | \`empty_or_null\` | \`profile:empty_or_null_only\` | \`approx_count_distinct == 0\` and \`total_rows > 0\` (\`hidden: yes\`) |
+| 2 | \`id_or_key\` | \`profile:foreign_key\` (if \`*_id\`/\`*_fk\`) | \`primary_key=True\`, system column, or ends with \`id\`/\`_id\`/\`_pk\`/\`_fk\`/\`_sk\` (\`hidden: yes\`) |
+| 3 | \`constant\` | \`profile:constant_value\` | \`approx_count_distinct == 1\` |
+| 4 | \`duration\` | \`profile:duration\` | \`lookml_type\` starts with \`duration\` or name has \`days_\`/\`hours_\`/\`minutes_\`/\`_duration\`/\`shelf_age\` |
+| 5 | \`percentage_or_ratio\` | \`profile:percentage_or_ratio\` | \`%\` in \`value_format\`, rate/pct/ratio/share token in name, or non-integer values in $[0.0, 1.0]$ |
+| 6 | \`currency_or_decimal\` | \`profile:currency_or_decimal\` | \`$\`/\`usd\` in \`value_format\` or monetary token (\`price\`, \`cost\`, \`revenue\`, \`amount\`, \`margin\`, \`profit\`, \`spend\`, \`fee\`) |
+| 7 | \`discrete_integer\` | \`profile:discrete_integer\` | All sampled numeric values are whole integers |
+| 8 | \`continuous_number\` | \`profile:continuous_number\` | Non-integer continuous values |
+
+- **Additional distribution tags on numbers**:
+  - \`profile:has_zeros\`: \`zero_count > 0\` (\`\${field} = 0\`)
+  - \`profile:has_negatives\`: \`negative_count > 0\` (\`\${field} < 0\`)
+  - \`profile:skewed_distribution\`: $\\frac{|\\text{average} - \\text{median}|}{|\\text{median}|} \\ge 0.5$ (where \`median\` uses warehouse \`APPROX_QUANTILES\`)
+
+### C. \`yesno\` Subtypes & Tags
+| \`subtype\` | \`suggested_tags\` added | Detection rule / threshold |
+| :--- | :--- | :--- |
+| \`empty_or_null\` | \`profile:empty_or_null_only\` | \`true_count == 0\` and \`false_count == 0\` (\`hidden: yes\`) |
+| \`constant_boolean\` | \`profile:constant_boolean\`, \`profile:constant_value\` | Only \`Yes\` or only \`No\` rows exist |
+| \`rare_or_skewed_boolean\` | \`profile:rare_or_skewed_boolean\` | Minority class $\\min(\\text{true\\_pct}, \\text{false\\_pct}) < 5.0\\%$ |
+| \`balanced_boolean\` | \`profile:balanced_boolean\` | Minority class $\\min(\\text{true\\_pct}, \\text{false\\_pct}) \\ge 5.0\\%$ |
+
+### D. \`datetime\` Subtypes, Grain Expansion & Spikiness Tags
+- **Subtypes**:
+  - \`timestamp_or_raw\` (\`profile:timestamp_or_raw\`): \`date_time\`, \`date_raw\`, \`date_hour\`, \`date_minute\`, \`date_second\`. Automatically expands to \`[date, hour]\` with \`subtotals=[date]\`.
+  - \`calendar_date\` (\`profile:calendar_date\`): \`date_date\`. Automatically expands to \`[year, month, date]\` with \`subtotals=[year, month]\`.
+  - \`period_grain\` (\`profile:period_grain\`): \`date_year\`, \`date_quarter\`, \`date_month\`, \`date_week\`, \`date_fiscal_year\`, \`date_fiscal_quarter\`. Automatically expands to \`[year, month, date]\` with \`subtotals=[year, month]\`.
+  - \`calendar_cycle\` (\`profile:calendar_cycle\`): recurring cycle timeframes such as \`date_day_of_week\`, \`date_hour_of_day\`, \`date_month_name\`.
+- **Spikiness metrics (\`stats.spikiness[grain]\`)**:
+  - Computes \`period_count\`, \`min_count\`, \`max_count\`, \`mean_count\` ($\\mu$), \`stddev_count\` ($\\sigma$), \`spikiness_ratio\` ($\\frac{\\max}{\\mu}$), \`cv\` ($\\frac{\\sigma}{\\mu}$), \`peak_period\`, and \`trough_period\` across \`year\`, \`month\`, \`day\`, or \`hour\`.
+  - Emits **\`profile:spiky_<grain>\`** (\`profile:spiky_year\`, \`profile:spiky_month\`, \`profile:spiky_day\`, \`profile:spiky_hour\`) when \`spikiness_ratio >= 2.0\` or \`cv >= 0.5\`.
+  - Emits **\`profile:steady_volume\`** when \`0 < cv < 0.25\`.
+
+---
+
+## 4. What to Do with the Profile Information (Action Playbook)
+
+### A. LookML Curation & Refinements (\`bronze/:table.refinement.lkml\`)
+1. **Apply \`curation.lookml_snippet\` directly in refinement files**:
+   - Never hand-edit autogenerated \`bronze/:table.view.lkml\` files; paste or merge \`curation["lookml_snippet"]\` into \`bronze/:table.refinement.lkml\` (\`view: +:table { ... }\`).
+   - See [lookml-field-curation](../lookml-field-curation/SKILL.md) for Medallion refinement rules.
+2. **Prune noisy fields (\`recommended_hidden: True\`)**:
+   - Hide \`profile:json_payload\`, \`profile:uuid_or_hash\`, \`profile:empty_or_null_only\`, and surrogate \`id_or_code\` / \`id_or_key\` dimensions so they do not clutter the Explore picker or Conversational Analytics context window.
+3. **Protect warehouse compute (\`recommended_suggestable: False\`)**:
+   - Set \`suggestable: no\` on fields tagged \`profile:opaque_code_or_free_text\` (\`users.email\`, \`sku\`, \`ip_address\`, \`free_text\` notes) to prevent expensive \`SELECT DISTINCT <col> ... LIMIT 1000\` filter autocomplete scans while keeping the field visible for exact filtering and table reporting.
+   - Keep \`suggestable: yes\` on \`profile:low_cardinality_enum\`, \`profile:medium_cardinality_categorical\`, and \`profile:searchable_entity_label\` (\`products.brand\`, \`users.city\`).
+
+### B. Query Authoring, Visualization & Dashboard Design
+| Tag / Subtype | Action to Take in Queries & Dashboards |
+| :--- | :--- |
+| \`profile:low_cardinality_enum\` ($\\le 15$) | Safe for **\`pivots:\`**, stacked bar/column series, donut charts, and dashboard dropdown filters. Use exact values from \`stats.top_values\` when writing Looker filter expressions. |
+| \`profile:medium_cardinality_categorical\` ($16\\text{–}100$) | Safe for **\`GROUP BY\`** in bar charts and grids with \`limit: "20"\` or \`limit: "50"\`. Do **not** pivot on this dimension (causes wide-table column explosion). |
+| \`profile:searchable_entity_label\` ($> 100$) | Use only in top-$N$ ranked leaderboards (\`sorts: ["measure desc"]\`, \`limit: "25"\`) or filter via substring/exact match. Never pivot or render in unfiltered pie/bar charts. |
+| \`profile:skewed_distribution\` | Mean (\`average\`) diverges from \`median\` by $\\ge 50\\%$ due to outliers or power-law tails. Always pair \`type: average\` measures with a \`type: median\` (\`APPROX_QUANTILES\`) measure or custom measure in executive scorecards. |
+| \`profile:has_zeros\` | Guard any custom division or ratio expression where this field is in the denominator using \`nullif(\${field}, 0)\`. |
+| \`profile:has_negatives\` | Inspect whether negative values represent refunds, credits, reversals, or clock-skew bugs (\`duration < 0\`). Add filtered measures (e.g. \`filters: [amount: ">0"]\`) when gross vs net semantics differ. |
+| \`profile:nullable\` (\`null_pct\` high) | When \`null_pct\` is significant (e.g. \`order_items.days_to_deliver\` at \`64.83%\` null for unshipped/in-transit orders), document the null semantics in \`description:\` and filter cohorts (\`NOT NULL\`) when charting completion metrics. |
+| \`profile:rare_or_skewed_boolean\` ($< 5\\%$) | Avoid side-by-side 50/50 split charts where the minority slice is barely visible; create a filtered measure (\`filters: [flag: "Yes"]\`) or percentage-of-total anomaly rate KPI instead. |
+| \`profile:spiky_year\` / \`profile:spiky_month\` / \`profile:spiky_day\` / \`profile:spiky_hour\` | Inspect \`stats.spikiness[grain]["peak_period"]\` and \`"trough_period"\`:<br>1. Check if \`trough_period\` is an incomplete trailing month/day and exclude partial periods in dashboard filters (e.g. \`complete months\`).<br>2. Avoid static alert thresholds on spiky grains; use rolling averages or YoY/DoW baselines.<br>3. Run \`decompile_kda_target\` + \`run_key_driver_analysis\` comparing \`peak_period\` (\`breach_filters\`) against normal periods (\`baseline_filters\`) to explain what drove the spike. |
+| \`profile:steady_volume\` ($\\text{cv} < 0.25$) | Ideal baseline grain for anomaly detection and fixed-threshold SLA monitoring. |
+
+### C. Security, Governance & LookML Data Tests (\`.test.lkml\`)
+- **\`profile:pii\`, \`profile:email\`, \`profile:phone\`**:
+  - Apply \`required_access_grants:\` or BigQuery policy-tag / Dynamic Data Masking security refinements (\`lkr tools lookml create --bq-security\`).
+  - Run \`lkr parse lookml snapshot\` so PII-tagged fields are tracked in \`access.snap.json.md\` for \`CODEOWNERS\` review.
+- **\`profile:unique_key_candidate\`**:
+  - Candidate for \`primary_key: yes\` on the view and a \`.test.lkml\` uniqueness assertion (\`assert: id_is_unique { expression: count(\${view.field}) = count_distinct(\${view.field}) ;; }\`).
+- **\`profile:empty_or_null_only\` & \`profile:constant_value\`**:
+  - Flag potential upstream ETL breakage or unpopulated columns before building downstream Silver/Gold models on top of them.
 `

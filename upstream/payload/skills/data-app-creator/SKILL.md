@@ -38,7 +38,7 @@ to die. Keep it short and cheap:
 - **Never sample or probe an explore unscoped.** Always pass `--fields` with
   the handful you actually need. An unscoped `--sample` on a wide explore
   compiles a monster query and can block for *five minutes* on its own.
-- **Batch your probes.** Fire discovery queries in parallel, not one at a time.
+- **Batch your probes.** Fire discovery queries in parallel, not one at a time. When `profile_fields` (`skills/looker-field-profiler/SKILL.md`) is available in Code Mode, use `stats.top_values` to populate `<app-select>` options, `subtype`/`approx_count_distinct` to choose `<app-chart type="...">` (`donut` only when `<= 6` categories), and `span_days` / `subtotals_by_grain` to select default date grains.
 - **Find the fields your first screen needs, then stop.** You do not need a
   complete map of the model to render something useful.
 - **If a field fights you** — broken join, an array that won't combine — drop
