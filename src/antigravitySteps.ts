@@ -10,15 +10,38 @@ import {
 import { type DataAppBundle, type NativeContentBundle, resolveNativeEmbedPath } from './lookerApi'
 import { BOOTSTRAP_LOOKML_PY, LKR_CLI_SITECUSTOMIZE_PY } from './lookmlTool'
 
+function extractNonThoughtText(val: unknown): string {
+  if (typeof val === 'string') return val.trim()
+  if (Array.isArray(val)) return val.map(extractNonThoughtText).filter(Boolean).join('\n')
+  if (val && typeof val === 'object') {
+    const obj = val as Record<string, unknown>
+    if (obj.type === 'thought' || obj.type === 'thinking' || obj.thought) return ''
+    for (const key of ['text', 'content', 'parts']) {
+      const extracted = extractNonThoughtText(obj[key])
+      if (extracted) return extracted
+    }
+  }
+  return ''
+}
+
 export function collectInteractionTextCandidates(interaction: AntigravityInteractionPayload | null | undefined): string {
   const out: unknown[] = [interaction?.output_text]
   for (const o of interaction?.outputs || []) {
     out.push(o?.text)
     if (o && o.type !== 'thought' && o.type !== 'thinking' && !o.thought) {
-      out.push(extractThoughtText(o.content ?? o.parts))
+      out.push(extractNonThoughtText(o.content ?? o.parts))
     }
   }
-  for (const s of interaction?.steps || []) out.push(s?.output, s?.stdout, s?.result, s?.text, s?.code_execution_result?.output)
+  for (const s of interaction?.steps || []) {
+    out.push(
+      s?.output,
+      s?.stdout,
+      s?.result,
+      s?.text,
+      s?.code_execution_result?.output,
+      extractNonThoughtText((s as Record<string, unknown>)?.content ?? (s as Record<string, unknown>)?.parts)
+    )
+  }
   return out.filter((x): x is string => typeof x === 'string' && x.length > 0).join('\n')
 }
 
@@ -26,13 +49,13 @@ export function extractInteractionOutputText(interaction: AntigravityInteraction
   if (typeof interaction?.output_text === 'string' && interaction.output_text.trim()) return interaction.output_text.trim()
   const nonThoughtText = (item?: AntigravityInteractionOutput | AntigravityInteractionStep | null) =>
     item && typeof item === 'object' && item.type !== 'thought' && item.type !== 'thinking' && !item.thought
-      ? (typeof item.text === 'string' && item.text.trim()) || extractThoughtText((item as Record<string, unknown>).content ?? (item as Record<string, unknown>).parts)
+      ? (typeof item.text === 'string' && item.text.trim()) || extractNonThoughtText((item as Record<string, unknown>).content ?? (item as Record<string, unknown>).parts)
       : ''
   const outputLines = (interaction?.outputs || []).map(nonThoughtText).filter(Boolean)
   if (outputLines.length > 0) return outputLines.join('\n').trim()
 
   const stepLines = (interaction?.steps || [])
-    .filter((s) => /^(?:message|text|assistant)$/.test(String(s?.type || '').trim()) || (!s?.type && typeof s?.text === 'string'))
+    .filter((s) => /^(?:message|text|assistant|model_output)$/.test(String(s?.type || '').trim()) || (!s?.type && typeof s?.text === 'string'))
     .map(nonThoughtText)
     .filter(Boolean)
   if (stepLines.length > 0) return stepLines.join('\n').trim()

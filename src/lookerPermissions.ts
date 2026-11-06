@@ -334,7 +334,7 @@ export function isLookerInstanceMetadataQuery(text?: string): boolean {
 
 const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
   ['health-check', /\b(3-pillar|three-pillar|health\s*check|transcriber\s*rubric|technical_design_document)\b/i],
-  ['lookml', /\b(lookml|\.lkml|dimension\s*:|measure\s*:|explore\s*:|refinement|data\s*test|model\.lkml|view\.lkml)\b/i],
+  ['lookml', /\b(lookml|\.lkml|dimension\s*:|measure\s*:|explore\s*:|refinement|data\s*test|model\.lkml|view\.lkml|(?:create|onboard|build|set\s*up|start)\s+(?:a\s+)?(?:new\s+)?(?:looker\s+)?project\b|new_project_)\b/i],
   ['tile', new RegExp(`${EXPLICIT_SCRIPT_CREATION_RE.source}|${LOOKER_INSTANCE_API_QUERY_RE.source}`, 'i')],
   ['dashboard', /\b(udd|user[- ]defined\s*dashboard|native\s*dashboard|saved\s*look|lookml\s*dashboard|pin\s*to\s*board|schedule\s*dashboard|content\s*studio)\b/i],
   [
