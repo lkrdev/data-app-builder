@@ -354,7 +354,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : [
           `You are building a Looker ${isDataInvestigatorTurn ? 'Data Investigator Narrative Data App' : 'Data App'} (Lit web component using Looker's data-app.js runtime) ${exploreDirective}`,
           `Follow these exact steps inside your Linux sandbox:`,
-          `1. /workspace/skills/data-apps/SKILL.md${isDataInvestigatorTurn ? ' and /workspace/skills/data-investigator/SKILL.md are' : ' is'} pre-loaded with component contracts (<app-kpi>, <app-chart>, <app-grid>, <app-select>), .da-* layout classes, dark mode (this.isDark), and static widget extraction rules. Do NOT download toolkits or read external skill directories.`,
+          `1. /workspace/skills/data-apps/SKILL.md${isDataInvestigatorTurn ? ' and /workspace/skills/data-investigator/SKILL.md are' : ' is'} pre-loaded below with component contracts (<app-kpi>, <app-chart>, <app-grid>, <app-select>), .da-* layout classes, dark mode (this.isDark), and static widget extraction rules. Do NOT call view_file on /workspace/skills/data-apps/SKILL.md, download toolkits, or read external skill directories.`,
+          DATA_APP_GUIDE_MD,
           ...(isDataInvestigatorTurn ? [DATA_INVESTIGATOR_GUIDE_MD] : []),
           step2Directive,
           step3Directive,
@@ -475,6 +476,14 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   await persistUserEnvIfChanged({ sdk, extensionSDK, userId, previousEnvId: initialEnvId, nextEnvId: trackedEnvId, onEnvironmentUpdated })
 
   let pollIdx = 0, prevStepCount = (interaction.steps || []).length, prevStatus = interaction.status, bridgeRound = 0
+  let accInputTokens = 0, accOutputTokens = 0, accThoughtTokens = 0
+  const accumulateInteractionUsage = (snap: AntigravityInteractionPayload | null | undefined) => {
+    const u = snap?.usage || snap?.usage_metadata
+    if (!u) return
+    accInputTokens += Number(u.input_tokens ?? u.total_input_tokens ?? u.prompt_token_count ?? 0)
+    accOutputTokens += Number(u.output_tokens ?? u.total_output_tokens ?? u.candidates_token_count ?? 0)
+    accThoughtTokens += Number(u.thought_tokens ?? u.total_thought_tokens ?? u.thoughts_token_count ?? 0)
+  }
   const resolvedBridgeCacheKeys = new Set<string>()
   const accumulatedSteps: AntigravityInteractionStep[] = []
 
@@ -643,6 +652,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
             )
             codemodeExecMs += Date.now() - cmStart
             await throwIfAborted(interaction.id)
+            accumulateInteractionUsage(interaction)
             accumulatedSteps.push(...(interaction.steps || []), ...resultsInput)
 
             interaction = await callInteractionsApi(
@@ -799,6 +809,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
         if (!hasFinalBundle) {
           bridgeRound += 1
+          accumulateInteractionUsage(interaction)
           accumulatedSteps.push(...(interaction.steps || []))
           const seedText = [
             '[LKR_EXTENSION_BRIDGE_RESULT] Executed online lkr-dev-cli request(s) in the host Looker Extension.',
@@ -844,9 +855,16 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   }
 
   if (accumulatedSteps.length > 0) {
+    accumulateInteractionUsage(interaction)
     interaction = {
       ...interaction,
       steps: [...accumulatedSteps, ...(interaction.steps || [])],
+      usage: {
+        ...(interaction.usage || {}),
+        input_tokens: accInputTokens,
+        output_tokens: accOutputTokens,
+        thought_tokens: accThoughtTokens,
+      },
     }
   }
 

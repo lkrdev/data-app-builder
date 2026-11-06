@@ -605,7 +605,7 @@ export function extractInteractionTelemetry(
   stats: { agentWallMs: number; pollWaitMs: number; pollCount: number; codemodeExecMs: number; lookerHttpMs: number; codemodeCalls: number; lookerHttpCalls: number; apiRetries: number }
 ): AntigravityTurnTelemetry {
   const steps: AntigravityInteractionStep[] = interaction?.steps || []
-  const bashCalls = steps.filter((s) => s?.type === 'code_execution' || s?.type === 'executable_code' || (s?.type === 'function_call' && s?.name !== 'run_looker_codemode')).length
+  const bashCalls = steps.filter((s) => s?.type === 'code_execution' || s?.type === 'code_execution_call' || s?.type === 'executable_code' || (s?.type === 'function_call' && s?.name !== 'run_looker_codemode')).length
   const verifyRetries = steps.filter((s) => /"stage":\s*"(?:syntax|safety|widget_extraction)"/.test(String(s?.output || s?.stderr || s?.result || ''))).length
   const usage = interaction?.usage || interaction?.usage_metadata || {}
   return {
@@ -616,9 +616,9 @@ export function extractInteractionTelemetry(
     looker_http_ms: stats.lookerHttpMs,
     tool_calls: { bash: bashCalls || Number(interaction?.bash_calls || 0), codemode: stats.codemodeCalls, looker_http: stats.lookerHttpCalls },
     tokens: {
-      input: Number(usage.input_tokens ?? usage.prompt_token_count ?? 0),
-      output: Number(usage.output_tokens ?? usage.candidates_token_count ?? 0),
-      thought: Number(usage.thought_tokens ?? usage.thoughts_token_count ?? 0),
+      input: Number(usage.input_tokens ?? usage.total_input_tokens ?? usage.prompt_token_count ?? 0),
+      output: Number(usage.output_tokens ?? usage.total_output_tokens ?? usage.candidates_token_count ?? 0),
+      thought: Number(usage.thought_tokens ?? usage.total_thought_tokens ?? usage.thoughts_token_count ?? 0),
     },
     verify_retries: verifyRetries,
     api_retries: stats.apiRetries + verifyRetries,

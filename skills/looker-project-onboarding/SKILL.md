@@ -15,7 +15,7 @@ Use this skill when a user asks to onboard or create a new Looker project, scaff
    - **Target tables or schemas** (or SQL queries from `[Open SQL Runner](/sql)` `/sql`).
    Do **not** call `run_looker_codemode` or `code_execution` on Turn 1 when these inputs are not yet provided.
 2. **Turn 2 Schema Discovery (`connection_schemas`)**:
-   When the user provides a connection name (e.g. `default_bigquery_connection`) and project name and asks what schemas it has access to, emit `<USE_CASE>lookml</USE_CASE>`, run **one** `run_looker_codemode` call (`sdk.connection_schemas(connection_name)` with fallback to `sdk.all_connections(fields="name,dialect_name,database,schema,snippets")` and `sdk.connection_tables(connection_name, schema_name=..., table_limit=5)`), list out the accessible schemas clearly (e.g. `argolis_scratch`, `cymbal_lakehouse`, `streaming_analytics`, `thelook`), and ask which schema/dataset to use.
+   When the user provides a connection name (e.g. `default_bigquery_connection`) and project name and asks what schemas it has access to, emit `<USE_CASE>lookml</USE_CASE>`, run **one** `run_looker_codemode` call (`sdk.connection_schemas(connection_name)` with fallback to `sdk.all_connections(fields="name,dialect_name,database,schema,snippets")` and `sdk.connection_tables(connection_name, schema_name=..., table_limit=5)`), list out the accessible schemas clearly (e.g. `argolis_scratch`, `cymbal_lakehouse`, `streaming_analytics`, `thelook`), and ask which schema/dataset to use. Do **not** call `code_execution`, `bootstrap_lookml.py`, or `view_file` on Turn 2.
 
 ## Step 2: Require `project_name` (`snake_case`) & Discover Schemas, Tables, or User SQL Queries
 1. `project_name` is required before creating any project or model. Normalize any user-supplied project name to strict lowercase `snake_case`:
@@ -50,7 +50,7 @@ Use this skill when a user asks to onboard or create a new Looker project, scaff
      - `measure: completed_order_count { type: count filters: [status: "Complete"] label: "Completed Order Count" }`
    - **Layer 4 — Portable ANSI Derived Ratios (`type: number`)**: Compose ratios from LookML measures via `1.0 * ${numerator_measure} / NULLIF(${denominator_measure}, 0)` (e.g. `return_rate`, `cancel_rate`, `average_order_value`).
    - **Layer 5 — Silver Explores with Joins (`silver/explores/order_items.explore.lkml`)**: Deconstruct workload SQL (`grain_change_reagg`, `window_pre_groupby`, `union`, `non_equi_join`, `filter_dependent_cte`) and create `/workspace/lookml/silver/explores/order_items.explore.lkml` (`extends: [order_items_base]`, `hidden: no`, `view_name: order_items`) joining `users` (`${order_items.user_id} = ${users.id}`, `many_to_one`), `products` (`${order_items.product_id} = ${products.id}`, `many_to_one`), and `distribution_centers` (`${products.distribution_center_id} = ${distribution_centers.id}`, `many_to_one`). Update `/workspace/lookml/<project_name>.model.lkml` to include `"/bronze/*.refinement.lkml"` and `"/silver/explores/*.explore.lkml"`.
-3. Push and bundle via CLI:
+3. In the **same** `code_execution` call that writes the refinement and Silver explore files, push all files to Looker using `lkr --dev tools lookml push` and emit `<LOOKML_BUNDLE>` (so Turn 4 uses only **1** `code_execution` call + **1** `run_looker_codemode` call):
    ```bash
    lkr --dev tools lookml push /workspace/lookml --project-id <project_name> --no-reset
    python3 /workspace/bootstrap_lookml.py bundle /workspace/lookml_result.json
