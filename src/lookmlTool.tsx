@@ -118,7 +118,16 @@ export function extractLookmlBundleFromInteraction(
     ]),
   ].filter((x): x is string => typeof x === 'string')
   const matches = Array.from(texts.join('\n').matchAll(/<LOOKML_BUNDLE>([\s\S]*?)<\/LOOKML_BUNDLE>/g))
-  return matches.length ? (JSON.parse(matches[matches.length - 1][1].trim()) as LookmlBundle) : null
+  if (!matches.length) return null
+  const bundle = JSON.parse(matches[matches.length - 1][1].trim()) as LookmlBundle
+  // ponytail: synthesize unified diff for newly created files on client so sandbox stdout omits duplicate content
+  for (const f of bundle.files || []) {
+    if (!f.diff && f.content) {
+      const lines = f.content.replace(/\r?\n$/, '').split('\n')
+      f.diff = `--- a/${f.path}\n+++ b/${f.path}\n@@ -0,0 +1,${lines.length} @@\n${lines.map((l) => `+${l}`).join('\n')}\n`
+    }
+  }
+  return bundle
 }
 
 export function buildLookmlSystemGuide(params: {

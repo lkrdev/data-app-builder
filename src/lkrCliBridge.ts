@@ -909,7 +909,7 @@ def collect_dir_diffs(lookml_dir: Path, baseline_dir: Path) -> list[dict]:
         if old_t == new_t and (rel in cur) == (rel in base):
             continue
         action = "created" if rel not in base else ("deleted" if rel not in cur else "updated")
-        changes.append({"path": rel, "action": action, "content": new_t, "diff": compute_diff(old_t, new_t, rel)})
+        changes.append({"path": rel, "action": action, "content": new_t, **({"diff": compute_diff(old_t, new_t, rel)} if old_t else {})})
     return changes
 
 def normalize_queries(raw_queries: list[dict]) -> list[dict]:
@@ -973,8 +973,8 @@ def main():
         for f in files:
             if not f.get("diff") and f.get("content"):
                 old_file = BASELINE_DIR / f["path"]
-                old_txt = old_file.read_text("utf-8") if old_file.is_file() else ""
-                f["diff"] = compute_diff(old_txt, f["content"], f["path"])
+                if old_file.is_file():
+                    f["diff"] = compute_diff(old_file.read_text("utf-8"), f["content"], f["path"])
 
         val_errors = raw.get("validation_errors") or (raw.get("validation") or {}).get("errors") or []
         bundle = {
