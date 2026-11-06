@@ -5219,6 +5219,27 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
       expect(skillDisk).toContain(token)
       expect(LOOKER_PROJECT_ONBOARDING_SKILL_MD).toContain(token)
     }
+    const wsSources = buildWorkspaceSources({ schemaMarkdown: '# Schema' })
+    for (const relPath of [
+      'agentic-lookml/SKILL.md',
+      'agentic-lookml/references/01-simple-single-table.md',
+      'agentic-lookml-workflow/SKILL.md',
+      'agentic-lookml-workflow/scripts/pre_gate.py',
+      'looker-field-profiler/SKILL.md',
+      'lookml-field-curation/SKILL.md',
+      'lookml-field-curation/scripts/profile_string_fields.py',
+      'generate-view-from-table/SKILL.md',
+      'generate-view-from-table/scripts/generate_bronze_view.py',
+      'lookml-tests/SKILL.md',
+      'lookml-view/references/derived_table.md',
+    ]) {
+      const diskContent = readFileSync(path.join(repoRoot, '.agents/skills', relPath), 'utf8')
+      expect(wsSources.find((s) => s.target === `/workspace/skills/${relPath}`)?.content).toBe(diskContent)
+      expect(resolveBuiltinWorkspaceFileContent(`/workspace/skills/${relPath}`)).toBe(diskContent)
+      expect(diskContent).not.toMatch(/thelook|argolis_scratch|default_bigquery_connection|demowest|looker-private-demo/i)
+    }
+    expect(LOOKER_PROJECT_ONBOARDING_SKILL_MD).not.toMatch(/thelook|argolis_scratch|default_bigquery_connection|demowest|looker-private-demo/i)
+    expect(KDA_SKILL_MD).not.toMatch(/thelook|argolis_scratch|default_bigquery_connection|demowest|looker-private-demo/i)
   })
 
   test('53. Issue #126: persists per-user agentName in user_config:${userId} (default "Ripper"), routes/copies Markdown links via extensionSDK, and appends CA embed collapse query params', async () => {

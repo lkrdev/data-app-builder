@@ -85,8 +85,8 @@ uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox \
 # Test a specific connection and list its schemas and tables
 uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox \
   --file=.agents/skills/lkr-project-helper/scripts/inspect_connections.py \
-  --var connection_name="looker-private-demo" \
-  --var schema_name="thelook"
+  --var connection_name="<connection_name>" \
+  --var schema_name="<schema_name>"
 ```
 
 *Note*: If instantiating from raw SQL via `bq_view_lookml_generator.py`, ensure the selected connection has a configured `tmp_db_name` (scratch schema/dataset) where Looker has write permissions to create temporary views.
@@ -102,7 +102,7 @@ uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --dev-mode \
   --file=.agents/skills/lkr-project-helper/scripts/ensure_project_and_model.py \
   --var project_name="my_new_project" \
   --var model_name="my_model" \
-  --var connection_name="looker-private-demo"
+  --var connection_name="<connection_name>"
 ```
 
 ---
@@ -120,7 +120,7 @@ uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --dev-mode \
   --file=.agents/skills/lkr-project-helper/scripts/generate_lookml.py \
   --var project_name="my_new_project" \
   --var model_name="my_model" \
-  --var connection_name="looker-private-demo" \
+  --var connection_name="<connection_name>" \
   --var schema_name="ecomm" \
   --var table_names="orders,order_items,users" \
   --var folder_name="views" \
@@ -157,7 +157,7 @@ When the user provides a raw SQL query (including complex joins, CTEs, or BigQue
 uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --dev-mode \
   --file=.agents/skills/lkr-project-helper/scripts/bq_view_lookml_generator.py \
   --var project="my_new_project" \
-  --var connection="looker-private-demo" \
+  --var connection="<connection_name>" \
   --var model="my_model" \
   --var view_name="order_summary_view" \
   --var sql_content="SELECT status, COUNT(*) AS order_count FROM \`ecomm.orders\` GROUP BY 1"
@@ -186,7 +186,7 @@ uvx --from "lkr-dev-cli[code-mode]" lkr-dev-cli code-mode sandbox --dev-mode \
   --file=.agents/skills/lkr-project-helper/scripts/generate_lookml.py \
   --var project_name="my_new_project" \
   --var model_name="my_model" \
-  --var connection_name="looker-private-demo" \
+  --var connection_name="<connection_name>" \
   --var schema_name="ecomm" \
   --var user_intention="Analyze e-commerce order retention and customer lifetime value" \
   --var questions="What is the 30-day repeat purchase rate by acquisition channel?"

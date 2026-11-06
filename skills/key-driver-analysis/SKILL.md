@@ -16,7 +16,7 @@ Use this skill whenever asked to run Key Driver Analysis (KDA), explain why a Lo
 > 2. **Single-Pass Execution with `print_kda_summary(out)`**: Prepend `skills/key-driver-analysis/scripts/kda_toolkit.py` to your script, run all targets in **one** `lkr code-mode sandbox -f` call, and call `print_kda_summary(out)` at the end (instead of `print(json.dumps(out))`, which gets double-escaped and truncated above 10 KB). `print_kda_summary(out)` emits a compact ~3.5 KB quote-free summary so `run_command` returns 100% of the results inline in a single turn with zero follow-up `read_file` calls.
 
 ```bash
-cat skills/key-driver-analysis/scripts/kda_toolkit.py /tmp/kda_job.py > /tmp/run_kda_job.py && lkr --oauth-account=prod-demowest code-mode sandbox -f /tmp/run_kda_job.py
+cat skills/key-driver-analysis/scripts/kda_toolkit.py /tmp/kda_job.py > /tmp/run_kda_job.py && lkr code-mode sandbox -f /tmp/run_kda_job.py
 ```
 
 ### Complete Toolkit API & Return Schemas (`kda_toolkit.py`)
@@ -102,16 +102,16 @@ def get_info(m, e):
         info_cache[(m, e)] = inspect_explore_for_kda(m, e)
     return info_cache[(m, e)]
 
-base_yr, breach_yr = {"order_items.created_year": "2024"}, {"order_items.created_year": "2025"}
-dash = resolve_source("https://demowest.cloud.looker.com/dashboards/thelook::business_pulse")
+base_yr, breach_yr = {"<view>.created_year": "2024"}, {"<view>.created_year": "2025"}
+dash = resolve_source("https://<looker_host>/dashboards/<model>::<dashboard_slug>")
 t_sales = [t for t in dash["targets"] if "Total Sales" in t["title"]][0]
 t_aov = [t for t in dash["targets"] if "Average Order Sale Price" in t["title"]][0]
 
 out = {
-    "dash_sales": analyze_target(t_sales, base_yr, breach_yr, get_info(t_sales["model"], t_sales["explore"]), drill=True, sub_timeframe="order_items.created_month"),
+    "dash_sales": analyze_target(t_sales, base_yr, breach_yr, get_info(t_sales["model"], t_sales["explore"]), drill=True, sub_timeframe="<view>.created_month"),
     "dash_aov": analyze_target(t_aov, base_yr, breach_yr, get_info(t_aov["model"], t_aov["explore"])),
-    "look_247": analyze_target(resolve_source("247")["targets"][0], base_yr, breach_yr, get_info("thelook", "order_items")),
-    "slug_8CDyM4D": analyze_target(resolve_source("8CDyM4D")["targets"][0], base_yr, breach_yr, get_info("thelook", "order_items")),
+    "look_247": analyze_target(resolve_source("247")["targets"][0], base_yr, breach_yr, get_info("<model>", "<explore>")),
+    "slug_8CDyM4D": analyze_target(resolve_source("8CDyM4D")["targets"][0], base_yr, breach_yr, get_info("<model>", "<explore>")),
     "conv": [analyze_target(t, base_yr, breach_yr, get_info(t["model"], t["explore"])) for t in resolve_source("a96583e4bac8437e8ab32f9b34ed2293")["targets"]],
 }
 print_kda_summary(out)
