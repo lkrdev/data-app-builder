@@ -101,5 +101,6 @@ test: margin_less_than_revenue {
 ## 4. Best Practices
 
 -   **Descriptive Extensions**: Use informative names for tests (`orders_pk_is_unique`) and assertions (`order_id_is_unique`).
+-   **Profile-Guided Assertions (`skills/looker-field-profiler/SKILL.md`)**: Run `profile_fields` to identify `profile:unique_key_candidate` dimensions for primary-key uniqueness assertions (`count(${view.field}) = count_distinct(${view.field})`) and `profile:nullable` / `profile:has_zeros` fields for non-null and denominator safety assertions.
 -   **Performance**: Use filters (e.g., `last 7 days`) to limit the scan size for large tables, unless verifying full history is required.
 -   **Model Inclusion**: Ensure `test` files are included in the model file (e.g., `include: "/tests/*.test.lkml"`).

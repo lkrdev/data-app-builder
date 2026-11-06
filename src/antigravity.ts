@@ -9,6 +9,8 @@ import {
   DATA_INVESTIGATOR_GUIDE_MD,
   KDA_SKILL_MD,
   KDA_TOOLKIT_PY,
+  LOOKER_DASHBOARD_SKILL_MD,
+  LOOKER_FIELD_PROFILER_SKILL_MD,
   LOOKER_PROJECT_ONBOARDING_SKILL_MD,
   wrapDashboardCodeMode,
 } from './antigravityPrompts'
@@ -160,6 +162,8 @@ export function buildWorkspaceSources(params: {
     { type: 'inline', content: DATA_INVESTIGATOR_GUIDE_MD, target: '/workspace/skills/data-investigator/SKILL.md' },
     { type: 'inline', content: KDA_SKILL_MD, target: '/workspace/skills/key-driver-analysis/SKILL.md' },
     { type: 'inline', content: KDA_TOOLKIT_PY, target: '/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py' },
+    { type: 'inline', content: LOOKER_DASHBOARD_SKILL_MD, target: '/workspace/skills/looker-dashboard/SKILL.md' },
+    { type: 'inline', content: LOOKER_FIELD_PROFILER_SKILL_MD, target: '/workspace/skills/looker-field-profiler/SKILL.md' },
     {
       type: 'inline',
       content: LOOKER_PROJECT_ONBOARDING_SKILL_MD,

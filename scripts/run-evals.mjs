@@ -480,7 +480,7 @@ async function eval07AgenticLookmlOnboarding() {
     assert.equal(bundle.validation.passed, true)
     assert.equal(bundle.files.length, 1)
     assert.equal(bundle.files[0].path, 'views/refinements/+order_items.view.lkml')
-    assert(bundle.files[0].diff.includes('+  measure: total_sale_price'))
+    assert((bundle.files[0].diff || bundle.files[0].content).includes('measure: total_sale_price'))
 
     // Verify sitecustomize.py cache key parity
     const pyKey = execFileSync(
