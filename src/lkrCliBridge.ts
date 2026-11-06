@@ -630,7 +630,7 @@ for f in files_to_push:
     except Exception:
         update_file(project_id, {"path": fpath, "content": content})
     pushed_paths.add(fpath)
-if not single_file:
+if reset and not single_file:
     for rpath in remote_paths:
         if rpath and rpath not in pushed_paths and not rpath.endswith(".gitkeep") and rpath != "manifest.lkml":
             try:

@@ -55,7 +55,7 @@ Use this skill when a user asks to onboard or create a new Looker project, scaff
    lkr --dev tools lookml push /workspace/lookml --project-id <project_name> --no-reset
    python3 /workspace/bootstrap_lookml.py bundle /workspace/lookml_result.json
    ```
-4. **Query & Show Live Example Data**: After the `code_execution` push completes, in **one** `run_looker_codemode` call, run `return run_inline_query("json", {"model": project_name, "view": "order_items", "fields": ["products.department", "order_items.count", "order_items.total_sale_price", "order_items.return_count", "order_items.cancel_count"], "sorts": ["order_items.total_sale_price desc"], "limit": "5"})`, render the returned rows in your response, and **ask the user if they want a dashboard with these metrics**.
+4. **Query & Show Live Example Data**: After the `code_execution` push completes, in **one** `run_looker_codemode` call, run `return {"rows": run_inline_query("json", {"model": project_name, "view": "order_items", "fields": ["products.department", "order_items.count", "order_items.total_sale_price", "order_items.return_count", "order_items.cancel_count"], "sorts": ["order_items.total_sale_price desc"], "limit": "5"})}`, render the returned rows in your response, and **ask the user if they want a dashboard with these metrics**.
 
 ## Step 5: Stage 3 (Turn 5) — Create LookML Dashboard, Copy into Selected UI Folder, and Offer Metric Selector Data App
 1. When the user asks to create a dashboard with these metrics, emit `<USE_CASE>dashboard</USE_CASE>`.
