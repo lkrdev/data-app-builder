@@ -318,6 +318,8 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
   const step2Directive =
     selectedExplores.length > 0
       ? `2. Read /workspace/schema.md for the compiled Looker Explore schema(s) and sample rows. You also have \`run_looker_codemode\` (WASM Monty Python sandbox with \`target_explores\`=${JSON.stringify(selectedExplores)}, \`target_model\`="${primaryModel}", and \`target_explore\`="${primaryExplore}" pre-injected, plus Looker 4.0 SDK globals \`lookml_model_explore\`, \`run_inline_query\`, \`search_content\`; always pass a concise 1-sentence \`thought\` string) if you need additional sample queries.`
+      : lookmlProjectId
+      ? `2. Reuse the LookML model "${lookmlProjectId}" and explore "${primaryExplore || 'order_items'}" (and measures/dimensions from prior conversation context or \`/workspace/lookml\`) without redundant discovery calls.`
       : `2. Pick the best \`model_id::explore_id\` from /workspace/schema.md and run ONE \`run_looker_codemode\` Python snippet (always passing a concise 1-sentence \`thought\` description) that resolves discovery + schema + 5-row sample in a single call:
 \`\`\`python
 m, e = "thelook", "order_items"  # or best model/explore from /workspace/schema.md matching search_content(terms="...")
@@ -331,8 +333,10 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const ctorHint =
     selectedExplores.length === 1
       ? `with \`this.lookerModel = '${primaryModel}'\` and \`this.explore = '${primaryExplore}'\` in \`constructor()\``
+      : lookmlProjectId
+      ? `with \`this.lookerModel = '${lookmlProjectId}'\` and \`this.explore = '${primaryExplore || 'order_items'}'\` in \`constructor()\``
       : `setting \`this.lookerModel\` and \`this.explore\` in \`constructor()\``
-  const step3Directive = `3. Write and bundle the Lit Data App in ONE \`code_execution\` call importing from '/runtime/data-app.js' (${ctorHint}) into \`${appFilePath}\`:\n   \`python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\\n...\\nEOF\``
+  const step3Directive = `3. Write and bundle the Lit Data App in ONE \`code_execution\` call importing from '/runtime/data-app.js' (${ctorHint}; do NOT read, inspect, or decompile \`/workspace/bundle_app.py\` or \`/runtime\` — \`bundle_app.py\` natively evaluates ternaries, \`+\` string concatenation, template literals, and dictionary lookups; for metric selector / timeframe switcher apps switching between day/date, week, month, and year, default the date filter window to day: '90 days', week: '53 weeks', month: '60 months', year: '10 years', and dynamically match the date dimension group to the selected measure: return_count uses order_items.returned_date/returned_week/returned_month/returned_year, cancel_count uses order_items.cancelled_date/cancelled_week/cancelled_month/cancelled_year, and standard metrics use order_items.created_date/created_week/created_month/created_year) into \`${appFilePath}\`:\n   \`python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\\n...\\nEOF\``
 
   const normalizedExistingNative: NativeContentState | null = existingNativeContent
     ? normalizeNativeContent({
@@ -530,6 +534,26 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
           if (pendingLookerCalls.length > 0) {
             await throwIfAborted(interaction.id)
+            const preBridgeReqs = extractLkrExtensionToolRequests(interaction).filter(
+              (r) => !resolvedBridgeCacheKeys.has(r.cache_key || computeLkrExtensionCacheKey(r))
+            )
+            for (const req of preBridgeReqs) {
+              await throwIfAborted(interaction.id)
+              try {
+                const { cacheKey } = await executeLkrExtensionToolRequest({
+                  sdk: turnSdk,
+                  req,
+                  defaultVars: defaultCodeModeVars,
+                  extensionSDK,
+                  requirePermission,
+                  approvedOperations,
+                  onPermissionRequest: effectivePermissionHandler,
+                })
+                resolvedBridgeCacheKeys.add(cacheKey)
+              } catch {
+                resolvedBridgeCacheKeys.add(req.cache_key || computeLkrExtensionCacheKey(req))
+              }
+            }
             const firstCallArgs = parseStepArguments(
               pendingLookerCalls[0]?.arguments ?? pendingLookerCalls[0]?.args
             )
@@ -585,11 +609,13 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                         ? (args.vars as Record<string, unknown>)
                         : {}
                     const rawCode = String(args.code || '')
+                    const needsDashboardMacros =
+                      isDashboardMode ||
+                      /\b(?:upsert_udd|upsert_lookml_dashboard|reflow_24col|pin_to_board|schedule_dashboard|emit_native_bundle)\s*\(/.test(rawCode)
                     codeModeOutput = await LkrCodeMode.runPythonCode({
-                      code: isDashboardMode ? wrapDashboardCodeMode(rawCode) : rawCode,
+                      code: needsDashboardMacros ? wrapDashboardCodeMode(rawCode) : rawCode,
                       sdk: turnSdk,
                       extensionSDK,
-                      allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard',
                       requirePermission,
                       approvedOperations,
                       onPermissionRequest: wrappedPermissionRequest,
@@ -732,10 +758,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         (r) => !resolvedBridgeCacheKeys.has(r.cache_key || computeLkrExtensionCacheKey(r))
       )
 
-      if (!hasFinalBundle && pendingBridgeReqs.length > 0 && bridgeRound < 8) {
+      if (pendingBridgeReqs.length > 0 && bridgeRound < 8) {
         await throwIfAborted(interaction.id)
-        bridgeRound += 1
-        accumulatedSteps.push(...(interaction.steps || []))
         const firstBridgeThought = pendingBridgeReqs
           .map((r) => String(r.thought || '').trim())
           .find((t) => Boolean(t) && !INTERNAL_JARGON_THOUGHT_RE.test(t))
@@ -773,38 +797,42 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         codemodeExecMs += Date.now() - bridgeStart
         await throwIfAborted(interaction.id)
 
-        const seedText = [
-          '[LKR_EXTENSION_BRIDGE_RESULT] Executed online lkr-dev-cli request(s) in the host Looker Extension.',
-          'Write the resolved JSON payload(s) below to /workspace/.lkr_extension_cache/ and re-run your sandbox command so it hits the local cache and completes:',
-          ...bridgedLines,
-        ].join('\n\n')
+        if (!hasFinalBundle) {
+          bridgeRound += 1
+          accumulatedSteps.push(...(interaction.steps || []))
+          const seedText = [
+            '[LKR_EXTENSION_BRIDGE_RESULT] Executed online lkr-dev-cli request(s) in the host Looker Extension.',
+            'Write the resolved JSON payload(s) below to /workspace/.lkr_extension_cache/ and re-run your sandbox command so it hits the local cache and completes:',
+            ...bridgedLines,
+          ].join('\n\n')
 
-        interaction = await callInteractionsApi(
-          extensionSDK,
-          auth,
-          'interactions',
-          'POST',
-          {
-            agent: 'antigravity-preview-09-2026',
-            agent_config: agentConfig,
-            background: true,
-            environment: interaction.environment_id || trackedEnvId || 'remote',
-            previous_interaction_id: interaction.id,
-            tools: activeTools,
-            input: [{ type: 'text', text: seedText }],
+          interaction = await callInteractionsApi(
+            extensionSDK,
+            auth,
+            'interactions',
+            'POST',
+            {
+              agent: 'antigravity-preview-09-2026',
+              agent_config: agentConfig,
+              background: true,
+              environment: interaction.environment_id || trackedEnvId || 'remote',
+              previous_interaction_id: interaction.id,
+              tools: activeTools,
+              input: [{ type: 'text', text: seedText }],
+            }
+          )
+          if (interaction.id) {
+            onInteractionCreated?.(interaction.id)
           }
-        )
-        if (interaction.id) {
-          onInteractionCreated?.(interaction.id)
+          await throwIfAborted(interaction.id)
+          if (interaction.environment_id) {
+            trackedEnvId = interaction.environment_id
+          }
+          pollIdx = 0
+          prevStepCount = (interaction.steps || []).length
+          prevStatus = interaction.status
+          continue
         }
-        await throwIfAborted(interaction.id)
-        if (interaction.environment_id) {
-          trackedEnvId = interaction.environment_id
-        }
-        pollIdx = 0
-        prevStepCount = (interaction.steps || []).length
-        prevStatus = interaction.status
-        continue
       }
 
       break

@@ -234,7 +234,14 @@ const runCodeMode: LkrCodeModeRunFn = async (
   const requestHandler = typeof baseOpts.requestHandler === 'function'
     ? baseOpts.requestHandler
     : hasRaw && rawSdk
-    ? (m: string, p: string, q?: unknown, b?: unknown) => rawLookerRequest(rawSdk, String(m || 'GET').toUpperCase() as 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', p, (q as Record<string, unknown> | undefined) || undefined, b)
+    ? (m: string, p: string, q?: unknown, b?: unknown) =>
+        rawLookerRequest(
+          rawSdk,
+          String(m || 'GET').toUpperCase() as 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
+          p,
+          (q as Record<string, unknown> | undefined) || undefined,
+          b
+        ).catch((err: unknown) => Promise.reject(err instanceof Error ? err.message : String(err)))
     : undefined
 
   let caAgentsCatalog: LookerCaAgentSummary[] | undefined
@@ -299,7 +306,7 @@ export const LkrCodeMode: LkrCodeModeRuntime = {
 
 export const LKR_DEV_CLI_VERSION = '0.0.64'
 export const LKR_DEV_CLI_SPEC = `lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}`
-export const BOOTSTRAP_SANDBOX_SH = `command -v uv >/dev/null 2>&1 || pip install --break-system-packages --quiet uv || python3 -m pip install --break-system-packages --quiet uv; lkr --version 2>/dev/null | grep -q "${LKR_DEV_CLI_VERSION}" || UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"`
+export const BOOTSTRAP_SANDBOX_SH = `command -v uv >/dev/null 2>&1 || pip install --break-system-packages --quiet uv || python3 -m pip install --break-system-packages --quiet uv; lkr --version 2>/dev/null | grep -q "${LKR_DEV_CLI_VERSION}" || UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"; for sp in ~/.local/share/uv/tools/lkr-dev-cli/lib/python3.*/site-packages; do [ -d "$sp" ] && [ -f /workspace/sitecustomize.py ] && cp -f /workspace/sitecustomize.py "$sp/sitecustomize.py"; done`
 
 export interface LkrExtensionToolRequest {
   kind: 'codemode' | 'sdk_request'
@@ -559,11 +566,158 @@ def _patch_codemode(mod):
         if getattr(cmd, "name", None) == "sandbox" or getattr(getattr(cmd, "callback", None), "__name__", "") == "sandbox":
             cmd.callback = _patched_sandbox
 
+_PUSH_CODEMODE_PY = """
+try:
+    p = project(project_id)
+except Exception:
+    p = create_project({"name": project_id})
+if not p.get("uses_git"):
+    try:
+        update_project(project_id, {"git_service_name": "bare"})
+    except Exception:
+        pass
+if reset:
+    try:
+        reset_project_to_production(project_id)
+    except Exception:
+        try:
+            create_developer_copy(project_id)
+        except Exception:
+            pass
+existing_remote = []
+try:
+    existing_remote = all_project_files(project_id) or []
+except Exception:
+    existing_remote = []
+remote_paths = {(rf.get("path") or rf.get("id") or "") for rf in existing_remote if isinstance(rf, dict)}
+created_dirs = set()
+pushed_paths = set()
+for f in files_to_push:
+    fpath = f["path"]
+    content = f["content"]
+    if fpath in remote_paths:
+        try:
+            update_file(project_id, {"path": fpath, "content": content})
+            pushed_paths.add(fpath)
+            continue
+        except Exception:
+            pass
+    dpath = "/".join(fpath.split("/")[:-1])
+    if dpath and dpath not in created_dirs:
+        cur = ""
+        for part in [x for x in dpath.split("/") if x]:
+            cur = f"{cur}/{part}" if cur else part
+            if cur not in created_dirs:
+                try:
+                    create_project_directory(project_id, cur)
+                except Exception:
+                    pass
+                created_dirs.add(cur)
+    try:
+        create_file(project_id, {"path": fpath, "content": content})
+    except Exception:
+        update_file(project_id, {"path": fpath, "content": content})
+    pushed_paths.add(fpath)
+if not single_file:
+    for rpath in remote_paths:
+        if rpath and rpath not in pushed_paths and not rpath.endswith(".gitkeep") and rpath != "manifest.lkml":
+            try:
+                delete_file(project_id, rpath)
+            except Exception:
+                pass
+model_files = [f for f in files_to_push if f["root_name"].endswith(".model.lkml")]
+if model_files:
+    existing_models = {m.get("name"): m for m in (all_lookml_models() or []) if isinstance(m, dict) and m.get("name")}
+    for mf in model_files:
+        mname = mf["root_name"][:-11]
+        conn_name = mf.get("connection")
+        allowed = [conn_name] if conn_name else []
+        if mname not in existing_models:
+            try:
+                create_lookml_model({"name": mname, "project_name": project_id, "allowed_db_connection_names": allowed})
+            except Exception:
+                pass
+        else:
+            cur_allowed = list(existing_models[mname].get("allowed_db_connection_names") or [])
+            if conn_name and conn_name not in cur_allowed:
+                cur_allowed.append(conn_name)
+            try:
+                update_lookml_model(mname, {"name": mname, "project_name": project_id, "allowed_db_connection_names": cur_allowed})
+            except Exception:
+                pass
+if deploy:
+    try:
+        commit(project_id, {"message": message})
+    except Exception:
+        pass
+    try:
+        deploy_to_production(project_id)
+    except Exception:
+        pass
+return {"ok": True, "project_id": project_id, "pushed": sorted(pushed_paths)}
+""".strip()
+
+def _patch_lookml(mod):
+    if getattr(mod, "_lkr_extension_patched", False):
+        return
+    orig_push = getattr(mod, "push", None)
+    if not orig_push:
+        return
+
+    @functools.wraps(orig_push)
+    def _patched_push(ctx, folder_name, project_id_opt=None, file_opt=None, deploy=False, reset=True, message="push from lkr cli", sync_hidden=False, only_changed=False):
+        if not _bridge_enabled():
+            return orig_push(ctx=ctx, folder_name=folder_name, project_id_opt=project_id_opt, file_opt=file_opt, deploy=deploy, reset=reset, message=message, sync_hidden=sync_hidden, only_changed=only_changed)
+        if file_opt is None and os.path.isfile(folder_name):
+            file_opt = folder_name
+            folder_name = os.path.dirname(os.path.abspath(folder_name))
+        project_id = mod._resolve_project_id(folder_name, project_id_opt)
+        lookml_dir = os.path.abspath(folder_name)
+        valid_exts = getattr(mod, "VALID_EXTENSIONS", (".lkml", ".lookml", ".md", ".json", ".js", ".css"))
+        ignored_files = getattr(mod, "IGNORED_FILES", set())
+        files_to_push = []
+        def _add_file(full_p, rel_p, fname):
+            content = Path(full_p).read_text(encoding="utf-8")
+            m = re.search(r'^\\s*connection:\\s*["\\']?([^"\\'\\s;#]+)["\\']?', content, re.MULTILINE) if fname.endswith(".model.lkml") else None
+            files_to_push.append({"path": rel_p, "root_name": fname, "content": content, "connection": m.group(1).strip() if m else None})
+        if file_opt:
+            fp = file_opt if os.path.isabs(file_opt) else os.path.join(lookml_dir, file_opt)
+            fp = os.path.abspath(fp)
+            _add_file(fp, os.path.relpath(fp, lookml_dir).replace("\\\\", "/"), os.path.basename(fp))
+        else:
+            for root, dirs, files in os.walk(lookml_dir):
+                dirs[:] = [d for d in dirs if (d != ".git" if sync_hidden else not d.startswith("."))]
+                for fname in sorted(files):
+                    if fname in ignored_files or not any(fname.endswith(ext) for ext in valid_exts):
+                        continue
+                    fp = os.path.join(root, fname)
+                    rel_p = os.path.relpath(fp, lookml_dir).replace("\\\\", "/")
+                    if not sync_hidden and any(part.startswith(".") for part in rel_p.split("/")):
+                        continue
+                    _add_file(fp, rel_p, fname)
+        vars_dict = {"project_id": project_id, "files_to_push": files_to_push, "single_file": bool(file_opt), "deploy": bool(deploy), "reset": bool(reset), "message": str(message)}
+        req = {"kind": "codemode", "code": _PUSH_CODEMODE_PY, "vars": dict(sorted(vars_dict.items())), "dev_mode": True}
+        req["cache_key"] = _compute_cache_key(req)
+        hit, val = _read_cache(req["cache_key"])
+        if hit:
+            print(val if isinstance(val, str) else json.dumps(val, indent=2, default=str))
+            return
+        tag = "<LKR_EXTENSION_TOOL_REQUEST>" + json.dumps(req, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str) + "</LKR_EXTENSION_TOOL_REQUEST>"
+        sys.stdout.write(tag + "\\n" + json.dumps({"ok": True, "project_id": project_id, "pushed": [f["path"] for f in files_to_push]}) + "\\n")
+        sys.stdout.flush()
+
+    mod.push, mod._lkr_extension_patched = _patched_push, True
+    for cmd in getattr(getattr(mod, "lookml_group", None), "registered_commands", []) or []:
+        if getattr(cmd, "name", None) == "push" or getattr(getattr(cmd, "callback", None), "__name__", "") == "push":
+            cmd.callback = _patched_push
+
 def _apply_lkr_patches():
     if mod_auth := sys.modules.get("lkr.auth_service"):
         _patch_auth_service(mod_auth)
     if mod_cm := sys.modules.get("lkr.codemode.main"):
         _patch_codemode(mod_cm)
+    if mod_lk := sys.modules.get("lkr.tools.lookml"):
+        _patch_lookml(mod_lk)
 
 _orig_import = builtins.__import__
 def _bridged_import(name, globals=None, locals=None, fromlist=(), level=0):
@@ -576,6 +730,7 @@ builtins.__import__ = _bridged_import
 try:
     import lkr.auth_service  # noqa: F401
     import lkr.codemode.main  # noqa: F401
+    import lkr.tools.lookml  # noqa: F401
     _apply_lkr_patches()
 except Exception:
     pass

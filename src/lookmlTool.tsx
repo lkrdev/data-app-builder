@@ -91,7 +91,14 @@ export interface LookmlArtifactPayload {
 export interface LookmlInteractionLike {
   output_text?: string
   outputs?: Array<{ text?: string }>
-  steps?: Array<{ output?: string; result?: string; text?: string }>
+  steps?: Array<{
+    output?: string
+    stdout?: string
+    result?: string
+    text?: string
+    content?: unknown
+    code_execution_result?: { output?: string }
+  }>
 }
 
 export function extractLookmlBundleFromInteraction(
@@ -100,7 +107,14 @@ export function extractLookmlBundleFromInteraction(
   const texts = [
     interaction?.output_text,
     ...(interaction?.outputs || []).map((o) => o?.text),
-    ...(interaction?.steps || []).flatMap((s) => [s?.output, s?.result, s?.text]),
+    ...(interaction?.steps || []).flatMap((s) => [
+      s?.output,
+      s?.stdout,
+      s?.result,
+      s?.text,
+      s?.code_execution_result?.output,
+      ...(Array.isArray(s?.content) ? s.content.map((c) => (c as { text?: string })?.text) : [s?.content]),
+    ]),
   ].filter((x): x is string => typeof x === 'string')
   const matches = Array.from(texts.join('\n').matchAll(/<LOOKML_BUNDLE>([\s\S]*?)<\/LOOKML_BUNDLE>/g))
   return matches.length ? (JSON.parse(matches[matches.length - 1][1].trim()) as LookmlBundle) : null
@@ -150,15 +164,15 @@ export function buildLookmlSystemGuide(params: {
       : `See /workspace/schema.md for available models and explores.`,
     `Follow these exact steps:`,
     `1. **Sandbox Bootstrap (\`/workspace\`)**:`,
-    `   Run \`python3 /workspace/bootstrap_lookml.py setup\` in your Linux sandbox to install \`uv\` (\`pip install --break-system-packages --quiet uv\`), \`${LKR_DEV_CLI_SPEC}\` (\`UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"\`), and unpack \`/workspace/.agents/skills/\` (\`agentic-lookml-workflow\`, \`agentic-lookml\`, \`generate-view-from-table\`, \`lookml-field-curation\`, \`lookml\`). Read the SKILL.md files for your Activated Turn Skills (${activeSkillList.join(', ')}), or load \`/workspace/skills/looker-project-onboarding/SKILL.md\` when onboarding a brand-new LookML project from a database connection.`,
-    `2. **Host-Bridged LookML Sync via Browser WASM \`run_looker_codemode(code, thought, vars)\` (\`allowUpdateSession: true\`)**:`,
-    `   - Zero sandbox Looker credentials are needed: \`run_looker_codemode\` runs in the browser extension with \`allowUpdateSession: true\`, requires a concise 1-sentence \`thought\` description, accepts \`vars: {...}\`, and has all \`ExtendedLooker40SDK\` methods pre-bound.`,
-    `   - Switch to the user's dev workspace (\`update_session({"workspace_id": "dev"})\`) and use whatever branch/state is already in the user's dev mode (inspect via \`git_branch(project_id)\` — do NOT reset to production or create a new git branch unless explicitly asked). Pull LookML files via \`all_project_files\` + \`get_file_content\` into \`/workspace/lookml_baseline/\` and \`/workspace/data/$RUN_ID/lookml/\`.`,
+    `   If the user asks to create/onboard a new project without specifying a connection name, project name, and target tables/schemas (e.g. "create a new project"), call ZERO tools on this turn and immediately ask for: (1) Connection Name (\`[Open Looker Connections](/admin/connections)\`), (2) Project Name (\`snake_case\`), and (3) Target Tables or Schemas (or SQL from \`[Open SQL Runner](/sql)\`). Otherwise, run \`python3 /workspace/bootstrap_lookml.py setup\` in your Linux sandbox to install \`uv\` (\`pip install --break-system-packages --quiet uv\`), \`${LKR_DEV_CLI_SPEC}\` (\`UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"\`), and unpack \`/workspace/.agents/skills/\` (\`agentic-lookml-workflow\`, \`agentic-lookml\`, \`generate-view-from-table\`, \`lookml-field-curation\`, \`lookml\`). Read the SKILL.md files for your Activated Turn Skills (${activeSkillList.join(', ')}), or load \`/workspace/skills/looker-project-onboarding/SKILL.md\` when onboarding a brand-new LookML project from a database connection.`,
+    `2. **Host-Bridged LookML Sync via Browser WASM \`run_looker_codemode(code, thought, vars)\`**:`,
+    `   - Zero sandbox Looker credentials are needed: \`run_looker_codemode\` runs in the browser extension, requires a concise 1-sentence \`thought\` description, accepts \`vars: {...}\`, and has all \`ExtendedLooker40SDK\` methods pre-bound. Do NOT call \`update_session\` inside \`run_looker_codemode\` — dev mode is controlled by the app session or the \`--dev\` CLI flag.`,
+    `   - Use whatever branch/state is already in the user's dev mode (inspect via \`git_branch(project_id)\` — do NOT reset to production or create a new git branch unless explicitly asked). Pull LookML files via \`all_project_files\` + \`get_file_content\` into \`/workspace/lookml_baseline/\` and \`/workspace/data/$RUN_ID/lookml/\`.`,
     `3. **100% Offline \`lkr-dev-cli[parse]\` CLI Commands in \`/workspace\`**:`,
     `   - Run offline CLI commands against \`/workspace/data/$RUN_ID/lookml\`: \`lkr parse sql --dialect bigquery --summary\`, \`lkr parse sql-lookml-compare --offline\`, \`lkr parse lookml-to-api --validate\`, \`lkr schema validate --explore-file\`, and \`lkr parse lookml snapshot\` & \`lkr parse curation-meta\`.`,
     `   - Author Bronze refinements, Silver/Gold views & explores, opinionated \`.test.lkml\` tests, and \`/workspace/data/$RUN_ID/summary.md\` according to the Activated Turn Skills (${activeSkillList.join(', ')}).`,
-    `4. **Push Modified \`.lkml\` Files, Pre-Gate Parity & Validate via \`run_looker_codemode\`**:`,
-    `   - Push changed/deleted \`.lkml\` files back to the user's current dev workspace using \`create_project_directory\`, \`create_file\`, \`update_file\`, \`delete_file\`, then run \`validate_project\` and \`run_lookml_test\`.`,
+    `4. **Push Modified \`.lkml\` Files via \`lkr --dev tools lookml push\`, Pre-Gate Parity & Validate**:`,
+    `   - Push local \`.lkml\` files back to Looker dev mode using \`lkr --dev tools lookml push /workspace/lookml --project-id <project_id> --no-reset\` (which automatically creates directories and configures \`.model.lkml\`), then run \`validate_project\` and \`run_lookml_test\`.`,
     `5. **Emit \`<LOOKML_BUNDLE>\`**:`,
     `   Run \`python3 /workspace/bootstrap_lookml.py bundle /workspace/data/$RUN_ID\` (or \`/workspace/lookml_result.json\`) and include the printed \`<LOOKML_BUNDLE>...</LOOKML_BUNDLE>\` tag in your final response.`,
   ].join('\n')
