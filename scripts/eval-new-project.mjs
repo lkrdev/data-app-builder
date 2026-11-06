@@ -105,6 +105,38 @@ function createLiveLookerSdk(initialAuth) {
     session: async () => (await rawRequest('GET', '/session')).body,
     update_session: async (body) => (await rawRequest('PATCH', '/session', undefined, body)).body,
     all_lookml_models: async (params) => (await rawRequest('GET', '/lookml_models', params)).body,
+    validate_project: async (pid) => (await rawRequest('POST', `/projects/${encodeURIComponent(pid)}/validate`)).body,
+    dashboard: async (did) => (await rawRequest('GET', `/dashboards/${encodeURIComponent(did)}`)).body,
+    run_inline_query: async (fmt, body) => (await rawRequest('POST', `/queries/run/${fmt}`, undefined, body)).body,
+    delete_dashboard: async (did) => (await rawRequest('DELETE', `/dashboards/${encodeURIComponent(did)}`)).body,
+    delete_lookml_model: async (mname) => (await rawRequest('DELETE', `/lookml_models/${encodeURIComponent(mname)}`)).body,
+  }
+}
+
+const persistedLookmlFiles = new Map()
+const extractUddId = (nb) =>
+  String(nb?.synced_udd_id || nb?.embed_path?.match(/\/dashboards\/([^/?#]+)/)?.[1] || nb?.url?.match(/\/dashboards\/([^/?#]+)/)?.[1] || nb?.id || '')
+
+function validateBundleOfflineWithLkrParse(files) {
+  for (const f of files || []) {
+    if (f && typeof f === 'object' && f.path && typeof f.content === 'string') {
+      persistedLookmlFiles.set(f.path, f.content)
+    }
+  }
+  if (persistedLookmlFiles.size === 0) return { ok: false, error: 'No LookML files in bundle' }
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eval-lookml-'))
+  try {
+    for (const [relPath, content] of persistedLookmlFiles.entries()) {
+      const target = path.join(tmpDir, relPath)
+      fs.mkdirSync(path.dirname(target), { recursive: true })
+      fs.writeFileSync(target, content, 'utf8')
+    }
+    execFileSync('lkr', ['parse', 'lookml-to-api', '--path', tmpDir, '--validate'], { stdio: 'pipe' })
+    return { ok: true, error: null }
+  } catch (err) {
+    return { ok: false, error: String(err?.stderr?.toString() || err?.message || err).slice(0, 500) }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
   }
 }
 
@@ -155,16 +187,20 @@ async function main() {
       turn: 3,
       name: 'Turn 3: Select thelook schema -> create model & bronze folders, ask to profile data & make metrics',
       prompt: 'Use the thelook dataset (argolis_scratch / looker-private-demo.thelook).',
-      grade: (res) => {
+      grade: async (res) => {
         const text = (res.assistantText || '').toLowerCase()
         const files = (res.lookmlBundle?.files || []).map((f) => f.path || f)
-        const allText = `${text}\n${files.join('\n')}\n${JSON.stringify(res.activitySteps || [])}`.toLowerCase()
+        const stepsText = JSON.stringify(res.activitySteps || []).toLowerCase()
+        const allText = `${text}\n${files.join('\n')}\n${stepsText}`
         const hasModel = files.some((f) => f.endsWith('.model.lkml')) || /\.model\.lkml/.test(allText)
         const hasBronzeFolder = files.some((f) => f.startsWith('bronze/') || f.includes('/bronze/')) || /\bbronze\//.test(allText)
+        const calledConnectionTables = /connection_tables/.test(stepsText)
+        const calledGenerateLookml = /generate_lookml_with_new_files/.test(stepsText)
+        const offlineParse = validateBundleOfflineWithLkrParse(res.lookmlBundle?.files || [])
         const asksToProfileAndMakeMetrics = /profile/.test(text) && /metric|measure|silver|refinement/.test(text)
         return {
-          passed: hasModel && hasBronzeFolder && asksToProfileAndMakeMetrics,
-          checks: { hasModel, hasBronzeFolder, asksToProfileAndMakeMetrics, files },
+          passed: hasModel && hasBronzeFolder && calledConnectionTables && calledGenerateLookml && offlineParse.ok && asksToProfileAndMakeMetrics,
+          checks: { hasModel, hasBronzeFolder, calledConnectionTables, calledGenerateLookml, offlineParseOk: offlineParse.ok, offlineParseError: offlineParse.error, asksToProfileAndMakeMetrics, files },
         }
       },
     },
@@ -172,17 +208,30 @@ async function main() {
       turn: 4,
       name: 'Turn 4: Profile data & create refinements, silver explores with joins, metrics, example query data, ask for dashboard',
       prompt: 'Yes, please profile the data and take a stab at making metrics.',
-      grade: (res) => {
+      grade: async (res) => {
         const text = (res.assistantText || '').toLowerCase()
         const files = (res.lookmlBundle?.files || []).map((f) => f.path || f)
-        const allText = `${text}\n${files.join('\n')}\n${JSON.stringify(res.activitySteps || [])}`.toLowerCase()
+        const stepsText = JSON.stringify(res.activitySteps || []).toLowerCase()
+        const allText = `${text}\n${files.join('\n')}\n${stepsText}`
         const hasRefinements = files.some((f) => f.includes('.refinement.lkml')) || /\.refinement\.lkml/.test(allText)
         const hasSilverExplores = files.some((f) => f.includes('silver/')) || /silver\/explores/.test(allText)
+        const calledProfileFields = /profile_fields/.test(stepsText)
         const showsExampleQueryData = /run_inline_query/.test(allText) && /\d/.test(text)
+        const offlineParse = validateBundleOfflineWithLkrParse(res.lookmlBundle?.files || [])
+        const activeProj = res.lookmlBundle?.project_id || lookmlProjectId || projectName
+        let liveProjectValid = false
+        let liveProjectFatalErrors = []
+        try {
+          const valRes = await sdk.validate_project(activeProj)
+          liveProjectFatalErrors = (valRes?.errors || []).filter((e) => e.severity === 'fatal' && (!e.explore || e.explore === 'order_items'))
+          liveProjectValid = Array.isArray(valRes?.errors) && liveProjectFatalErrors.length === 0
+        } catch (err) {
+          liveProjectFatalErrors = [String(err?.message || err)]
+        }
         const asksForDashboard = /dashboard/.test(text) && /\?/.test(text)
         return {
-          passed: hasRefinements && hasSilverExplores && showsExampleQueryData && asksForDashboard,
-          checks: { hasRefinements, hasSilverExplores, showsExampleQueryData, asksForDashboard, files },
+          passed: hasRefinements && hasSilverExplores && calledProfileFields && showsExampleQueryData && offlineParse.ok && liveProjectValid && asksForDashboard,
+          checks: { hasRefinements, hasSilverExplores, calledProfileFields, showsExampleQueryData, offlineParseOk: offlineParse.ok, offlineParseError: offlineParse.error, liveProjectValid, liveProjectFatalErrors, asksForDashboard, files },
         }
       },
     },
@@ -190,18 +239,30 @@ async function main() {
       turn: 5,
       name: 'Turn 5: Create LookML dashboard, copy into selected UI folder via CodeMode, ask for metric selector Data App',
       prompt: 'Yes, create a dashboard with these metrics.',
-      grade: (res) => {
+      grade: async (res) => {
         const text = (res.assistantText || '').toLowerCase()
         const stepsText = JSON.stringify(res.activitySteps || []).toLowerCase()
         const createdLookmlDashboard = /\.dashboard\.lookml/.test(stepsText) || /\.dashboard\.lookml/.test(text)
         const copiedToSelectedFolder =
           (/import_lookml_dashboard|sync_lookml_dashboard|create_dashboard|upsert_lookml_dashboard|upsert_udd/.test(stepsText)) &&
           (stepsText.includes(`"${selectedFolderId}"`) || stepsText.includes('target_folder_id') || String(res.nativeBundle?.folder_id || res.nativeBundle?.folderId || '') === String(selectedFolderId))
+        let liveDashExists = false
+        let liveDashFolderMatches = false
+        let liveDashTileCount = 0
+        const rawDashId = extractUddId(res.nativeBundle)
+        if (rawDashId) {
+          try {
+            const liveDash = await sdk.dashboard(rawDashId)
+            liveDashExists = Boolean(liveDash && String(liveDash.id) === rawDashId)
+            liveDashFolderMatches = String(liveDash?.folder?.id || liveDash?.space?.id || '') === String(selectedFolderId)
+            liveDashTileCount = (liveDash?.dashboard_elements || []).length
+          } catch {}
+        }
         const asksForMetricSelectorApp =
           /data app|metric selector/.test(text) && /day|week|month|year/.test(text)
         return {
-          passed: createdLookmlDashboard && copiedToSelectedFolder && asksForMetricSelectorApp,
-          checks: { createdLookmlDashboard, copiedToSelectedFolder, asksForMetricSelectorApp, nativeBundle: res.nativeBundle || null },
+          passed: createdLookmlDashboard && copiedToSelectedFolder && liveDashExists && liveDashFolderMatches && liveDashTileCount >= 4 && asksForMetricSelectorApp,
+          checks: { createdLookmlDashboard, copiedToSelectedFolder, liveDashExists, liveDashFolderMatches, liveDashTileCount, asksForMetricSelectorApp, nativeBundle: res.nativeBundle || null },
         }
       },
     },
@@ -209,7 +270,7 @@ async function main() {
       turn: 6,
       name: 'Turn 6: Build responsive metric selector Data App (90d/53w/60m/10y + measure-matched date dimensions)',
       prompt: 'Yes, build that metric selector data app.',
-      grade: (res) => {
+      grade: async (res) => {
         const code = res.bundle?.raw_code || ''
         const hasBundle = Boolean(code.trim())
         const has90Days = /90\s*days|90d/i.test(code)
@@ -219,9 +280,36 @@ async function main() {
         const matchesMeasureDate =
           /return/i.test(code) && /returned_date|returned_week|returned_month|returned_year|returned/i.test(code) &&
           /cancel/i.test(code) && /cancelled|canceled|shipped|delivered/i.test(code)
+        const activeModel = lookmlProjectId || projectName
+        const pairs = [
+          ['order_items.created_date', 'order_items.total_sale_price'],
+          ['order_items.returned_date', 'order_items.return_count'],
+          ['order_items.cancelled_date', 'order_items.cancel_count'],
+        ]
+        const liveQueryChecks = {}
+        let liveQueriesAllValid = true
+        await Promise.all(
+          pairs.map(async ([dim, meas]) => {
+            try {
+              const rows = await sdk.run_inline_query('json', {
+                model: activeModel,
+                view: 'order_items',
+                fields: [dim, meas],
+                filters: { [dim]: '10 years' },
+                limit: '5',
+              })
+              const ok = Array.isArray(rows) && rows.length > 0 && !rows[0]?.looker_error
+              liveQueryChecks[`${dim}+${meas}`] = ok ? rows.length : rows
+              if (!ok) liveQueriesAllValid = false
+            } catch (err) {
+              liveQueryChecks[`${dim}+${meas}`] = String(err?.message || err)
+              liveQueriesAllValid = false
+            }
+          })
+        )
         return {
-          passed: hasBundle && has90Days && has53Weeks && has60Months && has10Years && matchesMeasureDate,
-          checks: { hasBundle, has90Days, has53Weeks, has60Months, has10Years, matchesMeasureDate, codeLength: code.length },
+          passed: hasBundle && has90Days && has53Weeks && has60Months && has10Years && matchesMeasureDate && liveQueriesAllValid,
+          checks: { hasBundle, has90Days, has53Weeks, has60Months, has10Years, matchesMeasureDate, liveQueriesAllValid, liveQueryChecks, codeLength: code.length },
         }
       },
     },
@@ -230,6 +318,7 @@ async function main() {
   let session = { explores: [], conversationId: `eval_${shortId}` }
   let environmentId = undefined
   let lookmlProjectId = ''
+  let lastResolvedUseCase = 'auto'
   let currentAppCode = undefined
   let nativeContent = null
   const priorMessages = []
@@ -241,91 +330,110 @@ async function main() {
     turns: [],
   }
 
-  for (const t of turns) {
-    console.log(`\n=== ${t.name} ===`)
-    console.log(`> User: ${t.prompt}`)
-    if (t.turn >= 2 && !lookmlProjectId) lookmlProjectId = projectName
-    const classified = matchExplicitUseCaseRule(t.prompt, allowedModes)
-    const turnTargetUseCase = classified || 'auto'
-    const toolMode = turnTargetUseCase === 'lookml' || (lookmlProjectId && turnTargetUseCase === 'auto') ? 'lookml' : 'data_app'
-    const mode = turnTargetUseCase === 'dashboard' ? 'dashboard' : 'data_app'
-    const t0 = Date.now()
-    let res
-    try {
-      res = await runAntigravityTurn({
-        sdk,
-        userId: argolis.user_id,
-        environmentId,
-        conversationId: session.conversationId,
-        onEnvironmentUpdated: (envId) => { environmentId = envId },
-        auth: { mode: 'apikey', apiKey },
-        session,
-        thinkingLevel: 'low',
-        mode,
-        useCase: 'auto',
-        allowedModes,
-        selectedExplores: session.explores || [],
-        folderId: selectedFolderId,
-        toolMode,
-        lookmlProjectId,
-        activatedLookmlSkills: ['looker-project-onboarding', 'agentic-lookml'],
-        developableProjects: lookmlProjectId ? [lookmlProjectId] : [],
-        canDeploy: true,
-        schemaMarkdown: '',
-        userPrompt: t.prompt,
-        existingAppCode: currentAppCode,
-        existingNativeContent: nativeContent,
-        priorMessages,
-        requirePermission: false,
-        onStatus: (s) => process.stdout.write(`  [status] ${s}\n`),
-      })
-    } catch (err) {
-      console.error(`  [error] Turn ${t.turn} threw:`, err)
+  try {
+    for (const t of turns) {
+      console.log(`\n=== ${t.name} ===`)
+      console.log(`> User: ${t.prompt}`)
+      const classified = matchExplicitUseCaseRule(t.prompt, allowedModes)
+      const turnTargetUseCase = classified || 'auto'
+      const toolMode = turnTargetUseCase === 'lookml' || (turnTargetUseCase === 'auto' && lastResolvedUseCase === 'lookml') ? 'lookml' : 'data_app'
+      const mode = turnTargetUseCase === 'dashboard' ? 'dashboard' : 'data_app'
+      const t0 = Date.now()
+      let res
+      try {
+        res = await runAntigravityTurn({
+          sdk,
+          userId: argolis.user_id,
+          environmentId,
+          conversationId: session.conversationId,
+          onEnvironmentUpdated: (envId) => { environmentId = envId },
+          auth: { mode: 'apikey', apiKey },
+          session,
+          thinkingLevel: 'low',
+          mode,
+          useCase: 'auto',
+          allowedModes,
+          selectedExplores: session.explores || [],
+          folderId: selectedFolderId,
+          toolMode,
+          lookmlProjectId,
+          activatedLookmlSkills: [],
+          developableProjects: lookmlProjectId ? [lookmlProjectId] : [],
+          canDeploy: true,
+          schemaMarkdown: '',
+          userPrompt: t.prompt,
+          existingAppCode: currentAppCode,
+          existingNativeContent: nativeContent,
+          priorMessages,
+          requirePermission: false,
+          onStatus: (s) => process.stdout.write(`  [status] ${s}\n`),
+        })
+      } catch (err) {
+        console.error(`  [error] Turn ${t.turn} threw:`, err)
+        report.turns.push({
+          turn: t.turn,
+          name: t.name,
+          prompt: t.prompt,
+          durationMs: Date.now() - t0,
+          error: String(err?.stack || err),
+          passed: false,
+        })
+        break
+      }
+
+      const durationMs = Date.now() - t0
+      session = { ...res.session, conversationId: session.conversationId }
+      if (res.session?.environmentId) environmentId = res.session.environmentId
+      if (res.lookmlBundle?.project_id) lookmlProjectId = res.lookmlBundle.project_id
+      if (res.bundle?.raw_code) currentAppCode = res.bundle.raw_code
+      if (res.nativeBundle) nativeContent = res.nativeBundle
+      lastResolvedUseCase = res.resolvedUseCase || extractResolvedUseCase(res.assistantText, t.prompt, allowedModes)
+
+      priorMessages.push({ role: 'user', text: t.prompt })
+      priorMessages.push({ role: 'assistant', text: res.assistantText, interactionId: res.session?.lastInteractionId })
+
+      const evaluation = await t.grade(res)
+      console.log(`  [assistant (${(durationMs / 1000).toFixed(1)}s)] ${(res.assistantText || '').slice(0, 500).replace(/\n/g, ' ')}`)
+      console.log(`  [grade] passed=${evaluation.passed}`, JSON.stringify(evaluation.checks))
+
       report.turns.push({
         turn: t.turn,
         name: t.name,
         prompt: t.prompt,
-        durationMs: Date.now() - t0,
-        error: String(err?.stack || err),
-        passed: false,
+        durationMs,
+        interactionId: res.session?.lastInteractionId,
+        telemetry: res.telemetry,
+        resolvedUseCase: lastResolvedUseCase,
+        assistantText: res.assistantText,
+        activitySteps: res.activitySteps,
+        hasLookmlBundle: Boolean(res.lookmlBundle),
+        lookmlProjectId: res.lookmlBundle?.project_id || lookmlProjectId,
+        lookmlFiles: (res.lookmlBundle?.files || []).map((f) => f.path || f),
+        hasNativeBundle: Boolean(res.nativeBundle),
+        nativeBundle: res.nativeBundle || null,
+        hasDataAppBundle: Boolean(res.bundle),
+        dataAppCodeLength: res.bundle?.raw_code?.length || 0,
+        passed: evaluation.passed,
+        checks: evaluation.checks,
       })
-      break
     }
-
-    const durationMs = Date.now() - t0
-    session = { ...res.session, conversationId: session.conversationId }
-    if (res.session?.environmentId) environmentId = res.session.environmentId
-    if (res.lookmlBundle?.project_id) lookmlProjectId = res.lookmlBundle.project_id
-    if (res.bundle?.raw_code) currentAppCode = res.bundle.raw_code
-    if (res.nativeBundle) nativeContent = res.nativeBundle
-
-    priorMessages.push({ role: 'user', text: t.prompt })
-    priorMessages.push({ role: 'assistant', text: res.assistantText, interactionId: res.session?.lastInteractionId })
-
-    const evaluation = t.grade(res)
-    console.log(`  [assistant (${(durationMs / 1000).toFixed(1)}s)] ${(res.assistantText || '').slice(0, 500).replace(/\n/g, ' ')}`)
-    console.log(`  [grade] passed=${evaluation.passed}`, JSON.stringify(evaluation.checks))
-
-    report.turns.push({
-      turn: t.turn,
-      name: t.name,
-      prompt: t.prompt,
-      durationMs,
-      interactionId: res.session?.lastInteractionId,
-      telemetry: res.telemetry,
-      resolvedUseCase: res.resolvedUseCase || extractResolvedUseCase(res.assistantText, t.prompt, allowedModes),
-      assistantText: res.assistantText,
-      activitySteps: res.activitySteps,
-      hasLookmlBundle: Boolean(res.lookmlBundle),
-      lookmlProjectId: res.lookmlBundle?.project_id || lookmlProjectId,
-      lookmlFiles: (res.lookmlBundle?.files || []).map((f) => f.path || f),
-      hasNativeBundle: Boolean(res.nativeBundle),
-      nativeBundle: res.nativeBundle || null,
-      hasDataAppBundle: Boolean(res.bundle),
-      dataAppCodeLength: res.bundle?.raw_code?.length || 0,
-      passed: evaluation.passed,
-      checks: evaluation.checks,
-    })
+  } finally {
+    if (!process.argv.includes('--keep')) {
+      const dashId = extractUddId(nativeContent)
+      if (dashId && !dashId.includes('::')) {
+        try {
+          await sdk.delete_dashboard(dashId)
+          console.log(`[eval-new-project] Cleaned up UDD dashboard ${dashId}`)
+        } catch {}
+      }
+      const modelToClean = lookmlProjectId || projectName
+      if (modelToClean) {
+        try {
+          await sdk.delete_lookml_model(modelToClean)
+          console.log(`[eval-new-project] Cleaned up LookML model ${modelToClean}`)
+        } catch {}
+      }
+    }
   }
 
   const outIdx = process.argv.indexOf('--out')

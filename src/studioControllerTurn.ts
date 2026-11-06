@@ -460,7 +460,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         if (hydrated.promptSummary) turnPromptWithContext = `${effectivePrompt}\n\n${hydrated.promptSummary}`
       }
 
-      const effectiveLookmlTurn = turnTargetUseCase === 'lookml' || (explicitUseCase !== 'auto' && isLookmlMode)
+      const effectiveLookmlTurn = turnTargetUseCase === 'lookml' || (turnTargetUseCase === 'auto' && isLookmlMode)
       const effectiveBuilderMode: 'data_app' | 'dashboard' =
         turnTargetUseCase === 'dashboard'
           ? 'dashboard'
