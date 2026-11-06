@@ -366,6 +366,7 @@ async function main() {
           existingNativeContent: nativeContent,
           priorMessages,
           requirePermission: false,
+          pollScheduleMs: [250, 450, 700, 1000],
           onStatus: (s) => process.stdout.write(`  [status] ${s}\n`),
         })
       } catch (err) {

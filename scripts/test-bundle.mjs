@@ -45,9 +45,9 @@ const antigravityTs = [
   .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
   .join('\n')
 assert(
-  antigravityTs.includes('https://cdn.lkr.dev/cli/codemode/0.0.64/codemode.js') &&
+  antigravityTs.includes('https://cdn.lkr.dev/cli/codemode/0.0.65/codemode.js') &&
     antigravityTs.includes('export async function ensureCodeModeLoaded()'),
-  'src/lkrCliBridge.ts must define CODEMODE_CDN_URL (https://cdn.lkr.dev/cli/codemode/0.0.64/codemode.js) and ensureCodeModeLoaded()'
+  'src/lkrCliBridge.ts must define CODEMODE_CDN_URL (https://cdn.lkr.dev/cli/codemode/0.0.65/codemode.js) and ensureCodeModeLoaded()'
 )
 const distBundlePath = path.join(repoRoot, 'dist/bundle.js')
 if (statSync(distBundlePath, { throwIfNoEntry: false })) {
@@ -58,8 +58,8 @@ if (statSync(distBundlePath, { throwIfNoEntry: false })) {
   )
   const distBundleText = readFileSync(distBundlePath, 'utf8')
   assert(
-    distBundleText.includes('https://cdn.lkr.dev/cli/codemode/0.0.64/codemode.js'),
-    'Expected dist/bundle.js to reference https://cdn.lkr.dev/cli/codemode/0.0.64/codemode.js'
+    distBundleText.includes('https://cdn.lkr.dev/cli/codemode/0.0.65/codemode.js'),
+    'Expected dist/bundle.js to reference https://cdn.lkr.dev/cli/codemode/0.0.65/codemode.js'
   )
 }
 assert(
@@ -500,16 +500,16 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
   const upstreamAgentsMd = readFileSync(path.join(repoRoot, 'upstream/payload/AGENTS.md'), 'utf8')
   const pinnedVersionTxt = readFileSync(path.join(repoRoot, 'lkr-dev-cli-version.txt'), 'utf8').trim()
   const updateSkillsYml = readFileSync(path.join(repoRoot, '.github/workflows/update-skills.yml'), 'utf8')
-  assert.equal(pinnedVersionTxt, '0.0.64', 'lkr-dev-cli-version.txt must pin 0.0.64')
+  assert.equal(pinnedVersionTxt, '0.0.65', 'lkr-dev-cli-version.txt must pin 0.0.65')
   assert(
-    lookmlToolTsx.includes("export const LKR_DEV_CLI_VERSION = '0.0.64'") &&
+    lookmlToolTsx.includes("export const LKR_DEV_CLI_VERSION = '0.0.65'") &&
       lookmlToolTsx.includes('"install", "--break-system-packages", "--quiet", "uv"') &&
       lookmlToolTsx.includes('"UV_TOOL_BIN_DIR": "/usr/local/bin"') &&
       lookmlToolTsx.includes('"uv", "tool", "install", "--force", "--quiet", pkg_spec') &&
       updateSkillsYml.includes('cron: "0 9 * * 1,4"') &&
       updateSkillsYml.includes('https://pypi.org/pypi/lkr-dev-cli/json') &&
       updateSkillsYml.includes('chore/update-skills'),
-    'Issue #32: lookmlTool.tsx and .github/workflows/update-skills.yml must pin lkr-dev-cli==0.0.64, bootstrap uv via pip --break-system-packages + uv tool install, and auto-PR new PyPI releases'
+    'Issue #32: lookmlTool.tsx and .github/workflows/update-skills.yml must pin lkr-dev-cli==0.0.65, bootstrap uv via pip --break-system-packages + uv tool install, and auto-PR new PyPI releases'
   )
 
   // Live prototype check of bootstrap_lookml.py cli with mock pip & uv shims
@@ -525,7 +525,7 @@ cat << 'EOF' > "${fakeBinDir}/uv"
 echo "UV_TOOL_BIN_DIR=\${UV_TOOL_BIN_DIR:-} uv $@" >> "${cmdLogPath}"
 cat << 'INNER' > "${fakeBinDir}/lkr"
 #!/bin/sh
-echo "lkr, version 0.0.64"
+echo "lkr, version 0.0.65"
 INNER
 chmod +x "${fakeBinDir}/lkr"
 EOF
@@ -542,11 +542,11 @@ chmod +x "${fakeBinDir}/uv"
   })
   const cliBootstrapJson = JSON.parse(cliBootstrapOut.trim())
   assert.equal(cliBootstrapJson.ok, true)
-  assert.equal(cliBootstrapJson.version, '0.0.64')
+  assert.equal(cliBootstrapJson.version, '0.0.65')
   const loggedCmds = readFileSync(cmdLogPath, 'utf8')
   assert(
     loggedCmds.includes('pip install --break-system-packages --quiet uv') &&
-      loggedCmds.includes('UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet lkr-dev-cli[tools,code-mode,parse]==0.0.64'),
+      loggedCmds.includes('UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet lkr-dev-cli[tools,code-mode,parse]==0.0.65'),
     'bootstrap_lookml.py cli must execute pip install --break-system-packages --quiet uv followed by UV_TOOL_BIN_DIR=/usr/local/bin uv tool install'
   )
 
