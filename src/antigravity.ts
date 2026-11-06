@@ -475,7 +475,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   }
   await persistUserEnvIfChanged({ sdk, extensionSDK, userId, previousEnvId: initialEnvId, nextEnvId: trackedEnvId, onEnvironmentUpdated })
 
-  let pollIdx = 0, prevStepCount = (interaction.steps || []).length, prevStatus = interaction.status, bridgeRound = 0
+  let pollIdx = 0, prevStepCount = (interaction.steps || []).length, prevStatus = interaction.status, bridgeRound = 0, actionRound = 0
   let accInputTokens = 0, accOutputTokens = 0, accThoughtTokens = 0
   const accumulateInteractionUsage = (snap: AntigravityInteractionPayload | null | undefined) => {
     const u = snap?.usage || snap?.usage_metadata
@@ -559,7 +559,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
               !executedIds.has(s.id)
           )
 
-          if (pendingLookerCalls.length > 0) {
+          if (pendingLookerCalls.length > 0 && actionRound < 8) {
+            actionRound += 1
             await throwIfAborted(interaction.id)
             const preBridgeReqs = getPendingBridgeReqs(interaction)
             for (const req of preBridgeReqs) {
@@ -658,11 +659,21 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                     error: errMsg,
                   })
                 }
+                // ponytail: /v1beta/interactions requires function_result.result to be a JSON object (Struct); top-level arrays/primitives get dropped
+                let structResult = codeModeOutput
+                try {
+                  const parsed = JSON.parse(codeModeOutput)
+                  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                    structResult = JSON.stringify({ result: parsed })
+                  }
+                } catch {
+                  // Non-JSON string: /v1beta/interactions wraps raw strings automatically
+                }
                 return {
                   type: 'function_result',
                   name: call.name || 'run_looker_codemode',
                   call_id: call.id,
-                  result: codeModeOutput,
+                  result: structResult,
                 }
               })
             )
@@ -698,6 +709,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
             prevStatus = interaction.status
             continue
           }
+          break
         }
 
         onStatus(summarizeProgress(interaction))
