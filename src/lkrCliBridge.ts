@@ -570,16 +570,19 @@ def _patch_codemode(mod):
             cmd.callback = _patched_sandbox
 
 _PUSH_CODEMODE_PY = """
+existing_projects = {}
 try:
-    p = project(project_id)
+    existing_projects = {pr.get("id"): pr for pr in (all_projects(fields="id,uses_git,git_service_name") or []) if isinstance(pr, dict) and pr.get("id")}
 except Exception:
-    p = create_project({"name": project_id})
+    existing_projects = {}
+new_project = project_id not in existing_projects
+p = create_project({"name": project_id}) if new_project else existing_projects[project_id]
 if not p.get("uses_git") and p.get("git_service_name") != "bare":
     try:
         update_project(project_id, {"git_service_name": "bare"})
     except Exception:
         pass
-if reset:
+if reset and not new_project:
     try:
         reset_project_to_production(project_id)
     except Exception:
@@ -588,10 +591,11 @@ if reset:
         except Exception:
             pass
 existing_remote = []
-try:
-    existing_remote = all_project_files(project_id) or []
-except Exception:
-    existing_remote = []
+if not new_project:
+    try:
+        existing_remote = all_project_files(project_id) or []
+    except Exception:
+        existing_remote = []
 remote_paths = {(rf.get("path") or rf.get("id") or "") for rf in existing_remote if isinstance(rf, dict)}
 created_dirs = set()
 for rp in remote_paths:
@@ -635,7 +639,7 @@ if not single_file:
                 pass
 model_files = [f for f in files_to_push if f["root_name"].endswith(".model.lkml")]
 if model_files:
-    existing_models = {m.get("name"): m for m in (all_lookml_models() or []) if isinstance(m, dict) and m.get("name")}
+    existing_models = {m.get("name"): m for m in (all_lookml_models(fields="name,project_name,allowed_db_connection_names") or []) if isinstance(m, dict) and m.get("name")}
     for mf in model_files:
         mname = mf["root_name"][:-11]
         conn_name = mf.get("connection")
@@ -1160,34 +1164,49 @@ export function computeLkrExtensionCacheKey(req: LkrExtensionToolRequest): strin
 
 export interface LkrCliBridgeInteractionLike {
   output_text?: string
-  outputs?: Array<{ text?: string }>
+  outputs?: Array<{ text?: string; result?: string; output?: string; content?: unknown }>
   steps?: Array<{
     output?: string
     stdout?: string
     stderr?: string
     result?: string
     text?: string
-    code_execution_result?: { output?: string; stderr?: string }
+    content?: unknown
+    code_execution_result?: { output?: string; stderr?: string; result?: string; content?: unknown }
   }>
 }
 
 export function extractLkrExtensionToolRequests(
   interactionOrText: string | LkrCliBridgeInteractionLike | null | undefined
 ): LkrExtensionToolRequest[] {
+  const flattenContent = (val: unknown): Array<string | undefined> =>
+    typeof val === 'string'
+      ? [val]
+      : Array.isArray(val)
+      ? val.flatMap((c) => (typeof c === 'string' ? [c] : [(c as { text?: string })?.text]))
+      : []
   const texts: string[] =
     typeof interactionOrText === 'string'
       ? [interactionOrText]
       : [
           interactionOrText?.output_text,
-          ...(interactionOrText?.outputs || []).map((o) => o?.text),
+          ...(interactionOrText?.outputs || []).flatMap((o) => [
+            o?.text,
+            o?.result,
+            o?.output,
+            ...flattenContent(o?.content),
+          ]),
           ...(interactionOrText?.steps || []).flatMap((s) => [
             s?.output,
             s?.stdout,
             s?.stderr,
             s?.result,
             s?.text,
+            ...flattenContent(s?.content),
             s?.code_execution_result?.output,
             s?.code_execution_result?.stderr,
+            s?.code_execution_result?.result,
+            ...flattenContent(s?.code_execution_result?.content),
           ]),
         ].filter((x): x is string => typeof x === 'string')
 
