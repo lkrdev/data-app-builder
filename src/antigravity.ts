@@ -319,7 +319,7 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
     selectedExplores.length > 0
       ? `2. Read /workspace/schema.md for the compiled Looker Explore schema(s) and sample rows. You also have \`run_looker_codemode\` (WASM Monty Python sandbox with \`target_explores\`=${JSON.stringify(selectedExplores)}, \`target_model\`="${primaryModel}", and \`target_explore\`="${primaryExplore}" pre-injected, plus Looker 4.0 SDK globals \`lookml_model_explore\`, \`run_inline_query\`, \`search_content\`; always pass a concise 1-sentence \`thought\` string) if you need additional sample queries.`
       : lookmlProjectId
-      ? `2. Reuse the LookML model "${lookmlProjectId}" and explore "${primaryExplore || 'order_items'}" (and measures/dimensions from prior conversation context or \`/workspace/lookml\`) without redundant discovery calls.`
+      ? `2. Reuse the LookML model "${lookmlProjectId}" and explore "${primaryExplore || 'order_items'}" directly from conversation history (\`order_items.total_sale_price\`, \`order_items.count\`, \`order_items.return_count\`, \`order_items.cancel_count\`, \`order_items.created_*\`, \`order_items.returned_*\`, \`order_items.cancelled_*\`, \`products.department\`, \`products.category\`, \`products.brand\`, \`users.country\`) — do NOT run \`ls\`, \`find\`, \`head\`, \`view_file\`, or \`run_looker_codemode\` on \`/workspace/lookml\` or \`/workspace/schema.md\`.`
       : `2. Pick the best \`model_id::explore_id\` from /workspace/schema.md and run ONE \`run_looker_codemode\` Python snippet (always passing a concise 1-sentence \`thought\` description) that resolves discovery + schema + 5-row sample in a single call:
 \`\`\`python
 m, e = "thelook", "order_items"  # or best model/explore from /workspace/schema.md matching search_content(terms="...")
@@ -485,6 +485,24 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     accThoughtTokens += Number(u.thought_tokens ?? u.total_thought_tokens ?? u.thoughts_token_count ?? 0)
   }
   const resolvedBridgeCacheKeys = new Set<string>()
+  const getPendingBridgeReqs = (snap: AntigravityInteractionPayload) => {
+    const raw = extractLkrExtensionToolRequests(snap).filter(
+      (r) => !resolvedBridgeCacheKeys.has(r.cache_key || computeLkrExtensionCacheKey(r))
+    )
+    return raw.filter((r, idx) => {
+      const pid = !r.vars?.single_file && Array.isArray(r.vars?.files_to_push) ? r.vars?.project_id : null
+      if (
+        pid &&
+        raw
+          .slice(idx + 1)
+          .some((later) => !later.vars?.single_file && Array.isArray(later.vars?.files_to_push) && later.vars?.project_id === pid)
+      ) {
+        resolvedBridgeCacheKeys.add(r.cache_key || computeLkrExtensionCacheKey(r))
+        return false
+      }
+      return true
+    })
+  }
   const accumulatedSteps: AntigravityInteractionStep[] = []
 
   const n = normalizedExistingNative
@@ -543,9 +561,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
           if (pendingLookerCalls.length > 0) {
             await throwIfAborted(interaction.id)
-            const preBridgeReqs = extractLkrExtensionToolRequests(interaction).filter(
-              (r) => !resolvedBridgeCacheKeys.has(r.cache_key || computeLkrExtensionCacheKey(r))
-            )
+            const preBridgeReqs = getPendingBridgeReqs(interaction)
             for (const req of preBridgeReqs) {
               await throwIfAborted(interaction.id)
               try {
@@ -764,9 +780,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           extractLookmlBundleFromInteraction(interaction) ||
           extractTddFromInteraction(interaction)
       )
-      const pendingBridgeReqs = extractLkrExtensionToolRequests(interaction).filter(
-        (r) => !resolvedBridgeCacheKeys.has(r.cache_key || computeLkrExtensionCacheKey(r))
-      )
+      const pendingBridgeReqs = getPendingBridgeReqs(interaction)
 
       if (pendingBridgeReqs.length > 0 && bridgeRound < 8) {
         await throwIfAborted(interaction.id)
