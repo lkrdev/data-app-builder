@@ -24,6 +24,7 @@ import {
   formatFriendlyLookerActivityLabel,
   INTERNAL_JARGON_THOUGHT_RE,
   parseStepArguments,
+  SANDBOX_AGENT_SKILL_FILES,
   summarizeProgress,
 } from './antigravitySteps'
 import {
@@ -167,24 +168,14 @@ export function buildWorkspaceSources(params: {
     },
     {
       type: 'inline',
-      content: BUILTIN_SKILLS_FILES['lookml-field-curation'],
-      target: '/workspace/skills/lookml-field-curation/SKILL.md',
-    },
-    {
-      type: 'inline',
-      content: BUILTIN_SKILLS_FILES['lookml-tests'],
-      target: '/workspace/skills/lookml-tests/SKILL.md',
-    },
-    {
-      type: 'inline',
       content: BUILTIN_SKILLS_FILES['lookml-snapshot'],
       target: '/workspace/skills/lookml-snapshot/SKILL.md',
     },
-    {
-      type: 'inline',
-      content: BUILTIN_SKILLS_FILES['lookml-bronze-view'],
-      target: '/workspace/skills/generate-view-from-table/SKILL.md',
-    },
+    ...Object.entries(SANDBOX_AGENT_SKILL_FILES).map(([relPath, content]) => ({
+      type: 'inline' as const,
+      content,
+      target: `/workspace/skills/${relPath}`,
+    })),
     { type: 'inline', content: BOOTSTRAP_LOOKML_PY, target: '/workspace/bootstrap_lookml.py' },
     { type: 'inline', content: LKR_CLI_SITECUSTOMIZE_PY, target: '/workspace/sitecustomize.py' },
     {
@@ -340,10 +331,10 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
     selectedExplores.length > 0
       ? `2. Read /workspace/schema.md for the compiled Looker Explore schema(s) and sample rows. You also have \`run_looker_codemode\` (WASM Monty Python sandbox with \`target_explores\`=${JSON.stringify(selectedExplores)}, \`target_model\`="${primaryModel}", and \`target_explore\`="${primaryExplore}" pre-injected, plus Looker 4.0 SDK globals \`lookml_model_explore\`, \`run_inline_query\`, \`search_content\`; always pass a concise 1-sentence \`thought\` string) if you need additional sample queries.`
       : lookmlProjectId
-      ? `2. Reuse the LookML model "${lookmlProjectId}" and explore "${primaryExplore || 'order_items'}" directly from conversation history (\`order_items.total_sale_price\`, \`order_items.count\`, \`order_items.return_count\`, \`order_items.cancel_count\`, \`order_items.created_*\`, \`order_items.returned_*\`, \`order_items.cancelled_*\`, \`products.department\`, \`products.category\`, \`products.brand\`, \`users.country\`) — do NOT run \`ls\`, \`find\`, \`head\`, \`view_file\`, or \`run_looker_codemode\` on \`/workspace/lookml\` or \`/workspace/schema.md\`.`
+      ? `2. Reuse the LookML model "${lookmlProjectId}" and primary Silver explore${primaryExplore ? ` "${primaryExplore}"` : ''} and fields already created in conversation history (\`total_<num_col>\`, \`count\`, \`return_count\`, \`cancel_count\`, \`created_*\`, \`returned_*\`, \`cancelled_*\`, and joined dimension fields) — do NOT run \`ls\`, \`find\`, \`head\`, \`view_file\`, or \`run_looker_codemode\` on \`/workspace/lookml\` or \`/workspace/schema.md\`.`
       : `2. Pick the best \`model_id::explore_id\` from /workspace/schema.md and run ONE \`run_looker_codemode\` Python snippet (always passing a concise 1-sentence \`thought\` description) that resolves discovery + schema + 5-row sample in a single call:
 \`\`\`python
-m, e = "thelook", "order_items"  # or best model/explore from /workspace/schema.md matching search_content(terms="...")
+m, e = "<model_name>", "<explore_name>"  # best model/explore from /workspace/schema.md matching search_content(terms="...")
 exp = lookml_model_explore(m, e, fields="name,label,fields(dimensions(name,label,type),measures(name,label,type))")
 dims = [d["name"] for d in (exp.get("fields", {}).get("dimensions") or [])]
 meas = [x["name"] for x in (exp.get("fields", {}).get("measures") or [])]
@@ -355,9 +346,9 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     selectedExplores.length === 1
       ? `with \`this.lookerModel = '${primaryModel}'\` and \`this.explore = '${primaryExplore}'\` in \`constructor()\``
       : lookmlProjectId
-      ? `with \`this.lookerModel = '${lookmlProjectId}'\` and \`this.explore = '${primaryExplore || 'order_items'}'\` in \`constructor()\``
+      ? `with \`this.lookerModel = '${lookmlProjectId}'\` and \`this.explore = '${primaryExplore || '<fact_explore>'}'\` (the primary Silver explore from conversation history) in \`constructor()\``
       : `setting \`this.lookerModel\` and \`this.explore\` in \`constructor()\``
-  const step3Directive = `3. Write and bundle the Lit Data App in ONE \`code_execution\` call importing from '/runtime/data-app.js' (${ctorHint}; do NOT run \`bundle_app.py --help\` or read, inspect, or decompile \`/workspace/bundle_app.py\` or \`/runtime\` — \`bundle_app.py\` natively evaluates ternaries, \`+\` string concatenation, template literals, and dictionary lookups; for metric selector / timeframe switcher apps switching between day/date, week, month, and year, default the date filter window to day: '90 days', week: '53 weeks', month: '60 months', year: '10 years', and dynamically match the date dimension group to the selected measure: return_count uses order_items.returned_date/returned_week/returned_month/returned_year, cancel_count uses order_items.cancelled_date/cancelled_week/cancelled_month/cancelled_year, and standard metrics use order_items.created_date/created_week/created_month/created_year) into \`${appFilePath}\`:\n   \`python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\\n...\\nEOF\``
+  const step3Directive = `3. Write and bundle the Lit Data App in ONE \`code_execution\` call importing from '/runtime/data-app.js' (${ctorHint}; do NOT run \`bundle_app.py --help\` or read, inspect, or decompile \`/workspace/bundle_app.py\` or \`/runtime\` — \`bundle_app.py\` natively evaluates ternaries, \`+\` string concatenation, template literals, and dictionary lookups; for metric selector / timeframe switcher apps switching between day/date, week, month, and year, default the date filter window to day: '90 days', week: '53 weeks', month: '60 months', year: '10 years', and dynamically match the date dimension group to the selected measure: return_count uses <view>.returned_date/returned_week/returned_month/returned_year, cancel_count uses <view>.cancelled_date/cancelled_week/cancelled_month/cancelled_year, and standard metrics use <view>.created_date/created_week/created_month/created_year) into \`${appFilePath}\`:\n   \`python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\\n...\\nEOF\``
 
   const normalizedExistingNative: NativeContentState | null = existingNativeContent
     ? normalizeNativeContent({

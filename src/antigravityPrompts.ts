@@ -175,7 +175,7 @@ def upsert_udd(title, folder_id=None, filters=None, tiles=None, dashboard_id=Non
     }
 
 def upsert_lookml_dashboard(project_id="", model="", dashboard_name="executive_pulse", title="Executive Pulse", tiles=None, filters=None, yaml_content=None, folder_id=None, sync_udd_id=None, model_file_path=None):
-    m = str(model or _t_model or _active.get("model") or "thelook")
+    m = str(model or _t_model or _active.get("model") or project_id or _t_project_id or "")
     proj = str(project_id or _t_project_id or _active.get("projectId") or _active.get("project_id") or "")
     if not proj and m:
         try:
@@ -204,13 +204,15 @@ def upsert_lookml_dashboard(project_id="", model="", dashboard_name="executive_p
             lines.append("  filters:")
             for f in filters:
                 fn = str(f.get("name") or f.get("title") or "filter").replace(".", "_").replace(" ", "_").lower()
+                ffld = str(f.get("dimension") or f.get("field") or "")
+                fexp = str(f.get("explore") or _t_explore or (ffld.split(".", 1)[0] if "." in ffld else ""))
                 lines.extend([
                     f"  - name: {fn}",
                     f"    title: {json.dumps(str(f.get('title') or fn))}",
                     f"    type: {str(f.get('type') or 'field_filter')}",
                     f"    model: {str(f.get('model') or m)}",
-                    f"    explore: {str(f.get('explore') or _t_explore or 'order_items')}",
-                    f"    field: {str(f.get('dimension') or f.get('field') or '')}",
+                    f"    explore: {fexp}",
+                    f"    field: {ffld}",
                     f"    default_value: {json.dumps(str(f.get('default_value') or ''))}",
                     "    allow_multiple_values: true",
                 ])
@@ -222,8 +224,8 @@ def upsert_lookml_dashboard(project_id="", model="", dashboard_name="executive_p
                 vt = str(vc.get("type") or t.get("type") or "looker_grid")
                 en = str(t.get("name") or t.get("title") or f"tile_{idx + 1}").replace(".", "_").replace(" ", "_").lower()
                 tm = str(q.get("model") or t.get("model") or m)
-                te = str(q.get("view") or q.get("explore") or t.get("explore") or "order_items")
                 flds = list(q.get("fields") or t.get("fields") or [])
+                te = str(q.get("view") or q.get("explore") or t.get("explore") or _t_explore or (str(flds[0]).split(".", 1)[0] if flds and "." in str(flds[0]) else ""))
                 srts = list(q.get("sorts") or t.get("sorts") or [])
                 lim = str(q.get("limit") or t.get("limit") or "500")
                 nb = _norm_box(t, idx)
@@ -462,13 +464,13 @@ export function buildNativeContentGuide(params: {
     selectedExplores.length > 0
       ? `for selected Looker explore(s): ${selectedExplores.map((id) => `"${id}"`).join(', ')}.`
       : lookmlProjectId
-      ? `for LookML project/model "${lookmlProjectId}" (default explore "${primaryExplore || 'order_items'}").`
+      ? `for LookML project/model "${lookmlProjectId}"${primaryExplore ? ` (explore "${primaryExplore}")` : ''}.`
       : `where no explore was pre-selected — pick the best \`model_id::explore_id\` from /workspace/schema.md or \`search_content(terms="...", types="lookml_explore")\`.`
   const existingNativeDirective = existingNativeContent
     ? `Active native Looker ${existingNativeContent.contentType}: id="${existingNativeContent.id}", title="${existingNativeContent.title}", folder_id="${existingNativeContent.folderId}" (pre-injected in CodeMode as \`active_content\`). Update it in place without redundant read calls unless the user asks for a brand-new item.`
     : `Create the requested native Looker content in folder_id=\`target_folder_id\` ("${folderId}").`
   const lookmlOnboardingDirective = lookmlProjectId
-    ? `4. LookML Project Onboarding Dashboard Rule: Because \`target_project_id\`="${lookmlProjectId}" is active, reuse the LookML fields already created in conversation history (do NOT call \`lookml_model_explore\`), call \`res = upsert_lookml_dashboard(project_id="${lookmlProjectId}", model="${primaryModel || lookmlProjectId}", dashboard_name="ecommerce_overview", title="E-Commerce Performance Overview", folder_id="${folderId}", filters=[...], tiles=[...])\` and \`return emit_native_bundle(res, folder_id="${folderId}", title="E-Commerce Performance Overview")\` in ONE \`run_looker_codemode\` call so the LookML dashboard (\`dashboards/ecommerce_overview.dashboard.lookml\`) is both saved to the LookML project and copied/imported into folder_id="${folderId}". In your text response, confirm the LookML dashboard (\`.dashboard.lookml\`) was created and copied to the selected folder, and **ask the user if they want a responsive metric selector Data App** that takes these measures and switches between **day (date), week, month, and year** and different chart types.`
+    ? `4. LookML Project Onboarding Dashboard Rule: Because \`target_project_id\`="${lookmlProjectId}" is active, reuse the LookML fields already created in conversation history (do NOT call \`lookml_model_explore\`), call \`res = upsert_lookml_dashboard(project_id="${lookmlProjectId}", model="${primaryModel || lookmlProjectId}", dashboard_name="performance_overview", title="Performance Overview", folder_id="${folderId}", filters=[...], tiles=[...])\` and \`return emit_native_bundle(res, folder_id="${folderId}", title="Performance Overview")\` in ONE \`run_looker_codemode\` call so the LookML dashboard (\`dashboards/performance_overview.dashboard.lookml\`) is both saved to the LookML project and copied/imported into folder_id="${folderId}". In your text response, confirm the LookML dashboard (\`.dashboard.lookml\`) was created and copied to the selected folder, and **ask the user if they want a responsive metric selector Data App** that takes these measures and switches between **day (date), week, month, and year** and different chart types.`
     : ''
 
   return [
@@ -477,7 +479,7 @@ export function buildNativeContentGuide(params: {
     NATIVE_CONTENT_GUIDE_MD,
     `Follow these exact steps in ONE \`run_looker_codemode\` call per turn (remote bash \`code_execution\` is disabled in /dashboard mode; always pass a concise 1-sentence \`thought\` string describing the Looker API action; NEVER call \`update_session\`; all CodeMode SDK methods return Python \`dict\`s, so use \`d.get("fields", {})\` instead of attribute access):`,
     `1. On cold start (when fields are not already in conversation history), discover fields via \`lookml_model_explore(m, e, fields="name,label,fields(dimensions(name,label,type),measures(name,label,type))")\` (returns a \`dict\`), then build/update the UDD (\`upsert_udd\`), LookML Dashboard (\`upsert_lookml_dashboard\` + \`import_lookml_dashboard\` / \`sync_lookml_dashboard\`), Saved Look (\`create_look\`), Board (\`pin_to_board\`), or Schedule (\`schedule_dashboard\`) in the SAME \`run_looker_codemode\` script.`,
-    `2. End your Python script with \`return emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", summary="...")\` (with \`target_folder_id\`="${folderId}", \`target_explores\`=${JSON.stringify(selectedExplores)}, \`target_model\`="${primaryModel || lookmlProjectId}", \`target_explore\`="${primaryExplore || 'order_items'}", \`target_project_id\`="${lookmlProjectId}").`,
+    `2. End your Python script with \`return emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", summary="...")\` (with \`target_folder_id\`="${folderId}", \`target_explores\`=${JSON.stringify(selectedExplores)}, \`target_model\`="${primaryModel || lookmlProjectId}", \`target_explore\`="${primaryExplore}", \`target_project_id\`="${lookmlProjectId}").`,
     `3. CRITICAL: The host extracts \`<NATIVE_CONTENT_BUNDLE>\` / \`NATIVE_CONTENT_BUNDLE\` directly from your \`run_looker_codemode\` return value. Do NOT echo or repeat \`<NATIVE_CONTENT_BUNDLE>...</NATIVE_CONTENT_BUNDLE>\` in your final text response — reply with a concise 1–2 sentence summary only.`,
     ...(lookmlOnboardingDirective ? [lookmlOnboardingDirective] : []),
   ].join('\n')
@@ -492,9 +494,31 @@ This directory is an installed Looker Data Apps environment. A **Data App** is a
 code-first application for Looker, authored as a single self-contained ES module
 in \`apps/<name>/app.js\` and published directly into Looker dashboard tiles.
 
+## AI Agent Routing (Pre-Mounted Sandbox Skills in \`/workspace/skills/\`)
+
+All skills, references, and scripts are pre-mounted in \`/workspace/skills/\` (and linked at \`/workspace/.agents/skills/\`). Load the matching \`SKILL.md\` when needed:
+
+| Task / Intent | Skill to Load | What It Handles |
+| --- | --- | --- |
+| **Create or edit an app** | \`skills/data-apps/SKILL.md\` | Component contracts (\`<app-kpi>\`, \`<app-chart>\`, \`<app-grid>\`, \`<app-select>\`), \`.da-*\` layout classes, dark mode, and static widget extraction |
+| **Data Investigator narrative app** | \`skills/data-investigator/SKILL.md\` | Point-in-time root-cause narrative Data Apps (\`doc\` / \`slides\`) with fixed date ranges (\`YYYY-MM-DD to YYYY-MM-DD\`) and sequential evidence chapters |
+| **Key Driver Analysis (KDA)** | \`skills/key-driver-analysis/SKILL.md\` | Running, explaining, and recursively drilling through Looker Key Driver Analysis (\`run_key_driver_analysis\`) via \`skills/key-driver-analysis/scripts/kda_toolkit.py\` |
+| **Onboard a new Looker project** | \`skills/looker-project-onboarding/SKILL.md\` | End-to-end Looker Project Onboarding from a DB connection: \`snake_case\` \`project_name\`, bounded \`5 × 5\` SDK schema/table discovery, bare Git project & model creation, and 5-layer measure synthesis |
+| **Agentic LookML & Medallion modeling** | \`skills/agentic-lookml/SKILL.md\` | Unified LookML engineering, 14 SQL-to-LookML pattern playbooks (\`skills/agentic-lookml/references/01..14-*.md\`, \`measures-and-sql-functions.md\`), and Bronze/Silver/Gold Medallion modeling |
+| **End-to-end SQL-to-LookML PR workflow** | \`skills/agentic-lookml-workflow/SKILL.md\` | Offline SQL parsing, branch init, Bronze view generation, LookML data tests, parity pre-gate (\`skills/agentic-lookml-workflow/scripts/*.py\`), and PR creation |
+| **Scaffold Bronze views from DB tables** | \`skills/generate-view-from-table/SKILL.md\` | Detecting missing/stale Bronze views and generating 1:1 physical \`bronze/:table.view.lkml\` files (\`skills/generate-view-from-table/scripts/generate_bronze_view.py\`) |
+| **Profile Explore fields & distributions** | \`skills/looker-field-profiler/SKILL.md\` | Profiling Looker Explore dimensions and measures (\`profile_fields\`) for cardinality, quantiles, temporal spikiness, and LookML refinement snippets |
+| **Curate LookML field descriptions & tags** | \`skills/lookml-field-curation/SKILL.md\` | Authoring high-signal \`description:\`, \`tags:\`, \`hidden:\`, and \`suggestable:\` refinements (\`skills/lookml-field-curation/scripts/*.py\`) |
+| **LookML syntax, views, explores & tests** | \`skills/lookml/SKILL.md\` | Complete LookML reference suite: \`lookml-model\`, \`lookml-view\` (\`references/derived_table.md\`), \`lookml-explore\` (\`references/joins.md\`, \`advanced.md\`), \`lookml-fields\` (\`references/*.md\`), \`lookml-refinements\`, \`lookml-tests\`, \`lookml-liquid\`, \`lookml-sets\`, \`lookml-access-grants\`, \`lookml-ojof\`, \`lookml-modeling-guidelines\` |
+| **Looker filters & table calculations** | \`skills/looker-filters/SKILL.md\` & \`skills/looker-expressions/SKILL.md\` | Looker filter expressions, \`matches_filter\`, Custom Fields, Table Calculations (\`references/excel-equivalents.md\`), and \`.test.lkml\` \`assert:\` expressions |
+| **Looker Code Mode & project helpers** | \`skills/lkr-code-mode/SKILL.md\` & \`skills/lkr-project-helper/SKILL.md\` | Monty Python sandbox SDK recipes (\`skills/lkr-code-mode/scripts/*.py\`), bare Git setup, SQL-to-view generation, and UDD dashboard migration (\`skills/lkr-project-helper/scripts/*.py\`) |
+| **LookML architecture, review & audits** | \`skills/looker-architect/SKILL.md\`, \`skills/lookml-reviewer/SKILL.md\`, \`skills/looker-audit/SKILL.md\`, \`skills/looker-performance-optimizer/SKILL.md\` | Enterprise LookML scaffolding (\`looker_scaffold.py\`, \`references/*.md\`), LAMS style review, instance governance audits, and PDT/query performance optimization |
+| **Create & sync LookML dashboards** | \`skills/creating-looker-dashboard/SKILL.md\` | Authoring \`.dashboard.lookml\` files, importing to UDDs, and syncing iterative layout/tile refinements |
+| **Looker RBAC & Safe Mode permissions** | \`skills/looker-permissions/SKILL.md\` | 4-layer Looker RBAC mental model, model-to-project expansion, folder ACLs, role-denied 404 diagnostics, and execution approval matrix |
+
 ## Looker Code Mode Tool Contract (\`run_looker_codemode\`)
 
-Whenever calling \`run_looker_codemode\`, you **must** always pass both \`code\` and a concise 1-sentence \`thought\` string summarizing what the Code Mode snippet is doing with the Looker API calls (e.g. \`"Querying monthly revenue and brand share from thelook::order_items"\` or \`"Creating executive KPI dashboard with 4 tiles"\`).
+Whenever calling \`run_looker_codemode\`, you **must** always pass both \`code\` and a concise 1-sentence \`thought\` string summarizing what the Code Mode snippet is doing with the Looker API calls (e.g. \`"Querying monthly revenue and category share from the target explore"\` or \`"Creating executive KPI dashboard with 4 tiles"\`).
 
 ## Sandbox CLI Bootstrap (\`uv\` + \`lkr-dev-cli\`)
 
@@ -555,20 +579,20 @@ Use this skill when a user asks to onboard or create a new Looker project, scaff
    - **Target tables or schemas** (or SQL queries from \`[Open SQL Runner](/sql)\` \`/sql\`).
    Do **not** call \`run_looker_codemode\` or \`code_execution\` on Turn 1 when these inputs are not yet provided.
 2. **Turn 2 Schema Discovery (\`connection_schemas\`)**:
-   When the user provides a connection name (e.g. \`default_bigquery_connection\`) and project name and asks what schemas it has access to, emit \`<USE_CASE>lookml</USE_CASE>\`, run **one** \`run_looker_codemode\` call (\`sdk.connection_schemas(connection_name)\` with fallback to \`sdk.all_connections(fields="name,dialect_name,database,schema,snippets")\` and \`sdk.connection_tables(connection_name, schema_name=..., table_limit=5)\`), list out the accessible schemas clearly (e.g. \`argolis_scratch\`, \`cymbal_lakehouse\`, \`streaming_analytics\`, \`thelook\`), and ask which schema/dataset to use. Do **not** call \`code_execution\`, \`bootstrap_lookml.py\`, or \`view_file\` on Turn 2.
+   When the user provides a connection name (\`<connection_name>\`) and project name (\`<project_name>\`) and asks what schemas it has access to, emit \`<USE_CASE>lookml</USE_CASE>\`, run **one** \`run_looker_codemode\` call (\`sdk.connection_schemas(connection_name)\` with fallback to \`sdk.all_connections(fields="name,dialect_name,database,schema,snippets")\` and \`sdk.connection_tables(connection_name, schema_name=..., table_limit=5)\`), list out all accessible schema names returned by the connection clearly, and ask which schema/dataset to use. Do **not** call \`code_execution\`, \`bootstrap_lookml.py\`, or \`view_file\` on Turn 2.
 
 ## Step 2: Require \`project_name\` (\`snake_case\`) & Discover Schemas/Tables via SDK (Never \`INFORMATION_SCHEMA\`)
 1. \`project_name\` is required before creating any project or model. Normalize any user-supplied project name to strict lowercase \`snake_case\`:
    \`project_name = re.sub(r'_+', '_', re.sub(r'[^a-z0-9_]', '_', raw_name.strip().lower())).strip('_')\`
    If the user has not provided a \`project_name\`, ask them for one.
 2. Always use Looker SDK / CodeMode methods (\`connection_schemas\`, \`connection_tables\`, \`generate_lookml_with_new_files\`, \`profile_fields\`, \`run_inline_query\`) — **never** query \`INFORMATION_SCHEMA\`.
-3. Bound schema/table auto-discovery to at most **5 schemas** and **5 tables per schema** (\`5 × 5\` cap: \`schemas[:5]\` and \`connection_tables(conn_name, schema_name=sname)\` filtered to exclude \`LM_*\`, \`LR_*\`, \`YM_*\`, \`connection_reg*\` scratch tables). When the user selects \`thelook\` (\`argolis_scratch\` / \`looker-private-demo.thelook\`), pass \`schema_name="argolis_scratch"\` to \`connection_tables\` and target \`order_items\`, \`users\`, \`products\`, \`distribution_centers\`.
+3. Bound schema/table auto-discovery to at most **5 schemas** and **5 tables per schema** (\`5 × 5\` cap: \`schemas[:5]\` and up to 5 core fact/dimension tables from \`connection_tables(conn_name, schema_name=sname)\` filtered to exclude \`LM_*\`, \`LR_*\`, \`YM_*\`, \`connection_reg*\` scratch tables, prioritizing the primary line-item/transaction fact table and its foreign-key entity dimension tables over high-volume event logs or inventory snapshot tables). If the user names a dataset alias alongside a physical schema name in the connection (e.g. \`<schema_name>\`), pass the physical \`schema_name\` from \`connection_schemas\` to \`connection_tables\`.
 
 ## Step 3: Stage 1 (Turn 3) — Discover Tables & Generate Bronze Views via \`generate_lookml_with_new_files\`, Validate Offline (\`lkr parse\`), Push (\`lkr --dev tools lookml push\`), and Ask to Profile Data
 1. Emit \`<USE_CASE>lookml</USE_CASE>\`. Do **not** call \`update_session\` in \`run_looker_codemode\`.
-2. First, in **ONE** \`run_looker_codemode\` call (Monty WASM — do **not** \`import re\`), discover the tables in \`argolis_scratch\` via \`connection_tables\` and generate the 1:1 \`bronze/*.view.lkml\` files on Looker via \`generate_lookml_with_new_files\`:
+2. First, in **ONE** \`run_looker_codemode\` call (Monty WASM — do **not** \`import re\`), discover the tables in \`<schema_name>\` via \`connection_tables\` and generate the 1:1 \`bronze/*.view.lkml\` files on Looker via \`generate_lookml_with_new_files\`:
    \`\`\`python
-   conn, project_id, schema = "default_bigquery_connection", "<project_name>", "argolis_scratch"
+   conn, project_id, schema = "<connection_name>", "<project_name>", "<schema_name>"
    existing_ids = [p.get("id") for p in (all_projects(fields="id") or []) if isinstance(p, dict)]
    if project_id not in existing_ids:
        create_project({"name": project_id})
@@ -580,7 +604,7 @@ Use this skill when a user asks to onboard or create a new Looker project, scaff
    raw = connection_tables(conn, schema_name=schema) or []
    tlist = (raw[0].get("tables") or []) if raw and isinstance(raw[0], dict) else []
    names = [t.get("name") for t in tlist if isinstance(t, dict) and t.get("name") and not t.get("name", "").startswith(("LM_", "LR_", "YM_", "connection_reg"))]
-   core_tables = [t for t in ("order_items", "users", "products", "distribution_centers") if t in names] or names[:5]
+   core_tables = [t for t in names if "event" not in t and "inventory" not in t][:5] or names[:5]
    generate_lookml_with_new_files(
        project_id,
        {"tables": [{"schema": schema, "table_name": t, "base_view": True} for t in core_tables]},
@@ -604,20 +628,20 @@ Use this skill when a user asks to onboard or create a new Looker project, scaff
        fields[t] = cols
    return {"schema": schema, "tables": core_tables, "fields": fields}
    \`\`\`
-3. Next, in **ONE** \`code_execution\` call using a single-quoted Python heredoc (\`python3 - << 'PYEOF'\`, never \`python3 -c "..."\`, so bash never interpolates BigQuery backticks \`\\\`...\\\`\` or LookML \`\${TABLE}\` references; do **not** create refinements or \`silver/\` files yet), write \`/workspace/lookml/\` from the discovered \`fields\`, validate offline with \`lkr parse\`, push via \`lkr --dev tools lookml push\` (which registers the model via \`create_lookml_model\` / \`update_lookml_model\` and skips overwriting remote \`# AUTOGENERATED\` views), and emit \`<LOOKML_BUNDLE>\`:
+3. Next, in **ONE** \`code_execution\` call using a single-quoted Python heredoc (\`python3 - << 'PYEOF'\`, never \`python3 -c "..."\`, so bash never interpolates BigQuery backticks \`\` \`...\` \`\` or LookML \`\${TABLE}\` references; do **not** create refinements or \`silver/\` files yet), write \`/workspace/lookml/\` from the discovered \`fields\` (creating \`bronze/explores/<fact_table>_base.explore.lkml\` for the primary line-item/transaction fact table \`<fact_table>\`), validate offline with \`lkr parse\`, push via \`lkr --dev tools lookml push\` (which registers the model via \`create_lookml_model\` / \`update_lookml_model\` and skips overwriting remote \`# AUTOGENERATED\` views), and emit \`<LOOKML_BUNDLE>\`:
    \`\`\`bash
    python3 /workspace/bootstrap_lookml.py setup
    python3 - << 'PYEOF'
    from pathlib import Path
    import json
-   project_id, conn, schema = "<project_name>", "default_bigquery_connection", "argolis_scratch"
+   project_id, conn, schema, fact_table = "<project_name>", "<connection_name>", "<schema_name>", "<fact_table>"
    fields = <FIELDS_DICT_FROM_RUN_LOOKER_CODEMODE>
    root = Path("/workspace/lookml")
    (root / "bronze/explores").mkdir(parents=True, exist_ok=True)
    (root / f"{project_id}.model.lkml").write_text(f'connection: "{conn}"\\ninclude: "/bronze/*.view.lkml"\\ninclude: "/bronze/explores/*.explore.lkml"\\n')
-   (root / "bronze/explores/order_items_base.explore.lkml").write_text('include: "/bronze/*.view.lkml"\\nexplore: order_items_base {\\n  view_name: order_items\\n  label: "Order Items (Bronze)"\\n}\\n')
+   (root / "bronze/explores" / f"{fact_table}_base.explore.lkml").write_text(f'include: "/bronze/*.view.lkml"\\nexplore: {fact_table}_base {{\\n  view_name: {fact_table}\\n}}\\n')
    for t, cols in fields.items():
-       lines = ["# AUTOGENERATED BY LKR CLI", f"view: {t} {{", f"  sql_table_name: \\\`{schema}.{t}\\\` ;;"]
+       lines = ["# AUTOGENERATED BY LKR CLI", f"view: {t} {{", f"  sql_table_name: \`{schema}.{t}\` ;;"]
        for kind, cname, ctype in cols:
            if kind == "dimension_group":
                lines.append(f"  dimension_group: {cname} {{ type: time timeframes: [raw, time, date, week, month, quarter, year] sql: \${{TABLE}}.{cname}_at ;; }}")
@@ -636,47 +660,50 @@ Use this skill when a user asks to onboard or create a new Looker project, scaff
 
 ## Step 4: Stage 2 (Turn 4) — Create Refinements & Silver Explores, Validate Offline (\`lkr parse\`), Push (\`lkr --dev tools lookml push\`), Run \`profile_fields\` & Sample Query, and Ask for a Dashboard
 1. When the user confirms profiling the data and making metrics, emit \`<USE_CASE>lookml</USE_CASE>\`.
-2. Follow \`agentic-lookml\` and the 5-layer measure synthesis methodology:
-   - **Layer 1 — Medallion Refinements (\`bronze/order_items.refinement.lkml\`)**: Leave \`bronze/<table>.view.lkml\` untouched (\`users\`, \`products\`, and \`distribution_centers\` already have \`dimension: id { primary_key: yes }\` and \`measure: count { type: count }\` from \`generate_lookml_with_new_files\` — do **not** create redundant refinement files for them). Create \`/workspace/lookml/bronze/order_items.refinement.lkml\` starting with \`include: "/bronze/order_items.view.lkml"\` and \`view: +order_items { ... }\` with \`dimension: id { primary_key: yes }\` and a \`cancelled\` \`dimension_group\` (\`dimension_group: cancelled { type: time timeframes: [raw, time, date, week, month, quarter, year] sql: CASE WHEN \${status} = 'Cancelled' THEN \${created_raw} END ;; }\`) alongside \`returned\`, \`created\`, \`shipped\`, and \`delivered\`.
-   - **Layer 2 — Core Statistical Measures per Numeric & Entity Column**: \`order_count\` (\`type: count_distinct\`, \`sql: \${order_id} ;;\`), \`user_count\` (\`type: count_distinct\`, \`sql: \${user_id} ;;\`), \`total_sale_price\` (\`type: sum\`, \`sql: \${sale_price} ;;\`, \`value_format_name: usd\`), \`average_sale_price\` (\`type: average\`, \`sql: \${sale_price} ;;\`, \`value_format_name: usd\`).
-   - **Layer 3 — Data-Grounded Filtered Measures (Must Include \`return_count\` and \`cancel_count\`)**:
+2. Follow \`/workspace/skills/agentic-lookml/SKILL.md\` and the 5-layer measure synthesis methodology on the primary fact table \`<fact_table>\`:
+   - **Layer 1 — Medallion Refinements (\`bronze/<fact_table>.refinement.lkml\`)**: Leave \`bronze/<table>.view.lkml\` untouched (dimension views already have \`dimension: id { primary_key: yes }\` and \`measure: count { type: count }\` from \`generate_lookml_with_new_files\` — do **not** create redundant refinement files for them). Create \`/workspace/lookml/bronze/<fact_table>.refinement.lkml\` starting with \`include: "/bronze/<fact_table>.view.lkml"\` and \`view: +<fact_table> { ... }\` with \`dimension: id { primary_key: yes }\`. When \`<fact_table>\` has a \`status\` dimension and lifecycle timestamp dimension groups (\`created\`, \`shipped\`, \`delivered\`, \`returned\`) without a physical \`cancelled\` timestamp column, add a derived \`cancelled\` \`dimension_group\` (\`dimension_group: cancelled { type: time timeframes: [raw, time, date, week, month, quarter, year] sql: CASE WHEN \${status} = 'Cancelled' THEN \${created_raw} END ;; }\`) so every status-filtered metric has a matching lifecycle date dimension group.
+   - **Layer 2 — Core Statistical Measures per Numeric & Entity Column**: For each numeric measure column \`<num_col>\`, define \`total_<num_col>\` (\`type: sum\`, \`sql: \${<num_col>} ;;\`, \`value_format_name: usd\`) and \`average_<num_col>\` (\`type: average\`, \`sql: \${<num_col>} ;;\`, \`value_format_name: usd\`). For each foreign-key entity column \`<entity>_id\`, define \`<entity>_count\` (\`type: count_distinct\`, \`sql: \${<entity>_id} ;;\`).
+   - **Layer 3 — Data-Grounded Filtered Measures (Include \`return_count\` and \`cancel_count\` when \`status\` exists)**:
      - \`measure: return_count { type: count filters: [status: "Returned"] label: "Return Count" }\`
      - \`measure: cancel_count { type: count filters: [status: "Cancelled"] label: "Cancel Count" }\`
-     - \`measure: completed_order_count { type: count filters: [status: "Complete"] label: "Completed Order Count" }\`
-   - **Layer 4 — Portable ANSI Derived Ratios (\`type: number\`)**: Compose ratios from LookML measures via \`1.0 * \${numerator_measure} / NULLIF(\${denominator_measure}, 0)\` (e.g. \`return_rate\`, \`cancel_rate\`, \`average_order_value\`).
-   - **Layer 5 — Silver Explores with Joins (\`silver/explores/order_items.explore.lkml\`)**: Deconstruct workload SQL (\`grain_change_reagg\`, \`window_pre_groupby\`, \`union\`, \`non_equi_join\`, \`filter_dependent_cte\`) and create \`/workspace/lookml/silver/explores/order_items.explore.lkml\` (\`include: "/bronze/*.view.lkml"\`, \`include: "/bronze/*.refinement.lkml"\`, \`include: "/bronze/explores/*.explore.lkml"\`, \`explore: order_items { extends: [order_items_base] hidden: no view_name: order_items ... }\`) joining \`users\` (\`\${order_items.user_id} = \${users.id}\`, \`many_to_one\`), \`products\` (\`\${order_items.product_id} = \${products.id}\`, \`many_to_one\`), and \`distribution_centers\` (\`\${products.distribution_center_id} = \${distribution_centers.id}\`, \`many_to_one\`). Update \`/workspace/lookml/<project_name>.model.lkml\` to include \`"/bronze/*.refinement.lkml"\` and \`"/silver/explores/*.explore.lkml"\`.
-3. In **ONE** \`code_execution\` call, write \`/workspace/lookml/bronze/order_items.refinement.lkml\`, \`/workspace/lookml/silver/explores/order_items.explore.lkml\`, and \`/workspace/lookml/<project_name>.model.lkml\` via \`python3 - << 'PYEOF'\`, validate offline with \`lkr parse\`, push via \`lkr --dev tools lookml push\`, and emit \`<LOOKML_BUNDLE>\` (so Turn 4 uses only **1** \`code_execution\` call followed by **1** \`run_looker_codemode\` call):
+     - \`measure: completed_count { type: count filters: [status: "Complete"] label: "Completed Count" }\`
+   - **Layer 4 — Portable ANSI Derived Ratios (\`type: number\`)**: Compose ratios from LookML measures via \`1.0 * \${numerator_measure} / NULLIF(\${denominator_measure}, 0)\`:
+     - \`measure: return_rate { type: number sql: 1.0 * \${return_count} / NULLIF(\${count}, 0) ;; value_format_name: percent_2 }\`
+     - \`measure: cancel_rate { type: number sql: 1.0 * \${cancel_count} / NULLIF(\${count}, 0) ;; value_format_name: percent_2 }\`
+     - \`measure: average_order_value { type: number sql: 1.0 * \${total_<num_col>} / NULLIF(\${<entity>_count}, 0) ;; value_format_name: usd }\`
+   - **Layer 5 — Silver Explores with Joins (\`silver/explores/<fact_table>.explore.lkml\`)**: Deconstruct workload SQL (\`grain_change_reagg\`, \`window_pre_groupby\`, \`union\`, \`non_equi_join\`, \`filter_dependent_cte\`) and create \`/workspace/lookml/silver/explores/<fact_table>.explore.lkml\` (\`include: "/bronze/*.view.lkml"\`, \`include: "/bronze/*.refinement.lkml"\`, \`include: "/bronze/explores/*.explore.lkml"\`, \`explore: <fact_table> { extends: [<fact_table>_base] hidden: no view_name: <fact_table> ... }\`) joining each foreign-key dimension view \`<dim_table>\` (\`type: left_outer\`, \`sql_on: \${<fact_table>.<dim>_id} = \${<dim_table>.id} ;;\`, \`relationship: many_to_one\`, including chained foreign keys when present). Update \`/workspace/lookml/<project_name>.model.lkml\` to include \`"/bronze/*.refinement.lkml"\` and \`"/silver/explores/*.explore.lkml"\`.
+3. In **ONE** \`code_execution\` call, write \`/workspace/lookml/bronze/<fact_table>.refinement.lkml\`, \`/workspace/lookml/silver/explores/<fact_table>.explore.lkml\`, and \`/workspace/lookml/<project_name>.model.lkml\` via \`python3 - << 'PYEOF'\`, validate offline with \`lkr parse\`, push via \`lkr --dev tools lookml push\`, and emit \`<LOOKML_BUNDLE>\` (so Turn 4 uses only **1** \`code_execution\` call followed by **1** \`run_looker_codemode\` call):
    \`\`\`bash
    python3 - << 'PYEOF'
    from pathlib import Path
-   project_id, conn = "<project_name>", "default_bigquery_connection"
+   project_id, conn, fact_table = "<project_name>", "<connection_name>", "<fact_table>"
    root = Path("/workspace/lookml")
    (root / "silver/explores").mkdir(parents=True, exist_ok=True)
    (root / f"{project_id}.model.lkml").write_text(f'connection: "{conn}"\\ninclude: "/bronze/*.view.lkml"\\ninclude: "/bronze/*.refinement.lkml"\\ninclude: "/bronze/explores/*.explore.lkml"\\ninclude: "/silver/explores/*.explore.lkml"\\n')
-   (root / "bronze/order_items.refinement.lkml").write_text('include: "/bronze/order_items.view.lkml"\\nview: +order_items {\\n  dimension: id { primary_key: yes }\\n  dimension_group: cancelled { type: time timeframes: [raw, time, date, week, month, quarter, year] sql: CASE WHEN \${status} = \\'Cancelled\\' THEN \${created_raw} END ;; }\\n  measure: order_count { type: count_distinct sql: \${order_id} ;; }\\n  measure: user_count { type: count_distinct sql: \${user_id} ;; }\\n  measure: total_sale_price { type: sum sql: \${sale_price} ;; value_format_name: usd }\\n  measure: average_sale_price { type: average sql: \${sale_price} ;; value_format_name: usd }\\n  measure: return_count { type: count filters: [status: "Returned"] label: "Return Count" }\\n  measure: cancel_count { type: count filters: [status: "Cancelled"] label: "Cancel Count" }\\n  measure: completed_order_count { type: count filters: [status: "Complete"] label: "Completed Order Count" }\\n  measure: return_rate { type: number sql: 1.0 * \${return_count} / NULLIF(\${count}, 0) ;; value_format_name: percent_2 }\\n  measure: cancel_rate { type: number sql: 1.0 * \${cancel_count} / NULLIF(\${count}, 0) ;; value_format_name: percent_2 }\\n  measure: average_order_value { type: number sql: 1.0 * \${total_sale_price} / NULLIF(\${order_count}, 0) ;; value_format_name: usd }\\n}\\n')
-   (root / "silver/explores/order_items.explore.lkml").write_text('include: "/bronze/*.view.lkml"\\ninclude: "/bronze/*.refinement.lkml"\\ninclude: "/bronze/explores/*.explore.lkml"\\nexplore: order_items {\\n  extends: [order_items_base]\\n  hidden: no\\n  view_name: order_items\\n  join: users { type: left_outer sql_on: \${order_items.user_id} = \${users.id} ;; relationship: many_to_one }\\n  join: products { type: left_outer sql_on: \${order_items.product_id} = \${products.id} ;; relationship: many_to_one }\\n  join: distribution_centers { type: left_outer sql_on: \${products.distribution_center_id} = \${distribution_centers.id} ;; relationship: many_to_one }\\n}\\n')
+   (root / "bronze" / f"{fact_table}.refinement.lkml").write_text('<REFINEMENT_LKML>')
+   (root / "silver/explores" / f"{fact_table}.explore.lkml").write_text('<SILVER_EXPLORE_LKML>')
    PYEOF
    lkr parse lookml-to-api --path /workspace/lookml --validate > /dev/null
    lkr --dev tools lookml push /workspace/lookml --project-id <project_name> --no-reset
    python3 /workspace/bootstrap_lookml.py bundle /workspace/lookml_result.json
    \`\`\`
-4. **Profile Fields & Show Live Example Data via SDK**: After the \`code_execution\` push completes, in **one** \`run_looker_codemode\` call, run **both** \`profile_fields\` and \`run_inline_query\`:
+4. **Profile Fields & Show Live Example Data via SDK (\`/workspace/skills/looker-field-profiler/SKILL.md\`)**: After the \`code_execution\` push completes, in **one** \`run_looker_codemode\` call, run **both** \`profile_fields\` and \`run_inline_query\`:
    \`\`\`python
-   prof = profile_fields(model="<project_name>", view="order_items", fields=["order_items.status", "order_items.sale_price"])
-   rows = run_inline_query("json", {"model": "<project_name>", "view": "order_items", "fields": ["products.department", "order_items.count", "order_items.total_sale_price", "order_items.return_count", "order_items.cancel_count"], "sorts": ["order_items.total_sale_price desc"], "limit": "5"})
+   prof = profile_fields(model="<project_name>", view="<fact_table>", fields=["<fact_table>.status", "<fact_table>.<num_col>"])
+   rows = run_inline_query("json", {"model": "<project_name>", "view": "<fact_table>", "fields": ["<dim_table>.<category_dim>", "<fact_table>.count", "<fact_table>.total_<num_col>", "<fact_table>.return_count", "<fact_table>.cancel_count"], "sorts": ["<fact_table>.total_<num_col> desc"], "limit": "5"})
    return {"profiles": prof.get("profiles"), "rows": rows}
    \`\`\`
    Render the profiled findings and live sample rows in your response, and **ask the user if they want a dashboard with these metrics**.
 
 ## Step 5: Stage 3 (Turn 5) — Create LookML Dashboard, Copy into Selected UI Folder, and Offer Metric Selector Data App
 1. When the user asks to create a dashboard with these metrics, emit \`<USE_CASE>dashboard</USE_CASE>\`.
-2. In \`run_looker_codemode\`, call \`upsert_lookml_dashboard(project_id=project_name, model=project_name, dashboard_name="ecommerce_performance", title="E-Commerce Performance Overview", folder_id=target_folder_id, filters=[...], tiles=[...])\` (which creates \`dashboards/ecommerce_performance.dashboard.lookml\` and imports/copies it into \`target_folder_id\` via \`import_lookml_dashboard(lookml_id, str(target_folder_id), {"title": title})\` with fallback to \`upsert_udd\` in \`target_folder_id\`) and \`return emit_native_bundle(res, folder_id=target_folder_id, title="E-Commerce Performance Overview")\`.
-3. In your text response, confirm the LookML dashboard was created and copied into the selected folder, and **ask the user if they want a responsive metric selector Data App** that takes the measures (\`total_sale_price\`, \`count\`, \`return_count\`, \`cancel_count\`) and switches between **date (day), week, month, and year** and **different chart types**.
+2. In \`run_looker_codemode\`, call \`upsert_lookml_dashboard(project_id=project_name, model=project_name, dashboard_name="<dashboard_slug>", title="<Dashboard Title>", folder_id=target_folder_id, filters=[...], tiles=[...])\` (which creates \`dashboards/<dashboard_slug>.dashboard.lookml\` with 4+ KPI/chart tiles on \`<fact_table>\` and imports/copies it into \`target_folder_id\` via \`import_lookml_dashboard(lookml_id, str(target_folder_id), {"title": title})\` with fallback to \`upsert_udd\` in \`target_folder_id\`) and \`return emit_native_bundle(res, folder_id=target_folder_id, title="<Dashboard Title>")\`.
+3. In your text response, confirm the LookML dashboard was created and copied into the selected folder, and **ask the user if they want a responsive metric selector Data App** that takes the measures (\`total_<num_col>\`, \`count\`, \`return_count\`, \`cancel_count\`) and switches between **date (day), week, month, and year** and **different chart types**.
 
 ## Step 6: Stage 4 (Turn 6) — Responsive Metric Selector Data App (90d/53w/60m/10y & Measure-Matched Date Dimensions)
-1. When the user confirms building the metric selector Data App, emit \`<USE_CASE>app</USE_CASE>\` and write + bundle the Lit Data App in **ONE** \`code_execution\` call via \`python3 /workspace/bundle_app.py --app-dir /workspace/apps/$CONV_ID --stdin "Metric Selector Explorer" << 'EOF'\` (do **not** run \`bundle_app.py --help\`, \`ls\`, \`find\`, \`head\`, or \`view_file\` on \`/workspace/lookml\` or \`/workspace/bundle_app.py\`). Use this static-analyzer-safe \`render()\` snippet:
+1. When the user confirms building the metric selector Data App, emit \`<USE_CASE>app</USE_CASE>\` and write + bundle the Lit Data App in **ONE** \`code_execution\` call via \`python3 /workspace/bundle_app.py --app-dir /workspace/apps/$CONV_ID --stdin "Metric Selector Explorer" << 'EOF'\` (do **not** run \`bundle_app.py --help\`, \`ls\`, \`find\`, \`head\`, or \`view_file\` on \`/workspace/lookml\` or \`/workspace/bundle_app.py\`). Use this static-analyzer-safe \`render()\` snippet for \`<fact_table>\`:
    \`\`\`js
-   const datePrefix = this.selectedMetric === 'order_items.return_count' ? 'order_items.returned' : this.selectedMetric === 'order_items.cancel_count' ? 'order_items.cancelled' : 'order_items.created';
+   const datePrefix = this.selectedMetric === '<fact_table>.return_count' ? '<fact_table>.returned' : this.selectedMetric === '<fact_table>.cancel_count' ? '<fact_table>.cancelled' : '<fact_table>.created';
    const dateDim = \`\${datePrefix}_\${this.timeframe === 'day' ? 'date' : this.timeframe}\`;
    const dateFilterField = \`\${datePrefix}_date\`;
    const dateWindow = ({ day: '90 days', date: '90 days', week: '53 weeks', month: '60 months', year: '10 years' })[this.timeframe] || '90 days';
@@ -688,11 +715,11 @@ Use this skill when a user asks to onboard or create a new Looker project, scaff
      - \`month\`: \`'60 months'\`
      - \`year\`: \`'10 years'\`
 3. **Required Measure Switcher, Chart Type Switcher & Measure-Matched Date Dimensions**:
-   - Allow switching between measures (\`order_items.total_sale_price\`, \`order_items.count\`, \`order_items.return_count\`, \`order_items.cancel_count\`) and chart types (\`line\`, \`column\`, \`bar\`, \`areaspline\`).
+   - Allow switching between the primary measures (\`<fact_table>.total_<num_col>\`, \`<fact_table>.count\`, \`<fact_table>.return_count\`, \`<fact_table>.cancel_count\`) and chart types (\`line\`, \`column\`, \`bar\`, \`areaspline\`).
    - **Date dimension MUST match the selected measure**:
-     - When \`order_items.return_count\` (or a return metric) is selected, use the **\`returned\`** date dimension group (\`order_items.returned_date\`, \`order_items.returned_week\`, \`order_items.returned_month\`, \`order_items.returned_year\`).
-     - When \`order_items.cancel_count\` (or a cancel metric) is selected, use the **\`cancelled\`** date dimension group (\`order_items.cancelled_date\`, \`order_items.cancelled_week\`, \`order_items.cancelled_month\`, \`order_items.cancelled_year\`).
-     - When standard order/revenue metrics (\`order_items.total_sale_price\`, \`order_items.count\`) are selected, use the **\`created\`** date dimension group (\`order_items.created_date\`, \`order_items.created_week\`, \`order_items.created_month\`, \`order_items.created_year\`).
+     - When \`<fact_table>.return_count\` (or a return metric) is selected, use the **\`returned\`** date dimension group (\`<fact_table>.returned_date\`, \`<fact_table>.returned_week\`, \`<fact_table>.returned_month\`, \`<fact_table>.returned_year\`).
+     - When \`<fact_table>.cancel_count\` (or a cancel metric) is selected, use the **\`cancelled\`** date dimension group (\`<fact_table>.cancelled_date\`, \`<fact_table>.cancelled_week\`, \`<fact_table>.cancelled_month\`, \`<fact_table>.cancelled_year\`).
+     - When standard volume/revenue metrics (\`<fact_table>.total_<num_col>\`, \`<fact_table>.count\`) are selected, use the **\`created\`** date dimension group (\`<fact_table>.created_date\`, \`<fact_table>.created_week\`, \`<fact_table>.created_month\`, \`<fact_table>.created_year\`).
 `
 
 export const DATA_INVESTIGATOR_GUIDE_MD = `# Data Investigator — Narrative Root-Cause Data Apps (Google Doc & Slides)
@@ -732,7 +759,7 @@ export const DATA_APP_GUIDE_MD = `# Looker Lit Data Apps — Compact Sandbox Gui
 - Import from \`/runtime/data-app.js\`:
   \`import { DataApp, html, nothing, keyed, formatValue, createNumericCol, createCurrencyCol, createPercentageCol, createBadgeCol } from '/runtime/data-app.js';\`
 - No TypeScript decorators (\`@customElement\`, \`@property\`). Use \`static properties = { ... }\` and \`customElements.define(elementName, AppClass)\`.
-- In \`constructor()\`, always assign literal strings \`this.lookerModel = '<model>'\` and \`this.explore = '<explore>'\`, plus initial reactive state (e.g. \`this.selectedMetric = 'order_items.total_sale_price'\`).
+- In \`constructor()\`, always assign literal strings \`this.lookerModel = '<model>'\` and \`this.explore = '<explore>'\`, plus initial reactive state (e.g. \`this.selectedMetric = '<view>.<default_measure>'\`).
 - Always route widget filters through \`getEffectiveFilters(local = {}, { isTimeSeries = false } = {})\` spreading \`{ ...(this.dashboardFilters || {}), ...(this.crossFilters || {}) }\`.
 
 ## 2. Live Query Components (\`app-*\`)
@@ -851,7 +878,7 @@ Use this skill whenever asked to run Key Driver Analysis (KDA), explain why a Lo
 > 2. **Single-Pass Execution with \`print_kda_summary(out)\`**: Prepend \`skills/key-driver-analysis/scripts/kda_toolkit.py\` to your script, run all targets in **one** \`lkr code-mode sandbox -f\` call, and call \`print_kda_summary(out)\` at the end (instead of \`print(json.dumps(out))\`, which gets double-escaped and truncated above 10 KB). \`print_kda_summary(out)\` emits a compact ~3.5 KB quote-free summary so \`run_command\` returns 100% of the results inline in a single turn with zero follow-up \`read_file\` calls.
 
 \`\`\`bash
-cat skills/key-driver-analysis/scripts/kda_toolkit.py /tmp/kda_job.py > /tmp/run_kda_job.py && lkr --oauth-account=prod-demowest code-mode sandbox -f /tmp/run_kda_job.py
+cat skills/key-driver-analysis/scripts/kda_toolkit.py /tmp/kda_job.py > /tmp/run_kda_job.py && lkr code-mode sandbox -f /tmp/run_kda_job.py
 \`\`\`
 
 ### Complete Toolkit API & Return Schemas (\`kda_toolkit.py\`)
@@ -937,16 +964,16 @@ def get_info(m, e):
         info_cache[(m, e)] = inspect_explore_for_kda(m, e)
     return info_cache[(m, e)]
 
-base_yr, breach_yr = {"order_items.created_year": "2024"}, {"order_items.created_year": "2025"}
-dash = resolve_source("https://demowest.cloud.looker.com/dashboards/thelook::business_pulse")
+base_yr, breach_yr = {"<view>.created_year": "2024"}, {"<view>.created_year": "2025"}
+dash = resolve_source("https://<looker_host>/dashboards/<model>::<dashboard_slug>")
 t_sales = [t for t in dash["targets"] if "Total Sales" in t["title"]][0]
 t_aov = [t for t in dash["targets"] if "Average Order Sale Price" in t["title"]][0]
 
 out = {
-    "dash_sales": analyze_target(t_sales, base_yr, breach_yr, get_info(t_sales["model"], t_sales["explore"]), drill=True, sub_timeframe="order_items.created_month"),
+    "dash_sales": analyze_target(t_sales, base_yr, breach_yr, get_info(t_sales["model"], t_sales["explore"]), drill=True, sub_timeframe="<view>.created_month"),
     "dash_aov": analyze_target(t_aov, base_yr, breach_yr, get_info(t_aov["model"], t_aov["explore"])),
-    "look_247": analyze_target(resolve_source("247")["targets"][0], base_yr, breach_yr, get_info("thelook", "order_items")),
-    "slug_8CDyM4D": analyze_target(resolve_source("8CDyM4D")["targets"][0], base_yr, breach_yr, get_info("thelook", "order_items")),
+    "look_247": analyze_target(resolve_source("247")["targets"][0], base_yr, breach_yr, get_info("<model>", "<explore>")),
+    "slug_8CDyM4D": analyze_target(resolve_source("8CDyM4D")["targets"][0], base_yr, breach_yr, get_info("<model>", "<explore>")),
     "conv": [analyze_target(t, base_yr, breach_yr, get_info(t["model"], t["explore"])) for t in resolve_source("a96583e4bac8437e8ab32f9b34ed2293")["targets"]],
 }
 print_kda_summary(out)

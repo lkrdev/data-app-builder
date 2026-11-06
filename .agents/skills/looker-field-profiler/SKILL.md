@@ -25,7 +25,7 @@ Inside `lkr code-mode sandbox`, `profile_fields` is pre-bound as a global functi
 # Fast metadata-only type bucketing (zero SQL queries):
 uv run lkr code-mode sandbox --code='
 return profile_fields(
-    model="agentic_thelook",
+    model="<model_name>",
     view="order_items",
     fields=["order_items.status", "order_items.sale_price", "order_items.is_delivered", "order_items.created_date"],
     types_only=True,
@@ -35,7 +35,7 @@ return profile_fields(
 # Full value profiling (per-field queries, default group_fields=False):
 uv run lkr code-mode sandbox --code='
 return profile_fields(
-    model="agentic_thelook",
+    model="<model_name>",
     view="order_items",
     fields=[
         "order_items.status",
@@ -55,7 +55,7 @@ return profile_fields(
 uv run lkr code-mode sandbox --code='
 return profile_fields(
     body={
-        "model": "agentic_thelook",
+        "model": "<model_name>",
         "view": "order_items",
         "fields": ["order_items.status", "order_items.is_delivered", "order_items.total_sale_price"],
         "group_fields": True,

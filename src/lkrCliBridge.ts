@@ -178,7 +178,7 @@ function getCodeModeToolDefinition(name = 'run_looker_codemode'): LkrCodeModeToo
         thought: {
           type: 'string',
           description:
-            'Required concise 1-sentence summary of what this Code Mode snippet is doing with the Looker API calls (e.g. "Querying monthly revenue and brand share from thelook::order_items" or "Creating executive KPI dashboard with 4 tiles").',
+            'Required concise 1-sentence summary of what this Code Mode snippet is doing with the Looker API calls (e.g. "Querying monthly revenue and category share from the target explore" or "Creating executive KPI dashboard with 4 tiles").',
         },
       },
       required: ['code', 'thought'],

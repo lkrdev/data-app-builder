@@ -207,7 +207,7 @@ Inside the Monty sandbox, these built-in functions provide equivalent introspect
 Pre-packaged scripts are located in `scripts/`:
 
 - [scripts/personal_folder_dashboards.py](./scripts/personal_folder_dashboards.py): Inspects `me()`, extracts `personal_folder_id`, and returns personal folder dashboards.
-- [scripts/order_items_query.py](./scripts/order_items_query.py): Runs an inline query on `thelook` / `order_items` with `created_year` and `users.count` filtered by `status: Returned`.
+- [scripts/order_items_query.py](./scripts/order_items_query.py): Runs an inline query on `<model_name>` / `order_items` with `created_year` and `users.count` filtered by `status: Returned`.
 - [scripts/traverse_folders.py](./scripts/traverse_folders.py): Recursively collects dashboards and looks across all subfolders.
 
 ## Common Looker SDK Recipes
@@ -262,15 +262,15 @@ if not user_data or not user_data.get("personal_folder_id"):
 return get_all_items(user_data["personal_folder_id"])
 ```
 
-### Run an Inline Explore Query on `thelook` (`order_items`)
+### Run an Inline Explore Query on `<model_name>` (`order_items`)
 
-Execute an inline query on model `thelook`, explore `order_items`, with fields `order_items.created_year` and `users.count`, filtered by `order_items.status: Returned`:
+Execute an inline query on model `<model_name>`, explore `order_items`, with fields `order_items.created_year` and `users.count`, filtered by `order_items.status: Returned`:
 
 ```python
 return run_inline_query(
     result_format="json",
     body={
-        "model": "thelook",
+        "model": "<model_name>",
         "view": "order_items",
         "fields": [
             "order_items.created_year",
@@ -290,14 +290,14 @@ return run_inline_query(
 Inspect model configuration and extract available fields (dimensions and measures) from an explore:
 
 ```python
-explore = lookml_model_explore("thelook", "order_items")
+explore = lookml_model_explore("<model_name>", "order_items")
 
 fields = explore.get("fields", {})
 dimensions = [d["name"] for d in fields.get("dimensions", [])]
 measures = [m["name"] for m in fields.get("measures", [])]
 
 return {
-    "model": "thelook",
+    "model": "<model_name>",
     "explore": "order_items",
     "total_dimensions": len(dimensions),
     "total_measures": len(measures),
@@ -353,7 +353,7 @@ Before writing a Looker query, inspect the model's Explore topology with `lkr sc
        "source_queries": [
          {
            "name": "sales",
-           "model": "thelook",
+           "model": "<model_name>",
            "view": "order_items",
            "fields": ["products.category", "order_items.total_sale_price"],
            "sorts": ["order_items.total_sale_price desc"],
@@ -361,7 +361,7 @@ Before writing a Looker query, inspect the model's Explore topology with `lkr sc
          },
          {
            "name": "stock",
-           "model": "thelook",
+           "model": "<model_name>",
            "view": "inventory_items",
            "fields": ["products.category", "inventory_items.count"],
            "merge_fields": [

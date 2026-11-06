@@ -6,7 +6,7 @@ Run with `--dev-mode` flag so session is automatically in development workspace:
     --file=skills/lkr-project-helper/scripts/ensure_project_and_model.py \
     --var project_name="my_new_project" \
     [--var model_name="my_model"] \
-    [--var connection_name="looker-private-demo"] \
+    [--var connection_name="<connection_name>"] \
     [--var skip_model="false"]
 """
 
