@@ -306,7 +306,7 @@ export const LkrCodeMode: LkrCodeModeRuntime = {
 
 export const LKR_DEV_CLI_VERSION = '0.0.64'
 export const LKR_DEV_CLI_SPEC = `lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}`
-export const BOOTSTRAP_SANDBOX_SH = `command -v uv >/dev/null 2>&1 || pip install --break-system-packages --quiet uv || python3 -m pip install --break-system-packages --quiet uv; lkr --version 2>/dev/null | grep -q "${LKR_DEV_CLI_VERSION}" || UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"; for sp in ~/.local/share/uv/tools/lkr-dev-cli/lib/python3.*/site-packages; do [ -d "$sp" ] && [ -f /workspace/sitecustomize.py ] && cp -f /workspace/sitecustomize.py "$sp/sitecustomize.py"; done`
+export const BOOTSTRAP_SANDBOX_SH = `command -v uv >/dev/null 2>&1 || pip install --break-system-packages --quiet uv || python3 -m pip install --break-system-packages --quiet uv; lkr --version 2>/dev/null | grep -q "${LKR_DEV_CLI_VERSION}" || UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"; for sp in ~/.local/share/uv/tools/lkr-dev-cli/lib/python3.*/site-packages /usr/local/lib/python3.*/dist-packages /usr/lib/python3/dist-packages; do [ -d "$sp" ] && [ -f /workspace/sitecustomize.py ] && cp -f /workspace/sitecustomize.py "$sp/sitecustomize.py"; done`
 
 export interface LkrExtensionToolRequest {
   kind: 'codemode' | 'sdk_request'
@@ -347,6 +347,9 @@ def _bridge_enabled() -> bool:
         and os.environ.get("LOOKERSDK_CLIENT_SECRET")
         and os.environ.get("LKR_FORCE_EXTENSION_BRIDGE") not in ("1", "true", "yes")
     )
+
+if _bridge_enabled():
+    os.environ.setdefault("LOOKERSDK_BASE_URL", "https://extension.looker.local")
 
 def _normalize_bridge_path(raw_path: str) -> str:
     p = re.sub(r"^https?://[^/]+", "", str(raw_path or "").strip())
@@ -571,7 +574,7 @@ try:
     p = project(project_id)
 except Exception:
     p = create_project({"name": project_id})
-if not p.get("uses_git"):
+if not p.get("uses_git") and p.get("git_service_name") != "bare":
     try:
         update_project(project_id, {"git_service_name": "bare"})
     except Exception:
@@ -591,6 +594,11 @@ except Exception:
     existing_remote = []
 remote_paths = {(rf.get("path") or rf.get("id") or "") for rf in existing_remote if isinstance(rf, dict)}
 created_dirs = set()
+for rp in remote_paths:
+    cur_rp = ""
+    for part in [x for x in rp.split("/")[:-1] if x]:
+        cur_rp = f"{cur_rp}/{part}" if cur_rp else part
+        created_dirs.add(cur_rp)
 pushed_paths = set()
 for f in files_to_push:
     fpath = f["path"]
@@ -714,6 +722,9 @@ def _patch_lookml(mod):
 def _apply_lkr_patches():
     if mod_auth := sys.modules.get("lkr.auth_service"):
         _patch_auth_service(mod_auth)
+        for m in list(sys.modules.values()):
+            if getattr(m, "__name__", "").startswith("lkr.") and hasattr(m, "get_auth"):
+                setattr(m, "get_auth", mod_auth.get_auth)
     if mod_cm := sys.modules.get("lkr.codemode.main"):
         _patch_codemode(mod_cm)
     if mod_lk := sys.modules.get("lkr.tools.lookml"):
@@ -746,8 +757,10 @@ import difflib
 import json
 import os
 import shutil
+import site
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import urllib.request
 from pathlib import Path
@@ -823,12 +836,30 @@ def ensure_sitecustomize() -> list[str]:
         fallback_sp = uv_tool_lib / f"python{sys.version_info.major}.{sys.version_info.minor}/site-packages"
         fallback_sp.mkdir(parents=True, exist_ok=True)
         site_targets = [fallback_sp]
+    for p in (*site.getsitepackages(), sysconfig.get_path("purelib"), sysconfig.get_path("platlib"), site.getusersitepackages()):
+        if p and Path(p).is_dir() and Path(p) not in site_targets:
+            site_targets.append(Path(p))
+    lkr_bin = shutil.which("lkr") or shutil.which("lkr-dev-cli")
+    if lkr_bin and Path(lkr_bin).is_file():
+        try:
+            first_line = Path(lkr_bin).read_text(encoding="utf-8", errors="ignore").splitlines()[0]
+            if first_line.startswith("#!"):
+                shebang_py = first_line[2:].strip().split()[-1]
+                lib_dir = Path(shebang_py).resolve().parent.parent / "lib"
+                for sp in (*lib_dir.glob("python3.*/site-packages"), *lib_dir.glob("python3.*/dist-packages")):
+                    if sp.is_dir() and sp not in site_targets:
+                        site_targets.append(sp)
+        except Exception:
+            pass
     if ws_site.is_file():
         for sp in site_targets:
             dst = sp / "sitecustomize.py"
-            if dst.resolve() != ws_site.resolve():
-                shutil.copyfile(ws_site, dst)
-            installed.append(str(dst))
+            try:
+                if dst.resolve() != ws_site.resolve():
+                    shutil.copyfile(ws_site, dst)
+                installed.append(str(dst))
+            except Exception:
+                pass
     return installed
 
 def ensure_lkr_cli() -> str:

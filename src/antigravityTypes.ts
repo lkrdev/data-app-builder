@@ -135,8 +135,10 @@ export interface AntigravityInteractionOutput {
 }
 
 export interface AntigravityUsageMetadata {
-  input_tokens?: number; prompt_token_count?: number; output_tokens?: number
-  candidates_token_count?: number; thought_tokens?: number; thoughts_token_count?: number
+  input_tokens?: number; total_input_tokens?: number; prompt_token_count?: number
+  output_tokens?: number; total_output_tokens?: number; candidates_token_count?: number
+  thought_tokens?: number; total_thought_tokens?: number; thoughts_token_count?: number
+  total_tokens?: number
 }
 
 export interface AntigravityInteractionPayload {
