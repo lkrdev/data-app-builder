@@ -4,7 +4,7 @@ import type { Looker40SDK } from '@looker/sdk'
 import { fetchLookerCaAgentsCatalog, LookerCaAgentSummary, normalizeCaAgent } from './conversationalAnalytics'
 import { rawLookerRequest } from './lookerApi'
 
-export const CODEMODE_CDN_URL = 'https://cdn.lkr.dev/cli/codemode/0.0.64/codemode.js'
+export const CODEMODE_CDN_URL = 'https://cdn.lkr.dev/cli/codemode/0.0.65/codemode.js'
 
 export interface LkrCodeModeToolDefinition {
   type: string
@@ -304,7 +304,7 @@ export const LkrCodeMode: LkrCodeModeRuntime = {
   executeLookerCodeMode: (a: LkrCodeModeRunOptions & string, b?: LkrCodeModeRunOptions) => LkrCodeMode.runPythonCode(a, b),
 }
 
-export const LKR_DEV_CLI_VERSION = '0.0.64'
+export const LKR_DEV_CLI_VERSION = '0.0.65'
 export const LKR_DEV_CLI_SPEC = `lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}`
 export const BOOTSTRAP_SANDBOX_SH = `command -v uv >/dev/null 2>&1 || pip install --break-system-packages --quiet uv || python3 -m pip install --break-system-packages --quiet uv; lkr --version 2>/dev/null | grep -q "${LKR_DEV_CLI_VERSION}" || UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"; for sp in ~/.local/share/uv/tools/lkr-dev-cli/lib/python3.*/site-packages /usr/local/lib/python3.*/dist-packages /usr/lib/python3/dist-packages; do [ -d "$sp" ] && [ -f /workspace/sitecustomize.py ] && cp -f /workspace/sitecustomize.py "$sp/sitecustomize.py"; done`
 
@@ -570,32 +570,41 @@ def _patch_codemode(mod):
             cmd.callback = _patched_sandbox
 
 _PUSH_CODEMODE_PY = """
-existing_projects = {}
-try:
-    existing_projects = {pr.get("id"): pr for pr in (all_projects(fields="id,uses_git,git_service_name") or []) if isinstance(pr, dict) and pr.get("id")}
-except Exception:
-    existing_projects = {}
-new_project = project_id not in existing_projects
-p = create_project({"name": project_id}) if new_project else existing_projects[project_id]
-if not p.get("uses_git") and p.get("git_service_name") != "bare":
-    try:
-        update_project(project_id, {"git_service_name": "bare"})
-    except Exception:
-        pass
-if reset and not new_project:
-    try:
-        reset_project_to_production(project_id)
-    except Exception:
-        try:
-            create_developer_copy(project_id)
-        except Exception:
-            pass
+try: _cp = bool(create_project)
+except Exception: _cp = False
 existing_remote = []
-if not new_project:
+new_project = False
+if not reset and not _cp:
     try:
         existing_remote = all_project_files(project_id) or []
     except Exception:
-        existing_remote = []
+        new_project = True
+if reset or _cp or new_project:
+    existing_projects = {}
+    try:
+        existing_projects = {pr.get("id"): pr for pr in (all_projects(fields="id,uses_git,git_service_name") or []) if isinstance(pr, dict) and pr.get("id")}
+    except Exception:
+        existing_projects = {}
+    new_project = project_id not in existing_projects
+    p = create_project({"name": project_id}) if new_project else existing_projects[project_id]
+    if not p.get("uses_git") and p.get("git_service_name") != "bare":
+        try:
+            update_project(project_id, {"git_service_name": "bare"})
+        except Exception:
+            pass
+    if reset and not new_project:
+        try:
+            reset_project_to_production(project_id)
+        except Exception:
+            try:
+                create_developer_copy(project_id)
+            except Exception:
+                pass
+    if not new_project:
+        try:
+            existing_remote = all_project_files(project_id) or []
+        except Exception:
+            existing_remote = []
 remote_paths = {(rf.get("path") or rf.get("id") or "") for rf in existing_remote if isinstance(rf, dict)}
 created_dirs = set()
 for rp in remote_paths:
@@ -640,7 +649,7 @@ if reset and not single_file:
                 delete_file(project_id, rpath)
             except Exception:
                 pass
-model_files = [f for f in files_to_push if f["root_name"].endswith(".model.lkml")]
+model_files = [f for f in files_to_push if f["root_name"].endswith(".model.lkml") and (reset or f["path"] not in remote_paths)]
 if model_files:
     existing_models = {m.get("name"): m for m in (all_lookml_models(fields="name,project_name,allowed_db_connection_names") or []) if isinstance(m, dict) and m.get("name")}
     for mf in model_files:
@@ -680,9 +689,9 @@ def _patch_lookml(mod):
         return
 
     @functools.wraps(orig_push)
-    def _patched_push(ctx, folder_name, project_id_opt=None, file_opt=None, deploy=False, reset=True, message="push from lkr cli", sync_hidden=False, only_changed=False):
+    def _patched_push(ctx, folder_name, project_id_opt=None, file_opt=None, deploy=False, reset=True, message="push from lkr cli", sync_hidden=False, only_changed=False, create_project=False, **kwargs):
         if not _bridge_enabled():
-            return orig_push(ctx=ctx, folder_name=folder_name, project_id_opt=project_id_opt, file_opt=file_opt, deploy=deploy, reset=reset, message=message, sync_hidden=sync_hidden, only_changed=only_changed)
+            return orig_push(ctx=ctx, folder_name=folder_name, project_id_opt=project_id_opt, file_opt=file_opt, deploy=deploy, reset=reset, message=message, sync_hidden=sync_hidden, only_changed=only_changed, **({"create_project": create_project} if "create_project" in orig_push.__code__.co_varnames else {}), **kwargs)
         if file_opt is None and os.path.isfile(folder_name):
             file_opt = folder_name
             folder_name = os.path.dirname(os.path.abspath(folder_name))
@@ -710,7 +719,7 @@ def _patch_lookml(mod):
                     if not sync_hidden and any(part.startswith(".") for part in rel_p.split("/")):
                         continue
                     _add_file(fp, rel_p, fname)
-        vars_dict = {"project_id": project_id, "files_to_push": files_to_push, "single_file": bool(file_opt), "deploy": bool(deploy), "reset": bool(reset), "message": str(message)}
+        vars_dict = {"project_id": project_id, "files_to_push": files_to_push, "single_file": bool(file_opt), "deploy": bool(deploy), "reset": bool(reset), "message": str(message), **({"create_project": True} if create_project else {})}
         req = {"kind": "codemode", "code": _PUSH_CODEMODE_PY, "vars": dict(sorted(vars_dict.items())), "dev_mode": True}
         req["cache_key"] = _compute_cache_key(req)
         hit, val = _read_cache(req["cache_key"])
@@ -768,8 +777,6 @@ import site
 import subprocess
 import sys
 import sysconfig
-import tarfile
-import urllib.request
 from pathlib import Path
 
 WORKSPACE_DIR = Path(os.environ.get("WORKSPACE_DIR", "/workspace"))
@@ -781,11 +788,7 @@ CACHE_DIR = WORKSPACE_DIR / ".lkr_extension_cache"
 _PINNED_CLI_VERSION = "${LKR_DEV_CLI_VERSION}"
 LKR_DEV_CLI_VERSION = os.environ.get(
     "LKR_DEV_CLI_VERSION",
-    "0.0.64" if _PINNED_CLI_VERSION.startswith("$") else _PINNED_CLI_VERSION,
-)
-CLI_TARBALL_URL = os.environ.get(
-    "LKR_CLI_TARBALL_URL",
-    "https://codeload.github.com/lkrdev/cli/tar.gz/refs/heads/main",
+    "0.0.65" if _PINNED_CLI_VERSION.startswith("$") else _PINNED_CLI_VERSION,
 )
 REQUIRED_SKILLS = (
     "agentic-lookml-workflow",
@@ -798,35 +801,18 @@ REQUIRED_SKILLS = (
 )
 
 def ensure_skills() -> list[str]:
-    if not (SKILLS_ROOT / "agentic-lookml/SKILL.md").is_file():
-        SKILLS_ROOT.mkdir(parents=True, exist_ok=True)
-        local_skills = os.environ.get("LKR_CLI_SKILLS_DIR")
-        if local_skills and Path(local_skills).is_dir():
-            for s in REQUIRED_SKILLS:
-                src = Path(local_skills) / s
-                if src.is_dir():
-                    shutil.copytree(src, SKILLS_ROOT / s, dirs_exist_ok=True)
-        else:
-            tar_path = WORKSPACE_DIR / "lkrdev-cli.tar.gz"
-            urllib.request.urlretrieve(CLI_TARBALL_URL, tar_path)
-            extract_tmp = WORKSPACE_DIR / "_lkr_cli_extract"
-            extract_tmp.mkdir(parents=True, exist_ok=True)
-            with tarfile.open(tar_path, "r:gz") as tf:
-                tf.extractall(extract_tmp)
-            for child in extract_tmp.iterdir():
-                skills_dir = child / "skills"
-                if skills_dir.is_dir():
-                    for s in skills_dir.iterdir():
-                        if s.is_dir():
-                            shutil.copytree(s, SKILLS_ROOT / s.name, dirs_exist_ok=True)
-                    break
-            shutil.rmtree(extract_tmp, ignore_errors=True)
+    SKILLS_ROOT.mkdir(parents=True, exist_ok=True)
+    for src_root in (Path(os.environ.get("LKR_CLI_SKILLS_DIR") or "/nonexistent"), SKILLS_ALIAS):
+        if src_root.is_dir() and not src_root.is_symlink():
+            for s in src_root.iterdir():
+                if s.is_dir():
+                    shutil.copytree(s, SKILLS_ROOT / s.name, dirs_exist_ok=True)
     if not SKILLS_ALIAS.exists():
         try:
             SKILLS_ALIAS.symlink_to(SKILLS_ROOT)
         except Exception:
             pass
-    return [d.name for d in SKILLS_ROOT.iterdir() if d.is_dir()]
+    return sorted(d.name for d in SKILLS_ROOT.iterdir() if d.is_dir())
 
 def ensure_sitecustomize() -> list[str]:
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)

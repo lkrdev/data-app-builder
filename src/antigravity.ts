@@ -13,6 +13,7 @@ import {
   wrapDashboardCodeMode,
 } from './antigravityPrompts'
 import {
+  BUILTIN_SKILLS_FILES,
   collectInteractionTextCandidates,
   extractBundleFromInteraction,
   extractInteractionActivitySteps,
@@ -163,6 +164,26 @@ export function buildWorkspaceSources(params: {
       type: 'inline',
       content: LOOKER_PROJECT_ONBOARDING_SKILL_MD,
       target: '/workspace/skills/looker-project-onboarding/SKILL.md',
+    },
+    {
+      type: 'inline',
+      content: BUILTIN_SKILLS_FILES['lookml-field-curation'],
+      target: '/workspace/skills/lookml-field-curation/SKILL.md',
+    },
+    {
+      type: 'inline',
+      content: BUILTIN_SKILLS_FILES['lookml-tests'],
+      target: '/workspace/skills/lookml-tests/SKILL.md',
+    },
+    {
+      type: 'inline',
+      content: BUILTIN_SKILLS_FILES['lookml-snapshot'],
+      target: '/workspace/skills/lookml-snapshot/SKILL.md',
+    },
+    {
+      type: 'inline',
+      content: BUILTIN_SKILLS_FILES['lookml-bronze-view'],
+      target: '/workspace/skills/generate-view-from-table/SKILL.md',
     },
     { type: 'inline', content: BOOTSTRAP_LOOKML_PY, target: '/workspace/bootstrap_lookml.py' },
     { type: 'inline', content: LKR_CLI_SITECUSTOMIZE_PY, target: '/workspace/sitecustomize.py' },
@@ -336,7 +357,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : lookmlProjectId
       ? `with \`this.lookerModel = '${lookmlProjectId}'\` and \`this.explore = '${primaryExplore || 'order_items'}'\` in \`constructor()\``
       : `setting \`this.lookerModel\` and \`this.explore\` in \`constructor()\``
-  const step3Directive = `3. Write and bundle the Lit Data App in ONE \`code_execution\` call importing from '/runtime/data-app.js' (${ctorHint}; do NOT read, inspect, or decompile \`/workspace/bundle_app.py\` or \`/runtime\` — \`bundle_app.py\` natively evaluates ternaries, \`+\` string concatenation, template literals, and dictionary lookups; for metric selector / timeframe switcher apps switching between day/date, week, month, and year, default the date filter window to day: '90 days', week: '53 weeks', month: '60 months', year: '10 years', and dynamically match the date dimension group to the selected measure: return_count uses order_items.returned_date/returned_week/returned_month/returned_year, cancel_count uses order_items.cancelled_date/cancelled_week/cancelled_month/cancelled_year, and standard metrics use order_items.created_date/created_week/created_month/created_year) into \`${appFilePath}\`:\n   \`python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\\n...\\nEOF\``
+  const step3Directive = `3. Write and bundle the Lit Data App in ONE \`code_execution\` call importing from '/runtime/data-app.js' (${ctorHint}; do NOT run \`bundle_app.py --help\` or read, inspect, or decompile \`/workspace/bundle_app.py\` or \`/runtime\` — \`bundle_app.py\` natively evaluates ternaries, \`+\` string concatenation, template literals, and dictionary lookups; for metric selector / timeframe switcher apps switching between day/date, week, month, and year, default the date filter window to day: '90 days', week: '53 weeks', month: '60 months', year: '10 years', and dynamically match the date dimension group to the selected measure: return_count uses order_items.returned_date/returned_week/returned_month/returned_year, cancel_count uses order_items.cancelled_date/cancelled_week/cancelled_month/cancelled_year, and standard metrics use order_items.created_date/created_week/created_month/created_year) into \`${appFilePath}\`:\n   \`python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\\n...\\nEOF\``
 
   const normalizedExistingNative: NativeContentState | null = existingNativeContent
     ? normalizeNativeContent({
@@ -642,6 +663,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                       code: needsDashboardMacros ? wrapDashboardCodeMode(rawCode) : rawCode,
                       sdk: turnSdk,
                       extensionSDK,
+                      allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard',
                       requirePermission,
                       approvedOperations,
                       onPermissionRequest: wrappedPermissionRequest,
