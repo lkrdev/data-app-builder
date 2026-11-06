@@ -31,7 +31,7 @@ import {
   prewarmOrWakeAntigravityEnvironment, readInitialRightPaneCollapsed, readInitialThinkingLevel, recordSharedEnvExploreSchema,
   refreshOAuthSessionIfNeeded, resolveAdaptivePollScheduleMs, resolveBuiltinWorkspaceFileContent,
   resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, runAntigravityTurn,
-  SANDBOX_WORKSPACE_SKILL_FILES, sanitizeConversationLabel, saveStoredLeftPaneWidth,
+  SANDBOX_AGENT_SKILL_FILES, SANDBOX_WORKSPACE_SKILL_FILES, sanitizeConversationLabel, saveStoredLeftPaneWidth,
   saveStoredRightPaneCollapsed, STARTER_PROMPTS_REQUEST_TAG, STARTER_PROMPTS_RESPONSE_FORMAT,
   streamInteractionUntilActionOrDone, stripStarterPromptEmojis, STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY,
   STUDIO_MAX_TOTAL_TOKENS_OPTIONS, STUDIO_OAUTH_REFRESH_INTERVAL_MS,
@@ -1135,23 +1135,23 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(savedList[0].content?.agentId).toBe('ca_agent_bq_ops')
   })
 
-  test('13. pins LKR_DEV_CLI_VERSION=0.0.65, bootstraps uv via pip --break-system-packages + uv tool install in new environments, and configures Monday/Thursday PyPI auto-PR workflow', async () => {
+  test('13. pins LKR_DEV_CLI_VERSION=0.0.66, bootstraps uv via pip --break-system-packages + uv tool install in new environments, and configures Monday/Thursday PyPI auto-PR workflow', async () => {
     const repoRoot = path.resolve(__dirname, '../..')
     const versionTxt = readFileSync(path.join(repoRoot, 'lkr-dev-cli-version.txt'), 'utf8').trim()
-    expect(LKR_DEV_CLI_VERSION).toBe('0.0.65')
+    expect(LKR_DEV_CLI_VERSION).toBe('0.0.66')
     expect(versionTxt).toBe(LKR_DEV_CLI_VERSION)
-    expect(LKR_DEV_CLI_SPEC).toBe('lkr-dev-cli[tools,code-mode,parse]==0.0.65')
+    expect(LKR_DEV_CLI_SPEC).toBe('lkr-dev-cli[tools,code-mode,parse]==0.0.66')
 
     expect(BOOTSTRAP_SANDBOX_SH).toContain('pip install --break-system-packages --quiet uv')
     expect(BOOTSTRAP_SANDBOX_SH).toContain(
-      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.65"'
+      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.66"'
     )
     expect(BOOTSTRAP_LOOKML_PY).toContain('"install", "--break-system-packages", "--quiet", "uv"')
     expect(BOOTSTRAP_LOOKML_PY).toContain('"UV_TOOL_BIN_DIR": "/usr/local/bin"')
     expect(BOOTSTRAP_LOOKML_PY).toContain('["uv", "tool", "install", "--force", "--quiet", pkg_spec]')
     expect(AGENTS_MD).toContain('pip install --break-system-packages --quiet uv')
     expect(AGENTS_MD).toContain(
-      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.65"'
+      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.66"'
     )
 
     const workflowYml = readFileSync(
@@ -1194,7 +1194,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(postedBodies[0].input?.[0]?.text).toContain('python3 /workspace/bootstrap_lookml.py cli')
     expect(postedBodies[0].input?.[0]?.text).toContain('pip install --break-system-packages --quiet uv')
     expect(postedBodies[0].input?.[0]?.text).toContain(
-      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.65"'
+      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.66"'
     )
     expect(
       typeof postedBodies[0].environment === 'object' ? postedBodies[0].environment.sources : []
@@ -4391,7 +4391,7 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
   })
 
   test('32. Issue #104: provides CODEMODE_CDN_URL, synchronous LkrCodeMode tool & operation classification, and ensureCodeModeLoaded() runtime loader', async () => {
-    expect(CODEMODE_CDN_URL).toBe('https://cdn.lkr.dev/cli/codemode/0.0.65/codemode.js')
+    expect(CODEMODE_CDN_URL).toBe('https://cdn.lkr.dev/cli/codemode/0.0.66/codemode.js')
     expect(CODEMODE_CDN_URL).toContain(`/${LKR_DEV_CLI_VERSION}/codemode.js`)
     const preCommitHook = readFileSync(path.resolve(__dirname, '../../.githooks/pre-commit'), 'utf8')
     expect(preCommitHook).toContain('lkr-dev-cli-version.txt')
@@ -5686,8 +5686,36 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     expect(LOOKML_SKILLS_CATALOG.find((s) => s.id === 'looker-field-profiler')).toEqual({
       id: 'looker-field-profiler',
       label: 'Field Value Profiler',
-      desc: 'Profile string, number, yesno & datetime distributions, spikiness & LookML curation snippets via profile_fields',
+      desc: 'Profile field distributions, spikiness, LookML curation snippets & _field_value_search_<model> search index PDTs',
       path: 'skills/looker-field-profiler/SKILL.md',
+    })
+
+    for (const relPath of [
+      'looker-field-profiler/sub-skills/scratch-search/SKILL.md',
+      'looker-field-profiler/scripts/scratch_search.py',
+      'looker-field-profiler/scripts/dialects/bigquery.py',
+      'looker-field-profiler/scripts/dialects/snowflake.py',
+      'looker-field-profiler/scripts/dialects/postgres.py',
+      'looker-field-profiler/scripts/dialects/databricks.py',
+      'looker-field-profiler/scripts/dialects/duckdb.py',
+    ]) {
+      const diskContent = readFileSync(path.join(repoRoot, '.agents/skills', relPath), 'utf8')
+      expect(SANDBOX_AGENT_SKILL_FILES[relPath]).toBe(diskContent)
+      expect(resolveBuiltinWorkspaceFileContent(`/workspace/skills/${relPath}`)).toBe(diskContent)
+    }
+    const scratchSkillMd = readFileSync(path.join(repoRoot, 'skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md'), 'utf8')
+    expect(SANDBOX_AGENT_SKILL_FILES['looker-field-profiler/sub-skills/scratch-search/SKILL.md']).toBe(scratchSkillMd)
+    expect(BUILTIN_SKILLS_FILES['scratch-search']).toBe(scratchSkillMd)
+    expect(BUILTIN_SKILLS_FILES['looker-field-profiler-scratch-search']).toBe(scratchSkillMd)
+    expect(extractSkillNameFromPath('/workspace/skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md')).toBe('scratch-search')
+    expect(extractSkillNameFromPath('.agents/skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md')).toBe('scratch-search')
+
+    const scratchLabel = formatFriendlyLookerActivityLabel('return run_inline_query("json", {"model": "ecom", "view": "_field_value_search_ecom", "filters": {"_field_value_search_ecom.field_value": "%Acme%"}})')
+    expect(scratchLabel).toMatchObject({
+      title: 'Searching model field value index',
+      stepTitle: 'Searching model field value index',
+      statusText: 'Searching model _field_value_search index for matching entity values...',
+      isQuery: true,
     })
 
     const profLabel = formatFriendlyLookerActivityLabel('return profile_fields(model="thelook", view="order_items", fields=["order_items.status"])')
@@ -5704,11 +5732,13 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
       steps: [
         { id: 'st_dash', type: 'view_file', input: JSON.stringify({ TargetFile: 'skills/looker-dashboard/SKILL.md' }) },
         { id: 'st_prof', type: 'lookup_skill', arguments: { skill_name: 'looker-field-profiler' } },
+        { id: 'st_scratch', type: 'view_file', input: JSON.stringify({ TargetFile: '/workspace/skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md' }) },
       ],
     })
     expect(skillSteps).toEqual([
       expect.objectContaining({ id: 'st_dash', kind: 'skill', title: 'Reading skill looker-dashboard', path: 'skills/looker-dashboard/SKILL.md', content: LOOKER_DASHBOARD_SKILL_MD }),
       expect.objectContaining({ id: 'st_prof', kind: 'skill', title: 'Reading skill looker-field-profiler', path: '/workspace/skills/looker-field-profiler/SKILL.md', content: LOOKER_FIELD_PROFILER_SKILL_MD }),
+      expect.objectContaining({ id: 'st_scratch', kind: 'skill', title: 'Reading skill scratch-search', path: '/workspace/skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md', content: scratchSkillMd }),
     ])
 
     const nativeGuide = buildNativeContentGuide({ selectedExplores: ['thelook::order_items'], primaryModel: 'thelook', primaryExplore: 'order_items' })
@@ -5716,9 +5746,14 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
       expect(doc).toContain('looker-field-profiler')
       expect(doc).toContain('profile_fields')
     }
+    for (const doc of [LOOKER_FIELD_PROFILER_SKILL_MD, LOOKER_PROJECT_ONBOARDING_SKILL_MD, NATIVE_CONTENT_GUIDE_MD, DATA_APP_GUIDE_MD, DATA_INVESTIGATOR_GUIDE_MD, AGENTS_MD]) {
+      expect(doc).toContain('_field_value_search_')
+    }
     for (const doc of [AGENTS_MD, readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8'), readFileSync(path.join(repoRoot, 'upstream/payload/AGENTS.md'), 'utf8')]) {
       expect(doc).toContain('skills/looker-dashboard/SKILL.md')
       expect(doc).toContain('skills/looker-field-profiler/SKILL.md')
+      expect(doc).toContain('sub-skills/scratch-search/SKILL.md')
+      expect(doc).toContain('_field_value_search_<model>')
     }
   })
 })

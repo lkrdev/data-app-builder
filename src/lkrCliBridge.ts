@@ -4,7 +4,7 @@ import type { Looker40SDK } from '@looker/sdk'
 import { fetchLookerCaAgentsCatalog, LookerCaAgentSummary, normalizeCaAgent } from './conversationalAnalytics'
 import { rawLookerRequest } from './lookerApi'
 
-export const CODEMODE_CDN_URL = 'https://cdn.lkr.dev/cli/codemode/0.0.65/codemode.js'
+export const CODEMODE_CDN_URL = 'https://cdn.lkr.dev/cli/codemode/0.0.66/codemode.js'
 
 export interface LkrCodeModeToolDefinition {
   type: string
@@ -304,7 +304,7 @@ export const LkrCodeMode: LkrCodeModeRuntime = {
   executeLookerCodeMode: (a: LkrCodeModeRunOptions & string, b?: LkrCodeModeRunOptions) => LkrCodeMode.runPythonCode(a, b),
 }
 
-export const LKR_DEV_CLI_VERSION = '0.0.65'
+export const LKR_DEV_CLI_VERSION = '0.0.66'
 export const LKR_DEV_CLI_SPEC = `lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}`
 export const BOOTSTRAP_SANDBOX_SH = `command -v uv >/dev/null 2>&1 || pip install --break-system-packages --quiet uv || python3 -m pip install --break-system-packages --quiet uv; lkr --version 2>/dev/null | grep -q "${LKR_DEV_CLI_VERSION}" || UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"; for sp in ~/.local/share/uv/tools/lkr-dev-cli/lib/python3.*/site-packages /usr/local/lib/python3.*/dist-packages /usr/lib/python3/dist-packages; do [ -d "$sp" ] && [ -f /workspace/sitecustomize.py ] && cp -f /workspace/sitecustomize.py "$sp/sitecustomize.py"; done`
 
@@ -788,7 +788,7 @@ CACHE_DIR = WORKSPACE_DIR / ".lkr_extension_cache"
 _PINNED_CLI_VERSION = "${LKR_DEV_CLI_VERSION}"
 LKR_DEV_CLI_VERSION = os.environ.get(
     "LKR_DEV_CLI_VERSION",
-    "0.0.65" if _PINNED_CLI_VERSION.startswith("$") else _PINNED_CLI_VERSION,
+    "0.0.66" if _PINNED_CLI_VERSION.startswith("$") else _PINNED_CLI_VERSION,
 )
 REQUIRED_SKILLS = (
     "agentic-lookml-workflow",

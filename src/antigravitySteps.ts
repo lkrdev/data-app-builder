@@ -220,6 +220,8 @@ export function extractSkillNameFromPath(rawPath?: string): string | null {
   if (!raw) return null
   if (/(?:^|\/)DATA_APP_GUIDE\.md$/i.test(raw)) return 'data-apps'
   if (/(?:^|\/)DATA_INVESTIGATOR_GUIDE\.md$/i.test(raw)) return 'data-investigator'
+  const subMatch = raw.match(/(?:^|\/)sub-skills\/([^/\s]+)(?:\/SKILL\.md)?$/i)
+  if (subMatch?.[1]) return subMatch[1].toLowerCase()
   const match = raw.match(/(?:^|\/)skills\/([^/\s]+)(?:\/SKILL\.md)?$/i)
   return match?.[1] ? match[1].toLowerCase() : null
 }
@@ -258,9 +260,15 @@ for (const [relPath, content] of Object.entries(SANDBOX_AGENT_SKILL_FILES)) {
   BUILTIN_SKILLS_FILES[`.agents/skills/${relPath}`] ??= content
   if (relPath.endsWith('/SKILL.md')) {
     const skillId = relPath.slice(0, -'/SKILL.md'.length)
-    BUILTIN_SKILLS_FILES[`/workspace/skills/${skillId}/skill.md`] ??= content
-    BUILTIN_SKILLS_FILES[`skills/${skillId}/skill.md`] ??= content
-    BUILTIN_SKILLS_FILES[skillId] ??= content
+    const leafId = skillId.split('/').pop()!
+    const compactId = skillId.replace('/sub-skills/', '-')
+    for (const id of [skillId, leafId, compactId]) {
+      BUILTIN_SKILLS_FILES[`/workspace/skills/${id}/SKILL.md`] ??= content
+      BUILTIN_SKILLS_FILES[`skills/${id}/SKILL.md`] ??= content
+      BUILTIN_SKILLS_FILES[`/workspace/skills/${id}/skill.md`] ??= content
+      BUILTIN_SKILLS_FILES[`skills/${id}/skill.md`] ??= content
+      BUILTIN_SKILLS_FILES[id] ??= content
+    }
   }
 }
 
@@ -349,6 +357,15 @@ export function formatFriendlyLookerActivityLabel(
       title: 'Profiling Explore field distributions',
       stepTitle: 'Profiling Explore field distributions',
       statusText: 'Profiling Explore field distributions, cardinality, and temporal spikiness...',
+      ...(targetLabel ? { targetLabel } : {}),
+      isQuery: true,
+    }
+  }
+  if (/_field_value_search_/i.test(`${codeStr} ${String(args?.path || '')} ${String(args?.explore || args?.view || '')}`)) {
+    return {
+      title: 'Searching model field value index',
+      stepTitle: 'Searching model field value index',
+      statusText: 'Searching model _field_value_search index for matching entity values...',
       ...(targetLabel ? { targetLabel } : {}),
       isQuery: true,
     }

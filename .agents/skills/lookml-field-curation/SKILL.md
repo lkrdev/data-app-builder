@@ -330,3 +330,14 @@ uv run lkr code-mode sandbox --dev-mode \
   --var view_name="orders" \
   --var fields_json="$ENRICH_FIELDS_JSON"
 ```
+
+### Generate per-model scratch search index PDTs (`_field_value_search_<model>`)
+
+After profiling string dimensions, use [`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md`](../looker-field-profiler/sub-skills/scratch-search/SKILL.md) ([`skills/looker-field-profiler/scripts/scratch_search.py`](../looker-field-profiler/scripts/scratch_search.py)) to compile searchable string dimensions (`enum`, `categorical`, `entity_label`, `tier`, excluding PII/UUID/JSON) via `run_inline_query(result_format="sql", limit="-1")` into a per-model `UNION ALL` PDT (`view: _field_value_search_<model>` with `sql_trigger_value: SELECT CURRENT_DATE ;;` and `create_process` search index DDL) and hidden Explore (`explore: _field_value_search_<model> { hidden: yes }`):
+
+```bash
+python3 /workspace/skills/looker-field-profiler/scripts/scratch_search.py \
+  --model ecommerce \
+  --path ./lookml_project \
+  --write-lookml ./lookml_project/silver/explores/
+```
