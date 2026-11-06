@@ -16,6 +16,7 @@ export * from './lookerPermissions'
 export * from './dataAppPublisher'
 export * from './lookerArtifacts'
 export * from './conversationalAnalytics'
+export { LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD } from './antigravityPrompts'
 
 export function formatExploreId(modelName: string, exploreName: string): string {
   return `${modelName.trim()}::${exploreName.trim()}`

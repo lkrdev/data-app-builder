@@ -103,6 +103,7 @@ Use this skill when a user asks to onboard or create a new Looker project, scaff
      - `measure: return_count { type: count filters: [status: "Returned"] label: "Return Count" }`
      - `measure: cancel_count { type: count filters: [status: "Cancelled"] label: "Cancel Count" }`
      - `measure: completed_count { type: count filters: [status: "Complete"] label: "Completed Count" }`
+     - Ground filtered measure literals in `stats.top_values` from `profile_fields` (`skills/looker-field-profiler/SKILL.md`), apply `curation.lookml_snippet` (`recommended_hidden`, `recommended_suggestable`, `suggested_tags`, `recommended_description`) in `bronze/<fact_table>.refinement.lkml`, guard `profile:has_zeros` denominators with `NULLIF`, and use `profile:unique_key_candidate` / `profile:nullable` to author `.test.lkml` assertions when requested.
    - **Layer 4 — Portable ANSI Derived Ratios (`type: number`)**: Compose ratios from LookML measures via `1.0 * ${numerator_measure} / NULLIF(${denominator_measure}, 0)`:
      - `measure: return_rate { type: number sql: 1.0 * ${return_count} / NULLIF(${count}, 0) ;; value_format_name: percent_2 }`
      - `measure: cancel_rate { type: number sql: 1.0 * ${cancel_count} / NULLIF(${count}, 0) ;; value_format_name: percent_2 }`

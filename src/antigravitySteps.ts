@@ -1,8 +1,12 @@
 import {
   AGENTS_MD, BUNDLE_APP_PY, DATA_APP_GUIDE_MD, DATA_INVESTIGATOR_GUIDE_MD,
-  KDA_SKILL_MD, KDA_TOOLKIT_PY, LOOKER_PROJECT_ONBOARDING_SKILL_MD,
+  KDA_SKILL_MD, KDA_TOOLKIT_PY, LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD,
+  LOOKER_PROJECT_ONBOARDING_SKILL_MD,
 } from './antigravityPrompts'
-export { APP_BUILDER_SYSTEM_PROMPT, LOOKER_PROJECT_ONBOARDING_SKILL_MD } from './antigravityPrompts'
+export {
+  APP_BUILDER_SYSTEM_PROMPT, LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD,
+  LOOKER_PROJECT_ONBOARDING_SKILL_MD,
+} from './antigravityPrompts'
 import {
   type AntigravityActivityStep, type AntigravityInteractionOutput,
   type AntigravityInteractionPayload, type AntigravityInteractionStep, type AntigravityTurnTelemetry,
@@ -171,10 +175,10 @@ export function extractNativeContentFromInteraction(
 }
 
 const KNOWN_LOOKER_SDK_CALL_RE =
-  /\b(?:sdk\.([a-z_][a-z0-9_]*)|(search_agents|agents_search|format_content_inventory|run_inline_query|run_key_driver_analysis|to_fixed_date_range|lookml_model_explore|lookml_model|all_lookml_models|search_content|search_dashboards|search_looks|search_folders|folder_children|folder_ancestors|content_favorite|search_content_favorites|create_dashboard|update_dashboard|dashboard_dashboard_layouts|update_dashboard_layout_component|create_dashboard_element|update_dashboard_element|create_dashboard_filter|update_dashboard_filter|create_query|create_look|create_board|update_board|create_board_section|create_board_item|create_scheduled_plan|upsert_udd|upsert_lookml_dashboard|reflow_24col|pin_to_board|schedule_dashboard|emit_native_bundle|validate_project|run_lookml_test|create_sql_query|run_sql_query|all_project_files|get_file_content|create_file|update_file|delete_file|create_project_directory|update_session|git_branch|import_lookml_dashboard|sync_lookml_dashboard|me|user_roles|all_folders|generate_lookml_with_new_files|profile_fields|all_connections|connection_schemas|connection_tables|connection_columns|test_connection|all_projects|project|create_project|update_project|create_lookml_model|update_lookml_model|create_git_branch|update_git_branch|all_git_branches|deploy_to_production|reset_project_to_production))\s*\(/gi
+  /\b(?:sdk\.([a-z_][a-z0-9_]*)|(profile_fields|search_agents|agents_search|format_content_inventory|run_inline_query|run_key_driver_analysis|to_fixed_date_range|lookml_model_explore|lookml_model|all_lookml_models|search_content|search_dashboards|search_looks|search_folders|folder_children|folder_ancestors|content_favorite|search_content_favorites|create_dashboard|update_dashboard|dashboard_dashboard_layouts|update_dashboard_layout_component|create_dashboard_element|update_dashboard_element|create_dashboard_filter|update_dashboard_filter|create_query|create_look|create_board|update_board|create_board_section|create_board_item|create_scheduled_plan|upsert_udd|upsert_lookml_dashboard|reflow_24col|pin_to_board|schedule_dashboard|emit_native_bundle|validate_project|run_lookml_test|create_sql_query|run_sql_query|all_project_files|get_file_content|create_file|update_file|delete_file|create_project_directory|update_session|git_branch|import_lookml_dashboard|sync_lookml_dashboard|me|user_roles|all_folders|generate_lookml_with_new_files|all_connections|connection_schemas|connection_tables|connection_columns|test_connection|all_projects|project|create_project|update_project|create_lookml_model|update_lookml_model|create_git_branch|update_git_branch|all_git_branches|deploy_to_production|reset_project_to_production))\s*\(/gi
 
 const CODEMODE_MACROS = new Set([
-  'upsert_udd', 'upsert_lookml_dashboard', 'reflow_24col', 'pin_to_board',
+  'profile_fields', 'upsert_udd', 'upsert_lookml_dashboard', 'reflow_24col', 'pin_to_board',
   'schedule_dashboard', 'emit_native_bundle', 'to_fixed_date_range',
   'search_agents', 'agents_search', 'format_content_inventory',
 ])
@@ -234,6 +238,10 @@ export const BUILTIN_SKILLS_FILES: Record<string, string> = {
   '/workspace/skills/key-driver-analysis/skill.md': KDA_SKILL_MD, 'skills/key-driver-analysis/skill.md': KDA_SKILL_MD,
   'key-driver-analysis': KDA_SKILL_MD,
   '/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py': KDA_TOOLKIT_PY, 'skills/key-driver-analysis/scripts/kda_toolkit.py': KDA_TOOLKIT_PY, 'kda_toolkit.py': KDA_TOOLKIT_PY,
+  '/workspace/skills/looker-dashboard/SKILL.md': LOOKER_DASHBOARD_SKILL_MD, 'skills/looker-dashboard/SKILL.md': LOOKER_DASHBOARD_SKILL_MD,
+  'looker-dashboard': LOOKER_DASHBOARD_SKILL_MD, 'creating-looker-dashboard': LOOKER_DASHBOARD_SKILL_MD,
+  '/workspace/skills/looker-field-profiler/SKILL.md': LOOKER_FIELD_PROFILER_SKILL_MD, 'skills/looker-field-profiler/SKILL.md': LOOKER_FIELD_PROFILER_SKILL_MD,
+  'looker-field-profiler': LOOKER_FIELD_PROFILER_SKILL_MD,
   '/workspace/skills/looker-project-onboarding/SKILL.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD, 'skills/looker-project-onboarding/SKILL.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
   '/workspace/skills/looker-project-onboarding/skill.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD, 'skills/looker-project-onboarding/skill.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
   'looker-project-onboarding': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
@@ -241,16 +249,18 @@ export const BUILTIN_SKILLS_FILES: Record<string, string> = {
   'lookml-snapshot': LOOKML_SNAPSHOT_SKILL_MD,
   'lookml-bronze-view': SANDBOX_AGENT_SKILL_FILES['generate-view-from-table/SKILL.md'],
 }
+SANDBOX_AGENT_SKILL_FILES['looker-dashboard/SKILL.md'] = LOOKER_DASHBOARD_SKILL_MD
+SANDBOX_AGENT_SKILL_FILES['looker-field-profiler/SKILL.md'] = LOOKER_FIELD_PROFILER_SKILL_MD
 for (const [relPath, content] of Object.entries(SANDBOX_AGENT_SKILL_FILES)) {
-  BUILTIN_SKILLS_FILES[`/workspace/skills/${relPath}`] = content
-  BUILTIN_SKILLS_FILES[`skills/${relPath}`] = content
-  BUILTIN_SKILLS_FILES[`/workspace/.agents/skills/${relPath}`] = content
-  BUILTIN_SKILLS_FILES[`.agents/skills/${relPath}`] = content
+  BUILTIN_SKILLS_FILES[`/workspace/skills/${relPath}`] ??= content
+  BUILTIN_SKILLS_FILES[`skills/${relPath}`] ??= content
+  BUILTIN_SKILLS_FILES[`/workspace/.agents/skills/${relPath}`] ??= content
+  BUILTIN_SKILLS_FILES[`.agents/skills/${relPath}`] ??= content
   if (relPath.endsWith('/SKILL.md')) {
     const skillId = relPath.slice(0, -'/SKILL.md'.length)
-    BUILTIN_SKILLS_FILES[`/workspace/skills/${skillId}/skill.md`] = content
-    BUILTIN_SKILLS_FILES[`skills/${skillId}/skill.md`] = content
-    BUILTIN_SKILLS_FILES[skillId] = content
+    BUILTIN_SKILLS_FILES[`/workspace/skills/${skillId}/skill.md`] ??= content
+    BUILTIN_SKILLS_FILES[`skills/${skillId}/skill.md`] ??= content
+    BUILTIN_SKILLS_FILES[skillId] ??= content
   }
 }
 
@@ -306,7 +316,7 @@ const LOOKER_QUERY_EXEC_RE = /\b(?:run_inline_query|run_query|run_sql_query|crea
 
 export function formatFriendlyLookerActivityLabel(
   code: string, args?: Record<string, unknown>
-): { statusText: string; stepTitle: string; targetLabel?: string; isQuery: boolean } {
+): { statusText: string; stepTitle: string; title?: string; targetLabel?: string; isQuery: boolean } {
   const codeStr = String(code || '')
   const vars = args?.vars && typeof args.vars === 'object' && !Array.isArray(args.vars) ? (args.vars as Record<string, unknown>) : undefined
   const activeContent = vars?.active_content && typeof vars.active_content === 'object' && !Array.isArray(vars.active_content) ? (vars.active_content as Record<string, unknown>) : undefined
@@ -333,6 +343,15 @@ export function formatFriendlyLookerActivityLabel(
   for (const cand of rawCandidates) {
     targetLabel = humanizeLookerTargetLabel(cand)
     if (targetLabel) break
+  }
+  if (/\bprofile_fields\s*\(/i.test(codeStr)) {
+    return {
+      title: 'Profiling Explore field distributions',
+      stepTitle: 'Profiling Explore field distributions',
+      statusText: 'Profiling Explore field distributions, cardinality, and temporal spikiness...',
+      ...(targetLabel ? { targetLabel } : {}),
+      isQuery: true,
+    }
   }
   const isQuery = LOOKER_QUERY_EXEC_RE.test(codeStr) || /\/(?:queries|sql_queries)\b|run_inline_query|run_query|run_sql_query/i.test(String(args?.path || ''))
   const isAgentSearch = !isQuery && /\b(?:search_agents|agents_search)\b|\/agents\/search\b/i.test(`${codeStr} ${String(args?.path || '')}`)
