@@ -328,9 +328,12 @@ async function main() {
     })
   }
 
-  const outDir = path.join(rootDir, 'tmp/evals')
-  fs.mkdirSync(outDir, { recursive: true })
-  const outPath = path.join(outDir, 'new-project-latest.json')
+  const outIdx = process.argv.indexOf('--out')
+  const outPath =
+    outIdx >= 0 && process.argv[outIdx + 1]
+      ? path.resolve(process.argv[outIdx + 1])
+      : path.join(rootDir, 'tmp/evals/new-project-latest.json')
+  fs.mkdirSync(path.dirname(outPath), { recursive: true })
   fs.writeFileSync(outPath, JSON.stringify(report, null, 2))
   console.log(`\n[eval-new-project] Saved full report to ${outPath}`)
   const passedCount = report.turns.filter((x) => x.passed).length
