@@ -203,3 +203,11 @@ profile_fields(
   - Candidate for `primary_key: yes` on the view and a `.test.lkml` uniqueness assertion (`assert: id_is_unique { expression: count(${view.field}) = count_distinct(${view.field}) ;; }`).
 - **`profile:empty_or_null_only` & `profile:constant_value`**:
   - Flag potential upstream ETL breakage or unpopulated columns before building downstream Silver/Gold models on top of them.
+
+---
+
+## 5. Sub-Skills & Scripts — Scratch Schema Value Search
+
+- **[Scratch Schema Value Search (`sub-skills/scratch-search/SKILL.md`)](sub-skills/scratch-search/SKILL.md)**:
+  1. **Build-Time Generation ([`scripts/scratch_search.py`](scripts/scratch_search.py))**: Profiles `enum`, `categorical`, `entity_label`, and `tier` string dimensions across a model (offline via `--path` or online via `lookml_model_explore`, excluding `profile:pii`, `profile:email`, `profile:phone`, `profile:json_payload`, `profile:uuid_or_hash`, `profile:empty_or_null_only`), compiles each searchable `(explore_name, field_name)` SQL branch via `run_inline_query(result_format="sql", limit="-1")`, strips trailing `ORDER BY` / `LIMIT 100000`, and writes `view: _field_value_search_<model>` (`sql_trigger_value: SELECT CURRENT_DATE ;;` + `create_process` search index DDL across 5 dialects: [`bigquery.py`](scripts/dialects/bigquery.py), [`snowflake.py`](scripts/dialects/snowflake.py), [`postgres.py`](scripts/dialects/postgres.py), [`databricks.py`](scripts/dialects/databricks.py), [`duckdb.py`](scripts/dialects/duckdb.py)) plus a hidden LookML Explore (`explore: _field_value_search_<model> { hidden: yes }`).
+  2. **Query-Time Resolution (`run_inline_query`)**: When `explore: _field_value_search_<model>` exists on the model, query it via `run_inline_query("json", {"model": "<model>", "view": "_field_value_search_<model>", "fields": ["_field_value_search_<model>.explore_name", "_field_value_search_<model>.field_name", "_field_value_search_<model>.subtype", "_field_value_search_<model>.field_value"], "filters": {"_field_value_search_<model>.field_value": "%<term>%"}, "limit": "20"})` to resolve unknown or fuzzy string literals to exact `(explore_name, field_name, field_value)` tuples in a single indexed query before filtering downstream Explores.
