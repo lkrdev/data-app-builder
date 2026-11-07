@@ -60,11 +60,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   )
 
   const [lookmlProjectId, setLookmlProjectId] = useState('')
-  const [activatedLookmlSkills, setActivatedLookmlSkills] = useState<string[]>([
-    'lookml-field-curation',
-    'lookml-tests',
-    'lookml-snapshot',
-  ])
+  const [activatedLookmlSkills, setActivatedLookmlSkills] = useState<string[]>([])
   const [lookmlBundle, setLookmlBundle] = useState<LookmlBundle | null>(null)
   const [loadLookmlInput, setLoadLookmlInput] = useState('')
   const lastLookmlIdRef = useRef<string>('')

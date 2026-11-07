@@ -903,7 +903,7 @@ function buildHtmlPage(scenario) {
           scenario === 'chatbar_pasted_image_inspector'
             ? 'Match the layout in this screenshot and add a gross margin breakdown.'
             : scenario === 'chatbar_lookml_skills'
-            ? 'Curate descriptions on order_items, generate assert data tests, and capture a LookML parity snapshot.'
+            ? '/lookml'
             : '',
         initialPastedImages:
           scenario === 'chatbar_pasted_image_inspector'
@@ -1245,10 +1245,6 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         '⎇ user dev mode',
         '✓ LookML Validator Passed',
         'run_lookml_test (1/1 passed)',
-        'TURN SKILLS:',
-        'Descriptions & Curation',
-        'Data Tests (.test.lkml)',
-        'Snapshot & Parity',
         'bronze/orders.refinement.lkml',
         'Update LookML'
       ]
@@ -1349,13 +1345,11 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       category: 'Chat Bar States',
       title: '11. Chat Bar State — LookML Activated Turn Skills & Prompt',
       snapshotName: '11-chatbar-state-lookml-activated-skills-snap.png',
-      clipSelector: '.dab-composer',
+      clipSelector: ['[data-testid="composer-slash-skill-menu"]', '.dab-composer'],
       expectText: [
-        'TURN SKILLS:',
-        '✓ Descriptions & Curation',
-        '✓ Data Tests (.test.lkml)',
-        '✓ Snapshot & Parity',
-        '+ Bronze View',
+        '/lookml-field-curation',
+        '/lookml-tests',
+        '/lookml-snapshot',
         'Run Agentic LookML'
       ]
     },
@@ -1428,7 +1422,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       snapshotName: '17-centered-empty-prompt-snap.png',
       clipSelector: '.dab-empty-prompt-card',
       expectText: [
-        'Use your Ripper',
+        'Ripper is ready',
         'Send Message'
       ]
     },
@@ -1953,7 +1947,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     expect(step1.result.value.routeOnNew).toBe('/')
     expect(step1.result.value.hasCenteredStage).toBe(true)
     expect(step1.result.value.centeredHeroText).not.toContain('New Conversation')
-    expect(step1.result.value.centeredHeroText).toContain('Use your Ripper')
+    expect(step1.result.value.centeredHeroText).toContain('Ripper is ready')
     expect(step1.result.value.cardCenteredHorizontally).toBe(true)
     expect(step1.result.value.cardCenteredVertically).toBe(true)
 
@@ -5140,12 +5134,29 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const fileBodyText = (document.querySelector('[data-testid="viewer-document-body"]')?.textContent || '').trim();
         document.querySelector('[data-testid="viewer-document-close-btn"]')?.click();
         await new Promise((r) => setTimeout(r, 40));
+
+        // Issue #151: verify desktop hides mobile-only menu items and supports /skill slash autocomplete
+        document.querySelector('[data-testid="composer-add-context-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const desktopMobileFolderItemDisplay = window.getComputedStyle(document.querySelector('[data-testid="mobile-menu-folder-btn"]')).display;
+        document.querySelector('[data-testid="composer-add-context-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 30));
+
+        window.__DAB_STUDIO__.setPrompt('/lookml');
+        await new Promise((r) => setTimeout(r, 60));
+        const hasSlashMenu = Boolean(document.querySelector('[data-testid="composer-slash-skill-menu"]'));
+        document.querySelector('[data-testid="composer-slash-skill-option-lookml-tests"]')?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const promptAfterSlashPick = window.__DAB_STUDIO__.prompt;
+        const activatedAfterSlashPick = window.__DAB_STUDIO__.activatedLookmlSkills;
+
         return {
           resizerLabel, collapseBtnTitle, reloadViewerBtn, iframeTitle,
           hasViewerPaneAfterSkill: Boolean(viewerPaneAfterSkill), skillPathBadge,
           skillBodyHasGuide: skillBodyText.includes('Lit Data App') || skillBodyText.includes('data-app.js'),
           filePathBadge, fileBodyHasAnalysis: fileBodyText.includes('Q4 Revenue Drop Root-Cause Analysis'),
-          viewerClosed: !document.querySelector('[data-testid="viewer-document-pane"]')
+          viewerClosed: !document.querySelector('[data-testid="viewer-document-pane"]'),
+          desktopMobileFolderItemDisplay, hasSlashMenu, promptAfterSlashPick, activatedAfterSlashPick
         };
       })()`,
       awaitPromise: true, returnByValue: true
@@ -5154,7 +5165,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     expect(desktopRes.result.value).toEqual({
       resizerLabel: 'Resize chat and viewer panes', collapseBtnTitle: 'Collapse viewer', reloadViewerBtn: true, iframeTitle: 'Looker Live Viewer',
       hasViewerPaneAfterSkill: true, skillPathBadge: '/workspace/skills/data-apps/SKILL.md', skillBodyHasGuide: true,
-      filePathBadge: '/workspace/analysis.md', fileBodyHasAnalysis: true, viewerClosed: true
+      filePathBadge: '/workspace/analysis.md', fileBodyHasAnalysis: true, viewerClosed: true,
+      desktopMobileFolderItemDisplay: 'none', hasSlashMenu: true, promptAfterSlashPick: '/lookml-tests ', activatedAfterSlashPick: ['lookml-tests']
     })
 
     try {
@@ -5189,10 +5201,41 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           const hasCardHandle = Boolean(document.querySelector('[data-testid="mobile-viewer-card-handle"]'));
           document.querySelector('[data-testid="mobile-viewer-card-close"]').click();
           await new Promise((r) => setTimeout(r, 50));
+
+          // Issue #151: verify 1-row mobile top bar hiding and mobile composer '+' menu controls
+          const editBtnHiddenOnMobile = window.getComputedStyle(document.querySelector('[data-testid="studio-edit-agent-name-btn"]')).display === 'none';
+          const permToggleHiddenOnMobile = window.getComputedStyle(document.querySelector('[data-testid="permission-mode-toggle"]')).display === 'none';
+          const folderTriggerHiddenOnMobile = window.getComputedStyle(document.querySelector('[data-testid="topbar-folder-trigger"]')).display === 'none';
+          const fullscreenHiddenOnMobile = window.getComputedStyle(document.querySelector('[data-testid="topbar-fullscreen-toggle"]')).display === 'none';
+
+          document.querySelector('[data-testid="composer-add-context-btn"]')?.click();
+          await new Promise((r) => setTimeout(r, 40));
+          const mobileFolderBtnDisplay = window.getComputedStyle(document.querySelector('[data-testid="mobile-menu-folder-btn"]')).display;
+          const initialPerm = s.requirePermission;
+          document.querySelector('[data-testid="mobile-menu-approval-btn"]')?.click();
+          await new Promise((r) => setTimeout(r, 40));
+          const permAfterToggle = window.__DAB_STUDIO__.requirePermission;
+
+          document.querySelector('[data-testid="composer-add-context-btn"]')?.click();
+          await new Promise((r) => setTimeout(r, 40));
+          document.querySelector('[data-testid="mobile-menu-folder-btn"]')?.click();
+          await new Promise((r) => setTimeout(r, 50));
+          const folderModalOpened = Boolean(document.querySelector('[data-testid="folder-advanced-search-modal"]'));
+          window.__DAB_STUDIO__.setFolderModalOpen(false);
+          await new Promise((r) => setTimeout(r, 40));
+
+          document.querySelector('[data-testid="composer-add-context-btn"]')?.click();
+          await new Promise((r) => setTimeout(r, 40));
+          document.querySelector('[data-testid="mobile-menu-edit-agent-name-btn"]')?.click();
+          await new Promise((r) => setTimeout(r, 50));
+          const agentNameInputOpened = Boolean(document.querySelector('[data-testid="studio-agent-name-input"]'));
+
           return {
             initialCollapsed, initialDisplay, displayWhileThinkingNoContent,
             hasObjectChip: Boolean(chip), collapsedAfterChipClick, cardPosition, cardDisplay, hasCardHandle,
-            collapsedAfterClose: window.__DAB_STUDIO__.rightPaneCollapsed
+            collapsedAfterClose: window.__DAB_STUDIO__.rightPaneCollapsed,
+            editBtnHiddenOnMobile, permToggleHiddenOnMobile, folderTriggerHiddenOnMobile, fullscreenHiddenOnMobile,
+            mobileFolderBtnDisplay, permToggled: permAfterToggle === !initialPerm, folderModalOpened, agentNameInputOpened
           };
         })()`,
         awaitPromise: true, returnByValue: true
@@ -5200,7 +5243,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
 
       expect(mobRes.result.value).toEqual({
         initialCollapsed: true, initialDisplay: 'none', displayWhileThinkingNoContent: 'none',
-        hasObjectChip: true, collapsedAfterChipClick: false, cardPosition: 'absolute', cardDisplay: 'flex', hasCardHandle: true, collapsedAfterClose: true
+        hasObjectChip: true, collapsedAfterChipClick: false, cardPosition: 'absolute', cardDisplay: 'flex', hasCardHandle: true, collapsedAfterClose: true,
+        editBtnHiddenOnMobile: true, permToggleHiddenOnMobile: true, folderTriggerHiddenOnMobile: true, fullscreenHiddenOnMobile: true,
+        mobileFolderBtnDisplay: 'flex', permToggled: true, folderModalOpened: true, agentNameInputOpened: true
       })
     } finally {
       await chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })

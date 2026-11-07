@@ -105,6 +105,7 @@ export type { ExtensionHostStorageLike, ResolvedStudioUseCase, StudioBusySendAct
 export {
   BOOTSTRAP_LOOKML_PY,
   BOOTSTRAP_SANDBOX_SH,
+  buildLookmlSystemGuide,
   classifyLookerOperation,
   CODEMODE_CDN_URL,
   computeLkrExtensionCacheKey,
@@ -382,7 +383,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const systemGuide =
     customSystemGuide ||
     (toolMode === 'lookml'
-      ? buildLookmlSystemGuide({ selectedExplores, primaryModel, primaryExplore, projectId: lookmlProjectId, activatedSkills: activatedLookmlSkills, developableProjects, canDeploy })
+      ? buildLookmlSystemGuide({ selectedExplores, primaryModel, primaryExplore, projectId: lookmlProjectId, activatedSkills: activatedLookmlSkills, userPrompt, developableProjects, canDeploy })
       : dataAppOrNativeGuide)
 
   const uploadSources: Array<{ type: 'inline'; content: string; target: string }> = []

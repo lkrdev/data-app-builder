@@ -105,8 +105,11 @@
     "title": "11. Chat Bar State — LookML Activated Turn Skills & Prompt",
     "snapshotName": "11-chatbar-state-lookml-activated-skills-snap.png",
     "width": 766,
-    "height": 230,
-    "clipSelector": ".dab-composer",
+    "height": 407,
+    "clipSelector": [
+      "[data-testid=\"composer-slash-skill-menu\"]",
+      ".dab-composer"
+    ],
     "clipMargin": 24,
     "changedInGit": false
   },

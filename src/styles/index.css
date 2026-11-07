@@ -1760,10 +1760,14 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 .dab-viewer-document-markdown { font-size: 13px; line-height: 1.55; color: var(--dab-text, #0f172a); }
 .dab-viewer-document-code { margin: 0; padding: 12px 14px; border-radius: 8px; background: var(--dab-surface-muted, #f8fafc); border: 1px solid var(--dab-border, #e2e8f0); color: var(--dab-text, #0f172a); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 .dab-mobile-viewer-card-handle { display: none; }
+.dab-mobile-only-menu-item { display: none; }
 @media (max-width: 768px) {
-  .dab-topbar { padding: 6px 10px; gap: 6px; flex-wrap: wrap; }
-  .dab-brand { gap: 6px; flex-wrap: wrap; }
-  .dab-controls { gap: 6px; flex-wrap: wrap; width: 100%; justify-content: flex-start; }
+  .dab-topbar { padding: 6px 10px; gap: 6px; flex-wrap: nowrap; justify-content: space-between; }
+  .dab-brand { gap: 6px; flex-wrap: nowrap; min-width: 0; }
+  .dab-controls { gap: 6px; flex-wrap: nowrap; width: auto; justify-content: flex-end; }
+  .dab-topbar .dab-agent-name-edit-btn, .dab-topbar [data-testid="studio-edit-agent-name-btn"], .dab-topbar [data-testid="permission-mode-toggle"], .dab-topbar .dab-folder-picker > span, .dab-topbar [data-testid="topbar-folder-trigger"], .dab-topbar .dab-folder-picker > [data-testid="folder-selector-skeleton"], .dab-topbar [data-testid="topbar-fullscreen-toggle"], .dab-topbar .dab-divider { display: none !important; }
+  .dab-topbar .dab-folder-picker { gap: 0; margin: 0; }
+  .dab-mobile-only-menu-item { display: flex; }
   .dab-folder-trigger-fixed, .dab-combobox { min-width: 0; max-width: 100%; width: auto; flex: 1 1 130px; }
   .dab-workspace, .dab-workspace.dab-workspace-with-sidebar, .dab-workspace.dab-workspace-with-sidebar.dab-workspace-sidebar-collapsed, .dab-workspace.dab-workspace-with-sidebar.dab-workspace-empty, .dab-workspace.dab-workspace-with-sidebar.dab-workspace-sidebar-collapsed.dab-workspace-empty, .dab-workspace.dab-workspace-with-sidebar.dab-workspace-right-collapsed, .dab-workspace.dab-workspace-with-sidebar.dab-workspace-sidebar-collapsed.dab-workspace-right-collapsed { position: relative; grid-template-columns: 36px minmax(0, 1fr) !important; }
   .dab-conv-sidebar:not(.collapsed) { position: absolute; inset: 0 auto 0 0; width: min(260px, 82vw); z-index: 400; box-shadow: 4px 0 20px rgba(0, 0, 0, 0.35); }
