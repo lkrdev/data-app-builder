@@ -17,11 +17,11 @@ import {
   discoverStarterContentSummaries, discoverStarterExploreContext, ensureCodeModeLoaded,
   executeLkrExtensionToolRequest, EXPLICIT_SCRIPT_CREATION_RE, extractInteractionActivitySteps,
   extractInteractionOutputText, extractLkrExtensionToolRequests,
-  extractNativeContentFromInteraction, extractSkillNameFromPath, extractThoughtText, extractWrittenMarkdownPathFromCode,
+  extractNativeContentFromInteraction, extractNonThoughtText, extractSkillNameFromPath, extractThoughtText, extractWrittenMarkdownPathFromCode,
   fetchEnvironmentFile, formatContentInventoryMarkdown, formatFriendlyLookerActivityLabel,
   formatThinkingTraceMarkdown, generateConversationLabel, generateDynamicStarterPrompts,
   getCachedStarterPrompts, getInitialStoredOAuthToken, getSharedEnvExploreSchemas,
-  isEnvironmentNotFoundError, isLookerInstanceMetadataQuery, isTextAttachmentFile, KDA_SKILL_MD, KDA_TOOLKIT_PY,
+  isEnvironmentNotFoundError, isHostOAuthWedged, isLookerInstanceMetadataQuery, isTextAttachmentFile, KDA_SKILL_MD, KDA_TOOLKIT_PY,
   listAvailableAntigravityModels, LKR_CLI_BRIDGE_TOOL, LKR_CLI_SITECUSTOMIZE_PY, LKR_DEV_CLI_SPEC,
   LKR_DEV_CLI_VERSION, LkrCodeMode, loadStoredLeftPaneWidth, loadStoredOAuthSession,
   loadStoredRightPaneCollapsed, loadStoredThinkingLevel, loginWithGoogleOAuth,
@@ -29,7 +29,7 @@ import {
   mergeInteractionSseEvent, MIN_LEFT_PANE_WIDTH, NATIVE_CONTENT_GUIDE_MD, normalizeMaxTotalTokens, normalizeSandboxFilePath,
   normalizeThinkingLevel, parseStarterPromptsResponse, persistOAuthSession, persistThinkingLevel,
   prewarmOrWakeAntigravityEnvironment, readInitialRightPaneCollapsed, readInitialThinkingLevel, recordSharedEnvExploreSchema,
-  refreshOAuthSessionIfNeeded, resolveAdaptivePollScheduleMs, resolveBuiltinWorkspaceFileContent,
+  refreshOAuthSessionIfNeeded, resetHostOAuthWedged, resolveAdaptivePollScheduleMs, resolveBuiltinWorkspaceFileContent,
   resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, runAntigravityTurn,
   SANDBOX_AGENT_SKILL_FILES, SANDBOX_WORKSPACE_SKILL_FILES, sanitizeConversationLabel, saveStoredLeftPaneWidth,
   saveStoredRightPaneCollapsed, STARTER_PROMPTS_REQUEST_TAG, STARTER_PROMPTS_RESPONSE_FORMAT,
@@ -45,10 +45,10 @@ import {
 } from '../components/StudioDesignSystem'
 import {
   ALLOWED_EXTERNAL_WINDOW_PATTERNS, copyLinkWithExtensionSdk,
-  createLookerEmbedPreloadController, DOC_UI_COMPONENTS, getStarterPromptsForUseCase,
+  createLookerEmbedPreloadController, DOC_UI_COMPONENTS, fetchAvailableLookerConnectionsMarkdown, getStarterPromptsForUseCase,
   isAllowedExternalWindowUrl, isSandboxMarkdownPath, normalizeLookerEmbedUrl, openOrCopyMarkdownLink,
   renderUseCaseGuideMarkdown, resolveLookerEmbedTarget,
-  STARTER_PROMPTS_BY_USE_CASE, StarterPromptButtons, USE_CASE_BADGES,
+  STARTER_PROMPTS_BY_USE_CASE, StarterPromptButtons, StudioMarkdown, USE_CASE_BADGES,
   USE_CASE_GUIDE_ORDER, USE_CASE_GUIDES,
 } from '../components/StudioWorkspace'
 import {
@@ -5755,5 +5755,105 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
       expect(doc).toContain('sub-skills/scratch-search/SKILL.md')
       expect(doc).toContain('_field_value_search_<model>')
     }
+  })
+
+  test('59. Issue #152: recovers wedged Looker OAuth host state + visibilitychange/stored session, falls back from /connections 403/404 to /lookml_models allowed_db_connection_names, and preserves SSE streamed markdown continuity + multi-line <ol>', async () => {
+    // 1. OAuth hostOAuthWedged tracking, visibilitychange listener, and stored session recovery
+    resetHostOAuthWedged()
+    expect(isHostOAuthWedged()).toBe(false)
+
+    const winListeners: Record<string, Array<() => void>> = {}
+    const docListeners: Record<string, Array<() => void>> = {}
+    const g = globalThis as unknown as { window?: unknown; document?: unknown }
+    const prevWin = g.window
+    const prevDoc = g.document
+    g.window = {
+      location: { origin: 'https://dev.looker.com' },
+      addEventListener: (evt: string, fn: () => void) => { ;(winListeners[evt] = winListeners[evt] || []).push(fn) },
+      removeEventListener: (evt: string, fn: () => void) => { winListeners[evt] = (winListeners[evt] || []).filter((x) => x !== fn) },
+    }
+    g.document = {
+      visibilityState: 'visible',
+      addEventListener: (evt: string, fn: () => void) => { ;(docListeners[evt] = docListeners[evt] || []).push(fn) },
+      removeEventListener: (evt: string, fn: () => void) => { docListeners[evt] = (docListeners[evt] || []).filter((x) => x !== fn) },
+    }
+    try {
+      const hangingSdk = { oauth2Authenticate: () => new Promise(() => {}) }
+      const p1 = loginWithGoogleOAuth(hangingSdk, 'client-152', { focusReturnDelayMs: 15 })
+      for (const fn of docListeners.visibilitychange || []) fn()
+      await expect(p1).rejects.toThrow(/popup closed or failed/i)
+      expect(isHostOAuthWedged()).toBe(true)
+      expect(docListeners.visibilitychange?.length || 0).toBe(0)
+
+      // Stored session resolves on focus/visibilitychange instead of rejecting and clears wedged flag
+      const storedPayload = JSON.stringify({ token: 'stored_mobile_tok_152', expiresAt: Date.now() + 600_000, clientId: 'client-152' })
+      const storedSdk = {
+        oauth2Authenticate: () => new Promise(() => {}),
+        localStorageGetItem: async () => storedPayload,
+        localStorageSetItem: async () => {},
+      }
+      const p2 = loginWithGoogleOAuth(storedSdk, 'client-152', { focusReturnDelayMs: 15 })
+      for (const fn of docListeners.visibilitychange || []) fn()
+      await expect(p2).resolves.toBe('stored_mobile_tok_152')
+      expect(isHostOAuthWedged()).toBe(false)
+      resetHostOAuthWedged()
+    } finally {
+      g.window = prevWin
+      g.document = prevDoc
+    }
+
+    // 2. Non-admin /connections -> /lookml_models fallback in fetchAvailableLookerConnectionsMarkdown
+    const adminConnSdk = asSdk({
+      authSession: {
+        transport: {
+          rawRequest: async (_m: string, p: string) =>
+            p === '/connections'
+              ? { statusCode: 200, ok: true, body: [{ name: 'bq_analytics', dialect_name: 'bigquery_standard_sql', database: 'analytics_prod', schema: 'core' }] }
+              : { statusCode: 200, ok: true, body: [] },
+        },
+      },
+    })
+    const adminMd = await fetchAvailableLookerConnectionsMarkdown(adminConnSdk)
+    expect(adminMd).toContain('`bq_analytics` (bigquery_standard_sql · analytics_prod · core)')
+
+    const nonAdminFallbackSdk = asSdk({
+      authSession: {
+        transport: {
+          rawRequest: async (_m: string, p: string) =>
+            p === '/connections'
+              ? { statusCode: 404, ok: false, body: { message: 'Not found' } }
+              : { statusCode: 200, ok: true, body: [{ name: 'retail_model', project_name: 'retail_proj', allowed_db_connection_names: ['snowflake_dw', 'bq_retail'] }] },
+        },
+      },
+    })
+    const fallbackMd = await fetchAvailableLookerConnectionsMarkdown(nonAdminFallbackSdk)
+    expect(fallbackMd).toContain('`snowflake_dw` (models/projects: retail_proj)')
+    expect(fallbackMd).toContain('`bq_retail` (models/projects: retail_proj)')
+
+    // 3. Keyless step.delta SSE merging & non-trimmed streamed parts extraction
+    let sseState = { id: 'int_152', status: 'in_progress' }
+    for (const chunk of ['I', "'ll", ' help you set up **Target Tables or Schemas', '**: [Open SQL Runner](/sql', ')']) {
+      sseState = mergeInteractionSseEvent(sseState, 'step.delta', { step_delta: { type: 'text', text: chunk } })
+    }
+    expect((sseState.steps as Array<{ text?: string }>).length).toBe(1)
+    expect(extractInteractionOutputText(sseState)).toBe("I'll help you set up **Target Tables or Schemas**: [Open SQL Runner](/sql)")
+    expect(
+      extractNonThoughtText([
+        { type: 'output_text', text: 'I' },
+        { type: 'output_text', text: "'ll" },
+        { type: 'output_text', text: ' check connections.' },
+      ])
+    ).toBe("I'll check connections.")
+
+    // 4. StudioMarkdown normalizes split **bold\n** / [link](url\n) and keeps multi-line <ol> as a single <ol> with 2 <li>s
+    type Elem = React.ReactElement<Record<string, unknown>>
+    const mdTree = StudioMarkdown({
+      text: '1. **Connection Name**: Check [Open Looker Connections](/admin/connections\n)\nwrapped continuation line\n2. **Target Tables or Schemas\n**: See [Open SQL Runner](/sql\n)',
+    }) as Elem
+    const blocks = mdTree.props.children as Elem[]
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].type).toBe('ol')
+    const liNodes = blocks[0].props.children as Elem[]
+    expect(liNodes).toHaveLength(2)
   })
 })

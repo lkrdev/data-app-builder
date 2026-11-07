@@ -195,16 +195,21 @@ export async function loadStoredOAuthSession(
   }
 }
 
+let hostOAuthWedged = false
+export const isHostOAuthWedged = (): boolean => hostOAuthWedged
+export const resetHostOAuthWedged = (): void => { hostOAuthWedged = false }
+
 export async function loginWithGoogleOAuth(
   extensionSDK: AntigravityExtensionHostLike,
   clientId: string,
   options?: GoogleOAuthOptions
 ): Promise<string> {
+  if (!extensionSDK?.oauth2Authenticate) throw new Error('Looker Extension SDK oauth2Authenticate is not available.')
   const focusReturnDelayMs = options?.focusReturnDelayMs ?? 1500
   const timeoutMs = options?.timeoutMs ?? 120000
   let cleanup = () => {}
+  let authSettled = false
   try {
-    if (!extensionSDK?.oauth2Authenticate) throw new Error('Looker Extension SDK oauth2Authenticate is not available.')
     const authPromise = Promise.resolve(
       extensionSDK.oauth2Authenticate(
         'https://accounts.google.com/o/oauth2/v2/auth',
@@ -215,26 +220,31 @@ export async function loginWithGoogleOAuth(
         },
         'GET'
       )
+    ).then(
+      (r) => { authSettled = true; hostOAuthWedged = false; return r },
+      (e) => { authSettled = true; hostOAuthWedged = false; throw e }
     )
-    const guardPromise = new Promise<never>((_resolve, reject) => {
+    const guardPromise = new Promise<{ access_token: string; expires_in?: number }>((resolve, reject) => {
       let focusTimer: ReturnType<typeof setTimeout> | null = null
-      const timeoutTimer = setTimeout(() => reject(new Error('Google OAuth sign-in timed out.')), timeoutMs)
+      const settleOrReject = (err: Error) => void loadStoredOAuthSession(extensionSDK, clientId).then((s) =>
+        s?.token ? (authSettled = true, hostOAuthWedged = false, resolve({ access_token: s.token, expires_in: Math.max(60, Math.round((s.expiresAt - Date.now()) / 1000) + 60) })) : reject(err)
+      )
+      const timeoutTimer = setTimeout(() => settleOrReject(new Error('Google OAuth sign-in timed out.')), timeoutMs)
       const onFocus = () => {
         if (focusTimer) clearTimeout(focusTimer)
-        focusTimer = setTimeout(
-          () => reject(new Error('Google OAuth popup closed or failed before completing (check Authorized redirect URIs in /config if you saw Error 400: redirect_uri_mismatch).')),
-          focusReturnDelayMs
-        )
+        focusTimer = setTimeout(() => settleOrReject(new Error('Google OAuth popup closed or failed before completing (check Authorized redirect URIs in /config if you saw Error 400: redirect_uri_mismatch).')), focusReturnDelayMs)
       }
+      const onVis = () => { if (typeof document !== 'undefined' && document.visibilityState === 'visible') onFocus() }
       const onAbort = () => reject(new Error('Google OAuth sign-in cancelled.'))
       if (options?.signal?.aborted) return onAbort()
       options?.signal?.addEventListener('abort', onAbort, { once: true })
       if (typeof window !== 'undefined') window.addEventListener?.('focus', onFocus)
+      if (typeof document !== 'undefined') document.addEventListener?.('visibilitychange', onVis)
       cleanup = () => {
-        clearTimeout(timeoutTimer)
-        if (focusTimer) clearTimeout(focusTimer)
+        clearTimeout(timeoutTimer); if (focusTimer) clearTimeout(focusTimer)
         options?.signal?.removeEventListener('abort', onAbort)
         if (typeof window !== 'undefined') window.removeEventListener?.('focus', onFocus)
+        if (typeof document !== 'undefined') document.removeEventListener?.('visibilitychange', onVis)
       }
     })
     const res = (await Promise.race([authPromise, guardPromise])) as { access_token?: string; id_token?: string; expires_in?: number | string } | undefined
@@ -244,6 +254,9 @@ export async function loginWithGoogleOAuth(
     const expiresAt = Date.now() + Math.max(60, (Number(res?.expires_in) || 3600) - 60) * 1000
     persistOAuthSession(extensionSDK, { token, expiresAt, clientId: clientId.trim() })
     return token
+  } catch (err) {
+    if (!authSettled) hostOAuthWedged = true
+    throw err
   } finally {
     cleanup()
   }
@@ -568,12 +581,22 @@ export function mergeInteractionSseEvent(
     const stepObj = (data.step_delta || data.step || data.delta || data) as AntigravityInteractionStep
     if (stepObj && typeof stepObj === 'object') {
       const stepId = stepObj.id || stepObj.call_id
-      const idx = stepId ? nextSteps.findIndex((s) => (s.id || s.call_id) === stepId) : -1
       const append = evt === 'step.delta' || Boolean(data.step_delta || data.delta)
+      const stepIdx = (stepObj as { index?: unknown }).index
+      const last = nextSteps[nextSteps.length - 1]
+      const idx = stepId
+        ? nextSteps.findIndex((s) => (s.id || s.call_id) === stepId)
+        : append && typeof stepIdx === 'number'
+        ? nextSteps.findIndex((s, i) => ((s as { index?: unknown }).index ?? i) === stepIdx)
+        : append && last && (last.type === stepObj.type || !stepObj.type || !last.type)
+        ? nextSteps.length - 1
+        : -1
       if (idx >= 0) {
         const prev = nextSteps[idx]
         nextSteps[idx] = {
           ...prev, ...stepObj,
+          ...(prev.type && !stepObj.type ? { type: prev.type } : {}),
+          ...(prev.id && !stepObj.id ? { id: prev.id } : {}),
           ...(append && typeof prev.text === 'string' && typeof stepObj.text === 'string' ? { text: `${prev.text}${stepObj.text}` } : {}),
           ...(append && typeof prev.thought === 'string' && typeof stepObj.thought === 'string' ? { thought: `${prev.thought}${stepObj.thought}` } : {}),
         }

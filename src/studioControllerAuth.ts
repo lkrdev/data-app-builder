@@ -6,10 +6,10 @@ import {
   AgentSession, ANTIGRAVITY_ALLOWED_MODELS, AntigravityModelOption,
   clearStoredOAuthSession, DEFAULT_ANTIGRAVITY_MODEL,
   DEFAULT_THINKING_LEVEL, ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig,
-  getInitialStoredOAuthSession, getInitialStoredOAuthToken, listAvailableAntigravityModels,
+  getInitialStoredOAuthSession, getInitialStoredOAuthToken, isHostOAuthWedged, listAvailableAntigravityModels,
   loadStoredOAuthSession, loadStoredThinkingLevel, loginWithGoogleOAuth, normalizeEnvironmentId,
   normalizeMaxTotalTokens, normalizeThinkingLevel, parseValidOAuthSession, persistThinkingLevel,
-  readInitialThinkingLevel, refreshOAuthSessionIfNeeded, resolveLookerOAuthRedirectUri,
+  readInitialThinkingLevel, refreshOAuthSessionIfNeeded, resetHostOAuthWedged, resolveLookerOAuthRedirectUri,
   STUDIO_OAUTH_REFRESH_INTERVAL_MS, STUDIO_OAUTH_STORAGE_KEY, StudioThinkingLevel,
 } from './antigravity'
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
@@ -449,6 +449,18 @@ export function useStudioAuthAndPrefs() {
       setMessages((prev) => [...prev, { role: 'error', text: 'Enter your Google Web OAuth 2.0 Client ID first.' }])
       return
     }
+    if (isHostOAuthWedged()) {
+      const stored = await loadStoredOAuthSession(extensionSDK, clientId)
+      resetHostOAuthWedged()
+      if (stored?.token) {
+        oauthPendingRefreshRef.current = false; setOauthToken(stored.token); setOauthExpiresAt(stored.expiresAt || Date.now() + STUDIO_OAUTH_REFRESH_INTERVAL_MS); return
+      }
+      if (!mockExt) {
+        extensionSDK?.updateLocation?.(typeof window !== 'undefined' ? window.location?.pathname || '/' : '/')
+        if (typeof window !== 'undefined') window.location?.reload?.()
+        return
+      }
+    }
     oauthAbortRef.current?.abort()
     const controller = new AbortController()
     oauthAbortRef.current = controller
@@ -471,7 +483,7 @@ export function useStudioAuthAndPrefs() {
     } finally {
       if (oauthAbortRef.current === controller) { oauthAbortRef.current = null; setOauthSigningIn(false) }
     }
-  }, [clientId, extensionSDK, mockExt?.oauthFocusReturnDelayMs, setMessages])
+  }, [clientId, extensionSDK, mockExt, setMessages])
 
   return {
     extensionSDK, core40SDK, lookerHostData, extHostData, history, location, isTileMount, mockExt,

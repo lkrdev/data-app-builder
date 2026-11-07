@@ -8,12 +8,12 @@ description: End-to-end Looker Project Onboarding skill for creating a new LookM
 Use this skill when a user asks to onboard or create a new Looker project, scaffold a new LookML project from a database connection, or walk through the staged onboarding workflow (Model & Bronze -> Data Profiling & Silver Metrics -> LookML Dashboard -> Metric Selector Data App). All Looker API calls execute through `run_looker_codemode` routed via `transport.rawRequest` (`raw_api_request: yes`, requiring zero `core_api_methods` in `manifest.lkml`) and `lkr --dev tools lookml push`. Never call `update_session` inside `run_looker_codemode` — dev mode is controlled by the app session or the `--dev` CLI flag.
 
 ## Step 1: Conversational Intake & Verify Database Connection (`run_looker_codemode`)
-1. **Turn 1 Intake (Missing Inputs -> Ask Immediately with 0 Tool Calls)**:
-   When the user says `"create a new project"` (or asks to onboard a new project) without providing a **connection name**, **project name**, and **target tables or schemas**, emit `<USE_CASE>lookml</USE_CASE>` and **immediately ask the user** for:
-   - **Connection name** (or check `[Open Looker Connections](/admin/connections)` `/admin/connections`)
+1. **Turn 1 Intake (Missing Inputs -> Discover Available Connections via 1 `run_looker_codemode` Call & Ask)**:
+   When the user says `"create a new project"` (or asks to onboard a new project) without providing a **connection name**, **project name**, and **target tables or schemas**, emit `<USE_CASE>lookml</USE_CASE>`, run **one** `run_looker_codemode` call (`sdk.all_connections(fields="name,dialect_name,database,schema")` with fallback to `sdk.all_lookml_models(fields="name,project_name,allowed_db_connection_names")`), and **immediately ask the user** for:
+   - **Connection name** — list the discovered connection names (with dialect/database/schema) directly in your response alongside `[Open Looker Connections](/admin/connections)` `/admin/connections` so non-admin developers do not hit a 404 on `/admin/connections`
    - **Project name** (`snake_case`)
    - **Target tables or schemas** (or SQL queries from `[Open SQL Runner](/sql)` `/sql`).
-   Do **not** call `run_looker_codemode` or `code_execution` on Turn 1 when these inputs are not yet provided.
+   Do **not** call `code_execution` on Turn 1 when these inputs are not yet provided.
 2. **Turn 2 Schema Discovery (`connection_schemas`)**:
    When the user provides a connection name (`<connection_name>`) and project name (`<project_name>`) and asks what schemas it has access to, emit `<USE_CASE>lookml</USE_CASE>`, run **one** `run_looker_codemode` call (`sdk.connection_schemas(connection_name)` with fallback to `sdk.all_connections(fields="name,dialect_name,database,schema,snippets")` and `sdk.connection_tables(connection_name, schema_name=..., table_limit=5)`), list out all accessible schema names returned by the connection clearly, and ask which schema/dataset to use. Do **not** call `code_execution`, `bootstrap_lookml.py`, or `view_file` on Turn 2.
 
