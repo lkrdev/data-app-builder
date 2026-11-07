@@ -50,8 +50,7 @@ export const RipperSurfLoader: React.FC<{
 )
 
 export const StudioBrandAgentName: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
-  const { agentName, handleSaveAgentName } = ctl
-  const [editing, setEditing] = useState(false)
+  const { agentName, handleSaveAgentName, editingAgentName: editing, setEditingAgentName: setEditing } = ctl
   const [draft, setDraft] = useState(agentName)
   useEffect(() => { if (!editing) setDraft(agentName) }, [agentName, editing])
   const commitName = (raw: string) => { setEditing(false); void handleSaveAgentName(raw) }
@@ -297,12 +296,12 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     handleResetNewApp, authMode, oauthToken, oauthSigningIn, handleOAuthLogin,
     handleOAuthLogout, handleCancelOAuthLogin, extensionSDK, healthScope, setHealthScope,
     handleRunHealthCheck, busyStatus, userDisplayName, isLookerDevMode,
+    folderModalOpen: advModalOpen, setFolderModalOpen: setAdvModalOpen,
   } = ctl
 
   const mockExt = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
   const [folderPopoverOpen, setFolderPopoverOpen] = useState(() => Boolean(mockExt?.initialFolderPopoverOpen))
   const [folderQuickSearch, setFolderQuickSearch] = useState('')
-  const [advModalOpen, setAdvModalOpen] = useState(() => Boolean(mockExt?.initialFolderSearchModalOpen))
   const [advName, setAdvName] = useState('')
   const [advParentId, setAdvParentId] = useState('')
   const [advPersonal, setAdvPersonal] = useState<'any' | 'false' | 'true'>('any')
@@ -359,6 +358,13 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
       setAdvLoading(false)
     }
   }
+
+  useEffect(() => {
+    if (advModalOpen && !advResults.length) {
+      setAdvLoading(true)
+      void handleSearchFolders({ name: advName, parent_id: advParentId, is_personal: advPersonal, creator_id: advCreatorId, id: advFolderId }).then(setAdvResults).finally(() => setAdvLoading(false))
+    }
+  }, [advModalOpen, advResults.length, advName, advParentId, advPersonal, advCreatorId, advFolderId, handleSearchFolders])
 
   const handleOpenAdvancedSearch = () => {
     const seedName = folderQuickSearch.trim()

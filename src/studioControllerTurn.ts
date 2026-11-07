@@ -18,7 +18,7 @@ import {
   shouldRouteToIsolatedCaSubagent, StudioContentItemType, StudioContextMention,
   StudioUseCase, studioUseCaseToMode, upsertPublishedDataApp,
 } from './lookerApi'
-import { saveLookmlSessionArtifact } from './lookmlTool'
+import { extractSlashSkillIds, saveLookmlSessionArtifact } from './lookmlTool'
 import { getErrorMessage, StudioAuthAndPrefs } from './studioControllerAuth'
 import { StudioLoaders } from './studioControllerLoaders'
 import { StudioMetadata } from './studioControllerMetadata'
@@ -49,7 +49,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   } = meta
   const {
     caConversation, isCaMode,
-    lookmlProjectId, setLookmlProjectId, activatedLookmlSkills,
+    lookmlProjectId, setLookmlProjectId, activatedLookmlSkills, setActivatedLookmlSkills,
     lookmlBundle, setLookmlBundle, setLoadLookmlInput, lastLookmlIdRef,
     publishedApp, setPublishedApp, lastPublishedIdRef,
     nativeContent, setNativeContent, lastNativeIdRef,
@@ -460,6 +460,9 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         if (hydrated.promptSummary) turnPromptWithContext = `${effectivePrompt}\n\n${hydrated.promptSummary}`
       }
 
+      const promptSlashSkills = extractSlashSkillIds(effectivePrompt)
+      const turnActivatedSkills = Array.from(new Set([...activatedLookmlSkills, ...promptSlashSkills]))
+      if (promptSlashSkills.length > 0) setActivatedLookmlSkills(turnActivatedSkills)
       const effectiveLookmlTurn = turnTargetUseCase === 'lookml' || (turnTargetUseCase === 'auto' && isLookmlMode)
       const effectiveBuilderMode: 'data_app' | 'dashboard' =
         turnTargetUseCase === 'dashboard'
@@ -476,7 +479,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         mode: effectiveBuilderMode, useCase: explicitUseCase, allowedModes: allowedUseCases,
         selectedExplores: turnExplores, folderId: selectedFolderId,
         toolMode: effectiveLookmlTurn ? 'lookml' : 'data_app',
-        lookmlProjectId, activatedLookmlSkills, developableProjects: availableLookmlProjects,
+        lookmlProjectId, activatedLookmlSkills: turnActivatedSkills, developableProjects: availableLookmlProjects,
         canDeploy: canDeployLookml, schemaMarkdown: turnSchemaMarkdown,
         userPrompt:
           explicitUseCase === 'tile' || loadedScript || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)

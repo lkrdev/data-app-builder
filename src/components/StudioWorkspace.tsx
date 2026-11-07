@@ -5,9 +5,9 @@ import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
 import {
   Archive, ArchiveRestore, AtSign, BookOpen, Brain, Check, ChevronDown, Code2, Copy,
-  CornerDownRight, Database, Eye, FileText, Kanban, LayoutDashboard, Loader2,
-  MessageSquare, PanelRightClose, PanelRightOpen, Paperclip, Plus, Sparkles, Square,
-  Terminal, Trash2, Wrench, X, Zap,
+  CornerDownRight, Database, Eye, FileText, Folder, Kanban, LayoutDashboard, Loader2,
+  MessageSquare, PanelRightClose, PanelRightOpen, Paperclip, Pencil, Plus, Shield,
+  Sparkles, Square, Terminal, Trash2, Wrench, X, Zap,
 } from 'lucide-react'
 
 import {
@@ -23,7 +23,7 @@ import {
   rawCoreSdkRequest, resolveConversationRelatedContent, StudioContentItem, StudioContentItemType,
   StudioContextCategory, StudioContextMention,
 } from '../lookerApi'
-import { LOOKML_TURN_SKILLS, LookmlBundle, LookmlPreviewPane } from '../lookmlTool'
+import { LOOKML_TURN_SKILLS, LookmlBundle, LookmlPreviewPane, LookmlSkillCatalogEntry, STUDIO_SLASH_SKILLS } from '../lookmlTool'
 import { StudioController } from '../useStudioController'
 import { TilePreviewPane } from './ScriptStudioView'
 import {
@@ -1050,6 +1050,7 @@ export const StarterPromptButtons: React.FC<{
 }
 
 const AT_MENTION_DETECT_RE = /(?:^|\s)@(?:(explore|dashboard|look|conversation):([^\n@]*)|([^\s@]*))$/i
+const SLASH_SKILL_DETECT_RE = /(?:^|\s)\/([a-z0-9_-]*)$/i
 
 function renderMentionCategoryIcon(type: StudioContextCategory) {
   if (type === 'explore') return <Database size={13} strokeWidth={1.75} aria-hidden="true" />
@@ -1070,6 +1071,8 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt,
     isAuthenticated, authMode, clientId, oauthSigningIn, handleOAuthLogin, history,
     lookmlBundle, nativeContent, infoModalUseCase, setInfoModalUseCase,
+    folderTreeNodes, selectedFolderId, requirePermission, setRequirePermission,
+    setFolderModalOpen, setEditingAgentName,
   } = ctl
 
   const mockExt = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
@@ -1078,6 +1081,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   const addMenuWrapRef = useRef<HTMLDivElement | null>(null)
   const busyActionWrapRef = useRef<HTMLDivElement | null>(null)
   const mentionMenuRef = useRef<HTMLDivElement | null>(null)
+  const slashMenuRef = useRef<HTMLDivElement | null>(null)
 
   const [addContextOpen, setAddContextOpen] = useState(false)
   const [busyActionMenuOpen, setBusyActionMenuOpen] = useState(false)
@@ -1086,8 +1090,11 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     () => (mockExt?.initialComboOpen ? 'explore' : null)
   )
   const [activeMentionIndex, setActiveMentionIndex] = useState(0)
+  const [activeSlashIndex, setActiveSlashIndex] = useState(0)
+  const [slashDismissedAt, setSlashDismissedAt] = useState<string | null>(null)
   const [remoteSearchResults, setRemoteSearchResults] = useState<StudioContextMention[]>([])
   const [mentionLoading, setMentionLoading] = useState(false)
+  const selectedFolderLabel = folderTreeNodes?.[selectedFolderId]?.name || 'My folder'
 
   useEffect(() => { setCursorPos((prev) => Math.min(prev, prompt.length)) }, [prompt.length])
 
@@ -1119,10 +1126,13 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       if (mentionMenuRef.current && !mentionMenuRef.current.contains(e.target as Node) && textareaRef.current && !textareaRef.current.contains(e.target as Node)) {
         setForceMentionCategory(null)
       }
+      if (slashMenuRef.current && !slashMenuRef.current.contains(e.target as Node) && textareaRef.current && !textareaRef.current.contains(e.target as Node)) {
+        setSlashDismissedAt(prompt.slice(0, cursorPos || prompt.length))
+      }
     }
     document.addEventListener('mousedown', onDocMouseDown)
     return () => document.removeEventListener('mousedown', onDocMouseDown)
-  }, [])
+  }, [cursorPos, prompt])
 
   useEffect(() => {
     if (!detectedMention.open || !detectedMention.query) {
@@ -1225,6 +1235,31 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 
   useEffect(() => { setActiveMentionIndex(0) }, [detectedMention.category, detectedMention.query, mentionOptions.length])
 
+  const detectedSlashSkill = useMemo(() => {
+    if (detectedMention.open) return { open: false, query: '', tokenStart: prompt.length, tokenEnd: prompt.length }
+    const uptoCursor = prompt.slice(0, cursorPos || prompt.length)
+    const m = uptoCursor.match(SLASH_SKILL_DETECT_RE)
+    if (!m || slashDismissedAt === uptoCursor) return { open: false, query: '', tokenStart: prompt.length, tokenEnd: prompt.length }
+    const slashIdx = uptoCursor.lastIndexOf('/')
+    return { open: true, query: (m[1] || '').toLowerCase(), tokenStart: slashIdx >= 0 ? slashIdx : uptoCursor.length, tokenEnd: uptoCursor.length }
+  }, [prompt, cursorPos, detectedMention.open, slashDismissedAt])
+
+  const slashSkillOptions = useMemo(() => {
+    const q = detectedSlashSkill.query.trim().toLowerCase()
+    return q ? STUDIO_SLASH_SKILLS.filter((sk) => `${sk.id} ${sk.label} ${sk.desc}`.toLowerCase().includes(q)) : [...STUDIO_SLASH_SKILLS]
+  }, [detectedSlashSkill.query])
+
+  useEffect(() => { setActiveSlashIndex(0) }, [detectedSlashSkill.query, slashSkillOptions.length])
+
+  const handleSelectSlashSkill = (sk: LookmlSkillCatalogEntry) => {
+    setActivatedLookmlSkills((prev) => (prev.includes(sk.id) ? prev : [...prev, sk.id]))
+    const prefix = prompt.slice(0, detectedSlashSkill.tokenStart)
+    const head = `${prefix}${prefix && !/\s$/.test(prefix) ? ' ' : ''}/${sk.id} `
+    setPrompt(`${head}${prompt.slice(detectedSlashSkill.tokenEnd)}`)
+    setCursorPos(head.length); setSlashDismissedAt(null)
+    requestAnimationFrame(() => { if (textareaRef.current) { textareaRef.current.focus(); textareaRef.current.setSelectionRange(head.length, head.length) } })
+  }
+
   const contextChips = useMemo(() => {
     const seen = new Set<string>()
     const chips: StudioContextMention[] = []
@@ -1283,23 +1318,6 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   return (
     <div className="dab-composer dab-chatbar">
       <UseCaseInfoModal activeUseCase={infoModalUseCase} onSelectUseCase={setInfoModalUseCase} onClose={() => setInfoModalUseCase(null)} />
-
-      {isLookmlMode && (
-        <div className="dab-skill-bar" aria-label="Activated Turn Skills">
-          <span className="dab-skill-label">Turn Skills:</span>
-          {LOOKML_TURN_SKILLS.map((sk) => {
-            const isActive = activatedLookmlSkills.includes(sk.id)
-            return (
-              <button
-                key={sk.id} type="button" className={`dab-skill-chip ${isActive ? 'active' : ''}`} title={sk.desc}
-                onClick={() => setActivatedLookmlSkills((prev) => (prev.includes(sk.id) ? prev.filter((x) => x !== sk.id) : [...prev, sk.id]))}
-              >
-                {isActive ? '✓ ' : '+ '}{sk.label}
-              </button>
-            )
-          })}
-        </div>
-      )}
 
       {contextChips.length > 0 && (
         <div className="dab-composer-context-chips" data-testid="composer-context-chips" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1373,6 +1391,39 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       )}
 
       <div className="dab-composer-input-wrap" style={{ position: 'relative' }}>
+        {detectedSlashSkill.open && (
+          <div ref={slashMenuRef} className="dab-at-mention-menu dab-dropdown" data-testid="composer-slash-skill-menu" role="listbox" aria-label="Studio slash skills">
+            <div className="dab-at-mention-header">
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <Wrench size={12} strokeWidth={1.75} aria-hidden="true" /><span>Skills (/{detectedSlashSkill.query})</span>
+              </span>
+            </div>
+            {slashSkillOptions.length === 0 ? (
+              <div className="dab-option dab-muted">No matching skills</div>
+            ) : (
+              slashSkillOptions.map((sk, idx) => {
+                const isSelected = activatedLookmlSkills.includes(sk.id)
+                const isHighlighted = idx === activeSlashIndex
+                return (
+                  <div
+                    key={sk.id} role="option" aria-selected={isSelected || isHighlighted} data-testid={`composer-slash-skill-option-${sk.id}`}
+                    className={`dab-option ${isSelected || isHighlighted ? 'dab-option-selected' : ''}`}
+                    onMouseEnter={() => setActiveSlashIndex(idx)} onClick={(e) => { e.stopPropagation(); handleSelectSlashSkill(sk) }}
+                    title={`${sk.label} — ${sk.desc} (${sk.path})`}
+                  >
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
+                      <BookOpen size={13} strokeWidth={1.75} aria-hidden="true" /><code style={{ fontSize: 11.5, fontWeight: 600 }}>/{sk.id}</code>
+                      <span style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>{sk.label}</span>
+                      <span className="dab-muted" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>· {sk.desc}</span>
+                    </span>
+                    {isSelected && <Check size={13} strokeWidth={2} aria-hidden="true" />}
+                  </div>
+                )
+              })
+            )}
+          </div>
+        )}
+
         {detectedMention.open && (
           <div ref={mentionMenuRef} className="dab-at-mention-menu dab-dropdown" data-testid="composer-at-mention-menu" role="listbox" aria-label="Looker context mentions">
             <div className="dab-at-mention-header">
@@ -1475,11 +1526,23 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
             setPrompt(e.target.value)
             setCursorPos(e.target.selectionStart ?? e.target.value.length)
             if (forceMentionCategory !== null) setForceMentionCategory(null)
+            if (slashDismissedAt !== null) setSlashDismissedAt(null)
           }}
           onClick={(e) => setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? prompt.length)}
           onKeyUp={(e) => setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? prompt.length)}
           onPaste={handlePaste}
           onKeyDown={(e) => {
+            if (detectedSlashSkill.open && slashSkillOptions.length > 0) {
+              if (e.key === 'ArrowDown') { e.preventDefault(); setActiveSlashIndex((i) => (i + 1) % slashSkillOptions.length); return }
+              if (e.key === 'ArrowUp') { e.preventDefault(); setActiveSlashIndex((i) => (i - 1 + slashSkillOptions.length) % slashSkillOptions.length); return }
+              if ((e.key === 'Enter' || e.key === 'Tab') && !(e.metaKey || e.ctrlKey)) {
+                e.preventDefault()
+                const picked = slashSkillOptions[activeSlashIndex] || slashSkillOptions[0]
+                if (picked) handleSelectSlashSkill(picked)
+                return
+              }
+            }
+            if (e.key === 'Escape' && detectedSlashSkill.open) { e.preventDefault(); setSlashDismissedAt(prompt.slice(0, cursorPos || prompt.length)); return }
             if (detectedMention.open && mentionOptions.length > 0) {
               if (e.key === 'ArrowDown') { e.preventDefault(); setActiveMentionIndex((i) => (i + 1) % mentionOptions.length); return }
               if (e.key === 'ArrowUp') { e.preventDefault(); setActiveMentionIndex((i) => (i - 1 + mentionOptions.length) % mentionOptions.length); return }
@@ -1540,6 +1603,16 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                   {renderMentionCategoryIcon(cat)}<span>{label}</span>
                 </button>
               ))}
+              <button type="button" role="menuitem" data-testid="mobile-menu-folder-btn" className="dab-composer-add-item dab-mobile-only-menu-item" onClick={() => { setAddContextOpen(false); setFolderModalOpen(true) }}>
+                <Folder size={13} strokeWidth={1.75} aria-hidden="true" /><span>Folder: {selectedFolderLabel}</span>
+              </button>
+              <button type="button" role="menuitem" data-testid="mobile-menu-approval-btn" className="dab-composer-add-item dab-mobile-only-menu-item" onClick={() => { setRequirePermission((prev) => !prev); setAddContextOpen(false) }}>
+                {requirePermission ? <Shield size={13} strokeWidth={1.75} aria-hidden="true" /> : <Zap size={13} strokeWidth={1.75} aria-hidden="true" />}
+                <span>Approval: {requirePermission ? 'Safe Mode (Ask)' : 'Auto-Approve (YOLO)'}</span>
+              </button>
+              <button type="button" role="menuitem" data-testid="mobile-menu-edit-agent-name-btn" className="dab-composer-add-item dab-mobile-only-menu-item" onClick={() => { setAddContextOpen(false); setEditingAgentName(true) }}>
+                <Pencil size={13} strokeWidth={1.75} aria-hidden="true" /><span>Rename {normalizeStudioAgentName(rawAgentName)}...</span>
+              </button>
             </div>
           )}
         </div>
@@ -1634,7 +1707,7 @@ export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ 
               : isLookmlMode ? 'Author & Validate Agentic LookML'
               : activeMode === 'tile' ? 'Author & Schedule a Looker Script'
               : builderMode === 'dashboard' ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)'
-              : `Use your ${agentName}`}
+              : `${agentName} is ready`}
           </h2>
           <p className="dab-muted">
             {selectedExplores.length > 0 ? <>Exploring <code>{selectedExplores.join(', ')}</code> — pick a starter prompt below or describe what you want to build.</> : 'Pick a starter prompt below or describe what you want to build, analyze, or automate.'}

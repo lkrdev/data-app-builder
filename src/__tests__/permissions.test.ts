@@ -8,7 +8,7 @@ import type { Looker40SDK } from '@looker/sdk'
 
 import {
   AGENTS_MD, AntigravityActivityStep, ANTIGRAVITY_ALLOWED_MODELS, APP_BUILDER_SYSTEM_PROMPT, authenticateGoogleOAuth,
-  BOOTSTRAP_LOOKML_PY, BOOTSTRAP_SANDBOX_SH, buildDynamicStarterPrompts, buildNativeContentGuide, buildWorkspaceSources,
+  BOOTSTRAP_LOOKML_PY, BOOTSTRAP_SANDBOX_SH, buildDynamicStarterPrompts, buildLookmlSystemGuide, buildNativeContentGuide, buildWorkspaceSources,
   BUNDLE_APP_PY, BUILTIN_SKILLS_FILES, callInteractionsApi, clampLeftPaneWidth, classifyLookerOperation,
   clearStarterPromptsCache, clearStoredOAuthSession, CODEMODE_CDN_URL, CodeModePermissionRequest,
   computeIsAuthenticated, computeLkrExtensionCacheKey, CONCURRENT_POLL_SCHEDULE_MS,
@@ -16,7 +16,7 @@ import {
   DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_LEFT_PANE_WIDTH, DEFAULT_MAX_TOTAL_TOKENS, DEFAULT_THINKING_LEVEL,
   discoverStarterContentSummaries, discoverStarterExploreContext, ensureCodeModeLoaded,
   executeLkrExtensionToolRequest, EXPLICIT_SCRIPT_CREATION_RE, extractInteractionActivitySteps,
-  extractInteractionOutputText, extractLkrExtensionToolRequests,
+  extractInteractionOutputText, extractLkrExtensionToolRequests, extractSlashSkillIds,
   extractNativeContentFromInteraction, extractNonThoughtText, extractSkillNameFromPath, extractThoughtText, extractWrittenMarkdownPathFromCode,
   fetchEnvironmentFile, formatContentInventoryMarkdown, formatFriendlyLookerActivityLabel,
   formatThinkingTraceMarkdown, generateConversationLabel, generateDynamicStarterPrompts,
@@ -36,7 +36,7 @@ import {
   streamInteractionUntilActionOrDone, stripStarterPromptEmojis, STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY,
   STUDIO_MAX_TOTAL_TOKENS_OPTIONS, STUDIO_OAUTH_REFRESH_INTERVAL_MS,
   STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY, STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY,
-  STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY, StudioAttachedFile,
+  STUDIO_SLASH_SKILLS, STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY, StudioAttachedFile,
   summarizeProgress,
 } from '../antigravity'
 import {
@@ -5855,5 +5855,54 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     expect(blocks[0].type).toBe('ol')
     const liNodes = blocks[0].props.children as Elem[]
     expect(liNodes).toHaveLength(2)
+  })
+
+  test('60. Issue #151: exports STUDIO_SLASH_SKILLS, extracts /skill-id tokens via extractSlashSkillIds, and configures buildLookmlSystemGuide without forcing Turn Skills when none are activated', () => {
+    expect(STUDIO_SLASH_SKILLS.map((s) => s.id)).toEqual([
+      'looker-project-onboarding',
+      'lookml-field-curation',
+      'lookml-tests',
+      'lookml-snapshot',
+      'generate-view-from-table',
+      'agentic-lookml-workflow',
+      'looker-field-profiler',
+      'looker-dashboard',
+      'key-driver-analysis',
+      'data-investigator',
+      'data-apps',
+    ])
+
+    expect(extractSlashSkillIds('')).toEqual([])
+    expect(extractSlashSkillIds('Please run /lookml-tests and /looker-field-profiler on order_items')).toEqual([
+      'lookml-tests',
+      'looker-field-profiler',
+    ])
+    expect(extractSlashSkillIds('/looker-project-onboarding from snowflake_prod')).toEqual([
+      'looker-project-onboarding',
+    ])
+    expect(extractSlashSkillIds('https://example.com/lookml-tests/foo')).toEqual([])
+
+    const guideDefault = buildLookmlSystemGuide({
+      selectedExplores: ['thelook::order_items'],
+      primaryModel: 'thelook',
+      primaryExplore: 'order_items',
+      projectId: 'agentic_thelook',
+      activatedSkills: [],
+    })
+    expect(guideDefault).not.toContain('Activated Turn Skills:')
+    expect(guideDefault).toContain(
+      'Automatically discover and load the matching skill(s) for this turn from `/workspace/AGENTS.md` and `/workspace/skills/<skill-id>/SKILL.md`.'
+    )
+
+    const guideExplicit = buildLookmlSystemGuide({
+      selectedExplores: ['thelook::order_items'],
+      primaryModel: 'thelook',
+      primaryExplore: 'order_items',
+      projectId: 'agentic_thelook',
+      activatedSkills: ['lookml-tests'],
+      userPrompt: 'Also run /lookml-field-curation on orders',
+    })
+    expect(guideExplicit).toContain('Activated Turn Skills: `lookml-tests`, `lookml-field-curation`.')
+    expect(guideExplicit).toContain('Prioritize reading and executing the instructions for these activated skills on this turn.')
   })
 })

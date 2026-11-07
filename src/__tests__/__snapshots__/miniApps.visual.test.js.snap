@@ -6,7 +6,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "modeTabs": [],
   "scenario": "centered_empty_prompt",
   "verifiedVisibleText": [
-    "Use your Ripper",
+    "Ripper is ready",
     "Send Message",
   ],
 }
@@ -38,15 +38,13 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
 
 exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders chatbar_lookml_skills (11. Chat Bar State — LookML Activated Turn Skills & Prompt) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
-  "dropdownScrollTop": null,
+  "dropdownScrollTop": 0,
   "modeTabs": [],
   "scenario": "chatbar_lookml_skills",
   "verifiedVisibleText": [
-    "TURN SKILLS:",
-    "✓ Descriptions & Curation",
-    "✓ Data Tests (.test.lkml)",
-    "✓ Snapshot & Parity",
-    "+ Bronze View",
+    "/lookml-field-curation",
+    "/lookml-tests",
+    "/lookml-snapshot",
     "Run Agentic LookML",
   ],
 }
@@ -184,10 +182,6 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
     "⎇ user dev mode",
     "✓ LookML Validator Passed",
     "run_lookml_test (1/1 passed)",
-    "TURN SKILLS:",
-    "Descriptions & Curation",
-    "Data Tests (.test.lkml)",
-    "Snapshot & Parity",
     "bronze/orders.refinement.lkml",
     "Update LookML",
   ],

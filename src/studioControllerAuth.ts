@@ -275,6 +275,8 @@ export function useStudioAuthAndPrefs() {
       : typeof window !== 'undefined' && window.innerWidth <= 768
   )
   const [agentName, setAgentNameState] = useState<string>(() => normalizeStudioAgentName(mockExt?.initialAgentName))
+  const [editingAgentName, setEditingAgentName] = useState<boolean>(false)
+  const [folderModalOpen, setFolderModalOpen] = useState<boolean>(() => Boolean(mockExt?.initialFolderSearchModalOpen))
   const [appInitializing, setAppInitializing] = useState<boolean>(() =>
     mockExt ? Boolean(mockExt.forceAppInitializing) : !isTileMount
   )
@@ -487,7 +489,8 @@ export function useStudioAuthAndPrefs() {
 
   return {
     extensionSDK, core40SDK, lookerHostData, extHostData, history, location, isTileMount, mockExt,
-    agentName, setAgentName, appInitializing, setAppInitializing,
+    agentName, setAgentName, editingAgentName, setEditingAgentName,
+    folderModalOpen, setFolderModalOpen, appInitializing, setAppInitializing,
     themeMode, resolvedTheme, setThemeMode,
     authMode, setAuthMode, clientId, setClientId, projectId, setProjectId,
     disabledModes, setDisabledModes, selectedModel, setSelectedModel,

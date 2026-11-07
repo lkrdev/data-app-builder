@@ -16,3 +16,20 @@ export const LOOKML_SKILLS_CATALOG: readonly LookmlSkillCatalogEntry[] = [
 ] as const
 
 export const LOOKML_TURN_SKILLS = LOOKML_SKILLS_CATALOG.slice(1, 6)
+
+export const STUDIO_SLASH_SKILLS: readonly LookmlSkillCatalogEntry[] = [
+  ...LOOKML_SKILLS_CATALOG,
+  { id: 'looker-dashboard', label: 'Looker Dashboard', desc: 'Author & update 24-column UDDs, LookML dashboards, Saved Looks, Boards & Schedules', path: 'skills/looker-dashboard/SKILL.md' },
+  { id: 'key-driver-analysis', label: 'Key Driver Analysis', desc: 'Run & recursively drill Looker Key Driver Analysis (run_key_driver_analysis)', path: 'skills/key-driver-analysis/SKILL.md' },
+  { id: 'data-investigator', label: 'Data Investigator', desc: 'Build root-cause narrative Data Apps in Doc or Slides format with fixed date windows', path: 'skills/data-investigator/SKILL.md' },
+  { id: 'data-apps', label: 'Lit Data Apps', desc: 'Build interactive Lit web component Data Apps with KPIs, charts, grids & controls', path: 'skills/data-apps/SKILL.md' },
+] as const
+
+const KNOWN_SLASH_SKILL_IDS = new Set(STUDIO_SLASH_SKILLS.map((s) => s.id))
+
+export function extractSlashSkillIds(text?: string): string[] {
+  if (!text) return []
+  const matches = Array.from(String(text).matchAll(/(?:^|\s)\/([a-z0-9_-]+)(?=\s|$|[.,;!?])/gi))
+  return Array.from(new Set(matches.map((m) => m[1].toLowerCase()).filter((id) => KNOWN_SLASH_SKILL_IDS.has(id))))
+}
+
