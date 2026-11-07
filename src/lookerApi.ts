@@ -241,6 +241,8 @@ export async function rawLookerRequest<T = unknown>(
   return parseLookerRawBody<T>(rawResp)
 }
 
+export const rawCoreSdkRequest = rawLookerRequest
+
 export interface LookerFolderNode {
   id: string
   name: string

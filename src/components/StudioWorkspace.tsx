@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import { ChattyHostBuilderFactory, getEmbedSDK, ILookerConnection, LookerEmbedExSDK, PageChangedEvent } from '@looker/embed-sdk'
 import type { ExtensionSDK } from '@looker/extension-sdk'
+import type { Looker40SDK } from '@looker/sdk'
 import {
   Archive, ArchiveRestore, AtSign, BookOpen, Brain, Check, ChevronDown, Code2, Copy,
   CornerDownRight, Database, Eye, FileText, Kanban, LayoutDashboard, Loader2,
@@ -19,7 +20,7 @@ import {
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import {
   ConversationRecord, formatExploreId, normalizeCaEmbedPath, normalizeStudioAgentName,
-  resolveConversationRelatedContent, StudioContentItem, StudioContentItemType,
+  rawCoreSdkRequest, resolveConversationRelatedContent, StudioContentItem, StudioContentItemType,
   StudioContextCategory, StudioContextMention,
 } from '../lookerApi'
 import { LOOKML_TURN_SKILLS, LookmlBundle, LookmlPreviewPane } from '../lookmlTool'
@@ -95,17 +96,48 @@ export async function openOrCopyMarkdownLink(
   return { action: 'copied', targetUrl: clean }
 }
 
+export async function fetchAvailableLookerConnectionsMarkdown(core40SDK?: Partial<Looker40SDK> | null): Promise<string> {
+  if (!core40SDK) return '### Available Looker Connections\n- No Looker SDK session available.'
+  try {
+    const conns = await rawCoreSdkRequest<Array<Record<string, unknown>>>(core40SDK as Looker40SDK, 'GET', '/connections', { fields: 'name,dialect_name,database,schema' })
+    const items = (Array.isArray(conns) ? conns : [])
+      .filter((c) => typeof c?.name === 'string' && c.name.trim())
+      .map((c) => {
+        const meta = [c.dialect_name, c.database, c.schema].map((x) => String(x || '').trim()).filter(Boolean).join(' · ')
+        return `- \`${String(c.name).trim()}\`${meta ? ` (${meta})` : ''}`
+      })
+    if (items.length > 0) return `### Available Looker Connections\n${items.join('\n')}`
+  } catch { /* fall back to /lookml_models when /connections returns 403/404 for non-admins */ }
+  try {
+    const models = await rawCoreSdkRequest<Array<Record<string, unknown>>>(core40SDK as Looker40SDK, 'GET', '/lookml_models', { fields: 'name,project_name,allowed_db_connection_names' })
+    const byConn = new Map<string, Set<string>>()
+    for (const m of Array.isArray(models) ? models : []) {
+      const label = String(m?.project_name || m?.name || '').trim()
+      for (const c of Array.isArray(m?.allowed_db_connection_names) ? m.allowed_db_connection_names : []) {
+        const cname = String(c || '').trim()
+        if (cname) { if (!byConn.has(cname)) byConn.set(cname, new Set()); if (label) byConn.get(cname)!.add(label) }
+      }
+    }
+    if (byConn.size > 0) {
+      return `### Available Looker Connections\n${Array.from(byConn.entries()).map(([c, p]) => `- \`${c}\`${p.size ? ` (models/projects: ${Array.from(p).join(', ')})` : ''}`).join('\n')}`
+    }
+  } catch { /* ignore */ }
+  return '### Available Looker Connections\n- No database connections found for your Looker role.'
+}
+
 const StudioMarkdownLink: React.FC<{
-  label: string; href: string; hostUrl?: string; extensionSDK?: Partial<ExtensionSDK> | null
-}> = ({ label, href, hostUrl, extensionSDK }) => {
+  label: string; href: string; hostUrl?: string; extensionSDK?: Partial<ExtensionSDK> | null; onInspectConnections?: () => void
+}> = ({ label, href, hostUrl, extensionSDK, onInspectConnections }) => {
   const [copied, setCopied] = useState(false)
   const markCopied = () => { setCopied(true); setTimeout(() => setCopied(false), 1800) }
+  const isAdminConnectionsLink = /(?:^|\/)admin\/connections(?:[/?#]|$)/i.test(String(href || '').trim())
   return (
     <span className="dab-md-link-group">
       <a
         href={href} data-testid="chat-markdown-link" className="dab-md-link" target="_blank" rel="noopener noreferrer"
         onClick={(e) => {
           e.preventDefault(); e.stopPropagation()
+          if (isAdminConnectionsLink && onInspectConnections) { onInspectConnections(); return }
           void openOrCopyMarkdownLink(href, hostUrl, extensionSDK).then((res) => { if (res.action === 'copied') markCopied() })
         }}
       >
@@ -132,12 +164,20 @@ export function isSandboxMarkdownPath(raw: string): boolean {
   return /^(?:file:\/\/)?(?:\/workspace\/|[a-zA-Z0-9_./-]*\/)?[a-zA-Z0-9_.-]+\.md$/i.test(trimmed.split(/[?#]/)[0] || '')
 }
 
+function normalizeInlineMarkdownArtifacts(input: string): string {
+  return String(input ?? '')
+    .replace(/\[([^\][]+)\]\(\s*([^)]+?)\s*\)/g, (_m, lbl: string, url: string) => `[${lbl.replace(/\s*\n\s*/g, ' ').trim()}](${url.replace(/\s+/g, '')})`)
+    .replace(/\*\*([^*]+?)\*\*/g, (m, inner: string) => (inner.includes('\n') && !inner.includes('\n\n') && !/\n\s*(?:[-*]|\d+\.|#{1,4})\s/.test(inner) ? `**${inner.replace(/\s*\n\s*/g, ' ').trim()}**` : m))
+}
+
 function renderInlineMarkdown(
   rawText: string,
   hostUrl?: string,
   extensionSDK?: Partial<ExtensionSDK> | null,
-  onOpenSandboxMarkdownFile?: (path: string) => void
+  onOpenSandboxMarkdownFile?: (path: string) => void,
+  onInspectConnections?: () => void
 ): React.ReactNode[] {
+  const cleanedText = normalizeInlineMarkdownArtifacts(rawText)
   const tokenRegex = /`([^`\n]+)`|\[([^\]]+)\]\(([^)\s]+)\)|\*\*([^*]+)\*\*|(https?:\/\/[^\s<)"']+)/g
   const nodes: React.ReactNode[] = []
   let lastIdx = 0
@@ -155,31 +195,31 @@ function renderInlineMarkdown(
       </button>
     )
   }
-  while ((match = tokenRegex.exec(rawText)) !== null) {
-    if (match.index > lastIdx) nodes.push(rawText.slice(lastIdx, match.index))
+  while ((match = tokenRegex.exec(cleanedText)) !== null) {
+    if (match.index > lastIdx) nodes.push(cleanedText.slice(lastIdx, match.index))
     if (match[1] !== undefined) {
       const codeToken = match[1].trim()
       nodes.push(isSandboxMarkdownPath(codeToken) ? renderMdTrigger(codeToken, <code>{match[1]}</code>) : <code key={`code_${keyCounter++}`} className="dab-md-inline-code">{match[1]}</code>)
     } else if (match[2] !== undefined && match[3] !== undefined) {
       const linkHref = match[3].trim()
-      nodes.push(isSandboxMarkdownPath(linkHref) ? renderMdTrigger(linkHref, <span>{match[2]}</span>) : <StudioMarkdownLink key={`link_${keyCounter++}`} label={match[2]} href={match[3]} hostUrl={hostUrl} extensionSDK={extensionSDK} />)
+      nodes.push(isSandboxMarkdownPath(linkHref) ? renderMdTrigger(linkHref, <span>{match[2]}</span>) : <StudioMarkdownLink key={`link_${keyCounter++}`} label={match[2]} href={linkHref} hostUrl={hostUrl} extensionSDK={extensionSDK} onInspectConnections={onInspectConnections} />)
     } else if (match[4] !== undefined) {
-      nodes.push(<strong key={`bold_${keyCounter++}`}>{renderInlineMarkdown(match[4], hostUrl, extensionSDK, onOpenSandboxMarkdownFile)}</strong>)
+      nodes.push(<strong key={`bold_${keyCounter++}`}>{renderInlineMarkdown(match[4], hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections)}</strong>)
     } else if (match[5] !== undefined) {
       const bareUrl = match[5].replace(/[.,;:!?]+$/, '')
       const trailing = match[5].slice(bareUrl.length)
-      nodes.push(<StudioMarkdownLink key={`bare_${keyCounter++}`} label={bareUrl} href={bareUrl} hostUrl={hostUrl} extensionSDK={extensionSDK} />)
+      nodes.push(<StudioMarkdownLink key={`bare_${keyCounter++}`} label={bareUrl} href={bareUrl} hostUrl={hostUrl} extensionSDK={extensionSDK} onInspectConnections={onInspectConnections} />)
       if (trailing) nodes.push(trailing)
     }
     lastIdx = tokenRegex.lastIndex
   }
-  if (lastIdx < rawText.length) nodes.push(rawText.slice(lastIdx))
-  return nodes.length > 0 ? nodes : [rawText]
+  if (lastIdx < cleanedText.length) nodes.push(cleanedText.slice(lastIdx))
+  return nodes.length > 0 ? nodes : [cleanedText]
 }
 
 export const StudioMarkdown: React.FC<{
-  text: string; hostUrl?: string; extensionSDK?: Partial<ExtensionSDK> | null; onOpenSandboxMarkdownFile?: (path: string) => void
-}> = ({ text, hostUrl, extensionSDK, onOpenSandboxMarkdownFile }) => {
+  text: string; hostUrl?: string; extensionSDK?: Partial<ExtensionSDK> | null; onOpenSandboxMarkdownFile?: (path: string) => void; onInspectConnections?: () => void
+}> = ({ text, hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections }) => {
   const raw = String(text ?? '')
   const segments = raw.split(/(```[\s\S]*?```)/g)
   const blocks: React.ReactNode[] = []
@@ -193,7 +233,7 @@ export const StudioMarkdown: React.FC<{
       blocks.push(<pre key={`pre_${blockKey++}`} className="dab-md-pre"><code className="dab-md-code-block">{codeBody.replace(/^\n+|\n+$/g, '')}</code></pre>)
       continue
     }
-    const lines = segment.split('\n')
+    const lines = normalizeInlineMarkdownArtifacts(segment).split('\n')
     let i = 0
     while (i < lines.length) {
       const trimmed = lines[i].trim()
@@ -202,32 +242,30 @@ export const StudioMarkdown: React.FC<{
       if (headingMatch) {
         const level = headingMatch[1].length
         const HeadingTag = (`h${level}` as unknown) as 'h1' | 'h2' | 'h3' | 'h4'
-        blocks.push(<HeadingTag key={`h_${blockKey++}`} className={`dab-md-heading dab-md-h${level}`}>{renderInlineMarkdown(headingMatch[2], hostUrl, extensionSDK, onOpenSandboxMarkdownFile)}</HeadingTag>)
+        blocks.push(<HeadingTag key={`h_${blockKey++}`} className={`dab-md-heading dab-md-h${level}`}>{renderInlineMarkdown(headingMatch[2], hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections)}</HeadingTag>)
         i++; continue
       }
-      if (/^[-*]\s+/.test(trimmed)) {
+      const isUl = /^[-*]\s+/.test(trimmed)
+      if (isUl || /^\d+\.\s+/.test(trimmed)) {
+        const markerRe = isUl ? /^[-*]\s+/ : /^\d+\.\s+/
+        const ListTag = isUl ? 'ul' : 'ol'
         const items: React.ReactNode[] = []
-        while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
-          items.push(<li key={`uli_${items.length}`}>{renderInlineMarkdown(lines[i].trim().replace(/^[-*]\s+/, ''), hostUrl, extensionSDK, onOpenSandboxMarkdownFile)}</li>)
+        while (i < lines.length && markerRe.test(lines[i].trim())) {
+          const itemLines = [lines[i].trim().replace(markerRe, '')]
           i++
+          while (i < lines.length && lines[i].trim() && !/^(?:#{1,4}\s+|[-*]\s+|\d+\.\s+|```|>\s?|\||---+$)/.test(lines[i].trim())) {
+            itemLines.push(lines[i].trim()); i++
+          }
+          items.push(<li key={`li_${items.length}`}>{renderInlineMarkdown(itemLines.join(' '), hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections)}</li>)
         }
-        blocks.push(<ul key={`ul_${blockKey++}`} className="dab-md-list">{items}</ul>)
-        continue
-      }
-      if (/^\d+\.\s+/.test(trimmed)) {
-        const items: React.ReactNode[] = []
-        while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
-          items.push(<li key={`oli_${items.length}`}>{renderInlineMarkdown(lines[i].trim().replace(/^\d+\.\s+/, ''), hostUrl, extensionSDK, onOpenSandboxMarkdownFile)}</li>)
-          i++
-        }
-        blocks.push(<ol key={`ol_${blockKey++}`} className="dab-md-list">{items}</ol>)
+        blocks.push(<ListTag key={`list_${blockKey++}`} className="dab-md-list">{items}</ListTag>)
         continue
       }
       const paraLines: string[] = []
       while (i < lines.length && lines[i].trim() && !/^(#{1,4})\s+/.test(lines[i].trim()) && !/^[-*]\s+/.test(lines[i].trim()) && !/^\d+\.\s+/.test(lines[i].trim())) {
         paraLines.push(lines[i]); i++
       }
-      blocks.push(<p key={`p_${blockKey++}`} className="dab-md-p">{renderInlineMarkdown(paraLines.join('\n'), hostUrl, extensionSDK, onOpenSandboxMarkdownFile)}</p>)
+      blocks.push(<p key={`p_${blockKey++}`} className="dab-md-p">{renderInlineMarkdown(paraLines.join('\n'), hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections)}</p>)
     }
   }
   return <div className="dab-markdown" data-testid="studio-markdown-body">{blocks.length > 0 ? blocks : raw}</div>
@@ -1979,6 +2017,12 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                     const normalized = normalizeSandboxFilePath(p)
                     setActiveSandboxMarkdownModalPath(normalized ? `/${normalized}` : p)
                     void openViewerDocument?.({ path: p })
+                  }}
+                  onInspectConnections={() => {
+                    if (ctl.capabilities?.isAdmin) void openOrCopyMarkdownLink('/admin/connections', hostUrl, extensionSDK)
+                    void fetchAvailableLookerConnectionsMarkdown(ctl.core40SDK).then((md) => {
+                      ctl.setMessages((prev) => [...prev, { role: 'assistant', text: md }])
+                    })
                   }}
                 />
               </div>

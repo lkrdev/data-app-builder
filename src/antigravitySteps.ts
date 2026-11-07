@@ -16,9 +16,9 @@ import { BOOTSTRAP_LOOKML_PY, LKR_CLI_SITECUSTOMIZE_PY } from './lookmlTool'
 import { SANDBOX_AGENT_SKILL_FILES } from './sandboxSkillsBundle'
 export { SANDBOX_AGENT_SKILL_FILES } from './sandboxSkillsBundle'
 
-function extractNonThoughtText(val: unknown): string {
-  if (typeof val === 'string') return val.trim()
-  if (Array.isArray(val)) return val.map(extractNonThoughtText).filter(Boolean).join('\n')
+export function extractNonThoughtText(val: unknown): string {
+  if (typeof val === 'string') return val
+  if (Array.isArray(val)) return val.map(extractNonThoughtText).filter((s) => s.length > 0).join('')
   if (val && typeof val === 'object') {
     const obj = val as Record<string, unknown>
     if (obj.type === 'thought' || obj.type === 'thinking' || obj.thought) return ''
@@ -55,16 +55,17 @@ export function extractInteractionOutputText(interaction: AntigravityInteraction
   if (typeof interaction?.output_text === 'string' && interaction.output_text.trim()) return interaction.output_text.trim()
   const nonThoughtText = (item?: AntigravityInteractionOutput | AntigravityInteractionStep | null) =>
     item && typeof item === 'object' && item.type !== 'thought' && item.type !== 'thinking' && !item.thought
-      ? (typeof item.text === 'string' && item.text.trim()) || extractNonThoughtText((item as Record<string, unknown>).content ?? (item as Record<string, unknown>).parts)
+      ? (typeof item.text === 'string' && item.text.length > 0 ? item.text : extractNonThoughtText((item as Record<string, unknown>).content ?? (item as Record<string, unknown>).parts))
       : ''
-  const outputLines = (interaction?.outputs || []).map(nonThoughtText).filter(Boolean)
-  if (outputLines.length > 0) return outputLines.join('\n').trim()
+  const outputText = (interaction?.outputs || []).map(nonThoughtText).join('').trim()
+  if (outputText) return outputText
 
-  const stepLines = (interaction?.steps || [])
+  const stepText = (interaction?.steps || [])
     .filter((s) => /^(?:message|text|assistant|model_output)$/.test(String(s?.type || '').trim()) || (!s?.type && typeof s?.text === 'string'))
     .map(nonThoughtText)
-    .filter(Boolean)
-  if (stepLines.length > 0) return stepLines.join('\n').trim()
+    .join('')
+    .trim()
+  if (stepText) return stepText
 
   for (const s of [...(interaction?.steps || [])].reverse()) {
     if (s?.type === 'function_result' && (s?.name === 'run_looker_codemode' || !s?.name)) {
