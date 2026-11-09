@@ -6,7 +6,7 @@ import type { Looker40SDK } from '@looker/sdk'
 import {
   Archive, ArchiveRestore, AtSign, BookOpen, Brain, Bug, Check, ChevronDown, Code2, Copy,
   CornerDownRight, Database, Eye, FileText, Folder, Kanban, LayoutDashboard, Loader2,
-  MessageSquare, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Paperclip, Pencil, Plus, Shield,
+  MessageSquare, MoreVertical, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Paperclip, Pencil, Plus, Shield,
   Sparkles, Square, Terminal, Trash2, Wrench, X, Zap,
 } from 'lucide-react'
 
@@ -373,6 +373,7 @@ export function resolveLookerEmbedTarget(opts: {
       : null
   if (item) {
     const ct = item.contentType
+    if (ct === 'lookml' || ct === 'script') return preload
     if (ct === 'dashboard' || ct === 'lookml_dashboard') {
       const id = String(item.lookmlDashboardId || item.dashboardId || item.id)
       return { kind: 'dashboard', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
@@ -2327,7 +2328,9 @@ function renderContentTabIcon(contentType: StudioContentItemType): React.ReactNo
     case 'data-investigator': return <Sparkles size={13} strokeWidth={1.75} aria-hidden="true" />
     case 'board': return <Kanban size={13} strokeWidth={1.75} aria-hidden="true" />
     case 'conversational-analytics': return <MessageSquare size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'lookml':
     case 'extension': return <Code2 size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'script': return <Terminal size={13} strokeWidth={1.75} aria-hidden="true" />
     case 'report': return <FileText size={13} strokeWidth={1.75} aria-hidden="true" />
     default: return <LayoutDashboard size={13} strokeWidth={1.75} aria-hidden="true" />
   }
@@ -2338,7 +2341,8 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     activeMode, selectedUseCase, isEmptyConversation, isHealthCheckMode, isLookmlMode, isCaMode,
     builderMode, healthReport, lookmlBundle, caConversation, canDeployLookml, nativeContent,
     publishedApp, contentItems = [], activeContentTabKey = '', activeContentItem = null,
-    handleSelectContentTab, currentAppCode, embedNonce, extensionSDK, setInfoModalUseCase,
+    handleSelectContentTab, handleHideContentTab,
+    currentAppCode, embedNonce, extensionSDK, setInfoModalUseCase,
     busyStatus, rightPaneCollapsed, setRightPaneCollapsed, scriptId, scriptTitle,
     activeViewerDocument = null, setActiveViewerDocument, openViewerDocument,
   } = ctl
@@ -2349,16 +2353,47 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const [copiedTdd, setCopiedTdd] = useState(false)
   const [showAppCode, setShowAppCode] = useState(false)
   const [iframeRev, setIframeRev] = useState(0)
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+  const moreMenuWrapRef = useRef<HTMLDivElement | null>(null)
   const embedContainerRef = useRef<HTMLDivElement | null>(null)
   const embedControllerRef = useRef<ReturnType<typeof createLookerEmbedPreloadController> | null>(null)
 
+  const visibleTabs = useMemo(() => contentItems.filter((it) => !it.hidden), [contentItems])
+  const hiddenTabs = useMemo(() => contentItems.filter((it) => Boolean(it.hidden)), [contentItems])
+  const allTabsHidden = contentItems.length > 0 && visibleTabs.length === 0
+
+  useEffect(() => {
+    if (!moreMenuOpen || typeof document === 'undefined') return
+    const onDocDown = (ev: MouseEvent) => {
+      if (moreMenuWrapRef.current && !moreMenuWrapRef.current.contains(ev.target as Node)) setMoreMenuOpen(false)
+    }
+    const onDocKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setMoreMenuOpen(false) }
+    document.addEventListener('mousedown', onDocDown)
+    document.addEventListener('keydown', onDocKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocDown)
+      document.removeEventListener('keydown', onDocKey)
+    }
+  }, [moreMenuOpen])
+
+  const ct = activeContentItem?.contentType
+  const activePaneKind: 'script' | 'report' | 'lookml' | 'ca' | 'embed' | 'empty_hidden' = allTabsHidden
+    ? 'empty_hidden'
+    : ct
+    ? ct === 'script' || ct === 'lookml' || ct === 'report' ? ct : ct === 'conversational-analytics' ? 'ca' : 'embed'
+    : isTileMode ? 'script' : isHealthCheckMode ? 'report' : isLookmlMode ? 'lookml' : isCaMode || caConversation ? 'ca' : 'embed'
+
   const embedTarget = useMemo(
     () => resolveLookerEmbedTarget({
-      isEmptyConversation, isHealthCheckMode, isLookmlMode, isTileMode, isCaMode,
+      isEmptyConversation: isEmptyConversation || allTabsHidden,
+      isHealthCheckMode: activePaneKind === 'report',
+      isLookmlMode: activePaneKind === 'lookml',
+      isTileMode: activePaneKind === 'script',
+      isCaMode: activePaneKind === 'ca',
       builderMode, activeContentItem, caConversation, nativeContent, publishedApp,
       hostUrl, nonce: (embedNonce || 0) + iframeRev,
     }),
-    [isEmptyConversation, isHealthCheckMode, isLookmlMode, isTileMode, isCaMode, builderMode, activeContentItem, caConversation, nativeContent, publishedApp, hostUrl, embedNonce, iframeRev]
+    [isEmptyConversation, allTabsHidden, activePaneKind, builderMode, activeContentItem, caConversation, nativeContent, publishedApp, hostUrl, embedNonce, iframeRev]
   )
 
   useEffect(() => {
@@ -2388,26 +2423,32 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     URL.revokeObjectURL(url)
   }
 
-  const activePreviewId = activeContentItem?.id || (builderMode === 'dashboard' ? nativeContent?.id : publishedApp?.dashboardId)
+  const isDataAppPane = activeContentItem
+    ? activeContentItem.contentType === 'data_app' || activeContentItem.contentType === 'data-investigator'
+    : builderMode !== 'dashboard'
+  const activePreviewId = allTabsHidden
+    ? ''
+    : activeContentItem?.id || (builderMode === 'dashboard' ? nativeContent?.id : publishedApp?.dashboardId)
   const openInLookerPath = activeContentItem
     ? activeContentItem.embedPath.replace(/^\/embed/, '')
     : builderMode === 'dashboard' && nativeContent
     ? nativeContent.embedPath.replace(/^\/embed/, '')
     : publishedApp ? `/dashboards/${encodeURIComponent(publishedApp.dashboardId)}` : ''
   const hasActiveEmbed = embedTarget.kind !== 'preload'
-  const showContentTabs = !isTileMode && !isHealthCheckMode && !isLookmlMode && contentItems.length > 0
-  const resolvedActiveTabKey = activeContentTabKey || activeContentItem?.key || ''
+  const showContentTabs = visibleTabs.length > 0 || hiddenTabs.length > 0
+  const resolvedActiveTabKey = activeContentItem?.key || activeContentTabKey || ''
 
   const railArtifacts = useMemo<Array<{ key: string; title: string; contentType: StudioContentItemType }>>(() => {
-    if (contentItems.length > 0) return contentItems.map((item) => ({ key: item.key, title: item.title, contentType: item.contentType }))
-    if (isLookmlMode && lookmlBundle) return [{ key: `lookml:${lookmlBundle.id}`, title: lookmlBundle.title || 'Agentic LookML', contentType: 'extension' }]
+    if (visibleTabs.length > 0) return visibleTabs.map((item) => ({ key: item.key, title: item.title, contentType: item.contentType }))
+    if (allTabsHidden) return []
+    if (isLookmlMode && lookmlBundle) return [{ key: `lookml:${lookmlBundle.id}`, title: lookmlBundle.title || 'Agentic LookML', contentType: 'lookml' }]
     if (isHealthCheckMode && healthReport) return [{ key: `report:${healthReport.id}`, title: healthReport.title || 'Health Check Report', contentType: 'report' }]
-    if (isTileMode && scriptId) return [{ key: `script:${scriptId}`, title: scriptTitle || scriptId, contentType: 'extension' }]
+    if (isTileMode && scriptId) return [{ key: `script:${scriptId}`, title: scriptTitle || scriptId, contentType: 'script' }]
     if (caConversation) return [{ key: `ca:${caConversation.caConversationId}`, title: caConversation.title || 'Conversational Analytics', contentType: 'conversational-analytics' }]
     if (nativeContent) return [{ key: `${nativeContent.contentType}:${nativeContent.id}`, title: nativeContent.title, contentType: nativeContent.contentType }]
     if (publishedApp) return [{ key: `data_app:${publishedApp.dashboardId}`, title: publishedApp.title, contentType: 'data_app' }]
     return []
-  }, [contentItems, isLookmlMode, lookmlBundle, isHealthCheckMode, healthReport, isTileMode, scriptId, scriptTitle, caConversation, nativeContent, publishedApp])
+  }, [visibleTabs, allTabsHidden, isLookmlMode, lookmlBundle, isHealthCheckMode, healthReport, isTileMode, scriptId, scriptTitle, caConversation, nativeContent, publishedApp])
 
   const collapseToggleBtn = !rightPaneCollapsed ? (
     <button
@@ -2419,8 +2460,11 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   ) : null
 
   const hasViewerContent = Boolean(
-    activeViewerDocument || hasActiveEmbed || (isHealthCheckMode && healthReport) ||
-    (isLookmlMode && lookmlBundle) || ((isCaMode || caConversation) && caConversation) || isTileMode
+    activeViewerDocument || showContentTabs || hasActiveEmbed ||
+    (activePaneKind === 'report' && healthReport) ||
+    (activePaneKind === 'lookml' && lookmlBundle) ||
+    (activePaneKind === 'ca' && caConversation) ||
+    activePaneKind === 'script'
   )
 
   return (
@@ -2475,25 +2519,88 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
       )}
       {!rightPaneCollapsed && showContentTabs && (
         <div className="dab-content-tabs" data-testid="studio-content-tabs" role="tablist" aria-label="Conversation Looker content tabs">
-          {contentItems.map((item) => {
-            const isSelected = item.key === resolvedActiveTabKey
-            return (
+          <div className="dab-content-tabs-scroll">
+            {visibleTabs.map((item) => {
+              const isSelected = item.key === resolvedActiveTabKey
+              return (
+                <div
+                  key={item.key} role="tab" tabIndex={0} aria-selected={isSelected}
+                  data-testid={`studio-content-tab-${item.key}`} className={`dab-content-tab ${isSelected ? 'active' : ''}`}
+                  onClick={() => handleSelectContentTab?.(item.key)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      handleSelectContentTab?.(item.key)
+                    }
+                  }}
+                  title={`${item.title} (${item.contentType}: ${item.id})`}
+                >
+                  <span className="dab-content-tab-icon">{renderContentTabIcon(item.contentType)}</span>
+                  <span className="dab-content-tab-label">{item.title}</span>
+                  <button
+                    type="button"
+                    data-testid={`studio-content-tab-close-${item.key}`}
+                    className="dab-content-tab-close"
+                    aria-label={`Hide ${item.title} tab`}
+                    title="Hide tab"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleHideContentTab?.(item.key)
+                    }}
+                  >
+                    <X size={12} strokeWidth={1.75} aria-hidden="true" />
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+          {hiddenTabs.length > 0 && (
+            <div className="dab-content-tabs-more-wrap" ref={moreMenuWrapRef}>
               <button
-                key={item.key} type="button" role="tab" aria-selected={isSelected}
-                data-testid={`studio-content-tab-${item.key}`} className={`dab-content-tab ${isSelected ? 'active' : ''}`}
-                onClick={() => handleSelectContentTab?.(item.key)} title={`${item.title} (${item.contentType}: ${item.id})`}
+                type="button"
+                data-testid="studio-content-tabs-more-btn"
+                className="dab-btn dab-btn-secondary dab-content-tabs-more-btn"
+                aria-haspopup="menu"
+                aria-expanded={moreMenuOpen}
+                aria-label={`Restore hidden tabs (${hiddenTabs.length})`}
+                title={`Restore hidden tabs (${hiddenTabs.length})`}
+                onClick={() => setMoreMenuOpen((open) => !open)}
               >
-                <span className="dab-content-tab-icon">{renderContentTabIcon(item.contentType)}</span>
-                <span className="dab-content-tab-label">{item.title}</span>
+                <MoreVertical size={14} strokeWidth={1.75} aria-hidden="true" />
               </button>
-            )
-          })}
+              {moreMenuOpen && (
+                <div
+                  data-testid="studio-content-tabs-more-menu"
+                  role="menu"
+                  aria-label="Hidden content tabs"
+                  className="dab-content-tabs-more-menu"
+                >
+                  {hiddenTabs.map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      role="menuitem"
+                      data-testid={`studio-content-tab-restore-${item.key}`}
+                      className="dab-content-tabs-more-item"
+                      onClick={() => {
+                        setMoreMenuOpen(false)
+                        handleSelectContentTab?.(item.key)
+                      }}
+                    >
+                      <span className="dab-content-tab-icon">{renderContentTabIcon(item.contentType)}</span>
+                      <span className="dab-content-tab-label">{item.title}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
       {!rightPaneCollapsed && (
-        isTileMode ? (
+        activePaneKind === 'script' ? (
           <TilePreviewPane ctl={ctl} />
-        ) : isHealthCheckMode ? (
+        ) : activePaneKind === 'report' ? (
           <StudioToolbar
             title={healthReport ? (
               <>
@@ -2519,14 +2626,14 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               </>
             }
           />
-        ) : isLookmlMode ? (
+        ) : activePaneKind === 'lookml' ? (
           <StudioToolbar
             title={lookmlBundle ? (
               <><strong>{lookmlBundle.title}</strong> <span className="dab-muted">(Session <code>obj_lookml_{lookmlBundle.id}</code> · {lookmlBundle.files?.length || 0} .lkml files)</span></>
             ) : <span className="dab-muted">Agentic LookML Viewer (.lkml diffs, validator, run_lookml_test &amp; /sql/:slug + /x/:slug parity)</span>}
             actions={<><UseCaseInfoTrigger useCase="lookml" onOpen={setInfoModalUseCase} />{collapseToggleBtn}</>}
           />
-        ) : isCaMode || caConversation ? (
+        ) : activePaneKind === 'ca' ? (
           <>
             <StudioToolbar
               testId="ca-preview-toolbar"
@@ -2560,9 +2667,11 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         ) : (
           <StudioToolbar
             title={
-              activeContentItem && activeContentItem.contentType !== 'data_app' && activeContentItem.contentType !== 'data-investigator' ? (
+              allTabsHidden ? (
+                <span className="dab-muted">All tabs hidden — restore an item from the menu above</span>
+              ) : activeContentItem && activeContentItem.contentType !== 'data_app' && activeContentItem.contentType !== 'data-investigator' ? (
                 <><strong>{activeContentItem.title}</strong> <span className="dab-muted">({activeContentItem.contentType} #{activeContentItem.id} · <code>{activeContentItem.embedPath}</code>)</span></>
-              ) : builderMode === 'dashboard' && nativeContent ? (
+              ) : !activeContentItem && builderMode === 'dashboard' && nativeContent ? (
                 <><strong>{nativeContent.title}</strong> <span className="dab-muted">({nativeContent.contentType} #{nativeContent.id} · <code>{nativeContent.embedPath}</code>)</span></>
               ) : publishedApp ? (
                 <><strong>{publishedApp.title}</strong> <span className="dab-muted">(Dashboard #{publishedApp.dashboardId} · Extension db::{publishedApp.extensionId.slice(0, 8)}…)</span></>
@@ -2571,18 +2680,18 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             }
             actions={
               <>
-                {builderMode !== 'dashboard' && currentAppCode && (
+                {!allTabsHidden && isDataAppPane && currentAppCode && (
                   <button type="button" data-testid="preview-view-code-btn" className="dab-btn-secondary" onClick={() => setShowAppCode((v) => !v)}>
                     {showAppCode ? 'Hide app.js' : '{ } View app.js'}
                   </button>
                 )}
-                {activePreviewId && (
+                {!allTabsHidden && activePreviewId && (
                   <>
                     <button type="button" className="dab-btn-secondary" onClick={() => setIframeRev((r) => r + 1)}>Reload Viewer</button>
                     <button type="button" className="dab-btn-secondary" onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}>Open in Looker ↗</button>
                   </>
                 )}
-                <UseCaseInfoTrigger useCase={builderMode === 'dashboard' ? 'dashboard' : selectedUseCase === 'data-investigator' ? 'data-investigator' : 'app'} onOpen={setInfoModalUseCase} />
+                <UseCaseInfoTrigger useCase={!isDataAppPane ? 'dashboard' : selectedUseCase === 'data-investigator' ? 'data-investigator' : 'app'} onOpen={setInfoModalUseCase} />
                 {collapseToggleBtn}
               </>
             }
@@ -2590,7 +2699,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         )
       )}
 
-      {!rightPaneCollapsed && showAppCode && currentAppCode && builderMode !== 'dashboard' && (
+      {!rightPaneCollapsed && !allTabsHidden && showAppCode && currentAppCode && isDataAppPane && (
         <div className="dab-code-drawer" data-testid="preview-app-code-drawer" style={{ padding: 12, background: 'var(--dab-code-bg, #0f172a)', color: '#e2e8f0', borderBottom: '1px solid var(--dab-border, #e2e8f0)', maxHeight: 260, overflow: 'auto', fontSize: 12 }}>
           <div className="dab-inspector-bar">
             <strong>app.js ({currentAppCode.length} B)</strong>
@@ -2629,9 +2738,14 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         </div>
       )}
 
-      <div className="dab-iframe-container" data-testid="ca-embed-preview" style={isTileMode || rightPaneCollapsed || Boolean(activeViewerDocument) ? { display: 'none' } : undefined}>
+      <div className="dab-iframe-container" data-testid="ca-embed-preview" style={activePaneKind === 'script' || rightPaneCollapsed || Boolean(activeViewerDocument) ? { display: 'none' } : undefined}>
         <div ref={embedContainerRef} data-testid="looker-embed-container" className="dab-embed-container" style={{ width: '100%', height: '100%', display: hasActiveEmbed ? 'block' : 'none' }} />
-        {isHealthCheckMode ? (
+        {activePaneKind === 'empty_hidden' ? (
+          <div className="dab-placeholder" data-testid="studio-content-tabs-all-hidden">
+            <p>All content tabs are hidden</p>
+            <p className="dab-muted">Open the menu at the right end of the tab bar to restore any item.</p>
+          </div>
+        ) : activePaneKind === 'report' ? (
           healthReport ? (
             <div className="dab-tdd-viewer">
               {tddViewMode === 'rendered' ? <div className="dab-tdd-rendered" dangerouslySetInnerHTML={{ __html: renderTddMarkdownToHtml(healthReport.tddMarkdown) }} /> : <pre className="dab-tdd-markdown">{healthReport.tddMarkdown}</pre>}
@@ -2642,10 +2756,10 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               <p className="dab-muted">Click <strong>Run 3-Pillar Audit</strong> in the top-right bar or enter a prompt on the left to execute Pillar 1 (System Activity), Pillar 2 (LookML 0–4 Transcriber Rubric), and Pillar 3 (BigQuery INFORMATION_SCHEMA) in <code>LkrCodeMode</code>.</p>
             </div>
           )
-        ) : isLookmlMode ? (
+        ) : activePaneKind === 'lookml' ? (
           <LookmlPreviewPane bundle={lookmlBundle} hostUrl={hostUrl} extensionSDK={extensionSDK} canDeploy={canDeployLookml} />
-        ) : isCaMode || caConversation ? (
-          !caConversation && (
+        ) : activePaneKind === 'ca' ? (
+          !caConversation && !hasActiveEmbed && (
             <div className="dab-placeholder">
               <p>No active Conversational Analytics chat yet.</p>
               <p className="dab-muted">Ask a data question on the left — a stateless isolated sub-agent will select the best Looker CA Agent, create the conversation, and embed it here.</p>

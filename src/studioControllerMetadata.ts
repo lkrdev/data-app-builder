@@ -13,8 +13,8 @@ import {
   buildAvailableExploresCatalog, buildDenseExploreSchema, buildRootLookerFolders,
   DEFAULT_STUDIO_AGENT_NAME, fetchFolderChildren, fetchFolderWithAncestors,
   fetchInitialLookerMetadata, fetchPreloadedContentSummary, getArtifactNamespace,
-  getArtifactService, listSavedScripts, listUserArtifacts, loadStoredSelectedFolderId,
-  loadUserConversations, loadUserEnvironmentId, LookerFolderNode, normalizeStudioAgentName,
+  getArtifactService, listSavedScripts, loadStoredSelectedFolderId,
+  loadUserEnvironmentId, LookerFolderNode, normalizeStudioAgentName,
   parseExploreId, persistSelectedFolderId, readInitialSelectedFolderId,
   ResolvedStudioUseCase, SavedScript, searchLookerFolders, SearchLookerFoldersParams,
   StudioContextMention, studioModeToUseCase, StudioUseCase, studioUseCaseToMode,
@@ -29,7 +29,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     selectedUseCase, setSelectedUseCase, explicitUseCaseRef, parsedRoute,
     resolvedUseCaseByIdRef, allowedUseCases, availableModels,
     oauthAccessToken, clientId, projectId, apiKey, selectedModel,
-    sharedEnvIdRef, syncSharedEnvironmentId, sessionsByMode, messagesByMode, activeModeRef,
+    sharedEnvIdRef, syncSharedEnvironmentId, agentSession, messages, activeModeRef,
     capabilities,
   } = auth
 
@@ -132,10 +132,9 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     () => Boolean(mockExt?.forceStarterPromptsSkeleton ?? true)
   )
 
-  const [catalogItems, setCatalogItems] = useState<UserArtifactIndex[]>([])
   const [activeObjectId, setActiveObjectId] = useState('')
-  const [conversations, setConversations] = useState<UserConversationEntry[]>([])
   const conversationLabelsRef = useRef<Record<string, string>>({})
+  const optimisticConvRef = useRef<UserConversationEntry | null>(null)
   const [savedScripts, setSavedScripts] = useState<SavedScript[]>([])
   const [healthScope, setHealthScope] = useState<'all' | 'looker' | 'bq'>('all')
 
@@ -146,33 +145,40 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   )
   const { data: swrUserArtifacts } = useSWR<UserArtifactIndex[]>(
     !isTileMount && userId ? ['artifact:user_list', artifactNamespace, userId, 'all'] : null,
-    () => artifactService.listUserArtifacts(userId)
+    () => artifactService.listUserArtifacts(userId),
+    { revalidateOnFocus: false }
   )
-  const { data: swrConversations } = useSWR<UserConversationEntry[]>(
+  const catalogItems = useMemo(() => swrUserArtifacts ?? [], [swrUserArtifacts])
+  const { data: swrConversations, mutate: mutateConversations } = useSWR<UserConversationEntry[]>(
     !isTileMount && userId ? ['artifact:conversations', artifactNamespace, userId] : null,
-    () => artifactService.listConversations(userId)
+    () => artifactService.listConversations(userId),
+    { revalidateOnFocus: false }
   )
-  const applyCatalogLabels = useCallback((items: UserArtifactIndex[]) => {
-    const labels = conversationLabelsRef.current
-    return items.map((item) =>
-      labels[item.id] ? { ...item, label: labels[item.id], title: labels[item.id] } : item.label ? { ...item, title: item.label } : item
-    )
-  }, [])
-  useEffect(() => {
-    if (swrUserArtifacts) setCatalogItems(applyCatalogLabels(swrUserArtifacts))
-  }, [applyCatalogLabels, swrUserArtifacts])
-  useEffect(() => {
-    if (swrConversations) setConversations(swrConversations)
+  const conversations = useMemo<UserConversationEntry[]>(() => {
+    const base = swrConversations ?? []
+    const opt = optimisticConvRef.current
+    if (opt && base.some((c) => c.id === opt.id)) {
+      optimisticConvRef.current = null
+      return base
+    }
+    return opt ? [opt, ...base] : base
   }, [swrConversations])
+  const conversationsRef = useRef<UserConversationEntry[]>(conversations)
+  conversationsRef.current = conversations
 
-  const refreshCatalog = useCallback(
-    async (uid = userIdRef.current || '1') => {
-      if (!uid) return
-      try {
-        setCatalogItems(applyCatalogLabels(await listUserArtifacts(core40SDK, uid, getArtifactNamespace(extensionSDK))))
-      } catch { /* ignore */ }
+  const setConversations = useCallback(
+    (
+      next: UserConversationEntry[] | ((prev: UserConversationEntry[]) => UserConversationEntry[]),
+      opts?: { optimisticEntry?: UserConversationEntry | null }
+    ) => {
+      if (opts && 'optimisticEntry' in opts) {
+        optimisticConvRef.current = opts.optimisticEntry ?? null
+      }
+      const resolved = typeof next === 'function' ? next(conversationsRef.current) : next
+      conversationsRef.current = resolved
+      void mutateConversations(resolved, { revalidate: false })
     },
-    [applyCatalogLabels, core40SDK, extensionSDK]
+    [mutateConversations]
   )
 
   const handleSaveAgentName = useCallback(
@@ -203,34 +209,38 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
       )
       return cid === id || cid === rawId
     })
-    if (convMatch) return studioModeToUseCase(convMatch.type)
+    if (convMatch) {
+      if (convMatch.use_case === 'auto' && !convMatch.interactionId) return undefined
+      return studioModeToUseCase(convMatch.type)
+    }
     const catMatch = catalogItems.find((it) => it.id === id || it.id === rawId)
     if (catMatch) return studioModeToUseCase(catMatch.type)
     return undefined
   }, [parsedRoute, conversations, catalogItems, resolvedUseCaseByIdRef])
 
-  const effectiveUseCase: StudioUseCase = parsedRoute.objectId
-    ? inferredRouteUseCase || (selectedUseCase !== 'auto' ? selectedUseCase : 'app')
-    : selectedUseCase !== 'auto'
-    ? selectedUseCase
-    : inferredRouteUseCase || 'auto'
+  const isGenericConvRoute =
+    /^conv_[a-z0-9_-]+$/i.test(parsedRoute.conversationId || '') && parsedRoute.useCase === 'auto'
+  const effectiveUseCase: StudioUseCase =
+    selectedUseCase !== 'auto'
+      ? selectedUseCase
+      : inferredRouteUseCase || (parsedRoute.objectId && !isGenericConvRoute ? 'app' : 'auto')
   const activeMode: StudioMode =
     effectiveUseCase !== 'auto' ? studioUseCaseToMode(effectiveUseCase) : parsedRoute.mode
   activeModeRef.current = activeMode
   const isLookmlMode = activeMode === 'lookml'
   const isHealthCheckMode = location.pathname === '/health-check' || activeMode === 'health'
   const builderMode: 'data_app' | 'dashboard' = activeMode === 'dashboard' ? 'dashboard' : 'data_app'
-  const agentSession = sessionsByMode[activeMode] || { toolType: activeMode }
-  const messages = useMemo(() => messagesByMode[activeMode] || [], [messagesByMode, activeMode])
   const isUseCaseLocked = false
 
   useEffect(() => {
-    if (inferredRouteUseCase) {
-      setSelectedUseCase(inferredRouteUseCase)
-    } else if (parsedRoute.objectId && selectedUseCase === 'auto') {
-      setSelectedUseCase('app')
+    if (selectedUseCase === 'auto') {
+      if (inferredRouteUseCase) {
+        setSelectedUseCase(inferredRouteUseCase)
+      } else if (parsedRoute.objectId && !isGenericConvRoute) {
+        setSelectedUseCase('app')
+      }
     }
-  }, [parsedRoute.objectId, parsedRoute.conversationId, inferredRouteUseCase, selectedUseCase, setSelectedUseCase])
+  }, [parsedRoute.objectId, isGenericConvRoute, inferredRouteUseCase, selectedUseCase, setSelectedUseCase])
 
   const handleChangeUseCase = useCallback(
     (nextUseCase: StudioUseCase) => {
@@ -455,13 +465,20 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
         if (!extMock?.forceFolderSkeleton) setLoadingMetadata(false)
         void hydrateFolderAncestors(targetInitialFolder, initialRootIds)
         void loadFolderChildren(targetInitialFolder, initialRootIds).catch(() => {})
-        void refreshCatalog(resolvedUserId)
+        void artifactService.listUserArtifacts(resolvedUserId).catch(() => {})
         fetchPreloadedContentSummary(core40SDK)
           .then((items) => { if (mounted) setPreloadedContent(items) })
           .catch(() => {})
-        loadUserConversations(core40SDK, resolvedUserId, getArtifactNamespace(extensionSDK)).then((loadedConvs) => {
-          if (mounted) setConversations(loadedConvs)
-        })
+        void artifactService.listConversations(resolvedUserId)
+          .then((loadedConvs) => {
+            if (!mounted) return
+            const opt = optimisticConvRef.current
+            void mutateConversations(
+              opt && !loadedConvs.some((c) => c.id === opt.id) ? [opt, ...loadedConvs] : loadedConvs,
+              { revalidate: false }
+            )
+          })
+          .catch(() => {})
       })
       .catch((err: unknown) => {
         const extMock = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
@@ -473,7 +490,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
         if (mounted && !extMock?.forceAppInitializing) setAppInitializing(false)
       })
     return () => { mounted = false }
-  }, [artifactService, core40SDK, extensionSDK, syncSharedEnvironmentId, hydrateFolderAncestors, loadFolderChildren, refreshCatalog, setAgentName, setAppInitializing, setCapabilities, setMessages])
+  }, [artifactService, core40SDK, extensionSDK, syncSharedEnvironmentId, hydrateFolderAncestors, loadFolderChildren, mutateConversations, setAgentName, setAppInitializing, setCapabilities, setMessages])
 
   useEffect(() => {
     let mounted = true
@@ -567,8 +584,8 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     inferredRouteUseCase, effectiveUseCase, activeMode, isLookmlMode, isHealthCheckMode, builderMode,
     isUseCaseLocked, handleChangeUseCase,
     agentSession, messages,
-    catalogItems, setCatalogItems, activeObjectId, setActiveObjectId,
-    conversations, setConversations, conversationLabelsRef, refreshCatalog,
+    catalogItems, activeObjectId, setActiveObjectId,
+    conversations, setConversations, conversationLabelsRef,
     savedScripts, setSavedScripts,
     healthScope, setHealthScope,
   }

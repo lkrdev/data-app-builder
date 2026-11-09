@@ -250,7 +250,6 @@ export async function saveLookmlSessionArtifact(params: {
     bundle: { ...bundle, id },
     studio: {
       explores, lastInteractionId: studio.lastInteractionId, environmentId: studio.environmentId,
-      messages: (studio.messages || []).filter((m) => m.role === 'user' || m.role === 'assistant').slice(-200),
     },
   }
   await saveUserArtifact({ ...index, sdk, userId, content: payload, namespace })

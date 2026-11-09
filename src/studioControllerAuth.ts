@@ -338,40 +338,28 @@ export function useStudioAuthAndPrefs() {
 
   const [sharedEnvironmentId, setSharedEnvironmentId] = useState('')
   const sharedEnvIdRef = useRef<string>('')
-  const [sessionsByMode, setSessionsByMode] = useState<Record<StudioMode, AgentSession>>({
-    app: { toolType: 'app', environmentId: 'env_app_isolated' },
-    dashboard: { toolType: 'dashboard', environmentId: 'env_dashboard_isolated' },
-    lookml: { toolType: 'lookml', environmentId: 'env_lookml_isolated' },
-    health: { toolType: 'health', environmentId: 'env_health_isolated' },
-    tile: { toolType: 'tile', environmentId: 'env_tile_isolated' },
+  const [agentSession, setAgentSessionState] = useState<AgentSession>({
+    toolType: parsedRoute.mode,
+    environmentId: 'env_app_isolated',
   })
-  const sessionsByModeRef = useRef<Record<StudioMode, AgentSession>>(sessionsByMode)
-  sessionsByModeRef.current = sessionsByMode
+  const agentSessionRef = useRef<AgentSession>(agentSession)
+  agentSessionRef.current = agentSession
 
-  const [messagesByMode, setMessagesByMode] = useState<Record<StudioMode, ChatMessage[]>>(() => {
-    if (Array.isArray(mockExt?.initialMessages)) {
-      return { app: mockExt.initialMessages as ChatMessage[], dashboard: [], lookml: [], health: [], tile: [] }
-    }
-    const initialErr = mockExt?.initialError ? [{ role: 'error' as const, text: String(mockExt.initialError) }] : []
-    return { app: initialErr, dashboard: [], lookml: [], health: [], tile: [] }
+  const [messages, setMessagesState] = useState<ChatMessage[]>(() => {
+    if (Array.isArray(mockExt?.initialMessages)) return mockExt.initialMessages as ChatMessage[]
+    return mockExt?.initialError ? [{ role: 'error' as const, text: String(mockExt.initialError) }] : []
   })
-  const messagesByModeRef = useRef<Record<StudioMode, ChatMessage[]>>(messagesByMode)
-  messagesByModeRef.current = messagesByMode
+  const messagesRef = useRef<ChatMessage[]>(messages)
+  messagesRef.current = messages
 
   const syncSharedEnvironmentId = useCallback((envId?: string) => {
     const clean = normalizeEnvironmentId(envId)
     if (!clean) return
     sharedEnvIdRef.current = clean
     setSharedEnvironmentId(clean)
-    setSessionsByMode((prev) => {
-      const updated = {
-        app: { ...prev.app, toolType: 'app' as const, environmentId: clean },
-        dashboard: { ...prev.dashboard, toolType: 'dashboard' as const, environmentId: clean },
-        lookml: { ...prev.lookml, toolType: 'lookml' as const, environmentId: clean },
-        health: { ...prev.health, toolType: 'health' as const, environmentId: clean },
-        tile: { ...prev.tile, toolType: 'tile' as const, environmentId: clean },
-      }
-      sessionsByModeRef.current = updated
+    setAgentSessionState((prev) => {
+      const updated = { ...prev, environmentId: clean }
+      agentSessionRef.current = updated
       return updated
     })
   }, [])
@@ -383,15 +371,13 @@ export function useStudioAuthAndPrefs() {
       if (nextShared && nextShared !== sharedEnvIdRef.current && next.lastInteractionId) {
         sharedEnvIdRef.current = nextShared; setSharedEnvironmentId(nextShared)
       }
-      setSessionsByMode((prev) => {
-        const updated = {
-          ...prev,
-          [targetMode]: {
-            ...next, toolType: targetMode,
-            environmentId: sharedEnvIdRef.current || next.environmentId || prev[targetMode]?.environmentId || `env_${targetMode}_isolated`,
-          },
+      setAgentSessionState((prev) => {
+        const updated: AgentSession = {
+          ...next,
+          toolType: next.toolType || targetMode,
+          environmentId: sharedEnvIdRef.current || next.environmentId || prev.environmentId || `env_${targetMode}_isolated`,
         }
-        sessionsByModeRef.current = updated
+        agentSessionRef.current = updated
         return updated
       })
     },
@@ -399,12 +385,10 @@ export function useStudioAuthAndPrefs() {
   )
 
   const setMessages = useCallback(
-    (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[]), targetMode?: StudioMode) => {
-      const mode = targetMode ?? activeModeRef.current
-      const cur = messagesByModeRef.current[mode] || []
-      const updated = { ...messagesByModeRef.current, [mode]: typeof updater === 'function' ? updater(cur) : updater }
-      messagesByModeRef.current = updated
-      setMessagesByMode(updated)
+    (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
+      const next = typeof updater === 'function' ? updater(messagesRef.current) : updater
+      messagesRef.current = next
+      setMessagesState(next)
     },
     []
   )
@@ -528,8 +512,8 @@ export function useStudioAuthAndPrefs() {
     rightPaneCollapsed, setRightPaneCollapsed, busySendAction, setBusySendAction,
     resolvedUseCaseByIdRef, parsedRoute, selectedUseCase, setSelectedUseCase, explicitUseCaseRef,
     sharedEnvironmentId, sharedEnvIdRef, syncSharedEnvironmentId,
-    sessionsByMode, sessionsByModeRef, setSessionsByMode,
-    messagesByMode, messagesByModeRef, activeModeRef, setAgentSession, setMessages,
+    agentSession, agentSessionRef, messages, messagesRef,
+    activeModeRef, setAgentSession, setMessages,
     busyStatus, setBusyStatus,
   }
 }

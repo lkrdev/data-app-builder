@@ -361,7 +361,6 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
   const isFreshConversation =
     !session.lastInteractionId ||
     Boolean(session.statelessTurn) ||
-    Boolean(session.toolType && session.toolType !== effectiveToolType) ||
     (Array.isArray(session.explores) && session.explores.length > 0 && JSON.stringify(session.explores) !== JSON.stringify(selectedExplores))
 
   const exploreDirective =
@@ -1011,11 +1010,11 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const thinkingDurationSec = Math.max(1, Math.round((Date.now() - turnStartMs) / 1000))
 
   const bundle =
-    (mode === 'data_app' || useCase === 'auto') && toolMode !== 'lookml'
+    mode === 'data_app' || useCase === 'auto'
       ? extractBundleFromInteraction(interaction)
       : null
   const nativeBundle =
-    (mode === 'dashboard' || useCase === 'auto') && toolMode !== 'lookml'
+    mode === 'dashboard' || useCase === 'auto'
       ? extractNativeContentFromInteraction(interaction)
       : null
   const lookmlBundle = extractLookmlBundleFromInteraction(interaction)

@@ -119,8 +119,9 @@ export interface TileScriptBinding {
 }
 
 export type StudioContentItemType =
-  | 'dashboard' | 'lookml_dashboard' | 'look' | 'explore' | 'board'
-  | 'data_app' | 'data-investigator' | 'conversational-analytics' | 'extension' | 'report'
+  | 'board' | 'look' | 'dashboard' | 'lookml_dashboard' | 'explore'
+  | 'data_app' | 'data-investigator' | 'lookml' | 'script' | 'report'
+  | 'conversational-analytics' | 'extension'
 
 export interface StudioContentItem {
   key: string // `${contentType}:${id}`
@@ -134,10 +135,15 @@ export interface StudioContentItem {
   lookmlDashboardId?: string
   exploreId?: string
   extensionId?: string
+  sessionId?: string
+  scriptId?: string
+  reportId?: string
+  projectId?: string
   rawCode?: string
   updatedAt?: string
-  source?: 'created' | 'mention'
+  source?: 'created' | 'modified' | 'mention'
   createdInConversation?: boolean
+  hidden?: boolean
 }
 
 export function formatStudioContentItemTitle(
@@ -160,6 +166,8 @@ export function formatStudioContentItemTitle(
     board: `Board #${cleanId}`,
     data_app: `Data App #${cleanId}`,
     'data-investigator': `Data Investigator #${cleanId}`,
+    lookml: `LookML (${cleanId})`,
+    script: `Script (${cleanId})`,
     'conversational-analytics': `CA Chat (${cleanId})`,
     extension: `Extension (${cleanId})`,
     report: `Report (${cleanId})`,
@@ -184,6 +192,8 @@ export function resolveStudioContentEmbedPath(
     look: `/embed/looks/${enc}`,
     explore: `/embed/explore/${cleanId.replace('::', '/')}`,
     board: `/embed/boards/${enc}`,
+    lookml: `/lookml/${enc}`,
+    script: `/tile/${enc}`,
     'conversational-analytics': buildCaEmbedPath(cleanId),
     extension: `/embed/extensions/${cleanId}`,
     report: `/embed/reporting/${cleanId}`,
@@ -199,8 +209,10 @@ export function normalizeStudioContentItem(
   const key = String(raw.key || `${contentType}:${id}`).trim()
   const title = formatStudioContentItemTitle(contentType, id, raw.title)
   const embedPath = resolveStudioContentEmbedPath(contentType, id, raw.embedPath)
-  const source: 'created' | 'mention' | undefined =
-    raw.source === 'created' || raw.createdInConversation === true
+  const source: 'created' | 'modified' | 'mention' | undefined =
+    raw.source === 'created' || raw.source === 'modified'
+      ? raw.source
+      : raw.createdInConversation === true
       ? 'created'
       : raw.source === 'mention' || raw.createdInConversation === false
       ? 'mention'
@@ -211,6 +223,7 @@ export function normalizeStudioContentItem(
     ...raw, key, id, contentType, title, embedPath,
     ...(source !== undefined ? { source } : {}),
     ...(createdInConversation !== undefined ? { createdInConversation } : {}),
+    ...(typeof raw.hidden === 'boolean' ? { hidden: raw.hidden } : {}),
   }
 }
 
@@ -218,7 +231,8 @@ export function upsertStudioContentItem(
   items: StudioContentItem[],
   nextRaw: Partial<StudioContentItem> & { id: string; contentType: StudioContentItemType }
 ): { items: StudioContentItem[]; activeKey: string; item: StudioContentItem } {
-  const normalized = normalizeStudioContentItem(nextRaw)
+  const hidden = typeof nextRaw.hidden === 'boolean' ? nextRaw.hidden : false
+  const normalized = normalizeStudioContentItem({ ...nextRaw, hidden })
   const existingIdx = items.findIndex((it) => it.key === normalized.key)
   if (existingIdx >= 0) {
     const prev = items[existingIdx]
@@ -226,7 +240,7 @@ export function upsertStudioContentItem(
     const createdInConversation = isCreated ? true : (normalized.createdInConversation ?? prev.createdInConversation)
     const source = isCreated ? ('created' as const) : (normalized.source || prev.source)
     const merged = normalizeStudioContentItem({
-      ...prev, ...nextRaw,
+      ...prev, ...nextRaw, hidden,
       title: nextRaw.title && nextRaw.title !== normalized.id && !/^\d+$/.test(nextRaw.title) ? nextRaw.title : prev.title || normalized.title,
       embedPath: nextRaw.embedPath || prev.embedPath || normalized.embedPath,
       ...(source !== undefined ? { source } : {}),
@@ -279,7 +293,6 @@ export function hydrateConversationContentItems(conv: Partial<UserConversationEn
   }
   const c = conv.content || {}
   const rawType = String(conv.type || conv.use_case || 'app').trim()
-  if (['tile', 'script', 'health', 'health_check', 'health-check', 'lookml'].includes(rawType)) return []
   const fallbackTitle = typeof c.title === 'string' && c.title.trim() ? c.title.trim() : conv.label && conv.label !== conv.id ? conv.label : undefined
   const items: StudioContentItem[] = []
   const pushItem = (item: Partial<StudioContentItem> & { id: string; contentType: StudioContentItemType }) => {
@@ -290,6 +303,21 @@ export function hydrateConversationContentItems(conv: Partial<UserConversationEn
   if (rawType === 'conversational-analytics' || rawType === 'ca' || c.caConversationId) {
     const caId = String(c.caConversationId || c.id || conv.objectId || '').trim()
     if (caId) pushItem({ id: caId, contentType: 'conversational-analytics', title: fallbackTitle, embedPath: c.embedPath, updatedAt: conv.updatedAt })
+    return items
+  }
+  if (rawType === 'lookml' || c.sessionId) {
+    const sid = String(c.sessionId || c.id || conv.objectId || '').trim()
+    if (sid) pushItem({ id: sid, sessionId: sid, projectId: typeof c.projectId === 'string' ? c.projectId : undefined, contentType: 'lookml', title: fallbackTitle, updatedAt: conv.updatedAt })
+    return items
+  }
+  if (rawType === 'tile' || rawType === 'script' || c.scriptId) {
+    const scId = String(c.scriptId || c.id || conv.objectId || '').trim()
+    if (scId) pushItem({ id: scId, scriptId: scId, contentType: 'script', title: fallbackTitle, updatedAt: conv.updatedAt })
+    return items
+  }
+  if (rawType === 'health' || rawType === 'health_check' || rawType === 'health-check' || c.reportId) {
+    const repId = String(c.reportId || c.id || conv.objectId || '').trim()
+    if (repId) pushItem({ id: repId, reportId: repId, contentType: 'report', title: fallbackTitle, embedPath: `/health-check/${encodeURIComponent(repId)}`, updatedAt: conv.updatedAt })
     return items
   }
 
@@ -424,6 +452,18 @@ export function resolveConversationRelatedContent(
         extraUserKeys.push(`user_${uid}_dashboard_${itemId}`)
         extraSharedKeys.push(`obj_dashboard_${itemId}`)
         extraItems.push(`Content Studio artifact (obj_dashboard_${itemId})`)
+      } else if (item.contentType === 'lookml') {
+        extraUserKeys.push(`user_${uid}_lookml_${itemId}`)
+        extraSharedKeys.push(`obj_lookml_${itemId}`)
+        extraItems.push(`LookML session artifact (obj_lookml_${itemId})`)
+      } else if (item.contentType === 'script') {
+        extraUserKeys.push(`user_${uid}_script_${itemId}`, `user_${uid}_tile_${itemId}`)
+        extraSharedKeys.push(`obj_script_${itemId}`, `obj_schedule_${itemId}`)
+        extraItems.push(`Shared script artifact (obj_script_${itemId})`, `Script schedule (obj_schedule_${itemId})`)
+      } else if (item.contentType === 'report') {
+        extraUserKeys.push(`user_${uid}_health_check_${itemId}`, `user_${uid}_health_${itemId}`)
+        extraSharedKeys.push(`obj_health_${itemId}`, `obj_health_check_${itemId}`)
+        extraItems.push(`Health Check report artifact (obj_health_${itemId})`)
       }
     }
 
@@ -553,6 +593,23 @@ function parseArtifactValue<T = unknown>(raw: unknown): T {
   } catch {
     return raw as unknown as T
   }
+}
+
+function prunePersistedContentItem(raw: StudioContentItem): StudioContentItem {
+  const { rawCode: _rawCode, ...compact } = normalizeStudioContentItem(raw)
+  return compact
+}
+
+function prunePersistedMessages(messages?: PersistedChatTurn[]): PersistedChatTurn[] | undefined {
+  if (!Array.isArray(messages)) return undefined
+  return messages.map((m) => ({
+    role: m.role,
+    text: m.text,
+    ...(m.interactionId ? { interactionId: m.interactionId } : {}),
+    ...(m.dashboardId ? { dashboardId: m.dashboardId } : {}),
+    ...(m.widgetCount !== undefined ? { widgetCount: m.widgetCount } : {}),
+    ...(m.thinkingDurationSec !== undefined ? { thinkingDurationSec: m.thinkingDurationSec } : {}),
+  }))
 }
 
 function normalizeConversationsArray(raw: unknown): UserConversationEntry[] {
@@ -1097,6 +1154,7 @@ export class ArtifactService {
     if (!mergedContentItems && prev?.contentItems?.length) {
       mergedContentItems = prev.contentItems
     }
+    const mergedMessages = prunePersistedMessages(entry.messages ?? prev?.messages)
     const merged: UserConversationEntry = {
       ...prev,
       ...entry,
@@ -1104,11 +1162,12 @@ export class ArtifactService {
         ? { content: { ...prev?.content, ...entry.content } }
         : {}),
       ...(mergedContentItems
-        ? { contentItems: mergedContentItems.map((it) => normalizeStudioContentItem(it)) }
+        ? { contentItems: mergedContentItems.map((it) => prunePersistedContentItem(it)) }
         : {}),
-      ...(entry.activeContentTabKey || prev?.activeContentTabKey
-        ? { activeContentTabKey: entry.activeContentTabKey || prev?.activeContentTabKey }
+      ...(entry.activeContentTabKey !== undefined || prev?.activeContentTabKey
+        ? { activeContentTabKey: entry.activeContentTabKey ?? prev?.activeContentTabKey }
         : {}),
+      ...(mergedMessages !== undefined ? { messages: mergedMessages } : {}),
       id: cleanId,
       type: entry.type || prev?.type || 'app',
       label: String(entry.label || prev?.label || (entry as { title?: string }).title || cleanId),
@@ -1638,8 +1697,10 @@ export async function saveNativeContentArtifact(
     lastInteractionId: nextStudio?.lastInteractionId,
     environmentId: nextStudio?.environmentId,
   }
+  const { messages: _messages, ...lightStudio } = merged.studio || {}
   const objPayload = {
     ...merged,
+    studio: merged.studio ? lightStudio : undefined,
     type: 'dashboard',
   }
 

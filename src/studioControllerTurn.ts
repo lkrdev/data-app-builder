@@ -35,8 +35,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     resolvedUseCaseByIdRef, parsedRoute, setSelectedUseCase, explicitUseCaseRef,
     allowedUseCases, setRightPaneCollapsed, triggerSilentOAuthRefresh, resetOAuthOnUnauthorized,
     sharedEnvIdRef, syncSharedEnvironmentId,
-    sessionsByMode, sessionsByModeRef, setSessionsByMode,
-    messagesByModeRef, activeModeRef, setAgentSession, setMessages,
+    agentSession, agentSessionRef, messages, messagesRef, activeModeRef, setAgentSession, setMessages,
     busyStatus, setBusyStatus,
   } = auth
   const {
@@ -45,8 +44,8 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     selectedExplores, setSelectedExplores, mentionedItems, setMentionedItems,
     selectedFolderId, schemaMarkdown, setSchemaMarkdown,
     activeMode, isLookmlMode, isHealthCheckMode, builderMode,
-    agentSession, messages, activeObjectId, setActiveObjectId,
-    conversations, refreshCatalog,
+    setActiveObjectId,
+    conversations, setConversations,
   } = meta
   const {
     caConversation, isCaMode,
@@ -54,13 +53,13 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     lookmlBundle, setLookmlBundle, lastLookmlIdRef,
     publishedApp, setPublishedApp, lastPublishedIdRef,
     nativeContent, setNativeContent, lastNativeIdRef,
-    contentItems, upsertContentItem, setEmbedNonce,
-    healthReport, scriptId, scriptCode, setScriptCode, filtersJson,
+    contentItems, contentItemsRef, upsertContentItem, setEmbedNonce,
+    healthReport, scriptCode, setScriptCode, filtersJson,
     publishedTileDash, loadedScript,
     currentAppCode, setCurrentAppCode,
     activeViewerDocument, setActiveViewerDocument,
     prompt, setPrompt, pastedImages, setPastedImages,
-    activeConversationId, setActiveConversationId,
+    activeConversationId, activeConversationIdRef, setActiveConversationId,
     persistConversationAndLabel,
     handleRunPython, handleSaveScript,
     handleRunHealthCheck, handleRunConversationalAnalytics,
@@ -105,7 +104,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       if (!normalizedPath) return ''
       const displayPath = `/${normalizedPath}`
       if (opts?.openModal) setActiveSandboxMarkdownModalPath(displayPath)
-      const activeEnv = sessionsByModeRef.current[activeModeRef.current]?.environmentId
+      const activeEnv = agentSessionRef.current.environmentId
       const envId = normalizeEnvironmentId(sharedEnvIdRef.current) || normalizeEnvironmentId(activeEnv) || sharedEnvIdRef.current || activeEnv || 'mock_env_1'
       const cacheKey = `${envId}:${normalizedPath}`
       const cached = sandboxMarkdownCacheRef.current[cacheKey] ?? sandboxMarkdownCacheRef.current[normalizedPath] ?? sandboxMarkdownCacheRef.current[displayPath]
@@ -138,7 +137,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       inFlightSandboxFilesRef.current[cacheKey] = reqPromise
       return reqPromise
     },
-    [activeModeRef, apiKey, authMode, clientId, extensionSDK, oauthToken, projectId, sessionsByModeRef, sharedEnvIdRef, triggerSilentOAuthRefresh]
+    [agentSessionRef, apiKey, authMode, clientId, extensionSDK, oauthToken, projectId, sharedEnvIdRef, triggerSilentOAuthRefresh]
   )
 
   const openViewerDocument = useCallback(
@@ -169,14 +168,14 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     [loadSandboxMarkdownFile, setActiveViewerDocument, setRightPaneCollapsed]
   )
 
-  const wakeContextRef = useRef({ sessionsByMode, selectedExplores, schemaMarkdown, currentAppCode })
-  wakeContextRef.current = { sessionsByMode, selectedExplores, schemaMarkdown, currentAppCode }
+  const wakeContextRef = useRef({ agentSession, selectedExplores, schemaMarkdown, currentAppCode })
+  wakeContextRef.current = { agentSession, selectedExplores, schemaMarkdown, currentAppCode }
 
   const handleWakeModeEnv = useCallback(
     async (modeToWake: StudioMode = activeModeRef.current, forceFresh = false) => {
       try {
         const ctx = wakeContextRef.current
-        const existingSession = forceFresh ? { toolType: modeToWake } : ctx.sessionsByMode[modeToWake]
+        const existingSession: AgentSession = forceFresh ? { toolType: modeToWake } : ctx.agentSession
         const res = await prewarmOrWakeAntigravityEnvironment({
           sdk: core40SDK,
           userId: userIdRef.current || userId,
@@ -193,23 +192,26 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           forceFresh,
           onEnvironmentUpdated: syncSharedEnvironmentId,
         })
-        setSessionsByMode((prev) => {
-          const nextEnvId = sharedEnvIdRef.current || res.session.environmentId
-          const cur = prev[modeToWake]
-          if (
-            !forceFresh && cur && cur.environmentId === nextEnvId &&
-            cur.lastInteractionId === res.session.lastInteractionId &&
-            cur.toolType === res.session.toolType
-          ) {
-            return prev
-          }
-          const updated = { ...prev, [modeToWake]: { ...res.session, environmentId: nextEnvId } }
-          sessionsByModeRef.current = updated
-          return updated
-        })
+        const nextEnvId = sharedEnvIdRef.current || res.session.environmentId
+        const cur = agentSessionRef.current
+        if (
+          forceFresh ||
+          cur.environmentId !== nextEnvId ||
+          (!cur.lastInteractionId && res.session.lastInteractionId)
+        ) {
+          setAgentSession(
+            {
+              ...cur,
+              ...res.session,
+              lastInteractionId: forceFresh ? res.session.lastInteractionId : cur.lastInteractionId || res.session.lastInteractionId,
+              environmentId: nextEnvId,
+            },
+            modeToWake
+          )
+        }
       } catch { /* ignore */ }
     },
-    [activeModeRef, apiKey, authMode, clientId, core40SDK, extensionSDK, maxTotalTokens, oauthToken, projectId, selectedModel, sessionsByModeRef, setSessionsByMode, sharedEnvIdRef, syncSharedEnvironmentId, userId, userIdRef]
+    [activeModeRef, agentSessionRef, apiKey, authMode, clientId, core40SDK, extensionSDK, maxTotalTokens, oauthToken, projectId, selectedModel, setAgentSession, sharedEnvIdRef, syncSharedEnvironmentId, userId, userIdRef]
   )
 
   useEffect(() => {
@@ -300,19 +302,11 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       handleStopTurn()
       sharedEnvIdRef.current = ''
       syncSharedEnvironmentId('')
-      const cleared: Record<StudioMode, AgentSession> = {
-        app: { toolType: 'app', environmentId: '' },
-        dashboard: { toolType: 'dashboard', environmentId: '' },
-        lookml: { toolType: 'lookml', environmentId: '' },
-        health: { toolType: 'health', environmentId: '' },
-        tile: { toolType: 'tile', environmentId: '' },
-      }
-      sessionsByModeRef.current = cleared
-      setSessionsByMode(cleared)
+      setAgentSession({ toolType: activeModeRef.current, environmentId: '' })
       environmentStatusRef.current = nextStatus
       setEnvironmentStatus(nextStatus)
     },
-    [handleStopTurn, sessionsByModeRef, setSessionsByMode, sharedEnvIdRef, syncSharedEnvironmentId]
+    [activeModeRef, handleStopTurn, setAgentSession, sharedEnvIdRef, syncSharedEnvironmentId]
   )
 
   const handleResetEnvironment = useCallback(async () => {
@@ -365,7 +359,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     }
     const authCfg: AntigravityAuth = { mode: authMode, oauthToken, clientId, projectId, apiKey }
     const effectivePrompt = text || 'See the attached screenshot.'
-    const currentMessages = messagesByModeRef.current[activeModeRef.current] || messages
+    const currentMessages = messagesRef.current
     const isFirstTurn = currentMessages.filter((m) => m.role === 'user').length === 0
     const userMsg: ChatMessage = {
       role: 'user', text: effectivePrompt, images: attachedImages.map((img) => img.dataUrl),
@@ -383,33 +377,48 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     const turnTargetUseCase: StudioUseCase =
       explicitUseCase !== 'auto' ? explicitUseCase : (classifiedPromptUseCase || 'auto')
 
+    const hasSavedRouteConv = Boolean(
+      parsedRoute.conversationId && conversations.some((c) => c.id === parsedRoute.conversationId)
+    )
+    const convId =
+      isFirstTurn && !hasSavedRouteConv && (!parsedRoute.conversationId || location.pathname === '/')
+        ? `conv_${Date.now()}`
+        : activeConversationIdRef.current || parsedRoute.conversationId || `conv_${Date.now()}`
+
+    setActiveConversationId(convId)
+    const targetConvRoute = `/c/${encodeURIComponent(convId)}`
+    if (location.pathname !== targetConvRoute) history.replace(targetConvRoute)
+    if (isFirstTurn && !conversations.some((c) => c.id === convId)) {
+      const nowIso = new Date().toISOString()
+      const optimisticEntry = {
+        id: convId,
+        type: turnTargetUseCase !== 'auto' ? turnTargetUseCase : allowedUseCases[0] || 'app',
+        use_case: turnTargetUseCase,
+        label: sanitizeConversationLabel('', effectivePrompt),
+        explores: selectedExplores,
+        messages: [{ role: 'user' as const, text: effectivePrompt }],
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      }
+      setConversations((prev) => [optimisticEntry, ...prev.filter((c) => c.id !== convId)], {
+        optimisticEntry,
+      })
+    }
+
     const caRouteBase = { prompt: effectivePrompt, explicitUseCase, isCaMode, isFirstTurn, allowedModes: allowedUseCases }
     if (!isConversationalNoOpPrompt(effectivePrompt) && (turnTargetUseCase === 'health-check' || (explicitUseCase !== 'auto' && isHealthCheckMode))) {
       setSelectedUseCase('health-check')
-      await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages)
-      await refreshCatalog()
+      await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages, convId)
       return
     }
 
     if (shouldRouteToIsolatedCaSubagent(caRouteBase)) {
       setSelectedUseCase('conversational-analytics')
-      await handleRunConversationalAnalytics(effectivePrompt, messagesWithUser)
+      await handleRunConversationalAnalytics(effectivePrompt, messagesWithUser, undefined, convId)
       return
     }
 
-    const currentSession = sessionsByModeRef.current[activeModeRef.current] || agentSession
-    const activeConvId =
-      parsedRoute.objectId || activeObjectId || currentSession.conversationId ||
-      (activeMode === 'app'
-        ? publishedApp?.dashboardId
-        : activeMode === 'dashboard'
-        ? nativeContent?.id
-        : activeMode === 'lookml'
-        ? lookmlBundle?.id
-        : activeMode === 'tile'
-        ? scriptId
-        : healthReport?.id) ||
-      'current'
+    const currentSession = agentSessionRef.current
 
     const abortController = new AbortController()
     turnAbortControllerRef.current = abortController
@@ -423,7 +432,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       let turnPromptWithContext = effectivePrompt
 
       if (activeMentions.length > 0) {
-        for (const m of activeMentions) {
+        activeMentions.forEach((m) => {
           if (m.type === 'explore' || m.type === 'dashboard' || m.type === 'look') {
             const ct: StudioContentItemType = m.type === 'explore' ? 'explore' : m.type === 'look' ? 'look' : m.id.includes('::') ? 'lookml_dashboard' : 'dashboard'
             upsertContentItem({
@@ -432,7 +441,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
               ...(ct === 'dashboard' ? { dashboardId: m.id } : {}), ...(ct === 'lookml_dashboard' ? { lookmlDashboardId: m.id } : {}),
             })
           }
-        }
+        })
         setBusyStatus('Hydrating referenced Looker @-mention context...')
         const hydrated = await hydrateMentionedContext({
           sdk: core40SDK, mentions: activeMentions, conversations, selectedExplores, useCase: turnTargetUseCase,
@@ -480,7 +489,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       const result = await runAntigravityTurn({
         sdk: core40SDK, extensionSDK, userId,
         environmentId: sharedEnvIdRef.current || currentSession.environmentId,
-        conversationId: activeConvId, onEnvironmentUpdated: syncSharedEnvironmentId,
+        conversationId: convId, onEnvironmentUpdated: syncSharedEnvironmentId,
         auth: authCfg, session: currentSession,
         model: selectedModel, thinkingLevel, maxTotalTokens,
         mode: effectiveBuilderMode, useCase: explicitUseCase, allowedModes: allowedUseCases,
@@ -502,7 +511,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           setLiveActivitySteps(steps)
         },
         onInteractionCreated: (id) => {
-          latestTurnInteractionRef.current = { convId: activeConvId, id }
+          latestTurnInteractionRef.current = { convId, id }
         },
         signal: abortController.signal, onStatus: setBusyStatus,
       })
@@ -511,14 +520,14 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         explicitUseCase !== 'auto'
           ? explicitUseCase
           : result.resolvedUseCase || extractResolvedUseCase(result.assistantText, effectivePrompt, allowedUseCases)
+      resolvedUseCaseByIdRef.current[convId] = resolvedUseCase
       setSelectedUseCase(resolvedUseCase)
       if (shouldRouteToIsolatedCaSubagent({ ...caRouteBase, assistantOutput: result.rawOutputText ?? result.assistantText })) {
-        await handleRunConversationalAnalytics(effectivePrompt, messagesWithUser, result.rawOutputText ?? result.assistantText)
+        await handleRunConversationalAnalytics(effectivePrompt, messagesWithUser, result.rawOutputText ?? result.assistantText, convId)
         return
       }
       const resolvedMode: StudioMode = studioUseCaseToMode(resolvedUseCase)
 
-      let convId = activeObjectId || activeConversationId || result.session.lastInteractionId || 'conv_1'
       let convType: string = resolvedUseCase
       let convTitle = ''
       let convExplores = turnExplores
@@ -539,7 +548,6 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         ]
         setLookmlBundle(result.lookmlBundle)
         if (result.lookmlBundle.project_id) setLookmlProjectId(result.lookmlBundle.project_id)
-        convId = result.lookmlBundle.id || 'lookml_1'
         convType = 'lookml'
         convTitle = result.lookmlBundle.title
         try {
@@ -547,10 +555,16 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             sdk: core40SDK, extensionSDK, userId, bundle: result.lookmlBundle,
             studio: {
               explores: turnExplores, lastInteractionId: result.session.lastInteractionId,
-              environmentId: result.session.environmentId, messages: finalMsgs,
+              environmentId: result.session.environmentId,
             },
           })
-          convId = saved.id
+          const isExistingLookml = contentItemsRef.current.some((it) => it.key === `lookml:${saved.id}`)
+          upsertContentItem({
+            id: saved.id, sessionId: saved.id, projectId: result.lookmlBundle.project_id,
+            contentType: 'lookml', title: result.lookmlBundle.title || `LookML (${result.lookmlBundle.project_id || saved.id})`,
+            embedPath: `/lookml/${encodeURIComponent(saved.id)}`, updatedAt: new Date().toISOString(),
+            source: isExistingLookml ? 'modified' : 'created', createdInConversation: true, hidden: false,
+          })
           resolvedUseCaseByIdRef.current[saved.id] = 'lookml'
           convContent = {
             sessionId: saved.id, projectId: result.lookmlBundle.project_id,
@@ -558,12 +572,9 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           }
           lastLookmlIdRef.current = saved.id
           setActiveObjectId(saved.id)
-          await refreshCatalog()
-          const targetRoute = `/c/${encodeURIComponent(saved.id)}`
-          if (location.pathname !== targetRoute) history.replace(targetRoute)
         } catch { /* ignore */ }
-        setAgentSession({ ...result.session, explores: turnExplores }, 'lookml')
-        setMessages(finalMsgs, 'lookml')
+        setAgentSession({ ...result.session, conversationId: convId, explores: turnExplores }, 'lookml')
+        setMessages(finalMsgs)
       } else if (resolvedUseCase === 'tile') {
         const isExplicitScriptRequest =
           explicitUseCase === 'tile' || loadedScript || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
@@ -582,15 +593,14 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             activitySteps: result.activitySteps, thinkingDurationSec: result.thinkingDurationSec,
           },
         ]
-        setAgentSession({ ...result.session, explores: turnExplores }, 'tile')
-        setMessages(finalMsgs, 'tile')
+        setAgentSession({ ...result.session, conversationId: convId, explores: turnExplores }, 'tile')
+        setMessages(finalMsgs)
         if (isExplicitScriptRequest && (extractedPy || explicitUseCase === 'tile' || loadedScript)) {
           const nextCode = extractedPy || scriptCode
           if (extractedPy) setScriptCode(extractedPy)
           await handleRunPython(nextCode, filtersJson)
           try {
             const saved = await handleSaveScript(nextCode, finalMsgs, publishedTileDash)
-            convId = `conv_tile_${saved.id}`
             convType = 'tile'
             convTitle = saved.title
             convContent = { scriptId: saved.id, dashboardId: saved.dashboardId, elementId: saved.elementId }
@@ -611,9 +621,9 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         const effectiveExplores = turnExplores.length > 0 ? turnExplores : bundleExplores
         convExplores = effectiveExplores
         if (turnExplores.length === 0 && bundleExplores.length > 0) setSelectedExplores(bundleExplores)
-        setAgentSession({ ...result.session, explores: effectiveExplores }, resolvedMode)
+        setAgentSession({ ...result.session, conversationId: convId, explores: effectiveExplores }, resolvedMode)
 
-        if ((effectiveBuilderMode === 'dashboard' || resolvedUseCase === 'dashboard') && result.nativeBundle) {
+        if (result.nativeBundle) {
           setBusyStatus('Indexing native Looker content in user catalog...')
           const prelimAssistantMsg: ChatMessage = {
             role: 'assistant', text: result.assistantText,
@@ -621,24 +631,21 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             widgetCount: result.nativeBundle.tile_count,
             activitySteps: result.activitySteps, thinkingDurationSec: result.thinkingDurationSec,
           }
+          const isExistingNative = contentItemsRef.current.some((it) => it.id === String(result.nativeBundle!.id))
           const savedNative = await saveNativeContentArtifact(
             core40SDK, extensionSDK, userId, result.nativeBundle, selectedFolderId, nativeContent,
             {
               explores: effectiveExplores, lastInteractionId: result.session.lastInteractionId,
-              environmentId: result.session.environmentId, messages: [...messagesWithUser, prelimAssistantMsg],
+              environmentId: result.session.environmentId,
             }
           )
           lastNativeIdRef.current = savedNative.id
           resolvedUseCaseByIdRef.current[savedNative.id] = 'dashboard'
-          setNativeContent(savedNative, { source: 'created', createdInConversation: true })
+          setNativeContent(savedNative, { source: isExistingNative ? 'modified' : 'created', createdInConversation: true, hidden: false })
           setEmbedNonce((n) => n + 1)
           setActiveObjectId(savedNative.id)
-          const targetRoute = `/c/${encodeURIComponent(savedNative.id)}`
-          if (location.pathname !== targetRoute) history.replace(targetRoute)
-          await refreshCatalog()
           finalMsgs = [...messagesWithUser, { ...prelimAssistantMsg, dashboardId: savedNative.id }]
-          setMessages(finalMsgs, 'dashboard')
-          convId = savedNative.id
+          setMessages(finalMsgs)
           convType = 'dashboard'
           convTitle = savedNative.title
           convContent = {
@@ -657,14 +664,15 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             core40SDK, result.bundle, selectedFolderId, publishedApp,
             {
               explores: effectiveExplores, lastInteractionId: result.session.lastInteractionId,
-              environmentId: result.session.environmentId, messages: [...messagesWithUser, prelimAssistantMsg],
+              environmentId: result.session.environmentId,
             }
           )
           const appUseCaseType: ResolvedStudioUseCase =
             resolvedUseCase === 'data-investigator' ? 'data-investigator' : 'app'
+          const isExistingApp = contentItemsRef.current.some((it) => it.id === String(upserted.dashboardId))
           lastPublishedIdRef.current = upserted.dashboardId
           resolvedUseCaseByIdRef.current[upserted.dashboardId] = appUseCaseType
-          setPublishedApp(upserted, { source: 'created', createdInConversation: true })
+          setPublishedApp(upserted, { source: isExistingApp ? 'modified' : 'created', createdInConversation: true, hidden: false })
           setEmbedNonce((n) => n + 1)
           setActiveObjectId(upserted.dashboardId)
           setCurrentAppCode(result.bundle.raw_code)
@@ -680,16 +688,11 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
                 id: upserted.dashboardId, type: appUseCaseType, title: upserted.title,
                 explores: effectiveExplores, updatedAt: new Date().toISOString(), createdBy: userId,
                 dashboardId: upserted.dashboardId, extensionId: upserted.extensionId,
-                rawCode: result.bundle.raw_code, messages: finalMsgs,
               },
               getArtifactNamespace(extensionSDK)
             )
-            await refreshCatalog()
           } catch { /* ignore */ }
-          const targetRoute = `/c/${encodeURIComponent(upserted.dashboardId)}`
-          if (location.pathname !== targetRoute) history.replace(targetRoute)
-          setMessages(finalMsgs, 'app')
-          convId = upserted.dashboardId
+          setMessages(finalMsgs)
           convType = appUseCaseType
           convTitle = upserted.title
           convContent = {
@@ -706,10 +709,9 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
               activitySteps: result.activitySteps, thinkingDurationSec: result.thinkingDurationSec,
             },
           ]
-          setMessages(finalMsgs, resolvedMode)
+          setMessages(finalMsgs)
           if (explicitUseCase === 'auto' && resolvedMode !== activeMode && resolvedUseCase === 'health-check') {
-            await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages)
-            await refreshCatalog()
+            await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages, convId)
             return
           }
           if (effectiveBuilderMode === 'dashboard' && nativeContent) {
@@ -719,14 +721,11 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
               selectedFolderId, nativeContent,
               {
                 explores: effectiveExplores, lastInteractionId: result.session.lastInteractionId,
-                environmentId: result.session.environmentId, messages: finalMsgs,
+                environmentId: result.session.environmentId,
               }
             )
-            setNativeContent(updatedNative, { source: 'created', createdInConversation: true })
-            await refreshCatalog()
-            convId = updatedNative.id
+            setNativeContent(updatedNative, { source: 'modified', hidden: false })
             convType = 'dashboard'
-            convTitle = updatedNative.title
             convContent = {
               dashboardId: updatedNative.id, contentType: updatedNative.contentType, embedPath: updatedNative.embedPath,
             }
@@ -734,13 +733,11 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             setPublishedApp(
               await saveDashboardStudioMetadata(core40SDK, publishedApp, {
                 explores: effectiveExplores, lastInteractionId: result.session.lastInteractionId,
-                environmentId: result.session.environmentId, messages: finalMsgs,
+                environmentId: result.session.environmentId,
               }),
-              { source: 'created', createdInConversation: true }
+              { source: 'modified', hidden: false }
             )
-            convId = publishedApp.dashboardId
             convType = 'app'
-            convTitle = publishedApp.title
             convContent = {
               dashboardId: publishedApp.dashboardId, appArtifactId: `obj_app_${publishedApp.dashboardId}`,
             }
@@ -748,7 +745,6 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         }
       }
 
-      if (convId && resolvedUseCase) resolvedUseCaseByIdRef.current[convId] = resolvedUseCase
       setActiveConversationId(convId)
       const nextConvRoute = `/c/${encodeURIComponent(convId)}`
       if (location.pathname !== nextConvRoute) history.replace(nextConvRoute)
