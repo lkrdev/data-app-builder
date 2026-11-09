@@ -467,7 +467,11 @@ async function eval07AgenticLookmlOnboarding() {
       }),
       'utf8'
     )
-    writeFileSync(path.join(workDir, 'data/run_eval07/summary.md'), '### LookML Onboarding Summary\n- Layered base + refinement views validated with 0 errors.\n', 'utf8')
+    writeFileSync(
+      path.join(workDir, 'data/run_eval07/summary.md'),
+      '### LookML Onboarding Summary\n- Layered base + refinement views validated with 0 errors.\n- [Open ecommerce_core in Looker IDE](/projects/ecommerce_core/files)\n',
+      'utf8'
+    )
 
     const bundleOut = execFileSync('python3', [path.join(workDir, 'bootstrap_lookml.py'), 'bundle', path.join(workDir, 'data/run_eval07')], {
       env: { ...process.env, WORKSPACE_DIR: workDir, LOOKML_BASELINE_DIR: path.join(workDir, 'lookml_baseline') },
@@ -481,6 +485,26 @@ async function eval07AgenticLookmlOnboarding() {
     assert.equal(bundle.files.length, 1)
     assert.equal(bundle.files[0].path, 'views/refinements/+order_items.view.lkml')
     assert((bundle.files[0].diff || bundle.files[0].content).includes('measure: total_sale_price'))
+    const hasProjectLink = /\/projects\/[^/\s)]+/i.test(bundle.summary_markdown || '')
+    assert(hasProjectLink, 'Expected /projects/<project_name>/files link in onboarding summary')
+
+    const onboardingSkillMd = readFileSync(path.join(repoRoot, 'skills/looker-project-onboarding/SKILL.md'), 'utf8')
+    const lookmlToolTsx = readFileSync(path.join(repoRoot, 'src/lookmlTool.tsx'), 'utf8')
+    const zeroSdkDotGlobals =
+      !/\bsdk\.(?:all_connections|all_lookml_models|connection_schemas|connection_tables)\b/.test(onboardingSkillMd) &&
+      !/\bsdk\.(?:all_connections|all_lookml_models|connection_schemas|connection_tables)\b/.test(lookmlToolTsx)
+    assert(zeroSdkDotGlobals, 'Onboarding skill and lookmlTool must use bare Monty globals without sdk.*')
+    const requiresProjectAndDashLinks =
+      onboardingSkillMd.includes('/projects/<project_name>/files') &&
+      onboardingSkillMd.includes('/dashboards/<id>') &&
+      antigravityPromptsTs.includes('/dashboards/<id>') &&
+      lookmlToolTsx.includes('lookml-open-ide-btn')
+    assert(requiresProjectAndDashLinks, 'Onboarding & dashboard skills and LookmlPreviewPane must enforce IDE/dashboard links')
+    const hasTurn1FastPath =
+      lookerApiTs.includes('export async function discoverAccessibleConnections(') &&
+      antigravityTs.includes('isLookmlOnboardingIntake') &&
+      antigravityTs.includes("generation_config: { thinking_level: 'low'")
+    assert(hasTurn1FastPath, 'Turn-1 client connection prefetch and <4s stateless low-thinking fast-path must be present')
 
     // Verify sitecustomize.py cache key parity
     const pyKey = execFileSync(
@@ -505,11 +529,16 @@ print(k)`,
     assert.equal(pyKey, nodeKey, 'Python sitecustomize.py SHA-256 cache_key must match canonical JSON SHA-256')
 
     return {
-      routing: true,
-      toolBudget: true,
-      outputRubric: bundle.validation.passed && bundle.files.length === 1 && bundle.queries[0].parity_status === 'matched',
-      safety: pyKey === nodeKey,
-      detail: `LOOKML_BUNDLE verified (project=${bundle.project_id}, diff files=${bundle.files.length}, parity=matched, sitecustomize SHA-256=${pyKey.slice(0, 12)}...)`,
+      routing: hasTurn1FastPath && zeroSdkDotGlobals,
+      toolBudget: hasTurn1FastPath,
+      outputRubric:
+        bundle.validation.passed &&
+        bundle.files.length === 1 &&
+        bundle.queries[0].parity_status === 'matched' &&
+        hasProjectLink &&
+        requiresProjectAndDashLinks,
+      safety: pyKey === nodeKey && zeroSdkDotGlobals,
+      detail: `LOOKML_BUNDLE + Turn-1 <4s fast-path verified (project=${bundle.project_id}, hasProjectLink=${hasProjectLink}, diff files=${bundle.files.length}, parity=matched, sitecustomize SHA-256=${pyKey.slice(0, 12)}...)`,
     }
   } finally {
     rmSync(workDir, { recursive: true, force: true })

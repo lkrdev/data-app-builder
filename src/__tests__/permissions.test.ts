@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
-import type React from 'react'
+import React from 'react'
 
 import type { FetchCustomParameters } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
+import { renderToStaticMarkup } from 'react-dom/server'
 
 import {
   AGENTS_MD, AntigravityActivityStep, ANTIGRAVITY_ALLOWED_MODELS, APP_BUILDER_SYSTEM_PROMPT, authenticateGoogleOAuth,
@@ -14,14 +15,15 @@ import {
   computeIsAuthenticated, computeLkrExtensionCacheKey, CONCURRENT_POLL_SCHEDULE_MS,
   CONVERSATION_LABEL_REQUEST_TAG, DASHBOARD_CODEMODE_PREAMBLE_PY, DATA_APP_GUIDE_MD, DATA_INVESTIGATOR_GUIDE_MD,
   DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_LEFT_PANE_WIDTH, DEFAULT_MAX_TOTAL_TOKENS, DEFAULT_THINKING_LEVEL,
-  discoverStarterContentSummaries, discoverStarterExploreContext, ensureCodeModeLoaded,
+  discoverAccessibleConnections, discoverStarterContentSummaries, discoverStarterExploreContext, ensureCodeModeLoaded,
   executeLkrExtensionToolRequest, EXPLICIT_SCRIPT_CREATION_RE, extractInteractionActivitySteps,
   extractInteractionOutputText, extractLkrExtensionToolRequests, extractSlashSkillIds,
   extractNativeContentFromInteraction, extractNonThoughtText, extractSkillNameFromPath, extractThoughtText, extractWrittenMarkdownPathFromCode,
-  fetchEnvironmentFile, formatContentInventoryMarkdown, formatFriendlyLookerActivityLabel,
+  fetchEnvironmentFile, formatAccessibleConnectionsMarkdown, formatContentInventoryMarkdown, formatFriendlyLookerActivityLabel,
   formatThinkingTraceMarkdown, generateConversationLabel, generateDynamicStarterPrompts,
   getCachedStarterPrompts, getInitialStoredOAuthToken, getSharedEnvExploreSchemas,
-  isEnvironmentNotFoundError, isHostOAuthWedged, isLookerInstanceMetadataQuery, isTextAttachmentFile, KDA_SKILL_MD, KDA_TOOLKIT_PY,
+  isConnectionSchemaDiscoveryPrompt, isEnvironmentNotFoundError, isHostOAuthWedged, isLookerInstanceMetadataQuery,
+  isNewProjectOnboardingIntakePrompt, isTextAttachmentFile, KDA_SKILL_MD, KDA_TOOLKIT_PY,
   listAvailableAntigravityModels, LKR_CLI_BRIDGE_TOOL, LKR_CLI_SITECUSTOMIZE_PY, LKR_DEV_CLI_SPEC,
   LKR_DEV_CLI_VERSION, LkrCodeMode, loadStoredLeftPaneWidth, loadStoredOAuthSession,
   loadStoredRightPaneCollapsed, loadStoredThinkingLevel, loginWithGoogleOAuth,
@@ -76,6 +78,7 @@ import {
   STUDIO_FOLDER_STORAGE_KEY, STUDIO_MODES, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
   StudioContentItem, SWR_DEDUPED_METHODS, upsertStudioContentItem, UserArtifactIndexItem, userStudioConfigArtifactKey,
 } from '../lookerApi'
+import { LookmlPreviewPane } from '../lookmlTool'
 
 interface MockInteractionPostBody {
   model?: string
@@ -5933,5 +5936,270 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     for (const checkKey of ['noMetricDropdownOrActiveBadge', 'hasPopClickableKpis', 'hasCompareAgainstDualAxis', 'hasTrendMenuAndYAxis', 'hasDecoupledPeriodAndWindow', 'hasMultiSelectDimensions', 'hasTitlelessPopVarianceGrid']) {
       expect(evalNewProjectDisk).toContain(checkKey)
     }
+  })
+
+  test('62. Issue #157: pre-fetches accessible connections via discoverAccessibleConnections, runs Turn-1 project intake toollessly at thinkingLevel="low" with zero blocking container boot, uses bare Monty globals, renders lookml-open-ide-btn, and enforces IDE/dashboard links', async () => {
+    clearLookerMetadataCache()
+
+    // 1. discoverAccessibleConnections: /connections caching + non-admin /lookml_models fallback
+    let adminConnHits = 0
+    const adminSdk = asSdk({
+      authSession: {
+        transport: {
+          rawRequest: async (_m: string, p: string) => {
+            if (p === '/connections') {
+              adminConnHits += 1
+              return {
+                statusCode: 200,
+                ok: true,
+                body: [
+                  { name: 'bq_warehouse', dialect_name: 'bigquery_standard_sql', database: 'corp_dw', schema: 'analytics' },
+                ],
+              }
+            }
+            return { statusCode: 200, ok: true, body: [] }
+          },
+        },
+      },
+    })
+    const [conns1, conns2] = await Promise.all([
+      discoverAccessibleConnections(adminSdk),
+      discoverAccessibleConnections(adminSdk),
+    ])
+    expect(adminConnHits).toBe(1)
+    expect(conns1).toEqual([
+      { name: 'bq_warehouse', dialect_name: 'bigquery_standard_sql', database: 'corp_dw', schema: 'analytics', source: 'connections' },
+    ])
+    expect(conns2).toEqual(conns1)
+    expect(formatAccessibleConnectionsMarkdown(conns1)).toContain(
+      '- `bq_warehouse` (bigquery_standard_sql · corp_dw · analytics)'
+    )
+
+    let fallbackHits = 0
+    const nonAdminSdk = asSdk({
+      authSession: {
+        transport: {
+          rawRequest: async (_m: string, p: string) => {
+            fallbackHits += 1
+            if (p === '/connections') return { statusCode: 403, ok: false, body: { message: 'Forbidden' } }
+            return {
+              statusCode: 200,
+              ok: true,
+              body: [{ name: 'commerce_model', project_name: 'commerce_proj', allowed_db_connection_names: ['sf_prod'] }],
+            }
+          },
+        },
+      },
+    })
+    const fallbackConns = await discoverAccessibleConnections(nonAdminSdk)
+    expect(fallbackHits).toBe(2)
+    expect(fallbackConns).toEqual([
+      { name: 'sf_prod', models: ['commerce_proj'], source: 'lookml_models' },
+    ])
+    await discoverAccessibleConnections(nonAdminSdk)
+    expect(fallbackHits).toBe(2)
+
+    // 2. Prompt classifiers, bare Monty globals (zero sdk.*), skill byte-parity, and required link instructions
+    expect(isNewProjectOnboardingIntakePrompt('I need to create a new project')).toBe(true)
+    expect(isNewProjectOnboardingIntakePrompt('create a new project')).toBe(true)
+    expect(
+      isNewProjectOnboardingIntakePrompt(
+        'Create a new project called sales_core on connection bq_warehouse using schema analytics'
+      )
+    ).toBe(false)
+    expect(
+      isConnectionSchemaDiscoveryPrompt(
+        "Let's call it sales_core on connection bq_warehouse. What schemas do you have access to on that connection?"
+      )
+    ).toBe(true)
+    expect(isConnectionSchemaDiscoveryPrompt('Use the analytics dataset.')).toBe(false)
+
+    const repoRoot = path.resolve(__dirname, '../..')
+    expect(readFileSync(path.join(repoRoot, 'skills/looker-project-onboarding/SKILL.md'), 'utf8')).toBe(
+      LOOKER_PROJECT_ONBOARDING_SKILL_MD
+    )
+    expect(readFileSync(path.join(repoRoot, 'skills/looker-dashboard/SKILL.md'), 'utf8')).toBe(
+      LOOKER_DASHBOARD_SKILL_MD
+    )
+    expect(readFileSync(path.join(repoRoot, '.agents/skills/looker-dashboard/SKILL.md'), 'utf8')).toBe(
+      LOOKER_DASHBOARD_SKILL_MD
+    )
+
+    const guideWithConns = buildLookmlSystemGuide({
+      selectedExplores: [],
+      userPrompt: 'I need to create a new project',
+      availableConnections: conns1,
+    })
+    expect(guideWithConns).toContain('### Available Looker Connections')
+    expect(guideWithConns).toContain('`bq_warehouse` (bigquery_standard_sql · corp_dw · analytics)')
+    expect(guideWithConns).toContain('[Open <project_name> in Looker IDE](/projects/<project_name>/files)')
+    expect(guideWithConns).toContain('[Open <Dashboard Title>](/dashboards/<id>)')
+    for (const doc of [LOOKER_PROJECT_ONBOARDING_SKILL_MD, guideWithConns]) {
+      expect(doc).toContain('all_connections')
+      expect(doc).toContain('all_lookml_models')
+      expect(doc).toContain('connection_schemas')
+      expect(doc).not.toMatch(/\bsdk\.(?:all_connections|all_lookml_models|connection_schemas|connection_tables)\b/)
+    }
+    expect(LOOKER_PROJECT_ONBOARDING_SKILL_MD).toContain('/projects/<project_name>/files')
+    expect(LOOKER_PROJECT_ONBOARDING_SKILL_MD).toContain('/dashboards/<id>')
+    expect(LOOKER_DASHBOARD_SKILL_MD).toContain('/dashboards/<id>')
+
+    // Verify LkrCodeMode Monty runtime strips accidental sdk.<method>(...) prefixes cleanly
+    const cmBareOut = JSON.parse(
+      await LkrCodeMode.runPythonCode({
+        code: 'c = sdk.all_connections(fields="name")\nreturn {"first": c[0]["name"]}',
+        sdk: adminSdk,
+      })
+    )
+    expect((cmBareOut.result || cmBareOut).first).toBe('bq_warehouse')
+
+    // 3. runAntigravityTurn fast-path on Turn-1 intake -> Turn-2 schema discovery -> Turn-3 LookML bundle + IDE link
+    const postedBodies: MockInteractionPostBody[] = []
+    const mockExt157 = {
+      serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+        const body = init?.body ? (JSON.parse(String(init.body)) as MockInteractionPostBody) : {}
+        postedBodies.push(body)
+        if (postedBodies.length === 1) {
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_157_t1',
+              status: 'completed',
+              output_text:
+                '<USE_CASE>lookml</USE_CASE>\nAvailable connection: `bq_warehouse`. Please provide project name and target schema.',
+            }),
+          }
+        }
+        if (postedBodies.length === 2) {
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_157_t2',
+              status: 'completed',
+              output_text: '<USE_CASE>lookml</USE_CASE>\nAccessible schemas on `bq_warehouse`: `analytics`, `finance`.',
+            }),
+          }
+        }
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            id: 'int_157_t3',
+            environment_id: 'env_157_warm',
+            status: 'completed',
+            steps: [
+              {
+                type: 'code_execution',
+                output:
+                  '<LOOKML_BUNDLE>{"id":"sales_core_1","title":"sales_core","project_id":"sales_core","model_name":"sales_core","files":[{"path":"sales_core.model.lkml","action":"created","content":"connection: \\"bq_warehouse\\"\\n"}]}</LOOKML_BUNDLE>',
+              },
+            ],
+            output_text: '<USE_CASE>lookml</USE_CASE>\nCreated Bronze views. Want me to profile the data?',
+          }),
+        }
+      },
+    }
+
+    const t1Res = await runAntigravityTurn({
+      sdk: adminSdk,
+      extensionSDK: mockExt157,
+      userId: '1',
+      auth: { mode: 'apikey', apiKey: 'key-157' },
+      session: {},
+      thinkingLevel: 'high',
+      useCase: 'auto',
+      toolMode: 'lookml',
+      selectedExplores: [],
+      schemaMarkdown: '',
+      userPrompt: 'I need to create a new project',
+      onStatus: () => {},
+    })
+    expect(postedBodies).toHaveLength(1)
+    expect(postedBodies[0].model).toBe(DEFAULT_ANTIGRAVITY_MODEL)
+    expect(postedBodies[0].store).toBe(false)
+    expect(postedBodies[0].background).toBe(false)
+    expect(postedBodies[0].tools).toEqual([])
+    expect(postedBodies[0].environment).toBeUndefined()
+    expect(postedBodies[0].generation_config).toEqual({ thinking_level: 'low', max_output_tokens: 2048 })
+    expect(postedBodies[0].input?.[0]?.text?.startsWith('[THINKING LEVEL: LOW')).toBe(true)
+    expect(postedBodies[0].input?.[0]?.text).toContain('`bq_warehouse` (bigquery_standard_sql · corp_dw · analytics)')
+    expect(t1Res.resolvedUseCase).toBe('lookml')
+    expect(t1Res.session.statelessTurn).toBe(true)
+
+    const t2Res = await runAntigravityTurn({
+      sdk: adminSdk,
+      extensionSDK: mockExt157,
+      userId: '1',
+      auth: { mode: 'apikey', apiKey: 'key-157' },
+      session: t1Res.session,
+      thinkingLevel: 'high',
+      useCase: 'auto',
+      toolMode: 'lookml',
+      selectedExplores: [],
+      schemaMarkdown: '',
+      priorMessages: [
+        { role: 'user', text: 'I need to create a new project' },
+        { role: 'assistant', text: t1Res.assistantText },
+      ],
+      userPrompt: "Let's call it sales_core on connection bq_warehouse. What schemas do you have access to?",
+      onStatus: () => {},
+    })
+    expect(postedBodies).toHaveLength(2)
+    expect(postedBodies[1].environment).toBeUndefined()
+    expect(postedBodies[1].previous_interaction_id).toBeUndefined()
+    expect(postedBodies[1].tools).toEqual([LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL])
+    expect(postedBodies[1].input?.[0]?.text?.startsWith('[THINKING LEVEL: LOW')).toBe(true)
+    expect(postedBodies[1].input?.[0]?.text).toContain('Prior conversation context:')
+
+    const t3Res = await runAntigravityTurn({
+      sdk: adminSdk,
+      extensionSDK: mockExt157,
+      userId: '1',
+      auth: { mode: 'apikey', apiKey: 'key-157' },
+      session: t2Res.session,
+      thinkingLevel: 'high',
+      useCase: 'auto',
+      toolMode: 'lookml',
+      selectedExplores: [],
+      schemaMarkdown: '',
+      priorMessages: [
+        { role: 'user', text: 'I need to create a new project' },
+        { role: 'assistant', text: t1Res.assistantText },
+        { role: 'user', text: "Let's call it sales_core on connection bq_warehouse. What schemas do you have access to?" },
+        { role: 'assistant', text: t2Res.assistantText },
+      ],
+      userPrompt: 'Use the analytics schema.',
+      onStatus: () => {},
+    })
+    expect(postedBodies).toHaveLength(3)
+    expect(postedBodies[2].environment).toEqual(expect.objectContaining({ type: 'remote' }))
+    expect(t3Res.assistantText).toContain('[Open sales_core in Looker IDE](/projects/sales_core/files)')
+
+    // 4. LookmlPreviewPane renders data-testid="lookml-open-ide-btn" when bundle.project_id is present
+    const openedIdeUrls: Array<{ url: string; target?: string }> = []
+    const withProjectHtml = renderToStaticMarkup(
+      React.createElement(LookmlPreviewPane, {
+        bundle: {
+          id: 'b1',
+          title: 'Sales Core',
+          project_id: 'sales_core',
+          files: [{ path: 'sales_core.model.lkml', action: 'created', content: 'connection: "bq"\n' }],
+        },
+        hostUrl: 'https://dev.looker.com',
+        extensionSDK: { openBrowserWindow: (url: string, target?: string) => openedIdeUrls.push({ url, target }) },
+      })
+    )
+    expect(withProjectHtml).toContain('data-testid="lookml-open-ide-btn"')
+    expect(withProjectHtml).toContain('Open Project in IDE')
+
+    const withoutProjectHtml = renderToStaticMarkup(
+      React.createElement(LookmlPreviewPane, {
+        bundle: { id: 'b2', title: 'Untitled', project_id: '', files: [] },
+        hostUrl: 'https://dev.looker.com',
+      })
+    )
+    expect(withoutProjectHtml).not.toContain('data-testid="lookml-open-ide-btn"')
   })
 })

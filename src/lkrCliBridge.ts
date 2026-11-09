@@ -168,7 +168,7 @@ function getCodeModeToolDefinition(name = 'run_looker_codemode'): LkrCodeModeToo
         code: {
           type: 'string',
           description:
-            'Python snippet to execute in Monty sandbox. Use `return ...` to return the result (dicts/lists/strings). All Looker 4.0 SDK methods are available globally or on `sdk.<method>(...)`.',
+            'Python snippet to execute in Monty sandbox. Use `return ...` to return the result (dicts/lists/strings). All Looker 4.0 SDK methods are pre-bound as bare top-level functions (e.g. `all_connections()`, `connection_schemas(name)`, `run_inline_query(...)`) — do NOT use `sdk.<method>(...)`.',
         },
         vars: {
           type: 'object',
@@ -225,10 +225,10 @@ const runCodeMode: LkrCodeModeRunFn = async (
   const runtime = await ensureCodeModeLoaded()
   const isObj = Boolean(codeOrParams && typeof codeOrParams === 'object')
   const baseOpts: LkrCodeModeRunOptions = isObj ? { ...(codeOrParams as LkrCodeModeRunOptions) } : { ...(options || {}) }
-  const rawCode = String(isObj ? baseOpts.code || '' : codeOrParams || '').replace(
-    /\bsdk\.(search_agents|agents_search|format_content_inventory)\s*\(/g,
-    '$1('
-  )
+  const rawInputCode = String(isObj ? baseOpts.code || '' : codeOrParams || '')
+  const rawCode = /\bsdk\s*=/.test(rawInputCode)
+    ? rawInputCode
+    : rawInputCode.replace(/\bsdk\.([a-z_][a-z0-9_]*)\s*\(/g, '$1(')
   const rawSdk = (baseOpts.sdk || baseOpts.core40SDK) as Looker40SDK | undefined
   const hasRaw = typeof (rawSdk as { authSession?: { transport?: { rawRequest?: unknown } } } | undefined)?.authSession?.transport?.rawRequest === 'function'
   const requestHandler = typeof baseOpts.requestHandler === 'function'

@@ -29,8 +29,8 @@ for (const ext of ['.ts', '.tsx']) {
   }
 }
 
-const { runAntigravityTurn } = require(path.join(rootDir, 'src/antigravity.ts'))
-const { matchExplicitUseCaseRule, extractResolvedUseCase } = require(path.join(rootDir, 'src/lookerApi.ts'))
+const { DEFAULT_THINKING_LEVEL, runAntigravityTurn } = require(path.join(rootDir, 'src/antigravity.ts'))
+const { discoverAccessibleConnections, extractResolvedUseCase, matchExplicitUseCaseRule } = require(path.join(rootDir, 'src/lookerApi.ts'))
 
 function getApiKey() {
   if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY.trim()
@@ -148,6 +148,7 @@ async function main() {
   const projectName = `new_project_${shortId}`
   const selectedFolderId = argolis.personal_folder_id || '5'
   const allowedModes = ['app', 'data-investigator', 'dashboard', 'conversational-analytics', 'lookml', 'health-check', 'tile']
+  const prediscoveredConns = await discoverAccessibleConnections(sdk)
 
   console.log(`[eval-new-project] Starting live 6-turn eval on dev-argolis (${argolis.base_url})`)
   console.log(`[eval-new-project] user_id=${argolis.user_id} selectedFolderId=${selectedFolderId} projectName=${projectName}`)
@@ -157,14 +158,27 @@ async function main() {
       turn: 1,
       name: 'Turn 1: Ask to create a new project',
       prompt: 'create a new project',
-      grade: (res) => {
+      grade: (res, { durationMs } = {}) => {
         const text = (res.assistantText || '').toLowerCase()
         const asksConnection = /connection/.test(text)
+        const listsConnections =
+          prediscoveredConns.length > 0
+            ? prediscoveredConns.some((c) => text.includes(String(c.name || '').toLowerCase()))
+            : /default_bigquery_connection|bigquery/i.test(text)
         const asksProject = /project/.test(text)
         const asksSchemaOrTable = /schema|dataset|table/.test(text)
+        const underLatencyBudget = typeof durationMs === 'number' && durationMs < 15000
         return {
-          passed: asksConnection && asksProject && asksSchemaOrTable,
-          checks: { asksConnection, asksProject, asksSchemaOrTable, resolvedUseCase: res.resolvedUseCase },
+          passed: asksConnection && listsConnections && asksProject && asksSchemaOrTable && underLatencyBudget,
+          checks: {
+            durationMs,
+            underLatencyBudget,
+            listsConnections,
+            asksConnection,
+            asksProject,
+            asksSchemaOrTable,
+            resolvedUseCase: res.resolvedUseCase,
+          },
         }
       },
     },
@@ -198,9 +212,10 @@ async function main() {
         const calledGenerateLookml = /generate_lookml_with_new_files/.test(stepsText)
         const offlineParse = validateBundleOfflineWithLkrParse(res.lookmlBundle?.files || [])
         const asksToProfileAndMakeMetrics = /profile/.test(text) && /metric|measure|silver|refinement/.test(text)
+        const hasProjectLink = /\/projects\/[^/\s)]+/i.test(res.assistantText || '')
         return {
-          passed: hasModel && hasBronzeFolder && calledConnectionTables && calledGenerateLookml && offlineParse.ok && asksToProfileAndMakeMetrics,
-          checks: { hasModel, hasBronzeFolder, calledConnectionTables, calledGenerateLookml, offlineParseOk: offlineParse.ok, offlineParseError: offlineParse.error, asksToProfileAndMakeMetrics, files },
+          passed: hasModel && hasBronzeFolder && calledConnectionTables && calledGenerateLookml && offlineParse.ok && asksToProfileAndMakeMetrics && hasProjectLink,
+          checks: { hasModel, hasBronzeFolder, calledConnectionTables, calledGenerateLookml, offlineParseOk: offlineParse.ok, offlineParseError: offlineParse.error, asksToProfileAndMakeMetrics, hasProjectLink, files },
         }
       },
     },
@@ -229,9 +244,10 @@ async function main() {
           liveProjectFatalErrors = [String(err?.message || err)]
         }
         const asksForDashboard = /dashboard/.test(text) && /\?/.test(text)
+        const hasProjectLink = /\/projects\/[^/\s)]+/i.test(res.assistantText || '')
         return {
-          passed: hasRefinements && hasSilverExplores && calledProfileFields && showsExampleQueryData && offlineParse.ok && liveProjectValid && asksForDashboard,
-          checks: { hasRefinements, hasSilverExplores, calledProfileFields, showsExampleQueryData, offlineParseOk: offlineParse.ok, offlineParseError: offlineParse.error, liveProjectValid, liveProjectFatalErrors, asksForDashboard, files },
+          passed: hasRefinements && hasSilverExplores && calledProfileFields && showsExampleQueryData && offlineParse.ok && liveProjectValid && asksForDashboard && hasProjectLink,
+          checks: { hasRefinements, hasSilverExplores, calledProfileFields, showsExampleQueryData, offlineParseOk: offlineParse.ok, offlineParseError: offlineParse.error, liveProjectValid, liveProjectFatalErrors, asksForDashboard, hasProjectLink, files },
         }
       },
     },
@@ -260,9 +276,10 @@ async function main() {
         }
         const asksForMetricSelectorApp =
           /data app|metric selector/.test(text) && /day|week|month|year/.test(text)
+        const hasDashboardLink = /\/dashboards\/[^\s)]+/i.test(res.assistantText || '')
         return {
-          passed: createdLookmlDashboard && copiedToSelectedFolder && liveDashExists && liveDashFolderMatches && liveDashTileCount >= 4 && asksForMetricSelectorApp,
-          checks: { createdLookmlDashboard, copiedToSelectedFolder, liveDashExists, liveDashFolderMatches, liveDashTileCount, asksForMetricSelectorApp, nativeBundle: res.nativeBundle || null },
+          passed: createdLookmlDashboard && copiedToSelectedFolder && liveDashExists && liveDashFolderMatches && liveDashTileCount >= 4 && asksForMetricSelectorApp && hasDashboardLink,
+          checks: { createdLookmlDashboard, copiedToSelectedFolder, liveDashExists, liveDashFolderMatches, liveDashTileCount, asksForMetricSelectorApp, hasDashboardLink, nativeBundle: res.nativeBundle || null },
         }
       },
     },
@@ -359,7 +376,7 @@ async function main() {
           onEnvironmentUpdated: (envId) => { environmentId = envId },
           auth: { mode: 'apikey', apiKey },
           session,
-          thinkingLevel: 'low',
+          thinkingLevel: DEFAULT_THINKING_LEVEL,
           mode,
           useCase: 'auto',
           allowedModes,
@@ -370,6 +387,7 @@ async function main() {
           activatedLookmlSkills: [],
           developableProjects: lookmlProjectId ? [lookmlProjectId] : [],
           canDeploy: true,
+          warmEnvironmentInBackground: true,
           schemaMarkdown: '',
           userPrompt: t.prompt,
           existingAppCode: currentAppCode,
@@ -403,7 +421,7 @@ async function main() {
       priorMessages.push({ role: 'user', text: t.prompt })
       priorMessages.push({ role: 'assistant', text: res.assistantText, interactionId: res.session?.lastInteractionId })
 
-      const evaluation = await t.grade(res)
+      const evaluation = await t.grade(res, { durationMs })
       console.log(`  [assistant (${(durationMs / 1000).toFixed(1)}s)] ${(res.assistantText || '').slice(0, 500).replace(/\n/g, ' ')}`)
       console.log(`  [grade] passed=${evaluation.passed}`, JSON.stringify(evaluation.checks))
 

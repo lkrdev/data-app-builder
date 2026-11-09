@@ -44,6 +44,7 @@ Before choosing chart types, pivots, filter controls, or date windows, profile c
      - `pin_to_board(title, description, section_title, dashboard_id=..., lookml_dashboard_id=..., look_id=...)`: Pins UDDs, LookML Dashboards, and Saved Looks to a Looker Board.
      - `schedule_dashboard(dashboard_id, name, crontab="0 9 * * 1", email="...", fmt="wysiwyg_pdf", filters_string="...")`: Attaches a Scheduled Plan (`create_scheduled_plan`).
      - `emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", id=..., title=..., **extra)`: Returns `NATIVE_CONTENT_BUNDLE` directly from `run_looker_codemode` (never call `update_session` inside `run_looker_codemode`).
+   - Always include `[Open <Dashboard Title>](/dashboards/<id>)` at the end of every turn that creates or updates a Looker dashboard.
 2. **Looker MCP Toolbox (`looker.yaml` / `looker-dev.yaml`)**:
    - **UDD 3-Step Sequence**: `make_dashboard` -> `add_dashboard_filter` (`field_filter` requires `model`, `explore`, and `dimension`) -> `add_dashboard_element` (every element name in `listens_to_filters` must already exist on the dashboard).
    - **LookML Dashboard Sequence**: `dev_mode(true)` -> `get_lookml_dashboard_examples` -> `create_lookml_dashboard(project_id, file_path="dashboards/<name>.dashboard.lookml", content=...)` -> `validate_project(project_id)`.
