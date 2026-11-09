@@ -29,7 +29,7 @@ for (const ext of ['.ts', '.tsx']) {
   }
 }
 
-const { DEFAULT_THINKING_LEVEL, runAntigravityTurn } = require(path.join(rootDir, 'src/antigravity.ts'))
+const { DEFAULT_THINKING_LEVEL, fetchConversationSandboxDebugMarkdown, runAntigravityTurn } = require(path.join(rootDir, 'src/antigravity.ts'))
 const { discoverAccessibleConnections, extractResolvedUseCase, matchExplicitUseCaseRule } = require(path.join(rootDir, 'src/lookerApi.ts'))
 
 function getApiKey() {
@@ -399,6 +399,8 @@ async function main() {
         })
       } catch (err) {
         console.error(`  [error] Turn ${t.turn} threw:`, err)
+        priorMessages.push({ role: 'user', text: t.prompt })
+        priorMessages.push({ role: 'error', text: String(err?.stack || err) })
         report.turns.push({
           turn: t.turn,
           name: t.name,
@@ -419,7 +421,12 @@ async function main() {
       lastResolvedUseCase = res.resolvedUseCase || extractResolvedUseCase(res.assistantText, t.prompt, allowedModes)
 
       priorMessages.push({ role: 'user', text: t.prompt })
-      priorMessages.push({ role: 'assistant', text: res.assistantText, interactionId: res.session?.lastInteractionId })
+      priorMessages.push({
+        role: 'assistant',
+        text: res.assistantText,
+        interactionId: res.session?.lastInteractionId,
+        activitySteps: res.activitySteps,
+      })
 
       const evaluation = await t.grade(res, { durationMs })
       console.log(`  [assistant (${(durationMs / 1000).toFixed(1)}s)] ${(res.assistantText || '').slice(0, 500).replace(/\n/g, ' ')}`)
@@ -447,6 +454,24 @@ async function main() {
       })
     }
   } finally {
+    try {
+      const debugMd = await fetchConversationSandboxDebugMarkdown({
+        auth: { mode: 'apikey', apiKey },
+        conversationId: session.conversationId,
+        label: report.projectName,
+        useCase: lastResolvedUseCase,
+        environmentId,
+        lastInteractionId: session.lastInteractionId,
+        messages: priorMessages,
+      })
+      const evalDumpDir = path.join(rootDir, 'tmp/eval')
+      fs.mkdirSync(evalDumpDir, { recursive: true })
+      fs.writeFileSync(path.join(evalDumpDir, 'eval-new-project.md'), debugMd, 'utf8')
+      fs.writeFileSync(path.join(evalDumpDir, 'eval-new-project.json'), JSON.stringify(report, null, 2), 'utf8')
+      console.log(`[eval-new-project] Saved sandbox debug dump to ${path.join(evalDumpDir, 'eval-new-project.md')}`)
+    } catch (dumpErr) {
+      console.warn('[eval-new-project] Debug dump warning:', dumpErr?.message || dumpErr)
+    }
     if (!process.argv.includes('--keep')) {
       const dashId = extractUddId(nativeContent)
       if (dashId && !dashId.includes('::')) {

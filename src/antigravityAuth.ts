@@ -343,6 +343,12 @@ export async function callInteractionsApi(
   if (auth.mode === 'oauth') {
     if (!auth.oauthToken?.trim()) throw new Error('Please sign in with Google OAuth first.')
     if (typeof window !== 'undefined' && window.__MOCK_LOOKER_EXTENSION__) {
+      const mockInteractions = (window.__MOCK_LOOKER_EXTENSION__ as { mockInteractions?: Record<string, AntigravityInteractionPayload> }).mockInteractions
+      if (method === 'GET' && /^interactions\//i.test(path)) {
+        const reqId = decodeURIComponent(path.replace(/^interactions\//i, '').split('?')[0] || '').trim()
+        if (mockInteractions && mockInteractions[reqId]) return mockInteractions[reqId]
+        return { id: reqId || 'int_mock_get', status: 'completed', output_text: 'Mock sandbox interaction trace.' }
+      }
       if (/:cancel$/i.test(path)) return { id: path.replace(/^interactions\//i, '').replace(/:cancel$/i, ''), status: 'cancelled' }
       const inputArr = Array.isArray(body?.input) ? (body?.input as Array<{ text?: string }>) : []
       const promptText = String(inputArr[0]?.text || '')

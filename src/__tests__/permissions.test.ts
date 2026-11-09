@@ -40,6 +40,7 @@ import {
   STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY, STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY,
   STUDIO_SLASH_SKILLS, STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY, StudioAttachedFile,
   summarizeProgress,
+  copyTextWithExtensionSdk, fetchConversationSandboxDebugMarkdown, formatConversationThreadMarkdown,
 } from '../antigravity'
 import {
   StudioBadge, StudioButton, StudioCard, StudioDocPreview, StudioModal,
@@ -6201,5 +6202,189 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
       })
     )
     expect(withoutProjectHtml).not.toContain('data-testid="lookml-open-ide-btn"')
+  })
+
+  test('63. Issue #156: routes clipboard copies via copyTextWithExtensionSdk, parses GFM pipe tables / <hr> / <ol start>, walks full sandbox interaction chains via fetchConversationSandboxDebugMarkdown, and refreshes LookmlTurnSkills & UseCaseInfoModal guides', async () => {
+    // 1. copyTextWithExtensionSdk: extensionSDK.clipboardWrite first, navigator.clipboard.writeText fallback
+    const extCopied: string[] = []
+    const navCopied: string[] = []
+    const g = globalThis as unknown as { navigator?: { clipboard?: { writeText?: (t: string) => Promise<void> } } }
+    const prevNav = g.navigator
+    try {
+      g.navigator = { clipboard: { writeText: async (t: string) => { navCopied.push(t) } } }
+      expect(await copyTextWithExtensionSdk('', { clipboardWrite: async (t: string) => { extCopied.push(t) } })).toBe(false)
+      expect(await copyTextWithExtensionSdk('line 1\nline 2', { clipboardWrite: async (t: string) => { extCopied.push(t) } })).toBe(true)
+      expect(extCopied).toEqual(['line 1\nline 2'])
+      expect(navCopied).toEqual([])
+
+      // Fallback when clipboardWrite throws or is missing
+      expect(await copyTextWithExtensionSdk('fallback_throw', { clipboardWrite: async () => { throw new Error('sandbox denied') } })).toBe(true)
+      expect(await copyTextWithExtensionSdk('fallback_missing', undefined)).toBe(true)
+      expect(navCopied).toEqual(['fallback_throw', 'fallback_missing'])
+    } finally {
+      g.navigator = prevNav
+    }
+
+    // 2. StudioMarkdown: GFM pipe tables, --- <hr>, and <ol start={firstNum}>
+    type Elem = React.ReactElement<Record<string, unknown>>
+    const gfmMd = [
+      '| Category | Formula | Revenue |',
+      '| :--- | :---: | ---: |',
+      '| Outerwear | `price | qty` | $142,500 |',
+      '| Coats \\| Parkas | **gross** | $84,120 |',
+      '',
+      '---',
+      '',
+      '3. Third step after break',
+      '4. Fourth step',
+    ].join('\n')
+    const mdRoot = StudioMarkdown({ text: gfmMd }) as Elem
+    const mdBlocks = mdRoot.props.children as Elem[]
+    expect(mdBlocks).toHaveLength(3)
+    expect(mdBlocks[0].type).toBe('div')
+    expect(mdBlocks[0].props.className).toBe('dab-py-table-wrap')
+    const tableEl = mdBlocks[0].props.children as Elem
+    expect(tableEl.type).toBe('table')
+    expect(tableEl.props['data-testid']).toBe('chat-markdown-table')
+    const [theadEl, tbodyEl] = tableEl.props.children as [Elem, Elem]
+    const thCells = ((theadEl.props.children as Elem).props.children as Elem[])
+    expect(thCells).toHaveLength(3)
+    expect(thCells.map((th) => (th.props.style as { textAlign?: string } | undefined)?.textAlign)).toEqual(['left', 'center', 'right'])
+    const trRows = tbodyEl.props.children as Elem[]
+    expect(trRows).toHaveLength(2)
+    expect(mdBlocks[1].type).toBe('hr')
+    expect(mdBlocks[1].props.className).toBe('dab-md-hr')
+    expect(mdBlocks[2].type).toBe('ol')
+    expect(mdBlocks[2].props.start).toBe(3)
+    expect((mdBlocks[2].props.children as Elem[])).toHaveLength(2)
+
+    // 3. Untruncated formatThinkingTraceMarkdown + 2-turn fetchConversationSandboxDebugMarkdown
+    const longOutput = `SELECT ${'col_metric_value, '.repeat(60)}FROM order_items -- END_MARKER_999`
+    expect(longOutput.length).toBeGreaterThan(900)
+    const singleTurnMd = formatThinkingTraceMarkdown([
+      { id: 's1', kind: 'codemode', title: 'Executing Looker queries...', content: longOutput, status: 'done' },
+    ])
+    expect(singleTurnMd).toContain('END_MARKER_999')
+
+    const threadMd = formatConversationThreadMarkdown(
+      [
+        { role: 'user', text: 'Build revenue app' },
+        { role: 'assistant', text: 'Built app.', interactionId: 'int_t1', activitySteps: [{ id: 's1', kind: 'thought', title: 'Plan', content: longOutput, status: 'done' }] },
+      ],
+      { title: 'Revenue App Thread', conversationId: 'conv_42', liveActivitySteps: [{ id: 's_live', kind: 'code_execution', title: 'python3 /workspace/bundle_app.py', status: 'running' }], busyStatus: 'Bundling...' }
+    )
+    expect(threadMd).toContain('END_MARKER_999')
+    expect(threadMd).toContain('Live / In-Flight Activity (Bundling...)')
+    expect(threadMd).toContain('python3 /workspace/bundle_app.py')
+
+    const longThought = `Analyzing schema cardinality across dimensions: ${' products.category '.repeat(55)} [FULL_THOUGHT_TAIL]`
+    const proxyCalls: string[] = []
+    const debugClipWrites: string[] = []
+    const mockDebugExt = {
+      clipboardWrite: async (t: string) => { debugClipWrites.push(t) },
+      serverProxy: async (url: string) => {
+        proxyCalls.push(url)
+        if (url.endsWith('/interactions/int_turn_2')) {
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_turn_2',
+              previous_interaction_id: 'int_turn_1',
+              status: 'completed',
+              environment_id: 'env_live_sandbox_77',
+              usage: { input_tokens: 1200, output_tokens: 450, thought_tokens: 310 },
+              input: [{ type: 'text', text: 'Add gross margin breakdown and write /workspace/analysis.md' }],
+              steps: [
+                { id: 'st_2a', type: 'code_execution', language: 'BASH', command: 'python3 /workspace/bundle_app.py /workspace/apps/rev-app/app.js && cat /workspace/skills/data-apps/SKILL.md', stdout: 'BUNDLE_STDOUT_FULL_OK' },
+                { id: 'st_2b', type: 'function_call', name: 'run_looker_codemode', arguments: { thought: longThought, code: 'return sdk.run_inline_query("json", {"model":"thelook","view":"order_items"})' } },
+                { id: 'st_2c', type: 'function_result', name: 'run_looker_codemode', call_id: 'st_2b', result: { rows: [{ category: 'Outerwear', margin: 98412.5 }] } },
+              ],
+              output_text: 'Updated Data App and saved `/workspace/analysis.md`.',
+            }),
+          }
+        }
+        if (url.endsWith('/interactions/int_turn_1')) {
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_turn_1',
+              previous_interaction_id: 'int_prewarm_0',
+              status: 'completed',
+              environment_id: 'env_live_sandbox_77',
+              input: [{ type: 'text', text: 'Create initial revenue Data App' }],
+              steps: [{ id: 'st_1a', type: 'thought', thought: 'Initial Turn 1 reasoning step' }],
+              output_text: 'Created `/workspace/apps/rev-app/app.js`.',
+            }),
+          }
+        }
+        if (url.endsWith('/interactions/int_prewarm_0')) {
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_prewarm_0',
+              status: 'completed',
+              environment_id: 'env_live_sandbox_77',
+              input: [{ type: 'text', text: '[PREWARM: initialize container]' }],
+              output_text: 'Ready.',
+            }),
+          }
+        }
+        if (url.includes('/environments/env_live_sandbox_77/files/workspace/apps/rev-app/app.js')) {
+          return { ok: true, status: 200, body: 'export class RevApp extends DataApp { /* FULL_APP_JS_SOURCE */ }' }
+        }
+        if (url.includes('/environments/env_live_sandbox_77/files/workspace/analysis.md')) {
+          return { ok: true, status: 200, body: '# Margin Analysis\nOuterwear drove +18.4% YoY.' }
+        }
+        return { ok: false, status: 404, body: 'Not found' }
+      },
+    }
+
+    const sandboxDumpMd = await fetchConversationSandboxDebugMarkdown({
+      extensionSDK: mockDebugExt,
+      auth: { mode: 'apikey', apiKey: 'test_key' },
+      conversationId: 'conv_app_42',
+      label: 'Executive Revenue App',
+      useCase: 'app',
+      model: 'gemini-3.8-flash',
+      thinkingLevel: 'high',
+      lastInteractionId: 'int_turn_2',
+      messages: [
+        { role: 'user', text: 'Create initial revenue Data App' },
+        { role: 'assistant', text: 'Created app.', interactionId: 'int_turn_1' },
+        { role: 'user', text: 'Add gross margin breakdown and write /workspace/analysis.md' },
+        { role: 'assistant', text: 'Updated Data App and saved `/workspace/analysis.md`.', interactionId: 'int_turn_2' },
+      ],
+    })
+    await copyTextWithExtensionSdk(sandboxDumpMd, mockDebugExt)
+
+    expect(debugClipWrites).toEqual([sandboxDumpMd])
+    // Chronological order: Turn 1 (int_turn_1) appears before Turn 2 (int_turn_2), and [PREWARM:] is skipped
+    expect(sandboxDumpMd).not.toContain('int_prewarm_0')
+    expect(sandboxDumpMd.indexOf('### Turn 1 Interaction: `int_turn_1`')).toBeLessThan(
+      sandboxDumpMd.indexOf('### Turn 2 Interaction: `int_turn_2`')
+    )
+    expect(sandboxDumpMd).toContain('[FULL_THOUGHT_TAIL]')
+    expect(sandboxDumpMd).toContain('BUNDLE_STDOUT_FULL_OK')
+    expect(sandboxDumpMd).toContain('98412.5')
+    expect(sandboxDumpMd).toContain('### `/workspace/apps/rev-app/app.js`')
+    expect(sandboxDumpMd).toContain('FULL_APP_JS_SOURCE')
+    expect(sandboxDumpMd).toContain('### `/workspace/analysis.md`')
+    expect(sandboxDumpMd).toContain('Outerwear drove +18.4% YoY.')
+    // Static /workspace/skills/data-apps/SKILL.md was NOT fetched over network
+    expect(proxyCalls.some((u) => u.includes('skills/data-apps'))).toBe(false)
+
+    // 4. Refreshed DOC_UI_COMPONENTS.LookmlTurnSkills & USE_CASE_GUIDES
+    const slashPreview = DOC_UI_COMPONENTS.LookmlTurnSkills() as Elem
+    expect(slashPreview.props['data-testid']).toBe('doc-slash-skill-menu-preview')
+    const previewJson = JSON.stringify(slashPreview)
+    for (const skId of ['/looker-project-onboarding', '/lookml-field-curation', '/lookml-tests']) {
+      expect(previewJson).toContain(skId)
+    }
+    expect(USE_CASE_GUIDES.lookml.markdown).toContain('/looker-project-onboarding')
+    expect(USE_CASE_GUIDES.auto.markdown).toContain('@explore:')
+    expect(USE_CASE_GUIDES.dashboard.markdown).toContain('LookML Dashboards')
   })
 })

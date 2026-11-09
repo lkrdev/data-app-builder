@@ -11,7 +11,7 @@ import {
   STUDIO_MAX_TOTAL_TOKENS_OPTIONS, STUDIO_THINKING_LEVEL_OPTIONS, StudioThinkingLevel,
 } from '../antigravity'
 import { useLookerExtension } from '../contexts/LookerExtensionContext'
-import { LookerFolderNode, normalizeStudioAgentName } from '../lookerApi'
+import { copyTextWithExtensionSdk, LookerFolderNode, normalizeStudioAgentName } from '../lookerApi'
 import { ResolvedStudioTheme, StudioController, StudioThemeMode } from '../useStudioController'
 import { STUDIO_MODES } from './App'
 import {
@@ -200,7 +200,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                 <span><strong>Authorized redirect URI (Standard):</strong> <code data-testid="config-oauth-redirect-uri">{extensionRedirectUri}</code></span>
                 <StudioButton
                   variant="secondary" testId="config-copy-redirect-uri-btn" style={{ minHeight: 24, fontSize: 11, padding: '0 8px' }}
-                  onClick={() => { navigator.clipboard?.writeText?.(extensionRedirectUri); setCopiedRedirectUri(true); setTimeout(() => setCopiedRedirectUri(false), 1800) }}
+                  onClick={() => { void copyTextWithExtensionSdk(extensionRedirectUri, extensionSDK); setCopiedRedirectUri(true); setTimeout(() => setCopiedRedirectUri(false), 1800) }}
                 >
                   <span data-testid="copy-redirect-uri-btn">{copiedRedirectUri ? '✓ Copied Redirect URI' : 'Copy Redirect URI'}</span>
                 </StudioButton>
@@ -209,7 +209,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                 <span><strong>Authorized redirect URI (Full Screen / Spartan):</strong> <code data-testid="config-spartan-oauth-redirect-uri">{spartanRedirectUri}</code></span>
                 <StudioButton
                   variant="secondary" testId="copy-spartan-redirect-uri-btn" style={{ minHeight: 24, fontSize: 11, padding: '0 8px' }}
-                  onClick={() => { navigator.clipboard?.writeText?.(spartanRedirectUri); setCopiedSpartanRedirectUri(true); setTimeout(() => setCopiedSpartanRedirectUri(false), 1800) }}
+                  onClick={() => { void copyTextWithExtensionSdk(spartanRedirectUri, extensionSDK); setCopiedSpartanRedirectUri(true); setTimeout(() => setCopiedSpartanRedirectUri(false), 1800) }}
                 >
                   <span data-testid="config-copy-spartan-redirect-uri-btn">{copiedSpartanRedirectUri ? '✓ Copied Spartan URI' : 'Copy Spartan URI'}</span>
                 </StudioButton>
@@ -288,12 +288,11 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
     themeMode, resolvedTheme, setThemeMode, environmentStatus, envResetNotice,
     handleResetEnvironment, handleStopEnvironment, requirePermission, setRequirePermission,
-    capabilities, availableLookmlProjects, canDeployLookml, isLookmlMode, isHealthCheckMode,
-    builderMode, lookmlProjectId, setLookmlProjectId, lookmlSessions, loadLookmlSessionById,
-    lookmlBundle, loadingMetadata, folderTreeNodes, rootFolderIds, folderChildrenById,
+    capabilities, canDeployLookml, isLookmlMode, isHealthCheckMode,
+    loadingMetadata, folderTreeNodes, rootFolderIds, folderChildrenById,
     expandedFolderIds, loadingFolderIds, toggleExpandFolder, hydrateFolderAncestors,
-    handleSearchFolders, selectedFolderId, setSelectedFolderId, nativeContent, publishedApp,
-    handleResetNewApp, authMode, oauthToken, oauthSigningIn, handleOAuthLogin,
+    handleSearchFolders, selectedFolderId, setSelectedFolderId,
+    authMode, oauthToken, oauthSigningIn, handleOAuthLogin,
     handleOAuthLogout, handleCancelOAuthLogin, extensionSDK, healthScope, setHealthScope,
     handleRunHealthCheck, busyStatus, userDisplayName, isLookerDevMode,
     folderModalOpen: advModalOpen, setFolderModalOpen: setAdvModalOpen,
@@ -464,190 +463,135 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
           <span data-testid="studio-approval-policy-select">{requirePermission ? 'Safe Mode (Ask)' : 'Auto-Approve (YOLO)'}</span>
         </button>
 
-        {isLookmlMode ? (
-          <>
-            <label className="dab-field">
-              <span>Project</span>
-              {loadingMetadata ? (
-                <StudioSkeleton testId="folder-selector-skeleton" className="dab-folder-trigger-fixed" ariaLabel="Loading LookML projects..." />
-              ) : (
-                <input
-                  type="text" data-testid="topbar-lookml-project-input" className="dab-folder-trigger-fixed" list="dab-lookml-projects"
-                  placeholder="LookML project_id (opt)..." value={lookmlProjectId} onChange={(e) => setLookmlProjectId(e.target.value)}
-                  title={availableLookmlProjects.length > 0 ? `Developable projects: ${availableLookmlProjects.join(', ')}` : undefined}
-                />
-              )}
-              {availableLookmlProjects.length > 0 && (
-                <datalist id="dab-lookml-projects">{availableLookmlProjects.map((proj) => <option key={proj} value={proj} />)}</datalist>
-              )}
-            </label>
-            {capabilities?.rolesLoaded && !canDeployLookml && (
-              <StudioBadge tone="warning" title="Deploy to production requires Looker 'deploy' or 'admin' permission">
-                <Lock size={13} strokeWidth={1.75} aria-hidden="true" /> No deploy
-              </StudioBadge>
-            )}
-            {(lookmlSessions.length > 0 || lookmlBundle) && (
-              <>
-                <div className="dab-divider" />
-                <div className="dab-load-box">
-                  {lookmlSessions.length > 0 && (
-                    <StudioSelect
-                      testId="topbar-lookml-sessions-select" className="dab-folder-trigger-fixed" value=""
-                      onChange={(val) => { if (val) loadLookmlSessionById(val, true) }}
-                      options={[{ value: '', label: `Saved LookML (${lookmlSessions.length})...` }, ...lookmlSessions.map((s) => ({ value: s.id, label: `${s.title} (${s.id})` }))]}
-                    />
-                  )}
-                  {lookmlBundle && (
-                    <button type="button" className="dab-btn-secondary" onClick={handleResetNewApp} disabled={!!busyStatus}>New LookML</button>
-                  )}
-                </div>
-              </>
-            )}
-          </>
-        ) : (
-          <>
-            <div className="dab-field dab-folder-picker" data-testid="topbar-folder-picker" ref={folderPickerRef}>
-              <span>Save New Content to Folder:</span>
-              {loadingMetadata ? (
-                <StudioSkeleton testId="folder-selector-skeleton" className="dab-folder-trigger-fixed" ariaLabel="Loading folders..." />
-              ) : (
-                <button
-                  type="button" data-testid="topbar-folder-trigger" className="dab-folder-trigger dab-folder-trigger-fixed"
-                  onClick={() => setFolderPopoverOpen((prev) => !prev)} title={`Publish target folder: ${selectedFolderPath}`}
-                >
-                  <span className="dab-folder-node-icon">{renderFolderIcon(selectedFolderNode?.is_personal, folderPopoverOpen)}</span>
-                  <span className="dab-folder-trigger-text">{selectedFolderLabel}</span>
-                  <span className="dab-folder-trigger-caret">▾</span>
-                </button>
-              )}
-
-              {folderPopoverOpen && !loadingMetadata && (
-                <div className="dab-folder-popover" data-testid="folder-tree-popover">
-                  <div className="dab-folder-popover-header">
-                    <input
-                      type="text" data-testid="folder-tree-quick-search" className="dab-folder-quick-search"
-                      placeholder="Quick filter loaded folders..." value={folderQuickSearch} onChange={(e) => setFolderQuickSearch(e.target.value)}
-                    />
-                  </div>
-                  <div className="dab-folder-tree-list" data-testid="folder-tree-list">
-                    {quickFilteredFolders ? (
-                      quickFilteredFolders.length === 0 ? (
-                        <div className="dab-folder-empty">No loaded folders match &ldquo;{folderQuickSearch}&rdquo;. Use Advanced Search below.</div>
-                      ) : (
-                        quickFilteredFolders.map((node) => (
-                          <div key={node.id} className={`dab-folder-tree-row ${String(selectedFolderId) === String(node.id) ? 'selected' : ''}`} style={{ paddingLeft: 10 }}>
-                            <button type="button" data-testid={`folder-select-${node.id}`} className="dab-folder-select-btn" onClick={() => handleSelectFolderNode(node.id)} title={node.name}>
-                              <span className="dab-folder-node-icon">{renderFolderIcon(node.is_personal)}</span>
-                              <span className="dab-folder-node-name">{node.name}</span>
-                            </button>
-                          </div>
-                        ))
-                      )
-                    ) : (
-                      rootFolderIds.map((rid) => renderFolderTreeNode(rid, 0))
-                    )}
-                  </div>
-                  <div className="dab-folder-popover-footer">
-                    <span className="dab-muted" style={{ fontSize: 11 }}>Target: <strong>{selectedFolderLabel}</strong></span>
-                    <button type="button" data-testid="folder-advanced-search-btn" className="dab-btn-secondary dab-folder-adv-btn" onClick={handleOpenAdvancedSearch}>
-                      <Search size={14} strokeWidth={1.75} aria-hidden="true" /> Advanced Search...
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <StudioModal
-                open={advModalOpen} onClose={() => setAdvModalOpen(false)} testId="folder-advanced-search-modal"
-                closeTestId="folder-search-modal-close" closeLabel="✕" backdropClassName="dab-folder-modal-backdrop" className="dab-folder-search-modal"
-                title={<><Search size={14} strokeWidth={1.75} style={{ verticalAlign: -2, marginRight: 5 }} aria-hidden="true" />Advanced Looker Folder Search</>}
-                subtitle="Search across all Looker folders by folder name, parent folder, personal scope, creator, or folder ID"
-              >
-                <div className="dab-folder-search-grid">
-                  <div className="dab-modal-row">
-                    <label>Folder Name</label>
-                    <input type="search" data-testid="folder-search-input-name" placeholder="Search folder name or ID..." value={advName} onChange={(e) => setAdvName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void executeAdvancedSearch() }} />
-                  </div>
-                  <div className="dab-modal-row">
-                    <label>Parent Folder</label>
-                    <input type="search" data-testid="folder-search-input-parent-id" list="dab-folder-parent-suggestions" placeholder="Search parent folder name..." value={advParentId} onChange={(e) => setAdvParentId(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void executeAdvancedSearch() }} />
-                    <datalist id="dab-folder-parent-suggestions">{Object.values(folderTreeNodes).map((node) => <option key={node.id} value={node.name} />)}</datalist>
-                  </div>
-                  <div className="dab-modal-row">
-                    <label>Personal Scope</label>
-                    <StudioSelect
-                      testId="folder-search-select-personal" value={advPersonal} onChange={(val) => setAdvPersonal(val)}
-                      options={[{ value: 'any', label: 'Any Folder' }, { value: 'false', label: 'Shared Folders Only' }, { value: 'true', label: 'Personal Folders Only' }]}
-                    />
-                  </div>
-                  <div className="dab-modal-row">
-                    <label>Created By</label>
-                    <input type="search" data-testid="folder-search-input-creator-id" list="dab-folder-creator-suggestions" placeholder="Search creator name or ID..." value={advCreatorId} onChange={(e) => setAdvCreatorId(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void executeAdvancedSearch() }} />
-                    <datalist id="dab-folder-creator-suggestions">
-                      {Array.from(new Set([userDisplayName, ...Object.values(folderTreeNodes).map((n) => n.creator_id)].filter((c): c is string => Boolean(c)))).map((creator) => <option key={creator} value={creator} />)}
-                    </datalist>
-                  </div>
-                  <div className="dab-modal-row">
-                    <label>Folder ID</label>
-                    <input type="search" data-testid="folder-search-input-id" placeholder="Filter by exact folder ID..." value={advFolderId} onChange={(e) => setAdvFolderId(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void executeAdvancedSearch() }} />
-                  </div>
-                  <div className="dab-modal-row" style={{ justifyContent: 'flex-end', alignItems: 'flex-end' }}>
-                    <button type="button" data-testid="folder-search-submit-btn" className="dab-btn-primary" onClick={() => void executeAdvancedSearch()} disabled={advLoading}>
-                      {advLoading ? 'Searching...' : 'Search Folders'}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="dab-folder-search-results" data-testid="folder-search-results">
-                  {advResults.length === 0 ? (
-                    <div className="dab-folder-empty">{advLoading ? 'Searching Looker folders...' : 'No matching folders found. Adjust filters and click Search Folders.'}</div>
-                  ) : (
-                    advResults.map((item) => (
-                      <button
-                        key={item.id} type="button" data-testid={`folder-search-result-${item.id}`}
-                        className={`dab-folder-search-result-row ${String(selectedFolderId) === String(item.id) ? 'selected' : ''}`}
-                        onClick={() => handleSelectFolderNode(item.id, true)}
-                      >
-                        <span style={{ fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>{renderFolderIcon(item.is_personal)}{item.name}</span>
-                        <span className="dab-muted" style={{ fontSize: 11 }}>{item.parent_id ? folderTreeNodes[item.parent_id]?.name || 'Subfolder' : 'Root'} · {item.is_personal ? 'Personal' : 'Shared'}</span>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </StudioModal>
-            </div>
-            {(publishedApp || nativeContent) && (
-              <>
-                <div className="dab-divider" />
-                <div className="dab-load-box">
-                  <button type="button" className="dab-btn-secondary" onClick={handleResetNewApp} disabled={!!busyStatus}>
-                    {builderMode === 'dashboard' ? 'New Content' : 'New Session'}
-                  </button>
-                </div>
-              </>
-            )}
-          </>
+        {isLookmlMode && capabilities?.rolesLoaded && !canDeployLookml && (
+          <StudioBadge tone="warning" title="Deploy to production requires Looker 'deploy' or 'admin' permission">
+            <Lock size={13} strokeWidth={1.75} aria-hidden="true" /> No deploy
+          </StudioBadge>
         )}
+
+        <div className="dab-field dab-folder-picker" data-testid="topbar-folder-picker" ref={folderPickerRef}>
+          <span>Save New Content to Folder:</span>
+          {loadingMetadata ? (
+            <StudioSkeleton testId="folder-selector-skeleton" className="dab-folder-trigger-fixed" ariaLabel="Loading folders..." />
+          ) : (
+            <button
+              type="button" data-testid="topbar-folder-trigger" className="dab-folder-trigger dab-folder-trigger-fixed"
+              onClick={() => setFolderPopoverOpen((prev) => !prev)} title={`Publish target folder: ${selectedFolderPath}`}
+            >
+              <span className="dab-folder-node-icon">{renderFolderIcon(selectedFolderNode?.is_personal, folderPopoverOpen)}</span>
+              <span className="dab-folder-trigger-text">{selectedFolderLabel}</span>
+              <span className="dab-folder-trigger-caret">▾</span>
+            </button>
+          )}
+
+          {folderPopoverOpen && !loadingMetadata && (
+            <div className="dab-folder-popover" data-testid="folder-tree-popover">
+              <div className="dab-folder-popover-header">
+                <input
+                  type="text" data-testid="folder-tree-quick-search" className="dab-folder-quick-search"
+                  placeholder="Quick filter loaded folders..." value={folderQuickSearch} onChange={(e) => setFolderQuickSearch(e.target.value)}
+                />
+              </div>
+              <div className="dab-folder-tree-list" data-testid="folder-tree-list">
+                {quickFilteredFolders ? (
+                  quickFilteredFolders.length === 0 ? (
+                    <div className="dab-folder-empty">No loaded folders match &ldquo;{folderQuickSearch}&rdquo;. Use Advanced Search below.</div>
+                  ) : (
+                    quickFilteredFolders.map((node) => (
+                      <div key={node.id} className={`dab-folder-tree-row ${String(selectedFolderId) === String(node.id) ? 'selected' : ''}`} style={{ paddingLeft: 10 }}>
+                        <button type="button" data-testid={`folder-select-${node.id}`} className="dab-folder-select-btn" onClick={() => handleSelectFolderNode(node.id)} title={node.name}>
+                          <span className="dab-folder-node-icon">{renderFolderIcon(node.is_personal)}</span>
+                          <span className="dab-folder-node-name">{node.name}</span>
+                        </button>
+                      </div>
+                    ))
+                  )
+                ) : (
+                  rootFolderIds.map((rid) => renderFolderTreeNode(rid, 0))
+                )}
+              </div>
+              <div className="dab-folder-popover-footer">
+                <span className="dab-muted" style={{ fontSize: 11 }}>Target: <strong>{selectedFolderLabel}</strong></span>
+                <button type="button" data-testid="folder-advanced-search-btn" className="dab-btn-secondary dab-folder-adv-btn" onClick={handleOpenAdvancedSearch}>
+                  <Search size={14} strokeWidth={1.75} aria-hidden="true" /> Advanced Search...
+                </button>
+              </div>
+            </div>
+          )}
+
+          <StudioModal
+            open={advModalOpen} onClose={() => setAdvModalOpen(false)} testId="folder-advanced-search-modal"
+            closeTestId="folder-search-modal-close" closeLabel="✕" backdropClassName="dab-folder-modal-backdrop" className="dab-folder-search-modal"
+            title={<><Search size={14} strokeWidth={1.75} style={{ verticalAlign: -2, marginRight: 5 }} aria-hidden="true" />Advanced Looker Folder Search</>}
+            subtitle="Search across all Looker folders by folder name, parent folder, personal scope, creator, or folder ID"
+          >
+            <div className="dab-folder-search-grid">
+              <div className="dab-modal-row">
+                <label>Folder Name</label>
+                <input type="search" data-testid="folder-search-input-name" placeholder="Search folder name or ID..." value={advName} onChange={(e) => setAdvName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void executeAdvancedSearch() }} />
+              </div>
+              <div className="dab-modal-row">
+                <label>Parent Folder</label>
+                <input type="search" data-testid="folder-search-input-parent-id" list="dab-folder-parent-suggestions" placeholder="Search parent folder name..." value={advParentId} onChange={(e) => setAdvParentId(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void executeAdvancedSearch() }} />
+                <datalist id="dab-folder-parent-suggestions">{Object.values(folderTreeNodes).map((node) => <option key={node.id} value={node.name} />)}</datalist>
+              </div>
+              <div className="dab-modal-row">
+                <label>Personal Scope</label>
+                <StudioSelect
+                  testId="folder-search-select-personal" value={advPersonal} onChange={(val) => setAdvPersonal(val)}
+                  options={[{ value: 'any', label: 'Any Folder' }, { value: 'false', label: 'Shared Folders Only' }, { value: 'true', label: 'Personal Folders Only' }]}
+                />
+              </div>
+              <div className="dab-modal-row">
+                <label>Created By</label>
+                <input type="search" data-testid="folder-search-input-creator-id" list="dab-folder-creator-suggestions" placeholder="Search creator name or ID..." value={advCreatorId} onChange={(e) => setAdvCreatorId(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void executeAdvancedSearch() }} />
+                <datalist id="dab-folder-creator-suggestions">
+                  {Array.from(new Set([userDisplayName, ...Object.values(folderTreeNodes).map((n) => n.creator_id)].filter((c): c is string => Boolean(c)))).map((creator) => <option key={creator} value={creator} />)}
+                </datalist>
+              </div>
+              <div className="dab-modal-row">
+                <label>Folder ID</label>
+                <input type="search" data-testid="folder-search-input-id" placeholder="Filter by exact folder ID..." value={advFolderId} onChange={(e) => setAdvFolderId(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void executeAdvancedSearch() }} />
+              </div>
+              <div className="dab-modal-row" style={{ justifyContent: 'flex-end', alignItems: 'flex-end' }}>
+                <button type="button" data-testid="folder-search-submit-btn" className="dab-btn-primary" onClick={() => void executeAdvancedSearch()} disabled={advLoading}>
+                  {advLoading ? 'Searching...' : 'Search Folders'}
+                </button>
+              </div>
+            </div>
+
+            <div className="dab-folder-search-results" data-testid="folder-search-results">
+              {advResults.length === 0 ? (
+                <div className="dab-folder-empty">{advLoading ? 'Searching Looker folders...' : 'No matching folders found. Adjust filters and click Search Folders.'}</div>
+              ) : (
+                advResults.map((item) => (
+                  <button
+                    key={item.id} type="button" data-testid={`folder-search-result-${item.id}`}
+                    className={`dab-folder-search-result-row ${String(selectedFolderId) === String(item.id) ? 'selected' : ''}`}
+                    onClick={() => handleSelectFolderNode(item.id, true)}
+                  >
+                    <span style={{ fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>{renderFolderIcon(item.is_personal)}{item.name}</span>
+                    <span className="dab-muted" style={{ fontSize: 11 }}>{item.parent_id ? folderTreeNodes[item.parent_id]?.name || 'Subfolder' : 'Root'} · {item.is_personal ? 'Personal' : 'Shared'}</span>
+                  </button>
+                ))
+              )}
+            </div>
+          </StudioModal>
+        </div>
 
         <div className="dab-divider" />
 
         <div className="dab-auth-box">
           {authMode === 'oauth' ? (
-            <>
-              <button
-                type="button" data-testid="topbar-oauth-signin-btn"
-                className={oauthToken ? 'dab-btn dab-btn-secondary dab-btn-icon' : 'dab-btn-primary'}
-                onClick={oauthToken ? handleOAuthLogout : handleOAuthLogin}
-                title={oauthToken ? 'Sign Out' : 'Sign In with Google OAuth'}
-                aria-label={oauthToken ? 'Sign Out' : undefined}
-              >
-                {oauthToken ? <LogOut size={14} strokeWidth={1.75} aria-hidden="true" /> : oauthSigningIn ? 'Retry Sign In' : 'Sign In'}
-              </button>
-              {oauthSigningIn && (
-                <button type="button" data-testid="topbar-oauth-cancel-btn" className="dab-btn-secondary" onClick={handleCancelOAuthLogin} title="Cancel pending Google OAuth sign-in popup">
-                  Cancel Sign-In
-                </button>
-              )}
-            </>
+            <button
+              type="button" data-testid="topbar-oauth-signin-btn"
+              className={oauthToken ? 'dab-btn dab-btn-secondary dab-btn-icon' : oauthSigningIn ? 'dab-btn-secondary' : 'dab-btn-primary'}
+              onClick={oauthToken ? handleOAuthLogout : oauthSigningIn ? handleCancelOAuthLogin : handleOAuthLogin}
+              title={oauthToken ? 'Sign Out' : oauthSigningIn ? 'Cancel pending Google OAuth sign-in popup' : 'Sign In with Google OAuth'}
+              aria-label={oauthToken ? 'Sign Out' : undefined}
+            >
+              {oauthToken ? <LogOut size={14} strokeWidth={1.75} aria-hidden="true" /> : oauthSigningIn ? 'Signing in…' : 'Sign In'}
+            </button>
           ) : (
             <span className="dab-badge" title={`Uses serverProxy + ${getGeminiUserAttributeName(extensionSDK)}`}>API Key (User Attr) ✓</span>
           )}

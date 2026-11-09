@@ -3,14 +3,14 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AgentSession, AntigravityActivityStep, AntigravityAuth,
   CodeModePermissionDecision, CodeModePermissionRequest,
-  extractSkillNameFromPath, fetchEnvironmentFile, inFlightEnvProvisionByUser,
+  extractSkillNameFromPath, fetchConversationSandboxDebugMarkdown, fetchEnvironmentFile, inFlightEnvProvisionByUser,
   isNewProjectOnboardingIntakePrompt, normalizeEnvironmentId, normalizeSandboxFilePath,
   PastedImage, prewarmOrWakeAntigravityEnvironment, resolveBuiltinWorkspaceFileContent,
   runAntigravityTurn, sanitizeConversationLabel, sharedEnvExploreSchemas,
 } from './antigravity'
 import { ChatMessage, StudioMode } from './components/App'
 import {
-  buildDenseExploreSchema, discoverAccessibleConnections, EXPLICIT_SCRIPT_CREATION_RE,
+  buildDenseExploreSchema, copyTextWithExtensionSdk, discoverAccessibleConnections, EXPLICIT_SCRIPT_CREATION_RE,
   extractExploreIdsFromCode, extractResolvedUseCase, formatAccessibleConnectionsMarkdown,
   formatExploreId, getArtifactNamespace, hydrateMentionedContext,
   isConversationalNoOpPrompt, matchExplicitUseCaseRule, parseExploreId,
@@ -46,18 +46,18 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     selectedFolderId, schemaMarkdown, setSchemaMarkdown,
     activeMode, isLookmlMode, isHealthCheckMode, builderMode,
     agentSession, messages, activeObjectId, setActiveObjectId,
-    conversations, refreshCatalog, setLookmlSessions,
+    conversations, refreshCatalog,
   } = meta
   const {
     caConversation, isCaMode,
     lookmlProjectId, setLookmlProjectId, activatedLookmlSkills, setActivatedLookmlSkills,
-    lookmlBundle, setLookmlBundle, setLoadLookmlInput, lastLookmlIdRef,
+    lookmlBundle, setLookmlBundle, lastLookmlIdRef,
     publishedApp, setPublishedApp, lastPublishedIdRef,
     nativeContent, setNativeContent, lastNativeIdRef,
     contentItems, upsertContentItem, setEmbedNonce,
     healthReport, scriptId, scriptCode, setScriptCode, filtersJson,
     publishedTileDash, loadedScript,
-    currentAppCode, setCurrentAppCode, setLoadDashInput,
+    currentAppCode, setCurrentAppCode,
     activeViewerDocument, setActiveViewerDocument,
     prompt, setPrompt, pastedImages, setPastedImages,
     activeConversationId, setActiveConversationId,
@@ -96,6 +96,8 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   )
   const liveActivityStepsRef = useRef<AntigravityActivityStep[]>(liveActivitySteps)
   liveActivityStepsRef.current = liveActivitySteps
+  const latestTurnInteractionRef = useRef<{ convId: string; id: string } | null>(null)
+  const [copyThreadState, setCopyThreadState] = useState<'idle' | 'loading' | 'copied'>('idle')
 
   const loadSandboxMarkdownFile = useCallback(
     async (rawPath: string, opts?: { openModal?: boolean }): Promise<string> => {
@@ -499,6 +501,9 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           liveActivityStepsRef.current = steps
           setLiveActivitySteps(steps)
         },
+        onInteractionCreated: (id) => {
+          latestTurnInteractionRef.current = { convId: activeConvId, id }
+        },
         signal: abortController.signal, onStatus: setBusyStatus,
       })
 
@@ -553,8 +558,6 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           }
           lastLookmlIdRef.current = saved.id
           setActiveObjectId(saved.id)
-          setLoadLookmlInput(saved.id)
-          setLookmlSessions((prev) => [saved.index, ...prev.filter((s) => s.id !== saved.id)])
           await refreshCatalog()
           const targetRoute = `/c/${encodeURIComponent(saved.id)}`
           if (location.pathname !== targetRoute) history.replace(targetRoute)
@@ -630,7 +633,6 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           setNativeContent(savedNative, { source: 'created', createdInConversation: true })
           setEmbedNonce((n) => n + 1)
           setActiveObjectId(savedNative.id)
-          setLoadDashInput(savedNative.id)
           const targetRoute = `/c/${encodeURIComponent(savedNative.id)}`
           if (location.pathname !== targetRoute) history.replace(targetRoute)
           await refreshCatalog()
@@ -666,7 +668,6 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           setEmbedNonce((n) => n + 1)
           setActiveObjectId(upserted.dashboardId)
           setCurrentAppCode(result.bundle.raw_code)
-          setLoadDashInput(upserted.dashboardId)
           finalMsgs = [...messagesWithUser, { ...prelimAssistantMsg, dashboardId: upserted.dashboardId }]
           try {
             await saveUserArtifact(
@@ -814,6 +815,37 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     [abortActiveTurn, isAuthenticated, mentionedItems, pastedImages, prompt, setMentionedItems, setPastedImages, setPrompt, updateQueuedPrompts]
   )
 
+  const handleCopyThreadDebugTrace = useCallback(() => {
+    setCopyThreadState('loading')
+    const activeConv = conversations.find((c) => c.id === activeConversationId)
+    const trackedTurn = latestTurnInteractionRef.current
+    const latestTurnId =
+      (trackedTurn && (!activeConversationId || trackedTurn.convId === activeConversationId) ? trackedTurn.id : '') ||
+      messages.slice().reverse().find((m) => m.interactionId)?.interactionId ||
+      activeConv?.interactionId || agentSession?.lastInteractionId || ''
+    const envId = normalizeEnvironmentId(sharedEnvIdRef.current) || normalizeEnvironmentId(activeConv?.environmentId) || normalizeEnvironmentId(agentSession?.environmentId) || ''
+    return fetchConversationSandboxDebugMarkdown({
+      extensionSDK, auth: { mode: authMode, oauthToken, clientId, projectId, apiKey, onUnauthorizedRefresh: triggerSilentOAuthRefresh },
+      conversationId: activeConversationId || activeConv?.id, label: activeConv?.label,
+      useCase: activeConv?.use_case || auth.selectedUseCase, model: selectedModel, thinkingLevel,
+      environmentId: envId, lastInteractionId: latestTurnId, messages,
+      liveActivitySteps: liveActivitySteps.length ? liveActivitySteps : liveActivityStepsRef.current, busyStatus, contentItems,
+    }).then(
+      (md) => {
+        if (typeof window !== 'undefined') window.__LAST_COPIED_THINKING_TRACE__ = md
+        return copyTextWithExtensionSdk(md, extensionSDK).then(() => {
+          setCopyThreadState('copied')
+          setTimeout(() => setCopyThreadState((curr) => (curr === 'copied' ? 'idle' : curr)), 1800)
+        })
+      },
+      () => setCopyThreadState('idle')
+    )
+  }, [
+    activeConversationId, agentSession, apiKey, auth.selectedUseCase, authMode, busyStatus, clientId,
+    contentItems, conversations, extensionSDK, liveActivitySteps, messages, oauthToken, projectId, selectedModel,
+    sharedEnvIdRef, thinkingLevel, triggerSilentOAuthRefresh,
+  ])
+
   const isEmptyConversation =
     !isTileMount && location.pathname !== '/config' &&
     !parsedRoute.objectId && messages.length === 0 && !publishedApp && !nativeContent &&
@@ -825,6 +857,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     environmentStatus, setEnvironmentStatus, envResetNotice, setEnvResetNotice,
     handleResetEnvironment, handleStopEnvironment, handleWakeModeEnv,
     liveActivitySteps, setLiveActivitySteps,
+    copyThreadState, handleCopyThreadDebugTrace,
     queuedPrompts, updateQueuedPrompts,
     handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt,
     requirePermission, setRequirePermission, pendingPerm, requestCodeModePermission, resolvePermDecision,

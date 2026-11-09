@@ -637,9 +637,53 @@ export function formatThinkingTraceMarkdown(
     if (step.detail && step.detail !== step.title) {
       lines.push(step.kind === 'thought' ? `   ${step.detail.replace(/\r?\n/g, '\n   ')}` : `   \`${step.detail.replace(/\r?\n/g, ' ')}\``)
     }
-    if (step.content?.trim()) lines.push('   ```', `   ${step.content.trim().slice(0, 600).replace(/\r?\n/g, '\n   ')}`, '   ```')
+    if (step.content?.trim()) lines.push('   ```', `   ${step.content.trim().replace(/\r?\n/g, '\n   ')}`, '   ```')
   })
   if (meta?.assistantText?.trim()) lines.push('', '### Assistant Response', '', meta.assistantText.trim())
+  return lines.join('\n').trim()
+}
+
+export interface ConversationThreadTurnLike {
+  role: 'user' | 'assistant' | 'error'
+  text: string
+  interactionId?: string
+  dashboardId?: string
+  activitySteps?: AntigravityActivityStep[]
+  thinkingDurationSec?: number
+}
+
+export function formatConversationThreadMarkdown(
+  messages: ReadonlyArray<ConversationThreadTurnLike>,
+  opts?: {
+    title?: string
+    agentName?: string
+    conversationId?: string
+    liveActivitySteps?: AntigravityActivityStep[]
+    busyStatus?: string | null
+  }
+): string {
+  const safeMsgs = Array.isArray(messages) ? messages : []
+  const liveSteps = Array.isArray(opts?.liveActivitySteps) ? opts.liveActivitySteps : []
+  const authorLabel = opts?.agentName?.trim() || 'Assistant'
+  const lines: string[] = [opts?.title?.trim() ? `### Thread: ${opts.title.trim()}` : '### Thread Messages']
+  if (opts?.conversationId?.trim()) lines.push(`- Conversation ID: \`${opts.conversationId.trim()}\``)
+  lines.push(`- Messages: ${safeMsgs.length}${liveSteps.length > 0 ? ` (+ ${liveSteps.length} live steps)` : ''}`)
+  safeMsgs.forEach((m, idx) => {
+    const roleHeader = m.role === 'user' ? 'User' : m.role === 'error' ? 'Error' : authorLabel
+    const metaBits = [
+      m.interactionId ? `interaction: \`${m.interactionId}\`` : '',
+      m.dashboardId ? `dashboard: \`#${m.dashboardId}\`` : '',
+    ].filter(Boolean).join(' · ')
+    lines.push('', `#### Message ${idx + 1} — ${roleHeader}${metaBits ? ` (${metaBits})` : ''}`)
+    if (m.activitySteps && m.activitySteps.length > 0) {
+      lines.push('', formatThinkingTraceMarkdown(m.activitySteps, { thinkingDurationSec: m.thinkingDurationSec }))
+    }
+    if (m.text?.trim()) lines.push('', m.text.trim())
+  })
+  if (liveSteps.length > 0 || opts?.busyStatus) {
+    lines.push('', `#### Live / In-Flight Activity${opts?.busyStatus ? ` (${opts.busyStatus})` : ''}`)
+    if (liveSteps.length > 0) lines.push('', formatThinkingTraceMarkdown(liveSteps))
+  }
   return lines.join('\n').trim()
 }
 

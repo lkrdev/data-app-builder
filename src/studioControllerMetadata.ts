@@ -20,7 +20,6 @@ import {
   StudioContextMention, studioModeToUseCase, StudioUseCase, studioUseCaseToMode,
   UserArtifactIndex, UserConversationEntry,
 } from './lookerApi'
-import { listUserLookmlSessions, LookmlSessionIndex } from './lookmlTool'
 import { getErrorMessage, StudioAuthAndPrefs } from './studioControllerAuth'
 
 export function useStudioMetadata(auth: StudioAuthAndPrefs) {
@@ -81,7 +80,6 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   const [loadingMetadata, setLoadingMetadata] = useState<boolean>(
     () => Boolean(mockExt?.forceFolderSkeleton ?? true)
   )
-  const [folders, setFolders] = useState<Array<{ id: string; name: string }>>([])
   const [folderTreeNodes, setFolderTreeNodes] = useState<Record<string, LookerFolderNode>>(() => {
     const roots = buildRootLookerFolders()
     return Object.fromEntries(roots.map((r) => [r.id, r]))
@@ -138,7 +136,6 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   const [activeObjectId, setActiveObjectId] = useState('')
   const [conversations, setConversations] = useState<UserConversationEntry[]>([])
   const conversationLabelsRef = useRef<Record<string, string>>({})
-  const [lookmlSessions, setLookmlSessions] = useState<LookmlSessionIndex[]>([])
   const [savedScripts, setSavedScripts] = useState<SavedScript[]>([])
   const [healthScope, setHealthScope] = useState<'all' | 'looker' | 'bq'>('all')
 
@@ -386,11 +383,6 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   )
 
   useEffect(() => {
-    const list = Object.values(folderTreeNodes).map((f) => ({ id: String(f.id), name: f.name }))
-    if (list.length > 0) setFolders(list)
-  }, [folderTreeNodes])
-
-  useEffect(() => {
     if (!selectedFolderId) return
     void hydrateFolderAncestors(selectedFolderId)
   }, [selectedFolderId, hydrateFolderAncestors])
@@ -431,9 +423,6 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
         loadUserEnvironmentId(core40SDK, resolvedUserId, getArtifactNamespace(extensionSDK)).then((savedEnvId) => {
           if (mounted && savedEnvId) syncSharedEnvironmentId(savedEnvId)
         })
-        listUserLookmlSessions(core40SDK, extensionSDK, resolvedUserId).then((s) => {
-          if (mounted) setLookmlSessions(s)
-        })
         listSavedScripts(core40SDK, resolvedUserId)
           .then((items) => { if (mounted) setSavedScripts(items) })
           .catch(() => {})
@@ -454,7 +443,6 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
           return next
         })
         setRootFolderIds(initialRootIds)
-        setFolders(rawFolders.map((f) => ({ id: String(f.id), name: f.name })))
         const storedFolderId = asyncStoredFolderId || readInitialSelectedFolderId()
         const targetInitialFolder = extMock?.initialSelectedFolderId
           ? String(extMock.initialSelectedFolderId)
@@ -570,7 +558,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     availableLookmlProjects, canDeployLookml,
     loadingMetadata, setLoadingMetadata,
     starterPrompts, setStarterPrompts, starterPromptsLoading, setStarterPromptsLoading,
-    models, folders, folderTreeNodes, rootFolderIds, folderChildrenById,
+    models, folderTreeNodes, rootFolderIds, folderChildrenById,
     expandedFolderIds, loadingFolderIds, toggleExpandFolder,
     hydrateFolderAncestors, handleSearchFolders,
     selectedExplores, setSelectedExplores,
@@ -581,7 +569,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     agentSession, messages,
     catalogItems, setCatalogItems, activeObjectId, setActiveObjectId,
     conversations, setConversations, conversationLabelsRef, refreshCatalog,
-    lookmlSessions, setLookmlSessions, savedScripts, setSavedScripts,
+    savedScripts, setSavedScripts,
     healthScope, setHealthScope,
   }
 }

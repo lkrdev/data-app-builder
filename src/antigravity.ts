@@ -1,6 +1,11 @@
 import type { Looker40SDK } from '@looker/sdk'
 
-import { callInteractionsApi, streamInteractionUntilActionOrDone } from './antigravityAuth'
+import {
+  callInteractionsApi,
+  fetchEnvironmentFile,
+  normalizeSandboxFilePath,
+  streamInteractionUntilActionOrDone,
+} from './antigravityAuth'
 import {
   AGENTS_MD,
   buildNativeContentGuide,
@@ -16,13 +21,18 @@ import {
 } from './antigravityPrompts'
 import {
   BUILTIN_SKILLS_FILES,
+  BUILTIN_WORKSPACE_FILES,
   collectInteractionTextCandidates,
+  type ConversationThreadTurnLike,
   extractBundleFromInteraction,
   extractInteractionActivitySteps,
   extractInteractionOutputText,
   extractInteractionTelemetry,
   extractNativeContentFromInteraction,
+  extractNonThoughtText,
   extractTddFromInteraction,
+  extractThoughtText,
+  formatConversationThreadMarkdown,
   formatFriendlyLookerActivityLabel,
   INTERNAL_JARGON_THOUGHT_RE,
   parseStepArguments,
@@ -96,7 +106,7 @@ export * from './antigravityPrompts'
 export * from './lookmlSkills'
 export {
   buildStudioRoute, clampLeftPaneWidth, classifyStudioUseCase, convertRelativeDateFilterToFixed,
-  DEFAULT_BUSY_SEND_ACTION, DEFAULT_LEFT_PANE_WIDTH, discoverAccessibleConnections, EXPLICIT_SCRIPT_CREATION_RE,
+  copyTextWithExtensionSdk, DEFAULT_BUSY_SEND_ACTION, DEFAULT_LEFT_PANE_WIDTH, discoverAccessibleConnections, EXPLICIT_SCRIPT_CREATION_RE,
   extractResolvedUseCase, formatAccessibleConnectionsMarkdown, formatContentInventoryMarkdown, getAllowedUseCases, getUseCaseLabel,
   isConversationalNoOpPrompt, isLookerInstanceMetadataQuery, loadStoredBusySendAction, loadStoredLeftPaneWidth, loadStoredRightPaneCollapsed,
   matchExplicitUseCaseRule, MAX_LEFT_PANE_WIDTH, MIN_LEFT_PANE_WIDTH,
@@ -1333,4 +1343,193 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
     },
     status: 'standby',
   }
+}
+
+const STATIC_SANDBOX_PATH_RE =
+  /^workspace\/(?:\.lkr_extension_cache\/|(?:\.agents\/)?skills\/|AGENTS\.md$|DATA_APP_GUIDE\.md$|DATA_INVESTIGATOR_GUIDE\.md$|bootstrap_lookml\.py$|bundle_app\.py$|sitecustomize\.py$)/i
+const BINARY_SANDBOX_EXT_RE = /\.(?:png|jpe?g|gif|webp|ico|pdf|tar|gz|zip|pyc|wasm)$/i
+const WORKSPACE_FILE_RE = /\/workspace\/[A-Za-z0-9_./-]+\.[A-Za-z0-9]+/g
+
+function collectDynamicWorkspacePaths(texts: ReadonlyArray<string>): string[] {
+  const seen = new Set<string>()
+  const add = (raw: string) => {
+    const norm = normalizeSandboxFilePath(raw.split(/[?#]/)[0] || '').replace(/[,:;)'"`]+$/, '')
+    if (norm.startsWith('workspace/') && norm !== 'workspace' && !norm.endsWith('/') && !STATIC_SANDBOX_PATH_RE.test(norm) && !BINARY_SANDBOX_EXT_RE.test(norm) && !BUILTIN_WORKSPACE_FILES[`/${norm}`] && !BUILTIN_WORKSPACE_FILES[norm]) {
+      seen.add(norm)
+    }
+  }
+  texts.forEach((t) => {
+    if (!t) return
+    add(t)
+    ;(t.match(WORKSPACE_FILE_RE) || []).forEach(add)
+  })
+  return Array.from(seen)
+}
+
+const toRawText = (val: unknown): string =>
+  val === undefined || val === null ? '' : typeof val === 'string' ? val : JSON.stringify(val, null, 2)
+
+function formatInteractionStepForDebug(step: AntigravityInteractionStep, idx: number): string {
+  const raw = step as Record<string, unknown>
+  const nested = step.function_call || step.code_execution || step.code_execution_call || step.executable_code || step.view_file_call || step.edit_file_call || step.skill_lookup_call
+  const stepType = String(step.type || (step.function_call ? 'function_call' : step.code_execution ? 'code_execution' : 'step'))
+  const fnName = String(step.name || nested?.name || '').trim()
+  const meta = [step.id ? `id=\`${step.id}\`` : '', step.call_id ? `call_id=\`${step.call_id}\`` : '', step.status ? `status=\`${step.status}\`` : ''].filter(Boolean).join(', ')
+  const lines = [`##### Step ${idx + 1}: \`${stepType}\`${fnName ? ` — \`${fnName}\`` : ''}${meta ? ` (${meta})` : ''}`]
+  const rawArgs = step.arguments ?? step.args ?? nested?.arguments ?? nested?.args
+  const parsedArgs = parseStepArguments(rawArgs)
+  const thought = extractThoughtText(step.thought) || extractThoughtText(parsedArgs.thought)
+  if (thought) lines.push('', '**Thought:**', '```text', thought, '```')
+  const execCode = String(step.code || step.command || nested?.code || nested?.command || parsedArgs.command || '').trim()
+  const lang = String(step.language || nested?.language || parsedArgs.language || '').toLowerCase()
+  if (execCode) lines.push('', `**Executed Code (${lang || 'bash'}):**`, `\`\`\`${lang === 'python' ? 'python' : 'bash'}`, execCode, '```')
+  if (rawArgs !== undefined) {
+    if (typeof parsedArgs.code === 'string' && parsedArgs.code && parsedArgs.code !== execCode) {
+      lines.push('', '**Tool Code (`arguments.code`):**', '```python', parsedArgs.code, '```')
+    }
+    lines.push('', '**Arguments:**', '```json', toRawText(typeof rawArgs === 'string' && Object.keys(parsedArgs).length ? parsedArgs : rawArgs), '```')
+  }
+  const execRes = raw.code_execution_result && typeof raw.code_execution_result === 'object' ? (raw.code_execution_result as Record<string, unknown>) : undefined
+  ;(
+    [
+      ['Outcome', raw.outcome ?? execRes?.outcome],
+      ['Stdout', step.stdout ?? execRes?.stdout],
+      ['Stderr', step.stderr ?? execRes?.stderr],
+      ['Output', step.output ?? execRes?.output],
+      ['Result', step.result ?? raw.response],
+      ['Text', step.text],
+    ] as Array<[string, unknown]>
+  ).forEach((entry) => {
+    const s = toRawText(entry[1])
+    if (s) lines.push('', `**${entry[0]}:**`, '```text', s, '```')
+  })
+  return lines.join('\n')
+}
+
+export interface FetchConversationSandboxDebugOptions {
+  extensionSDK?: AntigravityExtensionHostLike; auth?: AntigravityAuth; conversationId?: string; label?: string
+  useCase?: string; model?: string; thinkingLevel?: string; environmentId?: string; lastInteractionId?: string
+  messages?: ReadonlyArray<ConversationThreadTurnLike>; liveActivitySteps?: AntigravityActivityStep[]; busyStatus?: string | null
+  contentItems?: ReadonlyArray<{ key?: string; id?: string; contentType?: string; title?: string; embedPath?: string; filePath?: string }>
+  maxTurns?: number; maxWorkspaceFiles?: number
+}
+
+export function fetchConversationSandboxDebugMarkdown(opts: FetchConversationSandboxDebugOptions): Promise<string> {
+  const { extensionSDK, auth, conversationId, label, useCase, model, thinkingLevel, messages = [], liveActivitySteps = [], busyStatus, contentItems = [], maxTurns = 30, maxWorkspaceFiles = 10 } = opts
+  const startId = String(opts.lastInteractionId || messages.slice().reverse().find((m) => m.interactionId)?.interactionId || '').trim()
+  let resolvedEnvId = normalizeEnvironmentId(opts.environmentId) || String(opts.environmentId || '').trim()
+  const canFetch = Boolean(auth && (auth.mode === 'apikey' ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy) : Boolean(auth.oauthToken?.trim())))
+  const chainNewestFirst: AntigravityInteractionPayload[] = []
+  const remoteErrors: string[] = []
+  const seen = new Set<string>()
+
+  const walkChain = (currId: string): Promise<void> => {
+    if (!currId || seen.has(currId) || seen.size >= maxTurns) return Promise.resolve()
+    seen.add(currId)
+    return callInteractionsApi(extensionSDK, auth!, `interactions/${encodeURIComponent(currId)}`, 'GET').then(
+      (fetched) => {
+        const envFromTurn = normalizeEnvironmentId(fetched.environment_id)
+        if (envFromTurn && !normalizeEnvironmentId(resolvedEnvId)) resolvedEnvId = envFromTurn
+        const isPrewarm = JSON.stringify(fetched.input ?? '').includes('[PREWARM:')
+        if (isPrewarm) {
+          if (chainNewestFirst.length) chainNewestFirst[chainNewestFirst.length - 1].previous_interaction_id = undefined
+        } else {
+          chainNewestFirst.push({ ...fetched, id: fetched.id || currId })
+        }
+        return walkChain(typeof fetched.previous_interaction_id === 'string' ? fetched.previous_interaction_id.trim() : '')
+      },
+      (err: unknown) => {
+        remoteErrors.push(`Failed to fetch interaction \`${currId}\`: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    )
+  }
+
+  const chainPromise = startId && canFetch && auth
+    ? walkChain(startId)
+    : (startId && !canFetch && remoteErrors.push('Skipped remote interaction fetch: not authenticated.'), Promise.resolve())
+
+  return chainPromise.then(() => {
+    const chronological = chainNewestFirst.slice().reverse()
+    const scanTexts: string[] = []
+    messages.forEach((m) => {
+      scanTexts.push(m.text || '')
+      ;(m.activitySteps || []).forEach((st) => scanTexts.push(st.path || '', st.detail || '', st.title || ''))
+    })
+    liveActivitySteps.forEach((st) => scanTexts.push(st.path || '', st.detail || '', st.title || ''))
+    contentItems.forEach((ci) => { if (ci.filePath) scanTexts.push(`/workspace/lookml/${ci.filePath.replace(/^\/+/, '')}`) })
+    chronological.forEach((inter) => scanTexts.push(JSON.stringify(inter)))
+
+    const workspacePaths = collectDynamicWorkspacePaths(scanTexts).slice(0, maxWorkspaceFiles)
+    const filesPromise = workspacePaths.length > 0 && resolvedEnvId && canFetch && auth
+      ? Promise.allSettled(workspacePaths.map((p) => fetchEnvironmentFile({ extensionSDK, auth, environmentId: resolvedEnvId, path: p }))).then((settled) =>
+          settled.map((r, i) => (r.status === 'fulfilled' ? { path: `/${workspacePaths[i]}`, content: r.value } : { path: `/${workspacePaths[i]}`, error: r.reason instanceof Error ? r.reason.message : String(r.reason) }))
+        )
+      : Promise.resolve([] as Array<{ path: string; content?: string; error?: string }>)
+
+    return filesPromise.then((fetchedFiles) => {
+      const out: string[] = [
+        `# Conversation Sandbox Debug Dump${label?.trim() ? ` — ${label.trim()}` : ''}`, '',
+        '## Conversation Metadata',
+        `- **Conversation ID:** \`${conversationId || 'unsaved'}\``,
+        ...(label?.trim() ? [`- **Title:** ${label.trim()}`] : []),
+        ...(useCase ? [`- **Use Case:** \`${useCase}\``] : []),
+        ...(model ? [`- **Model:** \`${model}\`${thinkingLevel ? ` (thinking: \`${thinkingLevel}\`)` : ''}`] : []),
+        `- **Environment ID:** \`${resolvedEnvId || 'none'}\``,
+        `- **Latest Interaction ID:** \`${startId || 'none'}\``,
+        `- **Fetched Remote Interactions:** ${chronological.length}`,
+        ...(contentItems.length ? [`- **Content Items (${contentItems.length}):** ${contentItems.map((c) => `\`${c.contentType || 'item'}:${c.id || c.key || ''}\` (${c.title || ''})`).join(', ')}`] : []),
+        '', '## UI Chat Transcript & In-Memory Steps', '',
+        formatConversationThreadMarkdown(messages, { title: label, conversationId, liveActivitySteps, busyStatus }),
+        '', '## Remote Antigravity Sandbox Interaction Chain',
+        ...(remoteErrors.length ? ['', ...remoteErrors.map((e) => `- **Warning:** ${e}`)] : []),
+      ]
+
+      if (!chronological.length) {
+        out.push('', '_No remote interactions fetched._')
+      } else {
+        chronological.forEach((inter, idx) => {
+          const u = inter.usage || inter.usage_metadata
+          const tok = u ? `input=${u.input_tokens ?? u.total_input_tokens ?? u.prompt_token_count ?? 0}, output=${u.output_tokens ?? u.total_output_tokens ?? u.candidates_token_count ?? 0}, thought=${u.thought_tokens ?? u.total_thought_tokens ?? u.thoughts_token_count ?? 0}` : 'n/a'
+          out.push('', `### Turn ${idx + 1} Interaction: \`${inter.id || 'unknown'}\``, `- **Status:** \`${inter.status || 'unknown'}\``, `- **Previous Interaction ID:** \`${inter.previous_interaction_id || 'none'}\``, `- **Environment ID:** \`${inter.environment_id || resolvedEnvId || 'none'}\``, `- **Tokens:** ${tok}`)
+          if (inter.error?.message) out.push(`- **Error:** ${inter.error.message}`)
+          if (inter.input) {
+            const items = Array.isArray(inter.input) ? inter.input : [inter.input]
+            const inputBlocks = items.map((item, i) => {
+              if (typeof item === 'string') return item
+              if (!item || typeof item !== 'object') return ''
+              const rec = item as Record<string, unknown>
+              if (typeof rec.text === 'string' && rec.text) return `**Input[${i}] (${String(rec.type || rec.role || 'text')}):**\n\n${rec.text}`
+              if (rec.type === 'function_result' || rec.result !== undefined || rec.response !== undefined) return `**Input[${i}] \`function_result\` (${String(rec.name || 'tool')}):**\n\`\`\`json\n${toRawText(rec.result ?? rec.response ?? rec.output)}\n\`\`\``
+              const clean: Record<string, unknown> = {}
+              Object.keys(rec).forEach((k) => {
+                const v = rec[k]
+                clean[k] = k === 'sources' ? '[omitted static sources]' : (k === 'data' || k === 'inline_data') && typeof v === 'string' && v.length > 256 ? `[base64: ${v.length} chars]` : v
+              })
+              return `\`\`\`json\n${JSON.stringify(clean, null, 2)}\n\`\`\``
+            }).filter(Boolean).join('\n\n')
+            if (inputBlocks) out.push('', '#### Input', '', inputBlocks)
+          }
+          if (inter.steps?.length) out.push('', `#### Raw Steps (${inter.steps.length})`, ...inter.steps.flatMap((st, sIdx) => ['', formatInteractionStepForDebug(st, sIdx)]))
+          if (inter.outputs?.length || inter.output_text) {
+            out.push('', '#### Outputs')
+            ;(inter.outputs || []).forEach((o, oIdx) => {
+              const oT = extractThoughtText(o.thought)
+              if (oT) out.push('', `**Output[${oIdx}] Thought:**`, '```text', oT, '```')
+              const oTxt = typeof o.text === 'string' && o.text ? o.text : extractNonThoughtText(o.content ?? o.parts)
+              if (oTxt) out.push('', `**Output[${oIdx}] Text:**`, '', oTxt)
+            })
+            if (inter.output_text) out.push('', '**output_text:**', '', inter.output_text)
+          }
+        })
+      }
+
+      out.push('', '## Sandbox Workspace Files')
+      if (!fetchedFiles.length) {
+        out.push('', workspacePaths.length ? `_Discovered ${workspacePaths.length} workspace path(s) (${workspacePaths.map((p) => `\`/${p}\``).join(', ')}), but sandbox fetch was unavailable._` : '_No dynamic `/workspace/...` files referenced._')
+      } else {
+        fetchedFiles.forEach((f) => out.push('', `### \`${f.path}\``, ...(f.error ? [`- **Fetch Error:** ${f.error}`] : ['```', f.content ?? '', '```'])))
+      }
+      return out.join('\n').trim()
+    })
+  })
 }

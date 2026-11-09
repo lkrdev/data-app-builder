@@ -28,6 +28,34 @@ const repoRoot = path.resolve(__dirname, '..')
 const require = createRequire(import.meta.url)
 const LkrCodeMode = require(path.join(repoRoot, 'src/vendor/codemode.js'))
 
+const babel = require('@babel/core')
+const Module = require('node:module')
+for (const ext of ['.ts', '.tsx']) {
+  Module._extensions[ext] = (mod, filename) => {
+    const src = readFileSync(filename, 'utf8')
+    const out = babel.transformSync(src, {
+      filename,
+      presets: [
+        ['@babel/preset-env', { targets: { node: 'current' }, modules: 'commonjs' }],
+        ['@babel/preset-react', { runtime: 'automatic' }],
+        ['@babel/preset-typescript', { isTSX: true, allExtensions: true }],
+      ],
+    })
+    mod._compile(out.code, filename)
+  }
+}
+const { fetchConversationSandboxDebugMarkdown } = require(path.join(repoRoot, 'src/antigravity.ts'))
+
+function resolveLiveGeminiAuth() {
+  if (process.env.GEMINI_API_KEY?.trim()) return { mode: 'apikey', apiKey: process.env.GEMINI_API_KEY.trim() }
+  const envFile = '/usr/local/google/home/bryanweber/bwebs/agentic-thelook/.env'
+  if (existsSync(envFile)) {
+    const m = readFileSync(envFile, 'utf8').match(/^GEMINI_API_KEY=(.+)$/m)
+    if (m?.[1]) return { mode: 'apikey', apiKey: m[1].trim().replace(/^['"]|['"]$/g, '') }
+  }
+  return undefined
+}
+
 const args = process.argv.slice(2)
 const isLive = args.includes('--live')
 const evalFilter = args.find((a) => a.startsWith('--eval='))?.split('=')[1]?.trim()?.toLowerCase()
@@ -156,7 +184,19 @@ return {"personal_folder_id": me_user.get("personal_folder_id"), "short": short_
     toolBudget: sdkCalls === 1,
     outputRubric: res.long.truncated === true && res.long.total_items === 10 && res.short.truncated === false,
     safety: true,
+    useCase: 'tile',
     detail: `1 CodeMode call (${sdkCalls} Looker HTTP call), short=3 items (untruncated), long=10 items across 2 folders (max 2 links/folder + /workspace/content_inventory.md), 0 dashboard 404s`,
+    messages: [
+      { role: 'user', text: 'What dashboards and Looks are in my personal and shared folders?' },
+      {
+        role: 'assistant',
+        text: res.long.summary_markdown,
+        activitySteps: [
+          { id: 'eval01_cm', kind: 'codemode', title: 'Executing format_content_inventory in Monty WASM', detail: 'me() + format_content_inventory(folders_data)', content: JSON.stringify(res, null, 2), status: 'done' },
+          { id: 'eval01_md', kind: 'file', title: 'Writing content_inventory.md', path: '/workspace/content_inventory.md', content: res.long.full_markdown, status: 'done' },
+        ],
+      },
+    ],
   }
 }
 
@@ -227,7 +267,18 @@ return {"count": len(all_agents), "ecom_id": ecom_hits[0]["id"], "gq_count": len
     toolBudget: queryCalls === 1,
     outputRubric: res.count === 2 && res.ecom_id === 'ca_ecom_01',
     safety: true,
+    useCase: 'conversational-analytics',
     detail: `search_agents() in Monty WASM inspected ${res.count} CA agents + golden_queries, matched ca_ecom_01 for margin, and executed fallback run_inline_query when no CA agent matched`,
+    messages: [
+      { role: 'user', text: 'Compare search_agents(query="margin") vs search_agents(query="payroll") fallback routing' },
+      {
+        role: 'assistant',
+        text: `<USE_CASE>conversational-analytics</USE_CASE>\nMatched CA agent \`${res.ecom_id}\` for margin and fell back to \`run_inline_query\` (${res.fallback_rows} row) when no CA agent matched payroll.`,
+        activitySteps: [
+          { id: 'eval02_cm', kind: 'codemode', title: 'Searching accessible Looker Conversational Analytics agents and golden queries...', detail: 'search_agents()', content: JSON.stringify({ code: rawCode, result: res }, null, 2), status: 'done' },
+        ],
+      },
+    ],
   }
 }
 
@@ -246,7 +297,19 @@ async function eval03MultiTurnDataApp() {
     toolBudget: turn1ToolsOk && warmToolsOk,
     outputRubric: allExtracted && iter10.turns[3].widgets_extracted === 8,
     safety: zeroRetries,
+    useCase: 'app',
+    environmentId: iter10.environment_id,
+    lastInteractionId: iter10.turns[iter10.turns.length - 1]?.interaction_id,
     detail: `4-turn Data App loop passed (${iter10.turns.map((t) => `${t.id}:${t.widgets_extracted}w`).join(', ')}); T1 tools=1 codemode+1 bash, T2-T4 warm tools=0 codemode+1 bash, retries=0`,
+    messages: iter10.turns.flatMap((t) => [
+      { role: 'user', text: t.prompt || `Turn ${t.id}` },
+      {
+        role: 'assistant',
+        text: `Extracted ${t.widgets_extracted} widgets (codemode=${t.codemode_calls}, bash=${t.bash_calls}, verify_retries=${t.verify_retries}).`,
+        interactionId: t.interaction_id,
+        activitySteps: [{ id: `eval03_${t.id}`, kind: 'code_execution', language: 'PYTHON', title: `Bundle & verify ${t.id}`, content: JSON.stringify(t, null, 2), status: 'done' }],
+      },
+    ]),
   }
 }
 
@@ -265,7 +328,19 @@ async function eval04MultiTurnContentStudio() {
     toolBudget: zeroBash && oneCodeModePerTurn,
     outputRubric: wasmOk && iter10.totals.codemode_calls === 4,
     safety: zeroBash && iter10.totals.api_retries === 0,
+    useCase: 'dashboard',
+    environmentId: iter10.environment_id,
+    lastInteractionId: turnList[turnList.length - 1]?.interaction_id,
     detail: `4-turn Content Studio loop passed (bash=0, codemode=1/turn, Looker HTTP=${iter10.totals.looker_http_calls} total across 4 turns, WASM macros verified)`,
+    messages: Object.entries(iter10.turns || {}).flatMap(([tid, t]) => [
+      { role: 'user', text: t.prompt || `Content Studio Turn ${tid}` },
+      {
+        role: 'assistant',
+        text: `Completed ${tid} (codemode=${t.codemode_calls}, bash=${t.bash_calls}, looker_http=${t.looker_http_calls}).`,
+        interactionId: t.interaction_id,
+        activitySteps: [{ id: `eval04_${tid}`, kind: 'codemode', title: `Executing Content Studio macro (${tid})`, content: JSON.stringify(t, null, 2), status: 'done' }],
+      },
+    ]),
   }
 }
 
@@ -286,7 +361,18 @@ async function eval05ConcurrentSharedEnv() {
     toolBudget: totalCodeMode > 0 && totalCodeMode <= 6,
     outputRubric: eightOfEight && fsIsolated,
     safety: singleEnv && zero400s && fsIsolated,
+    useCase: 'auto',
+    environmentId: iter10.shared_environment_id,
     detail: `Concurrent Conv A (Data App) + Conv B (Content Studio) on 1 shared env (${iter10.shared_environment_id}): score=${iter10.functional_score}, codemode_calls=${totalCodeMode}, 400_errors=0, filesystem_isolation=true`,
+    messages: Object.entries(iter10.turns || {}).flatMap(([tid, t]) => [
+      { role: 'user', text: `[${tid}] ${t.prompt || tid}` },
+      {
+        role: 'assistant',
+        text: `[${tid}] env=${t.environment_id}, passed=${t.self_eval?.passed}`,
+        interactionId: t.interaction_id,
+        activitySteps: [{ id: `eval05_${tid}`, kind: 'codemode', title: `Concurrent turn ${tid}`, content: JSON.stringify(t, null, 2), status: 'done' }],
+      },
+    ]),
   }
 }
 
@@ -426,7 +512,19 @@ customElements.define('margin-investigator-app', MarginInvestigatorApp);
       toolBudget: kdaCalls === 1,
       outputRubric: bundle.widgets.length === 2 && allLimit500 && bundle.raw_code.includes('What This Chart Means') && bundle.raw_code.includes('Next Investigation Path'),
       safety: noRelativeDates,
+      useCase: 'data-investigator',
       detail: `KDA + Data Investigator bundle verified: fixed date window=${kdaRes.fixed_window}, ${bundle.widgets.length} widgets with limit="500", 0 relative dates, Doc/Slides switcher present`,
+      messages: [
+        { role: 'user', text: 'Investigate Q1 gross margin drop over the last 30 days' },
+        {
+          role: 'assistant',
+          text: `Completed KDA root-cause narrative (${kdaRes.fixed_window}): top driver ${kdaRes.top_driver}.`,
+          activitySteps: [
+            { id: 'eval06_kda', kind: 'codemode', title: 'Running run_key_driver_analysis', content: JSON.stringify(kdaRes, null, 2), status: 'done' },
+            { id: 'eval06_app', kind: 'file', title: 'Bundled MarginInvestigatorApp', path: '/workspace/apps/margin-investigator/app.js', content: JSON.stringify(bundle, null, 2), status: 'done' },
+          ],
+        },
+      ],
     }
   } finally {
     rmSync(workDir, { recursive: true, force: true })
@@ -538,7 +636,18 @@ print(k)`,
         hasProjectLink &&
         requiresProjectAndDashLinks,
       safety: pyKey === nodeKey && zeroSdkDotGlobals,
+      useCase: 'lookml',
       detail: `LOOKML_BUNDLE + Turn-1 <4s fast-path verified (project=${bundle.project_id}, hasProjectLink=${hasProjectLink}, diff files=${bundle.files.length}, parity=matched, sitecustomize SHA-256=${pyKey.slice(0, 12)}...)`,
+      messages: [
+        { role: 'user', text: 'Onboard ecommerce_core LookML refinement and verify SQL-to-LookML parity' },
+        {
+          role: 'assistant',
+          text: bundle.summary_markdown || 'Validated LookML bundle.',
+          activitySteps: [
+            { id: 'eval07_lkml', kind: 'file', title: 'Bundled +order_items.view.lkml', path: '/workspace/data/run_eval07/lookml/views/refinements/+order_items.view.lkml', content: JSON.stringify(bundle, null, 2), status: 'done' },
+          ],
+        },
+      ],
     }
   } finally {
     rmSync(workDir, { recursive: true, force: true })
@@ -611,7 +720,18 @@ async function eval08ThreePillarHealthCheck() {
     toolBudget: sdkCalls <= 15,
     outputRubric: Boolean(res.pillar1 && res.pillar2 && res.pillar3),
     safety: true,
+    useCase: 'health-check',
     detail: `THREE_PILLAR_CODEMODE_PY executed in Monty WASM (${sdkCalls} Looker HTTP calls across Pillars 1/2/3) + 7-section TECHNICAL_DESIGN_DOCUMENT.md template verified`,
+    messages: [
+      { role: 'user', text: 'Run 3-Pillar Looker & BigQuery Health Check on thelook_project' },
+      {
+        role: 'assistant',
+        text: `Completed 3-Pillar telemetry collection (${sdkCalls} Looker HTTP calls).`,
+        activitySteps: [
+          { id: 'eval08_cm', kind: 'codemode', title: 'Executing THREE_PILLAR_CODEMODE_PY', content: JSON.stringify(res, null, 2), status: 'done' },
+        ],
+      },
+    ],
   }
 }
 
@@ -629,7 +749,12 @@ async function eval09ConversationalAnalyticsRouter() {
     toolBudget: true,
     outputRubric: true,
     safety: true,
+    useCase: 'conversational-analytics',
     detail: 'Stateless CA sub-agent (store:false, tools:[]), Turn-1 <CA_AGENT_SELECTION> fast-path (0 redundant LLM calls), and 4 CA_EMBED_COLLAPSE_PARAMS verified',
+    messages: [
+      { role: 'user', text: 'Verify stateless isolated CA sub-agent router & embed collapse parameters' },
+      { role: 'assistant', text: 'Verified store:false, background:false, tools:[], Turn-1 <CA_AGENT_SELECTION> fast-path, and CA_EMBED_COLLAPSE_PARAMS.' },
+    ],
   }
 }
 
@@ -690,7 +815,18 @@ async function eval10RbacSafemodeNoopGuardrails() {
     toolBudget: true,
     outputRubric: true,
     safety: writeBlocked && !writeExecuted && decisions.length > 0,
+    useCase: 'auto',
     detail: `Read-only me() bypassed prompt (0 prompts); create_dashboard intercepted (${decisions[0]}) and blocked on 'deny' (writeExecuted=false); 404 & no-op guards verified`,
+    messages: [
+      { role: 'user', text: 'Verify Safe Mode RBAC permission gate on me() vs create_dashboard()' },
+      {
+        role: 'assistant',
+        text: `Read-only \`me()\` allowed with 0 prompts; \`create_dashboard\` intercepted (\`${decisions[0]}\`) and denied (writeExecuted=${writeExecuted}).`,
+        activitySteps: [
+          { id: 'eval10_gate', kind: 'codemode', title: 'Safe Mode permission gate check', content: JSON.stringify({ readOut, decisions, writeBlocked, writeExecuted }, null, 2), status: 'done' },
+        ],
+      },
+    ],
   }
 }
 
@@ -717,6 +853,12 @@ async function main() {
   let totalPoints = 0
   const maxPoints = selected.length * 4
 
+  const evalDumpDir = path.join(repoRoot, 'tmp/eval')
+  const outDir = path.join(repoRoot, 'tmp/evals')
+  mkdirSync(evalDumpDir, { recursive: true })
+  mkdirSync(outDir, { recursive: true })
+  const liveAuth = isLive ? resolveLiveGeminiAuth() : undefined
+
   for (const item of selected) {
     const t0 = performance.now()
     const grade = await item.fn()
@@ -724,7 +866,7 @@ async function main() {
     const score = [grade.routing, grade.toolBudget, grade.outputRubric, grade.safety].filter(Boolean).length
     totalPoints += score
     const passed = score === 4
-    results.push({
+    const record = {
       id: item.id,
       num: item.num,
       title: item.title,
@@ -738,12 +880,27 @@ async function main() {
         safety: Boolean(grade.safety),
       },
       detail: grade.detail,
+    }
+    results.push(record)
+
+    const debugMd = await fetchConversationSandboxDebugMarkdown({
+      auth: grade.auth || liveAuth,
+      conversationId: item.id,
+      label: `${item.id} — ${item.title}`,
+      useCase: grade.useCase || 'auto',
+      environmentId: grade.environmentId,
+      lastInteractionId: grade.lastInteractionId,
+      messages: [
+        ...(grade.messages || [{ role: 'user', text: item.title }]),
+        {
+          role: 'assistant',
+          text: `### Eval Grader Summary (${record.score}, ${elapsedMs}ms)\n- **Detail:** ${grade.detail}\n- **Dimensions:** \`${JSON.stringify(record.dimensions)}\``,
+        },
+      ],
     })
+    writeFileSync(path.join(evalDumpDir, `${item.id}.md`), debugMd, 'utf8')
     console.log(`${passed ? '✓' : '✗'} [${item.id}] ${item.title} (${score}/4, ${elapsedMs}ms) — ${grade.detail}`)
   }
-
-  const outDir = path.join(repoRoot, 'tmp/evals')
-  mkdirSync(outDir, { recursive: true })
 
   const mdLines = [
     '# Looker Data App Studio — 10-Eval Scorecard',
@@ -763,15 +920,14 @@ async function main() {
     '',
   ]
 
-  writeFileSync(path.join(outDir, 'scorecard.md'), mdLines.join('\n'), 'utf8')
-  writeFileSync(
-    path.join(outDir, 'results.json'),
-    JSON.stringify({ mode: isLive ? 'live' : 'offline', totalPoints, maxPoints, passed: totalPoints === maxPoints, results }, null, 2),
-    'utf8'
-  )
+  const resultsJson = JSON.stringify({ mode: isLive ? 'live' : 'offline', totalPoints, maxPoints, passed: totalPoints === maxPoints, results }, null, 2)
+  for (const dir of [evalDumpDir, outDir]) {
+    writeFileSync(path.join(dir, 'scorecard.md'), mdLines.join('\n'), 'utf8')
+    writeFileSync(path.join(dir, 'results.json'), resultsJson, 'utf8')
+  }
 
   assert.equal(totalPoints, maxPoints, `Eval suite failed: ${totalPoints}/${maxPoints}`)
-  console.log(`\n✓ All ${results.length} Evals passed (${totalPoints}/${maxPoints})! Scorecard written to tmp/evals/scorecard.md`)
+  console.log(`\n✓ All ${results.length} Evals passed (${totalPoints}/${maxPoints})! Debug dumps written to tmp/eval/*.md & tmp/eval/scorecard.md`)
 }
 
 main().catch((err) => {
