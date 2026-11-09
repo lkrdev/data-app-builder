@@ -73,13 +73,13 @@ import {
   parseCaAgentSelectionResponse, parseStudioRoute, persistSelectedFolderId, rawLookerRequest,
   readInitialSelectedFolderId, readSwrCache, resolveConversationRelatedContent,
   resolveStudioContentEmbedPath, resolveStudioTheme, resolveSystemTheme, resolveUserCapabilities,
-  saveStoredBusySendAction, saveUserArtifact, saveUserConversation, saveUserEnvironmentId, searchGlobalContentV2,
+  saveNativeContentArtifact, saveStoredBusySendAction, saveUserArtifact, saveUserConversation, saveUserEnvironmentId, searchGlobalContentV2,
   searchLookerFolders, selectCaAgentViaIsolatedSubagent, shouldRouteToIsolatedCaSubagent,
   DEFAULT_BUSY_SEND_ACTION, loadStoredBusySendAction, STUDIO_BUSY_SEND_ACTION_STORAGE_KEY,
   STUDIO_FOLDER_STORAGE_KEY, STUDIO_MODES, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
   StudioContentItem, SWR_DEDUPED_METHODS, upsertStudioContentItem, UserArtifactIndexItem, userStudioConfigArtifactKey,
 } from '../lookerApi'
-import { LookmlPreviewPane } from '../lookmlTool'
+import { loadLookmlSessionArtifact, LookmlPreviewPane, saveLookmlSessionArtifact } from '../lookmlTool'
 
 interface MockInteractionPostBody {
   model?: string
@@ -6386,5 +6386,260 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     expect(USE_CASE_GUIDES.lookml.markdown).toContain('/looker-project-onboarding')
     expect(USE_CASE_GUIDES.auto.markdown).toContain('@explore:')
     expect(USE_CASE_GUIDES.dashboard.markdown).toContain('LookML Dashboards')
+  })
+
+  test('64. Issue #155: preserves previous_interaction_id + extracts bundles across multi-use-case turns, unifies contentItems (lookml/script/hidden/modified), prunes Looker Artifacts bloat, and isolates studio-conversation-debugger + root AGENTS.md rule', async () => {
+    clearArtifactServiceCache()
+
+    // 1. Cross-use-case continuity: LookML session -> Dashboard turn preserves previous_interaction_id and extracts <NATIVE_CONTENT_BUNDLE> even when toolMode === 'lookml'
+    const postedBodies: MockInteractionPostBody[] = []
+    const mockExtSdk = {
+      serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+        if (init?.body) postedBodies.push(JSON.parse(String(init.body)) as MockInteractionPostBody)
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            id: 'int_cross_mode_2',
+            environment_id: 'env_shared_155',
+            status: 'completed',
+            output_text:
+              '<USE_CASE>dashboard</USE_CASE>\nCreated Executive KPI UDD.\n<NATIVE_CONTENT_BUNDLE>{"id":"34","content_type":"dashboard","title":"Executive KPI UDD","folder_id":"1","tile_count":4}</NATIVE_CONTENT_BUNDLE>',
+          }),
+        }
+      },
+    }
+
+    const crossTurn = await runAntigravityTurn({
+      sdk: asSdk({ ok: async <T>(p: T) => p }),
+      extensionSDK: mockExtSdk,
+      userId: '1',
+      conversationId: 'conv_1762720000',
+      environmentId: 'env_shared_155',
+      auth: { mode: 'apikey' },
+      session: {
+        environmentId: 'env_shared_155',
+        lastInteractionId: 'int_lookml_turn_1',
+        conversationId: 'conv_1762720000',
+        toolType: 'lookml',
+        explores: ['ecom::orders'],
+      },
+      mode: 'data_app',
+      useCase: 'auto',
+      toolMode: 'lookml',
+      allowedModes: ['app', 'dashboard', 'lookml', 'tile', 'health-check', 'conversational-analytics'],
+      selectedExplores: ['ecom::orders'],
+      schemaMarkdown: '# Schema',
+      userPrompt: 'Now build an Executive KPI UDD dashboard on orders',
+      onStatus: () => {},
+    })
+
+    expect(postedBodies[0]?.previous_interaction_id).toBe('int_lookml_turn_1')
+    expect(crossTurn.resolvedUseCase).toBe('dashboard')
+    expect(crossTurn.nativeBundle?.id).toBe('34')
+    expect(crossTurn.nativeBundle?.title).toBe('Executive KPI UDD')
+
+    // 2. Unified contentItems hydration for lookml/script/report + hidden & source='modified' + embed target preload on lookml/script
+    expect(
+      hydrateConversationContentItems({
+        id: 'conv_lml',
+        type: 'lookml',
+        label: 'Orders Model Onboarding',
+        content: { sessionId: 'ecom_1762720001', projectId: 'ecom' },
+      })
+    ).toEqual([
+      expect.objectContaining({
+        key: 'lookml:ecom_1762720001',
+        id: 'ecom_1762720001',
+        contentType: 'lookml',
+        title: 'Orders Model Onboarding',
+      }),
+    ])
+    expect(
+      hydrateConversationContentItems({
+        id: 'conv_scr',
+        type: 'tile',
+        label: 'Space Audit Script',
+        content: { scriptId: 'audit_1' },
+      })
+    ).toEqual([
+      expect.objectContaining({
+        key: 'script:audit_1',
+        id: 'audit_1',
+        contentType: 'script',
+        title: 'Space Audit Script',
+      }),
+    ])
+    expect(
+      hydrateConversationContentItems({
+        id: 'conv_rep',
+        type: 'health-check',
+        label: '3-Pillar Audit',
+        content: { reportId: 'hc_9' },
+      })
+    ).toEqual([
+      expect.objectContaining({
+        key: 'report:hc_9',
+        id: 'hc_9',
+        contentType: 'report',
+        title: '3-Pillar Audit',
+      }),
+    ])
+
+    const step1 = upsertStudioContentItem([], {
+      id: '34',
+      dashboardId: '34',
+      contentType: 'dashboard',
+      title: 'Executive KPI UDD',
+      source: 'created',
+      hidden: true,
+    })
+    expect(step1.item.hidden).toBe(true)
+    const step2 = upsertStudioContentItem(step1.items, {
+      id: '34',
+      dashboardId: '34',
+      contentType: 'dashboard',
+      title: 'Executive KPI UDD v2',
+      source: 'modified',
+    })
+    expect(step2.item.hidden).toBe(false)
+    expect(step2.item.source).toBe('created')
+    expect(step2.item.title).toBe('Executive KPI UDD v2')
+
+    expect(
+      resolveLookerEmbedTarget({
+        activeContentItem: normalizeStudioContentItem({ id: 'ecom_1', contentType: 'lookml', title: 'LookML' }),
+        nonce: 1,
+      }).kind
+    ).toBe('preload')
+    expect(
+      resolveLookerEmbedTarget({
+        activeContentItem: normalizeStudioContentItem({ id: 'scr_1', contentType: 'script', title: 'Script' }),
+        nonce: 1,
+      }).kind
+    ).toBe('preload')
+
+    // 3. Lightweight Looker Artifacts pruning: strip activitySteps, images, rawCode from user_conversations:1 and omit studio.messages from obj_lookml_* & obj_dashboard_*
+    const rawArtifactStore = new Map<string, string>()
+    const mockSdk = asSdk({
+      ok: async <T>(p: T) => p,
+      artifact: async ({ key }: { key: string }) => {
+        const hit = rawArtifactStore.get(key)
+        return hit ? [{ key, version: 1, value: hit }] : []
+      },
+      update_artifacts: async (_ns: string, updates: Array<{ key: string; value: string }>) => {
+        for (const u of updates) rawArtifactStore.set(u.key, u.value)
+        return updates
+      },
+    })
+
+    await saveUserConversation(mockSdk, '1', {
+      id: 'conv_1762720000',
+      type: 'app',
+      label: 'Lightweight Pruning Test',
+      interactionId: 'int_155',
+      environmentId: 'env_155',
+      activeContentTabKey: 'data_app:42',
+      contentItems: [
+        {
+          key: 'data_app:42',
+          id: '42',
+          dashboardId: '42',
+          contentType: 'data_app',
+          title: 'Revenue App',
+          embedPath: '/embed/dashboards/42',
+          rawCode: 'export class HugeMultiMegabyteApp {}',
+          source: 'created',
+          hidden: true,
+        },
+      ],
+      messages: [
+        {
+          role: 'user',
+          text: 'Build app from screenshot',
+          images: ['data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA'],
+        } as unknown as ConversationRecord['messages'] extends Array<infer M> ? M : never,
+        {
+          role: 'assistant',
+          text: 'Published Data App #42.',
+          interactionId: 'int_155',
+          dashboardId: '42',
+          thinkingDurationSec: 4,
+          activitySteps: [{ id: 's1', kind: 'code', title: 'Bundled app', status: 'done', content: 'huge trace' }],
+        },
+      ],
+      updatedAt: '2026-11-09T20:00:00Z',
+    })
+
+    const persistedConvsJson = rawArtifactStore.get('user_conversations:1') || '[]'
+    expect(persistedConvsJson).not.toContain('HugeMultiMegabyteApp')
+    expect(persistedConvsJson).not.toContain('data:image/png;base64')
+    expect(persistedConvsJson).not.toContain('activitySteps')
+    const reloadedConvs = JSON.parse(persistedConvsJson) as ConversationRecord[]
+    expect(reloadedConvs[0]?.contentItems?.[0]?.hidden).toBe(true)
+    expect(reloadedConvs[0]?.contentItems?.[0]?.rawCode).toBeUndefined()
+    expect(reloadedConvs[0]?.messages).toEqual([
+      { role: 'user', text: 'Build app from screenshot' },
+      { role: 'assistant', text: 'Published Data App #42.', interactionId: 'int_155', dashboardId: '42', thinkingDurationSec: 4 },
+    ])
+
+    await saveLookmlSessionArtifact({
+      sdk: mockSdk,
+      userId: '1',
+      bundle: {
+        id: 'ecom_1762720001',
+        title: 'LookML Session',
+        project_id: 'ecom',
+        files: [],
+        validation: { passed: true, error_count: 0, errors: [] },
+        tests: [],
+        queries: [],
+      },
+      studio: {
+        explores: ['ecom::orders'],
+        lastInteractionId: 'int_lml_1',
+        environmentId: 'env_155',
+        messages: [{ role: 'user', text: 'Should not duplicate in obj_lookml' }],
+      },
+    })
+    const loadedLookmlObj = await loadLookmlSessionArtifact(mockSdk, undefined, 'ecom_1762720001')
+    expect(loadedLookmlObj.studio.messages).toBeUndefined()
+    expect(rawArtifactStore.get('obj_lookml_ecom_1762720001')).not.toContain('Should not duplicate in obj_lookml')
+
+    await saveNativeContentArtifact(
+      mockSdk,
+      undefined,
+      '1',
+      { id: '34', content_type: 'dashboard', title: 'Executive KPI UDD' },
+      '1',
+      null,
+      {
+        explores: ['ecom::orders'],
+        lastInteractionId: 'int_dash_1',
+        environmentId: 'env_155',
+        messages: [{ role: 'user', text: 'Should not duplicate in obj_dashboard' }],
+      }
+    )
+    expect(rawArtifactStore.get('obj_dashboard_34')).not.toContain('Should not duplicate in obj_dashboard')
+
+    // 4. Root-only AGENTS.md rule & studio-conversation-debugger excluded from sandbox bundle
+    const repoRoot = path.resolve(__dirname, '../..')
+    const rootAgents = readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8')
+    const upstreamAgents = readFileSync(path.join(repoRoot, 'upstream/payload/AGENTS.md'), 'utf8')
+    expect(rootAgents).toContain('## Looker Artifacts Lightweight-Only Rule')
+    expect(upstreamAgents).not.toContain('Looker Artifacts Lightweight-Only Rule')
+    expect(AGENTS_MD).not.toContain('Looker Artifacts Lightweight-Only Rule')
+    expect(BOOTSTRAP_LOOKML_PY).not.toContain('"lookml-session"')
+    expect(
+      Object.keys(SANDBOX_AGENT_SKILL_FILES).some((k) => k.includes('studio-conversation-debugger'))
+    ).toBe(false)
+    expect(
+      Object.keys(BUILTIN_SKILLS_FILES).some((k) => k.includes('studio-conversation-debugger'))
+    ).toBe(false)
+    expect(
+      buildWorkspaceSources({ schemaMarkdown: '# Schema' }).some((s) =>
+        s.target.includes('studio-conversation-debugger')
+      )
+    ).toBe(false)
   })
 })

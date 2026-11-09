@@ -1861,7 +1861,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           labelCallTools: labelCall ? labelCall.body.tools : null,
           labelCallHasPrevId: labelCall ? ('previous_interaction_id' in labelCall.body) : null,
           savedConvLabel: latestConvList[0] ? latestConvList[0].label : null,
-          routeAfterTurn1: window.__DAB_STUDIO__.history.location.pathname,
+          routeIsImmutableConv: window.__DAB_STUDIO__.history.location.pathname.startsWith('/c/conv_'),
           sidebarShowsGeneratedLabel:
             !document.querySelector('.dab-catalog-bar') &&
             Boolean(sidebarEl && (sidebarEl.innerText || '').includes('Quarterly Order Margin Analysis'))
@@ -1876,7 +1876,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       labelCallTools: [],
       labelCallHasPrevId: false,
       savedConvLabel: 'Quarterly Order Margin Analysis',
-      routeAfterTurn1: '/c/99',
+      routeIsImmutableConv: true,
       sidebarShowsGeneratedLabel: true
     })
   }, 15000)
@@ -2000,7 +2000,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     expect(step2.result.value).toEqual({
       noTopbarBadge: true,
       selectedUseCaseAfterSelect: 'dashboard',
-      routeAfterSelect: '/c/7',
+      routeAfterSelect: '/c/conv_dashboard_7',
       centeredGone: true,
       restoredChatMsg: true,
       restoredPreview: true,
@@ -5447,5 +5447,203 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     } finally {
       await chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
     }
+  }, 20000)
+
+  test('Issue #155: keeps immutable conv_<id> across LookML -> Dashboard turns with optimistic SWR sidebar insert, hides & restores unified content tabs via 3-dot menu, and navigates synchronously to / on active conversation delete', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=data_app` })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="new-conversation-btn"]'))`,
+        returnByValue: true,
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    const flowRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        window.__DAB_STUDIO__.setAuthMode('apikey');
+        window.__DAB_STUDIO__.setApiKey('mock-api-key');
+        await new Promise((r) => setTimeout(r, 80));
+
+        window.__INTERACTION_CALLS__ = [];
+        window.__ARTIFACT_UPDATES__ = [];
+        const ext = window.__DAB_STUDIO__.extensionSDK;
+        const origProxy = ext.serverProxy.bind(ext);
+        ext.serverProxy = async (url, init) => {
+          const body = init && init.body ? JSON.parse(init.body) : {};
+          const inputText = (body.input && body.input[0] && body.input[0].text) || '';
+          window.__INTERACTION_CALLS__.push({ url, method: (init && init.method) || 'GET', body });
+          if (inputText.includes('[CONVERSATION_LABEL_REQUEST]')) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({ id: 'int_lbl_155', status: 'completed', output_text: '"Order Items LookML & UDD"' }),
+            };
+          }
+          if (inputText.includes('order_items.view.lkml')) {
+            await new Promise((r) => setTimeout(r, 90));
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_155_turn_1',
+                environment_id: 'env_155_shared',
+                status: 'completed',
+                output_text:
+                  '<USE_CASE>lookml</USE_CASE>\\nAdded measures.\\n<LOOKML_BUNDLE>{"id":"thelook_1762720001","title":"Order Items Measures","project_id":"thelook","model_name":"thelook","branch_name":"dev_1","files":[{"path":"views/order_items.view.lkml","action":"updated","content":"view: order_items {}","diff":"@@ -1 +1 @@"}],"validation":{"passed":true,"error_count":0,"errors":[]},"tests":[],"queries":[]}</LOOKML_BUNDLE>',
+              }),
+            };
+          }
+          if (inputText.includes('native Looker UDD dashboard')) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_155_turn_2',
+                environment_id: 'env_155_shared',
+                status: 'completed',
+                output_text:
+                  '<USE_CASE>dashboard</USE_CASE>\\nCreated Executive KPI UDD.\\n<NATIVE_CONTENT_BUNDLE>{"id":"99","content_type":"dashboard","title":"Executive KPI UDD","folder_id":"5","tile_count":2,"explores":["thelook::order_items"]}</NATIVE_CONTENT_BUNDLE>',
+              }),
+            };
+          }
+          return origProxy(url, init);
+        };
+
+        // 1. Start fresh conversation at /
+        document.querySelector('[data-testid="new-conversation-btn"]').click();
+        await new Promise((r) => setTimeout(r, 80));
+        const routeAtRoot = window.__DAB_STUDIO__.history.location.pathname;
+
+        // 2. Submit Turn 1 (LookML) and inspect IMMEDIATE optimistic route + sidebar entry before network finishes
+        const turn1Promise = window.__DAB_STUDIO__.handleSendPrompt({ text: 'Add total_revenue and gross_margin measures to order_items.view.lkml' });
+        await new Promise((r) => setTimeout(r, 15));
+        const optimisticRoute = window.__DAB_STUDIO__.history.location.pathname;
+        const optimisticConvId = optimisticRoute.replace('/c/', '');
+        const optimisticSidebarItem = Boolean(document.querySelector('[data-testid="conversation-item-' + optimisticConvId + '"]'));
+        await turn1Promise;
+        await new Promise((r) => setTimeout(r, 150));
+
+        const routeAfterLookmlTurn = window.__DAB_STUDIO__.history.location.pathname;
+        const lookmlTabPresent = Boolean(document.querySelector('[data-testid^="studio-content-tab-lookml:"]'));
+
+        // 3. Submit Turn 2 (Dashboard) on the SAME conversation -> route & convId stay immutable, messages[] is continuous
+        await window.__DAB_STUDIO__.handleSendPrompt({ text: 'Create a native Looker UDD dashboard for executive KPIs' });
+        await new Promise((r) => setTimeout(r, 150));
+
+        const routeAfterDashTurn = window.__DAB_STUDIO__.history.location.pathname;
+        const matchingSidebarConvs = Array.from(document.querySelectorAll('[data-testid="conversation-item-' + optimisticConvId + '"]')).length;
+        const totalMsgCount = window.__DAB_STUDIO__.messages.length;
+        const visibleTabEls = Array.from(document.querySelectorAll('[data-testid^="studio-content-tab-"]:not([data-testid^="studio-content-tab-close-"]):not([data-testid^="studio-content-tab-restore-"])'));
+        const tabKeysAfter2Turns = visibleTabEls.map((el) => el.getAttribute('data-testid').replace('studio-content-tab-', ''));
+        const noMoreBtnBeforeHide = !document.querySelector('[data-testid="studio-content-tabs-more-btn"]');
+
+        // 4. Close (hide) the active dashboard tab -> focuses remaining LookML tab, persists hidden:true, shows 3-dot restore button
+        const dashTabKey = tabKeysAfter2Turns.find((k) => k.startsWith('dashboard:'));
+        const lookmlTabKey = tabKeysAfter2Turns.find((k) => k.startsWith('lookml:'));
+        document.querySelector('[data-testid="studio-content-tab-close-' + dashTabKey + '"]').click();
+        await new Promise((r) => setTimeout(r, 100));
+
+        const activeKeyAfterFirstClose = window.__DAB_STUDIO__.activeContentItem?.key || '';
+        const moreBtnAfterHide = document.querySelector('[data-testid="studio-content-tabs-more-btn"]');
+        const hasMoreBtnAfterHide = Boolean(moreBtnAfterHide);
+
+        // Open 3-dot menu and verify light & dark mode computed styles + restore item presence + union clip rect
+        moreBtnAfterHide.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const menuEl = document.querySelector('[data-testid="studio-content-tabs-more-menu"]');
+        const restoreBtn = document.querySelector('[data-testid="studio-content-tab-restore-' + dashTabKey + '"]');
+        const lightMenuBg = menuEl ? window.getComputedStyle(menuEl).backgroundColor : '';
+        const rects = ['[data-testid="studio-content-tabs"]', '[data-testid="studio-content-tabs-more-menu"]']
+          .flatMap((sel) => Array.from(document.querySelectorAll(sel)))
+          .map((el) => el.getBoundingClientRect())
+          .filter((r) => r.width > 0 && r.height > 0);
+        const ribbonMenuClipValid = rects.length === 2 && rects[1].right <= 1440 && rects[1].bottom <= 900;
+        window.__DAB_STUDIO__.setThemeMode('dark');
+        await new Promise((r) => setTimeout(r, 40));
+        const darkMenuBg = menuEl ? window.getComputedStyle(menuEl).backgroundColor : '';
+        window.__DAB_STUDIO__.setThemeMode('light');
+        await new Promise((r) => setTimeout(r, 40));
+
+        // Close remaining LookML tab -> all tabs hidden, ribbon + 3-dot button remain visible, viewer shows empty-hidden state
+        document.querySelector('[data-testid="studio-content-tab-close-' + lookmlTabKey + '"]').click();
+        await new Promise((r) => setTimeout(r, 80));
+        const allHiddenPlaceholder = Boolean(document.querySelector('[data-testid="studio-content-tabs-all-hidden"]'));
+        const ribbonStillVisibleWhenAllHidden = Boolean(document.querySelector('[data-testid="studio-content-tabs"]'));
+
+        // Restore dashboard tab from 3-dot menu -> sets hidden:false and activates dashboard tab
+        if (!document.querySelector('[data-testid="studio-content-tabs-more-menu"]')) {
+          document.querySelector('[data-testid="studio-content-tabs-more-btn"]').click();
+          await new Promise((r) => setTimeout(r, 60));
+        }
+        document.querySelector('[data-testid="studio-content-tab-restore-' + dashTabKey + '"]').click();
+        await new Promise((r) => setTimeout(r, 100));
+        const activeKeyAfterRestore = window.__DAB_STUDIO__.activeContentItem?.key || '';
+
+        const convUpdates = (window.__ARTIFACT_UPDATES__ || []).filter((u) => u.key === 'user_conversations:1');
+        const latestConvs = convUpdates.length ? JSON.parse(convUpdates[convUpdates.length - 1].value) : [];
+        const persistedConv = latestConvs.find((c) => c.id === optimisticConvId);
+        const hasZeroActivityStepsBloat = !(persistedConv?.messages || []).some((m) => Boolean(m.activitySteps));
+
+        // 5. Synchronous delete-to-/ navigation on active chat-only / conv_<ts> conversation BEFORE deleteUserConversation resolves
+        window.__DAB_STUDIO__.setActiveObjectId('');
+        const deletePromise = window.__DAB_STUDIO__.handleDeleteConversation(undefined, optimisticConvId, false);
+        const routeImmediatelyOnDelete = window.__DAB_STUDIO__.history.location.pathname;
+        await deletePromise;
+
+        return {
+          routeAtRoot,
+          optimisticIsConvPrefix: optimisticRoute.startsWith('/c/conv_'),
+          optimisticSidebarItem,
+          immutableAcrossLookml: routeAfterLookmlTurn === optimisticRoute,
+          immutableAcrossDash: routeAfterDashTurn === optimisticRoute,
+          lookmlTabPresent,
+          matchingSidebarConvs,
+          totalMsgCount,
+          hasBothLookmlAndDashTabs: Boolean(lookmlTabKey && dashTabKey),
+          noMoreBtnBeforeHide,
+          activeKeyAfterFirstCloseMatchesLookml: activeKeyAfterFirstClose === lookmlTabKey,
+          hasMoreBtnAfterHide,
+          hasRestoreMenuAndItem: Boolean(menuEl && restoreBtn),
+          ribbonMenuClipValid,
+          themeContrastDistinct: Boolean(lightMenuBg && darkMenuBg && lightMenuBg !== darkMenuBg),
+          allHiddenPlaceholder,
+          ribbonStillVisibleWhenAllHidden,
+          activeKeyAfterRestoreMatchesDash: activeKeyAfterRestore === dashTabKey,
+          hasZeroActivityStepsBloat,
+          routeImmediatelyOnDelete,
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+
+    expect(flowRes.result.value).toEqual({
+      routeAtRoot: '/',
+      optimisticIsConvPrefix: true,
+      optimisticSidebarItem: true,
+      immutableAcrossLookml: true,
+      immutableAcrossDash: true,
+      lookmlTabPresent: true,
+      matchingSidebarConvs: 1,
+      totalMsgCount: 4,
+      hasBothLookmlAndDashTabs: true,
+      noMoreBtnBeforeHide: true,
+      activeKeyAfterFirstCloseMatchesLookml: true,
+      hasMoreBtnAfterHide: true,
+      hasRestoreMenuAndItem: true,
+      ribbonMenuClipValid: true,
+      themeContrastDistinct: true,
+      allHiddenPlaceholder: true,
+      ribbonStillVisibleWhenAllHidden: true,
+      activeKeyAfterRestoreMatchesDash: true,
+      hasZeroActivityStepsBloat: true,
+      routeImmediatelyOnDelete: '/',
+    })
   }, 20000)
 })

@@ -777,6 +777,7 @@ import site
 import subprocess
 import sys
 import sysconfig
+import time
 from pathlib import Path
 
 WORKSPACE_DIR = Path(os.environ.get("WORKSPACE_DIR", "/workspace"))
@@ -967,7 +968,7 @@ def main():
 
         val_errors = raw.get("validation_errors") or (raw.get("validation") or {}).get("errors") or []
         bundle = {
-            "id": str(raw.get("id") or raw.get("run_id") or raw.get("branch_name") or "lookml-session"),
+            "id": str(raw.get("id") or raw.get("run_id") or raw.get("branch_name") or f"{raw.get('project_id') or 'lookml'}_{int(time.time())}"),
             "title": str(raw.get("title") or f"LookML: {raw.get('project_id', 'Project')}"),
             "project_id": str(raw.get("project_id") or ""),
             "model_name": raw.get("model_name") or "",

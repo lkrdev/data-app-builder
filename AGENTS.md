@@ -34,6 +34,7 @@ than guessing or hand-crafting commands:
 | **Create & sync LookML dashboards** | `skills/creating-looker-dashboard/SKILL.md` | Authoring `.dashboard.lookml` files, importing to UDDs, and syncing iterative layout/tile refinements |
 | **Studio UI, components, or theme** | `.agents/skills/studio-design-system/SKILL.md` | Design system tokens (`--dab-*`), React UI primitives (`StudioDesignSystem.tsx` & `StudioSelect.tsx`), layout/overflow invariants, Dark/Light theme rules, and cropped visual snapshot standards |
 | **Looker RBAC & Safe Mode permissions** | `.agents/skills/looker-permissions/SKILL.md` (`skills/looker-permissions/SKILL.md`) | 4-layer Looker RBAC mental model, model-to-project expansion, folder ACLs, role-denied 404 diagnostics, and `Safe Mode (Ask)` vs. `Auto-Approve (YOLO)` execution approval matrix |
+| **Debug Studio conversations & Artifacts** | `.agents/skills/studio-conversation-debugger/SKILL.md` | Inspecting immutable `conv_<id>` records in `user_conversations:${me.id}`, `contentItems` (`hidden`), `user_env:${me.id}`, and payload byte sizes via `lkr --oauth-account=<account> code-mode sandbox` (`scripts/inspect_conversation.py`) |
 | **File issues or submit PRs** | `.agents/skills/issue-authoring/SKILL.md` | Feedback stream intake (`file:line` + root-cause pre-analysis), blast-radius grouping, canonical GitHub issue template (`StudioDesignSystem` + `data-testid` + SDK/mock contracts), and mandatory pre-PR evaluation loop |
 
 Detailed component properties, methods, and styling variables live in
@@ -96,6 +97,13 @@ When a prompt starts with or contains `[CA_AGENT_SELECTION_REQUEST]`, you are ru
 All TypeScript and React code in `src/` enforces `"@typescript-eslint/no-explicit-any": "error"` with `--max-warnings=0` via `npm run lint:check` and `.githooks/pre-commit`:
 1. **Import Canonical Types from Installed SDKs First**: Before defining custom interfaces, import existing types from `@looker/sdk` (`Looker40SDK`, `IDashboard`, `IDashboardElement`, `IDashboardFilter`, `IDashboardLayout`, `IDashboardLayoutComponent`, `ILookmlModel`, `ILookmlModelExplore`, `ILookmlModelExploreField`, `IFolder`, `IArtifact`, `IUser`, `IRole`, `IPermission`, `IScheduledPlan`, `IQuery`, `ILookWithQuery`, `IBoard`), `@looker/extension-sdk` (`ExtensionSDK`, `LookerHostData`, `TileHostData`, `FetchCustomParameters`, `FetchProxyDataResponse`), `@looker/extension-sdk-react` (`ExtensionContextData`), `@looker/embed-sdk` (`LookerEmbedSDK`, `getEmbedSDK`, `ILookerConnection`), `swr`, `react`, and `react-router-dom`.
 2. **Compose Partial/Narrowed Shapes Without `any`**: When REST payloads or test mocks omit or extend SDK fields, compose with `Partial<IDashboard>`, `Pick<...>`, generics (`StudioSelect<T extends string = string>`), or `unknown` / `Record<string, unknown>` narrowing instead of `any`.
+
+## Looker Artifacts Lightweight-Only Rule
+
+Looker's internal Artifacts key-value store (`data_app_builder::data_app_builder`) is strictly reserved for **lightweight metadata, compact pointers, and short text turns** — never multi-megabyte blobs:
+1. **`user_conversations:${me.id}`**: Persist only immutable conversation metadata (`id: "conv_<id>"`, `type`, `use_case`, `label`, `archived`, `interactionId`, `environmentId`, `explores`, `activeContentTabKey`, `createdAt`, `updatedAt`), compact `contentItems` pointers (`id`, `contentType`, `title`, `embedPath`, `source`, `hidden` — **never** `rawCode`), and lightweight text turns (`role`, `text`, `interactionId`, `dashboardId`, `widgetCount`, `thinkingDurationSec` — **never** `activitySteps` or base64 `images[]`).
+2. **`obj_*` & `user_${me.id}_*` Index Artifacts**: Store compact index/state payloads only. **Never** duplicate chat transcripts (`studio.messages` or `messages[]`) inside `obj_lookml_*`, `obj_app_*`, or `obj_dashboard_*` artifacts; Data App JS bundles live in Looker's `/inline_extension/<uuid>/bundle.js` endpoint and full reasoning traces live in the Antigravity `interactionId` / sandbox workspace.
+3. **Repository-Internal Rule Only**: Keep this rule in root `AGENTS.md` for Studio engineering only — never copy it into `upstream/payload/AGENTS.md` or `src/antigravityPrompts.ts` (`AGENTS_MD`).
 
 <mandatory_rules>
 ### Strict Workspace Boundaries & Configuration Isolation

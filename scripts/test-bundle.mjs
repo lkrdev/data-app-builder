@@ -661,6 +661,64 @@ chmod +x "${fakeBinDir}/uv"
     'Evals #1-#10: scripts/run-evals.mjs, extractInteractionOutputText, formatContentInventoryMarkdown, and Monty WASM search_agents()/format_content_inventory() must be present'
   )
 
+  // Issue #155: Immutable conv_<id> state, unified close/restore content ribbon, lightweight Looker Artifacts rule (root AGENTS.md only), and studio-conversation-debugger exclusion
+  const sandboxSkillsBundleTs = readFileSync(path.join(repoRoot, 'src/sandboxSkillsBundle.ts'), 'utf8')
+  const convDebuggerSkillMd = readFileSync(
+    path.join(repoRoot, '.agents/skills/studio-conversation-debugger/SKILL.md'),
+    'utf8'
+  )
+  const convDebuggerScriptPy = readFileSync(
+    path.join(repoRoot, '.agents/skills/studio-conversation-debugger/scripts/inspect_conversation.py'),
+    'utf8'
+  )
+  const fallbackLookmlSpecPath = path.join(workDir, 'lookml_fallback_id.json')
+  writeFileSync(
+    fallbackLookmlSpecPath,
+    JSON.stringify({ title: 'Fallback ID Check', project_id: 'my_proj', model_name: 'ecom' }),
+    'utf8'
+  )
+  const fallbackLookmlOut = execFileSync('python3', [bootstrapPyPath, 'bundle', fallbackLookmlSpecPath], {
+    env: { ...process.env, WORKSPACE_DIR: workDir, LOOKML_DIR: lookmlDir, LOOKML_BASELINE_DIR: baselineDir },
+    encoding: 'utf8',
+  })
+  const fallbackLookmlBundle = JSON.parse(
+    fallbackLookmlOut.match(/<LOOKML_BUNDLE>([\s\S]*?)<\/LOOKML_BUNDLE>/)[1]
+  )
+  assert(
+    /^my_proj_\d+$/.test(fallbackLookmlBundle.id) && fallbackLookmlBundle.id !== 'lookml-session',
+    `Issue #155: BOOTSTRAP_LOOKML_PY fallback id must be <project_id>_<timestamp> (got "${fallbackLookmlBundle.id}")`
+  )
+  assert(
+    !appTsx.includes('messagesByMode') &&
+      !appTsx.includes('sessionsByMode') &&
+      appTsx.includes('studio-content-tab-close-') &&
+      appTsx.includes('studio-content-tabs-more-btn') &&
+      appTsx.includes('studio-content-tabs-more-menu') &&
+      appTsx.includes('studio-content-tab-restore-') &&
+      rootAgentsMd.includes('## Looker Artifacts Lightweight-Only Rule') &&
+      rootAgentsMd.includes('.agents/skills/studio-conversation-debugger/SKILL.md') &&
+      !upstreamAgentsMd.includes('Looker Artifacts Lightweight-Only Rule') &&
+      !upstreamAgentsMd.includes('studio-conversation-debugger') &&
+      !antigravityTs.includes('Looker Artifacts Lightweight-Only Rule') &&
+      !antigravityTs.includes('studio-conversation-debugger') &&
+      !sandboxSkillsBundleTs.includes('studio-conversation-debugger') &&
+      convDebuggerSkillMd.includes('name: studio-conversation-debugger') &&
+      convDebuggerSkillMd.includes('--oauth-account') &&
+      convDebuggerScriptPy.includes('user_conversations:') &&
+      !/thelook|argolis_scratch|default_bigquery_connection|demowest|looker-private-demo/i.test(
+        convDebuggerSkillMd + '\n' + convDebuggerScriptPy
+      ),
+    'Issue #155: single continuous messages/session, close/restore tab ribbon testids, root-only Looker Artifacts Lightweight-Only Rule, and studio-conversation-debugger exclusion from sandbox skills must hold'
+  )
+  if (statSync(distBundlePath, { throwIfNoEntry: false })) {
+    const distBundleContent = readFileSync(distBundlePath, 'utf8')
+    assert(
+      !distBundleContent.includes('studio-conversation-debugger') &&
+        !distBundleContent.includes('Looker Artifacts Lightweight-Only Rule'),
+      'Issue #155: dist/bundle.js must exclude studio-conversation-debugger and root-only Looker Artifacts Lightweight-Only Rule'
+    )
+  }
+
   console.log('✓ test-bundle.mjs: all assertions passed!')
 } finally {
   rmSync(workDir, { recursive: true, force: true })
