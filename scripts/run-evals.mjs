@@ -48,7 +48,7 @@ const { fetchConversationSandboxDebugMarkdown } = require(path.join(repoRoot, 's
 
 function resolveLiveGeminiAuth() {
   if (process.env.GEMINI_API_KEY?.trim()) return { mode: 'apikey', apiKey: process.env.GEMINI_API_KEY.trim() }
-  const envFile = '/usr/local/google/home/bryanweber/bwebs/agentic-thelook/.env'
+  const envFile = process.env.AGENTIC_THELOOK_ENV || path.join(os.homedir(), 'bwebs/agentic-thelook/.env')
   if (existsSync(envFile)) {
     const m = readFileSync(envFile, 'utf8').match(/^GEMINI_API_KEY=(.+)$/m)
     if (m?.[1]) return { mode: 'apikey', apiKey: m[1].trim().replace(/^['"]|['"]$/g, '') }
@@ -345,10 +345,14 @@ async function eval04MultiTurnContentStudio() {
 }
 
 async function eval05ConcurrentSharedEnv() {
-  execFileSync(process.execPath, [path.join(repoRoot, 'scripts/bench-concurrent-convs.mjs'), '--iter=10'], {
-    cwd: repoRoot,
-    stdio: 'pipe',
-  })
+  execFileSync(
+    process.execPath,
+    [path.join(repoRoot, 'scripts/bench-concurrent-convs.mjs'), '--iter=10', ...(isLive ? ['--live'] : [])],
+    {
+      cwd: repoRoot,
+      stdio: 'pipe',
+    }
+  )
   const iter10 = JSON.parse(readFileSync(path.join(repoRoot, 'tmp/bench-concurrent/iter-10.json'), 'utf8'))
   const eightOfEight = iter10.functional_score === '8/8'
   const singleEnv = iter10.single_env_invariant?.passed === true && iter10.single_env_invariant?.environments_created === 1

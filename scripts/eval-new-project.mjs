@@ -34,7 +34,7 @@ const { discoverAccessibleConnections, extractResolvedUseCase, matchExplicitUseC
 
 function getApiKey() {
   if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY.trim()
-  const envFile = '/usr/local/google/home/bryanweber/bwebs/agentic-thelook/.env'
+  const envFile = process.env.AGENTIC_THELOOK_ENV || path.join(os.homedir(), 'bwebs/agentic-thelook/.env')
   if (fs.existsSync(envFile)) {
     const m = fs.readFileSync(envFile, 'utf8').match(/^GEMINI_API_KEY=(.+)$/m)
     if (m) return m[1].trim().replace(/^['"]|['"]$/g, '')
@@ -500,6 +500,7 @@ async function main() {
   console.log(`\n[eval-new-project] Saved full report to ${outPath}`)
   const passedCount = report.turns.filter((x) => x.passed).length
   console.log(`[eval-new-project] Score: ${passedCount}/${turns.length} turns passed`)
+  if (passedCount < turns.length) process.exitCode = 1
 }
 
 main().catch((err) => {

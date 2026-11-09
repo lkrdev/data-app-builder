@@ -1,0 +1,13 @@
+# Skills (`skills`)
+
+## Overview
+
+`skills` houses Looker analytical and engineering skill bundles distributed with Data App Builder, grouping executable helper toolkits alongside `SKILL.md` workflow specifications for Key Driver Analysis, Looker Dashboards, Explore Field Profiling, and Looker Project Onboarding.
+
+## Subdirectories & Boundaries
+
+- `key-driver-analysis`: [./key-driver-analysis/EGM.md](./key-driver-analysis/EGM.md) - Looker Key Driver Analysis (`kda_toolkit.py`) blueprint and `lkr code-mode sandbox` root-cause analysis skill.
+- `looker-dashboard`: [./looker-dashboard/SKILL.md](./looker-dashboard/SKILL.md) - Unified Looker Dashboarding skill (`upsert_udd`, `upsert_lookml_dashboard`, `reflow_24col`, `pin_to_board`, `schedule_dashboard`, `emit_native_bundle`, 24-column layouts, and visualization specs).
+- `looker-field-profiler`: [./looker-field-profiler/SKILL.md](./looker-field-profiler/SKILL.md) - Explore field profiling skill using `profile_fields` to measure cardinality, quantiles, temporal spikiness, `profile:*` tags, and LookML refinement snippets.
+- `looker-field-profiler/sub-skills/scratch-search`: [./looker-field-profiler/sub-skills/scratch-search/SKILL.md](./looker-field-profiler/sub-skills/scratch-search/SKILL.md) - Per-model `_field_value_search_<model>` `UNION ALL` Persistent Derived Table and search index generator across 5 SQL dialects.
+- `looker-project-onboarding`: [./looker-project-onboarding/SKILL.md](./looker-project-onboarding/SKILL.md) - End-to-end Looker Project Onboarding workflow from database connection discovery through bare Git setup, Bronze/Silver views, dashboarding, and Metric Selector Data App creation.
