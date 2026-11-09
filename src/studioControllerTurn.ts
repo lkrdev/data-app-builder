@@ -419,7 +419,6 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     }
 
     const currentSession = agentSessionRef.current
-    const activeConvId = convId
 
     const abortController = new AbortController()
     turnAbortControllerRef.current = abortController
@@ -433,7 +432,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       let turnPromptWithContext = effectivePrompt
 
       if (activeMentions.length > 0) {
-        for (const m of activeMentions) {
+        activeMentions.forEach((m) => {
           if (m.type === 'explore' || m.type === 'dashboard' || m.type === 'look') {
             const ct: StudioContentItemType = m.type === 'explore' ? 'explore' : m.type === 'look' ? 'look' : m.id.includes('::') ? 'lookml_dashboard' : 'dashboard'
             upsertContentItem({
@@ -442,7 +441,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
               ...(ct === 'dashboard' ? { dashboardId: m.id } : {}), ...(ct === 'lookml_dashboard' ? { lookmlDashboardId: m.id } : {}),
             })
           }
-        }
+        })
         setBusyStatus('Hydrating referenced Looker @-mention context...')
         const hydrated = await hydrateMentionedContext({
           sdk: core40SDK, mentions: activeMentions, conversations, selectedExplores, useCase: turnTargetUseCase,
@@ -490,7 +489,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       const result = await runAntigravityTurn({
         sdk: core40SDK, extensionSDK, userId,
         environmentId: sharedEnvIdRef.current || currentSession.environmentId,
-        conversationId: activeConvId, onEnvironmentUpdated: syncSharedEnvironmentId,
+        conversationId: convId, onEnvironmentUpdated: syncSharedEnvironmentId,
         auth: authCfg, session: currentSession,
         model: selectedModel, thinkingLevel, maxTotalTokens,
         mode: effectiveBuilderMode, useCase: explicitUseCase, allowedModes: allowedUseCases,
@@ -512,7 +511,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           setLiveActivitySteps(steps)
         },
         onInteractionCreated: (id) => {
-          latestTurnInteractionRef.current = { convId: activeConvId, id }
+          latestTurnInteractionRef.current = { convId, id }
         },
         signal: abortController.signal, onStatus: setBusyStatus,
       })

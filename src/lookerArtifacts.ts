@@ -1697,10 +1697,10 @@ export async function saveNativeContentArtifact(
     lastInteractionId: nextStudio?.lastInteractionId,
     environmentId: nextStudio?.environmentId,
   }
-  const lightStudio = merged.studio ? (({ messages: _messages, ...rest }) => rest)(merged.studio) : undefined
+  const { messages: _messages, ...lightStudio } = merged.studio || {}
   const objPayload = {
     ...merged,
-    ...(lightStudio ? { studio: lightStudio } : { studio: undefined }),
+    studio: merged.studio ? lightStudio : undefined,
     type: 'dashboard',
   }
 

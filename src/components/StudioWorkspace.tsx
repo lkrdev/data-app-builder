@@ -2341,7 +2341,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     activeMode, selectedUseCase, isEmptyConversation, isHealthCheckMode, isLookmlMode, isCaMode,
     builderMode, healthReport, lookmlBundle, caConversation, canDeployLookml, nativeContent,
     publishedApp, contentItems = [], activeContentTabKey = '', activeContentItem = null,
-    handleSelectContentTab, handleHideContentTab, handleRestoreContentTab,
+    handleSelectContentTab, handleHideContentTab,
     currentAppCode, embedNonce, extensionSDK, setInfoModalUseCase,
     busyStatus, rightPaneCollapsed, setRightPaneCollapsed, scriptId, scriptTitle,
     activeViewerDocument = null, setActiveViewerDocument, openViewerDocument,
@@ -2363,19 +2363,11 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const allTabsHidden = contentItems.length > 0 && visibleTabs.length === 0
 
   useEffect(() => {
-    if (hiddenTabs.length === 0 && moreMenuOpen) setMoreMenuOpen(false)
-  }, [hiddenTabs.length, moreMenuOpen])
-
-  useEffect(() => {
     if (!moreMenuOpen || typeof document === 'undefined') return
     const onDocDown = (ev: MouseEvent) => {
-      if (moreMenuWrapRef.current && !moreMenuWrapRef.current.contains(ev.target as Node)) {
-        setMoreMenuOpen(false)
-      }
+      if (moreMenuWrapRef.current && !moreMenuWrapRef.current.contains(ev.target as Node)) setMoreMenuOpen(false)
     }
-    const onDocKey = (ev: KeyboardEvent) => {
-      if (ev.key === 'Escape') setMoreMenuOpen(false)
-    }
+    const onDocKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setMoreMenuOpen(false) }
     document.addEventListener('mousedown', onDocDown)
     document.addEventListener('keydown', onDocKey)
     return () => {
@@ -2384,21 +2376,12 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     }
   }, [moreMenuOpen])
 
-  const activePaneKind = useMemo<'script' | 'report' | 'lookml' | 'ca' | 'embed' | 'empty_hidden'>(() => {
-    if (allTabsHidden) return 'empty_hidden'
-    if (activeContentItem) {
-      if (activeContentItem.contentType === 'script') return 'script'
-      if (activeContentItem.contentType === 'lookml') return 'lookml'
-      if (activeContentItem.contentType === 'report') return 'report'
-      if (activeContentItem.contentType === 'conversational-analytics') return 'ca'
-      return 'embed'
-    }
-    if (isTileMode) return 'script'
-    if (isHealthCheckMode) return 'report'
-    if (isLookmlMode) return 'lookml'
-    if (isCaMode || caConversation) return 'ca'
-    return 'embed'
-  }, [allTabsHidden, activeContentItem, isTileMode, isHealthCheckMode, isLookmlMode, isCaMode, caConversation])
+  const ct = activeContentItem?.contentType
+  const activePaneKind: 'script' | 'report' | 'lookml' | 'ca' | 'embed' | 'empty_hidden' = allTabsHidden
+    ? 'empty_hidden'
+    : ct
+    ? ct === 'script' || ct === 'lookml' || ct === 'report' ? ct : ct === 'conversational-analytics' ? 'ca' : 'embed'
+    : isTileMode ? 'script' : isHealthCheckMode ? 'report' : isLookmlMode ? 'lookml' : isCaMode || caConversation ? 'ca' : 'embed'
 
   const embedTarget = useMemo(
     () => resolveLookerEmbedTarget({
@@ -2601,7 +2584,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                       className="dab-content-tabs-more-item"
                       onClick={() => {
                         setMoreMenuOpen(false)
-                        handleRestoreContentTab?.(item.key)
+                        handleSelectContentTab?.(item.key)
                       }}
                     >
                       <span className="dab-content-tab-icon">{renderContentTabIcon(item.contentType)}</span>

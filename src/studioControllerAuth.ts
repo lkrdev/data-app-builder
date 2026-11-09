@@ -385,7 +385,7 @@ export function useStudioAuthAndPrefs() {
   )
 
   const setMessages = useCallback(
-    (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[]), _targetMode?: StudioMode) => {
+    (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
       const next = typeof updater === 'function' ? updater(messagesRef.current) : updater
       messagesRef.current = next
       setMessagesState(next)
