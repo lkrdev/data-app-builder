@@ -4,19 +4,20 @@ import {
   AgentSession, AntigravityActivityStep, AntigravityAuth,
   CodeModePermissionDecision, CodeModePermissionRequest,
   extractSkillNameFromPath, fetchEnvironmentFile, inFlightEnvProvisionByUser,
-  normalizeEnvironmentId, normalizeSandboxFilePath, PastedImage,
-  prewarmOrWakeAntigravityEnvironment, resolveBuiltinWorkspaceFileContent,
+  isNewProjectOnboardingIntakePrompt, normalizeEnvironmentId, normalizeSandboxFilePath,
+  PastedImage, prewarmOrWakeAntigravityEnvironment, resolveBuiltinWorkspaceFileContent,
   runAntigravityTurn, sanitizeConversationLabel, sharedEnvExploreSchemas,
 } from './antigravity'
 import { ChatMessage, StudioMode } from './components/App'
 import {
-  buildDenseExploreSchema, EXPLICIT_SCRIPT_CREATION_RE, extractExploreIdsFromCode,
-  extractResolvedUseCase, formatExploreId, getArtifactNamespace,
-  hydrateMentionedContext, isConversationalNoOpPrompt, matchExplicitUseCaseRule,
-  parseExploreId, ResolvedStudioUseCase, saveDashboardStudioMetadata,
-  saveNativeContentArtifact, saveUserArtifact, saveUserEnvironmentId,
-  shouldRouteToIsolatedCaSubagent, StudioContentItemType, StudioContextMention,
-  StudioUseCase, studioUseCaseToMode, upsertPublishedDataApp,
+  buildDenseExploreSchema, discoverAccessibleConnections, EXPLICIT_SCRIPT_CREATION_RE,
+  extractExploreIdsFromCode, extractResolvedUseCase, formatAccessibleConnectionsMarkdown,
+  formatExploreId, getArtifactNamespace, hydrateMentionedContext,
+  isConversationalNoOpPrompt, matchExplicitUseCaseRule, parseExploreId,
+  ResolvedStudioUseCase, saveDashboardStudioMetadata, saveNativeContentArtifact,
+  saveUserArtifact, saveUserEnvironmentId, shouldRouteToIsolatedCaSubagent,
+  StudioContentItemType, StudioContextMention, StudioUseCase,
+  studioUseCaseToMode, upsertPublishedDataApp,
 } from './lookerApi'
 import { extractSlashSkillIds, saveLookmlSessionArtifact } from './lookmlTool'
 import { getErrorMessage, StudioAuthAndPrefs } from './studioControllerAuth'
@@ -464,6 +465,10 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       const turnActivatedSkills = Array.from(new Set([...activatedLookmlSkills, ...promptSlashSkills]))
       if (promptSlashSkills.length > 0) setActivatedLookmlSkills(turnActivatedSkills)
       const effectiveLookmlTurn = turnTargetUseCase === 'lookml' || (turnTargetUseCase === 'auto' && isLookmlMode)
+      const availableConnections =
+        effectiveLookmlTurn && !lookmlProjectId?.trim() && isNewProjectOnboardingIntakePrompt(effectivePrompt, currentMessages)
+          ? formatAccessibleConnectionsMarkdown(await discoverAccessibleConnections(core40SDK))
+          : undefined
       const effectiveBuilderMode: 'data_app' | 'dashboard' =
         turnTargetUseCase === 'dashboard'
           ? 'dashboard'
@@ -480,7 +485,8 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         selectedExplores: turnExplores, folderId: selectedFolderId,
         toolMode: effectiveLookmlTurn ? 'lookml' : 'data_app',
         lookmlProjectId, activatedLookmlSkills: turnActivatedSkills, developableProjects: availableLookmlProjects,
-        canDeploy: canDeployLookml, schemaMarkdown: turnSchemaMarkdown,
+        canDeploy: canDeployLookml, availableConnections, warmEnvironmentInBackground: true,
+        schemaMarkdown: turnSchemaMarkdown,
         userPrompt:
           explicitUseCase === 'tile' || loadedScript || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
             ? `Write a LkrCodeMode Python script for the user's request. Return the Python snippet inside a \`\`\`python code block.\n\nCurrent script:\n\`\`\`python\n${scriptCode}\n\`\`\`\n\nUser request: ${turnPromptWithContext}`

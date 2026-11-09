@@ -94,6 +94,7 @@ export type AntigravityToolType = 'app' | 'dashboard' | 'lookml' | 'health' | 't
 export interface AgentSession {
   environmentId?: string
   lastInteractionId?: string
+  statelessTurn?: boolean
   conversationId?: string
   explores?: string[]
   toolType?: AntigravityToolType

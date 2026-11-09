@@ -5,9 +5,11 @@ import type { Looker40SDK } from '@looker/sdk'
 import { Lock } from 'lucide-react'
 
 import { LOOKER_PROJECT_ONBOARDING_SKILL_MD } from './antigravityPrompts'
-import { StudioBadge, StudioCard } from './components/StudioDesignSystem'
+import { StudioBadge, StudioButton, StudioCard } from './components/StudioDesignSystem'
 import { LKR_DEV_CLI_SPEC } from './lkrCliBridge'
 import {
+  type AccessibleLookerConnection,
+  formatAccessibleConnectionsMarkdown,
   getArtifactNamespace,
   listUserArtifacts,
   loadObjectArtifact,
@@ -140,6 +142,7 @@ export function buildLookmlSystemGuide(params: {
   userPrompt?: string
   developableProjects?: string[]
   canDeploy?: boolean
+  availableConnections?: ReadonlyArray<AccessibleLookerConnection> | string
 }): string {
   const {
     selectedExplores,
@@ -150,11 +153,18 @@ export function buildLookmlSystemGuide(params: {
     userPrompt,
     developableProjects,
     canDeploy = true,
+    availableConnections,
   } = params
   const activeSkillList = Array.from(
     new Set([...(activatedSkills || []), ...extractSlashSkillIds(userPrompt)])
   )
   const hasExplicitSkills = activeSkillList.length > 0
+  const connectionsBlock =
+    typeof availableConnections === 'string'
+      ? availableConnections.trim()
+      : Array.isArray(availableConnections) && availableConnections.length > 0
+      ? formatAccessibleConnectionsMarkdown(availableConnections)
+      : ''
   const devProjectsHint =
     developableProjects && developableProjects.length > 0
       ? `Developable LookML projects (via Model -> Project expansion): ${developableProjects.join(', ')}.`
@@ -171,6 +181,7 @@ export function buildLookmlSystemGuide(params: {
   return [
     `You are the **Agentic LookML** engineer powered by \`lkrdev/cli\` and the \`agentic-lookml\` skill suite.`,
     projHint,
+    ...(connectionsBlock ? [connectionsBlock] : []),
     hasExplicitSkills
       ? `Activated Turn Skills: ${activeSkillList.map((s) => `\`${s}\``).join(', ')}. Prioritize reading and executing the instructions for these activated skills on this turn.`
       : `Automatically discover and load the matching skill(s) for this turn from \`/workspace/AGENTS.md\` and \`/workspace/skills/<skill-id>/SKILL.md\`.`,
@@ -179,18 +190,22 @@ export function buildLookmlSystemGuide(params: {
       : `See /workspace/schema.md for available models and explores.`,
     `Follow these exact steps:`,
     `1. **Sandbox Bootstrap (\`/workspace\`)**:`,
-    `   If the user asks to create/onboard a new project without specifying a connection name, project name, and target tables/schemas (e.g. "create a new project"), run ONE \`run_looker_codemode\` call (\`sdk.all_connections(fields="name,dialect_name,database,schema")\` with fallback to \`sdk.all_lookml_models(fields="name,project_name,allowed_db_connection_names")\`, do NOT call \`code_execution\`) to discover available connections, and immediately ask for: (1) Connection Name (listing the discovered connection names with dialect/database/schema alongside \`[Open Looker Connections](/admin/connections)\`), (2) Project Name (\`snake_case\`), and (3) Target Tables or Schemas (or SQL from \`[Open SQL Runner](/sql)\`). If the user is only asking what schemas a connection has access to (before selecting target schemas/tables), call ONLY ONE \`run_looker_codemode\` (\`sdk.connection_schemas(conn_name)\`) and do NOT call \`code_execution\` or \`view_file\`. Otherwise, when authoring or pushing LookML files in \`/workspace\`, run \`python3 /workspace/bootstrap_lookml.py setup\` in your Linux sandbox to install \`uv\` (\`pip install --break-system-packages --quiet uv\`), \`${LKR_DEV_CLI_SPEC}\` (\`UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"\`), and link the pre-mounted \`/workspace/skills/\` into \`/workspace/.agents/skills/\` (zero outbound network calls). ${hasExplicitSkills ? `Read the SKILL.md files for your Activated Turn Skills (${activeSkillList.join(', ')})` : `Discover and read the matching \`/workspace/skills/<skill-id>/SKILL.md\` file(s) from \`/workspace/AGENTS.md\``}, or load \`/workspace/skills/looker-project-onboarding/SKILL.md\` when onboarding a brand-new LookML project from a database connection.`,
+    `   If the user asks to create/onboard a new project without specifying a connection name, project name, and target tables/schemas (e.g. "create a new project"), ${
+      connectionsBlock
+        ? 'use the pre-fetched `Available Looker Connections` listed above in ONE toolless pass (`0` tool calls — do NOT call `run_looker_codemode` or `code_execution`)'
+        : 'run ONE `run_looker_codemode` call (`all_connections(fields="name,dialect_name,database,schema")` with fallback to `all_lookml_models(fields="name,project_name,allowed_db_connection_names")` — bare Monty globals, never `sdk.*`; do NOT call `code_execution`) to discover available connections'
+    }, and immediately ask for: (1) Connection Name (listing the discovered connection names with dialect/database/schema alongside \`[Open Looker Connections](/admin/connections)\`), (2) Project Name (\`snake_case\`), and (3) Target Tables or Schemas (or SQL from \`[Open SQL Runner](/sql)\`). If the user is only asking what schemas a connection has access to (before selecting target schemas/tables), call ONLY ONE \`run_looker_codemode\` (\`connection_schemas(conn_name)\` — bare Monty global, never \`sdk.*\`) and do NOT call \`code_execution\` or \`view_file\`. Otherwise, when authoring or pushing LookML files in \`/workspace\`, run \`python3 /workspace/bootstrap_lookml.py setup\` in your Linux sandbox to install \`uv\` (\`pip install --break-system-packages --quiet uv\`), \`${LKR_DEV_CLI_SPEC}\` (\`UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"\`), and link the pre-mounted \`/workspace/skills/\` into \`/workspace/.agents/skills/\` (zero outbound network calls). ${hasExplicitSkills ? `Read the SKILL.md files for your Activated Turn Skills (${activeSkillList.join(', ')})` : `Discover and read the matching \`/workspace/skills/<skill-id>/SKILL.md\` file(s) from \`/workspace/AGENTS.md\``}, or load \`/workspace/skills/looker-project-onboarding/SKILL.md\` when onboarding a brand-new LookML project from a database connection.`,
     ...(activeSkillList.includes('looker-project-onboarding') || !projectId?.trim() || selectedExplores.length === 0 ? [LOOKER_PROJECT_ONBOARDING_SKILL_MD] : []),
     `2. **Host-Bridged LookML Sync via Browser WASM \`run_looker_codemode(code, thought, vars)\`**:`,
-    `   - Zero sandbox Looker credentials are needed: \`run_looker_codemode\` runs in the browser extension, requires a concise 1-sentence \`thought\` description, accepts \`vars: {...}\`, and has all \`ExtendedLooker40SDK\` methods pre-bound. Do NOT call \`update_session\` inside \`run_looker_codemode\` — dev mode is controlled by the app session or the \`--dev\` CLI flag.`,
+    `   - Zero sandbox Looker credentials are needed: \`run_looker_codemode\` runs in the browser extension, requires a concise 1-sentence \`thought\` description, accepts \`vars: {...}\`, and has all \`ExtendedLooker40SDK\` methods pre-bound as bare globals (never prefix with \`sdk.\`). Do NOT call \`update_session\` inside \`run_looker_codemode\` — dev mode is controlled by the app session or the \`--dev\` CLI flag.`,
     `   - Use whatever branch/state is already in the user's dev mode (inspect via \`git_branch(project_id)\` — do NOT reset to production or create a new git branch unless explicitly asked). Pull LookML files via \`all_project_files\` + \`get_file_content\` into \`/workspace/lookml_baseline/\` and \`/workspace/data/$RUN_ID/lookml/\`.`,
     `3. **100% Offline \`lkr-dev-cli[parse]\` CLI Commands in \`/workspace\`**:`,
     `   - Run offline CLI commands against \`/workspace/data/$RUN_ID/lookml\`: \`lkr parse sql --dialect bigquery --summary\`, \`lkr parse sql-lookml-compare --offline\`, \`lkr parse lookml-to-api --validate\`, \`lkr schema validate --explore-file\`, and \`lkr parse lookml snapshot\` & \`lkr parse curation-meta\`.`,
     `   - Author Bronze refinements, Silver/Gold views & explores, opinionated \`.test.lkml\` tests, and \`/workspace/data/$RUN_ID/summary.md\` ${hasExplicitSkills ? `according to the Activated Turn Skills (${activeSkillList.join(', ')})` : `according to the matching \`/workspace/skills/<skill-id>/SKILL.md\` instructions`}.`,
     `4. **Push Modified \`.lkml\` Files via \`lkr --dev tools lookml push\`, Pre-Gate Parity & Validate**:`,
     `   - Push local \`.lkml\` files back to Looker dev mode using \`lkr --dev tools lookml push /workspace/lookml --project-id <project_id> --no-reset\` (which automatically creates directories and configures \`.model.lkml\`), then run \`validate_project\` and \`run_lookml_test\`.`,
-    `5. **Emit \`<LOOKML_BUNDLE>\`**:`,
-    `   Run \`python3 /workspace/bootstrap_lookml.py bundle /workspace/data/$RUN_ID\` (or \`/workspace/lookml_result.json\`) and include the printed \`<LOOKML_BUNDLE>...</LOOKML_BUNDLE>\` tag in your final response.`,
+    `5. **Emit \`<LOOKML_BUNDLE>\` & Clickable Links**:`,
+    `   Run \`python3 /workspace/bootstrap_lookml.py bundle /workspace/data/$RUN_ID\` (or \`/workspace/lookml_result.json\`), include the printed \`<LOOKML_BUNDLE>...</LOOKML_BUNDLE>\` tag, and end every turn that creates or updates LookML project files with \`[Open <project_name> in Looker IDE](/projects/<project_name>/files)\` (and end every turn that creates or updates a Looker dashboard with \`[Open <Dashboard Title>](/dashboards/<id>)\`).`,
   ].join('\n')
 }
 
@@ -303,12 +318,15 @@ export const LookmlPreviewPane: React.FC<{
   const queries = bundle.queries || []
   const cleanHost = hostUrl.replace(/\/$/, '')
 
+  const projectIdePath = bundle.project_id?.trim() ? `/projects/${encodeURIComponent(bundle.project_id.trim())}/files` : ''
   const openLink = (pathOrUrl: string) => {
-    const target = pathOrUrl.startsWith('http')
-      ? pathOrUrl
-      : `${cleanHost}${pathOrUrl.startsWith('/') ? '' : '/'}${pathOrUrl}`
-    if (extensionSDK?.openBrowserWindow) extensionSDK.openBrowserWindow(target, '_blank')
-    else window.open(target, '_blank', 'noopener,noreferrer')
+    const p = String(pathOrUrl || '').trim()
+    if (!p) return
+    const rel = p.startsWith('http') || p.startsWith('/') ? p : `/${p}`
+    if (extensionSDK?.openBrowserWindow) extensionSDK.openBrowserWindow(rel, '_blank')
+    else if (typeof window !== 'undefined' && typeof window.open === 'function') {
+      window.open(p.startsWith('http') ? p : `${cleanHost}${rel}`, '_blank', 'noopener,noreferrer')
+    }
   }
 
   return (
@@ -317,6 +335,11 @@ export const LookmlPreviewPane: React.FC<{
         <div>
           <strong>Project:</strong> <code>{bundle.project_id || 'default'}</code>
         </div>
+        {projectIdePath && (
+          <StudioButton variant="secondary" testId="lookml-open-ide-btn" onClick={() => openLink(projectIdePath)}>
+            Open Project in IDE
+          </StudioButton>
+        )}
         {bundle.model_name && (
           <div>
             <strong>Model:</strong> <code>{bundle.model_name}</code>

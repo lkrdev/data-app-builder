@@ -186,7 +186,7 @@ export function createDeduplicatedLookerSdkProxy(
       const reqStart = Date.now()
       const isMetaGet =
         String(method || 'GET').toUpperCase() === 'GET' &&
-        /\/(?:lookml_models|content_search|content_summary|global_search_v2|user|folders|session)(?:\/|$|\?)/i.test(String(path || ''))
+        /\/(?:lookml_models|connections|content_search|content_summary|global_search_v2|user|folders|session)(?:\/|$|\?)/i.test(String(path || ''))
       const execRaw = () => origRawReq.call(rawTransport, method, path, queryParams, body, ...rest)
       try {
         const res = isMetaGet
@@ -242,6 +242,85 @@ export async function rawLookerRequest<T = unknown>(
 }
 
 export const rawCoreSdkRequest = rawLookerRequest
+
+export interface AccessibleLookerConnection {
+  name: string
+  dialect_name?: string
+  database?: string
+  schema?: string
+  models?: string[]
+  source: 'connections' | 'lookml_models'
+}
+
+let nextConnectionSdkCacheId = 1
+const connectionSdkCacheIds = new WeakMap<object, number>()
+const getConnectionSdkCacheId = (sdk: object): number => {
+  const raw = ((sdk as { __rawSdk?: object }).__rawSdk || sdk) as object
+  let id = connectionSdkCacheIds.get(raw)
+  if (!id) connectionSdkCacheIds.set(raw, (id = nextConnectionSdkCacheId++))
+  return id
+}
+
+// ponytail: pre-fetch accessible Looker DB connections client-side (<100ms, cached in memory/SWR)
+// with non-admin fallback to /lookml_models so Turn-1 project intake needs 0 tool calls.
+export async function discoverAccessibleConnections(
+  sdk?: Partial<Looker40SDK> | null
+): Promise<AccessibleLookerConnection[]> {
+  if (!sdk || typeof sdk !== 'object') return []
+  const sdkId = getConnectionSdkCacheId(sdk)
+  return coalesceLookerMetadataRequest(
+    `accessible_connections:${sdkId}`,
+    async () => {
+      const hasRaw = typeof (sdk as { authSession?: { transport?: { rawRequest?: unknown } } })?.authSession?.transport?.rawRequest === 'function'
+      const sdkRec = sdk as unknown as {
+        ok?: <T>(p: Promise<T> | T) => Promise<T>
+        all_connections?: (params?: Record<string, unknown>) => Promise<unknown>
+        all_lookml_models?: (params?: Record<string, unknown>) => Promise<unknown>
+      }
+      const fetchList = async (path: string, fn: ((p: Record<string, unknown>) => Promise<unknown>) | undefined, fields: string) => {
+        const res = hasRaw
+          ? await rawCoreSdkRequest<Array<Record<string, unknown>>>(sdk as Looker40SDK, 'GET', path, { fields })
+          : typeof fn === 'function'
+          ? await (typeof sdkRec.ok === 'function' ? sdkRec.ok(Promise.resolve(fn({ fields }))) : fn({ fields }))
+          : []
+        return Array.isArray(res) ? (res as Array<Record<string, unknown>>) : []
+      }
+      try {
+        const items: AccessibleLookerConnection[] = (await fetchList('/connections', sdkRec.all_connections, 'name,dialect_name,database,schema'))
+          .filter((c) => typeof c?.name === 'string' && c.name.trim())
+          .map((c) => {
+            const d = String(c.dialect_name || '').trim(), db = String(c.database || '').trim(), s = String(c.schema || '').trim()
+            return { name: String(c.name).trim(), ...(d ? { dialect_name: d } : {}), ...(db ? { database: db } : {}), ...(s ? { schema: s } : {}), source: 'connections' as const }
+          })
+        if (items.length > 0) return items
+      } catch { /* non-admin 403/404 -> fallback to /lookml_models */ }
+      try {
+        const byConn = new Map<string, Set<string>>()
+        for (const m of await fetchList('/lookml_models', sdkRec.all_lookml_models, 'name,project_name,allowed_db_connection_names')) {
+          const label = String(m?.project_name || m?.name || '').trim()
+          for (const c of Array.isArray(m?.allowed_db_connection_names) ? m.allowed_db_connection_names : []) {
+            const cname = String(c || '').trim()
+            if (cname) { if (!byConn.has(cname)) byConn.set(cname, new Set()); if (label) byConn.get(cname)!.add(label) }
+          }
+        }
+        return Array.from(byConn.entries()).map(([name, p]) => ({ name, ...(p.size ? { models: Array.from(p) } : {}), source: 'lookml_models' as const }))
+      } catch { return [] }
+    },
+    LOOKER_METADATA_CACHE_TTL_MS,
+    ['looker:accessible_connections', sdkId]
+  )
+}
+
+export function formatAccessibleConnectionsMarkdown(connections: ReadonlyArray<AccessibleLookerConnection>): string {
+  if (!Array.isArray(connections) || connections.length === 0) {
+    return '### Available Looker Connections\n- No database connections found for your Looker role.'
+  }
+  const lines = connections.map((c) => {
+    const detail = c.source === 'lookml_models' ? (c.models?.length ? `models/projects: ${c.models.join(', ')}` : '') : [c.dialect_name, c.database, c.schema].filter(Boolean).join(' · ')
+    return `- \`${c.name}\`${detail ? ` (${detail})` : ''}`
+  })
+  return `### Available Looker Connections\n${lines.join('\n')}`
+}
 
 export interface LookerFolderNode {
   id: string

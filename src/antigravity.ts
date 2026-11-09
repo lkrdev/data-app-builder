@@ -56,11 +56,15 @@ import {
   type StudioThinkingLevel,
 } from './antigravityTypes'
 import {
+  type AccessibleLookerConnection,
   createDeduplicatedLookerSdkProxy,
   type DataAppBundle,
+  discoverAccessibleConnections,
   extractResolvedUseCase,
+  formatAccessibleConnectionsMarkdown,
   getArtifactNamespace,
   isConversationalNoOpPrompt,
+  matchExplicitUseCaseRule,
   type NativeContentBundle,
   type NativeContentState,
   normalizeNativeContent,
@@ -92,8 +96,8 @@ export * from './antigravityPrompts'
 export * from './lookmlSkills'
 export {
   buildStudioRoute, clampLeftPaneWidth, classifyStudioUseCase, convertRelativeDateFilterToFixed,
-  DEFAULT_BUSY_SEND_ACTION, DEFAULT_LEFT_PANE_WIDTH, EXPLICIT_SCRIPT_CREATION_RE, extractResolvedUseCase,
-  formatContentInventoryMarkdown, getAllowedUseCases, getUseCaseLabel,
+  DEFAULT_BUSY_SEND_ACTION, DEFAULT_LEFT_PANE_WIDTH, discoverAccessibleConnections, EXPLICIT_SCRIPT_CREATION_RE,
+  extractResolvedUseCase, formatAccessibleConnectionsMarkdown, formatContentInventoryMarkdown, getAllowedUseCases, getUseCaseLabel,
   isConversationalNoOpPrompt, isLookerInstanceMetadataQuery, loadStoredBusySendAction, loadStoredLeftPaneWidth, loadStoredRightPaneCollapsed,
   matchExplicitUseCaseRule, MAX_LEFT_PANE_WIDTH, MIN_LEFT_PANE_WIDTH,
   normalizeBusySendAction, normalizeQueryFiltersToFixedDates, readInitialBusySendAction, readInitialLeftPaneWidth, readInitialRightPaneCollapsed,
@@ -101,7 +105,7 @@ export {
   STUDIO_BUSY_SEND_ACTION_STORAGE_KEY, STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY, STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY,
   STUDIO_USE_CASE_OPTIONS, studioModeToUseCase, studioUseCaseToMode, useCaseToStudioMode,
 } from './lookerApi'
-export type { ExtensionHostStorageLike, ResolvedStudioUseCase, StudioBusySendAction, StudioUseCase } from './lookerApi'
+export type { AccessibleLookerConnection, ExtensionHostStorageLike, ResolvedStudioUseCase, StudioBusySendAction, StudioUseCase } from './lookerApi'
 export {
   BOOTSTRAP_LOOKML_PY,
   BOOTSTRAP_SANDBOX_SH,
@@ -240,6 +244,8 @@ export interface RunAntigravityTurnOptions {
   activatedLookmlSkills?: string[]
   developableProjects?: string[]
   canDeploy?: boolean
+  availableConnections?: ReadonlyArray<AccessibleLookerConnection> | string
+  warmEnvironmentInBackground?: boolean
   schemaMarkdown: string
   userPrompt: string
   images?: PastedImage[]
@@ -277,6 +283,25 @@ export interface AntigravityTurnResult {
   thinkingDurationSec?: number
 }
 
+export function isNewProjectOnboardingIntakePrompt(
+  userPrompt?: string,
+  priorMessages?: ReadonlyArray<{ role: string; text: string }>
+): boolean {
+  const clean = String(userPrompt || '').trim()
+  if (!/(?:\b(?:create|onboard|scaffold|set\s*up|start|initialize|init)\b[\s\S]{0,30}\b(?:new\s+)?(?:looker\s+|lookml\s+)?project\b|\bnew\s+(?:looker\s+|lookml\s+)project\b|\/looker-project-onboarding\b)/i.test(clean)) return false
+  const combined = [...(priorMessages || []).map((m) => String(m.text || '')), clean].join('\n')
+  const hasConn = /\bconnection(?:\s+name)?\s*(?:is|=|:|\s)\s*[`"']?(?!(?:name|and|or|to|for|from|in|on|with|access|a|the)\b)[a-z][a-z0-9_-]{2,}/i.test(combined)
+  const hasProj = /\b(?:called|call\s+it|named?|project(?:_id|_name|\s+name)?)\s*(?:is|=|:|\s)\s*[`"']?(?!(?:name|called|named|and|or|to|for|from|in|on|with|a|the)\b)[a-z][a-z0-9_]{2,}/i.test(combined)
+  const hasTarget = /\b(?:schema|dataset|tables?)\s*(?:is|=|:|\s)\s*[`"']?(?!(?:name|or|and|to|for|from|in|on|with|access|do|you|a|the)\b)[a-z][a-z0-9_.-]{2,}|\bselect\b[\s\S]+\bfrom\b/i.test(combined)
+  return !(hasConn && hasProj && hasTarget)
+}
+
+export function isConnectionSchemaDiscoveryPrompt(userPrompt?: string): boolean {
+  const clean = String(userPrompt || '').trim()
+  if (!clean || /\b(?:use|select|pick)\s+(?:the\s+)?\S+\s+(?:dataset|schema)\b|\b(?:profile|refinement|silver|bronze|measure|dashboard|data\s*app)\b/i.test(clean)) return false
+  return /\b(?:what|which|list|show|check|discover|inspect)\b[\s\S]{0,60}\b(?:schemas?|datasets?)\b|\bschemas?\s+(?:do\s+you|does\s+(?:it|that|this|the)|available|on\s+(?:that|this|the)?\s*connection)/i.test(clean)
+}
+
 export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Promise<AntigravityTurnResult> {
   const turnStartMs = Date.now()
   let pollWaitMs = 0, pollCount = 0, codemodeExecMs = 0, lookerHttpMs = 0, codemodeCalls = 0, lookerHttpCalls = 0, apiRetries = 0
@@ -285,7 +310,8 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
     sdk, extensionSDK, userId, environmentId, conversationId: rawConversationId, onEnvironmentUpdated, auth, session,
     model = DEFAULT_ANTIGRAVITY_MODEL, thinkingLevel = DEFAULT_THINKING_LEVEL, maxTotalTokens = DEFAULT_MAX_TOTAL_TOKENS, mode = 'data_app', useCase = 'auto',
     allowedModes, selectedExplores, folderId, toolMode = 'data_app', lookmlProjectId, activatedLookmlSkills,
-    developableProjects, canDeploy, schemaMarkdown, userPrompt, images, existingAppCode, existingNativeContent,
+    developableProjects, canDeploy, availableConnections: providedConnections, warmEnvironmentInBackground = false,
+    schemaMarkdown, userPrompt, images, existingAppCode, existingNativeContent,
     customSystemGuide, extraSources, priorMessages, requirePermission = true, approvedOperations, onPermissionRequest,
     onRequestWritePermission, onProgressSteps, pollScheduleMs = DEFAULT_POLL_SCHEDULE_MS, signal, onInteractionCreated, onStatus,
   } = params
@@ -324,6 +350,7 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
   // ponytail: decouple container state (environmentId) from conversation history (lastInteractionId).
   const isFreshConversation =
     !session.lastInteractionId ||
+    Boolean(session.statelessTurn) ||
     Boolean(session.toolType && session.toolType !== effectiveToolType) ||
     (Array.isArray(session.explores) && session.explores.length > 0 && JSON.stringify(session.explores) !== JSON.stringify(selectedExplores))
 
@@ -380,10 +407,33 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           `5. CRITICAL: bundle_app.py prints \`<DATA_APP_BUNDLE>...</DATA_APP_BUNDLE>\` directly to stdout, which the host captures automatically from tool output. NEVER echo or repeat \`<DATA_APP_BUNDLE>\` or raw JavaScript code in your final text reply—respond with a concise 1–2 sentence summary only.`,
         ].join('\n')
 
+  const isNoOpTurn = isConversationalNoOpPrompt(userPrompt)
+  const effectiveLookmlIntent =
+    toolMode === 'lookml' || useCase === 'lookml' || (useCase === 'auto' && matchExplicitUseCaseRule(userPrompt, allowedModes) === 'lookml')
+  const isLookmlOnboardingIntake =
+    !isNoOpTurn && effectiveLookmlIntent && !lookmlProjectId?.trim() && isNewProjectOnboardingIntakePrompt(userPrompt, priorMessages)
+  const isLookmlSchemaDiscovery =
+    !isNoOpTurn && !isLookmlOnboardingIntake && effectiveLookmlIntent && isConnectionSchemaDiscoveryPrompt(userPrompt)
+  const isToollessTurn = isLookmlOnboardingIntake || isNoOpTurn
+  const requiresBashSandbox = !isToollessTurn && !isLookmlSchemaDiscovery && !isDashboardMode && effectiveToolType !== 'tile'
+
+  let resolvedAvailableConnections = providedConnections
+  if (isLookmlOnboardingIntake && resolvedAvailableConnections === undefined && sdk) {
+    const connStart = Date.now()
+    const fetchedConns = await discoverAccessibleConnections(sdk)
+    lookerHttpMs += Date.now() - connStart
+    if (fetchedConns.length > 0) lookerHttpCalls += 1
+    resolvedAvailableConnections = formatAccessibleConnectionsMarkdown(fetchedConns)
+  }
+
   const systemGuide =
     customSystemGuide ||
-    (toolMode === 'lookml'
-      ? buildLookmlSystemGuide({ selectedExplores, primaryModel, primaryExplore, projectId: lookmlProjectId, activatedSkills: activatedLookmlSkills, userPrompt, developableProjects, canDeploy })
+    (toolMode === 'lookml' || isLookmlOnboardingIntake
+      ? buildLookmlSystemGuide({
+          selectedExplores, primaryModel, primaryExplore, projectId: lookmlProjectId,
+          activatedSkills: activatedLookmlSkills, userPrompt, developableProjects, canDeploy,
+          availableConnections: resolvedAvailableConnections,
+        })
       : dataAppOrNativeGuide)
 
   const uploadSources: Array<{ type: 'inline'; content: string; target: string }> = []
@@ -397,14 +447,13 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     uploadedFileNotices.push(`- \`${targetPath}\` (${file.mimeType}${file.size ? `, ${file.size} bytes` : ''})`)
   }
 
-  const sources = buildWorkspaceSources({
-    schemaMarkdown, appFilePath, existingAppCode: mode === 'data_app' ? existingAppCode : undefined,
-    cachedExploreSchemas: getSharedEnvExploreSchemas(activeEnvId), extraSources: [...(extraSources || []), ...uploadSources],
-  })
-
-  // ponytail: disable remote container code_execution in /dashboard mode so all UDD + .dashboard.lookml
-  // operations run directly in browser/extension WASM Monty CodeMode with zero bash container overhead.
-  const activeTools = isDashboardMode
+  // ponytail: omit { type: 'code_execution' } and blocking container boot on toolless intake / no-op turns
+  // and CodeMode-only turns (/dashboard, Turn-2 connection_schemas discovery, /tile).
+  const activeTools = isToollessTurn
+    ? []
+    : isDashboardMode
+    ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
+    : !requiresBashSandbox
     ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
     : [{ type: 'code_execution' }, LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
 
@@ -413,7 +462,6 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       ? `\n\nPrior conversation context:\n${priorMessages.filter((m) => m.role === 'user' || m.role === 'assistant').slice(-40).map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`).join('\n')}`
       : ''
 
-  const isNoOpTurn = isConversationalNoOpPrompt(userPrompt)
   const warmTurnDirective =
     !isNoOpTurn && mode === 'data_app' && toolMode !== 'lookml' && Boolean(existingAppCode?.trim())
       ? `[WARM SANDBOX FAST PATH: ${appFilePath} and the discovered Looker schema are already in /workspace. Do NOT re-run run_looker_codemode discovery or re-read guides unless a brand-new explore is requested. Update ${appFilePath} and bundle in ONE code_execution call via: python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\n...\nEOF\nNEVER echo <DATA_APP_BUNDLE> in your text reply.]\n\n`
@@ -427,9 +475,11 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : ''
 
   const uploadsSection = uploadedFileNotices.length > 0 ? `\n\nAttached files in /workspace/uploads:\n${uploadedFileNotices.join('\n')}` : ''
+  const effectiveThinkingLevel: StudioThinkingLevel =
+    isLookmlOnboardingIntake || isLookmlSchemaDiscovery ? 'low' : thinkingLevel
   const thinkingDirective =
-    thinkingLevel === 'low' ? '[THINKING LEVEL: LOW — Be concise and minimize exploratory steps]\n\n'
-      : thinkingLevel === 'high' ? '[THINKING LEVEL: HIGH — Reason deeply and verify edge cases thoroughly]\n\n' : ''
+    effectiveThinkingLevel === 'low' ? '[THINKING LEVEL: LOW — Be concise and minimize exploratory steps]\n\n'
+      : effectiveThinkingLevel === 'high' ? '[THINKING LEVEL: HIGH — Reason deeply and verify edge cases thoroughly]\n\n' : ''
 
   const buildInputItems = (fresh: boolean): Array<Record<string, unknown>> => [
     {
@@ -446,9 +496,17 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const activeModel = model || DEFAULT_ANTIGRAVITY_MODEL
   const resolvedMaxTokens = Number(maxTotalTokens) > 0 ? Number(maxTotalTokens) : DEFAULT_MAX_TOTAL_TOKENS
   const agentConfig = { type: 'antigravity', model: activeModel, max_total_tokens: String(resolvedMaxTokens) }
+  const baseAgentBody = { agent: 'antigravity-preview-09-2026', agent_config: agentConfig, background: true, tools: activeTools }
   const buildFreshPayload = (): Record<string, unknown> => ({
-    agent: 'antigravity-preview-09-2026', agent_config: agentConfig, background: true, tools: activeTools,
-    input: buildInputItems(true), environment: { type: 'remote', sources },
+    ...baseAgentBody,
+    input: buildInputItems(true),
+    environment: {
+      type: 'remote',
+      sources: buildWorkspaceSources({
+        schemaMarkdown, appFilePath, existingAppCode: mode === 'data_app' ? existingAppCode : undefined,
+        cachedExploreSchemas: getSharedEnvExploreSchemas(activeEnvId), extraSources: [...(extraSources || []), ...uploadSources],
+      }),
+    },
   })
 
   const provisionFreshEnvironmentInteraction = (): Promise<AntigravityInteractionPayload> =>
@@ -458,28 +516,48 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     })
 
   if (signal?.aborted) await throwIfAborted()
-  onStatus('Starting Antigravity sandbox interaction...')
-  if (!activeEnvId && inFlightEnvProvisionByUser.has(userProvisionKey)) {
+  onStatus(isLookmlOnboardingIntake ? 'Checking accessible Looker connections...' : 'Starting Antigravity sandbox interaction...')
+  if (!activeEnvId && inFlightEnvProvisionByUser.has(userProvisionKey) && (requiresBashSandbox || isDashboardMode)) {
     try {
       const coalescedId = normalizeEnvironmentId(await inFlightEnvProvisionByUser.get(userProvisionKey)!)
       if (coalescedId) activeEnvId = coalescedId
     } catch { /* ignore */ }
   }
+  if (warmEnvironmentInBackground && !requiresBashSandbox && !activeEnvId && !inFlightEnvProvisionByUser.has(userProvisionKey)) {
+    void prewarmOrWakeAntigravityEnvironment({
+      sdk, userId, extensionSDK, auth, toolType: effectiveToolType, model: activeModel, maxTotalTokens: resolvedMaxTokens,
+      selectedExplores, schemaMarkdown, existingAppCode: mode === 'data_app' ? existingAppCode : undefined, onEnvironmentUpdated,
+    }).catch(() => {})
+  }
   if (signal?.aborted) await throwIfAborted()
 
   let interaction: AntigravityInteractionPayload
-  if (activeEnvId || (!isFreshConversation && session.lastInteractionId)) {
+  let usedDirectStatelessModel = false
+  if (isLookmlOnboardingIntake || (isNoOpTurn && isFreshConversation)) {
+    usedDirectStatelessModel = true
+    interaction = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
+      model: activeModel, store: false, background: false, tools: [],
+      generation_config: { thinking_level: 'low', max_output_tokens: 2048 },
+      input: buildInputItems(true),
+    })
+  } else if (!requiresBashSandbox || activeEnvId) {
     try {
       interaction = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
-        agent: 'antigravity-preview-09-2026', agent_config: agentConfig, background: true, tools: activeTools,
-        input: buildInputItems(isFreshConversation), environment: activeEnvId || 'remote',
+        ...baseAgentBody,
+        input: buildInputItems(isFreshConversation),
+        ...(activeEnvId ? { environment: activeEnvId } : {}),
         ...(isFreshConversation ? {} : { previous_interaction_id: session.lastInteractionId }),
       })
     } catch (err) {
-      if (activeEnvId && !isEnvironmentNotFoundError(err) && isFreshConversation) throw err
+      if ((!requiresBashSandbox ? !activeEnvId : !isEnvironmentNotFoundError(err)) && isFreshConversation) throw err
       apiRetries += 1
-      onStatus('Resumed sandbox expired; provisioning fresh sandbox with app state...')
-      interaction = await provisionFreshEnvironmentInteraction()
+      if (!requiresBashSandbox) {
+        activeEnvId = undefined
+        interaction = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', { ...baseAgentBody, input: buildInputItems(true) })
+      } else {
+        onStatus('Resumed sandbox expired; provisioning fresh sandbox with app state...')
+        interaction = await provisionFreshEnvironmentInteraction()
+      }
     }
   } else {
     interaction = await provisionFreshEnvironmentInteraction()
@@ -700,6 +778,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
             accumulateInteractionUsage(interaction)
             accumulatedSteps.push(...(interaction.steps || []), ...resultsInput)
 
+            const resumeEnv = interaction.environment_id || trackedEnvId || (requiresBashSandbox ? 'remote' : undefined)
             interaction = await callInteractionsApi(
               extensionSDK,
               auth,
@@ -709,7 +788,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                 agent: 'antigravity-preview-09-2026',
                 agent_config: agentConfig,
                 background: true,
-                environment: interaction.environment_id || trackedEnvId || 'remote',
+                ...(resumeEnv ? { environment: resumeEnv } : {}),
                 previous_interaction_id: interaction.id,
                 tools: activeTools,
                 input: resultsInput,
@@ -986,6 +1065,25 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     onEnvironmentUpdated,
   })
 
+  let finalAssistantText =
+    cleanAssistantText ||
+    (bundle ? `Built "${bundle.title}".`
+      : nativeBundle ? `Built "${nativeBundle.title}".`
+      : lookmlBundle ? `Updated LookML "${lookmlBundle.title}".`
+      : tddMarkdown ? 'Synthesized 7-section Technical Design Document (TECHNICAL_DESIGN_DOCUMENT.md).'
+      : 'Done.')
+  const lookmlPid = lookmlBundle?.project_id?.trim()
+  if (lookmlPid && !/\/projects\/[^/\s)]+/i.test(finalAssistantText)) {
+    finalAssistantText = `${finalAssistantText}\n\n[Open ${lookmlPid} in Looker IDE](/projects/${encodeURIComponent(lookmlPid)}/files)`
+  }
+  if (nativeBundle) {
+    const ct = nativeBundle.content_type || nativeBundle.contentType || 'dashboard'
+    const dashId = nativeBundle.embed_path?.match(/\/dashboards\/([^/?#\s]+)/)?.[1] || (nativeBundle as NativeContentBundle & { dashboard_id?: string }).dashboard_id || nativeBundle.id
+    if ((ct === 'dashboard' || ct === 'lookml_dashboard') && dashId && !/\/dashboards\/[^\s)]+/i.test(finalAssistantText)) {
+      finalAssistantText = `${finalAssistantText}\n\n[Open ${nativeBundle.title || 'Dashboard'}](/dashboards/${dashId})`
+    }
+  }
+
   return {
     bundle,
     nativeBundle,
@@ -993,20 +1091,11 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     tddMarkdown,
     resolvedUseCase,
     rawOutputText: rawText,
-    assistantText:
-      cleanAssistantText ||
-      (bundle
-        ? `Built "${bundle.title}".`
-        : nativeBundle
-        ? `Built "${nativeBundle.title}".`
-        : lookmlBundle
-        ? `Updated LookML "${lookmlBundle.title}".`
-        : tddMarkdown
-        ? 'Synthesized 7-section Technical Design Document (TECHNICAL_DESIGN_DOCUMENT.md).'
-        : 'Done.'),
+    assistantText: finalAssistantText,
     session: {
       environmentId: finalEnvId,
       lastInteractionId: interaction.id,
+      ...(usedDirectStatelessModel ? { statelessTurn: true } : {}),
       conversationId,
       explores: selectedExplores,
       toolType: effectiveToolType,

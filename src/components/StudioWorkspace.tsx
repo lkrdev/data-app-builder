@@ -19,8 +19,9 @@ import {
 } from '../antigravity'
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import {
-  ConversationRecord, formatExploreId, normalizeCaEmbedPath, normalizeStudioAgentName,
-  rawCoreSdkRequest, resolveConversationRelatedContent, StudioContentItem, StudioContentItemType,
+  ConversationRecord, discoverAccessibleConnections, formatAccessibleConnectionsMarkdown,
+  formatExploreId, normalizeCaEmbedPath, normalizeStudioAgentName,
+  resolveConversationRelatedContent, StudioContentItem, StudioContentItemType,
   StudioContextCategory, StudioContextMention,
 } from '../lookerApi'
 import { LOOKML_TURN_SKILLS, LookmlBundle, LookmlPreviewPane, LookmlSkillCatalogEntry, STUDIO_SLASH_SKILLS } from '../lookmlTool'
@@ -98,31 +99,7 @@ export async function openOrCopyMarkdownLink(
 
 export async function fetchAvailableLookerConnectionsMarkdown(core40SDK?: Partial<Looker40SDK> | null): Promise<string> {
   if (!core40SDK) return '### Available Looker Connections\n- No Looker SDK session available.'
-  try {
-    const conns = await rawCoreSdkRequest<Array<Record<string, unknown>>>(core40SDK as Looker40SDK, 'GET', '/connections', { fields: 'name,dialect_name,database,schema' })
-    const items = (Array.isArray(conns) ? conns : [])
-      .filter((c) => typeof c?.name === 'string' && c.name.trim())
-      .map((c) => {
-        const meta = [c.dialect_name, c.database, c.schema].map((x) => String(x || '').trim()).filter(Boolean).join(' · ')
-        return `- \`${String(c.name).trim()}\`${meta ? ` (${meta})` : ''}`
-      })
-    if (items.length > 0) return `### Available Looker Connections\n${items.join('\n')}`
-  } catch { /* fall back to /lookml_models when /connections returns 403/404 for non-admins */ }
-  try {
-    const models = await rawCoreSdkRequest<Array<Record<string, unknown>>>(core40SDK as Looker40SDK, 'GET', '/lookml_models', { fields: 'name,project_name,allowed_db_connection_names' })
-    const byConn = new Map<string, Set<string>>()
-    for (const m of Array.isArray(models) ? models : []) {
-      const label = String(m?.project_name || m?.name || '').trim()
-      for (const c of Array.isArray(m?.allowed_db_connection_names) ? m.allowed_db_connection_names : []) {
-        const cname = String(c || '').trim()
-        if (cname) { if (!byConn.has(cname)) byConn.set(cname, new Set()); if (label) byConn.get(cname)!.add(label) }
-      }
-    }
-    if (byConn.size > 0) {
-      return `### Available Looker Connections\n${Array.from(byConn.entries()).map(([c, p]) => `- \`${c}\`${p.size ? ` (models/projects: ${Array.from(p).join(', ')})` : ''}`).join('\n')}`
-    }
-  } catch { /* ignore */ }
-  return '### Available Looker Connections\n- No database connections found for your Looker role.'
+  return formatAccessibleConnectionsMarkdown(await discoverAccessibleConnections(core40SDK))
 }
 
 const StudioMarkdownLink: React.FC<{
