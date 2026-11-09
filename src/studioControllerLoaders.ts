@@ -47,10 +47,10 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   const {
     userId, userIdRef, availableLookmlProjects, selectedExplores, setSelectedExplores,
     setMentionedItems, selectedFolderId, setSelectedFolderId, schemaMarkdown,
-    inferredRouteUseCase, effectiveUseCase, activeMode, isHealthCheckMode, builderMode,
+    inferredRouteUseCase, effectiveUseCase, activeMode,
     agentSession, messages, catalogItems, setCatalogItems, activeObjectId, setActiveObjectId,
     conversations, setConversations, conversationLabelsRef, refreshCatalog,
-    setLookmlSessions, setSavedScripts, healthScope,
+    setSavedScripts, healthScope,
   } = meta
 
   const [caConversation, setCaConversation] = useState<CaConversationState | null>(null)
@@ -62,7 +62,6 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   const [lookmlProjectId, setLookmlProjectId] = useState('')
   const [activatedLookmlSkills, setActivatedLookmlSkills] = useState<string[]>([])
   const [lookmlBundle, setLookmlBundle] = useState<LookmlBundle | null>(null)
-  const [loadLookmlInput, setLoadLookmlInput] = useState('')
   const lastLookmlIdRef = useRef<string>('')
   const [publishedApp, setPublishedAppState] = useState<PublishedAppState | null>(null)
   const [nativeContent, setNativeContentState] = useState<NativeContentState | null>(null)
@@ -183,7 +182,6 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   const [loadedScript, setLoadedScript] = useState(false)
   const lastScriptIdRef = useRef<string>('')
   const [currentAppCode, setCurrentAppCode] = useState('')
-  const [loadDashInput, setLoadDashInput] = useState('')
   const [activeViewerDocument, setActiveViewerDocument] = useState<StudioViewerDocument | null>(null)
   const [prompt, setPrompt] = useState(() => String(mockExt?.initialPrompt || ''))
   const [pastedImages, setPastedImages] = useState<PastedImage[]>(() => (mockExt?.initialPastedImages as PastedImage[] | undefined) || [])
@@ -305,7 +303,6 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
             conversationLabelsRef.current[opts.id] = label
             setCaConversation((prev) => (prev && prev.id === opts.id ? { ...prev, label } : prev))
             setCatalogItems((prev) => prev.map((it) => (it.id === opts.id ? { ...it, label, title: label } : it)))
-            setLookmlSessions((prev) => prev.map((s) => (s.id === opts.id ? { ...s, title: label } : s)))
             const updatedAt = new Date().toISOString()
             await saveUserConversation(core40SDK, userId, { ...baseConv, label, updatedAt }, namespace)
               .then(setConversations).catch(() => {})
@@ -325,7 +322,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
           .catch(() => {})
       }
     },
-    [apiKey, authMode, clientId, conversationLabelsRef, core40SDK, extensionSDK, oauthToken, projectId, selectedModel, setCatalogItems, setConversations, setLookmlSessions, userId]
+    [apiKey, authMode, clientId, conversationLabelsRef, core40SDK, extensionSDK, oauthToken, projectId, selectedModel, setCatalogItems, setConversations, userId]
   )
 
   const loadDashboardById = useCallback(
@@ -340,7 +337,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         const targetUc: ResolvedStudioUseCase = existingUc === 'data-investigator' ? 'data-investigator' : 'app'
         resolvedUseCaseByIdRef.current[loaded.dashboardId] = targetUc
         setSelectedUseCase(targetUc); setPublishedApp(loaded); setCurrentAppCode(loaded.code)
-        setLoadDashInput(loaded.dashboardId); setSelectedFolderId(loaded.folderId)
+        setSelectedFolderId(loaded.folderId)
         const studioExplores = loaded.studio?.explores?.filter(Boolean) || []
         const legacyExplore = loaded.studio?.modelName && loaded.studio?.exploreName ? [formatExploreId(loaded.studio.modelName, loaded.studio.exploreName)] : []
         const queryExplores = Array.from(new Set((loaded.manifestQueries || []).filter((q) => q.model && q.explore).map((q) => formatExploreId(q.model, q.explore))))
@@ -370,7 +367,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         const loaded = await loadNativeContentById(core40SDK, extensionSDK, id)
         lastNativeIdRef.current = loaded.id
         resolvedUseCaseByIdRef.current[loaded.id] = 'dashboard'
-        setSelectedUseCase('dashboard'); setNativeContent(loaded); setLoadDashInput(loaded.id); setSelectedFolderId(loaded.folderId)
+        setSelectedUseCase('dashboard'); setNativeContent(loaded); setSelectedFolderId(loaded.folderId)
         hydrateLoadedArtifact({
           mode: 'dashboard', id: loaded.id, route: `/c/${encodeURIComponent(loaded.id)}`,
           pushRoute, convTypes: ['dashboard'], studio: loaded.studio, defaultEnvId: 'env_dashboard_7', dashboardId: loaded.id,
@@ -390,7 +387,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         const loaded = await loadHealthCheckArtifact(core40SDK, extensionSDK, id)
         lastHealthIdRef.current = loaded.id
         resolvedUseCaseByIdRef.current[loaded.id] = 'health-check'
-        setSelectedUseCase('health-check'); setHealthReport(loaded); setLoadDashInput(loaded.id)
+        setSelectedUseCase('health-check'); setHealthReport(loaded)
         hydrateLoadedArtifact({
           mode: 'health', id: loaded.id, route: `/c/${encodeURIComponent(loaded.id)}`,
           pushRoute, convTypes: ['health', 'health-check', 'health_check'], studio: loaded, defaultEnvId: `env_health_${loaded.id}`,
@@ -410,7 +407,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         const loaded = await loadLookmlSessionArtifact(core40SDK, extensionSDK, id)
         lastLookmlIdRef.current = loaded.id
         resolvedUseCaseByIdRef.current[loaded.id] = 'lookml'
-        setSelectedUseCase('lookml'); setLookmlBundle(loaded.bundle); setLoadLookmlInput(loaded.id)
+        setSelectedUseCase('lookml'); setLookmlBundle(loaded.bundle)
         if (loaded.bundle?.project_id) setLookmlProjectId(loaded.bundle.project_id)
         setSelectedExplores(loaded.studio?.explores?.filter(Boolean) || [])
         hydrateLoadedArtifact({
@@ -566,7 +563,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
           upsertContentItem({
             id: caConvId, contentType: 'conversational-analytics', title: state.title, embedPath: state.embedPath, updatedAt: state.updatedAt,
           })
-          setSelectedUseCase('conversational-analytics'); setLoadDashInput(caConvId)
+          setSelectedUseCase('conversational-analytics')
           const msgs = content.studio?.messages || content.messages || convFromList?.messages
           hydrateLoadedArtifact({
             mode: 'app', id: caConvId, route: `/c/${encodeURIComponent(caConvId)}`, pushRoute,
@@ -620,7 +617,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         id: created.caConversationId, contentType: 'conversational-analytics', title: created.label,
         embedPath: created.embedPath, updatedAt: nextCaState.updatedAt, source: 'created', createdInConversation: true,
       })
-      setSelectedUseCase('conversational-analytics'); setActiveObjectId(created.caConversationId); setLoadDashInput(created.caConversationId)
+      setSelectedUseCase('conversational-analytics'); setActiveObjectId(created.caConversationId)
       if (selection.explores.length > 0) setSelectedExplores(selection.explores)
       setMessages(nextMsgs, 'app')
       const targetRoute = `/c/${encodeURIComponent(created.caConversationId)}`
@@ -660,7 +657,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     const activeMsgs = baseMessages || messages
     try {
       const baseRes = await runThreePillarHealthCheckViaCodeMode({
-        sdk: core40SDK, extensionSDK, reportId: healthReport?.id || loadDashInput.trim() || undefined,
+        sdk: core40SDK, extensionSDK, reportId: healthReport?.id || undefined,
         targetProject: lookmlProjectId || availableLookmlProjects[0], healthScope, customFocus, messages: activeMsgs, onStatus: setBusyStatus,
       })
       let finalReport = baseRes.report
@@ -690,7 +687,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       }
       lastHealthIdRef.current = finalReport.id
       resolvedUseCaseByIdRef.current[finalReport.id] = 'health-check'
-      setHealthReport(finalReport); setActiveObjectId(finalReport.id); setLoadDashInput(finalReport.id)
+      setHealthReport(finalReport); setActiveObjectId(finalReport.id)
       const targetRoute = `/c/${encodeURIComponent(finalReport.id)}`
       if (location.pathname !== targetRoute) history.replace(targetRoute)
       const nextHealthMsgs: ChatMessage[] = [
@@ -818,10 +815,6 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     activeConversationId, activeObjectId, agentSession.lastInteractionId, conversations, catalogItems,
   ])
 
-  const handleLoadExistingDashboard = async () => {
-    await openArtifactByMode(isHealthCheckMode ? 'health' : isCaMode ? 'conversational-analytics' : builderMode, loadDashInput, true)
-  }
-
   const handleResetNewApp = useCallback(
     (resetToDefaultRoute?: boolean | React.MouseEvent, presetUseCase?: StudioUseCase) => {
       const forceDefaultRoute = resetToDefaultRoute === true
@@ -844,8 +837,6 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       setHealthReport(null)
       setCaConversation(null)
       setCurrentAppCode('')
-      setLoadDashInput('')
-      setLoadLookmlInput('')
       setSelectedExplores([])
       setMentionedItems([])
       setAgentSession({
@@ -1022,7 +1013,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   return {
     caConversation, setCaConversation, lastCaIdRef, isCaMode,
     lookmlProjectId, setLookmlProjectId, activatedLookmlSkills, setActivatedLookmlSkills,
-    lookmlBundle, setLookmlBundle, loadLookmlInput, setLoadLookmlInput, lastLookmlIdRef,
+    lookmlBundle, setLookmlBundle, lastLookmlIdRef,
     publishedApp, setPublishedAppState, setPublishedApp, lastPublishedIdRef,
     nativeContent, setNativeContentState, setNativeContent, lastNativeIdRef,
     contentItems, contentItemsRef, setContentItems,
@@ -1037,7 +1028,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     infoModalUseCase, setInfoModalUseCase,
     scheduleConfig, setScheduleConfig, savedScheduleBadge, setSavedScheduleBadge,
     loadedScript, setLoadedScript, lastScriptIdRef,
-    currentAppCode, setCurrentAppCode, loadDashInput, setLoadDashInput,
+    currentAppCode, setCurrentAppCode,
     activeViewerDocument, setActiveViewerDocument,
     prompt, setPrompt, pastedImages, setPastedImages,
     showArchivedConversations, setShowArchivedConversations,
@@ -1047,7 +1038,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     persistConversationAndLabel,
     loadNativeById, loadLookmlSessionById, loadCaConversationById, loadScriptById,
     handleRunPython, handleSaveScript, handlePublishTileDashboard,
-    handleRunHealthCheck, handleRunConversationalAnalytics, handleLoadExistingDashboard,
+    handleRunHealthCheck, handleRunConversationalAnalytics,
     handleResetNewApp, handleNewConversation, handleSelectConversation,
     handleToggleArchiveConversation, handleRequestDeleteConversation,
     handleCancelDeleteConversation, handleConfirmDeleteConversation, handleDeleteConversation,

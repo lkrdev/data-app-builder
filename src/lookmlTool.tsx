@@ -1,17 +1,17 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 
 import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
-import { Lock } from 'lucide-react'
+import { Lock, MoreVertical } from 'lucide-react'
 
 import { LOOKER_PROJECT_ONBOARDING_SKILL_MD } from './antigravityPrompts'
 import { StudioBadge, StudioButton, StudioCard } from './components/StudioDesignSystem'
 import { LKR_DEV_CLI_SPEC } from './lkrCliBridge'
 import {
   type AccessibleLookerConnection,
+  copyTextWithExtensionSdk,
   formatAccessibleConnectionsMarkdown,
   getArtifactNamespace,
-  listUserArtifacts,
   loadObjectArtifact,
   PersistedChatTurn,
   saveUserArtifact,
@@ -269,19 +269,6 @@ export async function loadLookmlSessionArtifact(
   return found
 }
 
-export async function listUserLookmlSessions(
-  sdk: Looker40SDK,
-  extensionSDK: Partial<ExtensionSDK> | undefined,
-  userId: string
-): Promise<LookmlSessionIndex[]> {
-  return (await listUserArtifacts(
-    sdk,
-    String(userId || 'anon').trim(),
-    'lookml',
-    getArtifactNamespace(extensionSDK)
-  )) as LookmlSessionIndex[]
-}
-
 export const LookmlPreviewPane: React.FC<{
   bundle: LookmlBundle | null
   hostUrl: string
@@ -290,6 +277,23 @@ export const LookmlPreviewPane: React.FC<{
 }> = ({ bundle, hostUrl, extensionSDK, canDeploy = true }) => {
   const [selectedFileIdx, setSelectedFileIdx] = useState(0)
   const [viewMode, setViewMode] = useState<'diff' | 'content'>('diff')
+  const [codeMenuOpen, setCodeMenuOpen] = useState(false)
+  const [copiedFile, setCopiedFile] = useState(false)
+  const codeMenuRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!codeMenuOpen) return
+    const onMouseDown = (e: MouseEvent) => {
+      if (codeMenuRef.current && !codeMenuRef.current.contains(e.target as Node)) setCodeMenuOpen(false)
+    }
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') setCodeMenuOpen(false) }
+    document.addEventListener('mousedown', onMouseDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [codeMenuOpen])
 
   if (!bundle) {
     return (
@@ -421,9 +425,22 @@ export const LookmlPreviewPane: React.FC<{
         </StudioCard>
       )}
 
-      <StudioCard style={{ padding: 0, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 240, overflow: 'hidden' }}>
-        <div className="dab-inspector-bar" style={{ padding: '8px 12px', borderBottom: '1px solid var(--dab-border, #e2e8f0)', background: 'var(--dab-surface-muted, #f8fafc)' }}>
-          <div className="dab-controls">
+      <StudioCard style={{ padding: 0, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 240 }}>
+        <div
+          className="dab-inspector-bar"
+          style={{
+            padding: '8px 12px',
+            gap: 8,
+            borderBottom: '1px solid var(--dab-border, #e2e8f0)',
+            background: 'var(--dab-surface-muted, #f8fafc)',
+            borderRadius: '7px 7px 0 0',
+          }}
+        >
+          <div
+            className="dab-controls"
+            data-testid="lookml-file-tabs"
+            style={{ flexWrap: 'nowrap', overflowX: 'auto', flex: 1, minWidth: 0 }}
+          >
             {files.length === 0 ? (
               <span className="dab-muted">No modified .lkml files recorded</span>
             ) : (
@@ -431,9 +448,10 @@ export const LookmlPreviewPane: React.FC<{
                 <button
                   key={f.path}
                   type="button"
+                  data-testid={`lookml-file-tab-${idx}`}
                   onClick={() => setSelectedFileIdx(idx)}
                   className={idx === selectedFileIdx ? 'dab-btn-primary' : 'dab-btn-secondary'}
-                  style={{ fontFamily: 'monospace', fontSize: 11 }}
+                  style={{ fontFamily: 'monospace', fontSize: 11, flexShrink: 0 }}
                 >
                   {f.action === 'created' ? '+ ' : f.action === 'deleted' ? '- ' : 'Δ '}
                   {f.path}
@@ -442,25 +460,59 @@ export const LookmlPreviewPane: React.FC<{
             )}
           </div>
           {activeFile && (
-            <div className="dab-controls">
+            <div ref={codeMenuRef} style={{ position: 'relative', flexShrink: 0 }}>
               <button
                 type="button"
-                className="dab-btn-secondary"
-                onClick={() => setViewMode((m) => (m === 'diff' ? 'content' : 'diff'))}
+                data-testid="lookml-code-actions-btn"
+                className="dab-btn dab-btn-secondary dab-btn-icon"
+                title="LookML file actions"
+                aria-label="LookML file actions"
+                aria-haspopup="menu"
+                aria-expanded={codeMenuOpen}
+                onClick={() => setCodeMenuOpen((prev) => !prev)}
               >
-                {viewMode === 'diff' ? 'Show Full .lkml' : 'Show Unified Diff'}
+                <MoreVertical size={14} strokeWidth={1.75} aria-hidden="true" />
               </button>
-              <button
-                type="button"
-                className="dab-btn-secondary"
-                onClick={() => navigator.clipboard?.writeText(activeFile.content || activeFile.diff || '')}
-              >
-                Copy .lkml
-              </button>
+              {codeMenuOpen && (
+                <div
+                  data-testid="lookml-code-actions-menu"
+                  role="menu"
+                  aria-label="LookML file actions"
+                  className="dab-studio-menu align-right"
+                  style={{ minWidth: 168 }}
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-testid="lookml-toggle-view-mode-btn"
+                    className="dab-studio-menu-item"
+                    onClick={() => {
+                      setViewMode((m) => (m === 'diff' ? 'content' : 'diff'))
+                      setCodeMenuOpen(false)
+                    }}
+                  >
+                    <span>{viewMode === 'diff' ? 'Show Full .lkml' : 'Show Unified Diff'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-testid="lookml-copy-file-btn"
+                    className="dab-studio-menu-item"
+                    onClick={() => {
+                      void copyTextWithExtensionSdk(activeFile.content || activeFile.diff || '', extensionSDK)
+                      setCopiedFile(true)
+                      setTimeout(() => setCopiedFile(false), 1800)
+                      setCodeMenuOpen(false)
+                    }}
+                  >
+                    <span>{copiedFile ? 'Copied .lkml' : 'Copy .lkml'}</span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
-        <pre style={{ margin: 0, padding: 12, flex: 1, overflow: 'auto', background: '#0f172a', color: '#e2e8f0', fontSize: 12 }}>
+        <pre style={{ margin: 0, padding: 12, flex: 1, overflow: 'auto', background: '#0f172a', color: '#e2e8f0', fontSize: 12, borderRadius: '0 0 7px 7px' }}>
           {activeFile
             ? (viewMode === 'diff' && activeFile.diff ? activeFile.diff : activeFile.content || activeFile.diff || '')
                 .split('\n')

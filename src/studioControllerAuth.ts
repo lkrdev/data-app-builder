@@ -203,10 +203,33 @@ export function useStudioAuthAndPrefs() {
     return () => { mounted = false }
   }, [extensionSDK])
 
+  const leftPaneSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingLeftPaneWidthRef = useRef<number | null>(null)
+
+  const flushLeftPaneWidthSave = useCallback(() => {
+    if (leftPaneSaveTimerRef.current !== null) {
+      clearTimeout(leftPaneSaveTimerRef.current)
+      leftPaneSaveTimerRef.current = null
+    }
+    if (pendingLeftPaneWidthRef.current !== null) {
+      const w = pendingLeftPaneWidthRef.current
+      pendingLeftPaneWidthRef.current = null
+      void saveStoredLeftPaneWidth(w, extensionSDK)
+    }
+  }, [extensionSDK])
+
+  useEffect(() => () => flushLeftPaneWidthSave(), [flushLeftPaneWidthSave])
+
   const setLeftPaneWidth = useCallback((next: number | ((prev: number) => number)) => {
     setLeftPaneWidthState((prev) => {
       const clamped = clampLeftPaneWidth(typeof next === 'function' ? next(prev) : next)
-      void saveStoredLeftPaneWidth(clamped, extensionSDK)
+      pendingLeftPaneWidthRef.current = clamped
+      if (leftPaneSaveTimerRef.current !== null) clearTimeout(leftPaneSaveTimerRef.current)
+      leftPaneSaveTimerRef.current = setTimeout(() => {
+        leftPaneSaveTimerRef.current = null
+        pendingLeftPaneWidthRef.current = null
+        void saveStoredLeftPaneWidth(clamped, extensionSDK)
+      }, 250)
       return clamped
     })
   }, [extensionSDK])
@@ -501,7 +524,7 @@ export function useStudioAuthAndPrefs() {
     isAuthenticated, isConfigured, oauthSigningIn, oauthRedirectUri,
     handleSaveAuthSetup, handleOAuthLogin, handleOAuthLogout, handleCancelOAuthLogin,
     capabilities, setCapabilities, allowedUseCases, useCaseOptions,
-    sidebarCollapsed, setSidebarCollapsed, leftPaneWidth, setLeftPaneWidth,
+    sidebarCollapsed, setSidebarCollapsed, leftPaneWidth, setLeftPaneWidth, flushLeftPaneWidthSave,
     rightPaneCollapsed, setRightPaneCollapsed, busySendAction, setBusySendAction,
     resolvedUseCaseByIdRef, parsedRoute, selectedUseCase, setSelectedUseCase, explicitUseCaseRef,
     sharedEnvironmentId, sharedEnvIdRef, syncSharedEnvironmentId,

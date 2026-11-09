@@ -22,6 +22,21 @@ export function formatExploreId(modelName: string, exploreName: string): string 
   return `${modelName.trim()}::${exploreName.trim()}`
 }
 
+export function copyTextWithExtensionSdk(
+  text: string,
+  extensionSDK?: Partial<Pick<ExtensionSDK, 'clipboardWrite'>> | null
+): Promise<boolean> {
+  const raw = String(text ?? '')
+  if (!raw) return Promise.resolve(false)
+  const fallback = () =>
+    typeof navigator !== 'undefined' && typeof navigator.clipboard?.writeText === 'function'
+      ? navigator.clipboard.writeText(raw).then(() => true, () => false)
+      : Promise.resolve(false)
+  return typeof extensionSDK?.clipboardWrite === 'function'
+    ? Promise.resolve(extensionSDK.clipboardWrite(raw)).then(() => true, fallback)
+    : fallback()
+}
+
 export function parseExploreId(
   exploreId: string
 ): { modelName: string; exploreName: string } | null {

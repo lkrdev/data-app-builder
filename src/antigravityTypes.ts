@@ -143,7 +143,7 @@ export interface AntigravityUsageMetadata {
 }
 
 export interface AntigravityInteractionPayload {
-  id?: string; status?: string; environment_id?: string; output_text?: string
+  id?: string; previous_interaction_id?: string; status?: string; environment_id?: string; input?: unknown; output_text?: string
   outputs?: AntigravityInteractionOutput[]; steps?: AntigravityInteractionStep[]
   error?: { message?: string }; bash_calls?: number
   usage?: AntigravityUsageMetadata; usage_metadata?: AntigravityUsageMetadata

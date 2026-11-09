@@ -4,14 +4,15 @@ import { ChattyHostBuilderFactory, getEmbedSDK, ILookerConnection, LookerEmbedEx
 import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
 import {
-  Archive, ArchiveRestore, AtSign, BookOpen, Brain, Check, ChevronDown, Code2, Copy,
+  Archive, ArchiveRestore, AtSign, BookOpen, Brain, Bug, Check, ChevronDown, Code2, Copy,
   CornerDownRight, Database, Eye, FileText, Folder, Kanban, LayoutDashboard, Loader2,
-  MessageSquare, PanelRightClose, PanelRightOpen, Paperclip, Pencil, Plus, Shield,
+  MessageSquare, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Paperclip, Pencil, Plus, Shield,
   Sparkles, Square, Terminal, Trash2, Wrench, X, Zap,
 } from 'lucide-react'
 
 import {
-  AntigravityActivityStep, buildDynamicStarterPrompts, formatThinkingTraceMarkdown,
+  AntigravityActivityStep, buildDynamicStarterPrompts, fetchConversationSandboxDebugMarkdown,
+  formatConversationThreadMarkdown, formatThinkingTraceMarkdown,
   handleFileInputSelection, handleImageClipboardPaste, MAX_LEFT_PANE_WIDTH,
   MIN_LEFT_PANE_WIDTH, normalizeSandboxFilePath, resolveBuiltinWorkspaceFileContent,
   StarterPromptItem, stripStarterPromptEmojis, STUDIO_THINKING_LEVEL_OPTIONS,
@@ -19,12 +20,13 @@ import {
 } from '../antigravity'
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import {
-  ConversationRecord, discoverAccessibleConnections, formatAccessibleConnectionsMarkdown,
+  ConversationRecord, copyTextWithExtensionSdk, discoverAccessibleConnections, formatAccessibleConnectionsMarkdown,
   formatExploreId, normalizeCaEmbedPath, normalizeStudioAgentName,
   resolveConversationRelatedContent, StudioContentItem, StudioContentItemType,
   StudioContextCategory, StudioContextMention,
 } from '../lookerApi'
-import { LOOKML_TURN_SKILLS, LookmlBundle, LookmlPreviewPane, LookmlSkillCatalogEntry, STUDIO_SLASH_SKILLS } from '../lookmlTool'
+import { LookmlBundle, LookmlPreviewPane, LookmlSkillCatalogEntry, STUDIO_SLASH_SKILLS } from '../lookmlTool'
+export { copyTextWithExtensionSdk, fetchConversationSandboxDebugMarkdown, formatConversationThreadMarkdown }
 import { StudioController } from '../useStudioController'
 import { TilePreviewPane } from './ScriptStudioView'
 import {
@@ -50,20 +52,8 @@ export function isAllowedExternalWindowUrl(rawUrl: string): boolean {
   }
 }
 
-export async function copyLinkWithExtensionSdk(url: string, extensionSDK?: Partial<ExtensionSDK> | null): Promise<boolean> {
-  const clean = String(url || '').trim()
-  if (!clean) return false
-  if (typeof extensionSDK?.clipboardWrite === 'function') {
-    try { await extensionSDK.clipboardWrite(clean); return true } catch { /* fall through */ }
-  }
-  try {
-    if (typeof navigator !== 'undefined' && typeof navigator.clipboard?.writeText === 'function') {
-      await navigator.clipboard.writeText(clean)
-      return true
-    }
-  } catch { /* ignore */ }
-  return false
-}
+export const copyLinkWithExtensionSdk = (url: string, extensionSDK?: Partial<ExtensionSDK> | null): Promise<boolean> =>
+  copyTextWithExtensionSdk(String(url || '').trim(), extensionSDK)
 
 export async function openOrCopyMarkdownLink(
   url: string, hostUrl?: string, extensionSDK?: Partial<ExtensionSDK> | null
@@ -194,6 +184,37 @@ function renderInlineMarkdown(
   return nodes.length > 0 ? nodes : [cleanedText]
 }
 
+function splitGfmTableRow(rawLine: string): string[] {
+  let s = rawLine.trim()
+  if (s.startsWith('|')) s = s.slice(1)
+  if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1)
+  const cells: string[] = []
+  let cur = ''
+  let inCode = false
+  for (let idx = 0; idx < s.length; idx++) {
+    const ch = s[idx]
+    if (ch === '`' && s[idx - 1] !== '\\') { inCode = !inCode; cur += ch; continue }
+    if (ch === '\\' && s[idx + 1] === '|' && !inCode) { cur += '|'; idx++; continue }
+    if (ch === '|' && !inCode) { cells.push(cur.trim()); cur = ''; continue }
+    cur += ch
+  }
+  cells.push(cur.trim())
+  return cells
+}
+
+function isGfmTableDelimiterRow(rawLine: string): boolean {
+  const trimmed = rawLine.trim()
+  if (!trimmed.includes('|')) return false
+  const cells = splitGfmTableRow(trimmed)
+  return cells.length >= 1 && cells.every((c) => /^:?-{3,}:?$/.test(c))
+}
+
+function isGfmTableStart(lines: string[], idx: number): boolean {
+  return idx + 1 < lines.length && lines[idx].includes('|') && isGfmTableDelimiterRow(lines[idx + 1])
+}
+
+const MD_HR_RE = /^(?:-{3,}|\*{3,}|_{3,})$/
+
 export const StudioMarkdown: React.FC<{
   text: string; hostUrl?: string; extensionSDK?: Partial<ExtensionSDK> | null; onOpenSandboxMarkdownFile?: (path: string) => void; onInspectConnections?: () => void
 }> = ({ text, hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections }) => {
@@ -215,6 +236,10 @@ export const StudioMarkdown: React.FC<{
     while (i < lines.length) {
       const trimmed = lines[i].trim()
       if (!trimmed) { i++; continue }
+      if (MD_HR_RE.test(trimmed)) {
+        blocks.push(<hr key={`hr_${blockKey++}`} className="dab-md-hr" />)
+        i++; continue
+      }
       const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/)
       if (headingMatch) {
         const level = headingMatch[1].length
@@ -222,24 +247,71 @@ export const StudioMarkdown: React.FC<{
         blocks.push(<HeadingTag key={`h_${blockKey++}`} className={`dab-md-heading dab-md-h${level}`}>{renderInlineMarkdown(headingMatch[2], hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections)}</HeadingTag>)
         i++; continue
       }
+      if (isGfmTableStart(lines, i)) {
+        const headers = splitGfmTableRow(lines[i])
+        const alignments = splitGfmTableRow(lines[i + 1]).map((c): 'left' | 'center' | 'right' | undefined =>
+          c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : c.startsWith(':') ? 'left' : undefined
+        )
+        i += 2
+        const rows: string[][] = []
+        while (i < lines.length && lines[i].trim() && lines[i].includes('|') && !MD_HR_RE.test(lines[i].trim()) && !/^(#{1,4})\s+/.test(lines[i].trim())) {
+          rows.push(splitGfmTableRow(lines[i])); i++
+        }
+        blocks.push(
+          <div key={`tbl_${blockKey++}`} className="dab-py-table-wrap">
+            <table className="dab-py-table" data-testid="chat-markdown-table">
+              <thead>
+                <tr>
+                  {headers.map((h, cIdx) => (
+                    <th key={`th_${cIdx}`} style={alignments[cIdx] ? { textAlign: alignments[cIdx] } : undefined}>
+                      {renderInlineMarkdown(h, hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections)}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, rIdx) => (
+                  <tr key={`tr_${rIdx}`}>
+                    {headers.map((_h, cIdx) => (
+                      <td key={`td_${cIdx}`} style={alignments[cIdx] ? { textAlign: alignments[cIdx] } : undefined}>
+                        {renderInlineMarkdown(row[cIdx] ?? '', hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+        continue
+      }
       const isUl = /^[-*]\s+/.test(trimmed)
-      if (isUl || /^\d+\.\s+/.test(trimmed)) {
+      const olMatch = !isUl ? trimmed.match(/^(\d+)\.\s+/) : null
+      if (isUl || olMatch) {
+        const firstNum = olMatch ? Number(olMatch[1]) : 1
         const markerRe = isUl ? /^[-*]\s+/ : /^\d+\.\s+/
-        const ListTag = isUl ? 'ul' : 'ol'
         const items: React.ReactNode[] = []
         while (i < lines.length && markerRe.test(lines[i].trim())) {
           const itemLines = [lines[i].trim().replace(markerRe, '')]
           i++
-          while (i < lines.length && lines[i].trim() && !/^(?:#{1,4}\s+|[-*]\s+|\d+\.\s+|```|>\s?|\||---+$)/.test(lines[i].trim())) {
+          while (i < lines.length && lines[i].trim() && !/^(?:#{1,4}\s+|[-*]\s+|\d+\.\s+|```|>\s?|\||(?:-{3,}|\*{3,}|_{3,})$)/.test(lines[i].trim()) && !isGfmTableStart(lines, i)) {
             itemLines.push(lines[i].trim()); i++
           }
           items.push(<li key={`li_${items.length}`}>{renderInlineMarkdown(itemLines.join(' '), hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections)}</li>)
         }
-        blocks.push(<ListTag key={`list_${blockKey++}`} className="dab-md-list">{items}</ListTag>)
+        blocks.push(
+          isUl
+            ? <ul key={`list_${blockKey++}`} className="dab-md-list">{items}</ul>
+            : <ol key={`list_${blockKey++}`} className="dab-md-list" start={firstNum}>{items}</ol>
+        )
         continue
       }
       const paraLines: string[] = []
-      while (i < lines.length && lines[i].trim() && !/^(#{1,4})\s+/.test(lines[i].trim()) && !/^[-*]\s+/.test(lines[i].trim()) && !/^\d+\.\s+/.test(lines[i].trim())) {
+      while (
+        i < lines.length && lines[i].trim() &&
+        !/^(#{1,4})\s+/.test(lines[i].trim()) && !/^[-*]\s+/.test(lines[i].trim()) &&
+        !/^\d+\.\s+/.test(lines[i].trim()) && !MD_HR_RE.test(lines[i].trim()) && !isGfmTableStart(lines, i)
+      ) {
         paraLines.push(lines[i]); i++
       }
       blocks.push(<p key={`p_${blockKey++}`} className="dab-md-p">{renderInlineMarkdown(paraLines.join('\n'), hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections)}</p>)
@@ -590,10 +662,28 @@ export const DOC_UI_COMPONENTS: Record<string, () => React.ReactElement> = {
   ReloadPreviewButton: () => <button type="button" className="dab-btn-secondary" tabIndex={-1}>Reload Viewer</button>,
   OpenInLookerButton: () => <button type="button" className="dab-btn-secondary" tabIndex={-1}>Open in Looker ↗</button>,
   LookmlTurnSkills: () => (
-    <div className="dab-skill-bar">
-      <span className="dab-skill-label">Turn Skills:</span>
-      {LOOKML_TURN_SKILLS.slice(0, 3).map((sk) => (
-        <button key={sk.id} type="button" className="dab-skill-chip active" tabIndex={-1}>✓ {sk.label}</button>
+    <div
+      className="dab-ds-card"
+      data-testid="doc-slash-skill-menu-preview"
+      style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}
+    >
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: 'var(--dab-text-secondary)' }}>
+        <Wrench size={12} strokeWidth={1.75} aria-hidden="true" />
+        <span>Slash Command Skill Menu (type /)</span>
+      </div>
+      {STUDIO_SLASH_SKILLS.slice(0, 3).map((sk, idx) => (
+        <div
+          key={sk.id}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px', borderRadius: 5, fontSize: 11.5,
+            background: idx === 0 ? 'var(--dab-accent-subtle, #eff6ff)' : 'transparent',
+            color: idx === 0 ? 'var(--dab-accent-text, #1d4ed8)' : 'var(--dab-text)',
+          }}
+        >
+          <Wrench size={12} strokeWidth={1.75} aria-hidden="true" />
+          <code style={{ fontWeight: 600 }}>{`/${sk.id}`}</code>
+          <span className="dab-muted" style={{ fontSize: 11 }}>{sk.label}</span>
+        </div>
       ))}
     </div>
   ),
@@ -625,45 +715,49 @@ export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: s
     tabLabel: 'Auto',
     markdown: [
       '# Automatic Workflow Discovery',
-      '**Auto** analyzes what you want to accomplish and automatically routes your request to the best Looker workflow allowed by your Looker permissions.',
-      '## What You Can Do Across Each Use Case',
-      '- **Agentic LookML**: Author, validate, and test LookML views, explores, refinements, and field descriptions in your development branch.',
-      '- **Content Studio**: Create and update native Looker User-Defined Dashboards (UDDs), Saved Looks, Boards, and Scheduled Plans.',
-      '- **Conversational Analytics**: Ask natural-language data questions and explore trends with Looker Conversational Analytics agents.',
-      '- **Data App**: Build custom interactive Looker Data Apps with KPI cards, charts, tables, and metric switchers, or convert pasted screenshots into live apps.',
-      '- **Data Investigator**: Generate point-in-time root-cause narrative Data Apps in Google Doc or Google Presentation (Slides) format with Key Driver Analysis, LookML drill paths (`limit: 500`), and fixed date windows.',
-      '- **Health Check**: Run a 3-Pillar Looker and BigQuery audit covering System Activity performance, LookML maturity, and warehouse efficiency.',
-      '- **Python Tile (Script)**: Write, test, publish, and schedule custom Python data scripts that run as interactive dashboard tiles.',
+      '**Auto** routes each turn to the best Looker workflow allowed by your Looker permissions.',
+      '## Composer Shortcuts & Multi-Tab Viewer',
+      '- **Slash Command Skills (`/`)**: Type `/` (e.g. `/looker-project-onboarding`, `/lookml-field-curation`, `/looker-dashboard`, `/key-driver-analysis`) to activate domain skills.',
+      '- **Context Mentions (`@`)**: Type `@explore:`, `@dashboard:`, `@look:`, or `@conversation:` (or `+`) to attach live Looker metadata.',
+      '- **Multi-Tab Viewer**: Every dashboard, LookML Dashboard, Data App, Look, or Board stays switchable in the right-hand Viewer.',
+      '## Use Cases',
+      '- **Agentic LookML**: Onboard Looker projects from connections, and author, validate, and test LookML views, explores, refinements, and descriptions.',
+      '- **Content Studio**: Create and update UDDs, LookML Dashboards, Saved Looks, Boards, and Scheduled Plans.',
+      '- **Conversational Analytics**: Ask plain-language questions with Looker Conversational Analytics agents.',
+      '- **Data App**: Build interactive Data Apps with KPIs, charts, grids, and metric switchers, or convert screenshots.',
+      '- **Data Investigator**: Generate Doc or Slides root-cause narrative apps with Key Driver Analysis, LookML drills (`limit: 500`), and fixed date windows.',
+      '- **Health Check**: Run a 3-Pillar Looker and BigQuery performance and LookML maturity audit.',
+      '- **Python Tile (Script)**: Write, test, publish, and schedule Python scripts as interactive dashboard tiles.',
     ].join('\n'),
   },
   lookml: {
-    title: 'Agentic LookML — Modeling, Validation & Data Tests',
+    title: 'Agentic LookML — Project Onboarding, Modeling & Data Tests',
     tabLabel: 'Agentic LookML',
     markdown: [
-      '# Agentic LookML Modeling & Validation',
-      'Author and refine LookML models, views, explores, field descriptions, and data tests in your Looker development workspace with automated SQL and Explore parity checks.',
-      '## Focus Your Turn with LookML Skills',
+      '# Agentic LookML Modeling & Project Onboarding',
+      'Onboard new LookML projects from a Looker connection, or refine models, views, explores, field descriptions, and data tests in your dev workspace.',
+      '## Activate Skills with `/` Slash Commands & `@` Mentions',
       '<LookmlTurnSkills />',
-      'Toggle specialized skills before sending your prompt to steer field descriptions, data test assertions, Explore parity verification, or layered view refinements.',
+      '- Type `/` for `/looker-project-onboarding`, `/lookml-field-curation`, `/lookml-tests`, or `/looker-field-profiler`, and `@explore:` to scope models and Explores.',
+      '- Browse modified `.lkml` files in the scrollable tab strip and use the 3-dot menu to toggle unified diffs vs. full `.lkml` or copy files.',
       '## Review Diffs & Update LookML',
       '<PushLookmlButton />',
-      '- Inspect side-by-side LookML diffs, validator results, and query parity checks in the viewer.',
-      '- Push validated updates directly to your active Looker development branch.',
+      '- Inspect LookML Validator results, `run_lookml_test` assertions, and SQL vs. Explore parity links in the Viewer.',
     ].join('\n'),
   },
   dashboard: {
-    title: 'Content Studio — Native Dashboards, Looks, Boards & Schedules',
+    title: 'Content Studio — UDDs, LookML Dashboards, Looks, Boards & Schedules',
     tabLabel: 'Content Studio',
     markdown: [
       '# Native Looker Content Studio',
-      'Create, organize, and update native Looker User-Defined Dashboards (UDDs), Saved Looks, Boards, and Scheduled Plans directly from natural-language prompts.',
-      '## Viewer & Refresh Controls',
+      'Create and update Looker User-Defined Dashboards (UDDs), LookML Dashboards (`.dashboard.lookml` synced to your folder), Saved Looks, Boards, and Schedules.',
+      '## Context, Skills & Multi-Tab Viewer',
+      '- Reference `@explore:`, `@dashboard:`, or `@look:`, or invoke `/looker-dashboard` and `/looker-field-profiler` before building tiles.',
+      '- Switch across dashboards, LookML Dashboards, and Looks in the multi-tab Viewer bar.',
+      '## Viewer Controls',
       '<ReloadPreviewButton />',
-      'Refreshes the embedded Looker dashboard or Saved Look in the live viewer after changes are applied.',
-      '### Open Native Content in Looker',
       '<OpenInLookerButton />',
-      '- Launches your dashboard, Look, or Board in a new Looker browser tab.',
-      '- Save content to your personal folder or any shared folder you have permission to edit.',
+      '- Reloads the embedded dashboard or Look in place, or opens it in Looker from `Save New Content to Folder:`.',
     ].join('\n'),
   },
   'conversational-analytics': {
@@ -671,14 +765,11 @@ export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: s
     tabLabel: 'Conversational Analytics',
     markdown: [
       '# Looker Conversational Analytics',
-      'Ask ad-hoc analytical questions in plain language, automatically match with the best Looker Conversational Analytics agent for your data, and explore interactive answers.',
-      '## Embedded Conversation Controls',
+      'Ask analytical questions in plain language, match with the best Looker Conversational Analytics agent, and explore interactive answers.',
+      '## Embedded Controls',
       '<ReloadPreviewButton />',
-      'Reloads the embedded Looker Conversational Analytics session in the viewer.',
-      '### Open Conversation in Looker',
       '<OpenInLookerButton />',
-      '- Opens the full Looker Conversational Analytics thread in a new browser tab.',
-      '- Shows the matched analytics agent and target Explore scope above the conversation.',
+      '- Reloads the embedded session or opens the full thread in Looker.',
     ].join('\n'),
   },
   app: {
@@ -686,14 +777,11 @@ export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: s
     tabLabel: 'Data App',
     markdown: [
       '# Interactive Looker Data Apps',
-      'Build custom interactive applications with KPI scorecards, dynamic charts, data grids, and metric switchers published directly into a Looker dashboard tile.',
+      'Build interactive apps with KPI cards, dynamic charts, data grids, and metric switchers published into a Looker dashboard tile, or paste a screenshot (`Cmd+V`).',
       '## Live Viewer Controls',
       '<ReloadPreviewButton />',
-      'Re-runs the live Looker dashboard viewer in place so you can test interactive filters and controls immediately.',
-      '### Open Published App in Looker',
       '<OpenInLookerButton />',
-      '- Opens the published Looker dashboard hosting your Data App in a new browser tab.',
-      '- Paste a mockup or screenshot (`Cmd+V`) into the composer to turn a visual design into a working Data App.',
+      '- Re-runs the live dashboard viewer or opens the published Data App in Looker.',
     ].join('\n'),
   },
   'data-investigator': {
@@ -701,12 +789,11 @@ export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: s
     tabLabel: 'Data Investigator',
     markdown: [
       '# Point-in-Time Root-Cause Narrative Data Apps',
-      'Investigate metric changes and anomalies using Looker Key Driver Analysis (`run_key_driver_analysis`), LookML `drill_fields` (`limit: 500`), and fixed point-in-time date ranges (`YYYY-MM-DD to YYYY-MM-DD`).',
-      '## Google Doc (Default) & Google Presentation (Slides) Modes',
+      'Investigate metric changes using Key Driver Analysis (`run_key_driver_analysis`), LookML `drill_fields` (`limit: 500`), and fixed date ranges (`YYYY-MM-DD to YYYY-MM-DD`).',
+      '## Google Doc & Slides Modes',
       '<DataInvestigatorPreview />',
-      '- **Doc View (Default)**: Renders an executive overview followed by sequential **Chart -> What This Chart Means -> Next Investigation Path** chapters and a 500-row evidence grid.',
-      '- **Slides View**: Mention `slides`, `presentation`, or `deck` in your prompt (or toggle in the app header) to present each drill step as a self-contained slide with keyboard arrow navigation.',
-      '### Live Viewer & Looker Launch Controls',
+      '- **Doc View (Default)**: Executive overview plus **Chart -> What This Chart Means -> Next Investigation Path** chapters and a 500-row evidence grid.',
+      '- **Slides View**: Mention `slides`, `presentation`, or `deck` (or toggle in header) for slide-by-slide navigation.',
       '<ReloadPreviewButton />',
       '<OpenInLookerButton />',
     ].join('\n'),
@@ -716,11 +803,10 @@ export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: s
     tabLabel: 'Health Check',
     markdown: [
       '# 3-Pillar Looker & BigQuery Health Check',
-      'Run a comprehensive audit across **Pillar 1** (System Activity query latency and caching), **Pillar 2** (LookML modeling quality and best practices), and **Pillar 3** (BigQuery slot usage and storage partitioning).',
+      'Audit **Pillar 1** (System Activity latency and caching), **Pillar 2** (LookML quality), and **Pillar 3** (BigQuery slot usage and partitioning).',
       '## Export Technical Design Document (TDD)',
       '<ExportHealthTddButton />',
-      '- Downloads a complete Markdown Technical Design Document with prioritized recommendations, SQL optimizations, and estimated impact.',
-      '- Switch between the formatted **Rendered Report** and **`{ } Raw Markdown`**, or copy the report to your clipboard.',
+      '- Download or copy the Markdown TDD, or toggle **Rendered Report** vs. **`{ } Raw Markdown`**.',
     ].join('\n'),
   },
   tile: {
@@ -729,16 +815,15 @@ export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: s
     markdown: [
       '# Publish As Dashboard',
       '<PublishDashboardButton />',
-      'Publishes your Python script as an interactive Looker dashboard tile in your selected folder so teammates can view and filter its output.',
+      'Publishes your Python script as an interactive Looker dashboard tile in your selected folder.',
       '## Execute & Test Script Mode',
       '<RunPythonButton />',
       '<ScriptModeSelect />',
-      'Runs your Python script in the in-browser sandbox and lets you switch execution modes (`summary`, `detailed_audit`, `anomaly_alert`) with live dashboard filter values.',
+      'Runs your Python script in the in-browser sandbox across modes (`summary`, `detailed_audit`, `anomaly_alert`) with live dashboard filters.',
       '## Save & Schedule Recurring Runs',
       '<SaveScriptButton />',
       '<ScheduleScriptButton />',
-      '- **Save Script**: Saves your latest script code and configuration so you can reuse or publish it anytime.',
-      '- **Schedule Script**: Configures recurring cron schedules, execution modes, and automated delivery for your script.',
+      '- Save your script or configure recurring cron schedules and delivery.',
     ].join('\n'),
   },
 }
@@ -891,7 +976,7 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
           title={sidebarCollapsed ? 'Expand conversations sidebar' : 'Collapse conversations sidebar'}
           aria-expanded={!sidebarCollapsed}
         >
-          {sidebarCollapsed ? '»' : '«'}
+          {sidebarCollapsed ? <PanelLeftOpen size={14} strokeWidth={1.75} aria-hidden="true" /> : <PanelLeftClose size={14} strokeWidth={1.75} aria-hidden="true" />}
         </button>
         {!sidebarCollapsed && <strong className="dab-conv-sidebar-title">Conversations ({conversations.length})</strong>}
       </div>
@@ -1050,6 +1135,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     lookmlBundle, nativeContent, infoModalUseCase, setInfoModalUseCase,
     folderTreeNodes, selectedFolderId, requirePermission, setRequirePermission,
     setFolderModalOpen, setEditingAgentName,
+    messages, liveActivitySteps, copyThreadState, handleCopyThreadDebugTrace,
   } = ctl
 
   const mockExt = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
@@ -1590,6 +1676,22 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               <button type="button" role="menuitem" data-testid="mobile-menu-edit-agent-name-btn" className="dab-composer-add-item dab-mobile-only-menu-item" onClick={() => { setAddContextOpen(false); setEditingAgentName(true) }}>
                 <Pencil size={13} strokeWidth={1.75} aria-hidden="true" /><span>Rename {normalizeStudioAgentName(rawAgentName)}...</span>
               </button>
+              {(messages.length > 0 || (liveActivitySteps?.length ?? 0) > 0) && (
+                <button
+                  type="button" role="menuitem" data-testid="mobile-menu-copy-thread-btn"
+                  className="dab-composer-add-item dab-mobile-only-menu-item"
+                  onClick={() => { setAddContextOpen(false); void handleCopyThreadDebugTrace() }}
+                >
+                  {copyThreadState === 'loading' ? (
+                    <Loader2 size={13} strokeWidth={2} className="dab-spin" aria-hidden="true" />
+                  ) : copyThreadState === 'copied' ? (
+                    <Check size={13} strokeWidth={2} aria-hidden="true" />
+                  ) : (
+                    <Bug size={13} strokeWidth={1.75} aria-hidden="true" />
+                  )}
+                  <span>{copyThreadState === 'loading' ? 'Copying Thread…' : copyThreadState === 'copied' ? 'Copied Thread' : 'Copy Thread'}</span>
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -1802,7 +1904,7 @@ export const SandboxMarkdownPreviewModal: React.FC<{ ctl: StudioController }> = 
 
   const handleCopyMarkdown = () => {
     if (!markdownContent) return
-    void copyLinkWithExtensionSdk(markdownContent, extensionSDK).then(() => {
+    void copyTextWithExtensionSdk(markdownContent, extensionSDK).then(() => {
       setCopied(true); setTimeout(() => setCopied(false), 1800)
     })
   }
@@ -1965,18 +2067,39 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     agentName: rawAgentName, extensionSDK,
     messages, builderMode, selectedUseCase, selectedExplores, starterPrompts, starterPromptsLoading,
     setPrompt, busyStatus, liveActivitySteps, pendingPerm, resolvePermDecision,
-    leftPaneWidth, setLeftPaneWidth, rightPaneCollapsed, setRightPaneCollapsed,
+    leftPaneWidth, setLeftPaneWidth, flushLeftPaneWidthSave, rightPaneCollapsed, setRightPaneCollapsed,
     contentItems = [], activeContentTabKey = '', handleSelectContentTab, publishedApp, nativeContent,
     lookmlBundle, currentAppCode, schemaMarkdown,
     sandboxMarkdownCache, sandboxMarkdownLoading, loadSandboxMarkdownFile, setActiveSandboxMarkdownModalPath,
     openViewerDocument, setActiveViewerDocument,
+    conversations = [], activeConversationId, copyThreadState, handleCopyThreadDebugTrace,
   } = ctl
   const agentName = normalizeStudioAgentName(rawAgentName)
   const hostUrl = extensionSDK?.lookerHostData?.hostUrl || (typeof window !== 'undefined' ? window.location.origin : '')
 
   const leftPaneRef = useRef<HTMLElement | null>(null)
+  const chatLogRef = useRef<HTMLDivElement | null>(null)
+  const prevMsgCountRef = useRef(messages.length)
+  const prevBusyRef = useRef(Boolean(busyStatus))
   const [isResizingSplit, setIsResizingSplit] = useState(false)
   const [copiedTraceKey, setCopiedTraceKey] = useState<string | null>(null)
+
+  useEffect(() => {
+    const el = chatLogRef.current
+    const prevCount = prevMsgCountRef.current
+    const wasBusy = prevBusyRef.current
+    const lastMsg = messages[messages.length - 1]
+    const userJustSent = messages.length > prevCount && lastMsg?.role === 'user'
+    const busyJustActivated = Boolean(busyStatus) && !wasBusy
+    prevMsgCountRef.current = messages.length
+    prevBusyRef.current = Boolean(busyStatus)
+    if (!el) return
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 140
+    if (userJustSent || ((busyJustActivated || Boolean(busyStatus)) && isNearBottom)) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [messages, busyStatus, liveActivitySteps?.length])
+
   const contentCtx = useMemo<ActivityStepContentContext>(
     () => ({
       lookmlBundle, currentAppCode, schemaMarkdown, sandboxMarkdownCache, sandboxMarkdownLoading,
@@ -2004,7 +2127,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     const enriched = steps.map((s) => ((s.kind === 'file' || s.kind === 'skill') && !s.content ? { ...s, content: resolveActivityStepContent(s, contentCtx) } : s))
     const md = formatThinkingTraceMarkdown(enriched, meta)
     if (typeof window !== 'undefined') window.__LAST_COPIED_THINKING_TRACE__ = md
-    try { void navigator.clipboard?.writeText?.(md) } catch { /* ignore */ }
+    void copyTextWithExtensionSdk(md, extensionSDK)
     setCopiedTraceKey(traceKey)
     setTimeout(() => setCopiedTraceKey((curr) => (curr === traceKey ? null : curr)), 1800)
   }
@@ -2014,17 +2137,45 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     return (
       <button
         type="button" data-testid="copy-thinking-trace-btn" data-copied={isCopied ? 'true' : 'false'}
-        className="dab-thinking-copy-btn" title="Copy full chain of thought & activity trace" aria-label="Copy full chain of thought & activity trace"
+        className="dab-thinking-copy-btn" title="Copy debug trace to clipboard" aria-label="Copy debug trace to clipboard"
         onClick={(e) => handleCopyThinkingTrace(e, traceKey, steps, meta)}
       >
-        {isCopied ? <><Check size={12} strokeWidth={2} aria-hidden="true" /><span>Copied</span></> : <Copy size={12} strokeWidth={1.75} aria-hidden="true" />}
+        {isCopied ? <><Check size={12} strokeWidth={2} aria-hidden="true" /><span>Copied</span></> : <Bug size={12} strokeWidth={1.75} aria-hidden="true" />}
       </button>
     )
   }
 
+  const activeConvLabel = conversations.find((c) => c.id === activeConversationId)?.label
+  const showThreadCopyBtn = messages.length > 0 || Boolean(liveActivitySteps && liveActivitySteps.length > 0)
+
   return (
     <aside className="dab-left-pane" ref={leftPaneRef}>
-      <div className="dab-chat-log">
+      {showThreadCopyBtn && (
+        <div className="dab-left-pane-header" data-testid="left-pane-header">
+          <span className="dab-left-pane-title" title={activeConvLabel || 'Conversation'}>{activeConvLabel || 'Conversation'}</span>
+          <button
+            type="button"
+            data-testid="copy-thread-trace-btn"
+            data-copied={copyThreadState === 'copied' ? 'true' : 'false'}
+            data-loading={copyThreadState === 'loading' ? 'true' : 'false'}
+            className="dab-btn dab-btn-secondary dab-thread-copy-btn"
+            title="Copy full conversation & sandbox debug trace to clipboard"
+            aria-label="Copy Thread"
+            disabled={copyThreadState === 'loading'}
+            onClick={() => void handleCopyThreadDebugTrace()}
+          >
+            {copyThreadState === 'loading' ? (
+              <Loader2 size={13} strokeWidth={2} className="dab-spin" aria-hidden="true" />
+            ) : copyThreadState === 'copied' ? (
+              <Check size={13} strokeWidth={2} aria-hidden="true" />
+            ) : (
+              <Bug size={13} strokeWidth={1.75} aria-hidden="true" />
+            )}
+            <span>{copyThreadState === 'loading' ? 'Copying…' : copyThreadState === 'copied' ? 'Copied' : 'Copy Thread'}</span>
+          </button>
+        </div>
+      )}
+      <div className="dab-chat-log" ref={chatLogRef}>
         {messages.length === 0 && (
           <div className="dab-empty-chat">
             <p><strong>{builderMode === 'dashboard' ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)' : `Ask ${agentName} to build, analyze, or automate across Looker`}</strong></p>
@@ -2150,7 +2301,12 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
             const startWidth = leftPaneRef.current?.getBoundingClientRect().width || leftPaneWidth
             setIsResizingSplit(true)
             const onMove = (ev: MouseEvent) => setLeftPaneWidth(startWidth + (ev.clientX - startX))
-            const onUp = () => { setIsResizingSplit(false); window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+            const onUp = () => {
+              setIsResizingSplit(false)
+              flushLeftPaneWidthSave?.()
+              window.removeEventListener('mousemove', onMove)
+              window.removeEventListener('mouseup', onUp)
+            }
             window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp)
           }}
           onKeyDown={(e) => {
@@ -2221,7 +2377,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
 
   const handleCopyTddMarkdown = () => {
     if (!healthReport?.tddMarkdown) return
-    navigator.clipboard?.writeText(healthReport.tddMarkdown)
+    void copyTextWithExtensionSdk(healthReport.tddMarkdown, extensionSDK)
     setCopiedTdd(true); setTimeout(() => setCopiedTdd(false), 1800)
   }
 
@@ -2438,7 +2594,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         <div className="dab-code-drawer" data-testid="preview-app-code-drawer" style={{ padding: 12, background: 'var(--dab-code-bg, #0f172a)', color: '#e2e8f0', borderBottom: '1px solid var(--dab-border, #e2e8f0)', maxHeight: 260, overflow: 'auto', fontSize: 12 }}>
           <div className="dab-inspector-bar">
             <strong>app.js ({currentAppCode.length} B)</strong>
-            <button type="button" className="dab-btn-secondary" onClick={() => navigator.clipboard?.writeText(currentAppCode)}>Copy app.js</button>
+            <button type="button" className="dab-btn-secondary" onClick={() => void copyTextWithExtensionSdk(currentAppCode, extensionSDK)}>Copy app.js</button>
           </div>
           <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{currentAppCode}</pre>
         </div>

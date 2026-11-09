@@ -3202,13 +3202,13 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           topbarSignInText: (document.querySelector('[data-testid="topbar-oauth-signin-btn"]')?.textContent || '').trim()
         };
 
-        // 4. Re-click Sign In and cancel immediately via Cancel Sign-In button
+        // 4. Re-click Sign In and cancel immediately via clicking topbar-oauth-signin-btn while 'Signing in…'
         document.querySelector('[data-testid="topbar-oauth-signin-btn"]')?.click();
         await new Promise((r) => setTimeout(r, 30));
-        const hasCancelBeforeClick = Boolean(document.querySelector('[data-testid="topbar-oauth-cancel-btn"]'));
-        document.querySelector('[data-testid="topbar-oauth-cancel-btn"]')?.click();
+        const signingInBeforeCancel = (document.querySelector('[data-testid="topbar-oauth-signin-btn"]')?.textContent || '').trim() === 'Signing in…';
+        document.querySelector('[data-testid="topbar-oauth-signin-btn"]')?.click();
         await new Promise((r) => setTimeout(r, 30));
-        const hasCancelAfterClick = Boolean(document.querySelector('[data-testid="topbar-oauth-cancel-btn"]'));
+        const signInRestoredAfterCancel = (document.querySelector('[data-testid="topbar-oauth-signin-btn"]')?.textContent || '').trim() === 'Sign In';
 
         // 5. Restore working OAuth mock and click inline Sign In button -> enables Send button
         window.__MOCK_OAUTH_IMPL__ = null;
@@ -3236,8 +3236,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           noErrorBanner,
           duringHangingPopup,
           afterFocusRecovery,
-          hasCancelBeforeClick,
-          hasCancelAfterClick,
+          signingInBeforeCancel,
+          signInRestoredAfterCancel,
           afterSuccessSignIn
         };
       })()`,
@@ -3254,8 +3254,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       useCaseStillUnlocked: true,
       noErrorBanner: true,
       duringHangingPopup: {
-        hasCancelBtn: true,
-        topbarSignInText: 'Retry Sign In',
+        hasCancelBtn: false,
+        topbarSignInText: 'Signing in…',
         topbarSignInDisabled: false,
         promptInputDisabled: false,
         newConvDisabled: false,
@@ -3265,8 +3265,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         hasCancelBtn: false,
         topbarSignInText: 'Sign In'
       },
-      hasCancelBeforeClick: true,
-      hasCancelAfterClick: false,
+      signingInBeforeCancel: true,
+      signInRestoredAfterCancel: true,
       afterSuccessSignIn: {
         sendDisabled: false,
         hasInlineSignInBtn: false,
@@ -5246,6 +5246,203 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         hasObjectChip: true, collapsedAfterChipClick: false, cardPosition: 'absolute', cardDisplay: 'flex', hasCardHandle: true, collapsedAfterClose: true,
         editBtnHiddenOnMobile: true, permToggleHiddenOnMobile: true, folderTriggerHiddenOnMobile: true, fullscreenHiddenOnMobile: true,
         mobileFolderBtnDisplay: 'flex', permToggled: true, folderModalOpened: true, agentNameInputOpened: true
+      })
+    } finally {
+      await chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
+    }
+  }, 20000)
+
+  test('Issue #156: renders scrollable .lkml file tabs + 3-dot code menu, PanelLeftClose/Open sidebar icon, debounced resizer storage, <Bug /> per-turn & whole-thread sandbox debug copy via clipboardWrite, GFM tables, and uncrushed live thinking block on overflow', async () => {
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=lookml` })
+    const lkDeadline = Date.now() + 8000
+    while (Date.now() < lkDeadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="lookml-file-tabs"]'))`,
+        returnByValue: true
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 80))
+    }
+
+    const lkRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const noLegacyLookmlInput = !document.querySelector('[data-testid="topbar-lookml-project-input"]');
+        const noLegacySessionsSelect = !document.querySelector('[data-testid="topbar-lookml-sessions-select"]');
+        const hasUnifiedFolderTrigger = Boolean(document.querySelector('[data-testid="topbar-folder-trigger"]'));
+        const sidebarBtn = document.querySelector('[data-testid="sidebar-collapse-toggle"]');
+        const sidebarHasSvg = Boolean(sidebarBtn?.querySelector('svg.lucide'));
+        const sidebarNoGuillemets = !/[«»]/.test(sidebarBtn?.textContent || '');
+
+        const tabsEl = document.querySelector('[data-testid="lookml-file-tabs"]');
+        const tabsStyle = window.getComputedStyle(tabsEl);
+        const isSingleLineScrollable = tabsStyle.flexWrap === 'nowrap' && tabsStyle.overflowX === 'auto';
+
+        window.__CLIPBOARD_WRITES__ = [];
+        document.querySelector('[data-testid="lookml-code-actions-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const hasActionsMenu = Boolean(document.querySelector('[data-testid="lookml-code-actions-menu"]'));
+        const toggleTextBefore = (document.querySelector('[data-testid="lookml-toggle-view-mode-btn"]')?.textContent || '').trim();
+        document.querySelector('[data-testid="lookml-toggle-view-mode-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+
+        document.querySelector('[data-testid="lookml-code-actions-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const toggleTextAfter = (document.querySelector('[data-testid="lookml-toggle-view-mode-btn"]')?.textContent || '').trim();
+        document.querySelector('[data-testid="lookml-copy-file-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const copiedLkmlViaExt = (window.__CLIPBOARD_WRITES__ || []).some((t) => t.includes('measure: total_revenue') || t.includes('orders'));
+
+        return {
+          noLegacyLookmlInput, noLegacySessionsSelect, hasUnifiedFolderTrigger,
+          sidebarHasSvg, sidebarNoGuillemets, isSingleLineScrollable,
+          hasActionsMenu, toggleTextBefore, toggleTextAfter, copiedLkmlViaExt
+        };
+      })()`,
+      awaitPromise: true, returnByValue: true
+    })
+
+    expect(lkRes.result.value).toEqual({
+      noLegacyLookmlInput: true, noLegacySessionsSelect: true, hasUnifiedFolderTrigger: true,
+      sidebarHasSvg: true, sidebarNoGuillemets: true, isSingleLineScrollable: true,
+      hasActionsMenu: true, toggleTextBefore: 'Show Full .lkml', toggleTextAfter: 'Show Unified Diff', copiedLkmlViaExt: true
+    })
+
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=data_app` })
+    const appDeadline = Date.now() + 8000
+    while (Date.now() < appDeadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="workspace-split-resizer"]'))`,
+        returnByValue: true
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 80))
+    }
+
+    const chatRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const s = window.__DAB_STUDIO__;
+        // 1. Debounced split-pane resizer storage writes (0 mid-drag IPC writes, 1 flushed write on mouseup)
+        window.__LOCAL_STORAGE_UPDATES__ = [];
+        const resizer = document.querySelector('[data-testid="workspace-split-resizer"]');
+        resizer.dispatchEvent(new MouseEvent('mousedown', { clientX: 380, bubbles: true }));
+        window.dispatchEvent(new MouseEvent('mousemove', { clientX: 410, bubbles: true }));
+        window.dispatchEvent(new MouseEvent('mousemove', { clientX: 440, bubbles: true }));
+        window.dispatchEvent(new MouseEvent('mousemove', { clientX: 470, bubbles: true }));
+        const writesDuringDrag = (window.__LOCAL_STORAGE_UPDATES__ || []).filter((u) => u.key === 'dab_left_pane_width').length;
+        window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 40));
+        const writesAfterMouseUp = (window.__LOCAL_STORAGE_UPDATES__ || []).filter((u) => u.key === 'dab_left_pane_width').length;
+
+        // 2. Overflow chat log + GFM pipe table + <hr> + <ol start> + live thinking block not crushed to 2px + Bug copy buttons
+        window.__MOCK_LOOKER_EXTENSION__.mockInteractions = {
+          int_chain_2: {
+            id: 'int_chain_2', previous_interaction_id: 'int_chain_1', status: 'completed', environment_id: 'env_vis_156',
+            steps: [{ id: 's2', type: 'thought', thought: 'Remote sandbox thought from turn 2' }],
+            output_text: 'Updated /workspace/analysis.md.'
+          },
+          int_chain_1: {
+            id: 'int_chain_1', status: 'completed', environment_id: 'env_vis_156',
+            steps: [{ id: 's1', type: 'code_execution', language: 'BASH', command: 'cat /workspace/analysis.md', stdout: 'SANDBOX_STDOUT_156' }],
+            output_text: 'Initial analysis.'
+          }
+        };
+        const manyMsgs = [];
+        for (let i = 0; i < 14; i++) {
+          manyMsgs.push({ role: 'user', text: 'Follow-up turn ' + (i + 1) + ' with detailed metric filter context' });
+          manyMsgs.push({
+            role: 'assistant',
+            interactionId: i === 13 ? 'int_chain_2' : undefined,
+            thinkingDurationSec: 2,
+            activitySteps: [{ id: 'st_' + i, kind: 'codemode', title: 'Executing Looker queries...', status: 'done' }],
+            text: i === 13
+              ? '| Segment | Margin |\\n| :--- | ---: |\\n| Outerwear | $98,400 |\\n\\n---\\n\\n5. Fifth item'
+              : 'Assistant response paragraph ' + (i + 1) + ' filling vertical scroll height in chat log.'
+          });
+        }
+        s.setOauthToken('mock_oauth_token_156');
+        s.setMessages(manyMsgs);
+        s.setBusyStatus('Running sandbox verification...');
+        s.setLiveActivitySteps([
+          { id: 'live_1', kind: 'thought', title: 'Validating widget queries', detail: 'Checking fields against schema', status: 'running' },
+          { id: 'live_2', kind: 'code_execution', language: 'PYTHON', title: 'python3 /workspace/bundle_app.py', status: 'running' }
+        ]);
+        await new Promise((r) => setTimeout(r, 80));
+
+        const chatLog = document.querySelector('.dab-chat-log');
+        const liveBlock = document.querySelector('[data-testid="live-thinking-block"]');
+        const liveHeight = liveBlock ? Math.round(liveBlock.getBoundingClientRect().height) : 0;
+        const hasGfmTable = Boolean(document.querySelector('[data-testid="chat-markdown-table"]'));
+        const hasHr = Boolean(document.querySelector('hr.dab-md-hr'));
+        const olStart = document.querySelector('ol.dab-md-list')?.getAttribute('start') || '';
+
+        // Auto-scroll on user send
+        chatLog.scrollTop = 0;
+        s.setMessages((prev) => [...prev, { role: 'user', text: 'Scroll me to bottom on send' }]);
+        await new Promise((r) => setTimeout(r, 60));
+        const autoScrolledToBottom = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight <= 20;
+
+        // Per-turn <Bug /> button & Whole-thread <Bug /> Copy Thread button via clipboardWrite
+        window.__CLIPBOARD_WRITES__ = [];
+        const perTurnBtn = document.querySelector('[data-testid="copy-thinking-trace-btn"]');
+        const perTurnTitle = perTurnBtn?.getAttribute('title') || '';
+        const perTurnHasBugSvg = Boolean(perTurnBtn?.querySelector('svg.lucide-bug, svg.lucide'));
+        perTurnBtn?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const perTurnCopiedViaExt = (window.__CLIPBOARD_WRITES__ || []).some((t) => t.includes('## Thinking & Activity Trace'));
+
+        window.__CLIPBOARD_WRITES__ = [];
+        const threadBtn = document.querySelector('[data-testid="copy-thread-trace-btn"]');
+        threadBtn?.click();
+        await new Promise((r) => setTimeout(r, 120));
+        const threadDump = (window.__CLIPBOARD_WRITES__ || [])[0] || '';
+
+        return {
+          writesDuringDrag, writesAfterMouseUp,
+          chatOverflowing: chatLog.scrollHeight > chatLog.clientHeight,
+          liveBlockUncrushed: liveHeight >= 40,
+          hasGfmTable, hasHr, olStart, autoScrolledToBottom,
+          perTurnTitle, perTurnHasBugSvg, perTurnCopiedViaExt,
+          threadHasTurn1AndTurn2: threadDump.includes('int_chain_1') && threadDump.includes('int_chain_2'),
+          threadHasStdout: threadDump.includes('SANDBOX_STDOUT_156'),
+          threadHasLiveStep: threadDump.includes('python3 /workspace/bundle_app.py')
+        };
+      })()`,
+      awaitPromise: true, returnByValue: true
+    })
+
+    expect(chatRes.result.value).toEqual({
+      writesDuringDrag: 0, writesAfterMouseUp: 1,
+      chatOverflowing: true, liveBlockUncrushed: true,
+      hasGfmTable: true, hasHr: true, olStart: '5', autoScrolledToBottom: true,
+      perTurnTitle: 'Copy debug trace to clipboard', perTurnHasBugSvg: true, perTurnCopiedViaExt: true,
+      threadHasTurn1AndTurn2: true, threadHasStdout: true, threadHasLiveStep: true
+    })
+
+    // Also verify mobile-menu-copy-thread-btn on <=768px viewport
+    try {
+      await chrome.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
+      const mobCopyRes = await chrome.send('Runtime.evaluate', {
+        expression: `(async () => {
+          window.__CLIPBOARD_WRITES__ = [];
+          const leftHeaderHiddenOnMobile = window.getComputedStyle(document.querySelector('[data-testid="left-pane-header"]')).display === 'none';
+          document.querySelector('[data-testid="composer-add-context-btn"]')?.click();
+          await new Promise((r) => setTimeout(r, 40));
+          const mobCopyBtn = document.querySelector('[data-testid="mobile-menu-copy-thread-btn"]');
+          const mobCopyDisplay = mobCopyBtn ? window.getComputedStyle(mobCopyBtn).display : 'missing';
+          mobCopyBtn?.click();
+          await new Promise((r) => setTimeout(r, 100));
+          return {
+            leftHeaderHiddenOnMobile,
+            mobCopyDisplay,
+            copiedOnMobile: (window.__CLIPBOARD_WRITES__ || []).some((t) => t.includes('Conversation Sandbox Debug Dump'))
+          };
+        })()`,
+        awaitPromise: true, returnByValue: true
+      })
+      expect(mobCopyRes.result.value).toEqual({
+        leftHeaderHiddenOnMobile: true,
+        mobCopyDisplay: 'flex',
+        copiedOnMobile: true
       })
     } finally {
       await chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })

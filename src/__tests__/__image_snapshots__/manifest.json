@@ -24,7 +24,7 @@
     "snapshotName": "03-mode-agentic-lookml-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "health_check",
@@ -130,7 +130,7 @@
     "title": "13. Chat Bar State — Busy / Running Spinner Banner",
     "snapshotName": "13-chatbar-state-busy-running-snap.png",
     "width": 427,
-    "height": 642,
+    "height": 605,
     "clipSelector": [
       ".dab-status-banner",
       ".dab-composer"
@@ -144,7 +144,7 @@
     "title": "14. Chat Bar State — Error Diagnostic Banner",
     "snapshotName": "14-chatbar-state-error-banner-snap.png",
     "width": 427,
-    "height": 867,
+    "height": 830,
     "clipSelector": [
       ".dab-msg-error",
       ".dab-composer"
