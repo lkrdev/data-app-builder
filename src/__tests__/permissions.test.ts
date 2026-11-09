@@ -5905,4 +5905,33 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     expect(guideExplicit).toContain('Activated Turn Skills: `lookml-tests`, `lookml-field-curation`.')
     expect(guideExplicit).toContain('Prioritize reading and executing the instructions for these activated skills on this turn.')
   })
+
+  test('61. Issue #158: enforces all 6 Metric Selector Data App standards across onboarding skill, DATA_APP_GUIDE_MD, step3Directive, data-app-creator skill/reference, and eval-new-project Turn 6 grader', () => {
+    const repoRoot = path.resolve(__dirname, '../..')
+    const onboardingSkillDisk = readFileSync(path.join(repoRoot, 'skills/looker-project-onboarding/SKILL.md'), 'utf8')
+    expect(onboardingSkillDisk).toBe(LOOKER_PROJECT_ONBOARDING_SKILL_MD)
+    expect(LOOKER_PROJECT_ONBOARDING_SKILL_MD).not.toMatch(/thelook|argolis_scratch|default_bigquery_connection|demowest|looker-private-demo/i)
+    expect(DATA_APP_GUIDE_MD).not.toMatch(/thelook|argolis_scratch|default_bigquery_connection|demowest|looker-private-demo/i)
+
+    const antigravityTsDisk = readFileSync(path.join(repoRoot, 'src/antigravity.ts'), 'utf8')
+    const step3Line = antigravityTsDisk.split('\n').find((line) => line.includes('const step3Directive =')) || ''
+    const creatorSkillDisk = readFileSync(path.join(repoRoot, 'upstream/payload/skills/data-app-creator/SKILL.md'), 'utf8')
+    const litRefDisk = readFileSync(path.join(repoRoot, 'upstream/payload/skills/data-app-creator/reference/LIT_DATA_APPS.md'), 'utf8')
+    const evalNewProjectDisk = readFileSync(path.join(repoRoot, 'scripts/eval-new-project.mjs'), 'utf8')
+
+    const requiredTokens = [
+      'ACTIVE METRIC', 'border-color: var(--app-primary)', 'vs. prev', 'lower-better',
+      'Compare against', 'opposite: true', 'Longitudinal Trend', 'yAxis.title.text', '⋮',
+      'Period', 'Window', 'periodCount', 'getEffectiveFilters',
+      'Dimensions', 'selectedDimensions', 'ago for', 'This Period', 'Last Period', 'Variance',
+    ]
+    for (const targetDoc of [LOOKER_PROJECT_ONBOARDING_SKILL_MD, DATA_APP_GUIDE_MD, step3Line, creatorSkillDisk, litRefDisk]) {
+      expect(targetDoc).toMatch(/2 \* (?:this\.)?periodCount/)
+      for (const tok of requiredTokens) expect(targetDoc).toContain(tok)
+    }
+
+    for (const checkKey of ['noMetricDropdownOrActiveBadge', 'hasPopClickableKpis', 'hasCompareAgainstDualAxis', 'hasTrendMenuAndYAxis', 'hasDecoupledPeriodAndWindow', 'hasMultiSelectDimensions', 'hasTitlelessPopVarianceGrid']) {
+      expect(evalNewProjectDisk).toContain(checkKey)
+    }
+  })
 })

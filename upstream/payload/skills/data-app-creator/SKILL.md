@@ -502,6 +502,28 @@ When dashboard titles, airport names, or filter strings contain apostrophes (e.g
 16. **Seamless nested multiples:** put multiples inside one `.da-section-card` with column dividers, never nested cards, and without `bare`; see the `small-multiples` recipe.
 17. **Flat pie with no center total:** to render a flat pie with no donut hole or center total, set `options = { plotOptions: { pie: { innerSize: '0%' } } }`.
 
+### 15. Metric Selector Data App UX & Data-Binding Contract
+When building a **Metric Selector / Timeframe Switcher Data App**, enforce all 6 rules:
+1. **Clickable PoP KPI Selector Boxes (Border Highlight Only, 4-Row Vertical Stack)**:
+   - Remove any `Metric` `<app-select>` dropdown and **never** render an `"ACTIVE METRIC"` badge/pill; clicking a KPI card selects `this.selectedMetric` using an active border highlight (`border-color: var(--app-primary)`) only.
+   - Query `2 * this.periodCount` periods per KPI on its matched lifecycle date dimension (`created_*`, `returned_*`, `cancelled_*`) to compute current `N` periods vs. previous `N` periods and render 4 vertical rows:
+     1. Row 1: Metric label (`Total Sales`)
+     2. Row 2: Standalone headline number for the current `N` periods (no pill beside the headline number)
+     3. Row 3 (single inline flex row): Green/red `+/- %` PoP pill **on the same line** as `vs. prev <N> <unit>` (e.g. `[-69.5%] vs. prev 30 days`, respecting `polarity="higher-better|lower-better"` so increases in returns/cancellations color red)
+     4. Row 4: Sparkline SVG of the current `N` periods underneath.
+2. **Dual-Metric `"Compare against"` Overlay (`compareMetric`)**:
+   - Provide `<app-select label="Compare against">` (`None` + the other measures) to overlay a second metric on the time-series `<app-chart>`; when `compareMetric` is active and units/magnitudes differ (e.g. currency vs. count), configure dual Highcharts `yAxis` (`opposite: true` on axis 2, `series: [{ yAxis: 0 }, { yAxis: 1 }]`) with each axis labeled with its metric name.
+3. **No `"Longitudinal Trend"` Title + Explicit Y-Axis Labels + Top-Right 3-Dot (`⋮`) Chart Type Menu**:
+   - Omit `"Longitudinal Trend"` chart/card titles completely and always set `yAxis.title.text` to the selected metric label(s).
+   - Move `Chart Type` (`Area`/`areaspline`, `Line`/`line`, `Column`/`column`, `Bar`/`bar`) out of `.da-filter-bar` into a compact **3-dot (`⋮`) action menu** (`this.chartMenuOpen`) anchored in the **top-right corner** of the time-series chart card only.
+4. **Separate `Period` & `Window` (`periodCount`) Controls + Universal Filter Wiring**:
+   - Render **two separate controls**: `Period` (`Daily`, `Weekly`, `Monthly`, `Yearly` — resetting `this.periodCount` to `90`, `53`, `60`, `10` -> `'90 days'`, `'53 weeks'`, `'60 months'`, `'10 years'` when switching grain) and `Window` (`periodCount` selector: `14`/`30`/`60`/`90`/`180` for `Daily`; `12`/`26`/`53`/`104` for `Weekly`; `6`/`12`/`24`/`60` for `Monthly`; `3`/`5`/`10` for `Yearly`).
+   - Pass `{ [activeDateFilterField]: `${this.periodCount} ${unit}` }` via `this.getEffectiveFilters(...)` (or reactive `.query` bindings) to **every** KPI, chart, and table so changing either `Period` or `Window` refreshes all visuals together.
+5. **Titleless Bottom PoP Variance `<app-grid>` + Multi-Select `"Dimensions"` (Up to 5 Relevant Dimensions)**:
+   - Omit `title` on the bottom `<app-grid>`.
+   - Choose up to **5 relevant categorical dimensions** from the Explore (excluding raw IDs/timestamps) and render a `"Dimensions"` multi-select button/popover toggling `this.selectedDimensions` (keeping `>= 1` active).
+   - Join current-period (`"${N} ${unit}"`) and prior-period (`"${2 * N} ${unit} ago for ${N} ${unit}"`) queries on `this.selectedDimensions` and pass pre-computed `.data` rows to `<app-grid>` with columns: active breakdown dimension column(s), `<Metric 1> — This Period`, `<Metric 1> — Last Period`, `<Metric 1> — Variance` (`percent1-signed`), and (when `"Compare against"` is active) `<Metric 2> — This Period`, `<Metric 2> — Last Period`, `<Metric 2> — Variance`.
+
 ---
 
 ## Tile Sandbox Constraints
