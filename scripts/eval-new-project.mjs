@@ -268,18 +268,28 @@ async function main() {
     },
     {
       turn: 6,
-      name: 'Turn 6: Build responsive metric selector Data App (90d/53w/60m/10y + measure-matched date dimensions)',
+      name: 'Turn 6: Build responsive metric selector Data App (PoP KPIs, Compare against, 3-dot chart menu, Period/Window split & PoP variance grid)',
       prompt: 'Yes, build that metric selector data app.',
       grade: async (res) => {
         const code = res.bundle?.raw_code || ''
         const hasBundle = Boolean(code.trim())
-        const has90Days = /90\s*days|90d/i.test(code)
-        const has53Weeks = /53\s*weeks|53w/i.test(code)
-        const has60Months = /60\s*months|60m/i.test(code)
-        const has10Years = /10\s*years|10y/i.test(code)
+        const has90Days = /90\s*days|90d|\bday\s*:\s*['"]?90\b/i.test(code)
+        const has53Weeks = /53\s*weeks|53w|\bweek\s*:\s*['"]?53\b/i.test(code)
+        const has60Months = /60\s*months|60m|\bmonth\s*:\s*['"]?60\b/i.test(code)
+        const has10Years = /10\s*years|10y|\byear\s*:\s*['"]?10\b/i.test(code)
         const matchesMeasureDate =
           /return/i.test(code) && /returned_date|returned_week|returned_month|returned_year|returned/i.test(code) &&
           /cancel/i.test(code) && /cancelled|canceled|shipped|delivered/i.test(code)
+        // 1 & 2. Border-only clickable PoP KPI cards (no "ACTIVE METRIC" badge or Metric <app-select>), 2 * periodCount, inline vs. prev, polarity, sparkline
+        const noMetricDropdownOrActiveBadge = !/active\s+metric/i.test(code) && !/<app-select[^>]*\blabel\s*=\s*["'](?:Primary\s+)?Metric["']/i.test(code)
+        const hasPopClickableKpis = noMetricDropdownOrActiveBadge && /border-color[\s\S]{0,160}--app-primary|--app-primary[\s\S]{0,160}border-color/i.test(code) && /2\s*\*/.test(code) && /vs\.?\s*prev/i.test(code) && /lower-better/i.test(code) && /<svg\b|sparkline/i.test(code)
+        // 3 & 4. Dual-metric "Compare against" + dual yAxis (opposite: true), no "Longitudinal Trend", yAxis.title.text, and top-right 3-dot (⋮) Chart Type menu
+        const hasCompareAgainstDualAxis = /compare\s*against/i.test(code) && /opposite\s*:\s*true/.test(code)
+        const hasTrendMenuAndYAxis = !/longitudinal\s+trend/i.test(code) && !/<app-select[^>]*\blabel\s*=\s*["']Chart\s*Type["']/i.test(code) && /yAxis[\s\S]{0,500}title\s*:\s*\{\s*text\s*:/.test(code) && /⋮|\\u22ee|&#8942;|&vellip;|chartMenuOpen|more-vertical/i.test(code) && ['areaspline', 'line', 'column', 'bar'].every((t) => new RegExp(`\\b${t}\\b`, 'i').test(code))
+        // 5 & 6. Decoupled Period & Window (periodCount) + universal getEffectiveFilters, Multi-Select Dimensions, and titleless PoP Variance <app-grid>
+        const hasDecoupledPeriodAndWindow = /label\s*=\s*["']Period["']/i.test(code) && /label\s*=\s*["']Window["']/i.test(code) && /periodCount/.test(code) && /getEffectiveFilters/.test(code) && has90Days && has53Weeks && has60Months && has10Years
+        const hasMultiSelectDimensions = /Dimensions/i.test(code) && /selectedDimensions/.test(code)
+        const hasTitlelessPopVarianceGrid = /<app-grid(?![^>]*\btitle\s*=)/i.test(code) && /\.data\s*=\s*\$\{/.test(code) && /ago\s+for/i.test(code) && /This\s+Period/i.test(code) && /Last\s+Period/i.test(code) && /Variance/i.test(code)
         const activeModel = lookmlProjectId || projectName
         const pairs = [
           ['order_items.created_date', 'order_items.total_sale_price'],
@@ -308,8 +318,8 @@ async function main() {
           })
         )
         return {
-          passed: hasBundle && has90Days && has53Weeks && has60Months && has10Years && matchesMeasureDate && liveQueriesAllValid,
-          checks: { hasBundle, has90Days, has53Weeks, has60Months, has10Years, matchesMeasureDate, liveQueriesAllValid, liveQueryChecks, codeLength: code.length },
+          passed: hasBundle && matchesMeasureDate && hasPopClickableKpis && hasCompareAgainstDualAxis && hasTrendMenuAndYAxis && hasDecoupledPeriodAndWindow && hasMultiSelectDimensions && hasTitlelessPopVarianceGrid && liveQueriesAllValid,
+          checks: { hasBundle, has90Days, has53Weeks, has60Months, has10Years, matchesMeasureDate, noMetricDropdownOrActiveBadge, hasPopClickableKpis, hasCompareAgainstDualAxis, hasTrendMenuAndYAxis, hasDecoupledPeriodAndWindow, hasMultiSelectDimensions, hasTitlelessPopVarianceGrid, liveQueriesAllValid, liveQueryChecks, codeLength: code.length },
         }
       },
     },
