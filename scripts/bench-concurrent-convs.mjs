@@ -14,7 +14,7 @@ import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { performance } from 'node:perf_hooks'
 
@@ -1036,7 +1036,7 @@ finally:
       [
         'run',
         '--directory',
-        '/usr/local/google/home/bryanweber/lkrdev/cli',
+        process.env.LKR_CLI_DIR || path.join(homedir(), 'lkrdev/cli'),
         'lkr',
         '--oauth-account=dev-argolis',
         'code-mode',

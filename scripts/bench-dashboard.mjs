@@ -13,6 +13,7 @@
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { homedir } from 'node:os'
 import path from 'node:path'
 
 const require = createRequire(import.meta.url)
@@ -397,7 +398,7 @@ finally:
       [
         'run',
         '--directory',
-        '/usr/local/google/home/bryanweber/lkrdev/cli',
+        process.env.LKR_CLI_DIR || path.join(homedir(), 'lkrdev/cli'),
         'lkr',
         '--oauth-account=dev-argolis',
         'code-mode',
