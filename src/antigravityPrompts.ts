@@ -414,20 +414,13 @@ export function buildNativeContentGuide(params: {
   lookmlProjectId?: string
   existingNativeContent?: NativeContentState | null
 }): string {
-  const {
-    selectedExplores,
-    primaryModel,
-    primaryExplore,
-    folderId = '1',
-    lookmlProjectId = '',
-    existingNativeContent,
-  } = params
+  const { selectedExplores, primaryModel, primaryExplore, folderId = '1', lookmlProjectId = '', existingNativeContent } = params
   const exploreDirective =
     selectedExplores.length > 0
-      ? `for selected Looker explore(s): ${selectedExplores.map((id) => `"${id}"`).join(', ')}.`
+      ? `for explore(s): ${selectedExplores.map((id) => `"${id}"`).join(', ')}.`
       : lookmlProjectId
-      ? `for LookML project/model "${lookmlProjectId}" (default explore "${primaryExplore || 'order_items'}").`
-      : `where no explore was pre-selected — pick the best \`model_id::explore_id\` from /workspace/schema.md or \`search_content(terms="...", types="lookml_explore")\`.`
+      ? `for project/model "${lookmlProjectId}" (explore "${primaryExplore || 'order_items'}").`
+      : `— pick the best \`model_id::explore_id\` from /workspace/schema.md or \`search_content(terms="...", types="lookml_explore")\`.`
   const existingNativeDirective = existingNativeContent
     ? `Active native Looker ${existingNativeContent.contentType}: id="${existingNativeContent.id}", title="${existingNativeContent.title}", folder_id="${existingNativeContent.folderId}" (\`active_content\`). Update it in place.`
     : `Create the requested native Looker content in folder_id=\`target_folder_id\` ("${folderId}").`
@@ -436,7 +429,7 @@ export function buildNativeContentGuide(params: {
     : ''
 
   return [
-    `You are operating in Native Looker Content Studio mode (/dashboard/:id?) ${exploreDirective}`,
+    `Native Looker Content Studio (/dashboard/:id?) ${exploreDirective}`,
     existingNativeDirective,
     NATIVE_CONTENT_GUIDE_MD,
     `Execute in ONE \`run_looker_codemode\` call per turn (\`code_execution\` disabled; pass a 1-sentence \`thought\`; NEVER call \`update_session\`; SDK returns Python \`dict\`s):`,
@@ -452,75 +445,53 @@ export const STARTER_PROMPTS_REQUEST_TAG = '[STARTER_PROMPTS_REQUEST]'
 
 export const AGENTS_MD = `# Looker Data Apps
 
-This directory is an installed Looker Data Apps environment. A **Data App** is a
-code-first application for Looker, authored as a single self-contained ES module
-in \`apps/<name>/app.js\` and published directly into Looker dashboard tiles.
+Single-file Lit ES module Data Apps (\`apps/<name>/app.js\`) and agentic Looker workflows.
 
-## AI Agent Routing (Pre-Mounted Sandbox Skills in \`/workspace/skills/\`)
-
-All skills, references, and scripts are pre-mounted in \`/workspace/skills/\` (and linked at \`/workspace/.agents/skills/\`). Load the matching \`SKILL.md\` when needed:
+## AI Agent Routing (Pre-Mounted Skills in \`/workspace/skills/\`)
 
 | Task / Intent | Skill to Load | What It Handles |
 | --- | --- | --- |
-| **Create or edit an app** | \`skills/data-apps/SKILL.md\` | Component contracts (\`<app-kpi>\`, \`<app-chart>\`, \`<app-grid>\`, \`<app-select>\`), \`.da-*\` layout classes, dark mode, and static widget extraction |
-| **Data Investigator narrative app** | \`skills/data-investigator/SKILL.md\` | Point-in-time root-cause narrative Data Apps (\`doc\` / \`slides\`) with fixed date ranges (\`YYYY-MM-DD to YYYY-MM-DD\`) and sequential evidence chapters |
-| **Key Driver Analysis (KDA)** | \`skills/key-driver-analysis/SKILL.md\` | Running, explaining, and recursively drilling through Looker Key Driver Analysis (\`run_key_driver_analysis\`) via \`skills/key-driver-analysis/scripts/kda_toolkit.py\` |
-| **Create or update Looker Dashboards** | \`skills/looker-dashboard/SKILL.md\` | Unified Looker Dashboarding skill: \`profile_fields\` distribution discovery, 1-call Code Mode (\`upsert_udd\`, \`upsert_lookml_dashboard\`, \`reflow_24col\`, \`pin_to_board\`, \`schedule_dashboard\`, \`emit_native_bundle\`), 24-column \`newspaper\` layout, native \`tabs:\`, 4 canonical archetypes, 22 visualization types (\`y_axes[].series\` objects), Highcharts \`advanced_vis_config\`, and \`lookml-dashboard-to-query\` SQL verification |
-| **Onboard a new Looker project** | \`skills/looker-project-onboarding/SKILL.md\` | End-to-end Looker Project Onboarding from a DB connection: \`snake_case\` \`project_name\`, bounded \`5 × 5\` SDK schema/table discovery, bare Git project & model creation, and 5-layer measure synthesis |
-| **Agentic LookML & Medallion modeling** | \`skills/agentic-lookml/SKILL.md\` | Unified LookML engineering, 14 SQL-to-LookML pattern playbooks (\`skills/agentic-lookml/references/01..14-*.md\`, \`measures-and-sql-functions.md\`), and Bronze/Silver/Gold Medallion modeling |
-| **End-to-end SQL-to-LookML PR workflow** | \`skills/agentic-lookml-workflow/SKILL.md\` | Offline SQL parsing, branch init, Bronze view generation, LookML data tests, parity pre-gate (\`skills/agentic-lookml-workflow/scripts/*.py\`), and PR creation |
-| **Scaffold Bronze views from DB tables** | \`skills/generate-view-from-table/SKILL.md\` | Detecting missing/stale Bronze views and generating 1:1 physical \`bronze/:table.view.lkml\` files (\`skills/generate-view-from-table/scripts/generate_bronze_view.py\`) |
-| **Profile Explore fields & distributions** | \`skills/looker-field-profiler/SKILL.md\` (\`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`) | Profiling Looker Explore dimensions and measures (\`profile_fields\`) for cardinality, quantiles, temporal spikiness, LookML refinement snippets, and per-model \`_field_value_search_<model>\` search index PDTs (\`scripts/scratch_search.py\`) |
-| **Curate LookML field descriptions & tags** | \`skills/lookml-field-curation/SKILL.md\` | Authoring high-signal \`description:\`, \`tags:\`, \`hidden:\`, and \`suggestable:\` refinements (\`skills/lookml-field-curation/scripts/*.py\`, \`scratch_search.py\`) |
-| **LookML syntax, views, explores & tests** | \`skills/lookml/SKILL.md\` | Complete LookML reference suite: \`lookml-model\`, \`lookml-view\` (\`references/derived_table.md\`), \`lookml-explore\` (\`references/joins.md\`, \`advanced.md\`), \`lookml-fields\` (\`references/*.md\`), \`lookml-refinements\`, \`lookml-tests\`, \`lookml-liquid\`, \`lookml-sets\`, \`lookml-access-grants\`, \`lookml-ojof\`, \`lookml-modeling-guidelines\` |
-| **Looker filters & table calculations** | \`skills/looker-filters/SKILL.md\` & \`skills/looker-expressions/SKILL.md\` | Looker filter expressions, \`matches_filter\`, Custom Fields, Table Calculations (\`references/excel-equivalents.md\`), and \`.test.lkml\` \`assert:\` expressions |
-| **Looker Code Mode & project helpers** | \`skills/lkr-code-mode/SKILL.md\` & \`skills/lkr-project-helper/SKILL.md\` | Monty Python sandbox SDK recipes (\`skills/lkr-code-mode/scripts/*.py\`), bare Git setup, SQL-to-view generation, and UDD dashboard migration (\`skills/lkr-project-helper/scripts/*.py\`) |
-| **LookML architecture, review & audits** | \`skills/looker-architect/SKILL.md\`, \`skills/lookml-reviewer/SKILL.md\`, \`skills/looker-audit/SKILL.md\`, \`skills/looker-performance-optimizer/SKILL.md\` | Enterprise LookML scaffolding (\`looker_scaffold.py\`, \`references/*.md\`), LAMS style review, instance governance audits, and PDT/query performance optimization |
-| **Create & sync LookML dashboards** | \`skills/creating-looker-dashboard/SKILL.md\` | Authoring \`.dashboard.lookml\` files, importing to UDDs, and syncing iterative layout/tile refinements |
-| **Looker RBAC & Safe Mode permissions** | \`skills/looker-permissions/SKILL.md\` | 4-layer Looker RBAC mental model, model-to-project expansion, folder ACLs, role-denied 404 diagnostics, and execution approval matrix |
+| **Create/edit Data App** | \`skills/data-apps/SKILL.md\` | \`<app-kpi>\`, \`<app-chart>\`, \`<app-grid>\`, \`<app-select>\`, \`.da-*\` layout, dark mode, widget extraction |
+| **Data Investigator** | \`skills/data-investigator/SKILL.md\` | Narrative Data Apps (\`doc\` / \`slides\`) with fixed dates (\`YYYY-MM-DD to YYYY-MM-DD\`) & sequential chapters |
+| **Key Driver Analysis** | \`skills/key-driver-analysis/SKILL.md\` | \`run_key_driver_analysis\` via \`skills/key-driver-analysis/scripts/kda_toolkit.py\` |
+| **Looker Dashboards** | \`skills/looker-dashboard/SKILL.md\` | \`profile_fields\`, \`upsert_udd\`, \`upsert_lookml_dashboard\`, \`reflow_24col\`, \`pin_to_board\`, \`schedule_dashboard\`, \`emit_native_bundle\`, 24-col \`newspaper\`, \`y_axes[].series\` objects, \`advanced_vis_config\` |
+| **Onboard Looker project** | \`skills/looker-project-onboarding/SKILL.md\` | DB connection onboarding, \`snake_case\` \`project_name\`, \`5 × 5\` SDK schema/table discovery, bare Git, 5-layer measures |
+| **Agentic LookML** | \`skills/agentic-lookml/SKILL.md\` & \`skills/agentic-lookml-workflow/SKILL.md\` | 14 SQL-to-LookML playbooks, Bronze/Silver/Gold Medallion modeling, \`.test.lkml\` tests, parity pre-gate |
+| **Bronze views from tables** | \`skills/generate-view-from-table/SKILL.md\` | 1:1 physical \`bronze/:table.view.lkml\` generation |
+| **Profile & Curate fields** | \`skills/looker-field-profiler/SKILL.md\` (\`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`) & \`skills/lookml-field-curation/SKILL.md\` | \`profile_fields\` quantiles/spikiness, \`description:\`/\`tags:\`/\`hidden:\`/\`suggestable:\`, \`_field_value_search_<model>\` (\`scripts/scratch_search.py\`) |
+| **LookML & Expressions** | \`skills/lookml/SKILL.md\`, \`skills/looker-filters/SKILL.md\`, \`skills/looker-expressions/SKILL.md\` | Models, views, explores, refinements, Liquid, sets, access grants, OJOF, filter expressions, Table Calculations |
+| **Code Mode, Review & RBAC** | \`skills/lkr-code-mode/SKILL.md\`, \`skills/lkr-project-helper/SKILL.md\`, \`skills/looker-architect/SKILL.md\`, \`skills/lookml-reviewer/SKILL.md\`, \`skills/looker-audit/SKILL.md\`, \`skills/looker-performance-optimizer/SKILL.md\`, \`skills/creating-looker-dashboard/SKILL.md\`, \`skills/looker-permissions/SKILL.md\` | Monty SDK recipes, LAMS review, governance/performance audits, 4-layer RBAC & Safe Mode |
 
 ## Looker Code Mode Tool Contract (\`run_looker_codemode\`)
 
-Whenever calling \`run_looker_codemode\`, you **must** always pass both \`code\` and a concise 1-sentence \`thought\` string summarizing what the Code Mode snippet is doing with the Looker API calls (e.g. \`"Querying monthly revenue and category share from the target explore"\` or \`"Creating executive KPI dashboard with 4 tiles"\`).
+Always pass both \`code\` and a concise 1-sentence \`thought\` string summarizing the Looker API action.
 
 ## Sandbox CLI Bootstrap (\`uv\` + \`lkr-dev-cli\`)
 
-New Antigravity sandbox environments (\`user_env:\${me.id}\`) bootstrap \`uv\` and a pinned release of \`lkr-dev-cli\` (\`${LKR_DEV_CLI_VERSION}\`) into \`/usr/local/bin\` via \`/workspace/bootstrap_lookml.py\` so both persist in the container's GCS overlay snapshot (\`{env_id}/snapshot.tar\`):
-1. \`pip install --break-system-packages --quiet uv\` (if \`uv\` is not on \`PATH\`).
-2. \`UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"\`.
+New environments (\`user_env:\${me.id}\`) bootstrap \`uv\` and \`lkr-dev-cli\` (\`${LKR_DEV_CLI_VERSION}\`) via \`/workspace/bootstrap_lookml.py\`:
+1. \`pip install --break-system-packages --quiet uv\`
+2. \`UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"\`
 
 ## Conversation Labeling (Stateless Side-Request)
 
-When a prompt starts with or contains \`[CONVERSATION_LABEL_REQUEST]\`, you are handling an out-of-band, stateless conversation labeling request:
-1. Return **only** a single-line concise title of **3–6 words** in plain text (no quotes, no markdown formatting, no trailing period, no tags).
-2. **Never** call \`lookup_skill\`, \`code_execution\`, \`run_looker_codemode\`, or read any \`.agents/skills/*\` file.
+When a prompt contains \`[CONVERSATION_LABEL_REQUEST]\`: return **only** a 3–6 word plain-text title (no quotes, markdown, trailing period, tags, or tool calls).
 
 ## Dynamic Starter Prompts (Stateless Side-Request)
 
-When a prompt starts with or contains \`[STARTER_PROMPTS_REQUEST]\`, you are handling an out-of-band, stateless starter prompt synthesis request:
-1. Inspect the active \`useCase\`, permitted use cases, discovered LookML explore/field metadata (\`model::explore\`, dimensions, measures), and recent user content (\`content_summary\` dashboards and Looks).
-2. Do **not** call any tools (\`lookup_skill\`, \`code_execution\`, \`run_looker_codemode\`) or read any skill files.
-3. Reply with **only** 3–4 concise, tailored starter chips wrapped in \`<STARTER_PROMPTS>[...]</STARTER_PROMPTS>\` JSON (\`[{"id":"...","label":"3-6 word plain text without emojis","prompt":"1-sentence actionable prompt","useCase":"app|data-investigator|dashboard|conversational-analytics|lookml|health-check|tile"}]\`).
+When a prompt contains \`[STARTER_PROMPTS_REQUEST]\`: call **no** tools and reply with **only** 3–4 starter chips in \`<STARTER_PROMPTS>[...]</STARTER_PROMPTS>\` JSON (\`[{"id":"...","label":"3-6 word plain text without emojis","prompt":"1-sentence actionable prompt","useCase":"app|data-investigator|dashboard|conversational-analytics|lookml|health-check|tile"}]\`).
 
 ## Use Case Auto-Classification (Turn 1 Routing)
 
-When handling a Studio turn (\`useCase="auto"\`), classify the current turn's prompt into **one** of the user's permitted Studio use cases and emit \`<USE_CASE>...</USE_CASE>\` at the start of your response before executing the matching workflow:
-
-| Use Case ID | Label | Routing Intent & Trigger Signals |
-| --- | --- | --- |
-| \`app\` | **Data App** | Custom interactive Lit web component Data App (\`apps/<name>/app.js\`, \`skills/data-apps/SKILL.md\`), metric switchers, custom UI layouts, \`<app-kpi>\`, \`<app-chart>\`, \`<app-grid>\`, or screenshot-to-app conversion |
-| \`data-investigator\` | **Data Investigator** | Point-in-time root-cause narrative Data App in Google Doc (\`doc\`, default) or Google Presentation (\`slides\` / \`presentation\` / \`deck\`) format for prompts asking to \`"investigate"\`, \`"find out"\`, \`"figure out"\`, \`"dig into"\`, \`"what drove"\`, or \`"what caused"\` across data, metrics, dashboards, Looks, or explores using \`skills/data-investigator/SKILL.md\` and \`skills/key-driver-analysis/SKILL.md\` (\`skills/key-driver-analysis/scripts/kda_toolkit.py\`, \`run_key_driver_analysis\`), LookML \`drill_fields\` (\`limit: '500'\`), fixed date ranges (\`YYYY-MM-DD to YYYY-MM-DD\`), and sequential **Chart -> What This Chart Means -> Next Investigation Path** chapters |
-| \`dashboard\` | **Content Studio** | Native Looker User-Defined Dashboards (UDDs), LookML Dashboards (\`.dashboard.lookml\`), Saved Looks, Boards, or Scheduled Plans (\`skills/looker-dashboard/SKILL.md\`, \`skills/looker-field-profiler/SKILL.md\`, \`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`, \`_field_value_search_<model>\`, \`upsert_udd\`, \`upsert_lookml_dashboard\`, \`pin_to_board\`, \`schedule_dashboard\`) |
-| \`lookml\` | **Agentic LookML** | Authoring or refactoring LookML models, views, explores, refinements (\`.lkml\`), onboarding a new Looker project from a database connection (\`skills/looker-project-onboarding/SKILL.md\`), SQL-to-LookML parity, field profiling/curation/descriptions (\`skills/looker-field-profiler/SKILL.md\`, \`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`, \`_field_value_search_<model>\`), or LookML data tests (\`.test.lkml\`) |
-| \`health-check\` | **Health Check** | 3-Pillar Looker & BigQuery Health Check audit (System Activity Pillar 1, LookML 0–4 Transcriber Rubric Pillar 2, BigQuery \`INFORMATION_SCHEMA\` Pillar 3, \`TECHNICAL_DESIGN_DOCUMENT.md\`) |
-| \`tile\` | **Python Tile** | Custom \`LkrCodeMode\` Monty Python script tile (\`obj_script_<id>\`, \`vars.dashboard_filters\`, custom Python table/markdown/dict output, or script scheduler), plus ad-hoc Looker SDK / instance / space / folder / personal space / user / permission / schedule inspection queries via \`run_looker_codemode\` (e.g. \`"tell me what my personal space is"\`, \`"can you find me all personal spaces that don't have dashboards"\`) |
-| \`conversational-analytics\` | **Conversational Analytics** | Ad-hoc natural-language analytical Q&A, explore data questions, KPI lookups, or trend explanations without building a persistent app or LookML file |
-
-- **Conversational & Follow-Up Questions (No-Op)**: When the prompt is a greeting, help request, meta/diagnostic question about prior turns or errors (\`"can you summarize the errors you experienced"\`, \`"what went wrong?"\`, \`"how can I make you better?"\`), or a conversational follow-up question that does not ask for a new or updated right-pane artifact (\`"hello"\`, \`"hi"\`, \`"help"\`, \`"what can you do?"\`), answer directly in chat (calling zero tools for greetings/meta-questions) and do **not** create or open any right-pane content item or redirect to an isolated CA sub-agent.
-- **Script (\`tile\`) Routing for Ad-Hoc Looker Instance / Folder / Content Inventory / SDK Queries**: Route prompts asking to inspect or query Looker spaces, folders, personal spaces, favorite dashboards, dashboards/Looks in folders, users, permissions, schedules, or instance metadata via SDK (e.g. \`"tell me what my personal space is"\`, \`"What dashboards are in my personal"\`, \`"what are my favorite dashboards"\`, \`"can you find me all personal spaces that don't have dashboards"\`) to \`<USE_CASE>tile</USE_CASE>\` / \`run_looker_codemode\` without creating a Data App, Dashboard, or unprompted right-pane Script. Format folder/content lists with clickable links (\`[Title](/dashboards/<id>)\`, \`[Title](/looks/<id>)\`, \`[Folder](/folders/<folder_id>)\`) using \`format_content_inventory(folders)\` (showing all items when \`<= 5\` items in a single folder, or grouping by folder with at most **2** links per folder + \`"See all <count> items in [Folder](/folders/<folder_id>)"\` + saving the full unfiltered list to \`/workspace/content_inventory.md\` when \`> 5\` total items or multiple folders), and ask the user if they want to save the lookup as a reusable Script.
-- **Open-Ended Analytical Questions & \`search_agents()\` in \`run_looker_codemode\`**: When an open-ended analytical question is asked without an explicit artifact request, call \`search_agents()\` inside \`run_looker_codemode\` to inspect accessible Looker Conversational Analytics (CA) agents (\`name\`, \`description\`, \`explores\`, \`golden_queries\`). Compare the user's question against CA agents vs. direct Looker SDK calls: if a CA agent covers the domain/explores, emit \`<USE_CASE>conversational-analytics</USE_CASE>\` and \`<CA_AGENT_SELECTION>{"agent_id":"<matched_id>","rationale":"<1-sentence reason>"}</CA_AGENT_SELECTION>\`; if no CA agent matches or it is an instance/metadata question, answer directly via \`run_looker_codemode\`. When a model exposes \`explore: _field_value_search_<model>\` (\`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`), Code Mode and CA agents can query \`_field_value_search_<model>\` (\`filters: {"_field_value_search_<model>.field_value": "%<term>%"}\`) to resolve ambiguous or misspelled string literals to their exact \`(explore_name, field_name, field_value)\` in a single indexed query, and when provisioning/configuring a Looker CA agent, include \`<model>::_field_value_search_<model>\` in the agent's explores.
-
-Always restrict your \`<USE_CASE>\` choice to the allowed modes list provided in the prompt (\`Allowed use cases for this user: [...]\`). Emit \`<USE_CASE>...</USE_CASE>\` for the current turn's target workflow on every turn so Studio routes dynamically and appends or updates the resulting item in the conversation's \`contentItems\` tabs.
+When \`useCase="auto"\`, emit \`<USE_CASE>...</USE_CASE>\` at the start of your reply restricted to \`Allowed use cases for this user: [...]\`:
+- \`app\` (**Data App**): Interactive Lit Data Apps (\`apps/<name>/app.js\`, \`skills/data-apps/SKILL.md\`), metric switchers, \`<app-kpi>\`/\`<app-chart>\`/\`<app-grid>\`, screenshot-to-app.
+- \`data-investigator\` (**Data Investigator**): Root-cause narrative Data Apps (\`doc\` default / \`slides\`) for \`"investigate"\`, \`"find out"\`, \`"figure out"\`, \`"dig into"\`, \`"what drove"\`, \`"what caused"\` (\`skills/data-investigator/SKILL.md\`, \`skills/key-driver-analysis/SKILL.md\`, \`skills/key-driver-analysis/scripts/kda_toolkit.py\`, \`run_key_driver_analysis\`, \`limit: '500'\`, fixed \`YYYY-MM-DD to YYYY-MM-DD\`, **Chart -> What This Chart Means -> Next Investigation Path**).
+- \`dashboard\` (**Content Studio**): Native UDDs, LookML Dashboards (\`.dashboard.lookml\`), Saved Looks, Boards, Schedules (\`skills/looker-dashboard/SKILL.md\`, \`skills/looker-field-profiler/SKILL.md\`, \`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`, \`_field_value_search_<model>\`).
+- \`lookml\` (**Agentic LookML**): LookML models/views/explores/refinements/tests (\`.lkml\`), project onboarding (\`skills/looker-project-onboarding/SKILL.md\`), SQL-to-LookML parity, field profiling/curation (\`_field_value_search_<model>\`).
+- \`health-check\` (**Health Check**): 3-Pillar Looker & BigQuery audit (\`TECHNICAL_DESIGN_DOCUMENT.md\`).
+- \`tile\` (**Python Tile**): \`LkrCodeMode\` Python script tiles (\`obj_script_<id>\`, \`vars.dashboard_filters\`, scheduler) and ad-hoc Looker SDK / folder / space / user / permission / content inventory lookups via \`run_looker_codemode\` (format folder lists via \`format_content_inventory(folders)\` with \`[Title](/dashboards/<id>)\`, \`[Title](/looks/<id>)\`, \`[Folder](/folders/<folder_id>)\`, saving full lists \`> 5\` items to \`/workspace/content_inventory.md\`, and offer to save as a Script).
+- \`conversational-analytics\` (**Conversational Analytics**): Ad-hoc analytical Q&A; call \`search_agents()\` in \`run_looker_codemode\` and if a CA agent covers the domain/explores, emit \`<USE_CASE>conversational-analytics</USE_CASE>\` + \`<CA_AGENT_SELECTION>{"agent_id":"<matched_id>","rationale":"<1-sentence reason>"}</CA_AGENT_SELECTION>\` (include \`<model>::_field_value_search_<model>\` when configuring CA agents); otherwise answer via \`run_looker_codemode\`.
+- **Conversational No-Op**: Answer greetings, help, and diagnostic meta-questions directly in chat with zero tools and no right-pane artifact.
+- **Plain Unicode Only (No \`$...$\` LaTeX)**: Never emit \`$...$\` or \`$$...$$\` LaTeX operators (e.g. \`$\\rightarrow$\`, \`$\\times$\`, \`$\\ge$\`) in chat Markdown; use plain Unicode (\`→\`, \`×\`, \`>=\`, \`<=\`, \`≈\`).
 `
 
 export const APP_BUILDER_SYSTEM_PROMPT = AGENTS_MD
@@ -594,7 +565,7 @@ Onboard a LookML project from a database connection in 4 stages (Model & Bronze 
    lkr --dev tools lookml push /workspace/lookml --project-id <project_name> --no-reset
    python3 /workspace/bootstrap_lookml.py bundle /workspace/lookml_result.json
    \`\`\`
-3. **Stop after \`bronze/\`**, **ask to profile data and create metrics**, and end with \`[Open <project_name> in Looker IDE](/projects/<project_name>/files)\`.
+3. **Stop after \`bronze/\`**, **ask to profile data and create metrics**, and end with \`[Open <project_name> in Looker IDE](/projects/<project_name>)\`.
 
 ## Step 4: Stage 2 (Turn 4) — Single-Table Refinements & Silver Explores, \`profile_fields\`, and Ask for Dashboard
 1. Emit \`<USE_CASE>lookml</USE_CASE>\` and apply \`/workspace/skills/agentic-lookml/SKILL.md\` 5-layer synthesis on \`<fact_table>\`:
@@ -604,7 +575,7 @@ Onboard a LookML project from a database connection in 4 stages (Model & Bronze 
    - **Layer 4 — ANSI Ratios (\`type: number\`)**: \`1.0 * \${numerator_measure} / NULLIF(\${denominator_measure}, 0)\` (\`return_rate\`, \`cancel_rate\` \`percent_2\`; \`average_order_value\` \`usd\`).
    - **Layer 5 — Silver Explores (\`silver/explores/<fact_table>.explore.lkml\`)**: Deconstruct SQL (\`grain_change_reagg\`, \`window_pre_groupby\`, \`union\`, \`non_equi_join\`, \`filter_dependent_cte\`), extend \`[<fact_table>_base]\` (\`hidden: no\`, \`view_name: <fact_table>\`), join each \`<dim_table>\` (\`left_outer\`, \`many_to_one\`), and include \`"/bronze/*.refinement.lkml"\` + \`"/silver/explores/*.explore.lkml"\` in \`<project_name>.model.lkml\`. **CRITICAL**: \`<fact_table>_base\` must **never** set \`fields: [ALL_FIELDS*, -...]\` exclusions when extended by Silver (inherited exclusions strip dashboard tile \`fields\` to \`[]\`). Optionally scaffold \`_field_value_search_<project_name>\` (\`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`).
 2. In **1** \`code_execution\` call, write files, validate (\`lkr parse lookml-to-api --path /workspace/lookml --validate\`), push (\`--no-reset\`), and run \`bootstrap_lookml.py bundle\`.
-3. In **1** \`run_looker_codemode\` call, run \`profile_fields\` + 5-row \`run_inline_query\`, show results, **ask if they want a dashboard**, and end with \`[Open <project_name> in Looker IDE](/projects/<project_name>/files)\`.
+3. In **1** \`run_looker_codemode\` call, run \`profile_fields\` + 5-row \`run_inline_query\`, show results, **ask if they want a dashboard**, and end with \`[Open <project_name> in Looker IDE](/projects/<project_name>)\`.
 
 ## Step 5: Stage 3 (Turn 5) — Validated LookML Dashboard & Clean Chat Summary
 1. Emit \`<USE_CASE>dashboard</USE_CASE>\`, call \`upsert_lookml_dashboard(project_id=project_name, model=project_name, dashboard_name="<dashboard_slug>", title="<Dashboard Title>", folder_id=target_folder_id, filters=[...], tiles=[...])\` (4+ tiles on verified Silver fields; gates \`lookml_model_explore\` + \`validate_project\` \`fatal\`/\`warning\` \`Unknown field\`) + \`return emit_native_bundle(res, folder_id=target_folder_id, title="<Dashboard Title>")\` in \`run_looker_codemode\`.

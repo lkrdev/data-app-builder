@@ -5,14 +5,14 @@ import type { Looker40SDK } from '@looker/sdk'
 import { Lock, MoreVertical } from 'lucide-react'
 
 import { LOOKER_PROJECT_ONBOARDING_SKILL_MD } from './antigravityPrompts'
-import { StudioBadge, StudioButton, StudioCard } from './components/StudioDesignSystem'
+import { StudioBadge, StudioButton, StudioCard, StudioModal } from './components/StudioDesignSystem'
 import { LKR_DEV_CLI_SPEC } from './lkrCliBridge'
 import {
   type AccessibleLookerConnection,
   copyTextWithExtensionSdk,
   formatAccessibleConnectionsMarkdown,
   getArtifactNamespace,
-  loadObjectArtifact,
+  getArtifactService,
   PersistedChatTurn,
   saveUserArtifact,
 } from './lookerApi'
@@ -205,67 +205,126 @@ export function buildLookmlSystemGuide(params: {
     `4. **Push Modified \`.lkml\` Files via \`lkr --dev tools lookml push\`, Pre-Gate Parity & Validate**:`,
     `   - Push local \`.lkml\` files back to Looker dev mode using \`lkr --dev tools lookml push /workspace/lookml --project-id <project_id> --no-reset\` (which automatically creates directories and configures \`.model.lkml\`), then run \`validate_project\` and \`run_lookml_test\`.`,
     `5. **Emit \`<LOOKML_BUNDLE>\` & Clickable Links**:`,
-    `   Run \`python3 /workspace/bootstrap_lookml.py bundle /workspace/data/$RUN_ID\` (or \`/workspace/lookml_result.json\`), include the printed \`<LOOKML_BUNDLE>...</LOOKML_BUNDLE>\` tag, and end every turn that creates or updates LookML project files with \`[Open <project_name> in Looker IDE](/projects/<project_name>/files)\` (and end every turn that creates or updates a Looker dashboard with \`[Open <Dashboard Title>](/dashboards/<id>)\`).`,
+    `   Run \`python3 /workspace/bootstrap_lookml.py bundle /workspace/data/$RUN_ID\` (or \`/workspace/lookml_result.json\`), include the printed \`<LOOKML_BUNDLE>...</LOOKML_BUNDLE>\` tag, and end every turn that creates or updates LookML project files with \`[Open <project_name> in Looker IDE](/projects/<project_name>)\` (and end every turn that creates or updates a Looker dashboard with \`[Open <Dashboard Title>](/dashboards/<id>)\`).`,
   ].join('\n')
+}
+
+export function resolveLookmlCanonicalProjectId(bundle?: Partial<LookmlBundle> | null): string {
+  return String(bundle?.project_id || bundle?.model_name || bundle?.id || 'default').trim()
+}
+
+export function mergeLookmlFiles(prevFiles: LookmlFileChange[] = [], nextFiles: LookmlFileChange[] = []): LookmlFileChange[] {
+  const byPath = new Map<string, LookmlFileChange>()
+  prevFiles.forEach((f) => { if (f?.path) byPath.set(f.path, f) })
+  nextFiles.forEach((f) => {
+    if (!f?.path) return
+    const prev = byPath.get(f.path)
+    byPath.set(f.path, Object.assign({}, prev, f, {
+      content: f.content !== undefined ? f.content : prev?.content,
+      diff: f.diff !== undefined ? f.diff : prev?.diff,
+    }))
+  })
+  return Array.from(byPath.values())
+}
+
+export function extractLookmlDashboardsFromBundle(bundle?: LookmlBundle | null) {
+  const files = bundle?.files || []
+  const model = String(bundle?.model_name || files.map((f) => f.path?.match(/(?:^|\/)([^/]+)\.model\.lkml$/i)?.[1]).find(Boolean) || bundle?.project_id || bundle?.id || '').trim()
+  if (!model) return []
+  const seen = new Set<string>()
+  return files.flatMap((f) => {
+    if (!f?.path || f.action === 'deleted' || !/\.dashboard\.l(?:ook)?ml$/i.test(f.path)) return []
+    const raw = f.content || (f.diff || '').replace(/^[^+\n].*$/gm, '').replace(/^\+(?!\+\+)/gm, '')
+    const slug = (raw.match(/^\s*-\s*dashboard:\s*["']?([^\s"'#]+)/m)?.[1] || f.path.split('/').pop()!.replace(/\.dashboard\.l(?:ook)?ml$/i, '')).trim()
+    const id = `${model}::${slug}`
+    if (!slug || seen.has(id)) return []
+    seen.add(id)
+    const tm = raw.match(/^\s*title:\s*(?:"([^"\n]+)"|'([^'\n]+)'|([^\n#]+))/m)
+    const title = (tm?.[1] || tm?.[2] || tm?.[3] || '').trim() || slug.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+    return [{ slug, title, model, id, embedPath: `/embed/dashboards/${id}` }]
+  })
 }
 
 export function getLookmlArtifactKeys(userId: string, id: string) {
   const cleanUser = String(userId || 'anon').trim()
   const cleanId = String(id || 'default').trim().replace(/[^a-zA-Z0-9_-]/g, '_')
-  return {
-    id: cleanId,
-    userKey: `user_${cleanUser}_lookml_${cleanId}`,
-    objKey: `obj_lookml_${cleanId}`,
-  }
+  return { id: cleanId, userKey: `user_${cleanUser}_lookml_${cleanId}`, objKey: `obj_lookml_${cleanId}` }
 }
 
-// ponytail: persist two-tier Looker Artifacts (`user_${userId}_lookml_${id}` compact index + `obj_lookml_${id}` full payload)
-// via shared saveUserArtifact/loadObjectArtifact/listUserArtifacts in lookerArtifacts.ts.
-export async function saveLookmlSessionArtifact(params: {
+// ponytail: persist 1x per-project Looker Artifacts (`obj_lookml_${projectId}`) merging `files[]` in place
+export function saveLookmlSessionArtifact(params: {
   sdk: Looker40SDK
   extensionSDK?: Partial<ExtensionSDK>
   userId: string
   bundle: LookmlBundle
-  studio: {
-    explores?: string[]
-    lastInteractionId?: string
-    environmentId?: string
-    messages?: PersistedChatTurn[]
-  }
+  studio: { explores?: string[]; lastInteractionId?: string; environmentId?: string; messages?: PersistedChatTurn[] }
 }) {
   const { sdk, extensionSDK, userId, bundle, studio } = params
   const namespace = getArtifactNamespace(extensionSDK)
-  const rawId = bundle.id || bundle.branch_name || `${bundle.project_id || 'lookml'}_${Date.now().toString(36)}`
+  const rawId = resolveLookmlCanonicalProjectId(bundle)
   const { id, userKey, objKey } = getLookmlArtifactKeys(userId, rawId)
-  const updatedAt = new Date().toISOString()
-  const title = bundle.title || `LookML (${bundle.project_id || id})`
-  const explores = studio.explores || []
-  const index: LookmlSessionIndex = {
-    id, type: 'lookml', title, updatedAt, createdBy: String(userId),
-    targetId: bundle.project_id || '', branchName: bundle.branch_name,
-    explores, lastInteractionId: studio.lastInteractionId, environmentId: studio.environmentId,
-  }
-  const payload: LookmlArtifactPayload = {
-    id, type: 'lookml', title, updatedAt, createdBy: String(userId),
-    bundle: { ...bundle, id },
-    studio: {
-      explores, lastInteractionId: studio.lastInteractionId, environmentId: studio.environmentId,
-    },
-  }
-  await saveUserArtifact({ ...index, sdk, userId, content: payload, namespace })
-  return { id, userKey, objKey, index, payload }
+  return getArtifactService(sdk, namespace)
+    .get<LookmlArtifactPayload>(objKey)
+    .catch((): null => null)
+    .then((existing) => {
+      const updatedAt = new Date().toISOString()
+      const projectLabel = bundle.project_id?.trim() || rawId
+      const title = `LookML: ${projectLabel}`
+      const explores = studio.explores || existing?.studio?.explores || []
+      const mergedBundle: LookmlBundle = Object.assign({}, existing?.bundle, bundle, {
+        id,
+        project_id: bundle.project_id || existing?.bundle?.project_id || rawId,
+        title: bundle.title || existing?.bundle?.title || title,
+        files: mergeLookmlFiles(existing?.bundle?.files, bundle.files),
+      })
+      const index: LookmlSessionIndex = {
+        id, type: 'lookml', title, updatedAt, createdBy: String(userId),
+        targetId: mergedBundle.project_id || id, branchName: mergedBundle.branch_name,
+        explores, lastInteractionId: studio.lastInteractionId, environmentId: studio.environmentId,
+      }
+      const payload: LookmlArtifactPayload = {
+        id, type: 'lookml', title, updatedAt, createdBy: String(userId),
+        bundle: mergedBundle,
+        studio: { explores, lastInteractionId: studio.lastInteractionId, environmentId: studio.environmentId },
+      }
+      return saveUserArtifact(Object.assign({}, index, { sdk, userId, content: payload, namespace })).then(() => ({
+        id, userKey, objKey, index, payload,
+      }))
+    })
 }
 
-export async function loadLookmlSessionArtifact(
+export function loadLookmlSessionArtifact(
   sdk: Looker40SDK,
   extensionSDK: Partial<ExtensionSDK> | undefined,
-  rawId: string
+  rawId: string,
+  fallbackSessionId?: string
 ): Promise<LookmlArtifactPayload> {
-  const namespace = getArtifactNamespace(extensionSDK)
+  const svc = getArtifactService(sdk, getArtifactNamespace(extensionSDK))
   const cleanId = rawId.trim().replace(/^obj_lookml_/, '')
-  const found = await loadObjectArtifact<LookmlArtifactPayload>(sdk, 'lookml', cleanId, namespace)
-  if (!found) throw new Error(`LookML session artifact "obj_lookml_${cleanId}" not found.`)
-  return found
+  const cleanFb = String(fallbackSessionId || '').trim().replace(/^obj_lookml_/, '')
+  const tsBase = cleanId.match(/^(.+)_[0-9a-z]{6,}$/i)?.[1] || ''
+  const candidates = [cleanId, cleanFb, tsBase].filter((v, idx, arr) => v && arr.indexOf(v) === idx)
+  let chain: Promise<LookmlArtifactPayload | null> = Promise.resolve(null)
+  candidates.forEach((cid) => {
+    chain = chain.then((hit) => hit || svc.get<LookmlArtifactPayload>(`obj_lookml_${cid}`).catch((): null => null))
+  })
+  return chain.then((hit) => {
+    if (hit) return hit
+    return svc
+      .search(`obj_lookml_${cleanId}_%`)
+      .then((rows) => {
+        const parsed = (rows || [])
+          .map((r) => (typeof r?.value === 'string' ? (JSON.parse(r.value) as LookmlArtifactPayload) : (r?.value as LookmlArtifactPayload | undefined)))
+          .filter((p): p is LookmlArtifactPayload => Boolean(p?.bundle))
+          .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+        return parsed[0] || svc.loadObjectArtifact<LookmlArtifactPayload>('lookml', cleanId)
+      })
+      .catch((): null => null)
+      .then((fallbackHit) => {
+        if (!fallbackHit) throw new Error(`LookML session artifact "obj_lookml_${cleanId}" not found.`)
+        return fallbackHit
+      })
+  })
 }
 
 export const LookmlPreviewPane: React.FC<{
@@ -273,10 +332,12 @@ export const LookmlPreviewPane: React.FC<{
   hostUrl: string
   extensionSDK?: Partial<ExtensionSDK>
   canDeploy?: boolean
-}> = ({ bundle, hostUrl, extensionSDK, canDeploy = true }) => {
+  initialDetailsOpen?: boolean
+}> = ({ bundle, hostUrl, extensionSDK, canDeploy = true, initialDetailsOpen = false }) => {
   const [selectedFileIdx, setSelectedFileIdx] = useState(0)
-  const [viewMode, setViewMode] = useState<'diff' | 'content'>('diff')
+  const [viewMode, setViewMode] = useState<'diff' | 'content'>('content')
   const [codeMenuOpen, setCodeMenuOpen] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(initialDetailsOpen)
   const [copiedFile, setCopiedFile] = useState(false)
   const codeMenuRef = useRef<HTMLDivElement | null>(null)
 
@@ -297,17 +358,8 @@ export const LookmlPreviewPane: React.FC<{
   if (!bundle) {
     return (
       <div className="dab-placeholder">
-        <p>
-          <strong>Agentic LookML Workspace</strong>
-        </p>
-        <p className="dab-muted" style={{ maxWidth: 480, textAlign: 'center' }}>
-          Enter a SQL query, metric definition, or LookML task on the left. Antigravity will
-          switch to your Looker <code>dev</code> workspace via <code>LkrCodeMode</code>,
-          run offline <code>lkr parse</code> &amp; <code>lkr schema validate</code>, push
-          modified <code>.lkml</code> files, and render diffs, LookML Validator /{' '}
-          <code>run_lookml_test</code> status, and clickable <code>/sql/:slug</code> +{' '}
-          <code>/x/:slug</code> parity links here.
-        </p>
+        <p>Ready when you are</p>
+        <p className="dab-muted">Ask a question or describe what you want to analyze, build, or automate on the left.</p>
       </div>
     )
   }
@@ -316,12 +368,15 @@ export const LookmlPreviewPane: React.FC<{
   const activeFile = files[selectedFileIdx] || files[0] || null
   const valPassed = bundle.validation ? bundle.validation.passed : true
   const valErrors = bundle.validation?.errors || []
+  const fatalErrors = valErrors.filter((e) => e.severity === 'fatal')
   const tests = bundle.tests || []
   const passedTests = tests.filter((t) => t.success).length
   const queries = bundle.queries || []
   const cleanHost = hostUrl.replace(/\/$/, '')
 
-  const projectIdePath = bundle.project_id?.trim() ? `/projects/${encodeURIComponent(bundle.project_id.trim())}/files` : ''
+  const projectIdePath = bundle.project_id?.trim() ? `/projects/${encodeURIComponent(bundle.project_id.trim())}` : ''
+  const activeFileIdePath =
+    activeFile && projectIdePath ? `${projectIdePath}/files/${activeFile.path.replace(/^\/+/, '')}` : ''
   const openLink = (pathOrUrl: string) => {
     const p = String(pathOrUrl || '').trim()
     if (!p) return
@@ -334,93 +389,14 @@ export const LookmlPreviewPane: React.FC<{
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'auto', padding: 16, gap: 12 }}>
-      <StudioCard className="dab-controls">
-        <div>
-          <strong>Project:</strong> <code>{bundle.project_id || 'default'}</code>
-        </div>
-        {projectIdePath && (
-          <StudioButton variant="secondary" testId="lookml-open-ide-btn" onClick={() => openLink(projectIdePath)}>
-            Open Project in IDE
-          </StudioButton>
-        )}
-        {bundle.model_name && (
-          <div>
-            <strong>Model:</strong> <code>{bundle.model_name}</code>
-          </div>
-        )}
-        <StudioBadge title="Uses whatever branch is active in the user's Looker Dev Mode">
-          ⎇ {bundle.branch_name || 'user dev mode'}
-        </StudioBadge>
-        <StudioBadge pill tone={valPassed ? undefined : 'danger'}>
-          {valPassed
-            ? '✓ LookML Validator Passed'
-            : `✗ LookML Validator (${valErrors.length} error${valErrors.length === 1 ? '' : 's'})`}
-        </StudioBadge>
-        {tests.length > 0 && (
-          <StudioBadge pill tone={passedTests === tests.length ? undefined : 'danger'}>
-            {passedTests === tests.length ? '✓' : '✗'} run_lookml_test ({passedTests}/{tests.length} passed)
-          </StudioBadge>
-        )}
-        {!canDeploy && (
-          <StudioBadge
-            tone="warning"
-            title="Requires Looker 'deploy' or 'admin' permission to run deploy_to_production"
-          >
-            <Lock size={13} strokeWidth={1.75} aria-hidden="true" /> deploy_to_production disabled (missing deploy)
-          </StudioBadge>
-        )}
-      </StudioCard>
-
-      {queries.length > 0 && (
-        <StudioCard>
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>
-            SQL-to-LookML Parity Queries (<code>/sql/:slug</code> &amp; <code>/x/:slug</code>)
-          </div>
-          {queries.map((q, i) => {
-            const sqlPath = q.sql_runner_url || (q.sql_slug ? `/sql/${q.sql_slug}` : '')
-            const explorePath = q.explore_url || (q.explore_slug ? `/x/${q.explore_slug}` : '')
-            return (
-              <div key={i} className="dab-inspector-bar" style={{ padding: '4px 0' }}>
-                <div className="dab-controls">
-                  <strong>{q.label || `Query #${(q.query_index ?? i) + 1}`}</strong>
-                  {q.parity_status && <StudioBadge pill>{q.parity_status}</StudioBadge>}
-                </div>
-                <div className="dab-controls">
-                  {sqlPath && (
-                    <button type="button" className="dab-btn-secondary" onClick={() => openLink(sqlPath)}>
-                      <code>{q.sql_slug ? `/sql/${q.sql_slug}` : 'SQL Runner'}</code> ↗
-                    </button>
-                  )}
-                  {explorePath && (
-                    <button type="button" className="dab-btn-secondary" onClick={() => openLink(explorePath)}>
-                      <code>{q.explore_slug ? `/x/${q.explore_slug}` : 'Explore'}</code> ↗
-                    </button>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </StudioCard>
-      )}
-
-      {(valErrors.length > 0 || tests.length > 0) && (
-        <StudioCard>
-          {valErrors.map((e, i) => (
+      {fatalErrors.length > 0 && (
+        <StudioCard style={{ borderColor: 'var(--dab-danger-border)', background: 'var(--dab-danger-bg)' }}>
+          {fatalErrors.map((e, i) => (
             <div key={i} style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--dab-danger-text)' }}>
               {e.file_path ? `${e.file_path}${e.line_number ? `:${e.line_number}` : ''} — ` : ''}
               {e.message}
             </div>
           ))}
-          {tests.length > 0 && (
-            <div className="dab-controls" style={{ marginTop: valErrors.length ? 6 : 0 }}>
-              {tests.map((t, i) => (
-                <StudioBadge key={i} pill tone={t.success ? undefined : 'danger'}>
-                  {t.success ? '✓' : '✗'} {t.test_name}
-                  {t.file_id ? ` (${t.file_id})` : ''}
-                </StudioBadge>
-              ))}
-            </div>
-          )}
         </StudioCard>
       )}
 
@@ -441,7 +417,7 @@ export const LookmlPreviewPane: React.FC<{
             style={{ flexWrap: 'nowrap', overflowX: 'auto', flex: 1, minWidth: 0 }}
           >
             {files.length === 0 ? (
-              <span className="dab-muted">No modified .lkml files recorded</span>
+              <span className="dab-muted">No .lkml files recorded</span>
             ) : (
               files.map((f, idx) => (
                 <button
@@ -452,68 +428,63 @@ export const LookmlPreviewPane: React.FC<{
                   className={idx === selectedFileIdx ? 'dab-btn-primary' : 'dab-btn-secondary'}
                   style={{ fontFamily: 'monospace', fontSize: 11, flexShrink: 0 }}
                 >
-                  {f.action === 'created' ? '+ ' : f.action === 'deleted' ? '- ' : 'Δ '}
+                  {viewMode === 'diff' ? (f.action === 'created' ? '+ ' : f.action === 'deleted' ? '- ' : 'Δ ') : ''}
                   {f.path}
                 </button>
               ))
             )}
           </div>
-          {activeFile && (
-            <div ref={codeMenuRef} style={{ position: 'relative', flexShrink: 0 }}>
-              <button
-                type="button"
-                data-testid="lookml-code-actions-btn"
-                className="dab-btn dab-btn-secondary dab-btn-icon"
-                title="LookML file actions"
-                aria-label="LookML file actions"
-                aria-haspopup="menu"
-                aria-expanded={codeMenuOpen}
-                onClick={() => setCodeMenuOpen((prev) => !prev)}
+          <div ref={codeMenuRef} style={{ position: 'relative', flexShrink: 0 }}>
+            <button
+              type="button" data-testid="lookml-code-actions-btn" className="dab-btn dab-btn-secondary dab-btn-icon"
+              title="LookML file actions" aria-label="LookML file actions" aria-haspopup="menu" aria-expanded={codeMenuOpen}
+              onClick={() => setCodeMenuOpen((prev) => !prev)}
+            >
+              <MoreVertical size={14} strokeWidth={1.75} aria-hidden="true" />
+            </button>
+            {codeMenuOpen && (
+              <div
+                data-testid="lookml-code-actions-menu" role="menu" aria-label="LookML file actions"
+                className="dab-studio-menu align-right" style={{ minWidth: 176 }}
               >
-                <MoreVertical size={14} strokeWidth={1.75} aria-hidden="true" />
-              </button>
-              {codeMenuOpen && (
-                <div
-                  data-testid="lookml-code-actions-menu"
-                  role="menu"
-                  aria-label="LookML file actions"
-                  className="dab-studio-menu align-right"
-                  style={{ minWidth: 168 }}
+                <button
+                  type="button" role="menuitem" data-testid="lookml-toggle-view-mode-btn" className="dab-studio-menu-item"
+                  onClick={() => { setViewMode((m) => (m === 'content' ? 'diff' : 'content')); setCodeMenuOpen(false) }}
                 >
+                  <span>{viewMode === 'content' ? 'View Changeset' : 'Back to Files'}</span>
+                </button>
+                <button
+                  type="button" role="menuitem" data-testid="lookml-view-details-btn" className="dab-studio-menu-item"
+                  onClick={() => { setDetailsOpen(true); setCodeMenuOpen(false) }}
+                >
+                  <span>View Details</span>
+                </button>
+                {activeFileIdePath && (
                   <button
-                    type="button"
-                    role="menuitem"
-                    data-testid="lookml-toggle-view-mode-btn"
-                    className="dab-studio-menu-item"
-                    onClick={() => {
-                      setViewMode((m) => (m === 'diff' ? 'content' : 'diff'))
-                      setCodeMenuOpen(false)
-                    }}
+                    type="button" role="menuitem" data-testid="lookml-open-file-ide-btn" className="dab-studio-menu-item"
+                    onClick={() => { openLink(activeFileIdePath); setCodeMenuOpen(false) }}
                   >
-                    <span>{viewMode === 'diff' ? 'Show Full .lkml' : 'Show Unified Diff'}</span>
+                    <span>Open File in IDE</span>
                   </button>
+                )}
+                {activeFile && (
                   <button
-                    type="button"
-                    role="menuitem"
-                    data-testid="lookml-copy-file-btn"
-                    className="dab-studio-menu-item"
+                    type="button" role="menuitem" data-testid="lookml-copy-file-btn" className="dab-studio-menu-item"
                     onClick={() => {
                       void copyTextWithExtensionSdk(activeFile.content || activeFile.diff || '', extensionSDK)
-                      setCopiedFile(true)
-                      setTimeout(() => setCopiedFile(false), 1800)
-                      setCodeMenuOpen(false)
+                      setCopiedFile(true); setTimeout(() => setCopiedFile(false), 1800); setCodeMenuOpen(false)
                     }}
                   >
                     <span>{copiedFile ? 'Copied .lkml' : 'Copy .lkml'}</span>
                   </button>
-                </div>
-              )}
-            </div>
-          )}
+                )}
+              </div>
+            )}
+          </div>
         </div>
         <pre style={{ margin: 0, padding: 12, flex: 1, overflow: 'auto', background: '#0f172a', color: '#e2e8f0', fontSize: 12, borderRadius: '0 0 7px 7px' }}>
           {activeFile
-            ? (viewMode === 'diff' && activeFile.diff ? activeFile.diff : activeFile.content || activeFile.diff || '')
+            ? (viewMode === 'diff' ? activeFile.diff || activeFile.content || '' : activeFile.content ?? activeFile.diff ?? '')
                 .split('\n')
                 .map((line, i) => {
                   const isAdd = viewMode === 'diff' && line.startsWith('+') && !line.startsWith('+++')
@@ -521,9 +492,7 @@ export const LookmlPreviewPane: React.FC<{
                   return (
                     <div
                       key={i}
-                      style={{
-                        color: isAdd ? '#4ade80' : isDel ? '#f87171' : line.startsWith('@@') ? '#38bdf8' : '#e2e8f0',
-                      }}
+                      style={{ color: isAdd ? '#4ade80' : isDel ? '#f87171' : viewMode === 'diff' && line.startsWith('@@') ? '#38bdf8' : '#e2e8f0' }}
                     >
                       {line}
                     </div>
@@ -533,16 +502,116 @@ export const LookmlPreviewPane: React.FC<{
         </pre>
       </StudioCard>
 
-      {bundle.summary_markdown && (
-        <details open className="dab-ds-card">
-          <summary style={{ fontWeight: 700, cursor: 'pointer' }}>
-            Agentic LookML Diagnostic Summary (<code>summary.md</code>)
-          </summary>
-          <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: '8px 0 0' }}>
-            {bundle.summary_markdown}
-          </pre>
-        </details>
-      )}
+      <StudioModal
+        open={detailsOpen}
+        onClose={() => setDetailsOpen(false)}
+        testId="lookml-details-modal"
+        title="LookML Project Details"
+        maxWidth={640}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="dab-controls">
+            <div>
+              <strong>Project:</strong> <code>{bundle.project_id || 'default'}</code>
+            </div>
+            {projectIdePath && (
+              <StudioButton variant="secondary" testId="lookml-open-ide-btn" onClick={() => openLink(projectIdePath)}>
+                Open Project in IDE
+              </StudioButton>
+            )}
+            {bundle.model_name && (
+              <div>
+                <strong>Model:</strong> <code>{bundle.model_name}</code>
+              </div>
+            )}
+            <StudioBadge title="Uses whatever branch is active in the user's Looker Dev Mode">
+              Branch: {bundle.branch_name || 'user dev mode'}
+            </StudioBadge>
+            <StudioBadge pill tone={valPassed ? 'success' : 'danger'}>
+              {valPassed
+                ? 'LookML Validator Passed'
+                : `LookML Validator (${valErrors.length} error${valErrors.length === 1 ? '' : 's'})`}
+            </StudioBadge>
+            {tests.length > 0 && (
+              <StudioBadge pill tone={passedTests === tests.length ? 'success' : 'danger'}>
+                run_lookml_test ({passedTests}/{tests.length} passed)
+              </StudioBadge>
+            )}
+            {!canDeploy && (
+              <StudioBadge
+                tone="warning"
+                title="Requires Looker 'deploy' or 'admin' permission to run deploy_to_production"
+              >
+                <Lock size={13} strokeWidth={1.75} aria-hidden="true" /> deploy_to_production disabled (missing deploy)
+              </StudioBadge>
+            )}
+          </div>
+
+          {(valErrors.length > 0 || tests.length > 0) && (
+            <StudioCard>
+              {valErrors.map((e, i) => (
+                <div key={i} style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--dab-danger-text)' }}>
+                  {e.file_path ? `${e.file_path}${e.line_number ? `:${e.line_number}` : ''} — ` : ''}
+                  {e.message}
+                </div>
+              ))}
+              {tests.length > 0 && (
+                <div className="dab-controls" style={{ marginTop: valErrors.length ? 6 : 0 }}>
+                  {tests.map((t, i) => (
+                    <StudioBadge key={i} pill tone={t.success ? 'success' : 'danger'}>
+                      {t.test_name}
+                      {t.file_id ? ` (${t.file_id})` : ''}
+                    </StudioBadge>
+                  ))}
+                </div>
+              )}
+            </StudioCard>
+          )}
+
+          {queries.length > 0 && (
+            <StudioCard>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>
+                SQL-to-LookML Parity Queries (<code>/sql/:slug</code> &amp; <code>/x/:slug</code>)
+              </div>
+              {queries.map((q, i) => {
+                const sqlPath = q.sql_runner_url || (q.sql_slug ? `/sql/${q.sql_slug}` : '')
+                const explorePath = q.explore_url || (q.explore_slug ? `/x/${q.explore_slug}` : '')
+                return (
+                  <div key={i} className="dab-inspector-bar" style={{ padding: '4px 0' }}>
+                    <div className="dab-controls">
+                      <strong>{q.label || `Query #${(q.query_index ?? i) + 1}`}</strong>
+                      {q.parity_status && <StudioBadge pill>{q.parity_status}</StudioBadge>}
+                    </div>
+                    <div className="dab-controls">
+                      {sqlPath && (
+                        <button type="button" className="dab-btn-secondary" onClick={() => openLink(sqlPath)}>
+                          <code>{q.sql_slug ? `/sql/${q.sql_slug}` : 'SQL Runner'}</code>
+                        </button>
+                      )}
+                      {explorePath && (
+                        <button type="button" className="dab-btn-secondary" onClick={() => openLink(explorePath)}>
+                          <code>{q.explore_slug ? `/x/${q.explore_slug}` : 'Explore'}</code>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </StudioCard>
+          )}
+
+          {bundle.summary_markdown && (
+            <StudioCard>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                Diagnostic Summary (<code>summary.md</code>)
+              </div>
+              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: 0 }}>
+                {bundle.summary_markdown}
+              </pre>
+            </StudioCard>
+          )}
+        </div>
+      </StudioModal>
     </div>
   )
 }

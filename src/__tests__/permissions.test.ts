@@ -51,8 +51,8 @@ import {
 import {
   ALLOWED_EXTERNAL_WINDOW_PATTERNS, copyLinkWithExtensionSdk,
   createLookerEmbedPreloadController, DOC_UI_COMPONENTS, fetchAvailableLookerConnectionsMarkdown, getStarterPromptsForUseCase,
-  isAllowedExternalWindowUrl, isSandboxMarkdownPath, normalizeLookerEmbedUrl, openOrCopyMarkdownLink,
-  renderUseCaseGuideMarkdown, resolveLookerEmbedTarget,
+  isAllowedExternalWindowUrl, isSandboxMarkdownPath, normalizeLookerEmbedUrl, normalizeLookerProjectRootUrl, openOrCopyMarkdownLink,
+  parseInViewerLookerLink, renderUseCaseGuideMarkdown, resolveLookerEmbedTarget,
   STARTER_PROMPTS_BY_USE_CASE, StarterPromptButtons, StudioMarkdown, USE_CASE_BADGES,
   USE_CASE_GUIDE_ORDER, USE_CASE_GUIDES,
 } from '../components/StudioWorkspace'
@@ -81,7 +81,14 @@ import {
   STUDIO_FOLDER_STORAGE_KEY, STUDIO_MODES, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
   StudioContentItem, SWR_DEDUPED_METHODS, upsertStudioContentItem, UserArtifactIndexItem, userStudioConfigArtifactKey,
 } from '../lookerApi'
-import { loadLookmlSessionArtifact, LookmlPreviewPane, saveLookmlSessionArtifact } from '../lookmlTool'
+import {
+  extractLookmlDashboardsFromBundle,
+  loadLookmlSessionArtifact,
+  LookmlPreviewPane,
+  mergeLookmlFiles,
+  resolveLookmlCanonicalProjectId,
+  saveLookmlSessionArtifact,
+} from '../lookmlTool'
 
 interface MockInteractionPostBody {
   model?: string
@@ -6036,7 +6043,7 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     })
     expect(guideWithConns).toContain('### Available Looker Connections')
     expect(guideWithConns).toContain('`bq_warehouse` (bigquery_standard_sql · corp_dw · analytics)')
-    expect(guideWithConns).toContain('[Open <project_name> in Looker IDE](/projects/<project_name>/files)')
+    expect(guideWithConns).toContain('[Open <project_name> in Looker IDE](/projects/<project_name>)')
     expect(guideWithConns).toContain('[Open <Dashboard Title>](/dashboards/<id>)')
     for (const doc of [LOOKER_PROJECT_ONBOARDING_SKILL_MD, guideWithConns]) {
       expect(doc).toContain('all_connections')
@@ -6044,7 +6051,8 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
       expect(doc).toContain('connection_schemas')
       expect(doc).not.toMatch(/\bsdk\.(?:all_connections|all_lookml_models|connection_schemas|connection_tables)\b/)
     }
-    expect(LOOKER_PROJECT_ONBOARDING_SKILL_MD).toContain('/projects/<project_name>/files')
+    expect(LOOKER_PROJECT_ONBOARDING_SKILL_MD).toContain('/projects/<project_name>')
+    expect(LOOKER_PROJECT_ONBOARDING_SKILL_MD).not.toContain('/projects/<project_name>/files')
     expect(LOOKER_PROJECT_ONBOARDING_SKILL_MD).toContain('/dashboards/<id>')
     expect(LOOKER_DASHBOARD_SKILL_MD).toContain('/dashboards/<id>')
 
@@ -6179,11 +6187,27 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     })
     expect(postedBodies).toHaveLength(3)
     expect(postedBodies[2].environment).toEqual(expect.objectContaining({ type: 'remote' }))
-    expect(t3Res.assistantText).toContain('[Open sales_core in Looker IDE](/projects/sales_core/files)')
+    expect(t3Res.assistantText).toContain('[Open sales_core in Looker IDE](/projects/sales_core)')
 
-    // 4. LookmlPreviewPane renders data-testid="lookml-open-ide-btn" when bundle.project_id is present
+    // 4. LookmlPreviewPane defaults to clean file-first view and renders lookml-details-modal + lookml-open-ide-btn when details modal is open
     const openedIdeUrls: Array<{ url: string; target?: string }> = []
-    const withProjectHtml = renderToStaticMarkup(
+    const defaultPaneHtml = renderToStaticMarkup(
+      React.createElement(LookmlPreviewPane, {
+        bundle: {
+          id: 'b1',
+          title: 'Sales Core',
+          project_id: 'sales_core',
+          files: [{ path: 'sales_core.model.lkml', action: 'created', content: 'connection: "bq"\n', diff: '--- a/sales_core.model.lkml\n+++ b/sales_core.model.lkml\n@@ -0,0 +1 @@\n+connection: "bq"\n' }],
+        },
+        hostUrl: 'https://dev.looker.com',
+        extensionSDK: { openBrowserWindow: (url: string, target?: string) => openedIdeUrls.push({ url, target }) },
+      })
+    )
+    expect(defaultPaneHtml).not.toContain('data-testid="lookml-details-modal"')
+    expect(defaultPaneHtml).toContain('>sales_core.model.lkml</button>')
+    expect(defaultPaneHtml).not.toContain('--- a/sales_core.model.lkml')
+
+    const withProjectDetailsHtml = renderToStaticMarkup(
       React.createElement(LookmlPreviewPane, {
         bundle: {
           id: 'b1',
@@ -6192,16 +6216,19 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
           files: [{ path: 'sales_core.model.lkml', action: 'created', content: 'connection: "bq"\n' }],
         },
         hostUrl: 'https://dev.looker.com',
+        initialDetailsOpen: true,
         extensionSDK: { openBrowserWindow: (url: string, target?: string) => openedIdeUrls.push({ url, target }) },
       })
     )
-    expect(withProjectHtml).toContain('data-testid="lookml-open-ide-btn"')
-    expect(withProjectHtml).toContain('Open Project in IDE')
+    expect(withProjectDetailsHtml).toContain('data-testid="lookml-details-modal"')
+    expect(withProjectDetailsHtml).toContain('data-testid="lookml-open-ide-btn"')
+    expect(withProjectDetailsHtml).toContain('Open Project in IDE')
 
     const withoutProjectHtml = renderToStaticMarkup(
       React.createElement(LookmlPreviewPane, {
         bundle: { id: 'b2', title: 'Untitled', project_id: '', files: [] },
         hostUrl: 'https://dev.looker.com',
+        initialDetailsOpen: true,
       })
     )
     expect(withoutProjectHtml).not.toContain('data-testid="lookml-open-ide-btn"')
@@ -6452,10 +6479,12 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
       })
     ).toEqual([
       expect.objectContaining({
-        key: 'lookml:ecom_1762720001',
-        id: 'ecom_1762720001',
+        key: 'lookml:ecom',
+        id: 'ecom',
+        sessionId: 'ecom_1762720001',
+        projectId: 'ecom',
         contentType: 'lookml',
-        title: 'Orders Model Onboarding',
+        title: 'LookML: ecom',
       }),
     ])
     expect(
@@ -6606,8 +6635,10 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
       },
     })
     const loadedLookmlObj = await loadLookmlSessionArtifact(mockSdk, undefined, 'ecom_1762720001')
-    expect(loadedLookmlObj.studio.messages).toBeUndefined()
-    expect(rawArtifactStore.get('obj_lookml_ecom_1762720001')).not.toContain('Should not duplicate in obj_lookml')
+    expect(loadedLookmlObj.id).toBe('ecom')
+    expect(loadedLookmlObj.studio?.messages).toBeUndefined()
+    expect(rawArtifactStore.get('obj_lookml_ecom')).toBeDefined()
+    expect(rawArtifactStore.get('obj_lookml_ecom')).not.toContain('Should not duplicate in obj_lookml')
 
     await saveNativeContentArtifact(
       mockSdk,
@@ -6735,5 +6766,217 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     } finally {
       rmSync(workDir, { recursive: true, force: true })
     }
+  })
+
+  test('67. Issue #166: keys LookML tabs & artifacts by canonical projectId with multi-turn file merging, extracts .dashboard.lookml into lookml_dashboard tabs, normalizes /projects/<id> vs /files/<path>, routes content links in-viewer, and normalizes inline LaTeX operators', async () => {
+    // 1. Canonical LookML projectId tab dedupe & multi-turn obj_lookml_<projectId> file merging + legacy timestamped load fallback
+    expect(resolveLookmlCanonicalProjectId({ id: 'bryan_test2_1762720001', project_id: 'bryan_test2', model_name: 'ecom' })).toBe('bryan_test2')
+    expect(resolveLookmlCanonicalProjectId({ id: 'bryan_test2_1762720001', project_id: '', model_name: 'ecom' })).toBe('ecom')
+    expect(resolveLookmlCanonicalProjectId({ id: 'bryan_test2_1762720001', project_id: '' })).toBe('bryan_test2_1762720001')
+
+    const lmlStep1 = upsertStudioContentItem([], {
+      id: 'bryan_test2_1001',
+      sessionId: 'bryan_test2_1001',
+      projectId: 'bryan_test2',
+      contentType: 'lookml',
+      title: 'Stage 1 Bronze',
+      source: 'created',
+    })
+    expect(lmlStep1.activeKey).toBe('lookml:bryan_test2')
+    expect(lmlStep1.item.title).toBe('LookML: bryan_test2')
+    const lmlStep2 = upsertStudioContentItem(lmlStep1.items, {
+      id: 'bryan_test2_1002',
+      sessionId: 'bryan_test2_1002',
+      projectId: 'bryan_test2',
+      contentType: 'lookml',
+      title: 'Stage 2 Silver',
+      source: 'modified',
+    })
+    expect(lmlStep2.items).toHaveLength(1)
+    expect(lmlStep2.activeKey).toBe('lookml:bryan_test2')
+    expect(lmlStep2.item.title).toBe('LookML: bryan_test2')
+
+    const mergedFiles = mergeLookmlFiles(
+      [
+        { path: 'bryan_test2.model.lkml', action: 'created', content: 'connection: "bq"\n', diff: '+connection: "bq"\n' },
+        { path: 'bronze/orders.view.lkml', action: 'created', content: 'view: orders {}\n', diff: '+view: orders {}\n' },
+      ],
+      [
+        { path: 'bryan_test2.model.lkml', action: 'updated', content: 'connection: "bq"\ninclude: "/silver/*.explore.lkml"\n', diff: '+include: "/silver/*.explore.lkml"\n' },
+        { path: 'silver/orders.explore.lkml', action: 'created', content: 'explore: orders {}\n', diff: '+explore: orders {}\n' },
+      ]
+    )
+    expect(mergedFiles).toHaveLength(3)
+    expect(mergedFiles.find((f) => f.path === 'bryan_test2.model.lkml')?.content).toContain('silver/*.explore.lkml')
+    expect(mergedFiles.find((f) => f.path === 'bronze/orders.view.lkml')?.content).toBe('view: orders {}\n')
+
+    const store166 = new Map<string, string>()
+    store166.set(
+      'obj_lookml_legacy_proj_1762700999',
+      JSON.stringify({
+        id: 'legacy_proj_1762700999',
+        type: 'lookml',
+        title: 'Legacy Session',
+        updatedAt: '2026-11-09T00:00:00Z',
+        createdBy: '1',
+        bundle: { id: 'legacy_proj_1762700999', title: 'Legacy Session', project_id: 'legacy_proj', files: [{ path: 'legacy.model.lkml', content: 'connection: "c"\n' }] },
+      })
+    )
+    const sdk166 = asSdk({
+      ok: async <T>(p: T) => p,
+      artifact: async ({ key }: { key: string }) => {
+        const hit = store166.get(key)
+        return hit ? [{ key, version: 1, value: hit }] : []
+      },
+      search_artifacts: async ({ key }: { key: string }) => {
+        const prefix = key.replace(/%$/, '')
+        return Array.from(store166.entries())
+          .filter(([k]) => k.startsWith(prefix))
+          .map(([k, v]) => ({ key: k, version: 1, value: v }))
+      },
+      update_artifacts: async (_ns: string, updates: Array<{ key: string; value: string }>) => {
+        updates.forEach((u) => store166.set(u.key, u.value))
+        return updates
+      },
+    })
+    await saveLookmlSessionArtifact({
+      sdk: sdk166,
+      userId: '1',
+      bundle: {
+        id: 'bryan_test2_1',
+        title: 'Turn 1',
+        project_id: 'bryan_test2',
+        files: [{ path: 'bryan_test2.model.lkml', action: 'created', content: 'connection: "bq"\n' }],
+      },
+      studio: { explores: [] },
+    })
+    const savedT2 = await saveLookmlSessionArtifact({
+      sdk: sdk166,
+      userId: '1',
+      bundle: {
+        id: 'bryan_test2_2',
+        title: 'Turn 2',
+        project_id: 'bryan_test2',
+        files: [{ path: 'bronze/orders.refinement.lkml', action: 'created', content: 'view: +orders {}\n' }],
+      },
+      studio: { explores: ['bryan_test2::orders'] },
+    })
+    expect(savedT2.id).toBe('bryan_test2')
+    expect(savedT2.objKey).toBe('obj_lookml_bryan_test2')
+    expect(savedT2.payload.bundle.files.map((f) => f.path)).toEqual([
+      'bryan_test2.model.lkml',
+      'bronze/orders.refinement.lkml',
+    ])
+    const legacyLoaded = await loadLookmlSessionArtifact(sdk166, undefined, 'legacy_proj')
+    expect(legacyLoaded.bundle.project_id).toBe('legacy_proj')
+
+    // 2. Fatal-only inline alert strip in LookmlPreviewPane
+    const fatalHtml = renderToStaticMarkup(
+      React.createElement(LookmlPreviewPane, {
+        bundle: {
+          id: 'bryan_test2',
+          title: 'LookML: bryan_test2',
+          project_id: 'bryan_test2',
+          files: [{ path: 'bryan_test2.model.lkml', content: 'connection: "bq"\n' }],
+          validation: {
+            passed: false,
+            error_count: 2,
+            errors: [
+              { message: 'Unused view warning', severity: 'warning' },
+              { message: 'Unknown connection "bad_conn"', file_path: 'bryan_test2.model.lkml', line_number: 1, severity: 'fatal' },
+            ],
+          },
+        },
+        hostUrl: 'https://dev.looker.com',
+      })
+    )
+    expect(fatalHtml).toContain('Unknown connection &quot;bad_conn&quot;')
+    expect(fatalHtml).not.toContain('Unused view warning')
+
+    // 3. Looker IDE project root URL normalization (/projects/<id> vs /projects/<id>/files/<path>)
+    expect(normalizeLookerProjectRootUrl('/projects/bryan_test2/files')).toBe('/projects/bryan_test2')
+    expect(normalizeLookerProjectRootUrl('https://dev.looker.com/projects/bryan_test2/files?branch=dev')).toBe(
+      'https://dev.looker.com/projects/bryan_test2?branch=dev'
+    )
+    expect(normalizeLookerProjectRootUrl('/projects/bryan_test2/files/bronze/orders.view.lkml')).toBe(
+      '/projects/bryan_test2/files/bronze/orders.view.lkml'
+    )
+    const openedProjUrls: string[] = []
+    await openOrCopyMarkdownLink('/projects/bryan_test2/files', 'https://dev.looker.com', {
+      openBrowserWindow: (u: string) => openedProjUrls.push(u),
+    })
+    await openOrCopyMarkdownLink('/projects/bryan_test2/files/bronze/orders.view.lkml', 'https://dev.looker.com', {
+      openBrowserWindow: (u: string) => openedProjUrls.push(u),
+    })
+    expect(openedProjUrls).toEqual(['/projects/bryan_test2', '/projects/bryan_test2/files/bronze/orders.view.lkml'])
+
+    // 4. .dashboard.lookml extraction + parseInViewerLookerLink & markdown-link-external-btn
+    const extractedDash = extractLookmlDashboardsFromBundle({
+      id: 'bryan_test2',
+      title: 'LookML: bryan_test2',
+      project_id: 'bryan_test2',
+      model_name: 'bryan_test2',
+      files: [
+        {
+          path: 'dashboards/exec_pulse.dashboard.lookml',
+          action: 'created',
+          content: '- dashboard: exec_pulse\n  title: Executive Sales Pulse\n  layout: newspaper\n',
+        },
+      ],
+    })
+    expect(extractedDash).toEqual([
+      {
+        slug: 'exec_pulse',
+        title: 'Executive Sales Pulse',
+        model: 'bryan_test2',
+        id: 'bryan_test2::exec_pulse',
+        embedPath: '/embed/dashboards/bryan_test2::exec_pulse',
+      },
+    ])
+
+    expect(parseInViewerLookerLink('/dashboards/bryan_test2::exec_pulse', 'Open Executive Sales Pulse', 'https://dev.looker.com')).toEqual({
+      id: 'bryan_test2::exec_pulse',
+      contentType: 'lookml_dashboard',
+      title: 'Executive Sales Pulse',
+      embedPath: '/embed/dashboards/bryan_test2::exec_pulse',
+      externalPath: '/dashboards/bryan_test2::exec_pulse',
+    })
+    expect(parseInViewerLookerLink('https://dev.looker.com/looks/15', 'Monthly Churn Look', 'https://dev.looker.com')).toMatchObject({
+      id: '15',
+      contentType: 'look',
+      embedPath: '/embed/looks/15',
+      externalPath: '/looks/15',
+    })
+    expect(parseInViewerLookerLink('/boards/9', 'Exec Board', 'https://dev.looker.com')).toMatchObject({
+      id: '9',
+      contentType: 'board',
+      embedPath: '/embed/boards/9',
+    })
+    expect(parseInViewerLookerLink('/explore/thelook/order_items', 'Orders Explore', 'https://dev.looker.com')).toMatchObject({
+      id: 'thelook::order_items',
+      contentType: 'explore',
+      embedPath: '/embed/explore/thelook/order_items',
+    })
+    expect(parseInViewerLookerLink('/projects/bryan_test2', 'Open in IDE', 'https://dev.looker.com')).toBeNull()
+    expect(parseInViewerLookerLink('/admin/connections', 'Connections', 'https://dev.looker.com')).toBeNull()
+    expect(parseInViewerLookerLink('/sql/abc123', 'SQL Runner', 'https://dev.looker.com')).toBeNull()
+
+    // 5. StudioMarkdown LaTeX operator normalization outside code spans + markdown-link-external-btn + AGENTS_MD rule
+    expect(AGENTS_MD).toContain('No `$...$` LaTeX')
+    const mdHtml = renderToStaticMarkup(
+      React.createElement(StudioMarkdown, {
+        text: [
+          'Flow: A $\\rightarrow$ B $\\to$ C $\\leftarrow$ D $\\leftrightarrow$ E, grid $5 \\times 5$, bounds $x \\ge 1$, $y \\leq 10$, $\\approx 99%$, price $100 to $200, inline `$\\rightarrow$`, and [Open Pulse](/dashboards/42) vs [IDE](/projects/bryan_test2).',
+          '```',
+          'const raw = "$\\rightarrow$"',
+          '```',
+        ].join('\n'),
+        hostUrl: 'https://dev.looker.com',
+      })
+    )
+    expect(mdHtml).toContain('Flow: A → B → C ← D ↔ E, grid 5 × 5, bounds x &gt;= 1, y &lt;= 10, ≈ 99%, price $100 to $200')
+    expect(mdHtml).toContain('<code class="dab-md-inline-code">$\\rightarrow$</code>')
+    expect(mdHtml).toContain('const raw = &quot;$\\rightarrow$&quot;')
+    expect(mdHtml).toContain('data-testid="markdown-link-external-btn"')
   })
 })

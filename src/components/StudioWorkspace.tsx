@@ -5,7 +5,7 @@ import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
 import {
   Archive, ArchiveRestore, AtSign, BookOpen, Brain, Bug, Check, ChevronDown, Code2, Copy,
-  CornerDownRight, Database, Eye, FileText, Folder, Kanban, LayoutDashboard, Loader2,
+  CornerDownRight, Database, ExternalLink, Eye, FileText, Folder, Kanban, LayoutDashboard, Loader2,
   MessageSquare, MoreVertical, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Paperclip, Pencil, Plus, Shield,
   Sparkles, Square, Terminal, Trash2, Wrench, X, Zap,
 } from 'lucide-react'
@@ -55,11 +55,51 @@ export function isAllowedExternalWindowUrl(rawUrl: string): boolean {
 export const copyLinkWithExtensionSdk = (url: string, extensionSDK?: Partial<ExtensionSDK> | null): Promise<boolean> =>
   copyTextWithExtensionSdk(String(url || '').trim(), extensionSDK)
 
-export async function openOrCopyMarkdownLink(
+export function normalizeLookerProjectRootUrl(rawUrl: string): string {
+  return String(rawUrl || '')
+    .trim()
+    .replace(/^((?:https?:\/\/[^/?#]+)?\/projects\/[^/?#]+)\/files\/?([?#].*)?$/i, '$1$2')
+}
+
+export interface InViewerLookerLinkTarget {
+  id: string
+  contentType: StudioContentItemType
+  title?: string
+  embedPath: string
+  externalPath: string
+}
+
+export function parseInViewerLookerLink(rawUrl: string, label?: string, hostUrl?: string): InViewerLookerLinkTarget | null {
+  const clean = String(rawUrl || '').trim()
+  let local = clean.startsWith('/') && !clean.startsWith('//') ? clean : ''
+  if (!local && /^https?:\/\//i.test(clean) && hostUrl) {
+    try {
+      const u = new URL(clean)
+      if (u.origin.toLowerCase() === new URL(hostUrl).origin.toLowerCase()) local = `${u.pathname || '/'}${u.search || ''}`
+    } catch { /* ignore */ }
+  }
+  const qIdx = local.search(/[?#]/)
+  const pathname = qIdx >= 0 ? local.slice(0, qIdx) : local
+  const search = qIdx >= 0 ? local.slice(qIdx).split('#')[0] : ''
+  const m = pathname.match(/^(?:\/embed)?\/(dashboards|looks|boards|explore)\/([^/?#\s]+)(?:\/([^/?#\s]+))?\/?$/i)
+  if (!m || (m[1].toLowerCase() === 'explore') !== Boolean(m[3])) return null
+  const dec = (s: string) => { try { return decodeURIComponent(s) } catch { return s } }
+  const kind = m[1].toLowerCase()
+  const p1 = dec(m[2])
+  const p2 = m[3] ? dec(m[3]) : ''
+  const id = kind === 'explore' ? `${p1}::${p2}` : p1
+  const encPath = kind === 'explore' ? `explore/${encodeURIComponent(p1)}/${encodeURIComponent(p2)}` : `${kind}/${encodeURIComponent(p1).replace(/%3A%3A/gi, '::')}`
+  const contentType: StudioContentItemType = kind === 'explore' ? 'explore' : kind === 'looks' ? 'look' : kind === 'boards' ? 'board' : id.includes('::') ? 'lookml_dashboard' : 'dashboard'
+  const rawLbl = String(label || '').trim()
+  const title = rawLbl && !/^(?:https?:|\/)/i.test(rawLbl) ? rawLbl.replace(/^open\s+/i, '').replace(/\s+in\s+looker.*$/i, '').replace(/\s*↗\s*$/, '').trim() : undefined
+  return { id, contentType, title, embedPath: `/embed/${encPath}${search}`, externalPath: `/${encPath}${search}` }
+}
+
+export function openOrCopyMarkdownLink(
   url: string, hostUrl?: string, extensionSDK?: Partial<ExtensionSDK> | null
 ): Promise<{ action: 'opened' | 'copied'; targetUrl: string }> {
-  const clean = String(url || '').trim()
-  if (!clean) return { action: 'copied', targetUrl: '' }
+  const clean = normalizeLookerProjectRootUrl(url)
+  if (!clean) return Promise.resolve({ action: 'copied', targetUrl: '' })
   let hostOrigin = ''
   if (hostUrl) {
     try { hostOrigin = new URL(hostUrl).origin.toLowerCase() } catch { hostOrigin = '' }
@@ -71,7 +111,7 @@ export async function openOrCopyMarkdownLink(
     try {
       const parsed = new URL(clean)
       if (hostOrigin && parsed.origin.toLowerCase() === hostOrigin) {
-        targetToOpen = `${parsed.pathname || '/'}${parsed.search || ''}${parsed.hash || ''}`
+        targetToOpen = normalizeLookerProjectRootUrl(`${parsed.pathname || '/'}${parsed.search || ''}${parsed.hash || ''}`)
       } else if (isAllowedExternalWindowUrl(parsed.href)) {
         targetToOpen = parsed.href
       }
@@ -80,43 +120,65 @@ export async function openOrCopyMarkdownLink(
   if (targetToOpen && typeof extensionSDK?.openBrowserWindow === 'function') {
     try {
       extensionSDK.openBrowserWindow(targetToOpen, '_blank')
-      return { action: 'opened', targetUrl: targetToOpen }
+      return Promise.resolve({ action: 'opened', targetUrl: targetToOpen })
     } catch { /* fall back to clipboard */ }
   }
-  await copyLinkWithExtensionSdk(clean, extensionSDK)
-  return { action: 'copied', targetUrl: clean }
+  return copyLinkWithExtensionSdk(clean, extensionSDK).then(() => ({ action: 'copied' as const, targetUrl: clean }))
 }
 
-export async function fetchAvailableLookerConnectionsMarkdown(core40SDK?: Partial<Looker40SDK> | null): Promise<string> {
-  if (!core40SDK) return '### Available Looker Connections\n- No Looker SDK session available.'
-  return formatAccessibleConnectionsMarkdown(await discoverAccessibleConnections(core40SDK))
+export function fetchAvailableLookerConnectionsMarkdown(core40SDK?: Partial<Looker40SDK> | null): Promise<string> {
+  if (!core40SDK) return Promise.resolve('### Available Looker Connections\n- No Looker SDK session available.')
+  return discoverAccessibleConnections(core40SDK).then(formatAccessibleConnectionsMarkdown)
 }
 
 const StudioMarkdownLink: React.FC<{
-  label: string; href: string; hostUrl?: string; extensionSDK?: Partial<ExtensionSDK> | null; onInspectConnections?: () => void
-}> = ({ label, href, hostUrl, extensionSDK, onInspectConnections }) => {
+  label: string
+  href: string
+  hostUrl?: string
+  extensionSDK?: Partial<ExtensionSDK> | null
+  onInspectConnections?: () => void
+  onOpenContentInViewer?: (target: InViewerLookerLinkTarget) => void
+}> = ({ label, href, hostUrl, extensionSDK, onInspectConnections, onOpenContentInViewer }) => {
   const [copied, setCopied] = useState(false)
   const markCopied = () => { setCopied(true); setTimeout(() => setCopied(false), 1800) }
-  const isAdminConnectionsLink = /(?:^|\/)admin\/connections(?:[/?#]|$)/i.test(String(href || '').trim())
+  const normalizedHref = normalizeLookerProjectRootUrl(href)
+  const isAdminConnectionsLink = /(?:^|\/)admin\/connections(?:[/?#]|$)/i.test(normalizedHref)
+  const inViewerTarget = parseInViewerLookerLink(normalizedHref, label, hostUrl)
   return (
     <span className="dab-md-link-group">
       <a
-        href={href} data-testid="chat-markdown-link" className="dab-md-link" target="_blank" rel="noopener noreferrer"
+        href={normalizedHref} data-testid="chat-markdown-link" className="dab-md-link" target="_blank" rel="noopener noreferrer"
         onClick={(e) => {
           e.preventDefault(); e.stopPropagation()
           if (isAdminConnectionsLink && onInspectConnections) { onInspectConnections(); return }
-          void openOrCopyMarkdownLink(href, hostUrl, extensionSDK).then((res) => { if (res.action === 'copied') markCopied() })
+          if (inViewerTarget && onOpenContentInViewer) { onOpenContentInViewer(inViewerTarget); return }
+          void openOrCopyMarkdownLink(normalizedHref, hostUrl, extensionSDK).then((res) => { if (res.action === 'copied') markCopied() })
         }}
       >
         {label}
       </a>
+      {inViewerTarget && (
+        <button
+          type="button"
+          data-testid="markdown-link-external-btn"
+          className="dab-md-link-copy-btn"
+          title={`Open in Looker (${inViewerTarget.externalPath})`}
+          aria-label={`Open ${label} in Looker`}
+          onClick={(e) => {
+            e.preventDefault(); e.stopPropagation()
+            void openOrCopyMarkdownLink(inViewerTarget.externalPath, hostUrl, extensionSDK)
+          }}
+        >
+          <ExternalLink size={11} strokeWidth={1.75} aria-hidden="true" />
+        </button>
+      )}
       <button
         type="button" data-testid="chat-markdown-link-copy" data-copied={copied ? 'true' : 'false'}
-        className="dab-md-link-copy-btn" title={copied ? 'Copied URL to clipboard' : `Copy link (${href})`}
+        className="dab-md-link-copy-btn" title={copied ? 'Copied URL to clipboard' : `Copy link (${normalizedHref})`}
         aria-label={copied ? 'Copied link' : `Copy link ${label}`}
         onClick={(e) => {
           e.preventDefault(); e.stopPropagation()
-          void copyLinkWithExtensionSdk(href, extensionSDK).then(() => markCopied())
+          void copyLinkWithExtensionSdk(normalizedHref, extensionSDK).then(() => markCopied())
         }}
       >
         {copied ? (<><Check size={11} strokeWidth={2} aria-hidden="true" /><span>Copied!</span></>) : <Copy size={11} strokeWidth={1.75} aria-hidden="true" />}
@@ -131,10 +193,27 @@ export function isSandboxMarkdownPath(raw: string): boolean {
   return /^(?:file:\/\/)?(?:\/workspace\/|[a-zA-Z0-9_./-]*\/)?[a-zA-Z0-9_.-]+\.md$/i.test(trimmed.split(/[?#]/)[0] || '')
 }
 
+const LATEX_OPS: Record<string, string> = {
+  rightarrow: '→', to: '→', leftarrow: '←', leftrightarrow: '↔',
+  times: '×', ge: '>=', geq: '>=', le: '<=', leq: '<=', approx: '≈',
+}
+const LATEX_INLINE_OP_RE = /\\(rightarrow|to|leftarrow|leftrightarrow|times|geq?|leq?|approx)\b/g
+
 function normalizeInlineMarkdownArtifacts(input: string): string {
   return String(input ?? '')
     .replace(/\[([^\][]+)\]\(\s*([^)]+?)\s*\)/g, (_m, lbl: string, url: string) => `[${lbl.replace(/\s*\n\s*/g, ' ').trim()}](${url.replace(/\s+/g, '')})`)
     .replace(/\*\*([^*]+?)\*\*/g, (m, inner: string) => (inner.includes('\n') && !inner.includes('\n\n') && !/\n\s*(?:[-*]|\d+\.|#{1,4})\s/.test(inner) ? `**${inner.replace(/\s*\n\s*/g, ' ').trim()}**` : m))
+    .split(/(`[^`\n]+`)/g)
+    .map((part, idx) =>
+      idx % 2 === 1
+        ? part
+        : part.replace(/\$([^$\n]{1,120})\$/g, (m, inner: string) =>
+            inner.includes('\\') && /\\(?:rightarrow|to|leftarrow|leftrightarrow|times|geq?|leq?|approx)\b/.test(inner)
+              ? inner.replace(LATEX_INLINE_OP_RE, (_op, k: string) => LATEX_OPS[k] || '').trim()
+              : m
+          )
+    )
+    .join('')
 }
 
 function renderInlineMarkdown(
@@ -142,7 +221,8 @@ function renderInlineMarkdown(
   hostUrl?: string,
   extensionSDK?: Partial<ExtensionSDK> | null,
   onOpenSandboxMarkdownFile?: (path: string) => void,
-  onInspectConnections?: () => void
+  onInspectConnections?: () => void,
+  onOpenContentInViewer?: (target: InViewerLookerLinkTarget) => void
 ): React.ReactNode[] {
   const cleanedText = normalizeInlineMarkdownArtifacts(rawText)
   const tokenRegex = /`([^`\n]+)`|\[([^\]]+)\]\(([^)\s]+)\)|\*\*([^*]+)\*\*|(https?:\/\/[^\s<)"']+)/g
@@ -169,13 +249,13 @@ function renderInlineMarkdown(
       nodes.push(isSandboxMarkdownPath(codeToken) ? renderMdTrigger(codeToken, <code>{match[1]}</code>) : <code key={`code_${keyCounter++}`} className="dab-md-inline-code">{match[1]}</code>)
     } else if (match[2] !== undefined && match[3] !== undefined) {
       const linkHref = match[3].trim()
-      nodes.push(isSandboxMarkdownPath(linkHref) ? renderMdTrigger(linkHref, <span>{match[2]}</span>) : <StudioMarkdownLink key={`link_${keyCounter++}`} label={match[2]} href={linkHref} hostUrl={hostUrl} extensionSDK={extensionSDK} onInspectConnections={onInspectConnections} />)
+      nodes.push(isSandboxMarkdownPath(linkHref) ? renderMdTrigger(linkHref, <span>{match[2]}</span>) : <StudioMarkdownLink key={`link_${keyCounter++}`} label={match[2]} href={linkHref} hostUrl={hostUrl} extensionSDK={extensionSDK} onInspectConnections={onInspectConnections} onOpenContentInViewer={onOpenContentInViewer} />)
     } else if (match[4] !== undefined) {
-      nodes.push(<strong key={`bold_${keyCounter++}`}>{renderInlineMarkdown(match[4], hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections)}</strong>)
+      nodes.push(<strong key={`bold_${keyCounter++}`}>{renderInlineMarkdown(match[4], hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections, onOpenContentInViewer)}</strong>)
     } else if (match[5] !== undefined) {
       const bareUrl = match[5].replace(/[.,;:!?]+$/, '')
       const trailing = match[5].slice(bareUrl.length)
-      nodes.push(<StudioMarkdownLink key={`bare_${keyCounter++}`} label={bareUrl} href={bareUrl} hostUrl={hostUrl} extensionSDK={extensionSDK} onInspectConnections={onInspectConnections} />)
+      nodes.push(<StudioMarkdownLink key={`bare_${keyCounter++}`} label={bareUrl} href={bareUrl} hostUrl={hostUrl} extensionSDK={extensionSDK} onInspectConnections={onInspectConnections} onOpenContentInViewer={onOpenContentInViewer} />)
       if (trailing) nodes.push(trailing)
     }
     lastIdx = tokenRegex.lastIndex
@@ -216,9 +296,16 @@ function isGfmTableStart(lines: string[], idx: number): boolean {
 const MD_HR_RE = /^(?:-{3,}|\*{3,}|_{3,})$/
 
 export const StudioMarkdown: React.FC<{
-  text: string; hostUrl?: string; extensionSDK?: Partial<ExtensionSDK> | null; onOpenSandboxMarkdownFile?: (path: string) => void; onInspectConnections?: () => void
-}> = ({ text, hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections }) => {
+  text: string
+  hostUrl?: string
+  extensionSDK?: Partial<ExtensionSDK> | null
+  onOpenSandboxMarkdownFile?: (path: string) => void
+  onInspectConnections?: () => void
+  onOpenContentInViewer?: (target: InViewerLookerLinkTarget) => void
+}> = ({ text, hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections, onOpenContentInViewer }) => {
   const raw = String(text ?? '')
+  const inline = (s: string) =>
+    renderInlineMarkdown(s, hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections, onOpenContentInViewer)
   const segments = raw.split(/(```[\s\S]*?```)/g)
   const blocks: React.ReactNode[] = []
   let blockKey = 0
@@ -244,7 +331,7 @@ export const StudioMarkdown: React.FC<{
       if (headingMatch) {
         const level = headingMatch[1].length
         const HeadingTag = (`h${level}` as unknown) as 'h1' | 'h2' | 'h3' | 'h4'
-        blocks.push(<HeadingTag key={`h_${blockKey++}`} className={`dab-md-heading dab-md-h${level}`}>{renderInlineMarkdown(headingMatch[2], hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections)}</HeadingTag>)
+        blocks.push(<HeadingTag key={`h_${blockKey++}`} className={`dab-md-heading dab-md-h${level}`}>{inline(headingMatch[2])}</HeadingTag>)
         i++; continue
       }
       if (isGfmTableStart(lines, i)) {
@@ -264,7 +351,7 @@ export const StudioMarkdown: React.FC<{
                 <tr>
                   {headers.map((h, cIdx) => (
                     <th key={`th_${cIdx}`} style={alignments[cIdx] ? { textAlign: alignments[cIdx] } : undefined}>
-                      {renderInlineMarkdown(h, hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections)}
+                      {inline(h)}
                     </th>
                   ))}
                 </tr>
@@ -274,7 +361,7 @@ export const StudioMarkdown: React.FC<{
                   <tr key={`tr_${rIdx}`}>
                     {headers.map((_h, cIdx) => (
                       <td key={`td_${cIdx}`} style={alignments[cIdx] ? { textAlign: alignments[cIdx] } : undefined}>
-                        {renderInlineMarkdown(row[cIdx] ?? '', hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections)}
+                        {inline(row[cIdx] ?? '')}
                       </td>
                     ))}
                   </tr>
@@ -297,7 +384,7 @@ export const StudioMarkdown: React.FC<{
           while (i < lines.length && lines[i].trim() && !/^(?:#{1,4}\s+|[-*]\s+|\d+\.\s+|```|>\s?|\||(?:-{3,}|\*{3,}|_{3,})$)/.test(lines[i].trim()) && !isGfmTableStart(lines, i)) {
             itemLines.push(lines[i].trim()); i++
           }
-          items.push(<li key={`li_${items.length}`}>{renderInlineMarkdown(itemLines.join(' '), hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections)}</li>)
+          items.push(<li key={`li_${items.length}`}>{inline(itemLines.join(' '))}</li>)
         }
         blocks.push(
           isUl
@@ -314,7 +401,7 @@ export const StudioMarkdown: React.FC<{
       ) {
         paraLines.push(lines[i]); i++
       }
-      blocks.push(<p key={`p_${blockKey++}`} className="dab-md-p">{renderInlineMarkdown(paraLines.join('\n'), hostUrl, extensionSDK, onOpenSandboxMarkdownFile, onInspectConnections)}</p>)
+      blocks.push(<p key={`p_${blockKey++}`} className="dab-md-p">{inline(paraLines.join('\n'))}</p>)
     }
   }
   return <div className="dab-markdown" data-testid="studio-markdown-body">{blocks.length > 0 ? blocks : raw}</div>
@@ -2114,11 +2201,40 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     [lookmlBundle, currentAppCode, schemaMarkdown, sandboxMarkdownCache, sandboxMarkdownLoading, loadSandboxMarkdownFile, setActiveSandboxMarkdownModalPath, openViewerDocument]
   )
   const chatViewerObjects = useMemo<Array<{ key: string; title: string; contentType: StudioContentItemType }>>(() => {
-    if (contentItems.length > 0) return contentItems.map((item) => ({ key: item.key, title: item.title, contentType: item.contentType }))
+    if (contentItems.length > 0) {
+      return contentItems.filter((item) => !item.hidden).map((item) => ({ key: item.key, title: item.title, contentType: item.contentType }))
+    }
     if (nativeContent) return [{ key: `${nativeContent.contentType}:${nativeContent.id}`, title: nativeContent.title, contentType: nativeContent.contentType }]
     if (publishedApp) return [{ key: `data_app:${publishedApp.dashboardId}`, title: publishedApp.title, contentType: 'data_app' }]
     return []
   }, [contentItems, nativeContent, publishedApp])
+
+  const handleOpenContentLinkInViewer = (target: InViewerLookerLinkTarget) => {
+    setActiveViewerDocument?.(null)
+    setRightPaneCollapsed(false)
+    const dashGroup = ['dashboard', 'lookml_dashboard', 'data_app', 'data-investigator']
+    const existing = contentItems.find(
+      (it) =>
+        it.id === target.id &&
+        (it.contentType === target.contentType || (dashGroup.includes(target.contentType) && dashGroup.includes(it.contentType)))
+    )
+    const ct = existing ? existing.contentType : target.contentType
+    const upserted = ctl.upsertContentItem(
+      Object.assign({}, existing, {
+        id: target.id,
+        contentType: ct,
+        title: target.title || existing?.title,
+        embedPath: existing?.embedPath || target.embedPath,
+        dashboardId: ct === 'dashboard' ? target.id : existing?.dashboardId,
+        lookmlDashboardId: ct === 'lookml_dashboard' ? target.id : existing?.lookmlDashboardId,
+        lookId: ct === 'look' ? target.id : existing?.lookId,
+        exploreId: ct === 'explore' ? target.id : existing?.exploreId,
+        hidden: false,
+      }),
+      true
+    )
+    handleSelectContentTab?.(upserted.key)
+  }
 
   const handleCopyThinkingTrace = (
     e: React.MouseEvent<HTMLButtonElement>, traceKey: string, steps: AntigravityActivityStep[],
@@ -2215,6 +2331,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               <div className="dab-msg-body">
                 <StudioMarkdown
                   text={m.text} hostUrl={hostUrl} extensionSDK={extensionSDK}
+                  onOpenContentInViewer={handleOpenContentLinkInViewer}
                   onOpenSandboxMarkdownFile={(p) => {
                     const normalized = normalizeSandboxFilePath(p)
                     setActiveSandboxMarkdownModalPath(normalized ? `/${normalized}` : p)
@@ -2336,6 +2453,12 @@ function renderContentTabIcon(contentType: StudioContentItemType): React.ReactNo
   }
 }
 
+const CONTENT_TYPE_LABELS: Partial<Record<StudioContentItemType, string>> = {
+  lookml_dashboard: 'LookML Dashboard', data_app: 'Data App', 'data-investigator': 'Data Investigator',
+  lookml: 'LookML Project', script: 'Python Script', report: 'Health Check Report', 'conversational-analytics': 'Conversational Analytics',
+}
+const formatContentTypeLabel = (ct: StudioContentItemType): string => CONTENT_TYPE_LABELS[ct] || ct.charAt(0).toUpperCase() + ct.slice(1)
+
 export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
     activeMode, selectedUseCase, isEmptyConversation, isHealthCheckMode, isLookmlMode, isCaMode,
@@ -2344,7 +2467,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     handleSelectContentTab, handleHideContentTab,
     currentAppCode, embedNonce, extensionSDK, setInfoModalUseCase,
     busyStatus, rightPaneCollapsed, setRightPaneCollapsed, scriptId, scriptTitle,
-    activeViewerDocument = null, setActiveViewerDocument, openViewerDocument,
+    activeViewerDocument = null, setActiveViewerDocument, openViewerDocument, activeConversationId,
   } = ctl
   const isTileMode = activeMode === 'tile' && Boolean(ctl.loadedScript || ctl.explicitUseCase === 'tile')
   const hostUrl = extensionSDK?.lookerHostData?.hostUrl || window.location.origin
@@ -2354,9 +2477,24 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const [showAppCode, setShowAppCode] = useState(false)
   const [iframeRev, setIframeRev] = useState(0)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+  const [hoveredTab, setHoveredTab] = useState<{ key: string; left: number; top: number } | null>(null)
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const moreMenuWrapRef = useRef<HTMLDivElement | null>(null)
   const embedContainerRef = useRef<HTMLDivElement | null>(null)
   const embedControllerRef = useRef<ReturnType<typeof createLookerEmbedPreloadController> | null>(null)
+  const hadViewerContentRef = useRef(false)
+  const trackedConvIdRef = useRef(activeConversationId)
+
+  const openTabPopover = (key: string, el: HTMLElement | null) => {
+    if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null }
+    const r = el?.getBoundingClientRect()
+    const maxLeft = typeof window !== 'undefined' ? Math.max(8, window.innerWidth - 250) : 1200
+    setHoveredTab({ key, left: r ? Math.max(8, Math.min(Math.round(r.left), maxLeft)) : 8, top: r ? Math.round(r.bottom + 2) : 40 })
+  }
+  const scheduleCloseTabPopover = (key: string) => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)
+    hoverTimerRef.current = setTimeout(() => setHoveredTab((cur) => (cur?.key === key ? null : cur)), 140)
+  }
 
   const visibleTabs = useMemo(() => contentItems.filter((it) => !it.hidden), [contentItems])
   const hiddenTabs = useMemo(() => contentItems.filter((it) => Boolean(it.hidden)), [contentItems])
@@ -2466,12 +2604,24 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     (activePaneKind === 'ca' && caConversation) ||
     activePaneKind === 'script'
   )
+  if (trackedConvIdRef.current !== activeConversationId || isEmptyConversation) {
+    trackedConvIdRef.current = activeConversationId
+    hadViewerContentRef.current = false
+  }
+  if (hasViewerContent) {
+    hadViewerContentRef.current = true
+  }
+  const hideRightPane =
+    (isEmptyConversation && !activeViewerDocument) ||
+    (!hasViewerContent && !busyStatus && !hadViewerContentRef.current)
+  const idleToolbarText = <span className="dab-muted">{busyStatus ? 'Thinking...' : 'Viewer will appear here when Looker content is ready'}</span>
 
   return (
     <main
       className={`dab-right-pane ${rightPaneCollapsed ? 'dab-right-pane-collapsed' : ''}`}
       data-has-viewer-content={hasViewerContent ? 'true' : 'false'}
-      style={isEmptyConversation && !activeViewerDocument ? { display: 'none' } : undefined}
+      data-right-hidden={hideRightPane ? 'true' : 'false'}
+      style={hideRightPane ? { display: 'none' } : undefined}
     >
       {!rightPaneCollapsed && (
         <div className="dab-mobile-viewer-card-handle" data-testid="mobile-viewer-card-handle">
@@ -2522,34 +2672,74 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           <div className="dab-content-tabs-scroll">
             {visibleTabs.map((item) => {
               const isSelected = item.key === resolvedActiveTabKey
+              const isPopOpen = hoveredTab?.key === item.key
+              const pid = item.projectId || item.id
+              const isLookmlTab = item.contentType === 'lookml'
+              const isNonEmbed = item.contentType === 'script' || item.contentType === 'report'
+              const popHref = isLookmlTab ? (pid ? `/projects/${encodeURIComponent(pid)}` : '') : !isNonEmbed ? item.embedPath.replace(/^\/embed/, '') : ''
               return (
                 <div
-                  key={item.key} role="tab" tabIndex={0} aria-selected={isSelected}
-                  data-testid={`studio-content-tab-${item.key}`} className={`dab-content-tab ${isSelected ? 'active' : ''}`}
-                  onClick={() => handleSelectContentTab?.(item.key)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault()
-                      handleSelectContentTab?.(item.key)
-                    }
+                  key={item.key}
+                  className="dab-content-tab-item"
+                  onMouseEnter={(e) => openTabPopover(item.key, e.currentTarget)}
+                  onMouseLeave={() => scheduleCloseTabPopover(item.key)}
+                  onFocus={(e) => openTabPopover(item.key, e.currentTarget)}
+                  onBlur={(e) => {
+                    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) scheduleCloseTabPopover(item.key)
                   }}
-                  title={`${item.title} (${item.contentType}: ${item.id})`}
                 >
-                  <span className="dab-content-tab-icon">{renderContentTabIcon(item.contentType)}</span>
-                  <span className="dab-content-tab-label">{item.title}</span>
-                  <button
-                    type="button"
-                    data-testid={`studio-content-tab-close-${item.key}`}
-                    className="dab-content-tab-close"
-                    aria-label={`Hide ${item.title} tab`}
-                    title="Hide tab"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleHideContentTab?.(item.key)
+                  <div
+                    role="tab" tabIndex={0} aria-selected={isSelected}
+                    data-testid={`studio-content-tab-${item.key}`} className={`dab-content-tab ${isSelected ? 'active' : ''}`}
+                    onClick={() => handleSelectContentTab?.(item.key)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        handleSelectContentTab?.(item.key)
+                      }
                     }}
                   >
-                    <X size={12} strokeWidth={1.75} aria-hidden="true" />
-                  </button>
+                    <span className="dab-content-tab-icon">{renderContentTabIcon(item.contentType)}</span>
+                    <span className="dab-content-tab-label">{item.title}</span>
+                    <button
+                      type="button"
+                      data-testid={`studio-content-tab-close-${item.key}`}
+                      className="dab-content-tab-close"
+                      aria-label={`Hide ${item.title} tab`}
+                      title="Hide tab"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleHideContentTab?.(item.key)
+                      }}
+                    >
+                      <X size={12} strokeWidth={1.75} aria-hidden="true" />
+                    </button>
+                  </div>
+                  <div
+                    data-testid={`content-tab-popover-${item.key}`}
+                    className={`dab-content-tab-popover ${isPopOpen ? 'open' : ''}`}
+                    style={isPopOpen && hoveredTab ? { left: hoveredTab.left, top: hoveredTab.top } : undefined}
+                    onMouseEnter={() => { if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null } }}
+                    onMouseLeave={() => scheduleCloseTabPopover(item.key)}
+                  >
+                    <span className="dab-tab-popover-meta">
+                      {isLookmlTab ? <>Project: <code>{pid}</code></> : isNonEmbed ? <>{formatContentTypeLabel(item.contentType)}: <code>{item.id}</code></> : formatContentTypeLabel(item.contentType)}
+                    </span>
+                    {popHref && (
+                      <button
+                        type="button"
+                        data-testid={isLookmlTab ? 'lookml-open-ide-btn' : undefined}
+                        className="dab-btn dab-btn-secondary dab-tab-popover-btn"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void openOrCopyMarkdownLink(popHref, hostUrl, extensionSDK)
+                        }}
+                      >
+                        <span>{isLookmlTab ? 'Open in IDE' : 'Open in Looker'}</span>
+                        <ExternalLink size={11} strokeWidth={1.75} aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               )
             })}
@@ -2606,10 +2796,9 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               <>
                 <strong>{healthReport.title}</strong>{' '}
                 <StudioBadge>Health Score: {healthReport.scores.overallScore}% ({healthReport.scores.grade})</StudioBadge>{' '}
-                <StudioBadge>Transcriber: {healthReport.scores.transcriberScore}/4.00</StudioBadge>{' '}
-                <span className="dab-muted">(user_{healthReport.createdBy}_health_check_{healthReport.id} · obj_health_check_{healthReport.id})</span>
+                <StudioBadge>Transcriber: {healthReport.scores.transcriberScore}/4.00</StudioBadge>
               </>
-            ) : <span className="dab-muted">7-section TECHNICAL_DESIGN_DOCUMENT.md (0–100% health score) will render here</span>}
+            ) : idleToolbarText}
             actions={
               <>
                 {healthReport && (
@@ -2629,8 +2818,8 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         ) : activePaneKind === 'lookml' ? (
           <StudioToolbar
             title={lookmlBundle ? (
-              <><strong>{lookmlBundle.title}</strong> <span className="dab-muted">(Session <code>obj_lookml_{lookmlBundle.id}</code> · {lookmlBundle.files?.length || 0} .lkml files)</span></>
-            ) : <span className="dab-muted">Agentic LookML Viewer (.lkml diffs, validator, run_lookml_test &amp; /sql/:slug + /x/:slug parity)</span>}
+              <><strong>{lookmlBundle.title || lookmlBundle.project_id}</strong> <span className="dab-muted">({lookmlBundle.files?.length || 0} .lkml files)</span></>
+            ) : idleToolbarText}
             actions={<><UseCaseInfoTrigger useCase="lookml" onOpen={setInfoModalUseCase} />{collapseToggleBtn}</>}
           />
         ) : activePaneKind === 'ca' ? (
@@ -2643,7 +2832,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                   <StudioBadge testId="ca-selected-agent-badge">Agent: {caConversation.agentName} ({caConversation.agentId})</StudioBadge>{' '}
                   <span className="dab-muted">(Conversation <code>{caConversation.caConversationId}</code> · <code>{caConversation.embedPath}</code>)</span>
                 </>
-              ) : <span className="dab-muted">Looker Conversational Analytics embedded chat will appear here after routing</span>}
+              ) : idleToolbarText}
               actions={
                 <>
                   {caConversation && (
@@ -2674,9 +2863,8 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               ) : !activeContentItem && builderMode === 'dashboard' && nativeContent ? (
                 <><strong>{nativeContent.title}</strong> <span className="dab-muted">({nativeContent.contentType} #{nativeContent.id} · <code>{nativeContent.embedPath}</code>)</span></>
               ) : publishedApp ? (
-                <><strong>{publishedApp.title}</strong> <span className="dab-muted">(Dashboard #{publishedApp.dashboardId} · Extension db::{publishedApp.extensionId.slice(0, 8)}…)</span></>
-              ) : busyStatus ? <span className="dab-muted">Thinking...</span>
-              : <span className="dab-muted">Viewer will appear here when Looker content is ready</span>
+                <><strong>{publishedApp.title}</strong> <span className="dab-muted">(Dashboard #{publishedApp.dashboardId})</span></>
+              ) : idleToolbarText
             }
             actions={
               <>
@@ -2717,8 +2905,15 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               <StudioBadge tone="accent" testId="viewer-document-path-badge">{activeViewerDocument.displayPath}</StudioBadge>
             </div>
             <div className="dab-viewer-document-actions">
-              <button type="button" data-testid="viewer-document-close-btn" className="dab-btn dab-btn-secondary" onClick={() => setActiveViewerDocument?.(null)}>
-                Close Document
+              <button
+                type="button"
+                data-testid="viewer-document-close-btn"
+                className="dab-btn dab-btn-secondary dab-btn-icon"
+                title="Close document"
+                aria-label="Close document"
+                onClick={() => setActiveViewerDocument?.(null)}
+              >
+                <X size={14} strokeWidth={1.75} aria-hidden="true" />
               </button>
             </div>
           </div>
@@ -2729,7 +2924,17 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               </div>
             ) : activeViewerDocument.isMarkdown ? (
               <div className="dab-viewer-document-markdown" data-testid="viewer-document-markdown">
-                <StudioMarkdown text={activeViewerDocument.content} hostUrl={hostUrl} extensionSDK={extensionSDK} onOpenSandboxMarkdownFile={(p) => void openViewerDocument?.({ path: p })} />
+                <StudioMarkdown
+                  text={activeViewerDocument.content}
+                  hostUrl={hostUrl}
+                  extensionSDK={extensionSDK}
+                  onOpenSandboxMarkdownFile={(p) => void openViewerDocument?.({ path: p })}
+                  onOpenContentInViewer={(target) => {
+                    setActiveViewerDocument?.(null)
+                    const up = ctl.upsertContentItem({ id: target.id, contentType: target.contentType, title: target.title, embedPath: target.embedPath, hidden: false }, true)
+                    handleSelectContentTab?.(up.key)
+                  }}
+                />
               </div>
             ) : (
               <pre className="dab-viewer-document-code" data-testid="viewer-document-code"><code>{activeViewerDocument.content}</code></pre>
@@ -2745,28 +2950,14 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             <p>All content tabs are hidden</p>
             <p className="dab-muted">Open the menu at the right end of the tab bar to restore any item.</p>
           </div>
-        ) : activePaneKind === 'report' ? (
-          healthReport ? (
-            <div className="dab-tdd-viewer">
-              {tddViewMode === 'rendered' ? <div className="dab-tdd-rendered" dangerouslySetInnerHTML={{ __html: renderTddMarkdownToHtml(healthReport.tddMarkdown) }} /> : <pre className="dab-tdd-markdown">{healthReport.tddMarkdown}</pre>}
-            </div>
-          ) : (
-            <div className="dab-placeholder">
-              <p>No 3-Pillar Health Check report loaded yet.</p>
-              <p className="dab-muted">Click <strong>Run 3-Pillar Audit</strong> in the top-right bar or enter a prompt on the left to execute Pillar 1 (System Activity), Pillar 2 (LookML 0–4 Transcriber Rubric), and Pillar 3 (BigQuery INFORMATION_SCHEMA) in <code>LkrCodeMode</code>.</p>
-            </div>
-          )
-        ) : activePaneKind === 'lookml' ? (
+        ) : activePaneKind === 'report' && healthReport ? (
+          <div className="dab-tdd-viewer">
+            {tddViewMode === 'rendered' ? <div className="dab-tdd-rendered" dangerouslySetInnerHTML={{ __html: renderTddMarkdownToHtml(healthReport.tddMarkdown) }} /> : <pre className="dab-tdd-markdown">{healthReport.tddMarkdown}</pre>}
+          </div>
+        ) : activePaneKind === 'lookml' && lookmlBundle ? (
           <LookmlPreviewPane bundle={lookmlBundle} hostUrl={hostUrl} extensionSDK={extensionSDK} canDeploy={canDeployLookml} />
-        ) : activePaneKind === 'ca' ? (
-          !caConversation && !hasActiveEmbed && (
-            <div className="dab-placeholder">
-              <p>No active Conversational Analytics chat yet.</p>
-              <p className="dab-muted">Ask a data question on the left — a stateless isolated sub-agent will select the best Looker CA Agent, create the conversation, and embed it here.</p>
-            </div>
-          )
         ) : (
-          !hasActiveEmbed && (
+          !hasActiveEmbed && !(activePaneKind === 'ca' && caConversation) && (
             busyStatus ? (
               <div className="dab-placeholder">
                 <div className="dab-thinking-logo-card" data-testid="right-pane-thinking-state" role="status" aria-live="polite">

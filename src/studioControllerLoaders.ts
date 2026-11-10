@@ -112,23 +112,32 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     []
   )
 
+  const applyStateWithSync = <T,>(
+    setter: React.Dispatch<React.SetStateAction<T>>,
+    next: T | ((prev: T) => T),
+    sync: (resolved: T) => void
+  ) => {
+    if (typeof next !== 'function') {
+      sync(next); setter(next); return
+    }
+    setter((prev) => { const r = (next as (p: T) => T)(prev); sync(r); return r })
+  }
+
   const setPublishedApp = useCallback(
     (
       next: PublishedAppState | null | ((prev: PublishedAppState | null) => PublishedAppState | null),
       metaOpts?: { source?: 'created' | 'modified' | 'mention'; createdInConversation?: boolean; hidden?: boolean }
     ) => {
-      setPublishedAppState((prev) => {
-        const resolved = typeof next === 'function' ? next(prev) : next
-        if (resolved && resolved.dashboardId) {
+      applyStateWithSync(setPublishedAppState, next, (resolved) => {
+        if (resolved?.dashboardId) {
           const uc = resolvedUseCaseByIdRef.current[resolved.dashboardId]
-          const ct: StudioContentItemType = uc === 'data-investigator' ? 'data-investigator' : 'data_app'
           upsertContentItem({
-            id: String(resolved.dashboardId), dashboardId: String(resolved.dashboardId), contentType: ct,
+            id: String(resolved.dashboardId), dashboardId: String(resolved.dashboardId),
+            contentType: uc === 'data-investigator' ? 'data-investigator' : 'data_app',
             title: resolved.title, embedPath: `/embed/dashboards/${encodeURIComponent(String(resolved.dashboardId))}`,
             folderId: resolved.folderId, extensionId: resolved.extensionId, ...metaOpts,
           })
         }
-        return resolved
       })
     },
     [resolvedUseCaseByIdRef, upsertContentItem]
@@ -139,19 +148,17 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       next: NativeContentState | null | ((prev: NativeContentState | null) => NativeContentState | null),
       metaOpts?: { source?: 'created' | 'modified' | 'mention'; createdInConversation?: boolean; hidden?: boolean }
     ) => {
-      setNativeContentState((prev) => {
-        const resolved = typeof next === 'function' ? next(prev) : next
-        if (resolved && resolved.id) {
+      applyStateWithSync(setNativeContentState, next, (resolved) => {
+        if (resolved?.id) {
           const ct = (resolved.contentType || 'dashboard') as StudioContentItemType
           upsertContentItem({
             id: String(resolved.id), contentType: ct, title: resolved.title, embedPath: resolved.embedPath, folderId: resolved.folderId,
-            dashboardId: resolved.dashboardId || (ct === 'dashboard' ? String(resolved.id) : undefined),
+            dashboardId: ct === 'dashboard' ? String(resolved.id) : undefined,
             lookId: resolved.lookId || (ct === 'look' ? String(resolved.id) : undefined),
             lookmlDashboardId: resolved.lookmlDashboardId || (ct === 'lookml_dashboard' ? String(resolved.id) : undefined),
             ...metaOpts,
           })
         }
-        return resolved
       })
     },
     [upsertContentItem]
@@ -436,20 +443,22 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       lastLookmlIdRef.current = id
       return runWithBusy(`Loading LookML session "${id}"...`, `Could not load LookML session "${id}"`, () =>
         loadLookmlSessionArtifact(core40SDK, extensionSDK, id).then((loaded) => {
-          lastLookmlIdRef.current = loaded.id
+          const canonProj = loaded.bundle?.project_id?.trim() || String(loaded.id || id).trim()
+          lastLookmlIdRef.current = canonProj
+          resolvedUseCaseByIdRef.current[canonProj] = 'lookml'
           resolvedUseCaseByIdRef.current[loaded.id] = 'lookml'
           setSelectedUseCase('lookml'); setLookmlBundle(loaded.bundle)
           if (loaded.bundle?.project_id) setLookmlProjectId(loaded.bundle.project_id)
           setSelectedExplores(loaded.studio?.explores?.filter(Boolean) || [])
           upsertContentItem({
-            id: String(loaded.id), sessionId: String(loaded.id), projectId: loaded.bundle?.project_id,
-            contentType: 'lookml', title: loaded.title, embedPath: `/lookml/${encodeURIComponent(String(loaded.id))}`,
+            id: canonProj, sessionId: String(loaded.id), projectId: canonProj,
+            contentType: 'lookml', title: `LookML: ${canonProj}`, embedPath: `/lookml/${encodeURIComponent(canonProj)}`,
             updatedAt: loaded.updatedAt,
           })
           hydrateLoadedArtifact({
             mode: 'lookml', id: loaded.id, route: `/c/${encodeURIComponent(loaded.id)}`,
             pushRoute, convTypes: ['lookml'], studio: loaded.studio, defaultEnvId: `env_lookml_${loaded.id}`,
-            fallbackText: `Loaded LookML session "${loaded.title}" (${loaded.bundle?.files?.length || 0} modified .lkml files).`,
+            fallbackText: `Loaded LookML session "${loaded.title}" (${loaded.bundle?.files?.length || 0} .lkml files).`,
           })
         })
       )
@@ -899,7 +908,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     const loadedPair: [string | undefined, string] = (resolvedRouteType === 'conversational-analytics' || isCaMode)
       ? [caConversation?.caConversationId, lastCaIdRef.current]
       : targetMode === 'lookml'
-      ? [lookmlBundle?.id, lastLookmlIdRef.current]
+      ? [lookmlBundle?.project_id || lookmlBundle?.id, lastLookmlIdRef.current]
       : targetMode === 'health'
       ? [healthReport?.id, lastHealthIdRef.current]
       : targetMode === 'dashboard'
@@ -907,7 +916,11 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       : targetMode === 'tile'
       ? [loadedScript ? scriptId : undefined, lastScriptIdRef.current]
       : [publishedApp?.dashboardId, lastPublishedIdRef.current]
-    if (targetArtifactId !== loadedPair[0] && targetArtifactId !== loadedPair[1]) {
+    if (
+      targetArtifactId !== loadedPair[0] &&
+      targetArtifactId !== loadedPair[1] &&
+      !(targetMode === 'lookml' && targetArtifactId === lookmlBundle?.id)
+    ) {
       const dispatchType =
         resolvedRouteType || (isCaMode ? 'conversational-analytics' : parsedRoute.useCase === 'auto' ? 'auto' : activeMode)
       void openArtifactByMode(dispatchType, targetArtifactId, false)
@@ -915,7 +928,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   }, [
     isTileMount, location.pathname, activeMode, disabledModes, parsedRoute.conversationId, parsedRoute.isLegacyRoute,
     parsedRoute.objectId, parsedRoute.useCase, inferredRouteUseCase, isCaMode, publishedApp?.dashboardId,
-    nativeContent?.id, lookmlBundle?.id, healthReport?.id, caConversation?.caConversationId, loadedScript, scriptId,
+    nativeContent?.id, lookmlBundle?.id, lookmlBundle?.project_id, healthReport?.id, caConversation?.caConversationId, loadedScript, scriptId,
     openArtifactByMode, conversations, catalogItems, messages.length, activeConversationId, activeObjectId,
     agentSession.lastInteractionId, setActiveContentTabKey,
     setActiveConversationId, setAgentSession, setContentItems, setMessages, setSelectedExplores, sharedEnvIdRef,
@@ -989,8 +1002,11 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         if (!currentAppCode && dashId) {
           void loadExistingDashboardApp(core40SDK, dashId).then((l) => { setCurrentAppCode(l.code); setPublishedAppState(l) }).catch(() => {})
         }
-      } else if (ct === 'lookml' && lookmlBundle?.id !== item.id) {
-        void loadLookmlSessionArtifact(core40SDK, extensionSDK, item.id).then((l) => { setLookmlBundle(l.bundle); if (l.bundle?.project_id) setLookmlProjectId(l.bundle.project_id) }).catch(() => {})
+      } else if (ct === 'lookml') {
+        const targetProj = item.projectId || item.id
+        if (lookmlBundle?.project_id !== targetProj && lookmlBundle?.id !== item.id && lookmlBundle?.id !== item.sessionId) {
+          void loadLookmlSessionArtifact(core40SDK, extensionSDK, targetProj, item.sessionId).then((l) => { setLookmlBundle(l.bundle); if (l.bundle?.project_id) setLookmlProjectId(l.bundle.project_id) }).catch(() => {})
+        }
       } else if (ct === 'script' && (!loadedScript || scriptId !== item.id)) {
         setLoadedScript(true); setScriptId(item.id)
         void loadScriptArtifact(core40SDK, item.id).then((l) => { if (l) { setScriptTitle(l.title || l.id); setScriptCode(l.code || DEFAULT_PYTHON_SCRIPT); void handleRunPython(l.code || DEFAULT_PYTHON_SCRIPT, filtersJson) } }).catch(() => {})
@@ -1004,7 +1020,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         )
       }
     },
-    [core40SDK, currentAppCode, extensionSDK, filtersJson, handleRunPython, healthReport?.id, loadedScript, lookmlBundle?.id, scriptId, selectedExplores, selectedFolderId]
+    [core40SDK, currentAppCode, extensionSDK, filtersJson, handleRunPython, healthReport?.id, loadedScript, lookmlBundle?.id, lookmlBundle?.project_id, scriptId, selectedExplores, selectedFolderId]
   )
 
   const persistTabStateToConversation = useCallback(

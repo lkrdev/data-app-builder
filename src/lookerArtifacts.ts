@@ -166,7 +166,7 @@ export function formatStudioContentItemTitle(
     board: `Board #${cleanId}`,
     data_app: `Data App #${cleanId}`,
     'data-investigator': `Data Investigator #${cleanId}`,
-    lookml: `LookML (${cleanId})`,
+    lookml: `LookML: ${cleanId}`,
     script: `Script (${cleanId})`,
     'conversational-analytics': `CA Chat (${cleanId})`,
     extension: `Extension (${cleanId})`,
@@ -204,10 +204,15 @@ export function resolveStudioContentEmbedPath(
 export function normalizeStudioContentItem(
   raw: Partial<StudioContentItem> & { id: string; contentType: StudioContentItemType }
 ): StudioContentItem {
-  const id = String(raw.id || '').trim()
+  const rawId = String(raw.id || '').trim()
   const contentType = raw.contentType
-  const key = String(raw.key || `${contentType}:${id}`).trim()
-  const title = formatStudioContentItemTitle(contentType, id, raw.title)
+  const canonProj = contentType === 'lookml' ? String(raw.projectId || '').trim() : ''
+  const id = canonProj || rawId
+  const key = contentType === 'lookml' ? `lookml:${id}` : String(raw.key || `${contentType}:${id}`).trim()
+  const title =
+    contentType === 'lookml' && canonProj
+      ? `LookML: ${canonProj}`
+      : formatStudioContentItemTitle(contentType, id, raw.title)
   const embedPath = resolveStudioContentEmbedPath(contentType, id, raw.embedPath)
   const source: 'created' | 'modified' | 'mention' | undefined =
     raw.source === 'created' || raw.source === 'modified'
@@ -219,12 +224,13 @@ export function normalizeStudioContentItem(
       : undefined
   const createdInConversation =
     raw.createdInConversation !== undefined ? Boolean(raw.createdInConversation) : source !== undefined ? source === 'created' : undefined
-  return {
-    ...raw, key, id, contentType, title, embedPath,
-    ...(source !== undefined ? { source } : {}),
-    ...(createdInConversation !== undefined ? { createdInConversation } : {}),
-    ...(typeof raw.hidden === 'boolean' ? { hidden: raw.hidden } : {}),
-  }
+  const out: StudioContentItem = Object.assign({}, raw, { key, id, contentType, title, embedPath })
+  if (contentType === 'lookml' && (raw.sessionId || rawId)) out.sessionId = raw.sessionId || rawId
+  if (canonProj) out.projectId = canonProj
+  if (source !== undefined) out.source = source
+  if (createdInConversation !== undefined) out.createdInConversation = createdInConversation
+  if (typeof raw.hidden === 'boolean') out.hidden = raw.hidden
+  return out
 }
 
 export function upsertStudioContentItem(
@@ -232,25 +238,38 @@ export function upsertStudioContentItem(
   nextRaw: Partial<StudioContentItem> & { id: string; contentType: StudioContentItemType }
 ): { items: StudioContentItem[]; activeKey: string; item: StudioContentItem } {
   const hidden = typeof nextRaw.hidden === 'boolean' ? nextRaw.hidden : false
-  const normalized = normalizeStudioContentItem({ ...nextRaw, hidden })
-  const existingIdx = items.findIndex((it) => it.key === normalized.key)
+  const normalized = normalizeStudioContentItem(Object.assign({}, nextRaw, { hidden }))
+  const existingIdx = items.findIndex(
+    (it) =>
+      it.key === normalized.key ||
+      (normalized.contentType === 'lookml' &&
+        it.contentType === 'lookml' &&
+        (it.projectId || it.id) === (normalized.projectId || normalized.id))
+  )
   if (existingIdx >= 0) {
     const prev = items[existingIdx]
     const isCreated = prev.createdInConversation === true || prev.source === 'created' || normalized.createdInConversation === true || normalized.source === 'created'
     const createdInConversation = isCreated ? true : (normalized.createdInConversation ?? prev.createdInConversation)
     const source = isCreated ? ('created' as const) : (normalized.source || prev.source)
-    const merged = normalizeStudioContentItem({
-      ...prev, ...nextRaw, hidden,
-      title: nextRaw.title && nextRaw.title !== normalized.id && !/^\d+$/.test(nextRaw.title) ? nextRaw.title : prev.title || normalized.title,
-      embedPath: nextRaw.embedPath || prev.embedPath || normalized.embedPath,
-      ...(source !== undefined ? { source } : {}),
-      ...(createdInConversation !== undefined ? { createdInConversation } : {}),
-    })
-    const nextItems = [...items]
+    const merged = normalizeStudioContentItem(
+      Object.assign({}, prev, nextRaw, {
+        hidden,
+        title:
+          normalized.contentType === 'lookml' && normalized.projectId
+            ? `LookML: ${normalized.projectId}`
+            : nextRaw.title && nextRaw.title !== normalized.id && !/^\d+$/.test(nextRaw.title)
+            ? nextRaw.title
+            : prev.title || normalized.title,
+        embedPath: nextRaw.embedPath || prev.embedPath || normalized.embedPath,
+        ...(source !== undefined ? { source } : {}),
+        ...(createdInConversation !== undefined ? { createdInConversation } : {}),
+      })
+    )
+    const nextItems = items.slice()
     nextItems[existingIdx] = merged
     return { items: nextItems, activeKey: merged.key, item: merged }
   }
-  return { items: [...items, normalized], activeKey: normalized.key, item: normalized }
+  return { items: items.concat(normalized), activeKey: normalized.key, item: normalized }
 }
 
 export interface UserConversationContent {
@@ -306,8 +325,10 @@ export function hydrateConversationContentItems(conv: Partial<UserConversationEn
     return items
   }
   if (rawType === 'lookml' || c.sessionId) {
-    const sid = String(c.sessionId || c.id || conv.objectId || '').trim()
-    if (sid) pushItem({ id: sid, sessionId: sid, projectId: typeof c.projectId === 'string' ? c.projectId : undefined, contentType: 'lookml', title: fallbackTitle, updatedAt: conv.updatedAt })
+    const projId = typeof c.projectId === 'string' ? c.projectId.trim() : ''
+    const sid = String(c.sessionId || projId || c.id || conv.objectId || '').trim()
+    const canonId = projId || sid
+    if (canonId) pushItem({ id: canonId, sessionId: sid || canonId, projectId: projId || undefined, contentType: 'lookml', title: projId ? `LookML: ${projId}` : fallbackTitle, updatedAt: conv.updatedAt })
     return items
   }
   if (rawType === 'tile' || rawType === 'script' || c.scriptId) {

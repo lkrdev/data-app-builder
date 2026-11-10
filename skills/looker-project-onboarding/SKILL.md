@@ -67,7 +67,7 @@ Onboard a LookML project from a database connection in 4 stages (Model & Bronze 
    lkr --dev tools lookml push /workspace/lookml --project-id <project_name> --no-reset
    python3 /workspace/bootstrap_lookml.py bundle /workspace/lookml_result.json
    ```
-3. **Stop after `bronze/`**, **ask to profile data and create metrics**, and end with `[Open <project_name> in Looker IDE](/projects/<project_name>/files)`.
+3. **Stop after `bronze/`**, **ask to profile data and create metrics**, and end with `[Open <project_name> in Looker IDE](/projects/<project_name>)`.
 
 ## Step 4: Stage 2 (Turn 4) — Single-Table Refinements & Silver Explores, `profile_fields`, and Ask for Dashboard
 1. Emit `<USE_CASE>lookml</USE_CASE>` and apply `/workspace/skills/agentic-lookml/SKILL.md` 5-layer synthesis on `<fact_table>`:
@@ -77,7 +77,7 @@ Onboard a LookML project from a database connection in 4 stages (Model & Bronze 
    - **Layer 4 — ANSI Ratios (`type: number`)**: `1.0 * ${numerator_measure} / NULLIF(${denominator_measure}, 0)` (`return_rate`, `cancel_rate` `percent_2`; `average_order_value` `usd`).
    - **Layer 5 — Silver Explores (`silver/explores/<fact_table>.explore.lkml`)**: Deconstruct SQL (`grain_change_reagg`, `window_pre_groupby`, `union`, `non_equi_join`, `filter_dependent_cte`), extend `[<fact_table>_base]` (`hidden: no`, `view_name: <fact_table>`), join each `<dim_table>` (`left_outer`, `many_to_one`), and include `"/bronze/*.refinement.lkml"` + `"/silver/explores/*.explore.lkml"` in `<project_name>.model.lkml`. **CRITICAL**: `<fact_table>_base` must **never** set `fields: [ALL_FIELDS*, -...]` exclusions when extended by Silver (inherited exclusions strip dashboard tile `fields` to `[]`). Optionally scaffold `_field_value_search_<project_name>` (`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md`).
 2. In **1** `code_execution` call, write files, validate (`lkr parse lookml-to-api --path /workspace/lookml --validate`), push (`--no-reset`), and run `bootstrap_lookml.py bundle`.
-3. In **1** `run_looker_codemode` call, run `profile_fields` + 5-row `run_inline_query`, show results, **ask if they want a dashboard**, and end with `[Open <project_name> in Looker IDE](/projects/<project_name>/files)`.
+3. In **1** `run_looker_codemode` call, run `profile_fields` + 5-row `run_inline_query`, show results, **ask if they want a dashboard**, and end with `[Open <project_name> in Looker IDE](/projects/<project_name>)`.
 
 ## Step 5: Stage 3 (Turn 5) — Validated LookML Dashboard & Clean Chat Summary
 1. Emit `<USE_CASE>dashboard</USE_CASE>`, call `upsert_lookml_dashboard(project_id=project_name, model=project_name, dashboard_name="<dashboard_slug>", title="<Dashboard Title>", folder_id=target_folder_id, filters=[...], tiles=[...])` (4+ tiles on verified Silver fields; gates `lookml_model_explore` + `validate_project` `fatal`/`warning` `Unknown field`) + `return emit_native_bundle(res, folder_id=target_folder_id, title="<Dashboard Title>")` in `run_looker_codemode`.

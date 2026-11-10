@@ -1242,10 +1242,9 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       snapshotName: '03-mode-agentic-lookml-snap.png',
       expectText: [
         'Add total_revenue & gross_margin to order_items',
-        '⎇ user dev mode',
-        '✓ LookML Validator Passed',
-        'run_lookml_test (1/1 passed)',
+        'LookML: deploytobarerepo_temp',
         'bronze/orders.refinement.lkml',
+        'total_revenue',
         'Update LookML'
       ]
     },
@@ -4927,8 +4926,12 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         const mdBody = document.querySelector('[data-testid="studio-markdown-body"]');
         const links = Array.from(document.querySelectorAll('[data-testid="chat-markdown-link"]'));
         const copyBtns = Array.from(document.querySelectorAll('[data-testid="chat-markdown-link-copy"]'));
+        const extBtns = Array.from(document.querySelectorAll('[data-testid="markdown-link-external-btn"]'));
         links[0].click(); links[1].click(); links[2].click();
         await new Promise((r) => setTimeout(r, 60));
+        const routedInViewerKey = window.__DAB_STUDIO__.activeContentItem?.key || null;
+        extBtns[0]?.click();
+        await new Promise((r) => setTimeout(r, 40));
         const thirdCopiedAttr = copyBtns[2]?.getAttribute('data-copied');
         copyBtns[0].click();
         await new Promise((r) => setTimeout(r, 40));
@@ -4944,6 +4947,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           hasList: Boolean(mdBody?.querySelector('ul')),
           hasCodeBlock: Boolean(mdBody?.querySelector('pre code')),
           linkCount: links.length, copyBtnCount: copyBtns.length,
+          routedInViewerKey,
           openedWindows: window.__OPENED_WINDOWS__, clipboardWrites: window.__CLIPBOARD_WRITES__,
           thirdCopiedAttr, firstCopiedAttr
         };
@@ -4957,9 +4961,10 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       labelBefore: 'Ripper', authorBefore: 'Ripper', labelAfter: 'Maverick', authorAfter: 'Maverick',
       titleUpdatedToMaverick: true, savedUserConfigAgentName: 'Maverick',
       hasH3: true, hasList: true, hasCodeBlock: true, linkCount: 3, copyBtnCount: 3,
+      routedInViewerKey: 'data_app:42',
       openedWindows: [
-        { url: '/dashboards/42', target: '_blank' },
-        { url: 'https://docs.cloud.google.com/looker/docs/r/sql/LookML-field', target: '_blank' }
+        { url: 'https://docs.cloud.google.com/looker/docs/r/sql/LookML-field', target: '_blank' },
+        { url: '/dashboards/42', target: '_blank' }
       ],
       clipboardWrites: ['https://unlisted-vendor.example.org/report', '/dashboards/42'],
       thirdCopiedAttr: 'true', firstCopiedAttr: 'true'
@@ -5304,7 +5309,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
     expect(lkRes.result.value).toEqual({
       noLegacyLookmlInput: true, noLegacySessionsSelect: true, hasUnifiedFolderTrigger: true,
       sidebarHasSvg: true, sidebarNoGuillemets: true, isSingleLineScrollable: true,
-      hasActionsMenu: true, toggleTextBefore: 'Show Full .lkml', toggleTextAfter: 'Show Unified Diff', copiedLkmlViaExt: true
+      hasActionsMenu: true, toggleTextBefore: 'View Changeset', toggleTextAfter: 'Back to Files', copiedLkmlViaExt: true
     })
 
     await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=data_app` })
@@ -5644,6 +5649,250 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       activeKeyAfterRestoreMatchesDash: true,
       hasZeroActivityStepsBloat: true,
       routeImmediatelyOnDelete: '/',
+    })
+  }, 20000)
+
+  test('Issue #166: keeps right pane hidden on chat-only intake turns, merges multi-turn LookML into single lookml:<projectId> tab, auto-opens .dashboard.lookml & chat content links in viewer, and renders LookML details modal + tab hover popover', async () => {
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=data_app` })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="new-conversation-btn"]'))`,
+        returnByValue: true,
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 80))
+    }
+
+    const res166 = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const dataAppToolbarText = (document.querySelector('.dab-right-pane .dab-ds-toolbar-title-block')?.textContent || '').trim();
+        const hasExtensionDbJargon = /Extension\\s+db::/i.test(dataAppToolbarText);
+
+        // Verify <X /> viewer-document-close-btn icon-only button
+        await window.__DAB_STUDIO__.openViewerDocument({ path: '/workspace/analysis.md' });
+        await new Promise((r) => setTimeout(r, 60));
+        const closeDocBtn = document.querySelector('[data-testid="viewer-document-close-btn"]');
+        const closeDocBtnText = (closeDocBtn?.textContent || '').trim();
+        const closeDocBtnHasSvg = Boolean(closeDocBtn?.querySelector('svg.lucide'));
+        closeDocBtn?.click();
+        await new Promise((r) => setTimeout(r, 40));
+
+        window.__DAB_STUDIO__.setAuthMode('apikey');
+        window.__DAB_STUDIO__.setApiKey('mock-api-key-166');
+        await new Promise((r) => setTimeout(r, 60));
+
+        window.__OPENED_WINDOWS__ = [];
+        const ext = window.__DAB_STUDIO__.extensionSDK;
+        const origProxy = ext.serverProxy.bind(ext);
+        const bundleTurn2 = JSON.stringify({
+          id: 'bryan_test2_101',
+          title: 'Bronze Model',
+          project_id: 'bryan_test2',
+          model_name: 'bryan_test2',
+          branch_name: 'dev_166',
+          files: [{
+            path: 'bryan_test2.model.lkml',
+            action: 'created',
+            content: 'connection: "bq"\\n',
+            diff: '--- a/bryan_test2.model.lkml\\n+++ b/bryan_test2.model.lkml\\n@@ -0,0 +1 @@\\n+connection: "bq"\\n',
+          }],
+          validation: { passed: true, error_count: 0, errors: [] },
+        });
+        const bundleTurn3 = JSON.stringify({
+          id: 'bryan_test2_102',
+          title: 'Silver & Dashboard',
+          project_id: 'bryan_test2',
+          model_name: 'bryan_test2',
+          branch_name: 'dev_166',
+          files: [{
+            path: 'dashboards/exec_pulse.dashboard.lookml',
+            action: 'created',
+            content: '- dashboard: exec_pulse\\n  title: Executive Sales Pulse\\n',
+          }],
+          validation: { passed: true, error_count: 0, errors: [] },
+        });
+        ext.serverProxy = async (url, init) => {
+          const body = init && init.body ? JSON.parse(init.body) : {};
+          const inputText = (body.input && body.input[0] && body.input[0].text) || '';
+          if (inputText.includes('[CONVERSATION_LABEL_REQUEST]')) {
+            return { ok: true, status: 200, body: JSON.stringify({ id: 'lbl_166', status: 'completed', output_text: 'Bryan Test2 Onboarding' }) };
+          }
+          if (inputText.includes('Hello, help me plan')) {
+            return {
+              ok: true, status: 200,
+              body: JSON.stringify({
+                id: 'int_166_t1', status: 'completed',
+                output_text: '<USE_CASE>lookml</USE_CASE>\\nStage 1 $\\\\rightarrow$ Stage 2: please choose a connection and project name.',
+              }),
+            };
+          }
+          if (inputText.includes('Create bryan_test2 bronze model')) {
+            return {
+              ok: true, status: 200,
+              body: JSON.stringify({
+                id: 'int_166_t2', environment_id: 'env_166', status: 'completed',
+                output_text: '<USE_CASE>lookml</USE_CASE>\\nCreated Bronze model. [Open bryan_test2 in Looker IDE](/projects/bryan_test2)\\n<LOOKML_BUNDLE>' + bundleTurn2 + '</LOOKML_BUNDLE>',
+              }),
+            };
+          }
+          if (inputText.includes('Add exec_pulse.dashboard.lookml')) {
+            return {
+              ok: true, status: 200,
+              body: JSON.stringify({
+                id: 'int_166_t3', environment_id: 'env_166', status: 'completed',
+                output_text: '<USE_CASE>lookml</USE_CASE>\\nAdded Silver explore & LookML dashboard. [Open Executive Sales Pulse](/dashboards/bryan_test2::exec_pulse)\\n<LOOKML_BUNDLE>' + bundleTurn3 + '</LOOKML_BUNDLE>',
+              }),
+            };
+          }
+          return origProxy(url, init);
+        };
+
+        // 1. Fresh conversation -> Turn 1 chat-only intake keeps .dab-right-pane display:none and renders LaTeX arrow as →
+        document.querySelector('[data-testid="new-conversation-btn"]').click();
+        await new Promise((r) => setTimeout(r, 80));
+        await window.__DAB_STUDIO__.handleSendPrompt({ text: 'Hello, help me plan a new project' });
+        await new Promise((r) => setTimeout(r, 120));
+        const rightDisplayAfterChatIntake = window.getComputedStyle(document.querySelector('.dab-right-pane')).display;
+        const leftWidthFullOnChatIntake = document.querySelector('.dab-left-pane').getBoundingClientRect().width > 900;
+        const chatBodyAfterT1 = document.querySelector('.dab-chat-log')?.innerText || '';
+        const normalizedArrowInChat = chatBodyAfterT1.includes('Stage 1 → Stage 2') && !chatBodyAfterT1.includes('\\\\rightarrow');
+
+        // 2. Turn 2 LookML -> opens single lookml:bryan_test2 tab in clean File View
+        await window.__DAB_STUDIO__.handleSendPrompt({ text: 'Create bryan_test2 bronze model on bq' });
+        await new Promise((r) => setTimeout(r, 140));
+        const rightDisplayAfterLookml = window.getComputedStyle(document.querySelector('.dab-right-pane')).display;
+        const firstFileTabLabel = (document.querySelector('[data-testid="lookml-file-tab-0"]')?.textContent || '').trim();
+        const lookmlToolbarText = (document.querySelector('.dab-right-pane .dab-ds-toolbar-title-block')?.textContent || '').trim();
+        const noObjLookmlJargon = !/obj_lookml_/i.test(lookmlToolbarText);
+
+        // Open 3-dot LookML actions menu -> verify View Changeset <-> Back to Files, Open File in IDE & View Details modal
+        document.querySelector('[data-testid="lookml-code-actions-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const toggleLabelInFileMode = (document.querySelector('[data-testid="lookml-toggle-view-mode-btn"]')?.textContent || '').trim();
+        document.querySelector('[data-testid="lookml-toggle-view-mode-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        document.querySelector('[data-testid="lookml-code-actions-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const toggleLabelInDiffMode = (document.querySelector('[data-testid="lookml-toggle-view-mode-btn"]')?.textContent || '').trim();
+        document.querySelector('[data-testid="lookml-toggle-view-mode-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+
+        document.querySelector('[data-testid="lookml-code-actions-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        document.querySelector('[data-testid="lookml-open-file-ide-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const openedFileIdeUrl = (window.__OPENED_WINDOWS__ || []).slice(-1)[0]?.url || '';
+
+        document.querySelector('[data-testid="lookml-code-actions-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        document.querySelector('[data-testid="lookml-view-details-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const detailsModal = document.querySelector('[data-testid="lookml-details-modal"]');
+        const hasDetailsModal = Boolean(detailsModal);
+        const lightModalBg = detailsModal ? window.getComputedStyle(detailsModal).backgroundColor : '';
+        window.__DAB_STUDIO__.setThemeMode('dark');
+        await new Promise((r) => setTimeout(r, 40));
+        const darkModalBg = detailsModal ? window.getComputedStyle(detailsModal).backgroundColor : '';
+        window.__DAB_STUDIO__.setThemeMode('light');
+        await new Promise((r) => setTimeout(r, 40));
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 50));
+
+        // 3. Turn 3 LookML + .dashboard.lookml -> merges into SAME lookml:bryan_test2 tab AND auto-opens lookml_dashboard:bryan_test2::exec_pulse
+        await window.__DAB_STUDIO__.handleSendPrompt({ text: 'Add exec_pulse.dashboard.lookml' });
+        await new Promise((r) => setTimeout(r, 150));
+        const tabEls = Array.from(document.querySelectorAll('[data-testid^="studio-content-tab-"]:not([data-testid^="studio-content-tab-close-"]):not([data-testid^="studio-content-tab-restore-"])'));
+        const tabKeys = tabEls.map((el) => el.getAttribute('data-testid').replace('studio-content-tab-', ''));
+        const activeAfterDashAutoUpsert = window.__DAB_STUDIO__.activeContentItem?.key || '';
+        const mergedLookmlFileCount = (window.__DAB_STUDIO__.lookmlBundle?.files || []).length;
+
+        // Hover LookML tab -> verify content-tab-popover-lookml:bryan_test2 + lookml-open-ide-btn opens /projects/bryan_test2 (no /files)
+        const lookmlTabWrap = document.querySelector('[data-testid="studio-content-tab-lookml:bryan_test2"]')?.parentElement;
+        lookmlTabWrap?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 50));
+        const popoverEl = document.querySelector('[data-testid="content-tab-popover-lookml:bryan_test2"]');
+        const popoverVisible = popoverEl ? window.getComputedStyle(popoverEl).display !== 'none' : false;
+        popoverEl?.querySelector('[data-testid="lookml-open-ide-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const openedProjIdeUrl = (window.__OPENED_WINDOWS__ || []).slice(-1)[0]?.url || '';
+
+        // 4. Hide dashboard tab -> chip disappears from chat-object-viewer-chips -> click chat /dashboards/ link -> unhides & focuses in viewer; external btn opens browser window
+        document.querySelector('[data-testid="studio-content-tab-close-lookml_dashboard:bryan_test2::exec_pulse"]')?.click();
+        await new Promise((r) => setTimeout(r, 80));
+        const chipHiddenWhenTabHidden = !document.querySelector('[data-testid="chat-object-viewer-chip-lookml_dashboard:bryan_test2::exec_pulse"]');
+
+        const dashChatLinks = Array.from(document.querySelectorAll('[data-testid="chat-markdown-link"]')).filter((a) => (a.getAttribute('href') || '').includes('/dashboards/bryan_test2::exec_pulse'));
+        const openCountBeforeChatClick = (window.__OPENED_WINDOWS__ || []).length;
+        dashChatLinks[0]?.click();
+        await new Promise((r) => setTimeout(r, 80));
+        const openCountAfterChatClick = (window.__OPENED_WINDOWS__ || []).length;
+        const activeAfterChatLinkClick = window.__DAB_STUDIO__.activeContentItem?.key || '';
+        const chipRestoredAfterChatClick = Boolean(document.querySelector('[data-testid="chat-object-viewer-chip-lookml_dashboard:bryan_test2::exec_pulse"]'));
+
+        const extBtn = dashChatLinks[0]?.parentElement?.querySelector('[data-testid="markdown-link-external-btn"]');
+        extBtn?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const openedViaExtBtn = (window.__OPENED_WINDOWS__ || []).slice(-1)[0]?.url || '';
+
+        ext.serverProxy = origProxy;
+        return {
+          hasExtensionDbJargon,
+          closeDocBtnText,
+          closeDocBtnHasSvg,
+          rightDisplayAfterChatIntake,
+          leftWidthFullOnChatIntake,
+          normalizedArrowInChat,
+          rightDisplayAfterLookml,
+          firstFileTabLabel,
+          noObjLookmlJargon,
+          toggleLabelInFileMode,
+          toggleLabelInDiffMode,
+          openedFileIdeUrl,
+          hasDetailsModal,
+          modalThemeDistinct: Boolean(lightModalBg && darkModalBg && lightModalBg !== darkModalBg),
+          tabKeys,
+          activeAfterDashAutoUpsert,
+          mergedLookmlFileCount,
+          popoverVisible,
+          openedProjIdeUrl,
+          chipHiddenWhenTabHidden,
+          didNotOpenWindowOnChatContentLink: openCountAfterChatClick === openCountBeforeChatClick,
+          activeAfterChatLinkClick,
+          chipRestoredAfterChatClick,
+          openedViaExtBtn,
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+
+    expect(res166.result.value).toEqual({
+      hasExtensionDbJargon: false,
+      closeDocBtnText: '',
+      closeDocBtnHasSvg: true,
+      rightDisplayAfterChatIntake: 'none',
+      leftWidthFullOnChatIntake: true,
+      normalizedArrowInChat: true,
+      rightDisplayAfterLookml: 'flex',
+      firstFileTabLabel: 'bryan_test2.model.lkml',
+      noObjLookmlJargon: true,
+      toggleLabelInFileMode: 'View Changeset',
+      toggleLabelInDiffMode: 'Back to Files',
+      openedFileIdeUrl: '/projects/bryan_test2/files/bryan_test2.model.lkml',
+      hasDetailsModal: true,
+      modalThemeDistinct: true,
+      tabKeys: ['lookml:bryan_test2', 'lookml_dashboard:bryan_test2::exec_pulse'],
+      activeAfterDashAutoUpsert: 'lookml_dashboard:bryan_test2::exec_pulse',
+      mergedLookmlFileCount: 2,
+      popoverVisible: true,
+      openedProjIdeUrl: '/projects/bryan_test2',
+      chipHiddenWhenTabHidden: true,
+      didNotOpenWindowOnChatContentLink: true,
+      activeAfterChatLinkClick: 'lookml_dashboard:bryan_test2::exec_pulse',
+      chipRestoredAfterChatClick: true,
+      openedViaExtBtn: '/dashboards/bryan_test2::exec_pulse',
     })
   }, 20000)
 })

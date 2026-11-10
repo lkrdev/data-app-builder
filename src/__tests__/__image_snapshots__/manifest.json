@@ -6,7 +6,7 @@
     "snapshotName": "01-mode-data-app-and-permission-gate-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "dashboard",
@@ -15,7 +15,7 @@
     "snapshotName": "02-mode-native-dashboard-builder-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "lookml",
@@ -24,7 +24,7 @@
     "snapshotName": "03-mode-agentic-lookml-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "health_check",
@@ -33,7 +33,7 @@
     "snapshotName": "04-mode-3-pillar-health-check-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "python_tile_studio",
@@ -42,7 +42,7 @@
     "snapshotName": "05-mode-python-tile-studio-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "tile_mount_view",
@@ -136,14 +136,14 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_error_banner",
     "category": "Chat Bar States",
     "title": "14. Chat Bar State — Error Diagnostic Banner",
     "snapshotName": "14-chatbar-state-error-banner-snap.png",
-    "width": 427,
+    "width": 1234,
     "height": 830,
     "clipSelector": [
       ".dab-msg-error",
@@ -161,7 +161,7 @@
     "height": 416,
     "clipSelector": ".dab-modal",
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "conversational_analytics",
@@ -170,7 +170,7 @@
     "snapshotName": "16-mode-conversational-analytics-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "centered_empty_prompt",
@@ -190,6 +190,6 @@
     "snapshotName": "18-studio-dark-theme.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   }
 ]
