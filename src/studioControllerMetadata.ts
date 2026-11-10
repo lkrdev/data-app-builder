@@ -13,7 +13,7 @@ import {
   buildAvailableExploresCatalog, buildDenseExploreSchema, buildRootLookerFolders,
   DEFAULT_STUDIO_AGENT_NAME, fetchFolderChildren, fetchFolderWithAncestors,
   fetchInitialLookerMetadata, fetchPreloadedContentSummary, getArtifactNamespace,
-  getArtifactService, listSavedScripts, loadStoredSelectedFolderId,
+  getArtifactService, getConvTargetId, listSavedScripts, loadStoredSelectedFolderId,
   loadUserEnvironmentId, LookerFolderNode, normalizeStudioAgentName,
   parseExploreId, persistSelectedFolderId, readInitialSelectedFolderId,
   ResolvedStudioUseCase, SavedScript, searchLookerFolders, SearchLookerFoldersParams,
@@ -202,12 +202,8 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     if (cached) return cached
     const convMatch = conversations.find((c) => {
       if (c.id === rawId || c.id === id) return true
-      const cid = String(
-        c.content?.dashboardId || c.content?.lookId || c.content?.lookmlDashboardId ||
-        c.content?.reportId || c.content?.sessionId || c.content?.scriptId ||
-        c.content?.caConversationId || c.content?.id || ''
-      )
-      return cid === id || cid === rawId
+      const cid = getConvTargetId(c.content, c.type)
+      return Boolean((cid && (cid === id || cid === rawId)) || (c.type === 'lookml' && c.content?.sessionId && (c.content.sessionId === id || c.content.sessionId === rawId)))
     })
     if (convMatch) {
       if (convMatch.use_case === 'auto' && !convMatch.interactionId) return undefined
