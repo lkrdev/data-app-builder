@@ -435,7 +435,7 @@ export function buildNativeContentGuide(params: {
     `Execute in ONE \`run_looker_codemode\` call per turn (\`code_execution\` disabled; pass a 1-sentence \`thought\`; NEVER call \`update_session\`; SDK returns Python \`dict\`s):`,
     `1. On cold start (when fields are not in conversation history), discover fields via \`lookml_model_explore(m, e, fields="name,label,fields(dimensions(name,label,type),measures(name,label,type))")\`, then run \`upsert_udd\`, \`upsert_lookml_dashboard\`, \`create_look\`, \`pin_to_board\`, or \`schedule_dashboard\` in the SAME script.`,
     `2. End with \`return emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", summary="...")\` (\`target_folder_id\`="${folderId}", \`target_explores\`=${JSON.stringify(selectedExplores)}, \`target_model\`="${primaryModel || lookmlProjectId}", \`target_explore\`="${primaryExplore || 'order_items'}", \`target_project_id\`="${lookmlProjectId}").`,
-    `3. CRITICAL: Never echo \`<NATIVE_CONTENT_BUNDLE>\`, layout coordinates (\`Row 0\`, \`col\`, \`width\`, \`height\`, \`24-Column Grid\`), or internal vis strings (\`single_value\`, \`looker_area\`, \`looker_pie\`, \`looker_column\`, \`looker_bar\`, \`looker_grid\`) in your chat reply — summarize only the tiles, filters, what each tile measures, and end with \`[Open <Dashboard Title>](/dashboards/<id>)\`.`,
+    `3. CRITICAL: Never echo \`<NATIVE_CONTENT_BUNDLE>\`, layout coordinates, or internal vis strings in your chat reply — summarize only tiles, filters, what each tile measures, and end with \`[Open <Dashboard Title>](/dashboards/<id>)\`.`,
     ...(lookmlOnboardingDirective ? [lookmlOnboardingDirective] : []),
   ].join('\n')
 }
@@ -685,8 +685,8 @@ def main():
         if dm_day:
             ln = raw_js.count(chr(10), 0, dm_day.start()) + 1
             safety.append({"line": ln, "rule": "invalid-lookml-day-timeframe", "message": "Pairing 'day' period keys/values with '_$" + "{...period}' produces nonexistent '*_day' LookML fields. Key PERIOD_DEFAULTS, WINDOW_OPTIONS, UNITS, and Period options by 'date'.", "snippet": raw_lines[ln - 1].strip()[:100]})
-    ws_cls = "[ " + chr(9) + chr(10) + chr(13) + "]*"
-    ws_one = "[ " + chr(9) + chr(10) + chr(13) + "]+"
+    ws_ch = "[ " + chr(9) + chr(10) + chr(13) + "]"
+    ws_cls, ws_one = ws_ch + "*", ws_ch + "+"
     css_js = re.sub("""/[*][^*]*[*]+(?:[^/*][^*]*[*]+)*/""", lambda m: "".join(ch if ch == chr(10) else " " for ch in m.group(0)), clean_js)
     def _kpi_sub(src, idx):
         d, cur = 1, idx
@@ -696,22 +696,16 @@ def main():
                 return src[idx:idx + tm.start()]
             cur = idx + tm.end()
         return src[idx:cur + 400]
+    def _is_kpi_sub(s):
+        return ("<app-kpi" in s or "kpi-change" in s) and "<app-chart" not in s and "<app-grid" not in s
     kpi_msg = "KPI grids (.da-kpi-grid) must not use repeat(auto-fit/auto-fill) (wraps 4 cards 3+1). Set container-type: inline-size on .da-container and @container 4 -> 2 -> 1 columns (repeat(4, minmax(0, 1fr)) -> 820px repeat(2, minmax(0, 1fr)) -> 420px 1fr; N=3: 3->1; N=6: 6->3->2->1)."
     sel_excl, kpi_offs = "[^{};<>=" + chr(96) + "]*", []
     for km in re.finditer("""([.#][a-zA-Z0-9_-]+""" + sel_excl + """)[{][^}]*repeat[(]""" + ws_cls + """auto-(?:fit|fill)""", css_js, re.IGNORECASE):
         sel_hdr = km.group(1)
-        wraps_kpi = "kpi" in sel_hdr.lower()
-        if not wraps_kpi:
-            for ctok in re.findall("[.#][a-zA-Z0-9_-]+", sel_hdr):
-                pat_el = ("id" if ctok[0] == "#" else "class") + ws_cls + """=""" + ws_cls + """['"](?:[^'"]*""" + ws_one + """)?""" + ctok[1:] + """(?:""" + ws_one + """[^'"]*)?['"](?:[^>]|=>)*?>"""
-                if any(("<app-kpi" in s or "kpi-change" in s) and "<app-chart" not in s and "<app-grid" not in s for s in (_kpi_sub(css_js, m.end()) for m in re.finditer(pat_el, css_js, re.IGNORECASE))):
-                    wraps_kpi = True
-                    break
-        if wraps_kpi:
+        if "kpi" in sel_hdr.lower() or any(_is_kpi_sub(_kpi_sub(css_js, m.end())) for ctok in re.findall("[.#][a-zA-Z0-9_-]+", sel_hdr) for m in re.finditer(("id" if ctok[0] == "#" else "class") + ws_cls + """=""" + ws_cls + """['"](?:[^'"]*""" + ws_one + """)?""" + ctok[1:] + """(?:""" + ws_one + """[^'"]*)?['"](?:[^>]|=>)*?>""", css_js, re.IGNORECASE)):
             kpi_offs.append(km.start())
     for im in re.finditer("""<(?:div|section)(?:[^>]|=>)*?style""" + ws_cls + """=""" + ws_cls + """['"][^'"]*repeat[(]""" + ws_cls + """auto-(?:fit|fill)[^'"]*['"](?:[^>]|=>)*?>""", css_js, re.IGNORECASE):
-        sub = _kpi_sub(css_js, im.end())
-        if "kpi" in im.group(0).lower() or (("<app-kpi" in sub or "kpi-change" in sub) and "<app-chart" not in sub and "<app-grid" not in sub):
+        if "kpi" in im.group(0).lower() or _is_kpi_sub(_kpi_sub(css_js, im.end())):
             kpi_offs.append(im.start())
     if "kpi-change" in css_js:
         base_css = re.sub("""@container[^{]*[{](?:[^{}]*[{][^}]*[}])*[^}]*[}]""", "", css_js)
