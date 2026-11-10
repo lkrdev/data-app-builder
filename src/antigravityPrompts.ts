@@ -64,10 +64,7 @@ def _valid_explore_fields(tm, te):
             exp = lookml_model_explore(tm, te, fields="fields(dimensions(name),measures(name),filters(name),parameters(name))") or {}
             ef = exp.get("fields") if isinstance(exp, dict) else {}
             if isinstance(ef, dict):
-                dims = [str(x["name"]) for x in (ef.get("dimensions") or []) if isinstance(x, dict) and x.get("name")]
-                meas = [str(x["name"]) for x in (ef.get("measures") or []) if isinstance(x, dict) and x.get("name")]
-                flts = [str(x["name"]) for x in (ef.get("filters") or []) if isinstance(x, dict) and x.get("name")]
-                prms = [str(x["name"]) for x in (ef.get("parameters") or []) if isinstance(x, dict) and x.get("name")]
+                dims, meas, flts, prms = [[str(x["name"]) for x in (ef.get(k) or []) if isinstance(x, dict) and x.get("name")] for k in ("dimensions", "measures", "filters", "parameters")]
         except Exception:
             pass
     res = {"all": set(dims + meas + flts + prms), "dims": dims, "meas": meas}
@@ -101,48 +98,21 @@ def _check_dashboard_fields(default_model, default_explore, filters=None, tiles=
         vf = _valid_explore_fields(tm, te)
         if not vf["all"]:
             continue
-        dyn = set()
         raw_dyn = q.get("dynamic_fields") or t.get("dynamic_fields")
         if isinstance(raw_dyn, str) and raw_dyn.strip().startswith("["):
             try:
                 raw_dyn = json.loads(raw_dyn)
             except Exception:
                 raw_dyn = []
-        if isinstance(raw_dyn, list):
-            for df in raw_dyn:
-                if isinstance(df, dict):
-                    dn = df.get("measure") or df.get("dimension") or df.get("table_calculation")
-                    if dn:
-                        dyn.add(str(dn))
-        refs = list(flds)
-        for pv in (q.get("pivots") or t.get("pivots") or []):
-            if str(pv).strip():
-                refs.append(str(pv).strip())
-        for st in (q.get("sorts") or t.get("sorts") or []):
-            sp = str(st).strip().split()
-            if sp:
-                refs.append(sp[0])
-        for fk in dict(q.get("filters") or t.get("filters") or {}).keys():
-            if str(fk).strip():
-                refs.append(str(fk).strip())
+        dyn = set([str(df.get("measure") or df.get("dimension") or df.get("table_calculation") or "") for df in (raw_dyn if isinstance(raw_dyn, list) else []) if isinstance(df, dict)])
         lsn = t.get("listen")
-        if isinstance(lsn, dict):
-            for lv in lsn.values():
-                if str(lv).strip():
-                    refs.append(str(lv).strip())
-        elif isinstance(lsn, list):
-            for li in lsn:
-                if isinstance(li, dict) and li.get("field"):
-                    refs.append(str(li["field"]).strip())
+        lvals = list(lsn.values()) if isinstance(lsn, dict) else [li.get("field") for li in (lsn or []) if isinstance(li, dict)]
+        refs = flds + [str(x).strip() for x in list(q.get("pivots") or t.get("pivots") or []) + list(dict(q.get("filters") or t.get("filters") or {}).keys()) + lvals if x and str(x).strip()] + [str(s).split()[0] for s in (q.get("sorts") or t.get("sorts") or []) if str(s).strip()]
         for rf in refs:
             if rf not in vf["all"] and rf not in dyn:
                 missing.setdefault((tm, te), []).append(f"tile '{tlabel}': {rf}")
     if missing:
-        msgs = []
-        for (em, ee), bad in missing.items():
-            vf = _valid_explore_fields(em, ee)
-            msgs.append(f"Unknown/excluded field(s) on {em}::{ee}: {', '.join(bad)}. Valid measures: {vf['meas'][:40]}; Valid dimensions: {vf['dims'][:40]}")
-        raise ValueError(" | ".join(msgs))
+        raise ValueError(" | ".join([f"Unknown/excluded field(s) on {em}::{ee}: {', '.join(bad)}. Valid measures: {_valid_explore_fields(em, ee)['meas'][:40]}; Valid dimensions: {_valid_explore_fields(em, ee)['dims'][:40]}" for (em, ee), bad in missing.items()]))
 
 def upsert_udd(title, folder_id=None, filters=None, tiles=None, dashboard_id=None):
     _check_dashboard_fields(_t_model, _t_explore, filters=filters, tiles=tiles)
@@ -325,26 +295,17 @@ def upsert_lookml_dashboard(project_id="", model="", dashboard_name="executive_p
                 update_file(proj, {"path": mpath, "content": inc + mc})
             except Exception:
                 pass
-        val_res = None
         try:
             val_res = validate_project(proj)
         except Exception:
             val_res = None
         if isinstance(val_res, dict):
             bad_diags = []
-            slug_tok = f"{slug}.dashboard.lookml"
-            for diag in (val_res.get("errors") or []):
-                if not isinstance(diag, dict):
-                    continue
-                sev = str(diag.get("severity") or "").lower()
-                if sev not in ("fatal", "warning"):
-                    continue
-                fp = str(diag.get("file_path") or "")
-                msg = str(diag.get("message") or "")
-                dtl = str(diag.get("details") or "")
-                hay = f"{fp} {msg} {dtl}"
-                if fpath in hay or slug_tok in hay or "unknown field" in hay.lower():
-                    bad_diags.append(f"[{sev}] {fp}: {msg}".strip())
+            for d in (val_res.get("errors") or []):
+                sev = str(d.get("severity") or "").lower() if isinstance(d, dict) else ""
+                hay = f"{d.get('file_path') or ''} {d.get('message') or ''} {d.get('details') or ''}" if sev in ("fatal", "warning") else ""
+                if hay and (fpath in hay or f"{slug}.dashboard.lookml" in hay or "unknown field" in hay.lower()):
+                    bad_diags.append(f"[{sev}] {d.get('file_path') or ''}: {d.get('message') or ''}".strip())
             if bad_diags:
                 raise ValueError(f"LookML dashboard validation failed for {fpath}: " + "; ".join(bad_diags))
     synced_udd = str(sync_udd_id or "")

@@ -6647,7 +6647,6 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
   })
 
   test('66. Issue #167: enforces LookML dashboard field-existence & validate_project warning gates, clean summaries, date timeframe guard in BUNDLE_APP_PY, 4-row PoP KPIs, and card-border compare', async () => {
-    // 1. upsert_udd & upsert_lookml_dashboard field-existence + validate_project warning/fatal gates in Monty WASM
     let exploreHits = 0
     let validationErrors: Array<{ severity: string; file_path?: string; message: string }> = []
     const mockDashSdk = asSdk({
@@ -6657,28 +6656,13 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
             const m = method.toUpperCase()
             if (m === 'GET' && reqPath.includes('/lookml_models/ecom/explores/order_items')) {
               exploreHits += 1
-              return {
-                statusCode: 200,
-                ok: true,
-                body: {
-                  fields: {
-                    dimensions: [{ name: 'order_items.created_date' }, { name: 'products.category' }],
-                    measures: [{ name: 'order_items.total_sale_price' }, { name: 'order_items.count' }],
-                    filters: [],
-                    parameters: [],
-                  },
-                },
-              }
+              return { statusCode: 200, ok: true, body: { fields: { dimensions: [{ name: 'order_items.created_date' }, { name: 'products.category' }], measures: [{ name: 'order_items.total_sale_price' }, { name: 'order_items.count' }], filters: [], parameters: [] } } }
             }
-            if (m === 'POST' && reqPath.includes('/projects/ecom_proj/validate')) {
-              return { statusCode: 200, ok: true, body: { errors: validationErrors } }
-            }
+            if (m === 'POST' && reqPath.includes('/projects/ecom_proj/validate')) return { statusCode: 200, ok: true, body: { errors: validationErrors } }
             if (m === 'POST' && reqPath === '/dashboards') return { statusCode: 200, ok: true, body: { id: '77', title: body?.title } }
             if (m === 'POST' && reqPath === '/queries') return { statusCode: 200, ok: true, body: { id: '901' } }
             if (m === 'POST' && reqPath === '/dashboard_elements') return { statusCode: 200, ok: true, body: { id: '501' } }
-            if (m === 'GET' && reqPath.includes('/dashboard_layouts')) {
-              return { statusCode: 200, ok: true, body: [{ id: 'lay_77', dashboard_layout_components: [{ id: 'c_1', dashboard_element_id: '501' }] }] }
-            }
+            if (m === 'GET' && reqPath.includes('/dashboard_layouts')) return { statusCode: 200, ok: true, body: [{ id: 'lay_77', dashboard_layout_components: [{ id: 'c_1', dashboard_element_id: '501' }] }] }
             return { statusCode: 200, ok: true, body: { id: '1', path: body?.path || 'dashboards/pulse.dashboard.lookml' } }
           },
         },
@@ -6686,21 +6670,12 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     })
 
     const badUddOut = await LkrCodeMode.runPythonCode({
-      code: wrapDashboardCodeMode(`return upsert_udd(
-    "Commerce Overview",
-    folder_id="5",
-    filters=[{"name": "bad_flt", "dimension": "order_items.excluded_filter"}],
-    tiles=[
-        {"title": "KPI 1", "fields": ["order_items.excluded_brand_count"], "vis_config": {"type": "single_value"}},
-        {"title": "Trend", "fields": ["order_items.created_date", "order_items.count"], "pivots": ["products.unknown_pivot"], "sorts": ["order_items.unknown_sort desc"]},
-    ]
-)`),
+      code: wrapDashboardCodeMode('return upsert_udd("Commerce Overview", folder_id="5", filters=[{"name": "bad_flt", "dimension": "order_items.excluded_filter"}], tiles=[{"title": "KPI 1", "fields": ["order_items.excluded_brand_count"], "vis_config": {"type": "single_value"}}, {"title": "Trend", "fields": ["order_items.created_date", "order_items.count"], "pivots": ["products.unknown_pivot"], "sorts": ["order_items.unknown_sort desc"]}])'),
       sdk: mockDashSdk,
       vars: { target_model: 'ecom', target_explore: 'order_items', target_folder_id: '5' },
     })
     expect(exploreHits).toBe(1)
-    expect(badUddOut).toContain('ValueError')
-    for (const badTok of ['order_items.excluded_filter', 'order_items.excluded_brand_count', 'products.unknown_pivot', 'order_items.unknown_sort', 'order_items.total_sale_price', 'order_items.created_date']) {
+    for (const badTok of ['ValueError', 'order_items.excluded_filter', 'order_items.excluded_brand_count', 'products.unknown_pivot', 'order_items.unknown_sort', 'order_items.total_sale_price', 'order_items.created_date']) {
       expect(badUddOut).toContain(badTok)
     }
 
@@ -6709,120 +6684,54 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
       sdk: mockDashSdk,
       vars: { target_model: 'ecom', target_explore: 'order_items' },
     })
-    expect(emptyTileOut).toContain('ValueError')
     expect(emptyTileOut).toContain('empty fields=[]')
 
-    validationErrors = [
-      {
-        severity: 'warning',
-        file_path: 'dashboards/ecommerce_overview.dashboard.lookml',
-        message: 'Unknown field "order_items.brand_count" referenced in dashboard element',
-      },
-    ]
+    validationErrors = [{ severity: 'warning', file_path: 'dashboards/ecommerce_overview.dashboard.lookml', message: 'Unknown field "order_items.brand_count" referenced in dashboard element' }]
     const warnLookmlDashOut = await LkrCodeMode.runPythonCode({
-      code: wrapDashboardCodeMode(`return upsert_lookml_dashboard(
-    project_id="ecom_proj",
-    model="ecom",
-    dashboard_name="ecommerce_overview",
-    title="Overview",
-    tiles=[{"title": "Orders", "explore": "order_items", "fields": ["order_items.count"], "vis_config": {"type": "single_value"}}]
-)`),
+      code: wrapDashboardCodeMode('return upsert_lookml_dashboard(project_id="ecom_proj", model="ecom", dashboard_name="ecommerce_overview", title="Overview", tiles=[{"title": "Orders", "explore": "order_items", "fields": ["order_items.count"], "vis_config": {"type": "single_value"}}])'),
       sdk: mockDashSdk,
       vars: { target_model: 'ecom', target_explore: 'order_items', target_project_id: 'ecom_proj' },
     })
-    expect(warnLookmlDashOut).toContain('ValueError')
     expect(warnLookmlDashOut).toContain('[warning]')
     expect(warnLookmlDashOut).toContain('Unknown field')
 
     validationErrors = []
     const okLookmlDashOut = JSON.parse(
       await LkrCodeMode.runPythonCode({
-        code: wrapDashboardCodeMode(`return upsert_lookml_dashboard(
-    project_id="ecom_proj",
-    model="ecom",
-    dashboard_name="ecommerce_overview",
-    title="Overview",
-    folder_id="5",
-    tiles=[{"title": "Orders", "explore": "order_items", "fields": ["order_items.count"], "sorts": ["order_items.count desc"], "vis_config": {"type": "single_value"}}]
-)`),
+        code: wrapDashboardCodeMode('return upsert_lookml_dashboard(project_id="ecom_proj", model="ecom", dashboard_name="ecommerce_overview", title="Overview", folder_id="5", tiles=[{"title": "Orders", "explore": "order_items", "fields": ["order_items.count"], "sorts": ["order_items.count desc"], "vis_config": {"type": "single_value"}}])'),
         sdk: mockDashSdk,
         vars: { target_model: 'ecom', target_explore: 'order_items', target_project_id: 'ecom_proj', target_folder_id: '5' },
       })
     )
     expect((okLookmlDashOut.result || okLookmlDashOut).lookml_dashboard_id).toBe('ecom::ecommerce_overview')
 
-    // 2. Single-table Bronze refinement, no ALL_FIELDS* exclusions on _base, and clean dashboard summary rules
     for (const doc of [LOOKER_PROJECT_ONBOARDING_SKILL_MD, LOOKER_DASHBOARD_SKILL_MD]) {
       expect(doc).toContain('single-table')
       expect(doc).toContain('ALL_FIELDS*')
     }
-    const onboardingNativeGuide = buildNativeContentGuide({
-      selectedExplores: [],
-      primaryModel: 'ecom_proj',
-      primaryExplore: 'order_items',
-      folderId: '5',
-      lookmlProjectId: 'ecom_proj',
-    })
+    const onboardingNativeGuide = buildNativeContentGuide({ selectedExplores: [], primaryModel: 'ecom_proj', primaryExplore: 'order_items', folderId: '5', lookmlProjectId: 'ecom_proj' })
     for (const summaryDoc of [LOOKER_DASHBOARD_SKILL_MD, LOOKER_PROJECT_ONBOARDING_SKILL_MD, NATIVE_CONTENT_GUIDE_MD, onboardingNativeGuide]) {
-      for (const forbiddenReplyTok of ['Row 0', '24-Column Grid', 'single_value', 'looker_area', 'looker_pie', 'looker_column', 'looker_bar', 'looker_grid']) {
+      for (const forbiddenReplyTok of ['Row 0', '24-Column Grid', 'single_value', 'looker_area', 'looker_pie', 'looker_column', 'looker_bar', 'looker_grid', '[Open <Dashboard Title>](/dashboards/<id>)']) {
         expect(summaryDoc).toContain(forbiddenReplyTok)
       }
-      expect(summaryDoc).toContain('[Open <Dashboard Title>](/dashboards/<id>)')
     }
 
-    // 3. BUNDLE_APP_PY static *_day rejection (allowing _day_of_week/_day_of_month/_day_of_year/_hour_of_day & date: 90)
     const repoRoot = path.resolve(__dirname, '../..')
     const workDir = mkdtempSync(path.join(tmpdir(), 'dab-167-test-'))
     try {
       const bundlePyPath = path.join(workDir, 'bundle_app.py')
-      writeFileSync(
-        bundlePyPath,
-        BUNDLE_APP_PY.replace('Path("/workspace/bundle.json")', `Path(${JSON.stringify(path.join(workDir, 'bundle.json'))})`),
-        'utf8'
-      )
+      writeFileSync(bundlePyPath, BUNDLE_APP_PY.replace('Path("/workspace/bundle.json")', `Path(${JSON.stringify(path.join(workDir, 'bundle.json'))})`), 'utf8')
+      const env = { ...process.env, TOOLKIT_DIR: path.join(repoRoot, 'upstream/payload') }
       for (const badBody of [
         "fields: ['orders.created_day', 'orders.count']",
         'fields: [`${m.dateBase}_day`, m.field]',
         'const PERIOD_DEFAULTS = { day: 90, week: 53 }; const f = `${m.dateBase}_${this.period}`',
       ]) {
-        const badSrc = `import { DataApp, html } from '/runtime/data-app.js';
-export class BadApp extends DataApp {
-  constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; this.period = 'date'; }
-  render() { const m = { dateBase: 'orders.created', field: 'orders.count' }; ${badBody}; return html\`<app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; }
-}
-customElements.define('bad-app', BadApp);`
-        expect(() =>
-          execFileSync('python3', [bundlePyPath, '--stdin', 'Bad App', path.join(workDir, 'bad.js')], {
-            input: badSrc,
-            env: { ...process.env, TOOLKIT_DIR: path.join(repoRoot, 'upstream/payload') },
-            encoding: 'utf8',
-            stdio: 'pipe',
-          })
-        ).toThrow(/invalid-lookml-day-timeframe/)
+        const badSrc = `import { DataApp, html } from '/runtime/data-app.js';\nexport class BadApp extends DataApp { constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; this.period = 'date'; } render() { const m = { dateBase: 'orders.created', field: 'orders.count' }; ${badBody}; return html\`<app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; } }\ncustomElements.define('bad-app', BadApp);`
+        expect(() => execFileSync('python3', [bundlePyPath, '--stdin', 'Bad App', path.join(workDir, 'bad.js')], { input: badSrc, env, encoding: 'utf8', stdio: 'pipe' })).toThrow(/invalid-lookml-day-timeframe/)
       }
-
-      const goodSrc = `import { DataApp, html } from '/runtime/data-app.js';
-const PERIOD_DEFAULTS = { date: 90, week: 53, month: 60, year: 10 };
-const WINDOW_OPTIONS = { date: [14, 30, 60, 90, 180], week: [12, 26, 53, 104], month: [6, 12, 24, 60], year: [3, 5, 10] };
-const UNITS = { date: 'days', week: 'weeks', month: 'months', year: 'years' };
-export class GoodApp extends DataApp {
-  constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; this.period = 'date'; this.periodCount = PERIOD_DEFAULTS.date; }
-  render() {
-    const m = { dateBase: 'orders.created', field: 'orders.count' };
-    const dateDim = \`\${m.dateBase}_\${this.period}\`;
-    return html\`
-      <app-chart type="areaspline" .query=\${{ fields: [dateDim, m.field], limit: String(WINDOW_OPTIONS[this.period][3]) }}></app-chart>
-      <app-grid .query=\${{ fields: ['orders.created_day_of_week', 'orders.created_day_of_month', 'orders.created_day_of_year', 'orders.created_hour_of_day', m.field], filters: { 'orders.created_date': \`\${this.periodCount} \${UNITS[this.period]}\` } }}></app-grid>
-    \`;
-  }
-}
-customElements.define('good-app', GoodApp);`
-      const goodOut = execFileSync('python3', [bundlePyPath, '--stdin', 'Good App', path.join(workDir, 'good.js')], {
-        input: goodSrc,
-        env: { ...process.env, TOOLKIT_DIR: path.join(repoRoot, 'upstream/payload') },
-        encoding: 'utf8',
-      })
-      expect(goodOut).toContain('<DATA_APP_BUNDLE>')
+      const goodSrc = `import { DataApp, html } from '/runtime/data-app.js';\nconst PERIOD_DEFAULTS = { date: 90, week: 53, month: 60, year: 10 };\nconst WINDOW_OPTIONS = { date: [14, 30, 60, 90, 180], week: [12, 26, 53, 104], month: [6, 12, 24, 60], year: [3, 5, 10] };\nconst UNITS = { date: 'days', week: 'weeks', month: 'months', year: 'years' };\nexport class GoodApp extends DataApp { constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; this.period = 'date'; this.periodCount = PERIOD_DEFAULTS.date; } render() { const m = { dateBase: 'orders.created', field: 'orders.count' }; const dateDim = \`\${m.dateBase}_\${this.period}\`; return html\`<app-chart type="areaspline" .query=\${{ fields: [dateDim, m.field], limit: String(WINDOW_OPTIONS[this.period][3]) }}></app-chart><app-grid .query=\${{ fields: ['orders.created_day_of_week', 'orders.created_day_of_month', 'orders.created_day_of_year', 'orders.created_hour_of_day', m.field], filters: { 'orders.created_date': \`\${this.periodCount} \${UNITS[this.period]}\` } }}></app-grid>\`; } }\ncustomElements.define('good-app', GoodApp);`
+      expect(execFileSync('python3', [bundlePyPath, '--stdin', 'Good App', path.join(workDir, 'good.js')], { input: goodSrc, env, encoding: 'utf8' })).toContain('<DATA_APP_BUNDLE>')
     } finally {
       rmSync(workDir, { recursive: true, force: true })
     }
