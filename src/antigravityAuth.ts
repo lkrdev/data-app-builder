@@ -25,39 +25,45 @@ export function getGeminiUserAttributeName(extensionSDK: AntigravityExtensionHos
   return getGeminiSecretKeyTag(extensionSDK).replace(/^\{\{|\}\}$/g, '')
 }
 
-export async function ensureGeminiApiKeyUserAttribute(
+export function ensureGeminiApiKeyUserAttribute(
   sdk: Looker40SDK,
   extensionSDK: AntigravityExtensionHostLike,
   apiKeyValue?: string
 ): Promise<string> {
   const attrName = getGeminiUserAttributeName(extensionSDK)
   const trimmedKey = apiKeyValue?.trim()
-  try {
-    const attrs = await sdk.ok(sdk.all_user_attributes({ fields: 'id,name' }))
-    const existing = (attrs || []).find((a) => a.name === attrName)
-    if (!existing) {
-      await sdk.ok(
-        sdk.create_user_attribute({
-          name: attrName,
-          label: 'Looker Agent Gemini API Key',
-          type: 'string',
-          value_is_hidden: true,
-          user_can_view: false,
-          user_can_edit: false,
-          hidden_value_domain_whitelist: 'https://generativelanguage.googleapis.com/*',
-          default_value: trimmedKey || undefined,
-        })
-      )
-    } else if (trimmedKey && existing.id) {
-      await sdk.ok(sdk.update_user_attribute(String(existing.id), { default_value: trimmedKey }))
-    }
-    return attrName
-  } catch (err: unknown) {
-    const errMsg = err instanceof Error ? err.message : String(err || '')
-    throw new Error(
-      `Looker Admin required to create/update hidden user attribute "${attrName}" (value_is_hidden=true, user_can_view=false, whitelist="https://generativelanguage.googleapis.com/*"): ${errMsg}`
+  return Promise.resolve()
+    .then(() => sdk.ok(sdk.all_user_attributes({ fields: 'id,name' })))
+    .then((attrs) => {
+      const existing = (attrs || []).find((a) => a.name === attrName)
+      if (!existing) {
+        return sdk.ok(
+          sdk.create_user_attribute({
+            name: attrName,
+            label: 'Looker Agent Gemini API Key',
+            type: 'string',
+            value_is_hidden: true,
+            user_can_view: false,
+            user_can_edit: false,
+            hidden_value_domain_whitelist: 'https://generativelanguage.googleapis.com/*',
+            default_value: trimmedKey || undefined,
+          })
+        )
+      }
+      if (trimmedKey && existing.id) {
+        return sdk.ok(sdk.update_user_attribute(String(existing.id), { default_value: trimmedKey }))
+      }
+      return undefined
+    })
+    .then(
+      () => attrName,
+      (err: unknown) => {
+        const errMsg = err instanceof Error ? err.message : String(err || '')
+        throw new Error(
+          `Looker Admin required to create/update hidden user attribute "${attrName}" (value_is_hidden=true, user_can_view=false, whitelist="https://generativelanguage.googleapis.com/*"): ${errMsg}`
+        )
+      }
     )
-  }
 }
 
 export interface GoogleOAuthOptions {
@@ -180,37 +186,37 @@ export function getInitialStoredOAuthToken(clientId?: string): string {
   return getInitialStoredOAuthSession(clientId)?.token || ''
 }
 
-export async function loadStoredOAuthSession(
+export function loadStoredOAuthSession(
   extensionSDK?: AntigravityExtensionHostLike,
   clientId?: string
 ): Promise<StoredOAuthSession | null> {
-  try {
-    const extRaw = await extensionSDK?.localStorageGetItem?.(STUDIO_OAUTH_STORAGE_KEY)
-    const raw = extRaw?.trim() || (typeof window !== 'undefined' ? window.localStorage?.getItem?.(STUDIO_OAUTH_STORAGE_KEY) : null)
-    const { session, expired } = parseValidOAuthSession(raw, clientId)
-    if (expired) clearStoredOAuthSession(extensionSDK)
-    return session
-  } catch {
-    return null
-  }
+  return Promise.resolve()
+    .then(() => extensionSDK?.localStorageGetItem?.(STUDIO_OAUTH_STORAGE_KEY))
+    .then((extRaw) => {
+      const raw = extRaw?.trim() || (typeof window !== 'undefined' ? window.localStorage?.getItem?.(STUDIO_OAUTH_STORAGE_KEY) : null)
+      const { session, expired } = parseValidOAuthSession(raw, clientId)
+      if (expired) clearStoredOAuthSession(extensionSDK)
+      return session
+    })
+    .catch(() => null)
 }
 
 let hostOAuthWedged = false
 export const isHostOAuthWedged = (): boolean => hostOAuthWedged
 export const resetHostOAuthWedged = (): void => { hostOAuthWedged = false }
 
-export async function loginWithGoogleOAuth(
+export function loginWithGoogleOAuth(
   extensionSDK: AntigravityExtensionHostLike,
   clientId: string,
   options?: GoogleOAuthOptions
 ): Promise<string> {
-  if (!extensionSDK?.oauth2Authenticate) throw new Error('Looker Extension SDK oauth2Authenticate is not available.')
+  if (!extensionSDK?.oauth2Authenticate) return Promise.reject(new Error('Looker Extension SDK oauth2Authenticate is not available.'))
   const focusReturnDelayMs = options?.focusReturnDelayMs ?? 1500
   const timeoutMs = options?.timeoutMs ?? 120000
   let cleanup = () => {}
   let authSettled = false
-  try {
-    const authPromise = Promise.resolve(
+  return new Promise<{ access_token?: string; id_token?: string; expires_in?: number | string }>((resolveRace, rejectRace) => {
+    Promise.resolve(
       extensionSDK.oauth2Authenticate(
         'https://accounts.google.com/o/oauth2/v2/auth',
         {
@@ -221,52 +227,56 @@ export async function loginWithGoogleOAuth(
         'GET'
       )
     ).then(
-      (r) => { authSettled = true; hostOAuthWedged = false; return r },
-      (e) => { authSettled = true; hostOAuthWedged = false; throw e }
+      (r) => { authSettled = true; hostOAuthWedged = false; resolveRace(r) },
+      (e) => { authSettled = true; hostOAuthWedged = false; rejectRace(e) }
     )
-    const guardPromise = new Promise<{ access_token: string; expires_in?: number }>((resolve, reject) => {
-      let focusTimer: ReturnType<typeof setTimeout> | null = null
-      const settleOrReject = (err: Error) => void loadStoredOAuthSession(extensionSDK, clientId).then((s) =>
-        s?.token ? (authSettled = true, hostOAuthWedged = false, resolve({ access_token: s.token, expires_in: Math.max(60, Math.round((s.expiresAt - Date.now()) / 1000) + 60) })) : reject(err)
-      )
-      const timeoutTimer = setTimeout(() => settleOrReject(new Error('Google OAuth sign-in timed out.')), timeoutMs)
-      const onFocus = () => {
-        if (focusTimer) clearTimeout(focusTimer)
-        focusTimer = setTimeout(() => settleOrReject(new Error('Google OAuth popup closed or failed before completing (check Authorized redirect URIs in /config if you saw Error 400: redirect_uri_mismatch).')), focusReturnDelayMs)
+    let focusTimer: ReturnType<typeof setTimeout> | null = null
+    const settleOrReject = (err: Error) => void loadStoredOAuthSession(extensionSDK, clientId).then((s) =>
+      s?.token ? (authSettled = true, hostOAuthWedged = false, resolveRace({ access_token: s.token, expires_in: Math.max(60, Math.round((s.expiresAt - Date.now()) / 1000) + 60) })) : rejectRace(err)
+    )
+    const timeoutTimer = setTimeout(() => settleOrReject(new Error('Google OAuth sign-in timed out.')), timeoutMs)
+    const onFocus = () => {
+      if (focusTimer) clearTimeout(focusTimer)
+      focusTimer = setTimeout(() => settleOrReject(new Error('Google OAuth popup closed or failed before completing (check Authorized redirect URIs in /config if you saw Error 400: redirect_uri_mismatch).')), focusReturnDelayMs)
+    }
+    const onVis = () => { if (typeof document !== 'undefined' && document.visibilityState === 'visible') onFocus() }
+    const onAbort = () => rejectRace(new Error('Google OAuth sign-in cancelled.'))
+    if (options?.signal?.aborted) return onAbort()
+    options?.signal?.addEventListener('abort', onAbort, { once: true })
+    if (typeof window !== 'undefined') window.addEventListener?.('focus', onFocus)
+    if (typeof document !== 'undefined') document.addEventListener?.('visibilitychange', onVis)
+    cleanup = () => {
+      clearTimeout(timeoutTimer); if (focusTimer) clearTimeout(focusTimer)
+      options?.signal?.removeEventListener('abort', onAbort)
+      if (typeof window !== 'undefined') window.removeEventListener?.('focus', onFocus)
+      if (typeof document !== 'undefined') document.removeEventListener?.('visibilitychange', onVis)
+    }
+  }).then(
+    (res) => {
+      cleanup()
+      const rawToken = res?.access_token
+      if (!rawToken) {
+        if (!authSettled) hostOAuthWedged = true
+        throw new Error(`Google OAuth response did not include an access_token: ${JSON.stringify(res)}`)
       }
-      const onVis = () => { if (typeof document !== 'undefined' && document.visibilityState === 'visible') onFocus() }
-      const onAbort = () => reject(new Error('Google OAuth sign-in cancelled.'))
-      if (options?.signal?.aborted) return onAbort()
-      options?.signal?.addEventListener('abort', onAbort, { once: true })
-      if (typeof window !== 'undefined') window.addEventListener?.('focus', onFocus)
-      if (typeof document !== 'undefined') document.addEventListener?.('visibilitychange', onVis)
-      cleanup = () => {
-        clearTimeout(timeoutTimer); if (focusTimer) clearTimeout(focusTimer)
-        options?.signal?.removeEventListener('abort', onAbort)
-        if (typeof window !== 'undefined') window.removeEventListener?.('focus', onFocus)
-        if (typeof document !== 'undefined') document.removeEventListener?.('visibilitychange', onVis)
-      }
-    })
-    const res = (await Promise.race([authPromise, guardPromise])) as { access_token?: string; id_token?: string; expires_in?: number | string } | undefined
-    const rawToken = res?.access_token
-    if (!rawToken) throw new Error(`Google OAuth response did not include an access_token: ${JSON.stringify(res)}`)
-    const token = String(rawToken).trim()
-    const expiresAt = Date.now() + Math.max(60, (Number(res?.expires_in) || 3600) - 60) * 1000
-    persistOAuthSession(extensionSDK, { token, expiresAt, clientId: clientId.trim() })
-    return token
-  } catch (err) {
-    if (!authSettled) hostOAuthWedged = true
-    throw err
-  } finally {
-    cleanup()
-  }
+      const token = String(rawToken).trim()
+      const expiresAt = Date.now() + Math.max(60, (Number(res?.expires_in) || 3600) - 60) * 1000
+      persistOAuthSession(extensionSDK, { token, expiresAt, clientId: clientId.trim() })
+      return token
+    },
+    (err) => {
+      cleanup()
+      if (!authSettled) hostOAuthWedged = true
+      throw err
+    }
+  )
 }
 
 export const authenticateGoogleOAuth = loginWithGoogleOAuth
 
 let inFlightOAuthRefreshPromise: Promise<string> | null = null
 
-export async function refreshOAuthSessionIfNeeded(opts: {
+export function refreshOAuthSessionIfNeeded(opts: {
   extensionSDK: AntigravityExtensionHostLike
   clientId: string
   tabId?: string
@@ -278,38 +288,43 @@ export async function refreshOAuthSessionIfNeeded(opts: {
   const { extensionSDK, clientId, force = false, currentToken, lockWaitMs = 25, oauthOptions } = opts
   const effectiveTabId = (opts.tabId || 'default_tab').trim()
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-    return { token: '', expiresAt: 0, refreshedByOtherTab: false, deferredUntilVisible: true }
+    return Promise.resolve({ token: '', expiresAt: 0, refreshedByOtherTab: false, deferredUntilVisible: true })
   }
-  const stored = await loadStoredOAuthSession(extensionSDK, clientId)
-  if (stored && stored.expiresAt > Date.now() && (!force || (Boolean(currentToken?.trim()) && stored.token !== currentToken?.trim()))) {
-    return { token: stored.token, expiresAt: stored.expiresAt, refreshedByOtherTab: true, deferredUntilVisible: false }
-  }
-  const ls = typeof window !== 'undefined' ? window.localStorage : undefined
-  const readLock = (): { tabId?: string; expiresAt?: number } | null => {
-    try { const raw = ls?.getItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY); return raw ? (JSON.parse(raw) as { tabId?: string; expiresAt?: number }) : null } catch { return null }
-  }
-  const existingLock = readLock()
-  if (existingLock && Number(existingLock.expiresAt) > Date.now() && existingLock.tabId && existingLock.tabId !== effectiveTabId) {
-    if (inFlightOAuthRefreshPromise) await inFlightOAuthRefreshPromise.catch(() => '')
-    else if (lockWaitMs > 0) await new Promise((r) => setTimeout(r, lockWaitMs))
-    const afterLock = await loadStoredOAuthSession(extensionSDK, clientId)
-    return { token: afterLock?.token || '', expiresAt: afterLock?.expiresAt || 0, refreshedByOtherTab: true, deferredUntilVisible: false }
-  }
-  try { ls?.setItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY, JSON.stringify({ tabId: effectiveTabId, expiresAt: Date.now() + STUDIO_OAUTH_REFRESH_LOCK_TTL_MS })) } catch { /* ignore */ }
-
-  const loginPromise = loginWithGoogleOAuth(extensionSDK, clientId, oauthOptions)
-  inFlightOAuthRefreshPromise = loginPromise
-  try {
-    const token = await loginPromise
-    const refreshed = await loadStoredOAuthSession(extensionSDK, clientId)
-    return { token, expiresAt: refreshed?.expiresAt || Date.now() + STUDIO_OAUTH_REFRESH_INTERVAL_MS, refreshedByOtherTab: false, deferredUntilVisible: false }
-  } finally {
-    if (inFlightOAuthRefreshPromise === loginPromise) inFlightOAuthRefreshPromise = null
-    try { const curLock = readLock(); if (!curLock || curLock.tabId === effectiveTabId) ls?.removeItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY) } catch { /* ignore */ }
-  }
+  return loadStoredOAuthSession(extensionSDK, clientId).then((stored) => {
+    if (stored && stored.expiresAt > Date.now() && (!force || (Boolean(currentToken?.trim()) && stored.token !== currentToken?.trim()))) {
+      return { token: stored.token, expiresAt: stored.expiresAt, refreshedByOtherTab: true, deferredUntilVisible: false }
+    }
+    const ls = typeof window !== 'undefined' ? window.localStorage : undefined
+    const readLock = (): { tabId?: string; expiresAt?: number } | null => {
+      try { const raw = ls?.getItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY); return raw ? (JSON.parse(raw) as { tabId?: string; expiresAt?: number }) : null } catch { return null }
+    }
+    const existingLock = readLock()
+    if (existingLock && Number(existingLock.expiresAt) > Date.now() && existingLock.tabId && existingLock.tabId !== effectiveTabId) {
+      const waitP: Promise<unknown> = inFlightOAuthRefreshPromise
+        ? inFlightOAuthRefreshPromise.catch(() => '')
+        : lockWaitMs > 0 ? new Promise((r) => setTimeout(r, lockWaitMs)) : Promise.resolve()
+      return waitP.then(() => loadStoredOAuthSession(extensionSDK, clientId)).then((afterLock) => ({
+        token: afterLock?.token || '', expiresAt: afterLock?.expiresAt || 0, refreshedByOtherTab: true, deferredUntilVisible: false,
+      }))
+    }
+    try { ls?.setItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY, JSON.stringify({ tabId: effectiveTabId, expiresAt: Date.now() + STUDIO_OAUTH_REFRESH_LOCK_TTL_MS })) } catch { /* ignore */ }
+    const loginPromise = loginWithGoogleOAuth(extensionSDK, clientId, oauthOptions)
+    inFlightOAuthRefreshPromise = loginPromise
+    const releaseLock = () => {
+      if (inFlightOAuthRefreshPromise === loginPromise) inFlightOAuthRefreshPromise = null
+      try { const curLock = readLock(); if (!curLock || curLock.tabId === effectiveTabId) ls?.removeItem?.(STUDIO_OAUTH_REFRESH_LOCK_KEY) } catch { /* ignore */ }
+    }
+    return loginPromise.then(
+      (token) => loadStoredOAuthSession(extensionSDK, clientId).then((refreshed) => {
+        releaseLock()
+        return { token, expiresAt: refreshed?.expiresAt || Date.now() + STUDIO_OAUTH_REFRESH_INTERVAL_MS, refreshedByOtherTab: false, deferredUntilVisible: false }
+      }, (e) => { releaseLock(); throw e }),
+      (e) => { releaseLock(); throw e }
+    )
+  })
 }
 
-export async function callInteractionsApi(
+export function callInteractionsApi(
   extensionSDK: AntigravityExtensionHostLike,
   auth: AntigravityAuth,
   path: string,
@@ -320,40 +335,43 @@ export async function callInteractionsApi(
   const serializedBody = body ? JSON.stringify(body) : undefined
 
   if (auth.mode === 'apikey' && extensionSDK?.serverProxy) {
-    const proxyResp = await extensionSDK.serverProxy(url, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': auth.apiKey?.trim() || getGeminiSecretKeyTag(extensionSDK),
-      },
-      body: serializedBody,
+    return Promise.resolve(
+      extensionSDK.serverProxy(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': auth.apiKey?.trim() || getGeminiSecretKeyTag(extensionSDK),
+        },
+        body: serializedBody,
+      })
+    ).then((proxyResp) => {
+      const parsed: AntigravityInteractionPayload =
+        typeof proxyResp?.body === 'string'
+          ? (() => { try { return JSON.parse(proxyResp.body) as AntigravityInteractionPayload } catch { return { raw: proxyResp.body } } })()
+          : ((proxyResp?.body || {}) as AntigravityInteractionPayload)
+      if (!proxyResp?.ok || (proxyResp?.status && proxyResp.status >= 400)) {
+        const msg = parsed?.error?.message || JSON.stringify(parsed) || `HTTP ${proxyResp?.status}`
+        throw new Error(`Antigravity API error (${proxyResp?.status}): ${msg}`)
+      }
+      return parsed
     })
-    const parsed: AntigravityInteractionPayload =
-      typeof proxyResp?.body === 'string'
-        ? (() => { try { return JSON.parse(proxyResp.body) as AntigravityInteractionPayload } catch { return { raw: proxyResp.body } } })()
-        : ((proxyResp?.body || {}) as AntigravityInteractionPayload)
-    if (!proxyResp?.ok || (proxyResp?.status && proxyResp.status >= 400)) {
-      const msg = parsed?.error?.message || JSON.stringify(parsed) || `HTTP ${proxyResp?.status}`
-      throw new Error(`Antigravity API error (${proxyResp?.status}): ${msg}`)
-    }
-    return parsed
   }
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (auth.mode === 'oauth') {
-    if (!auth.oauthToken?.trim()) throw new Error('Please sign in with Google OAuth first.')
+    if (!auth.oauthToken?.trim()) return Promise.reject(new Error('Please sign in with Google OAuth first.'))
     if (typeof window !== 'undefined' && window.__MOCK_LOOKER_EXTENSION__) {
       const mockInteractions = (window.__MOCK_LOOKER_EXTENSION__ as { mockInteractions?: Record<string, AntigravityInteractionPayload> }).mockInteractions
       if (method === 'GET' && /^interactions\//i.test(path)) {
         const reqId = decodeURIComponent(path.replace(/^interactions\//i, '').split('?')[0] || '').trim()
-        if (mockInteractions && mockInteractions[reqId]) return mockInteractions[reqId]
-        return { id: reqId || 'int_mock_get', status: 'completed', output_text: 'Mock sandbox interaction trace.' }
+        if (mockInteractions && mockInteractions[reqId]) return Promise.resolve(mockInteractions[reqId])
+        return Promise.resolve({ id: reqId || 'int_mock_get', status: 'completed', output_text: 'Mock sandbox interaction trace.' })
       }
-      if (/:cancel$/i.test(path)) return { id: path.replace(/^interactions\//i, '').replace(/:cancel$/i, ''), status: 'cancelled' }
+      if (/:cancel$/i.test(path)) return Promise.resolve({ id: path.replace(/^interactions\//i, '').replace(/:cancel$/i, ''), status: 'cancelled' })
       const inputArr = Array.isArray(body?.input) ? (body?.input as Array<{ text?: string }>) : []
       const promptText = String(inputArr[0]?.text || '')
       if (promptText.includes(CONVERSATION_LABEL_REQUEST_TAG)) {
-        return { id: 'int_mock_label', status: 'completed', output_text: sanitizeConversationLabel('', promptText) }
+        return Promise.resolve({ id: 'int_mock_label', status: 'completed', output_text: sanitizeConversationLabel('', promptText) })
       }
       if (promptText.includes(STARTER_PROMPTS_REQUEST_TAG)) {
         const ucMatch = promptText.match(/Active useCase:\s*([^\r\n]+)/i)?.[1]?.trim() || 'auto'
@@ -390,96 +408,103 @@ export async function callInteractionsApi(
                 }
               : null,
         })
-        return { id: 'int_mock_starter_prompts', status: 'completed', output_text: `<STARTER_PROMPTS>${JSON.stringify(mockPrompts)}</STARTER_PROMPTS>` }
+        return Promise.resolve({ id: 'int_mock_starter_prompts', status: 'completed', output_text: `<STARTER_PROMPTS>${JSON.stringify(mockPrompts)}</STARTER_PROMPTS>` })
       }
       if (promptText.includes('[CA_AGENT_SELECTION_REQUEST]')) {
         const idMatch = promptText.match(/"agent_id"\s*:\s*"([^"]+)"/)
         const selectedId = idMatch?.[1] || 'ad69f74cd9e2494090e9e9e9c50190c8'
-        return {
+        return Promise.resolve({
           id: 'int_mock_ca_selection',
           status: 'completed',
           output_text: JSON.stringify({
             agent_id: selectedId,
             rationale: 'Selected Looker CA agent via direct model stateless routing.',
           }),
-        }
+        })
       }
       const isDirectStatelessModel =
         body?.store === false || (Boolean(body?.model) && !body?.agent)
       const userReqMatch = promptText.match(/User request:\s*([\s\S]*)$/i)
       const inferred = extractResolvedUseCase(undefined, userReqMatch ? userReqMatch[1].trim() : promptText)
-      return {
+      return Promise.resolve({
         id: `int_mock_${Date.now().toString(36).slice(-5)}`,
         ...(isDirectStatelessModel ? {} : { environment_id: `env_${inferred}_mock` }),
         status: 'completed',
         output_text: `<USE_CASE>${inferred}</USE_CASE>\nRouted turn via AGENTS.md to ${inferred}.`,
-      }
+      })
     }
     headers['Authorization'] = `Bearer ${auth.oauthToken.trim()}`
     if (auth.projectId?.trim()) headers['x-goog-user-project'] = auth.projectId.trim()
   } else {
-    if (!auth.apiKey?.trim()) throw new Error('Gemini API Key is not configured.')
+    if (!auth.apiKey?.trim()) return Promise.reject(new Error('Gemini API Key is not configured.'))
     headers['x-goog-api-key'] = auth.apiKey.trim()
   }
 
-  const resp = await fetch(url, { method, headers, body: serializedBody })
-  const text = await resp.text()
-  let parsed: AntigravityInteractionPayload
-  try { parsed = text ? (JSON.parse(text) as AntigravityInteractionPayload) : {} } catch { parsed = { raw: text } }
-  if (!resp.ok) {
-    if (resp.status === 401) {
-      clearStoredOAuthSession(extensionSDK)
-      if (auth.mode === 'oauth' && typeof auth.onUnauthorizedRefresh === 'function') {
-        const refreshedToken = (await auth.onUnauthorizedRefresh().catch(() => null))?.trim()
-        if (refreshedToken) {
-          return await callInteractionsApi(extensionSDK, { ...auth, oauthToken: refreshedToken, onUnauthorizedRefresh: undefined }, path, method, body)
+  return fetch(url, { method, headers, body: serializedBody }).then((resp) =>
+    resp.text().then((text) => {
+      let parsed: AntigravityInteractionPayload
+      try { parsed = text ? (JSON.parse(text) as AntigravityInteractionPayload) : {} } catch { parsed = { raw: text } }
+      if (!resp.ok) {
+        const fail = (): never => {
+          throw new Error(`Antigravity API error (${resp.status}): ${parsed?.error?.message || text || `HTTP ${resp.status}`}`)
         }
-        clearStoredOAuthSession(extensionSDK)
+        if (resp.status === 401) {
+          clearStoredOAuthSession(extensionSDK)
+          if (auth.mode === 'oauth' && typeof auth.onUnauthorizedRefresh === 'function') {
+            return auth.onUnauthorizedRefresh().catch(() => null).then((rt) => {
+              const refreshedToken = rt?.trim()
+              if (refreshedToken) {
+                return callInteractionsApi(extensionSDK, { ...auth, oauthToken: refreshedToken, onUnauthorizedRefresh: undefined }, path, method, body)
+              }
+              clearStoredOAuthSession(extensionSDK)
+              return fail()
+            })
+          }
+        }
+        return fail()
       }
-    }
-    throw new Error(`Antigravity API error (${resp.status}): ${parsed?.error?.message || text || `HTTP ${resp.status}`}`)
-  }
-  return parsed
+      return parsed
+    })
+  )
 }
 
-export async function listAvailableAntigravityModels(
+export function listAvailableAntigravityModels(
   extensionSDK: AntigravityExtensionHostLike,
   auth: AntigravityAuth
 ): Promise<AntigravityModelOption[]> {
   const canQuery = auth.mode === 'oauth' ? Boolean(auth.oauthToken?.trim()) : Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy)
-  if (!canQuery) return ANTIGRAVITY_ALLOWED_MODELS
-  try {
-    const res = await callInteractionsApi(extensionSDK, auth, 'models', 'GET')
-    const byId = new Map<string, { name?: string; displayName?: string; description?: string }>(
-      (Array.isArray(res?.models) ? res.models : []).map((m) => [String(m?.name || '').replace(/^models\//, '').trim(), m])
-    )
-    const matched = ANTIGRAVITY_ALLOWED_MODELS.filter((a) => byId.has(a.id)).map((a) => {
-      const m = byId.get(a.id)
-      return { id: a.id, label: String(m?.displayName || a.label), description: String(m?.description || a.description) }
+  if (!canQuery) return Promise.resolve(ANTIGRAVITY_ALLOWED_MODELS)
+  return callInteractionsApi(extensionSDK, auth, 'models', 'GET')
+    .then((res) => {
+      const byId = new Map<string, { name?: string; displayName?: string; description?: string }>(
+        (Array.isArray(res?.models) ? res.models : []).map((m) => [String(m?.name || '').replace(/^models\//, '').trim(), m])
+      )
+      const matched = ANTIGRAVITY_ALLOWED_MODELS.filter((a) => byId.has(a.id)).map((a) => {
+        const m = byId.get(a.id)
+        return { id: a.id, label: String(m?.displayName || a.label), description: String(m?.description || a.description) }
+      })
+      return matched.length > 0 ? matched : ANTIGRAVITY_ALLOWED_MODELS
     })
-    return matched.length > 0 ? matched : ANTIGRAVITY_ALLOWED_MODELS
-  } catch {
-    return ANTIGRAVITY_ALLOWED_MODELS
-  }
+    .catch(() => ANTIGRAVITY_ALLOWED_MODELS)
 }
 
 export function normalizeSandboxFilePath(rawPath: string): string {
   return String(rawPath || '').trim().replace(/^file:\/\//i, '').replace(/^\/+/, '')
 }
 
-export async function fetchEnvironmentFile(params: {
+export function fetchEnvironmentFile(params: {
   extensionSDK: AntigravityExtensionHostLike
   auth: AntigravityAuth
   environmentId: string
   path: string
 }): Promise<string> {
   const { extensionSDK, auth } = params
+  const rawKey = String(params.path || '').trim()
+  const normalizedPath = normalizeSandboxFilePath(rawKey)
+  if (!normalizedPath) return Promise.reject(new Error('Sandbox file path is required.'))
+  const slashKey = `/${normalizedPath}`
+  const builtin = resolveBuiltinWorkspaceFileContent(rawKey)
   const envId = String(params.environmentId || '').trim()
-  if (!envId) throw new Error('Sandbox environmentId is required.')
-  const normalizedPath = normalizeSandboxFilePath(params.path)
-  if (!normalizedPath) throw new Error('Sandbox file path is required.')
-  const encodedPath = normalizedPath.split('/').filter(Boolean).map((seg) => encodeURIComponent(seg)).join('/')
-  const url = `https://generativelanguage.googleapis.com/v1beta/environments/${encodeURIComponent(envId)}/files/${encodedPath}?alt=media`
 
   const mockWin = typeof window !== 'undefined'
     ? (window as unknown as {
@@ -488,73 +513,89 @@ export async function fetchEnvironmentFile(params: {
       })
     : undefined
   if (mockWin?.__MOCK_LOOKER_EXTENSION__) {
-    const rawKey = String(params.path || '').trim()
-    ;(mockWin.__ENVIRONMENT_FILE_CALLS__ ||= []).push({ environmentId: envId, path: rawKey, normalizedPath, url })
     const filesMap = mockWin.__MOCK_LOOKER_EXTENSION__.environmentFiles || {}
-    const slashKey = `/${normalizedPath}`
     const baseName = normalizedPath.split('/').pop() || normalizedPath
-    const matched =
+    const mockOverride =
       filesMap[`${envId}:${rawKey}`] ?? filesMap[`${envId}:${normalizedPath}`] ?? filesMap[`${envId}:${slashKey}`] ??
-      filesMap[rawKey] ?? filesMap[normalizedPath] ?? filesMap[slashKey] ?? filesMap[baseName] ??
-      resolveBuiltinWorkspaceFileContent(rawKey) ?? resolveBuiltinWorkspaceFileContent(slashKey) ?? resolveBuiltinWorkspaceFileContent(normalizedPath)
-    if (typeof matched === 'string') return matched
-    return `# ${baseName}\n\nFetched on-demand from remote sandbox \`/${normalizedPath}\` in environment \`${envId}\`.\n\n- **Environment:** \`${envId}\`\n- **Path:** \`/${normalizedPath}\`\n- **Persistence:** Ephemeral in-memory session state (never stored on Looker instance)`
+      filesMap[rawKey] ?? filesMap[normalizedPath] ?? filesMap[slashKey] ?? filesMap[baseName]
+    if (typeof mockOverride !== 'string' && typeof builtin === 'string') return Promise.resolve(builtin)
+    const encodedMock = normalizedPath.split('/').filter(Boolean).map((seg) => encodeURIComponent(seg)).join('/')
+    const mockUrl = `https://generativelanguage.googleapis.com/v1beta/environments/${encodeURIComponent(envId)}/files/${encodedMock}?alt=media`
+    ;(mockWin.__ENVIRONMENT_FILE_CALLS__ ||= []).push({ environmentId: envId, path: rawKey, normalizedPath, url: mockUrl })
+    if (typeof mockOverride === 'string') return Promise.resolve(mockOverride)
+    return Promise.resolve(`# ${baseName}\n\nFetched on-demand from remote sandbox \`/${normalizedPath}\` in environment \`${envId}\`.\n\n- **Environment:** \`${envId}\`\n- **Path:** \`/${normalizedPath}\`\n- **Persistence:** Ephemeral in-memory session state (never stored on Looker instance)`)
   }
+  if (typeof builtin === 'string') return Promise.resolve(builtin)
+  if (!envId) return Promise.reject(new Error('Sandbox environmentId is required.'))
+  const encodedPath = normalizedPath.split('/').filter(Boolean).map((seg) => encodeURIComponent(seg)).join('/')
+  const url = `https://generativelanguage.googleapis.com/v1beta/environments/${encodeURIComponent(envId)}/files/${encodedPath}?alt=media`
 
   if (auth.mode === 'apikey' && extensionSDK?.serverProxy) {
-    const proxyResp = await extensionSDK.serverProxy(url, {
-      method: 'GET',
-      headers: { 'x-goog-api-key': auth.apiKey?.trim() || getGeminiSecretKeyTag(extensionSDK) },
+    return Promise.resolve(
+      extensionSDK.serverProxy(url, {
+        method: 'GET',
+        headers: { 'x-goog-api-key': auth.apiKey?.trim() || getGeminiSecretKeyTag(extensionSDK) },
+      })
+    ).then((proxyResp) => {
+      if (!proxyResp?.ok || (proxyResp?.status && proxyResp.status >= 400)) {
+        const errBody = typeof proxyResp?.body === 'string' ? proxyResp.body : JSON.stringify(proxyResp?.body || {})
+        throw new Error(`Antigravity file fetch error (${proxyResp?.status}): ${errBody || `HTTP ${proxyResp?.status}`}`)
+      }
+      if (typeof proxyResp?.body === 'string') return proxyResp.body
+      if (proxyResp?.body && typeof proxyResp.body === 'object') {
+        const obj = proxyResp.body as Record<string, unknown>
+        const k = ['content', 'data', 'raw'].find((x) => typeof obj[x] === 'string')
+        if (k) return obj[k] as string
+        return JSON.stringify(proxyResp.body, null, 2)
+      }
+      return ''
     })
-    if (!proxyResp?.ok || (proxyResp?.status && proxyResp.status >= 400)) {
-      const errBody = typeof proxyResp?.body === 'string' ? proxyResp.body : JSON.stringify(proxyResp?.body || {})
-      throw new Error(`Antigravity file fetch error (${proxyResp?.status}): ${errBody || `HTTP ${proxyResp?.status}`}`)
-    }
-    if (typeof proxyResp?.body === 'string') return proxyResp.body
-    if (proxyResp?.body && typeof proxyResp.body === 'object') {
-      const obj = proxyResp.body as Record<string, unknown>
-      for (const k of ['content', 'data', 'raw']) if (typeof obj[k] === 'string') return obj[k] as string
-      return JSON.stringify(proxyResp.body, null, 2)
-    }
-    return ''
   }
 
   const headers: Record<string, string> = {}
   if (auth.mode === 'oauth') {
-    if (!auth.oauthToken?.trim()) throw new Error('Please sign in with Google OAuth first.')
+    if (!auth.oauthToken?.trim()) return Promise.reject(new Error('Please sign in with Google OAuth first.'))
     headers['Authorization'] = `Bearer ${auth.oauthToken.trim()}`
     if (auth.projectId?.trim()) headers['x-goog-user-project'] = auth.projectId.trim()
   } else {
-    if (!auth.apiKey?.trim()) throw new Error('Gemini API Key is not configured.')
+    if (!auth.apiKey?.trim()) return Promise.reject(new Error('Gemini API Key is not configured.'))
     headers['x-goog-api-key'] = auth.apiKey.trim()
   }
 
-  const resp = await fetch(url, { method: 'GET', headers })
-  const text = await resp.text()
-  if (!resp.ok) {
-    if (resp.status === 401) {
-      clearStoredOAuthSession(extensionSDK)
-      if (auth.mode === 'oauth' && typeof auth.onUnauthorizedRefresh === 'function') {
-        const refreshedToken = (await auth.onUnauthorizedRefresh().catch(() => null))?.trim()
-        if (refreshedToken) {
-          return await fetchEnvironmentFile({
-            extensionSDK,
-            auth: { ...auth, oauthToken: refreshedToken, onUnauthorizedRefresh: undefined },
-            environmentId: envId,
-            path: normalizedPath,
-          })
+  return fetch(url, { method: 'GET', headers }).then((resp) =>
+    resp.text().then((text) => {
+      if (!resp.ok) {
+        const fail = (): never => {
+          let errMsg = text || `HTTP ${resp.status}`
+          try {
+            const parsed = text ? (JSON.parse(text) as { error?: { message?: string } }) : undefined
+            if (parsed?.error?.message) errMsg = parsed.error.message
+          } catch { /* ignore */ }
+          throw new Error(`Antigravity file fetch error (${resp.status}): ${errMsg}`)
         }
-        clearStoredOAuthSession(extensionSDK)
+        if (resp.status === 401) {
+          clearStoredOAuthSession(extensionSDK)
+          if (auth.mode === 'oauth' && typeof auth.onUnauthorizedRefresh === 'function') {
+            return auth.onUnauthorizedRefresh().catch(() => null).then((rt) => {
+              const refreshedToken = rt?.trim()
+              if (refreshedToken) {
+                return fetchEnvironmentFile({
+                  extensionSDK,
+                  auth: { ...auth, oauthToken: refreshedToken, onUnauthorizedRefresh: undefined },
+                  environmentId: envId,
+                  path: normalizedPath,
+                })
+              }
+              clearStoredOAuthSession(extensionSDK)
+              return fail()
+            })
+          }
+        }
+        return fail()
       }
-    }
-    let errMsg = text || `HTTP ${resp.status}`
-    try {
-      const parsed = text ? (JSON.parse(text) as { error?: { message?: string } }) : undefined
-      if (parsed?.error?.message) errMsg = parsed.error.message
-    } catch { /* ignore */ }
-    throw new Error(`Antigravity file fetch error (${resp.status}): ${errMsg}`)
-  }
-  return text
+      return text
+    })
+  )
 }
 
 export interface StreamInteractionOptions {
@@ -599,10 +640,40 @@ export function mergeInteractionSseEvent(
         : -1
       if (idx >= 0) {
         const prev = nextSteps[idx]
+        const mergeArgs = (a: unknown, b: unknown): unknown => {
+          if (b === undefined) return a
+          if (typeof a === 'string' && typeof b === 'string') {
+            return append || !b.trimStart().startsWith('{') ? `${a}${b}` : b
+          }
+          if (a && typeof a === 'object' && !Array.isArray(a) && b && typeof b === 'object' && !Array.isArray(b)) {
+            return { ...(a as Record<string, unknown>), ...(b as Record<string, unknown>) }
+          }
+          return b
+        }
+        const mergedArgs = mergeArgs(prev.arguments, stepObj.arguments)
+        const mergedAltArgs = mergeArgs(prev.args, stepObj.args)
+        const mergedFc = prev.function_call || stepObj.function_call
+          ? {
+              ...prev.function_call,
+              ...stepObj.function_call,
+              ...(mergeArgs(prev.function_call?.arguments, stepObj.function_call?.arguments) !== undefined
+                ? { arguments: mergeArgs(prev.function_call?.arguments, stepObj.function_call?.arguments) }
+                : {}),
+              ...(mergeArgs(prev.function_call?.args, stepObj.function_call?.args) !== undefined
+                ? { args: mergeArgs(prev.function_call?.args, stepObj.function_call?.args) }
+                : {}),
+            }
+          : undefined
         nextSteps[idx] = {
           ...prev, ...stepObj,
           ...(prev.type && !stepObj.type ? { type: prev.type } : {}),
           ...(prev.id && !stepObj.id ? { id: prev.id } : {}),
+          ...(prev.name && !stepObj.name ? { name: prev.name } : {}),
+          ...(mergedArgs !== undefined ? { arguments: mergedArgs } : {}),
+          ...(mergedAltArgs !== undefined ? { args: mergedAltArgs } : {}),
+          ...(mergedFc ? { function_call: mergedFc } : {}),
+          ...(append && typeof prev.code === 'string' && typeof stepObj.code === 'string' ? { code: `${prev.code}${stepObj.code}` } : {}),
+          ...(append && typeof prev.command === 'string' && typeof stepObj.command === 'string' ? { command: `${prev.command}${stepObj.command}` } : {}),
           ...(append && typeof prev.text === 'string' && typeof stepObj.text === 'string' ? { text: `${prev.text}${stepObj.text}` } : {}),
           ...(append && typeof prev.thought === 'string' && typeof stepObj.thought === 'string' ? { thought: `${prev.thought}${stepObj.thought}` } : {}),
         }
@@ -632,7 +703,7 @@ export function mergeInteractionSseEvent(
   }
 }
 
-export async function streamInteractionUntilActionOrDone(options: StreamInteractionOptions): Promise<StreamInteractionResult> {
+export function streamInteractionUntilActionOrDone(options: StreamInteractionOptions): Promise<StreamInteractionResult> {
   const { auth, interactionId, initialInteraction, lastEventId: initialLastEventId, maxReconnects = 1, signal, fetchImpl, allowMockWindow = false, onUpdate } = options
   const cleanId = String(interactionId || '').trim()
   const effectiveFetch = fetchImpl || (typeof fetch === 'function' ? fetch : undefined)
@@ -640,107 +711,125 @@ export async function streamInteractionUntilActionOrDone(options: StreamInteract
     auth.mode !== 'oauth' || !auth.oauthToken?.trim() || !cleanId || !effectiveFetch ||
     (typeof window !== 'undefined' && window.__MOCK_LOOKER_EXTENSION__ && !allowMockWindow && !fetchImpl)
   ) {
-    return { interaction: initialInteraction || null, streamed: false, eventCount: 0, lastEventId: initialLastEventId }
+    return Promise.resolve({ interaction: initialInteraction || null, streamed: false, eventCount: 0, lastEventId: initialLastEventId })
   }
   let currentInteraction: AntigravityInteractionPayload = initialInteraction ? { ...initialInteraction, id: initialInteraction.id || cleanId } : { id: cleanId, status: 'in_progress' }
   let currentLastEventId: string | undefined = initialLastEventId
   let eventCount = 0
   const isTerminal = (s?: string) => s === 'completed' || s === 'requires_action' || s === 'failed' || s === 'cancelled'
+  const buildResult = (): StreamInteractionResult => ({
+    interaction: eventCount > 0 ? currentInteraction : initialInteraction || null,
+    streamed: eventCount > 0,
+    eventCount,
+    lastEventId: currentLastEventId,
+  })
 
-  for (let attempt = 0; attempt <= maxReconnects && !signal?.aborted; attempt += 1) {
+  const runAttempt = (attempt: number): Promise<StreamInteractionResult> => {
+    if (attempt > maxReconnects || signal?.aborted) return Promise.resolve(buildResult())
     const sseUrl = `https://generativelanguage.googleapis.com/v1beta/interactions/${encodeURIComponent(cleanId)}?stream=true&alt=sse${currentLastEventId ? `&last_event_id=${encodeURIComponent(currentLastEventId)}` : ''}`
-    let resp: Response
-    try {
-      resp = await effectiveFetch(sseUrl, {
-        method: 'GET',
-        headers: {
-          Accept: 'text/event-stream',
-          Authorization: `Bearer ${auth.oauthToken.trim()}`,
-          ...(auth.projectId?.trim() ? { 'x-goog-user-project': auth.projectId.trim() } : {}),
-          ...(currentLastEventId ? { 'Last-Event-ID': currentLastEventId } : {}),
-        },
-        signal,
-      })
-    } catch { break }
-    if (!resp?.ok) break
-    const contentType = String(resp.headers?.get?.('content-type') || '').toLowerCase()
-    const hasReader = typeof resp.body?.getReader === 'function'
-    if ((contentType || !hasReader) && !contentType.includes('text/event-stream')) break
+    return Promise.resolve()
+      .then(() =>
+        effectiveFetch(sseUrl, {
+          method: 'GET',
+          headers: {
+            Accept: 'text/event-stream',
+            Authorization: `Bearer ${auth.oauthToken!.trim()}`,
+            ...(auth.projectId?.trim() ? { 'x-goog-user-project': auth.projectId.trim() } : {}),
+            ...(currentLastEventId ? { 'Last-Event-ID': currentLastEventId } : {}),
+          },
+          signal,
+        })
+      )
+      .then(
+        (resp) => {
+          if (!resp?.ok) return buildResult()
+          const contentType = String(resp.headers?.get?.('content-type') || '').toLowerCase()
+          const hasReader = typeof resp.body?.getReader === 'function'
+          if ((contentType || !hasReader) && !contentType.includes('text/event-stream')) return buildResult()
 
-    let buffer = ''
-    let frameId: string | undefined
-    let frameEvent = ''
-    let dataLines: string[] = []
-    let sawDone = false
-    const beforeCount = eventCount
+          let buffer = ''
+          let frameId: string | undefined
+          let frameEvent = ''
+          let dataLines: string[] = []
+          let sawDone = false
+          const beforeCount = eventCount
 
-    const flushFrame = (): boolean => {
-      if (dataLines.length === 0 && !frameEvent && !frameId) return false
-      if (frameId) currentLastEventId = frameId
-      const rawPayload = dataLines.join('\n').trim()
-      const evt = frameEvent
-      frameId = undefined; frameEvent = ''; dataLines = []
-      if (!rawPayload) return false
-      if (rawPayload === '[DONE]') { sawDone = true; return true }
-      try {
-        const parsed = JSON.parse(rawPayload) as Record<string, unknown>
-        if (parsed && typeof parsed === 'object') {
-          currentInteraction = mergeInteractionSseEvent(currentInteraction, evt, parsed)
-          eventCount += 1
-          onUpdate?.(currentInteraction, currentLastEventId)
-        }
-      } catch { /* ignore non-JSON SSE commentary */ }
-      return isTerminal(currentInteraction.status)
-    }
-
-    const processChunkText = (chunkText: string): boolean => {
-      buffer += chunkText
-      for (let nl = buffer.indexOf('\n'); nl >= 0; nl = buffer.indexOf('\n')) {
-        const line = buffer.slice(0, nl).replace(/\r$/, '')
-        buffer = buffer.slice(nl + 1)
-        if (line === '') {
-          if (flushFrame()) return true
-        } else if (!line.startsWith(':')) {
-          const cIdx = line.indexOf(':')
-          const field = cIdx >= 0 ? line.slice(0, cIdx).trim() : line.trim()
-          const val = cIdx >= 0 ? line.slice(cIdx + 1).replace(/^ /, '') : ''
-          if (field === 'id') frameId = val
-          else if (field === 'event') frameEvent = val
-          else if (field === 'data') dataLines.push(val)
-        }
-      }
-      return false
-    }
-
-    try {
-      if (hasReader && resp.body) {
-        const reader = resp.body.getReader()
-        const decoder = new TextDecoder()
-        try {
-          for (;;) {
-            const { done, value } = await reader.read()
-            if (done) {
-              const tail = decoder.decode()
-              if (tail) processChunkText(tail)
-              if (buffer.trim()) processChunkText('\n\n')
-              else flushFrame()
-              break
-            }
-            if (processChunkText(typeof value === 'string' ? value : decoder.decode(value, { stream: true }))) {
-              await reader.cancel().catch(() => {})
-              break
-            }
+          const flushFrame = (): boolean => {
+            if (dataLines.length === 0 && !frameEvent && !frameId) return false
+            if (frameId) currentLastEventId = frameId
+            const rawPayload = dataLines.join('\n').trim()
+            const evt = frameEvent
+            frameId = undefined; frameEvent = ''; dataLines = []
+            if (!rawPayload) return false
+            if (rawPayload === '[DONE]') { sawDone = true; return true }
+            try {
+              const parsed = JSON.parse(rawPayload) as Record<string, unknown>
+              if (parsed && typeof parsed === 'object') {
+                currentInteraction = mergeInteractionSseEvent(currentInteraction, evt, parsed)
+                eventCount += 1
+                onUpdate?.(currentInteraction, currentLastEventId)
+              }
+            } catch { /* ignore non-JSON SSE commentary */ }
+            return isTerminal(currentInteraction.status)
           }
-        } finally {
-          try { reader.releaseLock() } catch { /* ignore */ }
-        }
-      } else if (typeof resp.text === 'function') {
-        processChunkText(`${await resp.text()}\n\n`)
-      }
-    } catch { /* stream dropped mid-flight; reconnect with last_event_id if available */ }
 
-    if (isTerminal(currentInteraction.status) || sawDone || !currentLastEventId || eventCount === beforeCount) break
+          const processChunkText = (chunkText: string): boolean => {
+            buffer += chunkText
+            for (let nl = buffer.indexOf('\n'); nl >= 0; nl = buffer.indexOf('\n')) {
+              const line = buffer.slice(0, nl).replace(/\r$/, '')
+              buffer = buffer.slice(nl + 1)
+              if (line === '') {
+                if (flushFrame()) return true
+              } else if (!line.startsWith(':')) {
+                const cIdx = line.indexOf(':')
+                const field = cIdx >= 0 ? line.slice(0, cIdx).trim() : line.trim()
+                const val = cIdx >= 0 ? line.slice(cIdx + 1).replace(/^ /, '') : ''
+                if (field === 'id') frameId = val
+                else if (field === 'event') frameEvent = val
+                else if (field === 'data') dataLines.push(val)
+              }
+            }
+            return false
+          }
+
+          const consumePromise: Promise<void> =
+            hasReader && resp.body
+              ? (() => {
+                  const reader = resp.body.getReader()
+                  const decoder = new TextDecoder()
+                  const pump = (): Promise<void> =>
+                    reader.read().then(({ done, value }) => {
+                      if (done) {
+                        const tail = decoder.decode()
+                        if (tail) processChunkText(tail)
+                        if (buffer.trim()) processChunkText('\n\n')
+                        else flushFrame()
+                        return
+                      }
+                      if (processChunkText(typeof value === 'string' ? value : decoder.decode(value, { stream: true }))) {
+                        return reader.cancel().catch(() => {})
+                      }
+                      return pump()
+                    })
+                  return pump().finally(() => {
+                    try { reader.releaseLock() } catch { /* ignore */ }
+                  })
+                })()
+              : typeof resp.text === 'function'
+              ? resp.text().then((txt) => { processChunkText(`${txt}\n\n`) })
+              : Promise.resolve()
+
+          return consumePromise
+            .catch(() => { /* stream dropped mid-flight; reconnect with last_event_id if available */ })
+            .then(() =>
+              isTerminal(currentInteraction.status) || sawDone || !currentLastEventId || eventCount === beforeCount
+                ? buildResult()
+                : runAttempt(attempt + 1)
+            )
+        },
+        () => buildResult()
+      )
   }
 
-  return { interaction: eventCount > 0 ? currentInteraction : initialInteraction || null, streamed: eventCount > 0, eventCount, lastEventId: currentLastEventId }
+  return runAttempt(0)
 }

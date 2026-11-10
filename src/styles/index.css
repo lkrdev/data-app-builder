@@ -308,9 +308,9 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 .dab-right-rail-artifact-btn.active {border-color:var(--dab-accent,#2563eb);background:var(--dab-accent-subtle,#eff6ff);color:var(--dab-accent-text,#1d4ed8)}
 .dab-thinking-copy-btn {display:inline-flex;align-items:center;justify-content:center;gap:4px;height:22px;min-width:22px;padding:0 6px;border-radius:5px;border:1px solid var(--dab-border,#e2e8f0);background:var(--dab-surface,#ffffff);color:var(--dab-text-secondary,#475569);font-size:11px;font-weight:600;font-family:inherit;cursor:pointer;flex-shrink:0}
 .dab-thinking-copy-btn:hover {border-color:var(--dab-accent-border,#93c5fd);background:var(--dab-accent-subtle,#eff6ff);color:var(--dab-accent-text,#1d4ed8)}
-.dab-thinking-step-interactive > summary.dab-thinking-step-header:hover {color:var(--dab-accent-text,#1d4ed8)}
+.dab-thinking-step-interactive > summary.dab-thinking-step-header:hover,.dab-thinking-step-expandable > summary.dab-thinking-step-header:hover {color:var(--dab-accent-text,#1d4ed8)}
 .dab-thinking-step-content-wrap {margin-top:4px;display:flex;flex-direction:column;gap:4px}
-.dab-thinking-step-content-preview {margin:0;max-height:220px;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:11px;line-height:1.45;color:var(--dab-text,#1e293b);background:var(--dab-surface,#ffffff);border:1px solid var(--dab-border,#e2e8f0);border-radius:6px;padding:6px 8px;white-space:pre-wrap;word-break:break-word}
+.dab-thinking-step-content-preview,.dab-thinking-step-pre {margin:4px 0 0;max-height:240px;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:11px;line-height:1.45;color:var(--dab-text,#1e293b);background:var(--dab-surface,#ffffff);border:1px solid var(--dab-border,#e2e8f0);border-radius:6px;padding:6px 8px;white-space:pre-wrap;word-break:break-word;min-width:0}
 .dab-btn-icon {width:28px;min-width:28px;height:28px;min-height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;flex-shrink:0}
 .dab-split-action-group {position:relative;display:inline-flex;align-items:center;flex-shrink:0}
 .dab-split-action-group .dab-split-action-main {border-top-right-radius:0;border-bottom-right-radius:0}

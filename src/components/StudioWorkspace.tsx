@@ -1344,13 +1344,13 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 
   const exploreLookup = useMemo(() => {
     const map: Record<string, { id: string; label: string; modelLabel: string; model: string; explore: string }> = {}
-    for (const model of models) {
-      for (const explore of model.explores || []) {
-        if (explore.hidden) continue
+    models.forEach((model) => {
+      ;(model.explores || []).forEach((explore) => {
+        if (explore.hidden) return
         const id = formatExploreId(model.name, String(explore.name))
         map[id] = { id, label: String(explore.label || explore.name), modelLabel: String(model.label || model.name), model: model.name, explore: String(explore.name) }
-      }
-    }
+      })
+    })
     return map
   }, [models])
 
@@ -1365,21 +1365,21 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       if (!seen.has(key)) { seen.add(key); out.push(item) }
     }
     if (cat === 'all' || cat === 'explore') {
-      for (const group of groupedExplores) for (const opt of group.options) pushItem(opt.mention)
-      for (const r of remoteSearchResults) if (r.type === 'explore') pushItem(r)
+      groupedExplores.forEach((group) => group.options.forEach((opt) => pushItem(opt.mention)))
+      remoteSearchResults.forEach((r) => { if (r.type === 'explore') pushItem(r) })
     }
-    for (const contentType of ['dashboard', 'look'] as const) {
+    ;(['dashboard', 'look'] as const).forEach((contentType) => {
       if (cat === 'all' || cat === contentType) {
-        for (const item of preloadedContent) if (item.type === contentType && matchTokens(`${item.title} ${item.id} ${item.description || ''}`)) pushItem(item)
-        for (const r of remoteSearchResults) if (r.type === contentType) pushItem(r)
+        preloadedContent.forEach((item) => { if (item.type === contentType && matchTokens(`${item.title} ${item.id} ${item.description || ''}`)) pushItem(item) })
+        remoteSearchResults.forEach((r) => { if (r.type === contentType) pushItem(r) })
       }
-    }
+    })
     if (cat === 'all' || cat === 'conversation') {
-      for (const c of allConversations || conversations || []) {
+      ;(allConversations || conversations || []).forEach((c) => {
         const label = c.label || c.id
         if (matchTokens(`${label} ${c.id} ${c.type || ''}`)) pushItem({ type: 'conversation', id: c.id, title: label, subtitle: c.use_case || c.type || 'conversation' })
-      }
-      for (const r of remoteSearchResults) if (r.type === 'conversation') pushItem(r)
+      })
+      remoteSearchResults.forEach((r) => { if (r.type === 'conversation') pushItem(r) })
     }
     return out
   }, [detectedMention.category, detectedMention.query, groupedExplores, preloadedContent, remoteSearchResults, allConversations, conversations])
@@ -1414,18 +1414,18 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   const contextChips = useMemo(() => {
     const seen = new Set<string>()
     const chips: StudioContextMention[] = []
-    for (const item of mentionedItems) {
+    mentionedItems.forEach((item) => {
       const key = `${item.type}:${item.id}`
       if (!seen.has(key)) { seen.add(key); chips.push(item) }
-    }
-    for (const expId of selectedExplores) {
+    })
+    selectedExplores.forEach((expId) => {
       const key = `explore:${expId}`
       if (!seen.has(key)) {
         seen.add(key)
         const info = exploreLookup[expId]
         chips.push({ type: 'explore', id: expId, title: info ? `${info.modelLabel}: ${info.label}` : expId, model: info?.model, explore: info?.explore })
       }
-    }
+    })
     return chips
   }, [mentionedItems, selectedExplores, exploreLookup])
 
@@ -1918,8 +1918,9 @@ interface ActivityStepContentContext {
 
 function extractStepFilePath(step: AntigravityActivityStep): string | undefined {
   if (step.kind !== 'file' && step.kind !== 'skill') return undefined
-  for (const cand of [step.path, step.detail, step.title].map((s) => String(s || '').trim()).filter(Boolean)) {
-    const clean = cand
+  const cands = [step.path, step.detail, step.title].map((s) => String(s || '').trim()).filter(Boolean)
+  for (let i = 0; i < cands.length; i++) {
+    const clean = cands[i]
       .split('—')[0]
       .trim()
       .replace(/^(?:Viewing|Editing|Creating|Writing|Reading\s+skill|Skill:)\s+/i, '')
@@ -1943,7 +1944,9 @@ function extractStepMarkdownPath(step: AntigravityActivityStep): string | undefi
 
 function resolveStaticOrCachedStepContent(step: AntigravityActivityStep, ctx?: ActivityStepContentContext): string | undefined {
   if (step.content?.trim()) return step.content
-  for (const cand of [step.path, step.detail, step.title].map((s) => String(s || '').trim()).filter(Boolean)) {
+  const cands = [step.path, step.detail, step.title].map((s) => String(s || '').trim()).filter(Boolean)
+  for (let i = 0; i < cands.length; i++) {
+    const cand = cands[i]
     const clean = cand.split('—')[0].trim().replace(/^(?:Viewing|Editing|Creating|Writing|Reading\s+skill|Skill:)\s+/i, '').trim()
     const builtin = resolveBuiltinWorkspaceFileContent(cand) || resolveBuiltinWorkspaceFileContent(clean)
     if (builtin) return builtin
@@ -2057,7 +2060,7 @@ export const SandboxMarkdownPreviewModal: React.FC<{ ctl: StudioController }> = 
   )
 }
 
-const ActivityStepsList: React.FC<{ steps: AntigravityActivityStep[]; contentCtx?: ActivityStepContentContext }> = ({ steps, contentCtx }) => {
+const ThinkingStepsList: React.FC<{ steps: AntigravityActivityStep[]; contentCtx?: ActivityStepContentContext }> = ({ steps, contentCtx }) => {
   const [expandedKeys, setExpandedKeys] = useState<Record<string, boolean>>({})
   const handleToggleStep = (key: string, step: AntigravityActivityStep) => {
     const willOpen = !expandedKeys[key]
@@ -2080,11 +2083,22 @@ const ActivityStepsList: React.FC<{ steps: AntigravityActivityStep[]; contentCtx
         const hasDetail = Boolean(step.detail && step.detail !== step.title)
         const isCollapsibleThought = step.kind === 'thought' && hasDetail
         const isFileOrSkill = step.kind === 'file' || step.kind === 'skill'
-        const isCollapsible = isCollapsibleThought || isFileOrSkill
+        const isExpandableExec =
+          (step.kind === 'code_execution' || step.kind === 'codemode' || step.kind === 'cli_bridge') &&
+          Boolean(step.content?.trim())
+        const isCollapsible = isCollapsibleThought || isFileOrSkill || isExpandableExec
         const isOpen = Boolean(expandedKeys[stepKey])
         const StepTag = isCollapsible ? 'details' : 'div'
         const HeaderTag = isCollapsible ? 'summary' : 'div'
-        const testId = isCollapsibleThought ? 'thinking-step-thought' : step.kind === 'file' ? 'thinking-step-file' : step.kind === 'skill' ? 'thinking-step-skill' : undefined
+        const testId = isCollapsibleThought
+          ? 'thinking-step-thought'
+          : step.kind === 'file'
+          ? 'thinking-step-file'
+          : step.kind === 'skill'
+          ? 'thinking-step-skill'
+          : isExpandableExec
+          ? 'thinking-step-expandable'
+          : undefined
         const mdPath = isFileOrSkill ? extractStepMarkdownPath(step) : undefined
         const staticOrCachedContent = isFileOrSkill ? resolveStaticOrCachedStepContent(step, contentCtx) : undefined
         const resolvedContent = isFileOrSkill ? resolveActivityStepContent(step, contentCtx) : ''
@@ -2096,7 +2110,7 @@ const ActivityStepsList: React.FC<{ steps: AntigravityActivityStep[]; contentCtx
         return (
           <StepTag
             key={stepKey}
-            className={`dab-thinking-step dab-thinking-step-${step.kind} ${isFileOrSkill ? 'dab-thinking-step-interactive' : ''}`}
+            className={`dab-thinking-step dab-thinking-step-${step.kind}${isFileOrSkill ? ' dab-thinking-step-interactive' : ''}${isExpandableExec ? ' dab-thinking-step-expandable' : ''}`}
             data-step-kind={step.kind} data-step-status={step.status || 'done'}
             {...(testId ? { 'data-testid': testId } : {})}
             {...(isCollapsible ? {
@@ -2116,6 +2130,7 @@ const ActivityStepsList: React.FC<{ steps: AntigravityActivityStep[]; contentCtx
               {step.status === 'running' && <span className="dab-thinking-step-status">Running…</span>}
             </HeaderTag>
             {hasDetail && <code className="dab-thinking-step-detail">{step.detail}</code>}
+            {isExpandableExec && <pre className="dab-thinking-step-pre">{step.content}</pre>}
             {isFileOrSkill && isOpen && (
               isLoadingMd ? (
                 <div className="dab-thinking-step-loading" data-testid="activity-step-loading">
@@ -2154,7 +2169,8 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   const {
     agentName: rawAgentName, extensionSDK,
     messages, builderMode, selectedUseCase, selectedExplores, starterPrompts, starterPromptsLoading,
-    setPrompt, busyStatus, liveActivitySteps, pendingPerm, resolvePermDecision,
+    setPrompt, busyStatus, liveActivitySteps, hydratingInteractionIds, hydrateMessageActivitySteps,
+    pendingPerm, resolvePermDecision,
     leftPaneWidth, setLeftPaneWidth, flushLeftPaneWidthSave, rightPaneCollapsed, setRightPaneCollapsed,
     contentItems = [], activeContentTabKey = '', handleSelectContentTab, publishedApp, nativeContent,
     lookmlBundle, currentAppCode, schemaMarkdown,
@@ -2238,24 +2254,38 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 
   const handleCopyThinkingTrace = (
     e: React.MouseEvent<HTMLButtonElement>, traceKey: string, steps: AntigravityActivityStep[],
-    meta?: { thinkingDurationSec?: number; userPrompt?: string; assistantText?: string }
+    meta?: { thinkingDurationSec?: number; userPrompt?: string; assistantText?: string },
+    interactionId?: string, stopAtInteractionId?: string
   ) => {
     e.preventDefault(); e.stopPropagation()
-    const enriched = steps.map((s) => ((s.kind === 'file' || s.kind === 'skill') && !s.content ? { ...s, content: resolveActivityStepContent(s, contentCtx) } : s))
-    const md = formatThinkingTraceMarkdown(enriched, meta)
-    if (typeof window !== 'undefined') window.__LAST_COPIED_THINKING_TRACE__ = md
-    void copyTextWithExtensionSdk(md, extensionSDK)
-    setCopiedTraceKey(traceKey)
-    setTimeout(() => setCopiedTraceKey((curr) => (curr === traceKey ? null : curr)), 1800)
+    const finishCopy = (resolvedSteps: AntigravityActivityStep[]) => {
+      const enriched = resolvedSteps.map((s) => ((s.kind === 'file' || s.kind === 'skill') && !s.content ? { ...s, content: resolveActivityStepContent(s, contentCtx) } : s))
+      const md = formatThinkingTraceMarkdown(enriched, meta)
+      if (typeof window !== 'undefined') window.__LAST_COPIED_THINKING_TRACE__ = md
+      void copyTextWithExtensionSdk(md, extensionSDK)
+      setCopiedTraceKey(traceKey)
+      setTimeout(() => setCopiedTraceKey((curr) => (curr === traceKey ? null : curr)), 1800)
+    }
+    if (steps.length > 0 || !interactionId || !hydrateMessageActivitySteps) {
+      finishCopy(steps)
+    } else {
+      void hydrateMessageActivitySteps(interactionId, stopAtInteractionId).then(finishCopy)
+    }
   }
 
-  const renderCopyTraceBtn = (traceKey: string, steps: AntigravityActivityStep[], meta?: { thinkingDurationSec?: number; userPrompt?: string; assistantText?: string }) => {
+  const renderCopyTraceBtn = (
+    traceKey: string,
+    steps: AntigravityActivityStep[],
+    meta?: { thinkingDurationSec?: number; userPrompt?: string; assistantText?: string },
+    interactionId?: string,
+    stopAtInteractionId?: string
+  ) => {
     const isCopied = copiedTraceKey === traceKey
     return (
       <button
         type="button" data-testid="copy-thinking-trace-btn" data-copied={isCopied ? 'true' : 'false'}
         className="dab-thinking-copy-btn" title="Copy debug trace to clipboard" aria-label="Copy debug trace to clipboard"
-        onClick={(e) => handleCopyThinkingTrace(e, traceKey, steps, meta)}
+        onClick={(e) => void handleCopyThinkingTrace(e, traceKey, steps, meta, interactionId, stopAtInteractionId)}
       >
         {isCopied ? <><Check size={12} strokeWidth={2} aria-hidden="true" /><span>Copied</span></> : <Bug size={12} strokeWidth={1.75} aria-hidden="true" />}
       </button>
@@ -2305,6 +2335,12 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 
         {messages.map((m, idx) => {
           const prevUserMsg = idx > 0 && messages[idx - 1]?.role === 'user' ? messages[idx - 1]?.text : undefined
+          const hasSteps = Boolean(m.activitySteps && m.activitySteps.length > 0)
+          const prevAssistantInteractionId =
+            !hasSteps && m.interactionId
+              ? messages.slice(0, idx).reverse().find((pm) => pm.role === 'assistant' && pm.interactionId)?.interactionId
+              : undefined
+          const isHydratingTurn = Boolean(!hasSteps && m.interactionId && hydratingInteractionIds?.[m.interactionId])
           return (
             <div key={idx} className={`dab-msg dab-msg-${m.role}`}>
               <div className="dab-msg-header">
@@ -2317,15 +2353,42 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                   </button>
                 )}
               </div>
-              {m.role === 'assistant' && m.activitySteps && m.activitySteps.length > 0 && (
-                <details className="dab-thinking-block" data-testid="completed-thinking-block">
+              {m.role === 'assistant' && (hasSteps || Boolean(m.interactionId)) && (
+                <details
+                  className="dab-thinking-block"
+                  data-testid="completed-thinking-block"
+                  onToggle={(e) => {
+                    if ((e.currentTarget as HTMLDetailsElement).open && !hasSteps && m.interactionId) {
+                      void hydrateMessageActivitySteps?.(m.interactionId, prevAssistantInteractionId)
+                    }
+                  }}
+                >
                   <summary className="dab-thinking-summary">
                     <span className="dab-thinking-summary-label">
-                      Thought for {m.thinkingDurationSec ?? 1}s · {m.activitySteps.length} {m.activitySteps.length === 1 ? 'step' : 'steps'}
+                      {hasSteps
+                        ? `Thought for ${m.thinkingDurationSec ?? 1}s · ${m.activitySteps!.length} ${m.activitySteps!.length === 1 ? 'step' : 'steps'}`
+                        : typeof m.thinkingDurationSec === 'number'
+                        ? `Thought for ${m.thinkingDurationSec}s · Thinking & Activity`
+                        : 'Thinking & Activity'}
                     </span>
-                    {renderCopyTraceBtn(`completed_${idx}`, m.activitySteps, { thinkingDurationSec: m.thinkingDurationSec ?? 1, userPrompt: prevUserMsg, assistantText: m.text })}
+                    {renderCopyTraceBtn(
+                      `completed_${idx}`,
+                      m.activitySteps || [],
+                      { thinkingDurationSec: m.thinkingDurationSec ?? 1, userPrompt: prevUserMsg, assistantText: m.text },
+                      m.interactionId,
+                      prevAssistantInteractionId
+                    )}
                   </summary>
-                  <ActivityStepsList steps={m.activitySteps} contentCtx={contentCtx} />
+                  {hasSteps ? (
+                    <ThinkingStepsList steps={m.activitySteps!} contentCtx={contentCtx} />
+                  ) : isHydratingTurn ? (
+                    <div className="dab-thinking-step-loading" data-testid="thinking-hydration-loading">
+                      <StudioSkeleton width="100%" height={28} />
+                      <StudioSkeleton width="78%" height={24} />
+                    </div>
+                  ) : (
+                    <div className="dab-thinking-steps"><span className="dab-muted">No recorded activity steps.</span></div>
+                  )}
                 </details>
               )}
               <div className="dab-msg-body">
@@ -2364,7 +2427,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               <span className="dab-thinking-step-count">{liveActivitySteps.length} {liveActivitySteps.length === 1 ? 'step' : 'steps'}</span>
               {renderCopyTraceBtn('live', liveActivitySteps)}
             </summary>
-            <ActivityStepsList steps={liveActivitySteps} contentCtx={contentCtx} />
+            <ThinkingStepsList steps={liveActivitySteps} contentCtx={contentCtx} />
           </details>
         )}
 
