@@ -203,10 +203,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     const convMatch = conversations.find((c) => {
       if (c.id === rawId || c.id === id) return true
       const cid = getConvTargetId(c.content, c.type)
-      return (
-        (Boolean(cid) && (cid === id || cid === rawId)) ||
-        Boolean(c.type === 'lookml' && c.content?.sessionId && (c.content.sessionId === id || c.content.sessionId === rawId))
-      )
+      return Boolean((cid && (cid === id || cid === rawId)) || (c.type === 'lookml' && c.content?.sessionId && (c.content.sessionId === id || c.content.sessionId === rawId)))
     })
     if (convMatch) {
       if (convMatch.use_case === 'auto' && !convMatch.interactionId) return undefined

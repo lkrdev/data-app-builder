@@ -209,51 +209,34 @@ export function studioModeToUseCase(mode?: string): ResolvedStudioUseCase {
 }
 
 export const getConvTargetId = (
-  c?: {
-    dashboardId?: string; lookId?: string; lookmlDashboardId?: string; reportId?: string
-    projectId?: unknown; sessionId?: string; scriptId?: string; caConversationId?: string
-    id?: string; contentType?: string; [key: string]: unknown
-  },
+  c?: { dashboardId?: string; lookId?: string; lookmlDashboardId?: string; reportId?: string; projectId?: unknown; sessionId?: string; scriptId?: string; caConversationId?: string; id?: string; contentType?: string; [key: string]: unknown },
   type?: string
 ): string => {
   if (!c) return ''
   const raw = String(type || '').trim().toLowerCase().replace(/\s+/g, '-')
   if (!raw || raw === 'auto') {
-    return String(
-      c.dashboardId || c.lookId || c.lookmlDashboardId || c.reportId || c.projectId || c.sessionId || c.scriptId || c.caConversationId || c.id || ''
-    ).trim()
+    return String(c.dashboardId || c.lookId || c.lookmlDashboardId || c.reportId || c.projectId || c.sessionId || c.scriptId || c.caConversationId || c.id || '').trim()
+  }
+  const pick: Partial<Record<ResolvedStudioUseCase, unknown>> = {
+    lookml: c.projectId || c.sessionId,
+    'health-check': c.reportId,
+    tile: c.scriptId || c.id,
+    'conversational-analytics': c.caConversationId || c.id,
+    dashboard: c.contentType === 'look' ? c.lookId || c.dashboardId : c.contentType === 'lookml_dashboard' ? c.lookmlDashboardId || c.dashboardId : c.dashboardId || c.lookmlDashboardId || c.lookId,
+    app: c.dashboardId || c.id,
+    'data-investigator': c.dashboardId || c.id,
   }
   const canonical = USE_CASE_ALIAS_MAP[raw]
-  if (canonical === 'lookml') return String(c.projectId || c.sessionId || '').trim()
-  if (canonical === 'health-check') return String(c.reportId || '').trim()
-  if (canonical === 'tile') return String(c.scriptId || c.id || '').trim()
-  if (canonical === 'conversational-analytics') return String(c.caConversationId || c.id || '').trim()
-  if (canonical === 'dashboard') {
-    return c.contentType === 'look'
-      ? String(c.lookId || c.dashboardId || '').trim()
-      : c.contentType === 'lookml_dashboard'
-      ? String(c.lookmlDashboardId || c.dashboardId || '').trim()
-      : String(c.dashboardId || c.lookmlDashboardId || c.lookId || '').trim()
-  }
-  if (canonical === 'app' || canonical === 'data-investigator') return String(c.dashboardId || c.id || '').trim()
-  return ''
+  return canonical ? String(pick[canonical] || '').trim() : ''
 }
 
 export const isLookmlTargetAlreadyLoaded = (
-  targetMode: string,
-  targetArtifactId: string,
-  bundle?: { id?: string; project_id?: string } | null,
-  sessionId?: string
+  targetMode: string, targetArtifactId: string, bundle?: { id?: string; project_id?: string } | null, sessionId?: string
 ): boolean => {
-  if (targetMode !== 'lookml' || !targetArtifactId || !bundle) return false
-  const canon = bundle.project_id || bundle.id
-  const tsBase = targetArtifactId.match(/^(.+)_[0-9a-z]{6,}$/i)?.[1] || ''
-  return (
-    targetArtifactId === bundle.project_id ||
-    targetArtifactId === bundle.id ||
-    Boolean(bundle.id && sessionId === bundle.id) ||
-    Boolean(tsBase && canon && tsBase === canon)
-  )
+  const canon = bundle?.project_id || bundle?.id
+  if (targetMode !== 'lookml' || !targetArtifactId || !canon) return false
+  const tsBase = targetArtifactId.match(/^(.+)_[0-9a-z]{6,}$/i)?.[1]
+  return targetArtifactId === canon || targetArtifactId === bundle?.id || Boolean(bundle?.id && sessionId === bundle.id) || tsBase === canon
 }
 
 export type StudioMode = StudioCapabilityMode

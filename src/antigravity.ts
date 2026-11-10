@@ -663,29 +663,18 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const envSlotKey = normalizeEnvironmentId(trackedEnvId) || 'remote'
   const envConcurrencySlot = activeInteractionsByEnv.get(envSlotKey) || 0
   activeInteractionsByEnv.set(envSlotKey, envConcurrencySlot + 1)
-  const postContinuation = async (
-    input: Array<Record<string, unknown>>,
-    envFallback: string | undefined,
-    extraSteps: AntigravityInteractionStep[] = []
-  ) => {
+  const postContinuation = async (input: Array<Record<string, unknown>>, envFallback?: string, extraSteps: AntigravityInteractionStep[] = []) => {
     accumulateInteractionUsage(interaction)
     accumulatedSteps.push(...(interaction.steps || []), ...extraSteps)
     const resumeEnv = interaction.environment_id || trackedEnvId || envFallback
-    interaction = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
-      agent: 'antigravity-preview-09-2026',
-      agent_config: agentConfig,
-      background: true,
-      ...(resumeEnv ? { environment: resumeEnv } : {}),
-      previous_interaction_id: interaction.id,
-      tools: activeTools,
-      input,
-    })
+    interaction = await callInteractionsApi(
+      extensionSDK, auth, 'interactions', 'POST',
+      Object.assign({ agent: 'antigravity-preview-09-2026', agent_config: agentConfig, background: true, previous_interaction_id: interaction.id, tools: activeTools, input }, resumeEnv ? { environment: resumeEnv } : null)
+    )
     if (interaction.id) onInteractionCreated?.(interaction.id)
     await throwIfAborted(interaction.id)
     if (interaction.environment_id) trackedEnvId = interaction.environment_id
-    pollIdx = 0
-    prevStepCount = (interaction.steps || []).length
-    prevStatus = interaction.status
+    pollIdx = 0; prevStepCount = (interaction.steps || []).length; prevStatus = interaction.status
   }
 
   try {
@@ -1172,13 +1161,7 @@ export function prewarmOrWakeAntigravityEnvironment(params: {
       agent_config: { type: 'antigravity', model: model || DEFAULT_ANTIGRAVITY_MODEL, max_total_tokens: String(resolvedMaxTokens) },
       background: true,
       tools: prewarmTools,
-      input: [{
-        type: 'text',
-        text:
-          toolType === 'lookml'
-            ? `[PREWARM:${toolType.toUpperCase()}] Initialize ${toolType} workspace (ensure \`command -v lkr >/dev/null 2>&1 || python3 /workspace/bootstrap_lookml.py cli\`) and reply READY.`
-            : `[PREWARM:${toolType.toUpperCase()}] Initialize ${toolType} workspace and reply READY.`,
-      }],
+      input: [{ type: 'text', text: `[PREWARM:${toolType.toUpperCase()}] Initialize ${toolType} workspace${toolType === 'lookml' ? ' (ensure `command -v lkr >/dev/null 2>&1 || python3 /workspace/bootstrap_lookml.py cli`)' : ''} and reply READY.` }],
     }
     const userProvisionKey = resolveUserProvisionKey(userId, auth)
     const coalesceStep =
