@@ -19,7 +19,14 @@ import {
   StudioContentItemType, StudioContextMention, StudioUseCase,
   studioUseCaseToMode, upsertPublishedDataApp,
 } from './lookerApi'
-import { extractSlashSkillIds, saveLookmlSessionArtifact } from './lookmlTool'
+import {
+  extractLookmlDashboardsFromBundle,
+  extractSlashSkillIds,
+  LookmlBundle,
+  mergeLookmlFiles,
+  resolveLookmlCanonicalProjectId,
+  saveLookmlSessionArtifact,
+} from './lookmlTool'
 import { getErrorMessage, StudioAuthAndPrefs } from './studioControllerAuth'
 import { StudioLoaders } from './studioControllerLoaders'
 import { StudioMetadata } from './studioControllerMetadata'
@@ -534,48 +541,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       let convContent: Record<string, unknown> | undefined
       let finalMsgs: ChatMessage[] = []
 
-      if (result.lookmlBundle) {
-        setLookerWorkspaceId('dev')
-        void syncLookerSessionWorkspace()
-        setBusyStatus('Saving LookML session artifacts (user_..._lookml_... & obj_lookml_...)...')
-        finalMsgs = [
-          ...messagesWithUser,
-          {
-            role: 'assistant', text: result.assistantText,
-            interactionId: result.session.lastInteractionId,
-            activitySteps: result.activitySteps, thinkingDurationSec: result.thinkingDurationSec,
-          },
-        ]
-        setLookmlBundle(result.lookmlBundle)
-        if (result.lookmlBundle.project_id) setLookmlProjectId(result.lookmlBundle.project_id)
-        convType = 'lookml'
-        convTitle = result.lookmlBundle.title
-        try {
-          const saved = await saveLookmlSessionArtifact({
-            sdk: core40SDK, extensionSDK, userId, bundle: result.lookmlBundle,
-            studio: {
-              explores: turnExplores, lastInteractionId: result.session.lastInteractionId,
-              environmentId: result.session.environmentId,
-            },
-          })
-          const isExistingLookml = contentItemsRef.current.some((it) => it.key === `lookml:${saved.id}`)
-          upsertContentItem({
-            id: saved.id, sessionId: saved.id, projectId: result.lookmlBundle.project_id,
-            contentType: 'lookml', title: result.lookmlBundle.title || `LookML (${result.lookmlBundle.project_id || saved.id})`,
-            embedPath: `/lookml/${encodeURIComponent(saved.id)}`, updatedAt: new Date().toISOString(),
-            source: isExistingLookml ? 'modified' : 'created', createdInConversation: true, hidden: false,
-          })
-          resolvedUseCaseByIdRef.current[saved.id] = 'lookml'
-          convContent = {
-            sessionId: saved.id, projectId: result.lookmlBundle.project_id,
-            model: result.lookmlBundle.model_name, branch: result.lookmlBundle.branch_name,
-          }
-          lastLookmlIdRef.current = saved.id
-          setActiveObjectId(saved.id)
-        } catch { /* ignore */ }
-        setAgentSession({ ...result.session, conversationId: convId, explores: turnExplores }, 'lookml')
-        setMessages(finalMsgs)
-      } else if (resolvedUseCase === 'tile') {
+      if (resolvedUseCase === 'tile' && !result.lookmlBundle && !result.nativeBundle && !result.bundle) {
         const isExplicitScriptRequest =
           explicitUseCase === 'tile' || loadedScript || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
         const pyMatch = (result.assistantText || '').match(/```(?:python|py)?\s*\n([\s\S]*?)```/i)
@@ -621,54 +587,100 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         const effectiveExplores = turnExplores.length > 0 ? turnExplores : bundleExplores
         convExplores = effectiveExplores
         if (turnExplores.length === 0 && bundleExplores.length > 0) setSelectedExplores(bundleExplores)
-        setAgentSession({ ...result.session, conversationId: convId, explores: effectiveExplores }, resolvedMode)
+
+        const studioMeta = {
+          explores: effectiveExplores,
+          lastInteractionId: result.session.lastInteractionId,
+          environmentId: result.session.environmentId,
+        }
+        let handledArtifact = false
+        let finalDashId: string | undefined
+        let finalWidgetCount: number | undefined
+
+        if (result.lookmlBundle) {
+          handledArtifact = true
+          setLookerWorkspaceId('dev')
+          void syncLookerSessionWorkspace()
+          setBusyStatus('Saving LookML project changes...')
+          const canonProj = resolveLookmlCanonicalProjectId(result.lookmlBundle)
+          const prevFiles =
+            lookmlBundle && resolveLookmlCanonicalProjectId(lookmlBundle) === canonProj
+              ? lookmlBundle.files
+              : []
+          let mergedBundle: LookmlBundle = Object.assign({}, result.lookmlBundle, {
+            id: canonProj,
+            project_id: result.lookmlBundle.project_id || canonProj,
+            files: mergeLookmlFiles(prevFiles, result.lookmlBundle.files),
+          })
+          try {
+            const saved = await saveLookmlSessionArtifact({ sdk: core40SDK, extensionSDK, userId, bundle: mergedBundle, studio: studioMeta })
+            mergedBundle = saved.payload.bundle
+          } catch { /* ignore */ }
+          const lookmlId = mergedBundle.project_id?.trim() || mergedBundle.id || canonProj
+          setLookmlBundle(mergedBundle)
+          if (mergedBundle.project_id) setLookmlProjectId(mergedBundle.project_id)
+          const isExistingLookml = contentItemsRef.current.some(
+            (it) => it.contentType === 'lookml' && (it.projectId || it.id) === lookmlId
+          )
+          upsertContentItem({
+            id: lookmlId, sessionId: lookmlId, projectId: lookmlId,
+            contentType: 'lookml', title: `LookML: ${lookmlId}`,
+            embedPath: `/lookml/${encodeURIComponent(lookmlId)}`, updatedAt: new Date().toISOString(),
+            source: isExistingLookml ? 'modified' : 'created', createdInConversation: true, hidden: false,
+          })
+          resolvedUseCaseByIdRef.current[lookmlId] = 'lookml'
+          convType = 'lookml'
+          convTitle = result.lookmlBundle.title || `LookML: ${lookmlId}`
+          convContent = { sessionId: lookmlId, projectId: lookmlId, model: mergedBundle.model_name, branch: mergedBundle.branch_name }
+          lastLookmlIdRef.current = lookmlId
+          setActiveObjectId(lookmlId)
+
+          extractLookmlDashboardsFromBundle(
+            Object.assign({}, result.lookmlBundle, {
+              model_name: result.lookmlBundle.model_name || mergedBundle.model_name,
+              project_id: result.lookmlBundle.project_id || mergedBundle.project_id,
+            })
+          ).forEach((d) => {
+            if (result.nativeBundle && (result.nativeBundle.id === d.id || result.nativeBundle.lookml_dashboard_id === d.id)) return
+            const isExistingDash = contentItemsRef.current.some((it) => it.key === `lookml_dashboard:${d.id}`)
+            setNativeContent(
+              {
+                id: d.id, contentType: 'lookml_dashboard', title: d.title,
+                folderId: selectedFolderId, embedPath: d.embedPath,
+                lookmlDashboardId: d.id, projectId: lookmlId, model: d.model,
+              },
+              { source: isExistingDash ? 'modified' : 'created', createdInConversation: true, hidden: false }
+            )
+            setEmbedNonce((n) => n + 1)
+            finalDashId = d.id
+          })
+        }
 
         if (result.nativeBundle) {
+          handledArtifact = true
           setBusyStatus('Indexing native Looker content in user catalog...')
-          const prelimAssistantMsg: ChatMessage = {
-            role: 'assistant', text: result.assistantText,
-            interactionId: result.session.lastInteractionId,
-            widgetCount: result.nativeBundle.tile_count,
-            activitySteps: result.activitySteps, thinkingDurationSec: result.thinkingDurationSec,
-          }
           const isExistingNative = contentItemsRef.current.some((it) => it.id === String(result.nativeBundle!.id))
-          const savedNative = await saveNativeContentArtifact(
-            core40SDK, extensionSDK, userId, result.nativeBundle, selectedFolderId, nativeContent,
-            {
-              explores: effectiveExplores, lastInteractionId: result.session.lastInteractionId,
-              environmentId: result.session.environmentId,
-            }
-          )
+          const savedNative = await saveNativeContentArtifact(core40SDK, extensionSDK, userId, result.nativeBundle, selectedFolderId, nativeContent, studioMeta)
           lastNativeIdRef.current = savedNative.id
           resolvedUseCaseByIdRef.current[savedNative.id] = 'dashboard'
           setNativeContent(savedNative, { source: isExistingNative ? 'modified' : 'created', createdInConversation: true, hidden: false })
           setEmbedNonce((n) => n + 1)
           setActiveObjectId(savedNative.id)
-          finalMsgs = [...messagesWithUser, { ...prelimAssistantMsg, dashboardId: savedNative.id }]
-          setMessages(finalMsgs)
+          finalDashId = savedNative.id
+          finalWidgetCount = result.nativeBundle.tile_count
           convType = 'dashboard'
           convTitle = savedNative.title
-          convContent = {
+          convContent = Object.assign({}, convContent, {
             dashboardId: savedNative.id, contentType: savedNative.contentType,
             embedPath: savedNative.embedPath, lookId: savedNative.lookId, lookmlDashboardId: savedNative.lookmlDashboardId,
-          }
-        } else if (result.bundle) {
+          })
+        }
+
+        if (result.bundle) {
+          handledArtifact = true
           setBusyStatus('Publishing inline extension & updating Looker dashboard...')
-          const prelimAssistantMsg: ChatMessage = {
-            role: 'assistant', text: result.assistantText,
-            interactionId: result.session.lastInteractionId,
-            widgetCount: result.bundle?.widgets?.length || 0,
-            activitySteps: result.activitySteps, thinkingDurationSec: result.thinkingDurationSec,
-          }
-          const upserted = await upsertPublishedDataApp(
-            core40SDK, result.bundle, selectedFolderId, publishedApp,
-            {
-              explores: effectiveExplores, lastInteractionId: result.session.lastInteractionId,
-              environmentId: result.session.environmentId,
-            }
-          )
-          const appUseCaseType: ResolvedStudioUseCase =
-            resolvedUseCase === 'data-investigator' ? 'data-investigator' : 'app'
+          const upserted = await upsertPublishedDataApp(core40SDK, result.bundle, selectedFolderId, publishedApp, studioMeta)
+          const appUseCaseType: ResolvedStudioUseCase = resolvedUseCase === 'data-investigator' ? 'data-investigator' : 'app'
           const isExistingApp = contentItemsRef.current.some((it) => it.id === String(upserted.dashboardId))
           lastPublishedIdRef.current = upserted.dashboardId
           resolvedUseCaseByIdRef.current[upserted.dashboardId] = appUseCaseType
@@ -676,40 +688,27 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           setEmbedNonce((n) => n + 1)
           setActiveObjectId(upserted.dashboardId)
           setCurrentAppCode(result.bundle.raw_code)
-          finalMsgs = [...messagesWithUser, { ...prelimAssistantMsg, dashboardId: upserted.dashboardId }]
+          finalDashId = upserted.dashboardId
+          finalWidgetCount = result.bundle?.widgets?.length || 0
+          const appEntryBase = {
+            id: upserted.dashboardId, type: appUseCaseType, title: upserted.title,
+            explores: effectiveExplores, updatedAt: new Date().toISOString(), createdBy: userId,
+          }
           try {
             await saveUserArtifact(
-              core40SDK, userId,
-              {
-                id: upserted.dashboardId, type: appUseCaseType, title: upserted.title,
-                explores: effectiveExplores, updatedAt: new Date().toISOString(), createdBy: userId,
-              },
-              {
-                id: upserted.dashboardId, type: appUseCaseType, title: upserted.title,
-                explores: effectiveExplores, updatedAt: new Date().toISOString(), createdBy: userId,
-                dashboardId: upserted.dashboardId, extensionId: upserted.extensionId,
-              },
+              core40SDK, userId, appEntryBase,
+              Object.assign({}, appEntryBase, { dashboardId: upserted.dashboardId, extensionId: upserted.extensionId }),
               getArtifactNamespace(extensionSDK)
             )
           } catch { /* ignore */ }
-          setMessages(finalMsgs)
           convType = appUseCaseType
           convTitle = upserted.title
-          convContent = {
-            dashboardId: upserted.dashboardId,
-            appArtifactId: `obj_app_${upserted.dashboardId}`,
-            extensionId: upserted.extensionId,
-          }
-        } else {
-          finalMsgs = [
-            ...messagesWithUser,
-            {
-              role: 'assistant', text: result.assistantText,
-              interactionId: result.session.lastInteractionId,
-              activitySteps: result.activitySteps, thinkingDurationSec: result.thinkingDurationSec,
-            },
-          ]
-          setMessages(finalMsgs)
+          convContent = Object.assign({}, convContent, {
+            dashboardId: upserted.dashboardId, appArtifactId: `obj_app_${upserted.dashboardId}`, extensionId: upserted.extensionId,
+          })
+        }
+
+        if (!handledArtifact) {
           if (explicitUseCase === 'auto' && resolvedMode !== activeMode && resolvedUseCase === 'health-check') {
             await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages, convId)
             return
@@ -718,31 +717,35 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             const updatedNative = await saveNativeContentArtifact(
               core40SDK, extensionSDK, userId,
               { id: nativeContent.id, title: nativeContent.title, explores: effectiveExplores },
-              selectedFolderId, nativeContent,
-              {
-                explores: effectiveExplores, lastInteractionId: result.session.lastInteractionId,
-                environmentId: result.session.environmentId,
-              }
+              selectedFolderId, nativeContent, studioMeta
             )
             setNativeContent(updatedNative, { source: 'modified', hidden: false })
             convType = 'dashboard'
-            convContent = {
-              dashboardId: updatedNative.id, contentType: updatedNative.contentType, embedPath: updatedNative.embedPath,
-            }
+            convContent = { dashboardId: updatedNative.id, contentType: updatedNative.contentType, embedPath: updatedNative.embedPath }
           } else if (publishedApp) {
-            setPublishedApp(
-              await saveDashboardStudioMetadata(core40SDK, publishedApp, {
-                explores: effectiveExplores, lastInteractionId: result.session.lastInteractionId,
-                environmentId: result.session.environmentId,
-              }),
-              { source: 'modified', hidden: false }
-            )
+            setPublishedApp(await saveDashboardStudioMetadata(core40SDK, publishedApp, studioMeta), { source: 'modified', hidden: false })
             convType = 'app'
-            convContent = {
-              dashboardId: publishedApp.dashboardId, appArtifactId: `obj_app_${publishedApp.dashboardId}`,
-            }
+            convContent = { dashboardId: publishedApp.dashboardId, appArtifactId: `obj_app_${publishedApp.dashboardId}` }
           }
         }
+
+        finalMsgs = [
+          ...messagesWithUser,
+          {
+            role: 'assistant',
+            text: result.assistantText,
+            interactionId: result.session.lastInteractionId,
+            ...(finalDashId ? { dashboardId: finalDashId } : {}),
+            ...(finalWidgetCount !== undefined ? { widgetCount: finalWidgetCount } : {}),
+            activitySteps: result.activitySteps,
+            thinkingDurationSec: result.thinkingDurationSec,
+          },
+        ]
+        setAgentSession(
+          { ...result.session, conversationId: convId, explores: effectiveExplores },
+          result.lookmlBundle && !result.nativeBundle && !result.bundle ? 'lookml' : resolvedMode
+        )
+        setMessages(finalMsgs)
       }
 
       setActiveConversationId(convId)

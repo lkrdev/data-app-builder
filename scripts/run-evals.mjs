@@ -571,7 +571,7 @@ async function eval07AgenticLookmlOnboarding() {
     )
     writeFileSync(
       path.join(workDir, 'data/run_eval07/summary.md'),
-      '### LookML Onboarding Summary\n- Layered base + refinement views validated with 0 errors.\n- [Open ecommerce_core in Looker IDE](/projects/ecommerce_core/files)\n',
+      '### LookML Onboarding Summary\n- Layered base + refinement views validated with 0 errors.\n- [Open ecommerce_core in Looker IDE](/projects/ecommerce_core)\n',
       'utf8'
     )
 
@@ -588,7 +588,7 @@ async function eval07AgenticLookmlOnboarding() {
     assert.equal(bundle.files[0].path, 'views/refinements/+order_items.view.lkml')
     assert((bundle.files[0].diff || bundle.files[0].content).includes('measure: total_sale_price'))
     const hasProjectLink = /\/projects\/[^/\s)]+/i.test(bundle.summary_markdown || '')
-    assert(hasProjectLink, 'Expected /projects/<project_name>/files link in onboarding summary')
+    assert(hasProjectLink, 'Expected /projects/<project_name> link in onboarding summary')
 
     const onboardingSkillMd = readFileSync(path.join(repoRoot, 'skills/looker-project-onboarding/SKILL.md'), 'utf8')
     const lookmlToolTsx = readFileSync(path.join(repoRoot, 'src/lookmlTool.tsx'), 'utf8')
@@ -597,7 +597,8 @@ async function eval07AgenticLookmlOnboarding() {
       !/\bsdk\.(?:all_connections|all_lookml_models|connection_schemas|connection_tables)\b/.test(lookmlToolTsx)
     assert(zeroSdkDotGlobals, 'Onboarding skill and lookmlTool must use bare Monty globals without sdk.*')
     const requiresProjectAndDashLinks =
-      onboardingSkillMd.includes('/projects/<project_name>/files') &&
+      onboardingSkillMd.includes('/projects/<project_name>') &&
+      !onboardingSkillMd.includes('/projects/<project_name>/files') &&
       onboardingSkillMd.includes('/dashboards/<id>') &&
       antigravityPromptsTs.includes('/dashboards/<id>') &&
       lookmlToolTsx.includes('lookml-open-ide-btn')

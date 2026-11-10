@@ -179,10 +179,9 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "scenario": "lookml",
   "verifiedVisibleText": [
     "Add total_revenue & gross_margin to order_items",
-    "⎇ user dev mode",
-    "✓ LookML Validator Passed",
-    "run_lookml_test (1/1 passed)",
+    "LookML: deploytobarerepo_temp",
     "bronze/orders.refinement.lkml",
+    "total_revenue",
     "Update LookML",
   ],
 }

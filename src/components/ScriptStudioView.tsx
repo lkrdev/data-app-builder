@@ -123,11 +123,8 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           <>
             <strong>{scriptTitle}</strong>
             <span className="dab-muted">
-              (Artifact <code>obj_script_{scriptId}</code>
-              {publishedTileDash
-                ? ` · Dashboard #${publishedTileDash.dashboardId} · tile_element_${publishedTileDash.elementId}`
-                : ''}
-              )
+              ({scriptId}
+              {publishedTileDash ? ` · Dashboard #${publishedTileDash.dashboardId}` : ''})
             </span>
           </>
         }
@@ -250,7 +247,7 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           }}
         >
           <div className="dab-inspector-bar" style={{ gap: 8, flexWrap: 'wrap' }}>
-            <strong>Python Script (`LkrCodeMode.runPythonCode`)</strong>
+            <strong>Python Script</strong>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
               <input
                 type="text"
@@ -316,7 +313,7 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             <ScriptOutputRenderer output={scriptOutput} />
           ) : (
             <div className="dab-placeholder">
-              <p>Click &ldquo;Run Python&rdquo; to execute in WASM Monty sandbox.</p>
+              <p>Click &ldquo;Run Python&rdquo; to execute your script.</p>
               <p className="dab-muted">
                 Renders a table for <code>list[dict]</code>, HTML/Markdown for{' '}
                 <code>str</code>, or <code>&lt;pre&gt;</code> for <code>dict</code>.

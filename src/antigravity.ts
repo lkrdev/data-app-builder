@@ -1083,7 +1083,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : 'Done.')
   const lookmlPid = lookmlBundle?.project_id?.trim()
   if (lookmlPid && !/\/projects\/[^/\s)]+/i.test(finalAssistantText)) {
-    finalAssistantText = `${finalAssistantText}\n\n[Open ${lookmlPid} in Looker IDE](/projects/${encodeURIComponent(lookmlPid)}/files)`
+    finalAssistantText = `${finalAssistantText}\n\n[Open ${lookmlPid} in Looker IDE](/projects/${encodeURIComponent(lookmlPid)})`
   }
   if (nativeBundle) {
     const ct = nativeBundle.content_type || nativeBundle.contentType || 'dashboard'
