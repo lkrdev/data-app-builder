@@ -652,6 +652,18 @@ chmod +x "${fakeBinDir}/uv"
 
   const pkgJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
   assert.equal(pkgJson.scripts?.eval, 'node scripts/run-evals.mjs', 'package.json must define "eval": "node scripts/run-evals.mjs"')
+  assert.equal(pkgJson.scripts?.['clean:artifacts'], 'bash scripts/clean-artifacts.sh')
+  const cleanScriptPath = path.join(repoRoot, 'scripts/clean-artifacts.sh')
+  for (const badArgs of [[], ['--oauth-account=foo'], ['a', 'b']]) {
+    assert.throws(() => execFileSync('bash', [cleanScriptPath, ...badArgs], { encoding: 'utf8', stdio: 'pipe' }), /expected a single <oauth-account> argument/)
+  }
+  const fakeCleanBinDir = mkdtempSync(path.join(workDir, 'fake_clean_bin_'))
+  writeFileSync(path.join(fakeCleanBinDir, 'lkr'), '#!/usr/bin/env bash\nprintf "%s\\n" "$@"\n', { mode: 0o755 })
+  const fakeCleanOut = execFileSync('bash', [cleanScriptPath, 'test-account'], { env: { ...process.env, PATH: `${fakeCleanBinDir}:/usr/bin:/bin` }, encoding: 'utf8' })
+  assert(
+    fakeCleanOut.includes('--oauth-account=test-account') && fakeCleanOut.includes('code-mode') && fakeCleanOut.includes('sandbox') && fakeCleanOut.includes('purge_artifacts'),
+    'clean-artifacts.sh must invoke lkr --oauth-account=<account> code-mode sandbox with purge_artifacts'
+  )
   assert(
     statSync(path.join(repoRoot, 'scripts/run-evals.mjs')).isFile() &&
       antigravityTs.includes('extractInteractionOutputText') &&
