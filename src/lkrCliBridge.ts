@@ -306,7 +306,7 @@ export const LkrCodeMode: LkrCodeModeRuntime = {
 
 export const LKR_DEV_CLI_VERSION = '0.0.66'
 export const LKR_DEV_CLI_SPEC = `lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}`
-export const BOOTSTRAP_SANDBOX_SH = `command -v uv >/dev/null 2>&1 || pip install --break-system-packages --quiet uv || python3 -m pip install --break-system-packages --quiet uv; lkr --version 2>/dev/null | grep -q "${LKR_DEV_CLI_VERSION}" || UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"; for sp in ~/.local/share/uv/tools/lkr-dev-cli/lib/python3.*/site-packages /usr/local/lib/python3.*/dist-packages /usr/lib/python3/dist-packages; do [ -d "$sp" ] && [ -f /workspace/sitecustomize.py ] && cp -f /workspace/sitecustomize.py "$sp/sitecustomize.py"; done`
+export const BOOTSTRAP_SANDBOX_SH = `[ -x /workspace/.uv_tools/lkr-dev-cli/bin/lkr ] && [ ! -x /usr/local/bin/lkr ] && ln -sf /workspace/.uv_tools/lkr-dev-cli/bin/lkr /usr/local/bin/lkr; lkr --version 2>/dev/null | grep -q "${LKR_DEV_CLI_VERSION}" || { (command -v uv >/dev/null 2>&1 || pip install --break-system-packages --quiet uv || python3 -m pip install --break-system-packages --quiet uv); UV_PYTHON_INSTALL_DIR=/workspace/.uv_python UV_TOOL_DIR=/workspace/.uv_tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"; }; for sp in /workspace/.uv_tools/lkr-dev-cli/lib/python3.*/site-packages ~/.local/share/uv/tools/lkr-dev-cli/lib/python3.*/site-packages /usr/local/lib/python3.*/dist-packages /usr/lib/python3/dist-packages; do [ -d "$sp" ] && [ -w "$sp" ] && [ -f /workspace/sitecustomize.py ] && cp -f /workspace/sitecustomize.py "$sp/sitecustomize.py"; done; true`
 
 export interface LkrExtensionToolRequest {
   kind: 'codemode' | 'sdk_request'
@@ -765,7 +765,7 @@ except Exception:
 
 export const BOOTSTRAP_LOOKML_PY = `#!/usr/bin/env python3
 """Sandbox helper for Agentic LookML:
-1. Bootstraps uv (via pip install --break-system-packages --quiet uv) + lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION} (via UV_TOOL_BIN_DIR=/usr/local/bin uv tool install), installs sitecustomize.py into ~/.local/share/uv/tools/lkr-dev-cli/lib/python3.*/site-packages/, and unpacks lkrdev/cli/skills/ into /workspace.
+1. Bootstraps uv (via pip install --break-system-packages --quiet uv) + lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION} (via UV_TOOL_DIR=/workspace/.uv_tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool install), re-symlinks /workspace/.uv_tools/lkr-dev-cli/bin/lkr -> /usr/local/bin/lkr after hibernation, installs sitecustomize.py into /workspace/.uv_tools/lkr-dev-cli/lib/python3.*/site-packages/, and unpacks lkrdev/cli/skills/ into /workspace.
 2. Computes unified diffs between /workspace/lookml_baseline and /workspace/data/$RUN_ID/lookml (or /workspace/lookml).
 3. Emits <LOOKML_BUNDLE>{...}</LOOKML_BUNDLE> for the host Looker extension.
 """
@@ -824,7 +824,7 @@ def ensure_sitecustomize() -> list[str]:
         shutil.copyfile(sibling_site, ws_site)
     os.environ["PYTHONPATH"] = f"{WORKSPACE_DIR}:{os.environ['PYTHONPATH']}" if os.environ.get("PYTHONPATH") else str(WORKSPACE_DIR)
     installed = [str(ws_site)] if ws_site.is_file() else []
-    uv_tool_lib = Path(os.environ.get("UV_TOOL_DIR", str(Path.home() / ".local/share/uv/tools"))) / "lkr-dev-cli/lib"
+    uv_tool_lib = Path(os.environ.get("UV_TOOL_DIR", str(WORKSPACE_DIR / ".uv_tools"))) / "lkr-dev-cli/lib"
     site_targets = list(uv_tool_lib.glob("python3.*/site-packages"))
     if not site_targets:
         fallback_sp = uv_tool_lib / f"python{sys.version_info.major}.{sys.version_info.minor}/site-packages"
@@ -857,19 +857,37 @@ def ensure_sitecustomize() -> list[str]:
     return installed
 
 def ensure_lkr_cli() -> str:
-    if not shutil.which("uv"):
-        for pip_cmd in (["pip"], [sys.executable, "-m", "pip"]):
-            subprocess.run([*pip_cmd, "install", "--break-system-packages", "--quiet", "uv"], check=False)
-            if shutil.which("uv"):
-                break
+    uv_tool_dir = Path(os.environ.get("UV_TOOL_DIR", str(WORKSPACE_DIR / ".uv_tools")))
+    bin_dir = Path(os.environ.get("UV_TOOL_BIN_DIR", "/usr/local/bin"))
+    persisted_lkr = uv_tool_dir / "lkr-dev-cli/bin/lkr"
+    target_lkr = bin_dir / "lkr"
+    if persisted_lkr.is_file() and os.access(persisted_lkr, os.X_OK) and not target_lkr.exists():
+        try:
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            if target_lkr.is_symlink():
+                target_lkr.unlink()
+            target_lkr.symlink_to(persisted_lkr)
+        except Exception:
+            pass
     pkg_spec = f"lkr-dev-cli[tools,code-mode,parse]=={LKR_DEV_CLI_VERSION}"
-    lkr_bin = shutil.which("lkr") or shutil.which("lkr-dev-cli")
-    ver_out = subprocess.run([lkr_bin, "--version"], capture_output=True, text=True, check=False).stdout if lkr_bin else ""
+    lkr_bin = shutil.which("lkr") or shutil.which("lkr-dev-cli") or (str(persisted_lkr) if persisted_lkr.is_file() else None)
+    try:
+        ver_out = subprocess.run([lkr_bin, "--version"], capture_output=True, text=True, check=False).stdout if lkr_bin else ""
+    except OSError:
+        ver_out = ""
     if LKR_DEV_CLI_VERSION not in ver_out:
+        if not shutil.which("uv"):
+            for pip_cmd in (["pip"], [sys.executable, "-m", "pip"]):
+                try:
+                    subprocess.run([*pip_cmd, "install", "--break-system-packages", "--quiet", "uv"], check=False)
+                except OSError:
+                    pass
+                if shutil.which("uv"):
+                    break
         cmd = ["uv", "tool", "install", "--force", "--quiet", pkg_spec] if shutil.which("uv") else [sys.executable, "-m", "pip", "install", "--break-system-packages", "--quiet", pkg_spec]
-        subprocess.run(cmd, env={**os.environ, "UV_TOOL_BIN_DIR": "/usr/local/bin"}, check=False)
+        subprocess.run(cmd, env={"UV_PYTHON_INSTALL_DIR": str(WORKSPACE_DIR / ".uv_python"), "UV_TOOL_DIR": str(WORKSPACE_DIR / ".uv_tools"), "UV_TOOL_BIN_DIR": "/usr/local/bin", **os.environ}, check=False)
     ensure_sitecustomize()
-    return shutil.which("lkr") or shutil.which("lkr-dev-cli") or "lkr"
+    return shutil.which("lkr") or shutil.which("lkr-dev-cli") or (str(persisted_lkr) if persisted_lkr.is_file() else "lkr")
 
 def compute_diff(old_text: str, new_text: str, rel_path: str) -> str:
     return "".join(

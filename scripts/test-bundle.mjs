@@ -523,6 +523,7 @@ echo "pip $@" >> "${cmdLogPath}"
 cat << 'EOF' > "${fakeBinDir}/uv"
 #!/bin/sh
 echo "UV_TOOL_BIN_DIR=\${UV_TOOL_BIN_DIR:-} uv $@" >> "${cmdLogPath}"
+echo "UV_TOOL_DIR=\${UV_TOOL_DIR:-}" >> "${cmdLogPath}"
 cat << 'INNER' > "${fakeBinDir}/lkr"
 #!/bin/sh
 echo "lkr, version 0.0.66"
@@ -546,8 +547,33 @@ chmod +x "${fakeBinDir}/uv"
   const loggedCmds = readFileSync(cmdLogPath, 'utf8')
   assert(
     loggedCmds.includes('pip install --break-system-packages --quiet uv') &&
-      loggedCmds.includes('UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet lkr-dev-cli[tools,code-mode,parse]==0.0.66'),
-    'bootstrap_lookml.py cli must execute pip install --break-system-packages --quiet uv followed by UV_TOOL_BIN_DIR=/usr/local/bin uv tool install'
+      loggedCmds.includes('UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet lkr-dev-cli[tools,code-mode,parse]==0.0.66') &&
+      loggedCmds.includes(`UV_TOOL_DIR=${workDir}/.uv_tools`),
+    'bootstrap_lookml.py cli must execute pip install --break-system-packages --quiet uv followed by UV_TOOL_DIR=<workspace>/.uv_tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool install'
+  )
+  // Issue #171: verify hibernation recovery re-symlinks .uv_tools/lkr-dev-cli/bin/lkr without re-running uv tool install, plus type-scoped getConvTargetId & incomplete auto-continue
+  const hibernatedBinDir = path.join(workDir, 'hibernated_bin')
+  const persistedUvBin = path.join(workDir, '.uv_tools/lkr-dev-cli/bin')
+  const persistedUvSp = path.join(workDir, '.uv_tools/lkr-dev-cli/lib/python3.12/site-packages')
+  execFileSync('mkdir', ['-p', hibernatedBinDir, persistedUvBin, persistedUvSp])
+  writeFileSync(path.join(persistedUvBin, 'lkr'), '#!/bin/sh\necho "lkr, version 0.0.66"\n', { mode: 0o755 })
+  writeFileSync(path.join(hibernatedBinDir, 'uv'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+  writeFileSync(path.join(workDir, 'sitecustomize.py'), '# bridge shim\n', 'utf8')
+  const hibernateOut = JSON.parse(
+    execFileSync('/usr/bin/python3', [bootstrapPyPath, 'cli'], {
+      env: { PATH: `${hibernatedBinDir}:/usr/bin:/bin`, WORKSPACE_DIR: workDir, UV_TOOL_BIN_DIR: hibernatedBinDir },
+      encoding: 'utf8',
+    }).trim()
+  )
+  assert.equal(hibernateOut.ok, true)
+  assert.equal(readFileSync(path.join(persistedUvSp, 'sitecustomize.py'), 'utf8'), '# bridge shim\n')
+  assert(
+    lookerApiTs.includes('export const getConvTargetId =') &&
+      appTsx.includes('export { getConvTargetId }') &&
+      antigravityTs.includes("interaction.status === 'incomplete'") &&
+      antigravityTs.includes("onStatus('Resuming incomplete turn...')") &&
+      antigravityTs.includes('UV_TOOL_DIR=/workspace/.uv_tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool install'),
+    'Issue #171: exported getConvTargetId, incomplete turn auto-continuation, and UV_TOOL_DIR=/workspace/.uv_tools must be present'
   )
 
   assert(

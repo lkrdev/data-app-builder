@@ -621,6 +621,7 @@ export function mergeInteractionSseEvent(
   if (!data.status) {
     if (evt === 'interaction.complete' || evt === 'completed' || evt === 'done') nextStatus = 'completed'
     else if (evt === 'interaction.requires_action' || evt === 'requires_action') nextStatus = 'requires_action'
+    else if (evt === 'interaction.incomplete' || evt === 'incomplete') nextStatus = 'incomplete'
     else if (evt === 'interaction.failed' || evt === 'failed') nextStatus = 'failed'
   }
   let nextSteps = Array.isArray(data.steps) ? [...(data.steps as AntigravityInteractionStep[])] : [...(current.steps || [])]
@@ -716,7 +717,8 @@ export function streamInteractionUntilActionOrDone(options: StreamInteractionOpt
   let currentInteraction: AntigravityInteractionPayload = initialInteraction ? { ...initialInteraction, id: initialInteraction.id || cleanId } : { id: cleanId, status: 'in_progress' }
   let currentLastEventId: string | undefined = initialLastEventId
   let eventCount = 0
-  const isTerminal = (s?: string) => s === 'completed' || s === 'requires_action' || s === 'failed' || s === 'cancelled'
+  const isTerminal = (s?: string) =>
+    s === 'completed' || s === 'requires_action' || s === 'incomplete' || s === 'failed' || s === 'cancelled'
   const buildResult = (): StreamInteractionResult => ({
     interaction: eventCount > 0 ? currentInteraction : initialInteraction || null,
     streamed: eventCount > 0,

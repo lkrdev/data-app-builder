@@ -473,10 +473,12 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : ''
 
   const warmTurnDirective =
-    !isNoOpTurn && mode === 'data_app' && toolMode !== 'lookml' && Boolean(existingAppCode?.trim())
+    !isNoOpTurn && !effectiveLookmlIntent && mode === 'data_app' && toolMode !== 'lookml' && Boolean(existingAppCode?.trim())
       ? `[WARM SANDBOX FAST PATH: ${appFilePath} and the discovered Looker schema are already in /workspace. Do NOT re-run run_looker_codemode discovery or re-read guides unless a brand-new explore is requested. Update ${appFilePath} and bundle in ONE code_execution call via: python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\n...\nEOF\nNEVER echo <DATA_APP_BUNDLE> in your text reply.]\n\n`
       : !isNoOpTurn && isDashboardMode && normalizedExistingNative
       ? `[WARM CONTENT STUDIO FAST PATH: Active Looker ${normalizedExistingNative.contentType} id="${normalizedExistingNative.id}" ("${normalizedExistingNative.title}") and pre-hydrated active_content (element_ids=${JSON.stringify(normalizedExistingNative.elementIds || [])}, filter_names=${JSON.stringify(normalizedExistingNative.filterNames || [])}, lookml_dashboard_id="${normalizedExistingNative.lookmlDashboardId || ''}", project_id="${normalizedExistingNative.projectId || lookmlProjectId || ''}") are pre-injected in run_looker_codemode vars. Execute the update in ONE run_looker_codemode call using upsert_udd / upsert_lookml_dashboard / reflow_24col / pin_to_board / schedule_dashboard + return emit_native_bundle(...). NEVER echo <NATIVE_CONTENT_BUNDLE> in your text reply.]\n\n`
+      : !isNoOpTurn && requiresBashSandbox && effectiveLookmlIntent
+      ? `[WARM LOOKML SANDBOX: Before running \`lkr\`, ensure \`command -v lkr >/dev/null 2>&1 || python3 /workspace/bootstrap_lookml.py cli\` so \`/usr/local/bin/lkr\` is linked from \`/workspace/.uv_tools\`.]\n\n`
       : ''
 
   const autoRoutingDirective =
@@ -580,7 +582,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   }
   await persistUserEnvIfChanged({ sdk, extensionSDK, userId, previousEnvId: initialEnvId, nextEnvId: trackedEnvId, onEnvironmentUpdated })
 
-  let pollIdx = 0, prevStepCount = (interaction.steps || []).length, prevStatus = interaction.status, bridgeRound = 0, actionRound = 0
+  let pollIdx = 0, prevStepCount = (interaction.steps || []).length, prevStatus = interaction.status, bridgeRound = 0, actionRound = 0, incompleteRound = 0
   let accInputTokens = 0, accOutputTokens = 0, accThoughtTokens = 0
   const accumulateInteractionUsage = (snap: AntigravityInteractionPayload | null | undefined) => {
     const u = snap?.usage || snap?.usage_metadata
@@ -661,6 +663,30 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const envSlotKey = normalizeEnvironmentId(trackedEnvId) || 'remote'
   const envConcurrencySlot = activeInteractionsByEnv.get(envSlotKey) || 0
   activeInteractionsByEnv.set(envSlotKey, envConcurrencySlot + 1)
+  const postContinuation = async (
+    input: Array<Record<string, unknown>>,
+    envFallback: string | undefined,
+    extraSteps: AntigravityInteractionStep[] = []
+  ) => {
+    accumulateInteractionUsage(interaction)
+    accumulatedSteps.push(...(interaction.steps || []), ...extraSteps)
+    const resumeEnv = interaction.environment_id || trackedEnvId || envFallback
+    interaction = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
+      agent: 'antigravity-preview-09-2026',
+      agent_config: agentConfig,
+      background: true,
+      ...(resumeEnv ? { environment: resumeEnv } : {}),
+      previous_interaction_id: interaction.id,
+      tools: activeTools,
+      input,
+    })
+    if (interaction.id) onInteractionCreated?.(interaction.id)
+    await throwIfAborted(interaction.id)
+    if (interaction.environment_id) trackedEnvId = interaction.environment_id
+    pollIdx = 0
+    prevStepCount = (interaction.steps || []).length
+    prevStatus = interaction.status
+  }
 
   try {
     for (;;) {
@@ -799,35 +825,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
             activeLookerCallId = ''
             codemodeExecMs += Date.now() - cmStart
             await throwIfAborted(interaction.id)
-            accumulateInteractionUsage(interaction)
-            accumulatedSteps.push(...(interaction.steps || []), ...resultsInput)
-
-            const resumeEnv = interaction.environment_id || trackedEnvId || (requiresBashSandbox ? 'remote' : undefined)
-            interaction = await callInteractionsApi(
-              extensionSDK,
-              auth,
-              'interactions',
-              'POST',
-              {
-                agent: 'antigravity-preview-09-2026',
-                agent_config: agentConfig,
-                background: true,
-                ...(resumeEnv ? { environment: resumeEnv } : {}),
-                previous_interaction_id: interaction.id,
-                tools: activeTools,
-                input: resultsInput,
-              }
-            )
-            if (interaction.id) {
-              onInteractionCreated?.(interaction.id)
-            }
-            await throwIfAborted(interaction.id)
-            if (interaction.environment_id) {
-              trackedEnvId = interaction.environment_id
-            }
-            pollIdx = 0
-            prevStepCount = (interaction.steps || []).length
-            prevStatus = interaction.status
+            await postContinuation(resultsInput, requiresBashSandbox ? 'remote' : undefined, resultsInput)
             continue
           }
           break
@@ -957,41 +955,29 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
         if (!hasFinalBundle) {
           bridgeRound += 1
-          accumulateInteractionUsage(interaction)
-          accumulatedSteps.push(...(interaction.steps || []))
           const seedText = [
             '[LKR_EXTENSION_BRIDGE_RESULT] Executed online lkr-dev-cli request(s) in the host Looker Extension.',
             'Write the resolved JSON payload(s) below to /workspace/.lkr_extension_cache/ and re-run your sandbox command so it hits the local cache and completes:',
             ...bridgedLines,
           ].join('\n\n')
-
-          interaction = await callInteractionsApi(
-            extensionSDK,
-            auth,
-            'interactions',
-            'POST',
-            {
-              agent: 'antigravity-preview-09-2026',
-              agent_config: agentConfig,
-              background: true,
-              environment: interaction.environment_id || trackedEnvId || 'remote',
-              previous_interaction_id: interaction.id,
-              tools: activeTools,
-              input: [{ type: 'text', text: seedText }],
-            }
-          )
-          if (interaction.id) {
-            onInteractionCreated?.(interaction.id)
-          }
-          await throwIfAborted(interaction.id)
-          if (interaction.environment_id) {
-            trackedEnvId = interaction.environment_id
-          }
-          pollIdx = 0
-          prevStepCount = (interaction.steps || []).length
-          prevStatus = interaction.status
+          await postContinuation([{ type: 'text', text: seedText }], 'remote')
           continue
         }
+      }
+
+      if (
+        interaction.status === 'incomplete' &&
+        !usedDirectStatelessModel &&
+        Boolean(interaction.id) &&
+        !hasFinalBundle &&
+        incompleteRound < 2 &&
+        extractInteractionOutputText(interaction) === 'Completed.'
+      ) {
+        incompleteRound += 1
+        await throwIfAborted(interaction.id)
+        onStatus('Resuming incomplete turn...')
+        await postContinuation([{ type: 'text', text: 'Continue and complete the current request.' }], requiresBashSandbox ? 'remote' : undefined)
+        continue
       }
 
       break
@@ -1002,7 +988,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     else activeInteractionsByEnv.set(envSlotKey, remaining)
   }
 
-  if (accumulatedSteps.length > 0) {
+  if (accumulatedSteps.length > 0 || incompleteRound > 0 || bridgeRound > 0 || actionRound > 0) {
     accumulateInteractionUsage(interaction)
     interaction = {
       ...interaction,
@@ -1186,7 +1172,13 @@ export function prewarmOrWakeAntigravityEnvironment(params: {
       agent_config: { type: 'antigravity', model: model || DEFAULT_ANTIGRAVITY_MODEL, max_total_tokens: String(resolvedMaxTokens) },
       background: true,
       tools: prewarmTools,
-      input: [{ type: 'text', text: `[PREWARM:${toolType.toUpperCase()}] Initialize ${toolType} workspace and reply READY.` }],
+      input: [{
+        type: 'text',
+        text:
+          toolType === 'lookml'
+            ? `[PREWARM:${toolType.toUpperCase()}] Initialize ${toolType} workspace (ensure \`command -v lkr >/dev/null 2>&1 || python3 /workspace/bootstrap_lookml.py cli\`) and reply READY.`
+            : `[PREWARM:${toolType.toUpperCase()}] Initialize ${toolType} workspace and reply READY.`,
+      }],
     }
     const userProvisionKey = resolveUserProvisionKey(userId, auth)
     const coalesceStep =
@@ -1301,6 +1293,7 @@ export function hydrateInteractionActivitySteps(opts: {
           Array.isArray(fetched.input) &&
           fetched.input.some((it) => it && typeof it === 'object' && (it as { type?: string }).type === 'text') &&
           !rawInput.includes('[LKR_EXTENSION_BRIDGE_RESULT]') &&
+          !rawInput.includes('Continue and complete the current request.') &&
           !fetched.input.some((it) => it && typeof it === 'object' && (it as { type?: string }).type === 'function_result')
         if (isFreshUserTurnRoot) return
         return walk(typeof fetched.previous_interaction_id === 'string' ? fetched.previous_interaction_id.trim() : '')
@@ -1331,7 +1324,7 @@ export function hydrateInteractionActivitySteps(opts: {
 }
 
 const STATIC_SANDBOX_PATH_RE =
-  /^workspace\/(?:\.lkr_extension_cache\/|(?:\.agents\/)?skills\/|AGENTS\.md$|DATA_APP_GUIDE\.md$|DATA_INVESTIGATOR_GUIDE\.md$|bootstrap_lookml\.py$|bundle_app\.py$|sitecustomize\.py$)/i
+  /^workspace\/(?:\.lkr_extension_cache\/|\.uv_tools\/|\.uv_python\/|(?:\.agents\/)?skills\/|AGENTS\.md$|DATA_APP_GUIDE\.md$|DATA_INVESTIGATOR_GUIDE\.md$|bootstrap_lookml\.py$|bundle_app\.py$|sitecustomize\.py$)/i
 const BINARY_SANDBOX_EXT_RE = /\.(?:png|jpe?g|gif|webp|ico|pdf|tar|gz|zip|pyc|wasm)$/i
 const WORKSPACE_FILE_RE = /\/workspace\/[A-Za-z0-9_./-]+\.[A-Za-z0-9]+/g
 

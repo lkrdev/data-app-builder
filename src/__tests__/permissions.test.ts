@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -66,8 +66,8 @@ import {
   fetchFolderWithAncestors, fetchInitialLookerMetadata, fetchLookerCaAgentsCatalog,
   fetchPreloadedContentSummary, formatStudioContentItemTitle, formatUserConversationsArtifactKey,
   formatUserConversationsKey, formatUserEnvArtifactKey, getAllowedUseCases, getArtifactNamespace,
-  getArtifactService, getUseCaseLabel, hydrateConversationContentItems, hydrateMentionedContext,
-  isConversationalNoOpPrompt, listUserArtifacts, loadStoredSelectedFolderId,
+  getArtifactService, getConvTargetId, getUseCaseLabel, hydrateConversationContentItems, hydrateMentionedContext,
+  isConversationalNoOpPrompt, isLookmlTargetAlreadyLoaded, listUserArtifacts, loadStoredSelectedFolderId,
   loadUserConversations, loadUserEnvironmentId, matchExplicitUseCaseRule,
   normalizeArtifactNamespace, normalizeBusySendAction, normalizeCaEmbedPath, normalizeQueryFiltersToFixedDates,
   normalizeStudioAgentName, normalizeStudioContentItem,
@@ -7366,5 +7366,357 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     expect(afterDelConv.contentItems).toEqual([])
     expect(afterDelConv.activeContentTabKey).toBe('')
     expect(hydrateConversationContentItems(afterDelConv)).toEqual([])
+  })
+
+  test('71. Issue #171: type-scoped getConvTargetId on multi-artifact conversations, status="incomplete" auto-continuation in runAntigravityTurn, and /workspace/.uv_tools hibernation recovery', async () => {
+    // 1. Type-scoped getConvTargetId & isLookmlTargetAlreadyLoaded prevent cross-mode dashboardId ("35") collisions
+    const mixedContent: ConversationRecord['content'] = {
+      dashboardId: '35',
+      lookId: '88',
+      lookmlDashboardId: 'thelook::pulse',
+      reportId: 'hc_99',
+      projectId: 'thelook_proj',
+      sessionId: 'thelook_sess',
+      scriptId: 'script_7',
+      caConversationId: 'ca_12',
+      id: 'generic_id',
+    }
+    expect(getConvTargetId(mixedContent, 'lookml')).toBe('thelook_proj')
+    expect(getConvTargetId(mixedContent, 'LOOKML')).toBe('thelook_proj')
+    expect(getConvTargetId({ dashboardId: '35', sessionId: 'legacy_sess' }, 'lookml')).toBe('legacy_sess')
+    expect(getConvTargetId({ dashboardId: '35', id: '35' }, 'lookml')).toBe('')
+    expect(getConvTargetId(mixedContent, 'health')).toBe('hc_99')
+    expect(getConvTargetId(mixedContent, 'health-check')).toBe('hc_99')
+    expect(getConvTargetId(mixedContent, 'health_check')).toBe('hc_99')
+    expect(getConvTargetId({ dashboardId: '35' }, 'health-check')).toBe('')
+    expect(getConvTargetId(mixedContent, 'tile')).toBe('script_7')
+    expect(getConvTargetId(mixedContent, 'script')).toBe('script_7')
+    expect(getConvTargetId(mixedContent, 'conversational-analytics')).toBe('ca_12')
+    expect(getConvTargetId(mixedContent, 'ca')).toBe('ca_12')
+    expect(getConvTargetId({ ...mixedContent, contentType: 'look' }, 'dashboard')).toBe('88')
+    expect(getConvTargetId({ ...mixedContent, contentType: 'lookml_dashboard' }, 'dashboard')).toBe('thelook::pulse')
+    expect(getConvTargetId({ ...mixedContent, contentType: 'dashboard' }, 'dashboard')).toBe('35')
+    expect(getConvTargetId({ lookmlDashboardId: 'thelook::pulse', lookId: '88' }, 'dashboard')).toBe('thelook::pulse')
+    expect(getConvTargetId(mixedContent, 'app')).toBe('35')
+    expect(getConvTargetId(mixedContent, 'data_app')).toBe('35')
+    expect(getConvTargetId(mixedContent, 'data-investigator')).toBe('35')
+    expect(getConvTargetId(mixedContent, 'data_investigator')).toBe('35')
+    expect(getConvTargetId({ projectId: 'only_proj' }, 'auto')).toBe('only_proj')
+    expect(getConvTargetId({ sessionId: 'only_sess' }, undefined)).toBe('only_sess')
+    expect(getConvTargetId(mixedContent, 'unknown_mode')).toBe('')
+    expect(getConvTargetId(undefined, 'lookml')).toBe('')
+
+    expect(isLookmlTargetAlreadyLoaded('lookml', 'thelook_proj', null, undefined)).toBe(false)
+    expect(isLookmlTargetAlreadyLoaded('app', 'thelook_proj', { id: 'thelook_proj', project_id: 'thelook_proj' })).toBe(false)
+    expect(isLookmlTargetAlreadyLoaded('lookml', 'thelook_proj', { id: 'sess_1', project_id: 'thelook_proj' })).toBe(true)
+    expect(isLookmlTargetAlreadyLoaded('lookml', 'thelook_proj', { id: 'legacy_sess', project_id: '' }, 'legacy_sess')).toBe(true)
+    expect(isLookmlTargetAlreadyLoaded('lookml', 'thelook_1762800000', { id: 'thelook', project_id: 'thelook' })).toBe(true)
+
+    // 2. Auto-continue status: "incomplete" (outputs: null) in runAntigravityTurn with step/token accumulation, warm LookML directive & < 2 cap
+    const resumePosts: MockInteractionPostBody[] = []
+    const resumeStatuses: string[] = []
+    const createdIds: string[] = []
+    const mockIncompleteSdk = asSdk({ ok: async <T>(p: T) => p })
+    const resumeTurn = await runAntigravityTurn({
+      sdk: mockIncompleteSdk,
+      extensionSDK: {
+        serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+          const b = init?.body ? (JSON.parse(String(init.body)) as MockInteractionPostBody) : {}
+          resumePosts.push(b)
+          if (resumePosts.length === 1) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_171_inc1',
+                environment_id: 'env_171_idle',
+                status: 'incomplete',
+                outputs: null,
+                usage: { input_tokens: 120, output_tokens: 15, thought_tokens: 30 },
+                steps: [{ id: 'vf_1', type: 'view_file', path: '/workspace/AGENTS.md', content: '# Agents' }],
+              }),
+            }
+          }
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_171_done',
+              environment_id: 'env_171_idle',
+              previous_interaction_id: 'int_171_inc1',
+              status: 'completed',
+              output_text: '<USE_CASE>lookml</USE_CASE>\nCompleted field curation on `thelook_proj`.',
+              usage: { input_tokens: 200, output_tokens: 45, thought_tokens: 20 },
+              steps: [{ id: 'ce_2', type: 'code_execution', command: 'lkr --version', stdout: '0.0.66' }],
+            }),
+          }
+        },
+      },
+      auth: { mode: 'apikey', apiKey: 'test-key' },
+      session: { environmentId: 'env_171_idle', lastInteractionId: 'int_171_prev', toolType: 'lookml' },
+      useCase: 'lookml',
+      selectedExplores: [],
+      existingAppCode: 'export class PriorApp35 {}',
+      userPrompt: '/lookml-field-curation curate order_items',
+      schemaMarkdown: '# Schema',
+      onStatus: (s) => resumeStatuses.push(s),
+      onInteractionCreated: (id) => createdIds.push(id),
+    })
+    expect(resumePosts).toHaveLength(2)
+    expect(resumePosts[0].input?.[0]?.text).toContain('[WARM LOOKML SANDBOX:')
+    expect(resumePosts[0].input?.[0]?.text).not.toContain('[WARM SANDBOX FAST PATH:')
+    expect(resumePosts[1]).toMatchObject({
+      previous_interaction_id: 'int_171_inc1',
+      environment: 'env_171_idle',
+      input: [{ type: 'text', text: 'Continue and complete the current request.' }],
+    })
+    expect(resumeStatuses).toContain('Resuming incomplete turn...')
+    expect(createdIds).toEqual(['int_171_inc1', 'int_171_done'])
+    expect(resumeTurn.assistantText).toContain('Completed field curation on `thelook_proj`.')
+    expect(resumeTurn.activitySteps?.map((s) => s.id)).toEqual(['vf_1', 'ce_2'])
+    expect(resumeTurn.telemetry.tokens.input).toBe(320)
+    expect(resumeTurn.telemetry.tokens.output).toBe(60)
+    expect(resumeTurn.telemetry.tokens.thought).toBe(50)
+
+    // OAuth SSE mergeInteractionSseEvent & streamInteractionUntilActionOrDone treat status="incomplete" as terminal (zero wasted reconnects)
+    expect(
+      mergeInteractionSseEvent({ id: 'int_sse_inc', status: 'in_progress' }, 'interaction.incomplete', {})
+    ).toMatchObject({ id: 'int_sse_inc', status: 'incomplete' })
+    let sseFetchCount = 0
+    const sseIncRes = await streamInteractionUntilActionOrDone({
+      auth: { mode: 'oauth', oauthToken: 'tok_sse_inc' },
+      interactionId: 'int_sse_inc',
+      maxReconnects: 2,
+      fetchImpl: (async () => {
+        sseFetchCount += 1
+        const payload = 'id: evt_1\nevent: interaction.incomplete\ndata: {"id":"int_sse_inc","status":"incomplete"}\n\n'
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => {
+              let sent = false
+              return {
+                read: async () =>
+                  sent ? { done: true, value: undefined } : ((sent = true), { done: false, value: new TextEncoder().encode(payload) }),
+                cancel: async () => {},
+              }
+            },
+          },
+        } as unknown as Response
+      }) as typeof fetch,
+    })
+    expect(sseFetchCount).toBe(1)
+    expect(sseIncRes.streamed).toBe(true)
+    expect(sseIncRes.interaction?.status).toBe('incomplete')
+
+    // Cap auto-continuation at incompleteRound < 2 (1 initial POST + 2 continuation POSTs = 3 total)
+    let capPostCount = 0
+    const cappedTurn = await runAntigravityTurn({
+      sdk: mockIncompleteSdk,
+      extensionSDK: {
+        serverProxy: async () => {
+          capPostCount += 1
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: `int_cap_${capPostCount}`,
+              environment_id: 'env_171_idle',
+              status: 'incomplete',
+              outputs: null,
+              steps: [{ id: `s_${capPostCount}`, type: 'thought', thought: `Thinking ${capPostCount}` }],
+            }),
+          }
+        },
+      },
+      auth: { mode: 'apikey', apiKey: 'test-key' },
+      session: { environmentId: 'env_171_idle', lastInteractionId: 'int_171_prev' },
+      selectedExplores: [],
+      userPrompt: 'Check cold resume cap',
+      schemaMarkdown: '# Schema',
+      onStatus: () => {},
+    })
+    expect(capPostCount).toBe(3)
+    expect(cappedTurn.assistantText).toBe('Completed.')
+
+    // Zero-step incomplete hop still preserves accumulated token usage across continuation
+    let zeroStepCall = 0
+    const zeroStepTurn = await runAntigravityTurn({
+      sdk: mockIncompleteSdk,
+      extensionSDK: {
+        serverProxy: async () => {
+          zeroStepCall += 1
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify(
+              zeroStepCall === 1
+                ? {
+                    id: 'int_zero_inc',
+                    environment_id: 'env_171_idle',
+                    status: 'incomplete',
+                    outputs: null,
+                    steps: [],
+                    usage: { input_tokens: 75, output_tokens: 5, thought_tokens: 10 },
+                  }
+                : {
+                    id: 'int_zero_done',
+                    environment_id: 'env_171_idle',
+                    previous_interaction_id: 'int_zero_inc',
+                    status: 'completed',
+                    output_text: 'Recovered from zero-step wake timeout.',
+                    steps: [],
+                    usage: { input_tokens: 125, output_tokens: 25, thought_tokens: 15 },
+                  }
+            ),
+          }
+        },
+      },
+      auth: { mode: 'apikey', apiKey: 'test-key' },
+      session: { environmentId: 'env_171_idle', lastInteractionId: 'int_171_prev' },
+      selectedExplores: [],
+      userPrompt: 'Check zero-step incomplete token merge',
+      schemaMarkdown: '# Schema',
+      onStatus: () => {},
+    })
+    expect(zeroStepTurn.telemetry.tokens).toMatchObject({ input: 200, output: 30, thought: 25 })
+
+    // Do not auto-continue when status === 'incomplete' already emitted real output text
+    let nonEmptyPostCount = 0
+    const nonEmptyIncomplete = await runAntigravityTurn({
+      sdk: mockIncompleteSdk,
+      extensionSDK: {
+        serverProxy: async () => {
+          nonEmptyPostCount += 1
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_partial_text',
+              environment_id: 'env_171_idle',
+              status: 'incomplete',
+              output_text: 'Partial answer already present.',
+            }),
+          }
+        },
+      },
+      auth: { mode: 'apikey', apiKey: 'test-key' },
+      session: { environmentId: 'env_171_idle', lastInteractionId: 'int_171_prev' },
+      selectedExplores: [],
+      userPrompt: 'Check partial text guard',
+      schemaMarkdown: '# Schema',
+      onStatus: () => {},
+    })
+    expect(nonEmptyPostCount).toBe(1)
+    expect(nonEmptyIncomplete.assistantText).toBe('Partial answer already present.')
+
+    // hydrateInteractionActivitySteps walks across auto-continued incomplete hops when stopAtInteractionId is omitted
+    const hydratedAcrossIncomplete = await hydrateInteractionActivitySteps({
+      extensionSDK: {
+        serverProxy: async (url: string) => {
+          const hopId = decodeURIComponent(url.split('/interactions/')[1] || '')
+          const payload =
+            hopId === 'int_171_done'
+              ? {
+                  id: 'int_171_done',
+                  previous_interaction_id: 'int_171_inc1',
+                  status: 'completed',
+                  input: [{ type: 'text', text: 'Continue and complete the current request.' }],
+                  steps: [{ id: 'ce_2', type: 'code_execution', command: 'lkr --version', stdout: '0.0.66' }],
+                }
+              : {
+                  id: 'int_171_inc1',
+                  status: 'incomplete',
+                  input: [{ type: 'text', text: 'Initial Turn 1 prompt' }],
+                  steps: [{ id: 'vf_1', type: 'view_file', path: '/workspace/AGENTS.md', content: '# Agents' }],
+                }
+          return { ok: true, status: 200, body: JSON.stringify(payload) }
+        },
+      },
+      auth: { mode: 'apikey', apiKey: 'test-key' },
+      interactionId: 'int_171_done',
+    })
+    expect(hydratedAcrossIncomplete.map((s) => s.id)).toEqual(['vf_1', 'ce_2'])
+
+    // 3. Persist lkr-dev-cli under /workspace/.uv_tools + re-symlink /usr/local/bin/lkr after hibernation (Python + Shell + dangling shebang OSError fallback)
+    expect(BOOTSTRAP_SANDBOX_SH).toContain(
+      'UV_TOOL_DIR=/workspace/.uv_tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.66"'
+    )
+    expect(BOOTSTRAP_SANDBOX_SH).toContain('UV_PYTHON_INSTALL_DIR=/workspace/.uv_python')
+    expect(BOOTSTRAP_SANDBOX_SH).toContain('ln -sf /workspace/.uv_tools/lkr-dev-cli/bin/lkr /usr/local/bin/lkr')
+    expect(BOOTSTRAP_SANDBOX_SH).toContain('/workspace/.uv_tools/lkr-dev-cli/lib/python3.*/site-packages')
+    expect(BOOTSTRAP_LOOKML_PY).toContain('"UV_TOOL_DIR": str(WORKSPACE_DIR / ".uv_tools")')
+    expect(BOOTSTRAP_LOOKML_PY).toContain('"UV_TOOL_BIN_DIR": "/usr/local/bin"')
+
+    const tmpWs = mkdtempSync(path.join(tmpdir(), 'dab-171-uv-'))
+    try {
+      const uvBinDir = path.join(tmpWs, '.uv_tools/lkr-dev-cli/bin')
+      const uvSiteDir = path.join(tmpWs, '.uv_tools/lkr-dev-cli/lib/python3.12/site-packages')
+      const targetBinDir = path.join(tmpWs, 'usr_local_bin')
+      const bootstrapPath = path.join(tmpWs, 'bootstrap_lookml.py')
+      const cmdLog = path.join(tmpWs, 'uv_calls.log')
+      mkdirSync(uvBinDir, { recursive: true })
+      mkdirSync(uvSiteDir, { recursive: true })
+      mkdirSync(targetBinDir, { recursive: true })
+      writeFileSync(bootstrapPath, BOOTSTRAP_LOOKML_PY, { mode: 0o755 })
+      writeFileSync(path.join(tmpWs, 'sitecustomize.py'), LKR_CLI_SITECUSTOMIZE_PY, 'utf8')
+      writeFileSync(path.join(uvBinDir, 'lkr'), `#!/bin/sh\necho "lkr, version ${LKR_DEV_CLI_VERSION}"\n`, { mode: 0o755 })
+
+      // Hibernation recovery succeeds offline with zero uv/pip binaries on PATH when .uv_tools/lkr-dev-cli/bin/lkr is intact
+      const out = JSON.parse(
+        execFileSync('/usr/bin/python3', [bootstrapPath, 'cli'], {
+          env: {
+            PATH: `${targetBinDir}:/bin`,
+            WORKSPACE_DIR: tmpWs,
+            UV_TOOL_BIN_DIR: targetBinDir,
+          },
+          encoding: 'utf8',
+        }).trim()
+      ) as { ok: boolean; lkr: string; version: string }
+      expect(out.ok).toBe(true)
+      expect(out.version).toBe(LKR_DEV_CLI_VERSION)
+      const recoveredLink = path.join(targetBinDir, 'lkr')
+      expect(lstatSync(recoveredLink).isSymbolicLink()).toBe(true)
+      expect(readlinkSync(recoveredLink)).toBe(path.join(uvBinDir, 'lkr'))
+      expect(readFileSync(path.join(uvSiteDir, 'sitecustomize.py'), 'utf8')).toContain('<LKR_EXTENSION_TOOL_REQUEST>')
+
+      // Verify BOOTSTRAP_SANDBOX_SH shell symlink recovery & sitecustomize copy in isolated temp paths without uv/pip
+      rmSync(recoveredLink)
+      rmSync(path.join(uvSiteDir, 'sitecustomize.py'))
+      const rewrittenSh = BOOTSTRAP_SANDBOX_SH.split('/workspace')
+        .join(tmpWs)
+        .split('/usr/local/bin')
+        .join(targetBinDir)
+        .split('/usr/local/lib')
+        .join(path.join(tmpWs, 'ro_local_lib'))
+        .split('/usr/lib')
+        .join(path.join(tmpWs, 'ro_usr_lib'))
+      execFileSync('sh', ['-c', rewrittenSh], {
+        env: { PATH: `${targetBinDir}:/bin:/usr/bin`, HOME: tmpWs },
+        encoding: 'utf8',
+      })
+      expect(lstatSync(recoveredLink).isSymbolicLink()).toBe(true)
+      expect(readFileSync(path.join(uvSiteDir, 'sitecustomize.py'), 'utf8')).toContain('<LKR_EXTENSION_TOOL_REQUEST>')
+
+      // Verify broken-#! OSError on persisted_lkr falls back cleanly to uv tool install --force instead of crashing
+      writeFileSync(path.join(targetBinDir, 'uv'), `#!/bin/sh\necho "uv $@" >> "${cmdLog}"\n`, { mode: 0o755 })
+      rmSync(recoveredLink)
+      writeFileSync(path.join(uvBinDir, 'lkr'), '#!/nonexistent/hibernated/python3\nimport sys\n', { mode: 0o755 })
+      const fallbackOut = JSON.parse(
+        execFileSync('/usr/bin/python3', [bootstrapPath, 'cli'], {
+          env: {
+            PATH: `${targetBinDir}:/usr/bin:/bin`,
+            WORKSPACE_DIR: tmpWs,
+            UV_TOOL_BIN_DIR: targetBinDir,
+          },
+          encoding: 'utf8',
+        }).trim()
+      ) as { ok: boolean }
+      expect(fallbackOut.ok).toBe(true)
+      expect(readFileSync(cmdLog, 'utf8')).toContain(`uv tool install --force --quiet lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}`)
+    } finally {
+      rmSync(tmpWs, { recursive: true, force: true })
+    }
   })
 })

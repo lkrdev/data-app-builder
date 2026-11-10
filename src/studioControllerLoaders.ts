@@ -13,8 +13,8 @@ import {
 import {
   archiveUserConversation, CaConversationState, ConversationRecord,
   createLookerCaConversation, deleteUserConversation, extractExploreIdsFromCode,
-  formatExploreId, getArtifactNamespace, hydrateConversationContentItems,
-  listSavedScripts, loadExistingDashboardApp, loadNativeContentById,
+  formatExploreId, getArtifactNamespace, getConvTargetId, hydrateConversationContentItems,
+  isLookmlTargetAlreadyLoaded, listSavedScripts, loadExistingDashboardApp, loadNativeContentById,
   loadObjectArtifact, loadScriptArtifact, NativeContentState, PublishedAppState,
   publishScriptDashboard, resolveCaEmbedPath, ResolvedStudioUseCase, SavedScript,
   saveScriptArtifact, saveUserArtifact, saveUserConversation,
@@ -26,6 +26,8 @@ import { loadLookmlSessionArtifact, LookmlBundle } from './lookmlTool'
 import { getErrorMessage, normalizeCatalogMode, StudioAuthAndPrefs } from './studioControllerAuth'
 import { StudioMetadata } from './studioControllerMetadata'
 
+export { getConvTargetId }
+
 export interface StudioViewerDocument {
   path: string; displayPath: string; title: string; kind: 'skill' | 'file'; isMarkdown: boolean; content: string; loading?: boolean
 }
@@ -33,15 +35,6 @@ export interface StudioViewerDocument {
 interface StoredCaArtifactPayload extends Partial<CaConversationState> {
   agent_id?: string; agent_name?: string; lastInteractionId?: string
   studio?: { lastInteractionId?: string; messages?: ChatMessage[] }; messages?: ChatMessage[]
-}
-
-const getConvTargetId = (c?: ConversationRecord['content'], type?: string): string => {
-  if (!c) return ''
-  if (type === 'tile' || type === 'script') return String(c.scriptId || c.id || '').trim()
-  if (type === 'conversational-analytics' || type === 'ca') return String(c.caConversationId || c.id || '').trim()
-  return String(
-    c.dashboardId || c.lookId || c.lookmlDashboardId || c.reportId || c.sessionId || c.scriptId || c.caConversationId || c.id || ''
-  ).trim()
 }
 
 export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata) {
@@ -272,7 +265,11 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       const matchedConv = conversations.find((c) => {
         if (opts.convId && c.id === opts.convId) return true
         if (!opts.pushRoute && c.id === activeConversationIdRef.current) return true
-        return getConvTargetId(c.content, c.type) === opts.id && opts.convTypes.includes(c.type)
+        return (
+          (getConvTargetId(c.content, c.type) === opts.id ||
+            (opts.mode === 'lookml' && c.content?.sessionId === opts.id)) &&
+          opts.convTypes.includes(c.type)
+        )
       })
       const explores = opts.explores ?? opts.studio?.explores?.filter(Boolean) ?? matchedConv?.explores
       const msgs = (matchedConv?.messages as ChatMessage[] | undefined) ?? opts.messages ?? (opts.studio?.messages as ChatMessage[] | undefined)
@@ -452,12 +449,17 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   )
 
   const loadLookmlSessionById = useCallback(
-    (rawId: string, pushRoute = true) => {
+    (rawId: string, pushRoute = true, fallbackSessionId?: string) => {
       const id = rawId.trim()
       if (!id) return Promise.resolve()
+      const matchedSessionId =
+        fallbackSessionId ||
+        conversations.find(
+          (c) => c.type === 'lookml' && (c.id === activeConversationIdRef.current || getConvTargetId(c.content, c.type) === id)
+        )?.content?.sessionId
       lastLookmlIdRef.current = id
       return runWithBusy(`Loading LookML session "${id}"...`, `Could not load LookML session "${id}"`, () =>
-        loadLookmlSessionArtifact(core40SDK, extensionSDK, id).then((loaded) => {
+        loadLookmlSessionArtifact(core40SDK, extensionSDK, id, matchedSessionId).then((loaded) => {
           const canonProj = loaded.bundle?.project_id?.trim() || String(loaded.id || id).trim()
           lastLookmlIdRef.current = canonProj
           resolvedUseCaseByIdRef.current[canonProj] = 'lookml'
@@ -478,7 +480,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         })
       )
     },
-    [core40SDK, extensionSDK, hydrateLoadedArtifact, resolvedUseCaseByIdRef, runWithBusy, setSelectedExplores, setSelectedUseCase, upsertContentItem]
+    [conversations, core40SDK, extensionSDK, hydrateLoadedArtifact, resolvedUseCaseByIdRef, runWithBusy, setSelectedExplores, setSelectedUseCase, upsertContentItem]
   )
 
   const handleRunPython = useCallback(
@@ -917,12 +919,12 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     if (!convTargetId) {
       if ((id === activeConversationId || id === agentSession.lastInteractionId) && !activeObjectId) return
     }
-    if (convMatch && !convTargetId && !catalogItems.some((it) => it.id === targetArtifactId)) return
     const resolvedRouteType =
       (convMatch && convMatch.type !== 'auto' ? convMatch.type : undefined) ||
       (parsedRoute.useCase && parsedRoute.useCase !== 'auto' ? parsedRoute.useCase : undefined) ||
       inferredRouteUseCase
     const targetMode = resolvedRouteType ? normalizeCatalogMode(resolvedRouteType) : activeMode
+    if (convMatch && !convTargetId && !catalogItems.some((it) => it.id === targetArtifactId && normalizeCatalogMode(it.type) === targetMode)) return
     const loadedPair: [string | undefined, string] = (resolvedRouteType === 'conversational-analytics' || isCaMode)
       ? [caConversation?.caConversationId, lastCaIdRef.current]
       : targetMode === 'lookml'
@@ -934,10 +936,11 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       : targetMode === 'tile'
       ? [loadedScript ? scriptId : undefined, lastScriptIdRef.current]
       : [publishedApp?.dashboardId, lastPublishedIdRef.current]
+    const lookmlSnap = lookmlBundle?.id || lookmlBundle?.project_id ? { id: lookmlBundle.id, project_id: lookmlBundle.project_id } : null
     if (
       targetArtifactId !== loadedPair[0] &&
       targetArtifactId !== loadedPair[1] &&
-      !(targetMode === 'lookml' && targetArtifactId === lookmlBundle?.id)
+      !isLookmlTargetAlreadyLoaded(targetMode, targetArtifactId, lookmlSnap, convMatch?.content?.sessionId)
     ) {
       const dispatchType =
         resolvedRouteType || (isCaMode ? 'conversational-analytics' : parsedRoute.useCase === 'auto' ? 'auto' : activeMode)
@@ -1022,7 +1025,8 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         }
       } else if (ct === 'lookml') {
         const targetProj = item.projectId || item.id
-        if (lookmlBundle?.project_id !== targetProj && lookmlBundle?.id !== item.id && lookmlBundle?.id !== item.sessionId) {
+        const loadedSnap = lookmlBundle?.id || lookmlBundle?.project_id ? { id: lookmlBundle.id, project_id: lookmlBundle.project_id } : null
+        if (!isLookmlTargetAlreadyLoaded('lookml', targetProj, loadedSnap, item.sessionId) && lookmlBundle?.id !== item.id) {
           void loadLookmlSessionArtifact(core40SDK, extensionSDK, targetProj, item.sessionId).then((l) => { setLookmlBundle(l.bundle); if (l.bundle?.project_id) setLookmlProjectId(l.bundle.project_id) }).catch(() => {})
         }
       } else if (ct === 'script' && (!loadedScript || scriptId !== item.id)) {
