@@ -25,29 +25,13 @@ _qcache = dict(_active.get("query_cache") or _active.get("queryCache") or {})
 _fcache = dict(_active.get("filter_cache") or _active.get("filterCache") or {})
 
 def _canonical_qkey(q):
-    return json.dumps({
-        "model": q.get("model"),
-        "view": q.get("view") or q.get("explore"),
-        "fields": list(q.get("fields") or []),
-        "filters": dict(q.get("filters") or {}),
-        "sorts": list(q.get("sorts") or []),
-        "pivots": list(q.get("pivots") or []),
-        "limit": str(q.get("limit") or "500"),
-        "vis_config": dict(q.get("vis_config") or {}),
-    }, sort_keys=True)
+    return json.dumps({"model": q.get("model"), "view": q.get("view") or q.get("explore"), "fields": list(q.get("fields") or []), "filters": dict(q.get("filters") or {}), "sorts": list(q.get("sorts") or []), "pivots": list(q.get("pivots") or []), "limit": str(q.get("limit") or "500"), "vis_config": dict(q.get("vis_config") or {})}, sort_keys=True)
 
 def _norm_box(spec, idx=0):
-    default_boxes = [
-        (0, 0, 8, 4), (0, 8, 8, 4), (0, 16, 8, 4),
-        (4, 0, 12, 8), (4, 12, 12, 8),
-        (12, 0, 24, 8),
-    ]
+    default_boxes = [(0, 0, 8, 4), (0, 8, 8, 4), (0, 16, 8, 4), (4, 0, 12, 8), (4, 12, 12, 8), (12, 0, 24, 8)]
     dr, dc, dw, dh = default_boxes[idx] if idx < len(default_boxes) else (12 + ((idx - 6) // 2) * 8, ((idx - 6) % 2) * 12, 12, 8)
-    r = max(0, int(spec.get("row", dr)))
-    c = min(23, max(0, int(spec.get("col", spec.get("column", dc)))))
-    w = min(24 - c, max(1, int(spec.get("width", dw))))
-    h = max(2, int(spec.get("height", dh)))
-    return {"row": r, "col": c, "column": c, "width": w, "height": h}
+    r, c = max(0, int(spec.get("row", dr))), min(23, max(0, int(spec.get("col", spec.get("column", dc)))))
+    return {"row": r, "col": c, "column": c, "width": min(24 - c, max(1, int(spec.get("width", dw)))), "height": max(2, int(spec.get("height", dh)))}
 
 def reflow_24col(dashboard_id, boxes, layout_id=None, comp_map=None):
     did = str(dashboard_id)
@@ -65,17 +49,73 @@ def reflow_24col(dashboard_id, boxes, layout_id=None, comp_map=None):
         cid = str(b.get("component_id") or cmap.get(eid) or "")
         if cid and lid:
             nb = _norm_box(b, idx)
-            update_dashboard_layout_component(cid, {
-                "dashboard_layout_id": lid,
-                "dashboard_element_id": eid,
-                "row": nb["row"],
-                "column": nb["column"],
-                "width": nb["width"],
-                "height": nb["height"],
-            })
+            update_dashboard_layout_component(cid, {"dashboard_layout_id": lid, "dashboard_element_id": eid, "row": nb["row"], "column": nb["column"], "width": nb["width"], "height": nb["height"]})
     return {"layout_id": lid, "layout_component_ids": cmap}
 
+_exp_field_cache = {}
+
+def _valid_explore_fields(tm, te):
+    key = f"{tm}::{te}"
+    if key in _exp_field_cache:
+        return _exp_field_cache[key]
+    dims, meas, flts, prms = [], [], [], []
+    if tm and te:
+        try:
+            exp = lookml_model_explore(tm, te, fields="fields(dimensions(name),measures(name),filters(name),parameters(name))") or {}
+            ef = exp.get("fields") if isinstance(exp, dict) else {}
+            if isinstance(ef, dict):
+                dims, meas, flts, prms = [[str(x["name"]) for x in (ef.get(k) or []) if isinstance(x, dict) and x.get("name")] for k in ("dimensions", "measures", "filters", "parameters")]
+        except Exception:
+            pass
+    res = {"all": set(dims + meas + flts + prms), "dims": dims, "meas": meas}
+    _exp_field_cache[key] = res
+    return res
+
+def _check_dashboard_fields(default_model, default_explore, filters=None, tiles=None):
+    missing = {}
+    for f in (filters or []):
+        if not isinstance(f, dict):
+            continue
+        fm = str(f.get("model") or default_model or "")
+        fe = str(f.get("explore") or default_explore or "")
+        fd = str(f.get("dimension") or f.get("field") or "").strip()
+        if not fd:
+            continue
+        vf = _valid_explore_fields(fm, fe)
+        if vf["all"] and fd not in vf["all"]:
+            missing.setdefault((fm, fe), []).append(f"filter '{f.get('name') or f.get('title') or fd}': {fd}")
+    for idx, t in enumerate(tiles or []):
+        if not isinstance(t, dict):
+            continue
+        q = t.get("query") if isinstance(t.get("query"), dict) else t
+        tm = str(q.get("model") or t.get("model") or default_model or "")
+        te = str(q.get("view") or q.get("explore") or t.get("explore") or default_explore or "")
+        flds = [str(x).strip() for x in (q.get("fields") or t.get("fields") or []) if str(x).strip()]
+        tlabel = str(t.get("title") or t.get("name") or f"tile_{idx + 1}")
+        vt = str((q.get("vis_config") or t.get("vis_config") or {}).get("type") or t.get("type") or "vis")
+        if vt != "text" and t.get("type") != "text" and not flds:
+            raise ValueError(f"Tile '{tlabel}' ({tm}::{te}) has empty fields=[] — query at least one dimension or measure.")
+        vf = _valid_explore_fields(tm, te)
+        if not vf["all"]:
+            continue
+        raw_dyn = q.get("dynamic_fields") or t.get("dynamic_fields")
+        if isinstance(raw_dyn, str) and raw_dyn.strip().startswith("["):
+            try:
+                raw_dyn = json.loads(raw_dyn)
+            except Exception:
+                raw_dyn = []
+        dyn = set([str(df.get("measure") or df.get("dimension") or df.get("table_calculation") or "") for df in (raw_dyn if isinstance(raw_dyn, list) else []) if isinstance(df, dict)])
+        lsn = t.get("listen")
+        lvals = list(lsn.values()) if isinstance(lsn, dict) else [li.get("field") for li in (lsn or []) if isinstance(li, dict)]
+        refs = flds + [str(x).strip() for x in list(q.get("pivots") or t.get("pivots") or []) + list(dict(q.get("filters") or t.get("filters") or {}).keys()) + lvals if x and str(x).strip()] + [str(s).split()[0] for s in (q.get("sorts") or t.get("sorts") or []) if str(s).strip()]
+        for rf in refs:
+            if rf not in vf["all"] and rf not in dyn:
+                missing.setdefault((tm, te), []).append(f"tile '{tlabel}': {rf}")
+    if missing:
+        raise ValueError(" | ".join([f"Unknown/excluded field(s) on {em}::{ee}: {', '.join(bad)}. Valid measures: {_valid_explore_fields(em, ee)['meas'][:40]}; Valid dimensions: {_valid_explore_fields(em, ee)['dims'][:40]}" for (em, ee), bad in missing.items()]))
+
 def upsert_udd(title, folder_id=None, filters=None, tiles=None, dashboard_id=None):
+    _check_dashboard_fields(_t_model, _t_explore, filters=filters, tiles=tiles)
     fid = str(folder_id or _t_folder_id or _active.get("folderId") or _active.get("folder_id") or "1")
     did = str(dashboard_id or _active.get("id") or "")
     if did and "::" not in did:
@@ -86,18 +126,7 @@ def upsert_udd(title, folder_id=None, filters=None, tiles=None, dashboard_id=Non
     f_names = list(_active.get("filter_names") or _active.get("filterNames") or [])
     for f in (filters or []):
         fname = str(f.get("name") or f.get("title") or "Filter").replace(".", "_")
-        fbody = {
-            "dashboard_id": did,
-            "name": fname,
-            "title": str(f.get("title") or fname),
-            "type": str(f.get("type") or "field_filter"),
-            "model": f.get("model") or _t_model,
-            "explore": f.get("explore") or _t_explore,
-            "dimension": f.get("dimension") or f.get("field"),
-            "default_value": str(f.get("default_value") or ""),
-            "allow_multiple_values": bool(f.get("allow_multiple_values", True)),
-            "row": int(f.get("row", 0)),
-        }
+        fbody = {"dashboard_id": did, "name": fname, "title": str(f.get("title") or fname), "type": str(f.get("type") or "field_filter"), "model": f.get("model") or _t_model, "explore": f.get("explore") or _t_explore, "dimension": f.get("dimension") or f.get("field"), "default_value": str(f.get("default_value") or ""), "allow_multiple_values": bool(f.get("allow_multiple_values", True)), "row": int(f.get("row", 0))}
         if f.get("ui_config"):
             fbody["ui_config"] = f["ui_config"]
         if fname in _fcache:
@@ -108,26 +137,16 @@ def upsert_udd(title, folder_id=None, filters=None, tiles=None, dashboard_id=Non
                 _fcache[fname] = str(cf["id"])
             f_names.append(fname)
     el_ids = list(_active.get("element_ids") or _active.get("elementIds") or [])
-    elements_meta = []
-    boxes = []
+    elements_meta, boxes = [], []
     for idx, t in enumerate(tiles or []):
         q = t.get("query") or t
-        qbody = {
-            "model": q.get("model") or _t_model,
-            "view": q.get("view") or q.get("explore") or _t_explore,
-            "fields": list(q.get("fields") or []),
-            "filters": dict(q.get("filters") or {}),
-            "sorts": list(q.get("sorts") or []),
-            "limit": str(q.get("limit") or "500"),
-            "vis_config": dict(q.get("vis_config") or t.get("vis_config") or {"type": t.get("vis_type") or "looker_grid"}),
-        }
+        qbody = {"model": q.get("model") or _t_model, "view": q.get("view") or q.get("explore") or _t_explore, "fields": list(q.get("fields") or []), "filters": dict(q.get("filters") or {}), "sorts": list(q.get("sorts") or []), "limit": str(q.get("limit") or "500"), "vis_config": dict(q.get("vis_config") or t.get("vis_config") or {"type": t.get("vis_type") or "looker_grid"})}
         if q.get("pivots"):
             qbody["pivots"] = list(q["pivots"])
         qk = _canonical_qkey(qbody)
         qid = _qcache.get(qk)
         if not qid:
-            cq = create_query(qbody)
-            qid = str(cq["id"])
+            qid = str(create_query(qbody)["id"])
             _qcache[qk] = qid
         raw_listen = t.get("listen")
         listen_arr = []
@@ -138,41 +157,21 @@ def upsert_udd(title, folder_id=None, filters=None, tiles=None, dashboard_id=Non
             for item in raw_listen:
                 if isinstance(item, dict) and item.get("dashboard_filter_name") and item.get("field"):
                     listen_arr.append({"dashboard_filter_name": str(item["dashboard_filter_name"]).replace(".", "_"), "field": str(item["field"])})
-        ebody = {
-            "dashboard_id": did,
-            "title": str(t.get("title") or f"Tile {idx + 1}"),
-            "type": "vis",
-            "query_id": qid,
-        }
+        ebody = {"dashboard_id": did, "title": str(t.get("title") or f"Tile {idx + 1}"), "type": "vis", "query_id": qid}
         if listen_arr:
             ebody["result_maker"] = {"filterables": [{"model": qbody["model"], "view": qbody["view"], "listen": listen_arr}]}
         eid = str(t.get("element_id") or (el_ids[idx] if idx < len(el_ids) and t.get("in_place", True) else ""))
         if eid:
-            el = update_dashboard_element(eid, ebody)
-            eid = str(el.get("id") or eid)
+            eid = str(update_dashboard_element(eid, ebody).get("id") or eid)
         else:
-            el = create_dashboard_element(ebody)
-            eid = str(el.get("id"))
+            eid = str(create_dashboard_element(ebody).get("id"))
             el_ids.append(eid)
         nb = _norm_box(t, idx)
         nb["element_id"] = eid
         boxes.append(nb)
         elements_meta.append({"id": eid, "title": ebody["title"], "type": qbody["vis_config"].get("type", "vis"), "model": qbody["model"], "explore": qbody["view"], **nb})
     lay_res = reflow_24col(did, boxes)
-    return {
-        "dashboard_id": did,
-        "title": title,
-        "folder_id": fid,
-        "layout_id": lay_res["layout_id"],
-        "element_ids": el_ids,
-        "filter_names": f_names,
-        "layout_component_ids": lay_res["layout_component_ids"],
-        "query_cache": _qcache,
-        "filter_cache": _fcache,
-        "tile_count": len(el_ids),
-        "filter_count": len(f_names),
-        "elements": elements_meta,
-    }
+    return {"dashboard_id": did, "title": title, "folder_id": fid, "layout_id": lay_res["layout_id"], "element_ids": el_ids, "filter_names": f_names, "layout_component_ids": lay_res["layout_component_ids"], "query_cache": _qcache, "filter_cache": _fcache, "tile_count": len(el_ids), "filter_count": len(f_names), "elements": elements_meta}
 
 def upsert_lookml_dashboard(project_id="", model="", dashboard_name="executive_pulse", title="Executive Pulse", tiles=None, filters=None, yaml_content=None, folder_id=None, sync_udd_id=None, model_file_path=None):
     m = str(model or _t_model or _active.get("model") or "thelook")
@@ -187,11 +186,13 @@ def upsert_lookml_dashboard(project_id="", model="", dashboard_name="executive_p
         m, raw_slug = raw_slug.split("::", 1)
     slug = raw_slug.replace(".", "_").replace(" ", "_").lower()
     lookml_id = f"{m}::{slug}"
+    default_exp = str(_t_explore or "order_items")
     if yaml_content:
         ytxt = str(yaml_content).strip()
         if not ytxt.startswith("- dashboard:"):
             ytxt = f"- dashboard: {slug}\\n  title: {json.dumps(str(title or slug))}\\n  layout: newspaper\\n  " + ytxt
     else:
+        _check_dashboard_fields(m, default_exp, filters=filters, tiles=tiles)
         lines = [
             f"- dashboard: {slug}",
             f"  title: {json.dumps(str(title or slug))}",
@@ -209,7 +210,7 @@ def upsert_lookml_dashboard(project_id="", model="", dashboard_name="executive_p
                     f"    title: {json.dumps(str(f.get('title') or fn))}",
                     f"    type: {str(f.get('type') or 'field_filter')}",
                     f"    model: {str(f.get('model') or m)}",
-                    f"    explore: {str(f.get('explore') or _t_explore or 'order_items')}",
+                    f"    explore: {str(f.get('explore') or default_exp)}",
                     f"    field: {str(f.get('dimension') or f.get('field') or '')}",
                     f"    default_value: {json.dumps(str(f.get('default_value') or ''))}",
                     "    allow_multiple_values: true",
@@ -222,8 +223,9 @@ def upsert_lookml_dashboard(project_id="", model="", dashboard_name="executive_p
                 vt = str(vc.get("type") or t.get("type") or "looker_grid")
                 en = str(t.get("name") or t.get("title") or f"tile_{idx + 1}").replace(".", "_").replace(" ", "_").lower()
                 tm = str(q.get("model") or t.get("model") or m)
-                te = str(q.get("view") or q.get("explore") or t.get("explore") or "order_items")
+                te = str(q.get("view") or q.get("explore") or t.get("explore") or default_exp)
                 flds = list(q.get("fields") or t.get("fields") or [])
+                pvts = list(q.get("pivots") or t.get("pivots") or [])
                 srts = list(q.get("sorts") or t.get("sorts") or [])
                 lim = str(q.get("limit") or t.get("limit") or "500")
                 nb = _norm_box(t, idx)
@@ -235,6 +237,8 @@ def upsert_lookml_dashboard(project_id="", model="", dashboard_name="executive_p
                     f"    type: {vt}",
                     f"    fields: [{', '.join(str(x) for x in flds)}]",
                 ])
+                if pvts:
+                    lines.append(f"    pivots: [{', '.join(str(x) for x in pvts)}]")
                 if srts:
                     lines.append(f"    sorts: [{', '.join(str(x) for x in srts)}]")
                 lines.append(f"    limit: {lim}")
@@ -291,6 +295,19 @@ def upsert_lookml_dashboard(project_id="", model="", dashboard_name="executive_p
                 update_file(proj, {"path": mpath, "content": inc + mc})
             except Exception:
                 pass
+        try:
+            val_res = validate_project(proj)
+        except Exception:
+            val_res = None
+        if isinstance(val_res, dict):
+            bad_diags = []
+            for d in (val_res.get("errors") or []):
+                sev = str(d.get("severity") or "").lower() if isinstance(d, dict) else ""
+                hay = f"{d.get('file_path') or ''} {d.get('message') or ''} {d.get('details') or ''}" if sev in ("fatal", "warning") else ""
+                if hay and (fpath in hay or f"{slug}.dashboard.lookml" in hay or "unknown field" in hay.lower()):
+                    bad_diags.append(f"[{sev}] {d.get('file_path') or ''}: {d.get('message') or ''}".strip())
+            if bad_diags:
+                raise ValueError(f"LookML dashboard validation failed for {fpath}: " + "; ".join(bad_diags))
     synced_udd = str(sync_udd_id or "")
     fid = str(folder_id or _t_folder_id or _active.get("folderId") or _active.get("folder_id") or "")
     if synced_udd:
@@ -310,47 +327,27 @@ def upsert_lookml_dashboard(project_id="", model="", dashboard_name="executive_p
                 udd_res = upsert_udd(title, folder_id=fid, filters=filters, tiles=tiles)
                 if udd_res and udd_res.get("dashboard_id"):
                     synced_udd = str(udd_res["dashboard_id"])
+            except ValueError:
+                raise
             except Exception:
                 pass
-    return {
-        "id": lookml_id,
-        "lookml_dashboard_id": lookml_id,
-        "dashboard_id": synced_udd or lookml_id,
-        "content_type": "lookml_dashboard",
-        "project_id": proj,
-        "model": m,
-        "file_path": fpath,
-        "folder_id": fid,
-        "sync_action": "import_lookml_dashboard",
-        "title": title,
-        "embed_path": f"/embed/dashboards/{synced_udd or lookml_id}",
-        "tile_count": len(tiles or []),
-        "filter_count": len(filters or []),
-    }
+    return {"id": lookml_id, "lookml_dashboard_id": lookml_id, "dashboard_id": synced_udd or lookml_id, "content_type": "lookml_dashboard", "project_id": proj, "model": m, "file_path": fpath, "folder_id": fid, "sync_action": "import_lookml_dashboard", "title": title, "embed_path": f"/embed/dashboards/{synced_udd or lookml_id}", "tile_count": len(tiles or []), "filter_count": len(filters or [])}
 
 def pin_to_board(title, description="", section_title="Executive Overview", dashboard_id=None, lookml_dashboard_id=None, look_id=None, board_id=None):
     bid = str(board_id or _active.get("boardId") or _active.get("board_id") or "")
-    if bid:
-        b = update_board(bid, {"title": title, "description": description})
-        bid = str(b.get("id") or bid)
-    else:
-        b = create_board({"title": title, "description": description})
-        bid = str(b.get("id"))
-    sec = create_board_section({"board_id": bid, "title": section_title})
-    sid = str(sec.get("id"))
+    b = update_board(bid, {"title": title, "description": description}) if bid else create_board({"title": title, "description": description})
+    bid = str(b.get("id") or bid)
+    sid = str(create_board_section({"board_id": bid, "title": section_title}).get("id"))
     items = []
     if dashboard_id:
         if "::" in str(dashboard_id) and not lookml_dashboard_id:
             lookml_dashboard_id = str(dashboard_id)
         else:
-            it = create_board_item({"board_section_id": sid, "dashboard_id": str(dashboard_id), "custom_description": "Primary UDD KPI & trend breakdown", "use_custom_description": True})
-            items.append(str(it.get("id")))
+            items.append(str(create_board_item({"board_section_id": sid, "dashboard_id": str(dashboard_id), "custom_description": "Primary UDD KPI & trend breakdown", "use_custom_description": True}).get("id")))
     if lookml_dashboard_id:
-        it = create_board_item({"board_section_id": sid, "lookml_dashboard_id": str(lookml_dashboard_id), "custom_description": "Version-controlled LookML Dashboard", "use_custom_description": True})
-        items.append(str(it.get("id")))
+        items.append(str(create_board_item({"board_section_id": sid, "lookml_dashboard_id": str(lookml_dashboard_id), "custom_description": "Version-controlled LookML Dashboard", "use_custom_description": True}).get("id")))
     if look_id:
-        it = create_board_item({"board_section_id": sid, "look_id": str(look_id), "custom_description": "Top-customer cohort retention Look", "use_custom_description": True})
-        items.append(str(it.get("id")))
+        items.append(str(create_board_item({"board_section_id": sid, "look_id": str(look_id), "custom_description": "Top-customer cohort retention Look", "use_custom_description": True}).get("id")))
     return {"board_id": bid, "section_id": sid, "item_ids": items}
 
 def schedule_dashboard(dashboard_id, name="Weekly Executive Digest", crontab="0 9 * * 1", email="exec-team@example.com", fmt="wysiwyg_pdf", filters_string=""):
@@ -358,30 +355,12 @@ def schedule_dashboard(dashboard_id, name="Weekly Executive Digest", crontab="0 
     fstr = str(filters_string or "").strip()
     if fstr and not fstr.startswith("?"):
         fstr = "?" + fstr.replace(" ", "%20")
-    body = {
-        "name": name,
-        "crontab": crontab,
-        "datagroup": None,
-        "filters_string": fstr,
-        "require_results": False,
-        "require_no_results": False,
-        "require_change": False,
-        "send_all_results": False,
-        "scheduled_plan_destination": [{
-            "format": fmt or "wysiwyg_pdf",
-            "apply_formatting": True,
-            "apply_vis": True,
-            "address": email,
-            "type": "email",
-            "message": "Automated weekly KPI digest."
-        }],
-    }
+    body = {"name": name, "crontab": crontab, "datagroup": None, "filters_string": fstr, "require_results": False, "require_no_results": False, "require_change": False, "send_all_results": False, "scheduled_plan_destination": [{"format": fmt or "wysiwyg_pdf", "apply_formatting": True, "apply_vis": True, "address": email, "type": "email", "message": "Automated weekly KPI digest."}]}
     if "::" in did:
         body["lookml_dashboard_id"] = did
     else:
         body["dashboard_id"] = int(did) if did.isdigit() else did
-    sp = create_scheduled_plan(body)
-    return str(sp.get("id") or "")
+    return str(create_scheduled_plan(body).get("id") or "")
 
 schedule_udd = schedule_dashboard
 
@@ -401,20 +380,7 @@ def emit_native_bundle(state=None, **extra):
     epath = merged.get("embed_path") or (f"/embed/looks/{cid}" if ctype == "look" else (f"/boards/{cid}" if ctype == "board" else f"/embed/dashboards/{cid}"))
     exps = list(merged.get("explores") or _t_explores or _active.get("explores") or [])
     payload = dict(merged)
-    payload.update({
-        "id": cid,
-        "content_type": ctype,
-        "contentType": ctype,
-        "title": title,
-        "folder_id": fid,
-        "folderId": fid,
-        "embed_path": epath,
-        "url": epath,
-        "summary": str(merged.get("summary") or title),
-        "explores": exps,
-        "query_cache": _qcache,
-        "filter_cache": _fcache,
-    })
+    payload.update({"id": cid, "content_type": ctype, "contentType": ctype, "title": title, "folder_id": fid, "folderId": fid, "embed_path": epath, "url": epath, "summary": str(merged.get("summary") or title), "explores": exps, "query_cache": _qcache, "filter_cache": _fcache})
     payload.pop("NATIVE_CONTENT_BUNDLE", None)
     return {"NATIVE_CONTENT_BUNDLE": payload, **payload}
 `
@@ -427,22 +393,17 @@ export function wrapDashboardCodeMode(code: string): string {
 
 export const NATIVE_CONTENT_GUIDE_MD = `# Native Looker Content Studio (/dashboard) — Compact Recipe Guide
 
-See \`/workspace/skills/looker-dashboard/SKILL.md\` and \`/workspace/skills/looker-field-profiler/SKILL.md\` for full dashboarding & field profiling specifications.
+See \`/workspace/skills/looker-dashboard/SKILL.md\` and \`/workspace/skills/looker-field-profiler/SKILL.md\`.
 
 ## 1. Pre-Injected Monty Python Helpers in \`run_looker_codemode\`
-- \`upsert_udd(title, folder_id, filters=[...], tiles=[...], dashboard_id=None)\`: Creates/updates a User-Defined Dashboard (UDD), deduplicates \`create_query\`, wires \`create_dashboard_filter\` + \`result_maker.filterables[].listen\`, and positions all tiles on Looker's 24-column grid via \`dashboard_dashboard_layouts\` + \`update_dashboard_layout_component\`.
-- \`upsert_lookml_dashboard(project_id, model, dashboard_name, title, tiles=[...], filters=[...], yaml_content=None, folder_id=None, sync_udd_id=None)\`: Writes \`dashboards/<name>.dashboard.lookml\` (\`create_file\` / \`update_file\`) with \`- dashboard:\`, \`layout: newspaper\`, \`filters:\`, \`elements:\`, \`listen:\`, and 24-col \`row\`/\`col\`/\`width\`/\`height\`, ensures \`include: "*.dashboard.lookml"\` in \`{model}.model.lkml\`, and imports/syncs a linked UDD into \`folder_id\` (\`import_lookml_dashboard\` / \`sync_lookml_dashboard\` / \`upsert_udd\`). Never call \`update_session\` in \`run_looker_codemode\`.
-- \`reflow_24col(dashboard_id, boxes)\`: Reflows 24-column \`dashboard_layout_components\` in place without duplicating or orphaning existing tiles.
-- \`pin_to_board(title, description, section_title, dashboard_id=..., lookml_dashboard_id=..., look_id=...)\`: Creates a Board + Section (\`create_board\`, \`create_board_section\`, \`create_board_item\`) pinning UDDs, LookML Dashboards (\`lookml_dashboard_id\`), and Saved Looks (\`create_look\`).
-- \`schedule_dashboard(dashboard_id, name, crontab="0 9 * * 1", email="...", fmt="wysiwyg_pdf", filters_string="...")\`: Attaches a weekly Scheduled Plan (\`create_scheduled_plan\`) with normalized \`scheduled_plan_destination\` defaults.
-- \`emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", id=..., title=..., **extra)\`: Returns \`NATIVE_CONTENT_BUNDLE\` directly from \`run_looker_codemode\` so the host captures it with zero LLM echo tokens.
-- \`profile_fields(model=m, view=e, fields=[...])\`: Profiles candidate fields (\`/workspace/skills/looker-field-profiler/SKILL.md\`) — use \`profile:low_cardinality_enum\` for \`pivots:\`, \`looker_pie\` donuts (\`limit: 6\`), and \`button_toggles\`/\`dropdown_menu\` filters grounded in \`stats.top_values\`; \`profile:medium_cardinality_categorical\` for \`looker_bar\` without pivots; \`profile:nullable\` for \`-NULL\` filters; and \`profile:spiky_*\` (\`stats.spikiness[grain]["trough_period"]\`) for complete-period date filters. If a prompt filters by a specific entity/string value and \`_field_value_search_<model>\` (\`/workspace/skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`) exists on the model, query \`_field_value_search_<model>\` first (or fall back to \`profile_fields\` \`stats.top_values\`) so dashboard filters use verified \`(field_name, field_value)\` pairs instead of guessing column names.
+- \`upsert_udd(title, folder_id, filters=[...], tiles=[...], dashboard_id=None)\`: Validates tile/filter fields against \`lookml_model_explore\`, creates/updates a UDD, deduplicates \`create_query\`, wires \`create_dashboard_filter\` + \`result_maker.filterables[].listen\`, and positions tiles on Looker's 24-column grid.
+- \`upsert_lookml_dashboard(project_id, model, dashboard_name, title, tiles=[...], filters=[...], yaml_content=None, folder_id=None, sync_udd_id=None)\`: Validates fields against \`lookml_model_explore\`, writes \`dashboards/<name>.dashboard.lookml\` (\`layout: newspaper\`), wires \`include:\` in \`{model}.model.lkml\`, gates \`validate_project\` (\`fatal\` & \`warning\` \`Unknown field\`), and imports/syncs into \`folder_id\`. Never call \`update_session\` in \`run_looker_codemode\`.
+- \`reflow_24col(dashboard_id, boxes)\`, \`pin_to_board(...)\`, \`schedule_dashboard(...)\`, \`emit_native_bundle(res, content_type=..., **extra)\`.
+- \`profile_fields(model=m, view=e, fields=[...])\`: Profiles distributions (\`/workspace/skills/looker-field-profiler/SKILL.md\`) — \`profile:low_cardinality_enum\` for \`pivots:\`, \`looker_pie\` (\`limit: 6\`), and \`stats.top_values\` filters; \`profile:medium_cardinality_categorical\` for unpivoted \`looker_bar\`; \`profile:nullable\` for \`-NULL\`; \`profile:spiky_*\` for complete-period filters. Query \`_field_value_search_<model>\` (\`/workspace/skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`) first when resolving unknown entity literals.
 
-## 2. 24-Column Grid & Visualization Standards
-- Row 0 (\`height: 4\`): 3 KPI scorecards at \`col: 0, 8, 16, width: 8\` (\`type: "single_value"\`, \`value_format: "$#,##0"\`, \`show_comparison: True\`, \`comparison_type: "change"\`).
-- Row 4 (\`height: 8\`): 2 side-by-side Cartesian charts at \`col: 0, width: 12\` and \`col: 12, width: 12\` (\`looker_line\` / \`looker_column\`, dual unpinned Y-axes \`y_axis_combined: False\`, \`y_axes[].series\` MUST be objects \`[{"id": "view.m", "name": "Label", "axisId": "view.m"}]\` and never plain strings, \`reference_lines\`, \`advanced_vis_config\` JSON string with \`defaults_version: 1\`).
-- Row 12 (\`height: 8\`): Full-width \`looker_grid\` at \`col: 0, width: 24\` (or 2 cross-explore tiles at \`row: 12, col: 0/12, width: 12\` + full-width \`looker_grid\` reflowed to \`row: 20, col: 0, width: 24, height: 8\`).
-- Filter & element \`name\` identifiers must NEVER contain periods (\`.\`); use underscores (e.g. \`date_range\`, \`order_status\`, \`min_sale_price\`).
+## 2. 24-Column Grid & Clean Chat Summary Rules
+- Layout: Row 0 (\`height: 4\`): 3 KPIs (\`col: 0, 8, 16, width: 8\`, \`single_value\`); Row 4 (\`height: 8\`): 2 charts (\`col: 0/12, width: 12\`, \`y_axes[].series\` objects \`[{"id": "view.m", "name": "Label", "axisId": "view.m"}]\`, \`defaults_version: 1\`); Row 12 (\`height: 8\`): full-width \`looker_grid\` (\`col: 0, width: 24\`). Filter/element \`name\` values use \`snake_case\` without periods (\`.\`).
+- **Clean User-Facing Summary Rule**: NEVER include layout coordinates (\`Row 0\`, \`col\`, \`width\`, \`height\`, \`24-Column Grid\`) or internal Looker vis-type identifiers (\`single_value\`, \`looker_area\`, \`looker_pie\`, \`looker_column\`, \`looker_bar\`, \`looker_grid\`) in chat replies. Describe only the created tiles, filters, what each tile measures, and \`[Open <Dashboard Title>](/dashboards/<id>)\`.
 `
 
 export function buildNativeContentGuide(params: {
@@ -468,20 +429,20 @@ export function buildNativeContentGuide(params: {
       ? `for LookML project/model "${lookmlProjectId}" (default explore "${primaryExplore || 'order_items'}").`
       : `where no explore was pre-selected — pick the best \`model_id::explore_id\` from /workspace/schema.md or \`search_content(terms="...", types="lookml_explore")\`.`
   const existingNativeDirective = existingNativeContent
-    ? `Active native Looker ${existingNativeContent.contentType}: id="${existingNativeContent.id}", title="${existingNativeContent.title}", folder_id="${existingNativeContent.folderId}" (pre-injected in CodeMode as \`active_content\`). Update it in place without redundant read calls unless the user asks for a brand-new item.`
+    ? `Active native Looker ${existingNativeContent.contentType}: id="${existingNativeContent.id}", title="${existingNativeContent.title}", folder_id="${existingNativeContent.folderId}" (\`active_content\`). Update it in place.`
     : `Create the requested native Looker content in folder_id=\`target_folder_id\` ("${folderId}").`
   const lookmlOnboardingDirective = lookmlProjectId
-    ? `4. LookML Project Onboarding Dashboard Rule: Because \`target_project_id\`="${lookmlProjectId}" is active, reuse the LookML fields already created in conversation history (do NOT call \`lookml_model_explore\`), call \`res = upsert_lookml_dashboard(project_id="${lookmlProjectId}", model="${primaryModel || lookmlProjectId}", dashboard_name="ecommerce_overview", title="E-Commerce Performance Overview", folder_id="${folderId}", filters=[...], tiles=[...])\` and \`return emit_native_bundle(res, folder_id="${folderId}", title="E-Commerce Performance Overview")\` in ONE \`run_looker_codemode\` call so the LookML dashboard (\`dashboards/ecommerce_overview.dashboard.lookml\`) is both saved to the LookML project and copied/imported into folder_id="${folderId}". In your text response, confirm the LookML dashboard (\`.dashboard.lookml\`) was created and copied to the selected folder, **ask the user if they want a responsive metric selector Data App** that takes these measures and switches between **day (date), week, month, and year** and different chart types, and end your response with \`[Open <Dashboard Title>](/dashboards/<id>)\` (using \`res["dashboard_id"]\` or \`res["id"]\`).`
+    ? `4. LookML Project Onboarding Dashboard Rule: Reuse the verified LookML fields from conversation history, call \`res = upsert_lookml_dashboard(project_id="${lookmlProjectId}", model="${primaryModel || lookmlProjectId}", dashboard_name="ecommerce_overview", title="E-Commerce Performance Overview", folder_id="${folderId}", filters=[...], tiles=[...])\` and \`return emit_native_bundle(res, folder_id="${folderId}", title="E-Commerce Performance Overview")\` in ONE \`run_looker_codemode\` call. In your reply (zero grid coordinates or internal \`looker_*\`/\`single_value\` strings), summarize the tiles and filters, **ask if the user wants a responsive metric selector Data App** switching between **day (date), week, month, and year** and chart types, and end with \`[Open <Dashboard Title>](/dashboards/<id>)\`.`
     : ''
 
   return [
     `You are operating in Native Looker Content Studio mode (/dashboard/:id?) ${exploreDirective}`,
     existingNativeDirective,
     NATIVE_CONTENT_GUIDE_MD,
-    `Follow these exact steps in ONE \`run_looker_codemode\` call per turn (remote bash \`code_execution\` is disabled in /dashboard mode; always pass a concise 1-sentence \`thought\` string describing the Looker API action; NEVER call \`update_session\`; all CodeMode SDK methods return Python \`dict\`s, so use \`d.get("fields", {})\` instead of attribute access):`,
-    `1. On cold start (when fields are not already in conversation history), discover fields via \`lookml_model_explore(m, e, fields="name,label,fields(dimensions(name,label,type),measures(name,label,type))")\` (returns a \`dict\`), then build/update the UDD (\`upsert_udd\`), LookML Dashboard (\`upsert_lookml_dashboard\` + \`import_lookml_dashboard\` / \`sync_lookml_dashboard\`), Saved Look (\`create_look\`), Board (\`pin_to_board\`), or Schedule (\`schedule_dashboard\`) in the SAME \`run_looker_codemode\` script.`,
-    `2. End your Python script with \`return emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", summary="...")\` (with \`target_folder_id\`="${folderId}", \`target_explores\`=${JSON.stringify(selectedExplores)}, \`target_model\`="${primaryModel || lookmlProjectId}", \`target_explore\`="${primaryExplore || 'order_items'}", \`target_project_id\`="${lookmlProjectId}").`,
-    `3. CRITICAL: The host extracts \`<NATIVE_CONTENT_BUNDLE>\` / \`NATIVE_CONTENT_BUNDLE\` directly from your \`run_looker_codemode\` return value. Do NOT echo or repeat \`<NATIVE_CONTENT_BUNDLE>...</NATIVE_CONTENT_BUNDLE>\` in your final text response — reply with a concise 1–2 sentence summary and end with \`[Open <Dashboard Title>](/dashboards/<id>)\` whenever a Looker dashboard is created or updated.`,
+    `Execute in ONE \`run_looker_codemode\` call per turn (\`code_execution\` disabled; pass a 1-sentence \`thought\`; NEVER call \`update_session\`; SDK returns Python \`dict\`s):`,
+    `1. On cold start (when fields are not in conversation history), discover fields via \`lookml_model_explore(m, e, fields="name,label,fields(dimensions(name,label,type),measures(name,label,type))")\`, then run \`upsert_udd\`, \`upsert_lookml_dashboard\`, \`create_look\`, \`pin_to_board\`, or \`schedule_dashboard\` in the SAME script.`,
+    `2. End with \`return emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", summary="...")\` (\`target_folder_id\`="${folderId}", \`target_explores\`=${JSON.stringify(selectedExplores)}, \`target_model\`="${primaryModel || lookmlProjectId}", \`target_explore\`="${primaryExplore || 'order_items'}", \`target_project_id\`="${lookmlProjectId}").`,
+    `3. CRITICAL: Never echo \`<NATIVE_CONTENT_BUNDLE>\`, layout coordinates (\`Row 0\`, \`col\`, \`width\`, \`height\`, \`24-Column Grid\`), or internal vis strings (\`single_value\`, \`looker_area\`, \`looker_pie\`, \`looker_column\`, \`looker_bar\`, \`looker_grid\`) in your chat reply — summarize only the tiles, filters, what each tile measures, and end with \`[Open <Dashboard Title>](/dashboards/<id>)\`.`,
     ...(lookmlOnboardingDirective ? [lookmlOnboardingDirective] : []),
   ].join('\n')
 }
@@ -566,71 +527,47 @@ export const APP_BUILDER_SYSTEM_PROMPT = AGENTS_MD
 
 export const LOOKER_PROJECT_ONBOARDING_SKILL_MD = `---
 name: looker-project-onboarding
-description: End-to-end Looker Project Onboarding skill for creating a new LookML project, bare Git repo, model, Bronze/Silver Medallion views and explores, LookML dashboard, and Metric Selector Data App from an existing Looker database connection.
+description: End-to-end Looker Project Onboarding skill for creating a new LookML project, bare Git repo, model, Bronze/Silver views and explores, LookML dashboard, and Metric Selector Data App from a Looker connection.
 ---
 
 # Looker Project Onboarding (\`skills/looker-project-onboarding/SKILL.md\`)
 
-Use this skill when a user asks to onboard or create a new Looker project, scaffold a new LookML project from a database connection, or walk through the staged onboarding workflow (Model & Bronze -> Data Profiling & Silver Metrics -> LookML Dashboard -> Metric Selector Data App). All Looker API calls execute through \`run_looker_codemode\` routed via \`transport.rawRequest\` (\`raw_api_request: yes\`, requiring zero \`core_api_methods\` in \`manifest.lkml\`) and \`lkr --dev tools lookml push\`. Never call \`update_session\` inside \`run_looker_codemode\` — dev mode is controlled by the app session or the \`--dev\` CLI flag.
+Onboard a LookML project from a database connection in 4 stages (Model & Bronze -> Profiling & Silver Metrics -> LookML Dashboard -> Metric Selector Data App) via \`run_looker_codemode\` (\`raw_api_request: yes\`) and \`lkr --dev tools lookml push\`. Never call \`update_session\` inside \`run_looker_codemode\`.
 
-## Step 1: Conversational Intake & Verify Database Connection (\`run_looker_codemode\`)
-1. **Turn 1 Intake (Missing Inputs -> Pre-Fetched Connections in 1 Toolless Pass & Ask)**:
-   When the user says \`"create a new project"\` (or asks to onboard a new project) without providing a **connection name**, **project name**, and **target tables or schemas**, emit \`<USE_CASE>lookml</USE_CASE>\`. When \`Available Looker Connections\` are already pre-injected in the system prompt, do **not** call \`run_looker_codemode\` or \`code_execution\` (\`0\` tool calls); otherwise run **one** \`run_looker_codemode\` call (\`all_connections(fields="name,dialect_name,database,schema")\` with fallback to \`all_lookml_models(fields="name,project_name,allowed_db_connection_names")\` — bare Monty globals, never \`sdk.*\`). **Immediately ask the user** for:
-   - **Connection name** — list the discovered connection names (with dialect/database/schema) directly in your response alongside \`[Open Looker Connections](/admin/connections)\` \`/admin/connections\` so non-admin developers do not hit a 404 on \`/admin/connections\`
-   - **Project name** (\`snake_case\`)
-   - **Target tables or schemas** (or SQL queries from \`[Open SQL Runner](/sql)\` \`/sql\`).
-   Do **not** call \`code_execution\` on Turn 1 when these inputs are not yet provided.
-2. **Turn 2 Schema Discovery (\`connection_schemas\`)**:
-   When the user provides a connection name (\`<connection_name>\`) and project name (\`<project_name>\`) and asks what schemas it has access to, emit \`<USE_CASE>lookml</USE_CASE>\`, run **one** \`run_looker_codemode\` call (\`connection_schemas(connection_name)\` with fallback to \`all_connections(fields="name,dialect_name,database,schema,snippets")\` and \`connection_tables(connection_name, schema_name=..., table_limit=5)\` — bare Monty globals, never \`sdk.*\`), list out all accessible schema names returned by the connection clearly, and ask which schema/dataset to use. Do **not** call \`code_execution\`, \`bootstrap_lookml.py\`, or \`view_file\` on Turn 2.
+## Step 1: Conversational Intake & Verify Connection (\`run_looker_codemode\`)
+1. **Turn 1 Intake**: Without **connection name**, **project name**, and **target tables/schemas**, emit \`<USE_CASE>lookml</USE_CASE>\`. If \`Available Looker Connections\` are pre-injected, make **0 tool calls**; else run **1** \`run_looker_codemode\` call (\`all_connections(fields="name,dialect_name,database,schema")\` with fallback to \`all_lookml_models(fields="name,project_name,allowed_db_connection_names")\` — bare Monty globals, never \`sdk.*\`). Ask for: **Connection name** (list connections + \`[Open Looker Connections](/admin/connections)\`), **Project name** (\`snake_case\`), and **Target tables/schemas** (or SQL from \`[Open SQL Runner](/sql)\`). No \`code_execution\`.
+2. **Turn 2 Schema Discovery (\`connection_schemas\`)**: Given \`<connection_name>\` + \`<project_name>\` and asked for schemas, emit \`<USE_CASE>lookml</USE_CASE>\`, run **1** \`run_looker_codemode\` call (\`connection_schemas(connection_name)\` with fallback to \`all_connections(fields="name,dialect_name,database,schema,snippets")\` and \`connection_tables(connection_name, schema_name=..., table_limit=5)\` — bare globals), list schemas, and ask which to use (no \`code_execution\` or \`view_file\`).
 
-## Step 2: Require \`project_name\` (\`snake_case\`) & Discover Schemas/Tables via SDK (Never \`INFORMATION_SCHEMA\`)
-1. \`project_name\` is required before creating any project or model. Normalize any user-supplied project name to strict lowercase \`snake_case\`:
-   \`project_name = re.sub(r'_+', '_', re.sub(r'[^a-z0-9_]', '_', raw_name.strip().lower())).strip('_')\`
-   If the user has not provided a \`project_name\`, ask them for one.
-2. Always use Looker SDK / CodeMode methods (\`connection_schemas\`, \`connection_tables\`, \`generate_lookml_with_new_files\`, \`profile_fields\`, \`run_inline_query\`) — **never** query \`INFORMATION_SCHEMA\`.
-3. Bound schema/table auto-discovery to at most **5 schemas** and **5 tables per schema** (\`5 × 5\` cap: \`schemas[:5]\` and up to 5 core fact/dimension tables from \`connection_tables(conn_name, schema_name=sname)\` filtered to exclude \`LM_*\`, \`LR_*\`, \`YM_*\`, \`connection_reg*\` scratch tables, prioritizing the primary line-item/transaction fact table and its foreign-key entity dimension tables over high-volume event logs or inventory snapshot tables). If the user names a dataset alias alongside a physical schema name in the connection (e.g. \`<schema_name>\`), pass the physical \`schema_name\` from \`connection_schemas\` to \`connection_tables\`.
+## Step 2: \`project_name\` (\`snake_case\`) & Bounded \`5 × 5\` SDK Discovery (Never \`INFORMATION_SCHEMA\`)
+1. Normalize \`project_name\`: \`project_name = re.sub(r'_+', '_', re.sub(r'[^a-z0-9_]', '_', raw_name.strip().lower())).strip('_')\`.
+2. Use SDK globals (\`connection_schemas\`, \`connection_tables\`, \`generate_lookml_with_new_files\`, \`profile_fields\`, \`run_inline_query\`) — **never** query \`INFORMATION_SCHEMA\`.
+3. Bound discovery to \`5 × 5\` (max 5 schemas × 5 tables, excluding \`LM_*\`, \`LR_*\`, \`YM_*\`, \`connection_reg*\`, prioritizing core transaction fact & FK entity tables over event/inventory logs). Pass physical \`schema_name\` to \`connection_tables\`.
 
-## Step 3: Stage 1 (Turn 3) — Discover Tables & Generate Bronze Views via \`generate_lookml_with_new_files\`, Validate Offline (\`lkr parse\`), Push (\`lkr --dev tools lookml push\`), and Ask to Profile Data
-1. Emit \`<USE_CASE>lookml</USE_CASE>\`. Do **not** call \`update_session\` in \`run_looker_codemode\`.
-2. First, in **ONE** \`run_looker_codemode\` call (Monty WASM — do **not** \`import re\`), discover the tables in \`<schema_name>\` via \`connection_tables\` and generate the 1:1 \`bronze/*.view.lkml\` files on Looker via \`generate_lookml_with_new_files\`:
+## Step 3: Stage 1 (Turn 3) — Generate Bronze Views, Validate, Push & Ask to Profile
+1. Emit \`<USE_CASE>lookml</USE_CASE>\`. In **1** \`run_looker_codemode\` call (no \`import re\`), discover tables and generate \`bronze/*.view.lkml\`:
    \`\`\`python
    conn, project_id, schema = "<connection_name>", "<project_name>", "<schema_name>"
-   existing_ids = [p.get("id") for p in (all_projects(fields="id") or []) if isinstance(p, dict)]
-   if project_id not in existing_ids:
+   if project_id not in [p.get("id") for p in (all_projects(fields="id") or []) if isinstance(p, dict)]:
        create_project({"name": project_id})
    update_project(project_id, {"git_service_name": "bare"})
-   try:
-       create_project_directory(project_id, "bronze")
-   except Exception:
-       pass
+   try: create_project_directory(project_id, "bronze")
+   except Exception: pass
    raw = connection_tables(conn, schema_name=schema) or []
    tlist = (raw[0].get("tables") or []) if raw and isinstance(raw[0], dict) else []
    names = [t.get("name") for t in tlist if isinstance(t, dict) and t.get("name") and not t.get("name", "").startswith(("LM_", "LR_", "YM_", "connection_reg"))]
    core_tables = [t for t in names if "event" not in t and "inventory" not in t][:5] or names[:5]
-   generate_lookml_with_new_files(
-       project_id,
-       {"tables": [{"schema": schema, "table_name": t, "base_view": True} for t in core_tables]},
-       connection=conn,
-       model_name=project_id,
-       folder_name="bronze",
-       file_type_for_explores="none",
-       generate_descriptions=True,
-       add_autogenerated_header=True,
-       allow_update_without_header=True,
-   )
+   generate_lookml_with_new_files(project_id, {"tables": [{"schema": schema, "table_name": t, "base_view": True} for t in core_tables]}, connection=conn, model_name=project_id, folder_name="bronze", file_type_for_explores="none", generate_descriptions=True, add_autogenerated_header=True, allow_update_without_header=True)
    fields = {}
    for t in core_tables:
        cols = []
        for blk in (get_file_content(project_id, f"bronze/{t}.view.lkml") or "").split("\\n  "):
            if blk.startswith(("dimension:", "dimension_group:")):
                kind, rest = blk.split(":", 1)
-               cname = rest.split("{", 1)[0].strip()
-               ctype = rest.split("type:", 1)[1].split()[0].strip() if "type:" in rest else "string"
-               cols.append([kind.strip(), cname, ctype])
+               cols.append([kind.strip(), rest.split("{", 1)[0].strip(), rest.split("type:", 1)[1].split()[0].strip() if "type:" in rest else "string"])
        fields[t] = cols
    return {"schema": schema, "tables": core_tables, "fields": fields}
    \`\`\`
-3. Next, in **ONE** \`code_execution\` call using a single-quoted Python heredoc (\`python3 - << 'PYEOF'\`, never \`python3 -c "..."\`, so bash never interpolates BigQuery backticks \`\` \`...\` \`\` or LookML \`\${TABLE}\` references; do **not** create refinements or \`silver/\` files yet), write \`/workspace/lookml/\` from the discovered \`fields\` (creating \`bronze/explores/<fact_table>_base.explore.lkml\` for the primary line-item/transaction fact table \`<fact_table>\`), validate offline with \`lkr parse\`, push via \`lkr --dev tools lookml push\` (which registers the model via \`create_lookml_model\` / \`update_lookml_model\` and skips overwriting remote \`# AUTOGENERATED\` views), and emit \`<LOOKML_BUNDLE>\`:
+2. In **1** \`code_execution\` call (\`python3 - << 'PYEOF'\`, never \`python3 -c "..."\`; no refinements/\`silver/\` yet), write \`/workspace/lookml/\`, validate, push (\`create_lookml_model\` / \`update_lookml_model\`), and bundle:
    \`\`\`bash
    python3 /workspace/bootstrap_lookml.py setup
    python3 - << 'PYEOF'
@@ -648,8 +585,7 @@ Use this skill when a user asks to onboard or create a new Looker project, scaff
            if kind == "dimension_group":
                lines.append(f"  dimension_group: {cname} {{ type: time timeframes: [raw, time, date, week, month, quarter, year] sql: \${{TABLE}}.{cname}_at ;; }}")
            else:
-               pk = "primary_key: yes " if cname == "id" else ""
-               lines.append(f"  dimension: {cname} {{ {pk}type: {ctype} sql: \${{TABLE}}.{cname} ;; }}")
+               lines.append(f"  dimension: {cname} {{ {'primary_key: yes ' if cname == 'id' else ''}type: {ctype} sql: \${{TABLE}}.{cname} ;; }}")
        lines.append("  measure: count { type: count }\\n}\\n")
        (root / "bronze" / f"{t}.view.lkml").write_text("\\n".join(lines))
    Path("/workspace/lookml_result.json").write_text(json.dumps({"project_id": project_id, "model_name": project_id}))
@@ -658,79 +594,60 @@ Use this skill when a user asks to onboard or create a new Looker project, scaff
    lkr --dev tools lookml push /workspace/lookml --project-id <project_name> --no-reset
    python3 /workspace/bootstrap_lookml.py bundle /workspace/lookml_result.json
    \`\`\`
-4. **Stop after creating the model and \`bronze/\` folder**, **ask the user if they want you to profile the data and take a stab at making metrics** (refinements and Silver explores with joins), and end your response with \`[Open <project_name> in Looker IDE](/projects/<project_name>/files)\`.
+3. **Stop after \`bronze/\`**, **ask to profile data and create metrics**, and end with \`[Open <project_name> in Looker IDE](/projects/<project_name>/files)\`.
 
-## Step 4: Stage 2 (Turn 4) — Create Refinements & Silver Explores, Validate Offline (\`lkr parse\`), Push (\`lkr --dev tools lookml push\`), Run \`profile_fields\` & Sample Query, and Ask for a Dashboard
-1. Emit \`<USE_CASE>lookml</USE_CASE>\` and apply \`/workspace/skills/agentic-lookml/SKILL.md\` 5-layer measure synthesis on \`<fact_table>\`:
-   - **Layer 1 — Medallion Refinements (\`bronze/<fact_table>.refinement.lkml\`)**: Leave \`bronze/<table>.view.lkml\` untouched (do **not** create redundant dimension refinements). Write \`include: "/bronze/<fact_table>.view.lkml"\` and \`view: +<fact_table> { dimension: id { primary_key: yes } ... }\`. When \`<fact_table>\` has \`status\` and lifecycle timestamps (\`created\`, \`shipped\`, \`delivered\`, \`returned\`) without a physical \`cancelled\` column, add \`dimension_group: cancelled { type: time timeframes: [raw, time, date, week, month, quarter, year] sql: CASE WHEN \${status} = 'Cancelled' THEN \${created_raw} END ;; }\`.
-   - **Layer 2 — Statistical Measures**: Per \`<num_col>\`, define \`total_<num_col>\` (\`type: sum\`, \`sql: \${<num_col>} ;;\`, \`value_format_name: usd\`) and \`average_<num_col>\` (\`type: average\`, \`sql: \${<num_col>} ;;\`, \`value_format_name: usd\`). Per \`<entity>_id\`, define \`<entity>_count\` (\`type: count_distinct\`, \`sql: \${<entity>_id} ;;\`).
-   - **Layer 3 — Filtered Measures (when \`status\` exists)**: \`return_count\` (\`filters: [status: "Returned"]\`), \`cancel_count\` (\`filters: [status: "Cancelled"]\`), \`completed_count\` (\`filters: [status: "Complete"]\`), grounded in \`stats.top_values\` from \`profile_fields\` (\`skills/looker-field-profiler/SKILL.md\`); apply \`curation.lookml_snippet\` (\`recommended_hidden\`, \`recommended_suggestable\`, \`suggested_tags\`, \`recommended_description\`), guard \`profile:has_zeros\` denominators with \`NULLIF\`, and use \`profile:unique_key_candidate\` / \`profile:nullable\` for \`.test.lkml\` assertions when requested.
-   - **Layer 4 — ANSI Ratios (\`type: number\`)**: Compose via \`1.0 * \${numerator_measure} / NULLIF(\${denominator_measure}, 0)\` (\`return_rate\`, \`cancel_rate\` with \`value_format_name: percent_2\`; \`average_order_value\` with \`value_format_name: usd\`).
-   - **Layer 5 — Silver Explores (\`silver/explores/<fact_table>.explore.lkml\`)**: Deconstruct workload SQL (\`grain_change_reagg\`, \`window_pre_groupby\`, \`union\`, \`non_equi_join\`, \`filter_dependent_cte\`), extend \`[<fact_table>_base]\` (\`hidden: no\`, \`view_name: <fact_table>\`), join each \`<dim_table>\` (\`type: left_outer\`, \`sql_on: \${<fact_table>.<dim>_id} = \${<dim_table>.id} ;;\`, \`relationship: many_to_one\`), and include \`"/bronze/*.refinement.lkml"\` + \`"/silver/explores/*.explore.lkml"\` in \`<project_name>.model.lkml\`. Optionally run \`python3 /workspace/skills/looker-field-profiler/scripts/scratch_search.py --model <project_name> --path /workspace/lookml --write-lookml /workspace/lookml/silver/explores/\` (\`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`) to scaffold \`explore: _field_value_search_<project_name> { hidden: yes }\`.
-2. In **ONE** \`code_execution\` call, write \`<project_name>.model.lkml\`, \`bronze/<fact_table>.refinement.lkml\`, and \`silver/explores/<fact_table>.explore.lkml\` via \`python3 - << 'PYEOF'\`, validate with \`lkr parse lookml-to-api --path /workspace/lookml --validate > /dev/null\`, push via \`lkr --dev tools lookml push /workspace/lookml --project-id <project_name> --no-reset\`, and run \`python3 /workspace/bootstrap_lookml.py bundle /workspace/lookml_result.json\`.
-3. Next, in **ONE** \`run_looker_codemode\` call, run \`profile_fields(model="<project_name>", view="<fact_table>", fields=["<fact_table>.status", "<fact_table>.<num_col>"])\` and a 5-row \`run_inline_query\`, show the profiled results, **ask if the user wants a dashboard with these metrics**, and end your response with \`[Open <project_name> in Looker IDE](/projects/<project_name>/files)\`.
+## Step 4: Stage 2 (Turn 4) — Single-Table Refinements & Silver Explores, \`profile_fields\`, and Ask for Dashboard
+1. Emit \`<USE_CASE>lookml</USE_CASE>\` and apply \`/workspace/skills/agentic-lookml/SKILL.md\` 5-layer synthesis on \`<fact_table>\`:
+   - **Layer 1 — Single-Table Bronze Refinements (\`bronze/<fact_table>.refinement.lkml\`)**: Leave \`bronze/<table>.view.lkml\` untouched and keep \`bronze/<fact_table>.refinement.lkml\` **strictly single-table** (never reference joined \`\${<dim_table>.*}\` fields in Bronze; cross-view measures belong in \`silver/\`). Add \`primary_key: yes\` on \`id\` and \`dimension_group: cancelled { type: time timeframes: [raw, time, date, week, month, quarter, year] sql: CASE WHEN \${status} = 'Cancelled' THEN \${created_raw} END ;; }\` when \`status\` + lifecycle dates exist without \`cancelled\`.
+   - **Layer 2 — Statistical Measures**: \`total_<num_col>\` (\`sum\`, \`usd\`), \`average_<num_col>\` (\`average\`, \`usd\`), \`<entity>_count\` (\`count_distinct\`).
+   - **Layer 3 — Filtered Measures**: \`return_count\` (\`"Returned"\`), \`cancel_count\` (\`"Cancelled"\`), \`completed_count\` (\`"Complete"\`) grounded in \`profile_fields\` (\`skills/looker-field-profiler/SKILL.md\`) \`stats.top_values\`; apply \`curation.lookml_snippet\` and \`NULLIF\` on \`profile:has_zeros\`.
+   - **Layer 4 — ANSI Ratios (\`type: number\`)**: \`1.0 * \${numerator_measure} / NULLIF(\${denominator_measure}, 0)\` (\`return_rate\`, \`cancel_rate\` \`percent_2\`; \`average_order_value\` \`usd\`).
+   - **Layer 5 — Silver Explores (\`silver/explores/<fact_table>.explore.lkml\`)**: Deconstruct SQL (\`grain_change_reagg\`, \`window_pre_groupby\`, \`union\`, \`non_equi_join\`, \`filter_dependent_cte\`), extend \`[<fact_table>_base]\` (\`hidden: no\`, \`view_name: <fact_table>\`), join each \`<dim_table>\` (\`left_outer\`, \`many_to_one\`), and include \`"/bronze/*.refinement.lkml"\` + \`"/silver/explores/*.explore.lkml"\` in \`<project_name>.model.lkml\`. **CRITICAL**: \`<fact_table>_base\` must **never** set \`fields: [ALL_FIELDS*, -...]\` exclusions when extended by Silver (inherited exclusions strip dashboard tile \`fields\` to \`[]\`). Optionally scaffold \`_field_value_search_<project_name>\` (\`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`).
+2. In **1** \`code_execution\` call, write files, validate (\`lkr parse lookml-to-api --path /workspace/lookml --validate\`), push (\`--no-reset\`), and run \`bootstrap_lookml.py bundle\`.
+3. In **1** \`run_looker_codemode\` call, run \`profile_fields\` + 5-row \`run_inline_query\`, show results, **ask if they want a dashboard**, and end with \`[Open <project_name> in Looker IDE](/projects/<project_name>/files)\`.
 
-## Step 5: Stage 3 (Turn 5) — Create LookML Dashboard, Copy into Selected UI Folder, and Offer Metric Selector Data App
-1. Emit \`<USE_CASE>dashboard</USE_CASE>\`, call \`upsert_lookml_dashboard(project_id=project_name, model=project_name, dashboard_name="<dashboard_slug>", title="<Dashboard Title>", folder_id=target_folder_id, filters=[...], tiles=[...])\` (4+ tiles on \`<fact_table>\`, imported via \`import_lookml_dashboard\` with \`upsert_udd\` fallback) + \`return emit_native_bundle(res, folder_id=target_folder_id, title="<Dashboard Title>")\` in \`run_looker_codemode\`, confirm creation, **ask if they want a responsive metric selector Data App** switching measures (\`total_<num_col>\`, \`count\`, \`return_count\`, \`cancel_count\`), grains (\`day\`/\`week\`/\`month\`/\`year\`), and chart types, and end your response with \`[Open <Dashboard Title>](/dashboards/<id>)\`.
+## Step 5: Stage 3 (Turn 5) — Validated LookML Dashboard & Clean Chat Summary
+1. Emit \`<USE_CASE>dashboard</USE_CASE>\`, call \`upsert_lookml_dashboard(project_id=project_name, model=project_name, dashboard_name="<dashboard_slug>", title="<Dashboard Title>", folder_id=target_folder_id, filters=[...], tiles=[...])\` (4+ tiles on verified Silver fields; gates \`lookml_model_explore\` + \`validate_project\` \`fatal\`/\`warning\` \`Unknown field\`) + \`return emit_native_bundle(res, folder_id=target_folder_id, title="<Dashboard Title>")\` in \`run_looker_codemode\`.
+2. **Clean Summary Rule**: Never output layout coordinates (\`Row 0\`, \`col\`, \`width\`, \`height\`, \`24-Column Grid\`) or internal vis strings (\`single_value\`, \`looker_area\`, \`looker_pie\`, \`looker_column\`, \`looker_bar\`, \`looker_grid\`). Summarize tiles, filters, what each tile measures, **ask if they want a responsive metric selector Data App** (\`day\`/\`date\`, \`week\`, \`month\`, \`year\`, chart types), and end with \`[Open <Dashboard Title>](/dashboards/<id>)\`.
 
-## Step 6: Stage 4 (Turn 6) — Responsive Metric Selector Data App (PoP KPIs, Compare Against, 3-Dot Menu, Period/Window & PoP Grid)
-1. Emit \`<USE_CASE>app</USE_CASE>\` and write + bundle in **ONE** \`code_execution\` call via \`python3 /workspace/bundle_app.py --app-dir /workspace/apps/$CONV_ID --stdin "Metric Selector Explorer" << 'EOF'\` (never run \`bundle_app.py --help\`, \`ls\`, \`find\`, \`head\`, or \`view_file\` on \`/workspace/lookml\` or \`/workspace/bundle_app.py\`).
-2. **PoP Clickable KPIs (Border-Only, 4-Row Stack)**: Remove any \`Metric\` \`<app-select>\` and **forbid** \`"ACTIVE METRIC"\` badges; clicking a card sets \`this.selectedMetric = m.field\` (clearing \`this.compareMetric\` if equal) via \`border-color: var(--app-primary)\` only. Match lifecycle dates (\`return_count\` -> \`returned\`, \`cancel_count\` -> \`cancelled\`, \`total_<num_col>\`/\`count\` -> \`created\`), query \`2 * this.periodCount\` periods per KPI, and stack: (1) label, (2) standalone current-\`N\` headline (no pill beside it), (3) inline flex \`[+/- %] vs. prev \${this.periodCount} \${unit}\` (\`polarity: 'higher-better' | 'lower-better'\`), (4) current-\`N\` sparkline \`<svg>\`.
-3. **\`"Compare against"\` + Trend Header & Top-Right \`⋮\` Menu**: Render \`<app-select label="Compare against">\` (\`None\`/\`''\` + other measures) with dual \`yAxis: [{ title: { text: m1.label } }, { title: { text: m2.label }, opposite: true }]\` (\`series: [{ yAxis: 0 }, { yAxis: 1 }]\`) when units/magnitudes differ; omit \`"Longitudinal Trend"\` titles, set \`yAxis.title.text\` to metric label(s), and put \`Chart Type\` (\`areaspline\`/\`line\`/\`column\`/\`bar\`) in a top-right \`⋮\` menu (\`this.chartMenuOpen\`) on the trend card only.
-4. **Separate \`Period\` & \`Window\` (\`periodCount\`) + PoP \`<app-grid>\`**: Render separate \`Period\` (\`Daily\`/\`Weekly\`/\`Monthly\`/\`Yearly\` resetting \`periodCount\` to \`90\`/\`53\`/\`60\`/\`10\` -> \`'90 days'\`/\`'53 weeks'\`/\`'60 months'\`/\`'10 years'\`) and \`Window\` (\`14/30/60/90/180\`d, \`12/26/53/104\`w, \`6/12/24/60\`m, \`3/5/10\`y) controls wired via \`this.getEffectiveFilters(...)\` to **all** widgets. Omit \`title\` on \`<app-grid>\`, add a \`"Dimensions"\` multi-select (\`this.selectedDimensions\`, <= 5 non-ID/non-timestamp dims, \`>= 1\` active), and join current (\`"\${n} \${unit}"\`) + prior (\`"\${2 * n} \${unit} ago for \${n} \${unit}"\`) queries into \`.data\` with \`<Metric> — This Period\`, \`<Metric> — Last Period\`, \`<Metric> — Variance\` (\`percent1-signed\`) columns for Metric 1 (and Metric 2 when \`compareMetric\` is active):
-   \`\`\`js
-   const METRICS_MAP = {
-     '<fact_table>.total_<num_col>': { field: '<fact_table>.total_<num_col>', label: 'Total Sales', format: 'usd', polarity: 'higher-better', dateBase: '<fact_table>.created' },
-     '<fact_table>.count': { field: '<fact_table>.count', label: 'Orders', format: 'int', polarity: 'higher-better', dateBase: '<fact_table>.created' },
-     '<fact_table>.return_count': { field: '<fact_table>.return_count', label: 'Returns', format: 'int', polarity: 'lower-better', dateBase: '<fact_table>.returned' },
-     '<fact_table>.cancel_count': { field: '<fact_table>.cancel_count', label: 'Cancellations', format: 'int', polarity: 'lower-better', dateBase: '<fact_table>.cancelled' },
-   };
-   const PERIOD_DEFAULTS = { day: 90, week: 53, month: 60, year: 10 };
-   const WINDOW_OPTIONS = { day: [14, 30, 60, 90, 180], week: [12, 26, 53, 104], month: [6, 12, 24, 60], year: [3, 5, 10] };
-   const UNITS = { day: 'days', week: 'weeks', month: 'months', year: 'years' };
-   \`\`\`
+## Step 6: Stage 4 (Turn 6) — Metric Selector Data App (\`date\` Grain, 4-Row PoP KPIs & Card-Border Compare)
+1. Emit \`<USE_CASE>app</USE_CASE>\` and bundle in **1** \`code_execution\` call via \`python3 /workspace/bundle_app.py --app-dir /workspace/apps/$CONV_ID --stdin "Metric Selector Explorer" << 'EOF'\` (never inspect \`/workspace/lookml\` or \`/workspace/bundle_app.py\`).
+2. **\`date\` Timeframe Key (Never \`*_day\`)**: \`const PERIOD_DEFAULTS = { date: 90, week: 53, month: 60, year: 10 };\`, \`WINDOW_OPTIONS = { date: [14, 30, 60, 90, 180], week: [12, 26, 53, 104], month: [6, 12, 24, 60], year: [3, 5, 10] }\`, \`UNITS = { date: 'days', week: 'weeks', month: 'months', year: 'years' }\` (\`Period\` \`Daily\` -> \`'date'\`, default \`this.period = 'date'\`; forbid \`\${dateBase}_day\` / \`*_day\`).
+3. **Custom 4-Row PoP KPI Cards (Forbid \`<app-kpi>\` on Switcher Cards)**: No \`Metric\` \`<app-select>\` and no \`"ACTIVE METRIC"\` badge. Match lifecycle dates (\`created_*\`, \`returned_*\`, \`cancelled_*\`), query \`2 * this.periodCount\` periods (\`sorts: ["\${dateDim} asc"]\`, \`limit: '500'\`), split \`prevRows\` (first \`n\`) vs \`currRows\` (last \`n\`), and render: (1) uppercase label, (2) standalone headline (zero pill beside value), (3) Row-3 inline flex \`<span class="kpi-change \${tone}">\${pctStr}</span>\` directly before \`<span>vs. prev \${n} \${UNITS[this.period]}</span>\` (\`lower-better\` polarity), (4) \`currRows\` \`<svg>\` sparkline.
+4. **Card-Border Compare State Machine (No \`Compare against\` Dropdown) + \`⋮\` Menu**: Delete \`<app-select label="Compare against">\`; set \`--app-chart-2: #34a853;\` on \`.da-container\`. Primary (\`this.selectedMetric === key\`): \`border: 2px solid var(--app-chart-1, #4285f4)\`; Secondary (\`this.compareMetric === key\`): \`border: 2px solid var(--app-chart-2, #34a853)\`. When \`!this.compareMetric\`: click sets \`selectedMetric = key\`; \`Shift+Click\` (\`e.shiftKey\`) or \`@contextmenu\` (\`e.preventDefault()\` -> \`Compare\`) sets \`compareMetric = key\`. When \`Boolean(this.compareMetric)\`: click on \`compareMetric\` clears \`compareMetric = ''\`, click elsewhere keeps \`selectedMetric\` locked (\`title\` hint), and \`shiftKey\` or \`contextmenu\` (\`Remove comparison\`) on \`compareMetric\` or a 3rd metric clears \`compareMetric = ''\`. Merge parallel \`this.runQuery\` trend series by period when \`dateBase\` differs; use dual \`yAxis\` (\`opposite: true\`, \`yAxis.title.text\`), omit \`"Longitudinal Trend"\`, and keep only the top-right \`⋮\` menu (\`areaspline\`/\`line\`/\`column\`/\`bar\`).
+5. **Separate \`Period\` & \`Window\` (\`periodCount\`) + Titleless PoP \`<app-grid>\`**: Wire \`this.getEffectiveFilters(...)\` to all widgets; omit \`<app-grid>\` \`title\`, add \`"Dimensions"\` multi-select (\`this.selectedDimensions\`), and join current + \`ago for\` prior queries into \`.data\` (\`This Period\`, \`Last Period\`, \`Variance\`).
 `
 
 export const DATA_INVESTIGATOR_GUIDE_MD = `# Data Investigator — Narrative Root-Cause Data Apps (Google Doc & Slides)
 
-Author a self-contained Lit Data App (\`apps/<name>/app.js\`) presenting a point-in-time root-cause investigation as a **Google Doc** (default) or **Google Presentation (Slides)** narrative.
-
-## 1. Format & Mode Switcher (\`Doc View\` / \`Slides View\`)
-- Default \`this.viewMode = 'doc'\` unless the prompt mentions \`"slides"\`, \`"presentation"\`, \`"deck"\`, or \`"google presentation"\` (\`this.viewMode = 'slides'\` in \`constructor()\`). Always render header \`Doc View\` and \`Slides View\` buttons toggling \`this.viewMode\`.
-- **Doc Mode (\`doc\`)**: Sticky outline + **Overview** (question, \`model::explore\`, fixed date window \`YYYY-MM-DD to YYYY-MM-DD\`), followed by sequential chapters each containing: (1) **Chart (\`<app-chart>\` / \`<app-kpi>\`)**, (2) **What This Chart Means**, and (3) **Next Investigation Path**, ending with a root-driver chapter and \`limit="500"\` \`<app-grid>\`.
-- **Slides Mode (\`slides\`)**: Deck viewer (\`Slide \${this.activeSlide + 1} of \${slides.length}\`, \`Previous\`/\`Next\` + \`ArrowLeft\`/\`ArrowRight\`), one chapter per slide with chart, **"What This Means"** bullets, and **"Next Investigation Path"** footer.
-
-## 2. \`drill_fields\`, \`limit: '500'\` & \`run_key_driver_analysis\` (\`skills/key-driver-analysis/SKILL.md\`)
-- \`/workspace/skills/key-driver-analysis/SKILL.md\` and \`/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py\` (\`resolve_source\`, \`inspect_explore_for_kda\`, \`analyze_target\`, \`run_kda\`, \`drill_top_driver\`, \`print_kda_summary\`) are pre-seeded. Follow \`[Drills: \`...\`]\` in \`/workspace/schema.md\` and set \`limit: '500'\` on every drill/evidence query.
-- Use read-only \`profile_fields\` (\`skills/looker-field-profiler/SKILL.md\`) \`stats.spikiness[grain]\` to pick \`breach_filters\` vs. \`baseline_filters\`, prune \`profile:uuid_or_hash\`/\`profile:json_payload\`/\`profile:empty_or_null_only\`/\`profile:constant_value\` dims, and resolve entity strings via \`_field_value_search_<model>\` (\`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`) or \`stats.top_values\` before calling \`run_key_driver_analysis\` (up to 6 dims; fall back to \`run_inline_query\` with \`limit: "500"\` if KDA is unavailable).
-
-## 3. Point-in-Time Fixed Dates (\`YYYY-MM-DD to YYYY-MM-DD\`)
-- **NEVER** use relative date strings (\`"last 30 days"\`, \`"90 days"\`, \`"this year"\`, \`"today"\`) in widget filters; use pre-injected \`INVESTIGATION_ANCHOR_DATE\` and \`to_fixed_date_range(expr)\` in \`run_looker_codemode\` for explicit \`"YYYY-MM-DD to YYYY-MM-DD"\` ranges.
+Author a Lit Data App (\`apps/<name>/app.js\`) as a **Google Doc** (\`this.viewMode = 'doc'\` default) or **Slides** (\`this.viewMode = 'slides'\` when prompt mentions \`slides\`/\`presentation\`/\`deck\`), rendering \`Doc View\` and \`Slides View\` buttons.
+- **Doc (\`doc\`)**: Sticky outline + Overview (\`model::explore\`, fixed \`YYYY-MM-DD to YYYY-MM-DD\`) + sequential chapters: (1) Chart, (2) **What This Chart Means**, (3) **Next Investigation Path**, ending with a \`limit: '500'\` \`<app-grid>\`. **Slides (\`slides\`)**: Deck viewer (\`Previous\`/\`Next\` + \`ArrowLeft\`/\`ArrowRight\`).
+- Pre-seeded \`/workspace/skills/key-driver-analysis/SKILL.md\`, \`/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py\`, \`profile_fields\` (\`skills/looker-field-profiler/SKILL.md\`), and \`_field_value_search_<model>\` (\`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`): use \`stats.spikiness\`, \`stats.top_values\`, \`[Drills: \`...\`]\`, \`limit: '500'\`, and \`run_key_driver_analysis\`.
+- **Fixed Dates Only**: Never use relative date filters (\`"last 30 days"\`, \`"90 days"\`); use \`INVESTIGATION_ANCHOR_DATE\` and \`to_fixed_date_range(expr)\` for \`"YYYY-MM-DD to YYYY-MM-DD"\`.
 `
 
 export const DATA_APP_GUIDE_MD = `# Looker Lit Data Apps — Compact Sandbox Guide
 
 ## 1. Zero-Build ES Module Contract
 - \`import { DataApp, html, nothing, keyed, formatValue, createNumericCol, createCurrencyCol, createPercentageCol, createBadgeCol } from '/runtime/data-app.js';\`
-- No TS decorators (\`@customElement\`, \`@property\`). Use \`static properties = { ... }\`, \`customElements.define(elementName, AppClass)\`, literal \`this.lookerModel = '<model>'\` & \`this.explore = '<explore>'\` in \`constructor()\`, and \`getEffectiveFilters(local = {}, { isTimeSeries = false } = {})\` spreading \`{ ...(this.dashboardFilters || {}), ...(this.crossFilters || {}) }\`.
+- No TS decorators. Use \`static properties = { ... }\`, \`customElements.define(elementName, AppClass)\`, literal \`this.lookerModel\` & \`this.explore\` in \`constructor()\`, and \`getEffectiveFilters(local = {}, { isTimeSeries = false } = {})\` spreading \`{ ...(this.dashboardFilters || {}), ...(this.crossFilters || {}) }\`.
 
 ## 2. Live Query Components (\`app-*\`) & Profiling
-- \`<app-kpi>\`: \`label\` (1-3 words), \`subtitle\`, \`query-field="view.measure"\` (or 2-field \`.query\`), \`.filters\`, \`format="usd|usd2|int|decimal1|percent1|percent-100"\`, \`sparkline\`, \`sparkline-agg="sum|avg|last"\`, \`change\`, \`change-type="positive|negative|neutral"\`, \`polarity="higher-better|lower-better"\`, \`bare\`, \`cell\`.
-- \`<app-chart>\`: \`title\`, \`type="areaspline|line|column|bar|donut|pie|treemap|funnel|gauge"\`, \`value-format\`, \`color="var(--app-primary)"\`, \`cross-filter\` (on segmented charts), \`pivot-by\`, \`.query\`, \`.filters\`, \`.options=\${{ chart: { spacing: [10, 15, 10, 10] } }}\`, \`bare\`, \`cell\`.
+- \`<app-kpi>\`: \`label\` (1-3 words), \`subtitle\`, \`query-field="view.measure"\` (only for static non-PoP-switcher KPIs), \`.filters\`, \`format="usd|usd2|int|decimal1|percent1|percent-100"\`, \`polarity="higher-better|lower-better"\`, \`bare\`, \`cell\`.
+- \`<app-chart>\`: \`title\`, \`type="areaspline|line|column|bar|donut|pie|treemap|funnel|gauge"\`, \`value-format\`, \`color="var(--app-primary)"\`, \`cross-filter\`, \`pivot-by\`, \`.query\` / \`.data\`, \`.filters\`, \`.options=\${{ chart: { spacing: [10, 15, 10, 10] } }}\`, \`bare\`, \`cell\`.
 - \`<app-grid>\`: \`title\`, \`height="420px"\`, \`show-row-count\`, \`.query\` or \`.data\`, \`.filters\`, \`.columnDefs\`, \`@app-grid-row-click\`. \`<app-select>\`: \`label\`, \`.value\`, \`.options\`, \`@change=\${(e) => { this.val = e.detail.value; }}\`.
-- **Profiling (\`profile_fields\` in \`skills/looker-field-profiler/SKILL.md\`)**: Populate \`<app-select>\` from \`stats.top_values\`, pick chart types from \`subtype\`/\`approx_count_distinct\` (\`donut\` <= 6), and resolve entity literals via \`_field_value_search_<model>\` (\`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`) before guessing fields.
+- **Profiling (\`profile_fields\` in \`skills/looker-field-profiler/SKILL.md\`)**: Use \`stats.top_values\`, \`subtype\`/\`approx_count_distinct\` (\`donut\` <= 6), and \`_field_value_search_<model>\` (\`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`) to verify entity literals.
 
 ## 3. Layout (\`.da-*\`) & Dark Theme
-- Standard HTML wrappers: \`.da-container\`, \`.da-header\`, \`.da-filter-bar\`, \`.da-tabs\`, \`.da-tab-btn\` (\`.active\`), \`.da-kpi-grid\`, \`.da-grid-1\`, \`.da-grid-2\`, \`.da-grid-3\`, \`.da-grid-2-1\`, \`.da-grid-1-2\`, \`.da-section-card\`.
-- Dark mode: \`this.isDark = true\`, \`<div class="da-container \${this.isDark ? 'dark-theme' : ''}">\`, \`\${this.renderThemeToggle()}\`, and \`--app-*\` CSS tokens — never mutate \`document.body\` or use inline \`onclick=\` / \`localStorage\`.
+- Containers: \`.da-container\`, \`.da-header\`, \`.da-filter-bar\`, \`.da-tabs\`, \`.da-tab-btn\` (\`.active\`), \`.da-kpi-grid\`, \`.da-grid-1\`, \`.da-grid-2\`, \`.da-grid-3\`, \`.da-grid-2-1\`, \`.da-grid-1-2\`, \`.da-section-card\`.
+- Dark mode: \`this.isDark = true\`, \`<div class="da-container \${this.isDark ? 'dark-theme' : ''}">\`, \`\${this.renderThemeToggle()}\`, \`--app-*\` tokens — never mutate \`document.body\` or use inline \`onclick=\` / \`localStorage\`.
 
-## 4. Static Widget Extraction & Metric Selector Standards
-- Initialize \`this.selectedMetric = '<view>.<default_measure>'\` in \`constructor()\`; include all candidate measures in \`<app-grid>\` \`.query.fields\` when using \`.query\` (or pass \`.data=\${this.gridRows}\` without \`.query\`).
-- For **Metric Selector / Timeframe Switcher Data Apps**:
-  1. **PoP Clickable KPIs (Border-Only, 4-Row Stack)**: No \`Metric\` \`<app-select>\` and **no** \`"ACTIVE METRIC"\` badge; click sets \`this.selectedMetric\` via \`border-color: var(--app-primary)\` only. Match lifecycle dates (\`return_count\` -> \`returned_*\`, \`cancel_count\` -> \`cancelled_*\`, standard -> \`created_*\`), query \`2 * this.periodCount\` periods per KPI, and stack: (1) label, (2) standalone current-\`N\` headline, (3) inline flex \`[+/- %] vs. prev <N> <unit>\` (\`polarity="higher-better|lower-better"\`), (4) current-\`N\` sparkline \`<svg>\`.
-  2. **\`"Compare against"\` & Top-Right \`⋮\` Menu**: Render \`<app-select label="Compare against">\` (\`None\` + other measures) with dual \`yAxis\` (\`opposite: true\` on axis 2, \`series: [{ yAxis: 0 }, { yAxis: 1 }]\`) when units/magnitudes differ; omit \`"Longitudinal Trend"\` titles, set \`yAxis.title.text\` to metric label(s), and put \`Chart Type\` (\`areaspline\`/\`line\`/\`column\`/\`bar\`) inside a top-right **3-dot (\`⋮\`) menu** on the trend card only.
-  3. **Separate \`Period\` & \`Window\` (\`periodCount\`) + PoP \`<app-grid>\`**: Render separate \`Period\` (\`Daily\`/\`Weekly\`/\`Monthly\`/\`Yearly\` resetting \`periodCount\` to \`90\`/\`53\`/\`60\`/\`10\` -> \`'90 days'\`/\`'53 weeks'\`/\`'60 months'\`/\`'10 years'\`) and \`Window\` (\`14/30/60/90/180\`d, \`12/26/53/104\`w, \`6/12/24/60\`m, \`3/5/10\`y) controls wired via \`this.getEffectiveFilters(...)\` to **all** widgets. Omit \`title\` on \`<app-grid>\`, add a \`"Dimensions"\` multi-select (\`this.selectedDimensions\`, <= 5 categorical dims, \`>= 1\` active), and join current (\`"\${N} \${unit}"\`) + prior (\`"\${2 * N} \${unit} ago for \${N} \${unit}"\`) queries into \`.data\` with \`<Metric> — This Period\`, \`<Metric> — Last Period\`, \`<Metric> — Variance\` (\`percent1-signed\`) columns for Metric 1 (and Metric 2 when \`compareMetric\` is active).
-- Bundle in one call: \`python3 /workspace/bundle_app.py --app-dir /workspace/apps/$CONV_ID --stdin "<App Title>" << 'EOF'\`
+## 4. Metric Selector / Timeframe Switcher Standards
+1. **\`date\` Timeframe Key (Never \`*_day\`)**: Use \`const PERIOD_DEFAULTS = { date: 90, week: 53, month: 60, year: 10 };\`, \`WINDOW_OPTIONS = { date: [14, 30, 60, 90, 180], week: [12, 26, 53, 104], month: [6, 12, 24, 60], year: [3, 5, 10] }\`, \`UNITS = { date: 'days', week: 'weeks', month: 'months', year: 'years' }\` (\`Period\` \`Daily\` -> \`'date'\`; forbid \`\${dateBase}_day\` / \`*_day\`).
+2. **Custom 4-Row PoP KPI Cards (Forbid \`<app-kpi>\` on Switcher Cards)**: No \`Metric\` \`<app-select>\` and no \`"ACTIVE METRIC"\` badge. Match lifecycle dates (\`created_*\`, \`returned_*\`, \`cancelled_*\`), query \`2 * this.periodCount\` periods (\`sorts: ["\${dateDim} asc"]\`, \`limit: '500'\`), split \`prevRows\` (first \`N\`) vs \`currRows\` (last \`N\`), and render: (1) uppercase label, (2) standalone headline value (zero pill beside value), (3) Row 3 inline flex \`<span class="kpi-change \${tone}">\${pctStr}</span>\` directly before \`<span>vs. prev \${N} \${UNITS[this.period]}</span>\` (\`lower-better\` polarity), (4) \`currRows\` \`<svg>\` sparkline.
+3. **Card-Border Compare State Machine (No \`Compare against\` Dropdown) & \`⋮\` Menu**: Delete \`Compare against\` \`<app-select>\`. Style Primary (\`selectedMetric === key\`) with \`border: 2px solid var(--app-chart-1, #4285f4)\` and Secondary (\`compareMetric === key\`) with \`border: 2px solid var(--app-chart-2, #34a853)\` (\`--app-chart-2: #34a853\`). When \`!compareMetric\`: click sets \`selectedMetric = key\`; \`e.shiftKey\` or \`@contextmenu\` (\`e.preventDefault()\` -> \`Compare\`) sets \`compareMetric = key\`. When \`compareMetric\` is set: click on \`compareMetric\` clears \`compareMetric = ''\`, click elsewhere keeps \`selectedMetric\` locked (\`title\` hint), and \`shiftKey\` or \`contextmenu\` (\`Remove comparison\`) on \`compareMetric\` or a 3rd metric clears \`compareMetric = ''\`. Merge parallel \`runQuery\` series by period when \`dateBase\` differs; use dual \`yAxis\` (\`opposite: true\`, \`yAxis.title.text\`), no \`"Longitudinal Trend"\` title, and top-right \`⋮\` Chart Type menu.
+4. **Separate \`Period\` & \`Window\` (\`periodCount\`) + Titleless PoP \`<app-grid>\`**: Wire \`getEffectiveFilters\` to all widgets; omit \`<app-grid>\` \`title\`, add \`"Dimensions"\` multi-select (\`selectedDimensions\`), and join current + \`ago for\` prior queries into \`.data\` (\`This Period\`, \`Last Period\`, \`Variance\`).
+- Bundle: \`python3 /workspace/bundle_app.py --app-dir /workspace/apps/$CONV_ID --stdin "<App Title>" << 'EOF'\`
 `
 
 export const BUNDLE_APP_PY = `#!/usr/bin/env python3
@@ -786,6 +703,16 @@ def main():
         print(json.dumps({"stage": "syntax", "error": syn}, indent=2), file=sys.stderr)
         sys.exit(1)
     safety, warnings = check_tile_safety(app_path), check_composition(app_path)
+    raw_js = app_path.read_text(encoding="utf-8")
+    clean_js, raw_lines = strip_comments(raw_js), raw_js.splitlines()
+    for dm in re.finditer("""(?:[.][a-z0-9_]+(?<!_hour_of)|[$][{][^}]+[}])_day(?![a-zA-Z0-9_])""", clean_js):
+        ln = raw_js.count(chr(10), 0, dm.start()) + 1
+        safety.append({"line": ln, "rule": "invalid-lookml-day-timeframe", "message": "LookML dimension_group (type: time) uses '_date' (never '_day'). Replace '*_day' with '*_date' and key PERIOD_DEFAULTS/WINDOW_OPTIONS/UNITS by 'date'.", "snippet": raw_lines[ln - 1].strip()[:100]})
+    if re.search("""_[$][{][^}]*period(?![a-zA-Z0-9_])""", clean_js):
+        dm_day = re.search("""(?<![a-zA-Z0-9_.$])day[ ]*:|(?<![a-zA-Z0-9_$])(?:value|period)[ ]*[:=]=?[ ]*['"]day['"]""", clean_js)
+        if dm_day:
+            ln = raw_js.count(chr(10), 0, dm_day.start()) + 1
+            safety.append({"line": ln, "rule": "invalid-lookml-day-timeframe", "message": "Pairing 'day' period keys/values with '_$" + "{...period}' produces nonexistent '*_day' LookML fields. Key PERIOD_DEFAULTS, WINDOW_OPTIONS, UNITS, and Period options by 'date'.", "snippet": raw_lines[ln - 1].strip()[:100]})
     if safety:
         print(json.dumps({"stage": "safety", "violations": safety}, indent=2), file=sys.stderr)
         sys.exit(1)
@@ -1494,134 +1421,95 @@ def print_kda_summary(out):
 export const LOOKER_DASHBOARD_SKILL_MD = `---
 name: looker-dashboard
 description: >
-  Unified Looker Dashboarding skill (\`skills/looker-dashboard/SKILL.md\`) collating \`looker-open-source/looker-skills\`
-  (\`creating-looker-dashboard\`, \`looker-architect\`), \`googleapis/genai-toolbox\` Looker MCP (\`make_dashboard\`,
-  \`add_dashboard_filter\`, \`add_dashboard_element\`, \`get_lookml_dashboard_examples\`, \`create_lookml_dashboard\`),
-  \`lkrdev/looker-embed-demo\` (\`lookml-dashboard\`, \`lookml-dashboard-to-query\`), \`gcloud_gtm/looker-demo-cli\`
-  (\`looker-visualizations\`, \`looker-vis-cartesian\`, \`looker-vis-tabular-kpi\`, \`looker-vis-specialty-maps\`,
-  \`looker-vis-advanced-config\`), \`looker-field-profiler\` (\`profile_fields\`), and \`lkrdev/data-app-builder\`
-  Code Mode helpers (\`upsert_udd\`, \`upsert_lookml_dashboard\`, \`reflow_24col\`, \`pin_to_board\`, \`schedule_dashboard\`,
-  \`emit_native_bundle\`).
+  Unified Looker Dashboarding skill (\`skills/looker-dashboard/SKILL.md\`) collating \`creating-looker-dashboard\`,
+  \`looker-architect\`, Looker MCP (\`make_dashboard\`, \`add_dashboard_filter\`, \`add_dashboard_element\`,
+  \`get_lookml_dashboard_examples\`, \`create_lookml_dashboard\`), \`lookml-dashboard\`, \`lookml-dashboard-to-query\`,
+  \`looker-visualizations\`, \`looker-field-profiler\` (\`profile_fields\`), and Code Mode helpers (\`upsert_udd\`,
+  \`upsert_lookml_dashboard\`, \`reflow_24col\`, \`pin_to_board\`, \`schedule_dashboard\`, \`emit_native_bundle\`).
 ---
 
 # Unified Looker Dashboarding Skill (\`looker-dashboard\`)
 
-Use this skill whenever creating, updating, refactoring, or validating Looker User-Defined Dashboards (UDDs), LookML Dashboards (\`.dashboard.lookml\`), Saved Looks, Boards, or Scheduled Plans across Looker Studio Code Mode (\`run_looker_codemode\`), Looker MCP Toolbox, or \`lkr-dev-cli\`.
+Create, update, and validate Looker User-Defined Dashboards (UDDs), LookML Dashboards (\`.dashboard.lookml\`), Saved Looks, Boards, and Scheduled Plans across Studio Code Mode (\`run_looker_codemode\`), Looker MCP Toolbox, or \`lkr-dev-cli\`.
 
 ---
 
-## Step 1 — Field & Distribution Discovery with \`profile_fields\` (\`skills/looker-field-profiler/SKILL.md\`)
+## Step 1 — Field & Distribution Discovery (\`profile_fields\`)
 
-Before choosing chart types, pivots, filter controls, or date windows, profile candidate dimensions and measures via \`profile_fields(model=m, view=e, fields=[...])\` in \`run_looker_codemode\` (or \`lkr code-mode sandbox\`) and map its \`suggested_tags\` (\`profile:*\`) and \`stats\` directly to dashboard decisions:
+Profile candidate fields via \`profile_fields(model=m, view=e, fields=[...])\` (\`skills/looker-field-profiler/SKILL.md\`) before selecting chart types, pivots, or filters:
 
-| \`profile_fields\` Tag / Signal | Dashboard Visualization & Filter Action |
+| \`profile_fields\` Tag | Visualization & Filter Rule |
 | :--- | :--- |
-| \`profile:low_cardinality_enum\` ($\\le 15$ distinct) | Safe for **\`pivots:\`**, stacked column/area series, \`looker_pie\` donuts (\`limit: 6\`), and \`button_toggles\` / \`dropdown_menu\` filters grounded in exact literals from \`stats.top_values\`. |
-| \`profile:medium_cardinality_categorical\` ($16\\text{–}100$) | Render as horizontal \`looker_bar\` or \`looker_grid\` with \`limit: "20"\`; **never pivot** (causes wide-table column explosion); use \`dropdown_menu\` or \`tag_list\` filter. |
-| \`profile:searchable_entity_label\` ($> 100$) | Use only in top-$N$ ranked \`looker_grid\` / \`looker_bar\` leaderboards (\`sorts: ["measure desc"]\`, \`limit: "25"\`); configure filter with \`ui_config: {type: "advanced", display: "popover"}\`. |
-| \`profile:skewed_distribution\` ($\\frac{\\|\\text{avg}-\\text{median}\\|}{\\|\\text{median}\\|} \\ge 0.5$) | Pair \`type: average\` KPI scorecards with a \`type: median\` (\`percentile\` / \`APPROX_QUANTILES\`) measure so outliers do not distort executive scorecards. |
-| \`profile:nullable\` (\`null_pct > 0\`) | Add element-level \`filters: {"view.dim": "-NULL"}\` on dimensional ranking/breakdown tiles so unmapped \`null\` buckets do not claim the #1 rank. |
-| \`profile:has_zeros\` | Guard custom ratio denominators in LookML or table calculations with \`nullif(\${view.field}, 0)\`. |
-| \`profile:rare_or_skewed_boolean\` ($< 5\\%$) | Use a filtered measure (\`filters: [flag: "Yes"]\`) or anomaly-rate \`single_value\` KPI instead of a 50/50 split chart where the minority slice is invisible. |
-| \`profile:spiky_year\` / \`profile:spiky_month\` / \`profile:spiky_day\` | Inspect \`stats.spikiness[grain]["trough_period"]\` to exclude incomplete trailing periods in dashboard date filters (e.g. \`"12 complete months"\`) and overlay moving-average \`reference_lines\`. |
+| \`profile:low_cardinality_enum\` (<= 15) | Safe for **\`pivots:\`**, stacked series, \`looker_pie\` donuts (\`limit: 6\`), and \`button_toggles\`/\`dropdown_menu\` filters using exact \`stats.top_values\` literals. |
+| \`profile:medium_cardinality_categorical\` (16–100) | Horizontal \`looker_bar\` or \`looker_grid\` (\`limit: "20"\`); **never pivot**; \`dropdown_menu\`/\`tag_list\` filter. |
+| \`profile:searchable_entity_label\` (> 100) | Top-N \`looker_grid\`/\`looker_bar\` (\`sorts: ["measure desc"]\`, \`limit: "25"\`); \`ui_config: {type: "advanced", display: "popover"}\`. |
+| \`profile:skewed_distribution\` | Pair \`type: average\` scorecards with \`type: median\` (\`percentile\` / \`APPROX_QUANTILES\`). |
+| \`profile:nullable\` (\`null_pct > 0\`) | Add \`filters: {"view.dim": "-NULL"}\` on ranking/breakdown tiles so \`null\` does not claim #1. |
+| \`profile:has_zeros\` | Guard ratio denominators with \`nullif(\${view.field}, 0)\`. |
+| \`profile:rare_or_skewed_boolean\` (< 5%) | Filtered measure (\`filters: [flag: "Yes"]\`) or anomaly-rate \`single_value\` KPI instead of 50/50 split chart. |
+| \`profile:spiky_year\` / \`profile:spiky_month\` / \`profile:spiky_day\` | Inspect \`stats.spikiness[grain]["trough_period"]\` to exclude incomplete trailing periods and overlay moving-average \`reference_lines\`. |
 
 ---
 
-## Step 2 — Execution Workflows (Studio Code Mode, MCP Toolbox, & LookML CLI)
+## Step 2 — Execution Workflows, Compile Gate & Clean Chat Summary Rule
 
 1. **Studio Code Mode (\`run_looker_codemode\`)**:
-   - Execute the entire dashboard workflow in **ONE** \`run_looker_codemode\` call using pre-injected helpers:
-     - \`upsert_udd(title, folder_id, filters=[...], tiles=[...], dashboard_id=None)\`: Creates/updates a UDD, deduplicates \`create_query\`, wires \`create_dashboard_filter\` + \`result_maker.filterables[].listen\`, and positions all tiles on the 24-column grid via \`dashboard_dashboard_layouts\` + \`update_dashboard_layout_component\`.
-     - \`upsert_lookml_dashboard(project_id, model, dashboard_name, title, tiles=[...], filters=[...], yaml_content=None, folder_id=None, sync_udd_id=None)\`: Writes \`dashboards/<slug>.dashboard.lookml\` (\`create_file\` / \`update_file\`), ensures \`include: "/dashboards/*.dashboard.lookml"\` (or \`include: "*.dashboard.lookml"\`) in \`{model}.model.lkml\`, and imports/syncs a linked UDD into \`folder_id\` via \`import_lookml_dashboard\` / \`sync_lookml_dashboard\`.
-     - \`reflow_24col(dashboard_id, boxes)\`: Reflows 24-column \`dashboard_layout_components\` in place.
-     - \`pin_to_board(title, description, section_title, dashboard_id=..., lookml_dashboard_id=..., look_id=...)\`: Pins UDDs, LookML Dashboards, and Saved Looks to a Looker Board.
-     - \`schedule_dashboard(dashboard_id, name, crontab="0 9 * * 1", email="...", fmt="wysiwyg_pdf", filters_string="...")\`: Attaches a Scheduled Plan (\`create_scheduled_plan\`).
-     - \`emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", id=..., title=..., **extra)\`: Returns \`NATIVE_CONTENT_BUNDLE\` directly from \`run_looker_codemode\` (never call \`update_session\` inside \`run_looker_codemode\`).
-   - Always include \`[Open <Dashboard Title>](/dashboards/<id>)\` at the end of every turn that creates or updates a Looker dashboard.
-2. **Looker MCP Toolbox (\`looker.yaml\` / \`looker-dev.yaml\`)**:
-   - **UDD 3-Step Sequence**: \`make_dashboard\` -> \`add_dashboard_filter\` (\`field_filter\` requires \`model\`, \`explore\`, and \`dimension\`) -> \`add_dashboard_element\` (every element name in \`listens_to_filters\` must already exist on the dashboard).
-   - **LookML Dashboard Sequence**: \`dev_mode(true)\` -> \`get_lookml_dashboard_examples\` -> \`create_lookml_dashboard(project_id, file_path="dashboards/<name>.dashboard.lookml", content=...)\` -> \`validate_project(project_id)\`.
-3. **Local LookML CLI (\`lkr-dev-cli\`)**:
-   - Validate offline and push to Looker dev workspace:
-     \`\`\`bash
-     lkr parse lookml-to-api --path /workspace/lookml --validate
-     lkr --dev tools lookml push /workspace/lookml --project-id <project_id> --file dashboards/<name>.dashboard.lookml --no-reset
-     \`\`\`
+   - Execute in **ONE** \`run_looker_codemode\` call using pre-injected helpers (never call \`update_session\`):
+     - \`upsert_udd(title, folder_id, filters=[...], tiles=[...], dashboard_id=None)\`: Verifies all tile \`fields\`, \`pivots\`, \`sorts\`, and filter \`field\`s exist in \`lookml_model_explore\`, creates/updates a UDD, deduplicates \`create_query\`, wires \`listen\`, and positions tiles on the 24-column grid.
+     - \`upsert_lookml_dashboard(project_id, model, dashboard_name, title, tiles=[...], filters=[...], yaml_content=None, folder_id=None, sync_udd_id=None)\`: Verifies fields against \`lookml_model_explore\`, writes \`dashboards/<slug>.dashboard.lookml\`, wires \`include:\` in \`{model}.model.lkml\`, runs \`validate_project(project_id)\` (raising \`ValueError\` on **both** \`"fatal"\` and \`"warning"\` diagnostics referencing the dashboard file or \`Unknown field\`, which otherwise strip tile \`fields\` to \`[]\` -> \`"Must query at least one dimension or measure"\`), and imports/syncs into \`folder_id\`.
+     - \`reflow_24col(dashboard_id, boxes)\`, \`pin_to_board(...)\`, \`schedule_dashboard(...)\`, \`emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", ...)\`.
+2. **Clean User-Facing Summary Rule (Mandatory)**:
+   - **NEVER** include layout coordinates (\`Row 0\`, \`col\`, \`width\`, \`height\`, \`24-Column Grid\`) or internal Looker vis-type identifiers (\`single_value\`, \`looker_area\`, \`looker_pie\`, \`looker_column\`, \`looker_bar\`, \`looker_grid\`) in user-facing chat replies.
+   - Focus strictly on the created tiles, filters, what each tile measures, and end with \`[Open <Dashboard Title>](/dashboards/<id>)\`.
+3. **Looker MCP Toolbox & Local CLI (\`lkr-dev-cli\`)**:
+   - MCP UDD: \`make_dashboard\` -> \`add_dashboard_filter\` -> \`add_dashboard_element\`. MCP LookML: \`dev_mode(true)\` -> \`get_lookml_dashboard_examples\` -> \`create_lookml_dashboard\` -> \`validate_project\`.
+   - CLI: \`lkr parse lookml-to-api --path /workspace/lookml --validate\` && \`lkr --dev tools lookml push /workspace/lookml --project-id <project_id> --file dashboards/<name>.dashboard.lookml --no-reset\`.
 
 ---
 
-## Step 3 — 24-Column \`newspaper\` Layout & Native Tabbed Architecture (\`tabs:\` + \`tab_name:\`)
+## Step 3 — 24-Column \`newspaper\` Layout & Native \`tabs:\`
 
 1. **24-Column Grid (\`layout: newspaper\`, \`preferred_viewer: dashboards-next\`, \`col + width <= 24\`)**:
-   - **Row 0 (\`height: 4\`)**: 3 (\`width: 8\` at \`col: 0, 8, 16\`) or 4 (\`width: 6\` at \`col: 0, 6, 12, 18\`) \`single_value\` KPI scorecards.
-   - **Row 4 (\`height: 8\`)**: 2 side-by-side (\`width: 12\` at \`col: 0, 12\`) or \`16 + 8\` primary velocity/trend charts (\`looker_line\`, \`looker_area\`, dual-axis \`looker_column\`).
-   - **Row 12 (\`height: 8\`)**: 2 (\`width: 12\`) or 3 (\`width: 8\`) segment breakdowns (\`looker_bar\`, \`looker_pie\` donut, \`looker_funnel\`, \`looker_google_map\`).
-   - **Row 20 (\`height: 8\`)**: Full-width (\`col: 0, width: 24\`) \`looker_grid\` detail table (\`table_theme: modern\`).
-2. **Native Tabbed Architecture (\`tabs:\` + \`tab_name:\`)**:
-   - Consolidate multi-topic dashboards or dashboards with $> 25$ tiles into 2–4 native \`tabs: [{name, label}]\` at the dashboard root and assign each element \`tab_name: <tab_id>\`.
-   - Each tab has its own independent 24-column coordinate system starting at \`row: 0, col: 0\`.
-   - **Strictly prohibit HTML navigation bars** in \`type: text\` tiles.
+   - Row 0 (\`height: 4\`): 3 (\`width: 8\` at \`col: 0, 8, 16\`) or 4 (\`width: 6\` at \`col: 0, 6, 12, 18\`) \`single_value\` KPIs.
+   - Row 4 (\`height: 8\`): 2 (\`width: 12\`) or \`16 + 8\` primary trend charts (\`looker_line\`, \`looker_area\`, dual-axis \`looker_column\`).
+   - Row 12 (\`height: 8\`): 2 (\`width: 12\`) or 3 (\`width: 8\`) breakdowns (\`looker_bar\`, \`looker_pie\`, \`looker_funnel\`, \`looker_google_map\`).
+   - Row 20 (\`height: 8\`): Full-width (\`col: 0, width: 24\`) \`looker_grid\` (\`table_theme: modern\`).
+2. **Native Tabs (\`tabs:\` + \`tab_name:\`)**: Consolidate multi-topic or $> 25$-tile dashboards into 2–4 root \`tabs: [{name, label}]\` with independent \`row: 0, col: 0\` grids per \`tab_name\`. Prohibit HTML nav bars in \`type: text\` tiles.
 
 ---
 
-## Step 4 — Four Canonical Dashboard Archetypes (\`get_lookml_dashboard_examples\`)
+## Step 4 — Four Canonical Archetypes (\`get_lookml_dashboard_examples\`)
 
-1. **Executive Pulse (\`business_pulse\`)**:
-   - Row 0: 4 \`single_value\` KPI scorecards (\`width: 6, height: 4\`) with PoP comparison and sparklines.
-   - Row 4: \`looker_area\` trend (\`width: 16, height: 8\`) + \`looker_pie\` donut share (\`width: 8, height: 8\`).
-   - Row 12: \`looker_column\` cohort breakdown (\`width: 12, height: 8\`) + \`looker_google_map\` (\`width: 12, height: 8\`).
-   - Row 20: Full-width \`looker_grid\` (\`width: 24, height: 8\`) with \`series_cell_visualizations\`.
-2. **Entity / Brand Deep-Dive (\`brand_lookup\`)**:
-   - Parameterized entity filter (\`brand\`, \`account\`, \`merchant\`) with top-line performance scorecards, category affinity bars, regional heatmap, and item-level leaderboard.
-3. **360° Single-Entity Inspector (\`customer_lookup\` with \`looker_single_record\`)**:
-   - Combines a \`looker_single_record\` profile card (\`show_null_labels: false\`, \`width: 8, height: 8\`) with lifetime value KPIs and chronological order/activity \`looker_grid\` history.
-4. **Funnel & Conversion Overview (\`web_analytics_overview\` with \`looker_funnel\`)**:
-   - Pairs a stage-drop-off \`looker_funnel\` (\`percent_type: percent_of_previous\` or \`percent_of_max\`) with session/conversion trend lines and traffic-source attribution tables.
+1. **Executive Pulse (\`business_pulse\`)**: 4 PoP \`single_value\` KPIs + \`looker_area\` trend & \`looker_pie\` donut + \`looker_column\` cohort & \`looker_google_map\` + full-width \`looker_grid\` (\`series_cell_visualizations\`).
+2. **Entity / Brand Deep-Dive (\`brand_lookup\`)**: Parameterized entity filter + scorecards, affinity bars, regional map, and item leaderboard.
+3. **360° Inspector (\`customer_lookup\`)**: \`looker_single_record\` (\`show_null_labels: false\`) + lifetime KPIs + chronological \`looker_grid\`.
+4. **Funnel Overview (\`web_analytics_overview\`)**: \`looker_funnel\` (\`percent_of_previous\` / \`percent_of_max\`) + conversion trends + attribution grid.
 
 ---
 
-## Step 5 — Visualization Selection Matrix & Query Shape Rules (All 22 Types)
+## Step 5 — Visualization Matrix & Query Shape Rules (All 22 Types)
 
-- **\`single_value\`**:
-  - **Pattern A (Timeframe Row Comparison + Sparkline)**: 1 date dimension + 1 measure (\`sorts: [date desc]\`, \`limit: 2\`, \`show_comparison: true\`, \`comparison_type: change_percentage\`, \`comparison_row: first\`, \`show_chart_component: true\`).
-  - **Pattern B (Two-Measure PoP Comparison)**: 0 dimensions, 2 measures (\`[current_measure, change_measure]\`, \`show_comparison: true\`, \`comparison_type: change\`, \`comparison_reverse_colors: true\` when lower is better such as error rate, latency, or returns).
-- **\`looker_grid\`**:
-  - Always set \`table_theme: modern\`, \`show_view_names: false\`, \`size_to_fit: true\`, \`enable_conditional_formatting: true\`, and \`series_cell_visualizations\` on primary measures.
-- **Cartesian Dual Y-Axes Rule (\`looker_line\`, \`looker_column\`, \`looker_area\`, \`looker_bar\`, \`looker_scatter\`)**:
-  - When plotting 2 measures with different units (e.g. Revenue \`$\` and Margin \`%\`), set \`y_axis_combined: false\`, \`y_axis_unpinned: true\`, and \`y_axes[].series\` **MUST** be objects \`[{id: "view.m", name: "Label", axisId: "view.m"}]\` — **never** plain strings, which crash the Looker frontend with \`Cannot create property 'id' on string\`.
-  - Valid \`legend_position\` values: \`center\`, \`top\`, \`right\`, \`none\` (**never** \`bottom\` or \`left\`).
-- **Donut (\`looker_pie\`)**:
-  - Strictly 1 dimension, 1 measure, 0 pivots, \`limit: 6\`, \`show_donut: true\`, \`inner_radius: 50\`, \`value_labels: legend\`, \`label_type: labPer\` (never use \`looker_donut_multiples\` for a single unpivoted measure).
-- **Maps (\`looker_google_map\`, \`looker_map\`, \`looker_geo_choropleth\`, \`looker_geo_coordinates\`)**:
-  - Always bound marker sizes (\`map_marker_radius_min: 3\`, \`map_marker_radius_max: 25\`, \`map_plot_mode: automagic_heatmap\` or \`points\`) to prevent outlier bubbles from obscuring the map.
-- **Additional Supported Types**: \`looker_waterfall\`, \`looker_boxplot\`, \`looker_histogram\`, \`looker_funnel\`, \`looker_timeline\`, \`looker_sankey\`, \`treemap\`, \`sunburst\`, \`looker_wordcloud\`, \`looker_bullet\`, \`looker_single_record\`, \`table\`.
+- **\`single_value\`**: Pattern A (1 date dim + 1 measure, \`sorts: [date desc]\`, \`limit: 2\`, \`show_comparison: true\`, \`comparison_type: change_percentage\`, \`show_chart_component: true\`) or Pattern B (0 dims, 2 measures, \`comparison_type: change\`, \`comparison_reverse_colors: true\` when lower is better).
+- **\`looker_grid\`**: \`table_theme: modern\`, \`show_view_names: false\`, \`size_to_fit: true\`, \`enable_conditional_formatting: true\`, \`series_cell_visualizations\`.
+- **Cartesian Dual Y-Axes (\`looker_line\`, \`looker_column\`, \`looker_area\`, \`looker_bar\`, \`looker_scatter\`)**: Set \`y_axis_combined: false\`, \`y_axis_unpinned: true\`, and \`y_axes[].series\` **MUST** be objects \`[{id: "view.m", name: "Label", axisId: "view.m"}]\` (never plain strings). \`legend_position\`: \`center\`|\`top\`|\`right\`|\`none\`.
+- **Donut (\`looker_pie\`)**: 1 dim, 1 measure, 0 pivots, \`limit: 6\`, \`show_donut: true\`, \`inner_radius: 50\`, \`value_labels: legend\`, \`label_type: labPer\`.
+- **Maps (\`looker_google_map\`, \`looker_map\`, \`looker_geo_choropleth\`, \`looker_geo_coordinates\`)**: Bound \`map_marker_radius_min: 3\`, \`map_marker_radius_max: 25\`, \`map_plot_mode: automagic_heatmap\`|\`points\`.
+- **Other Supported Types**: \`looker_waterfall\`, \`looker_boxplot\`, \`looker_histogram\`, \`looker_funnel\`, \`looker_timeline\`, \`looker_sankey\`, \`treemap\`, \`sunburst\`, \`looker_wordcloud\`, \`looker_bullet\`, \`looker_single_record\`, \`table\`.
 
 ---
 
 ## Step 6 — Highcharts \`advanced_vis_config\` Guardrails
 
-1. **Allowed vs. Forbidden Visualization Types**:
-   - **Allowed (14 Highcharts types only)**: \`looker_column\`, \`looker_bar\`, \`looker_line\`, \`looker_area\`, \`looker_scatter\`, \`looker_pie\`, \`looker_funnel\`, \`looker_timeline\`, \`looker_waterfall\`, \`looker_boxplot\`, \`looker_wordcloud\`, \`looker_histogram\`, \`looker_bullet\`, \`looker_sankey\`.
-   - **Forbidden**: Never attach \`advanced_vis_config\` to \`single_value\`, \`looker_grid\`, \`table\`, \`looker_single_record\`, \`looker_google_map\`, \`looker_map\`, \`looker_geo_choropleth\`, or \`looker_geo_coordinates\`.
-2. **Strict JSON & Security Rules**:
-   - Always set \`defaults_version: 1\` on the element and pass valid JSON (no trailing commas, no comments).
-   - **No JavaScript functions or \`formatter\` keys**: Looker strips executable JS. Use Highcharts \`format\` template strings (e.g. \`"{point.y:,.0f}"\`) or Looker's declarative \`formatters: [{"select": "max", "style": {"color": "#10B981"}}]\`.
-   - Use rounded bar geometry (\`borderRadius: 8\`) and transparent chart backgrounds (\`"backgroundColor": "rgba(0, 0, 0, 0)"\`) so embedded dashboards inherit Light/Dark host themes cleanly.
+1. **Allowed (14 Highcharts types only)**: \`looker_column\`, \`looker_bar\`, \`looker_line\`, \`looker_area\`, \`looker_scatter\`, \`looker_pie\`, \`looker_funnel\`, \`looker_timeline\`, \`looker_waterfall\`, \`looker_boxplot\`, \`looker_wordcloud\`, \`looker_histogram\`, \`looker_bullet\`, \`looker_sankey\`. Never attach to \`single_value\`, \`looker_grid\`, \`table\`, \`looker_single_record\`, or map types.
+2. **JSON & Security**: Set \`defaults_version: 1\`, valid JSON only, zero JS \`formatter\` functions (use \`format\` strings like \`"{point.y:,.0f}"\` or declarative \`formatters\`), \`borderRadius: 8\`, and \`"backgroundColor": "rgba(0, 0, 0, 0)"\`.
 
 ---
 
-## Step 7 — Filter Architecture, YAML Safety & Self-Healing Query Verification (\`lookml-dashboard-to-query\`)
+## Step 7 — YAML Safety, Medallion Field Scoping & Self-Healing (\`lookml-dashboard-to-query\`)
 
-1. **YAML Quoting & Identifier Rules**:
-   - Double-quote all user-facing strings (\`title\`, \`name\`, \`tab_name\`, \`label\`, \`subtitle\`) so colons (\`:\`) or \`#\` never break YAML parsing.
-   - Filter and element \`name:\` identifiers must **never** contain periods (\`.\`); use \`snake_case\` underscores (e.g. \`date_range\`, \`order_status\`).
-2. **Filter Wiring & RLS Governance**:
-   - Set root \`crossfilter_enabled: true\`.
-   - Use \`type: field_filter\` with explicit \`model\`, \`explore\`, \`field\`, and \`ui_config\` (\`display: inline\` for primary filters, \`display: popover\` for secondary filters), cascading dependent filters via \`listens_to_filters\`.
-   - Omit UI dashboard filters for fields already enforced by model-level \`access_filter\` (Row-Level Security).
-3. **Self-Healing SQL Query Verification (\`lookml-dashboard-to-query\`)**:
-   - \`validate_project\` checks LookML syntax only. To guarantee zero runtime tile errors, extract every element's query (and deconstruct \`result_maker.query_IDs\` for Merge Results) and verify SQL generation via \`run_inline_query("sql", body)\` (or \`run_query(query_id, "json", limit=5)\`).
-   - If a tile references a missing field, self-heal by adding the dimension or measure to \`bronze/<table>.refinement.lkml\` (never hand-editing \`# AUTOGENERATED\` \`bronze/<table>.view.lkml\`), re-running \`validate_project\`, and syncing via \`sync_lookml_dashboard\`.
+1. **YAML & Filters**: Double-quote user-facing strings; filter/element \`name:\` identifiers must use \`snake_case\` without periods (\`.\`); set \`crossfilter_enabled: true\`, \`type: field_filter\` with explicit \`model\`/\`explore\`/\`field\`/\`ui_config\`, and omit filters already enforced by \`access_filter\`.
+2. **Medallion Field Scoping (Prevent Excluded/Unknown Fields)**: Keep \`bronze/<fact>.refinement.lkml\` strictly **single-table** (cross-view measures referencing joined views belong in \`silver/\`), and **never** set \`fields: [ALL_FIELDS*, -...]\` exclusions on \`<fact>_base\` when Silver \`extends: [<fact>_base]\` (inherited exclusions hide fields from dashboards and strip tile \`fields\` to \`[]\`).
+3. **Self-Healing SQL Verification (\`lookml-dashboard-to-query\`)**: Verify every tile query via \`run_inline_query("sql", body)\` (deconstructing \`result_maker.query_IDs\` for Merge Results). Add missing single-table fields to \`bronze/<table>.refinement.lkml\` or cross-view fields to \`silver/\`, re-run \`validate_project\`, and sync via \`sync_lookml_dashboard\`.
 `
 
 export const LOOKER_FIELD_PROFILER_SKILL_MD = `---
