@@ -590,7 +590,7 @@ export function createLookerEmbedPreloadController(opts: {
               emit('dashboard:run:start'); emit('dashboard:run:complete')
             }
           },
-          sendAndReceive: async (event: string, payload?: { url?: string }) => {
+          sendAndReceive: (event: string, payload?: { url?: string }) => {
             if (event === 'page:load' && payload?.url) {
               const nextUrl = String(payload.url)
               syncIframe(nextUrl)
@@ -605,7 +605,7 @@ export function createLookerEmbedPreloadController(opts: {
                 emit('page:changed', { page: { url: nextUrl, lookerVersion: '25.20.0' } })
               }, 0)
             }
-            return []
+            return Promise.resolve([])
           },
         }
         return {
@@ -657,58 +657,45 @@ export function createLookerEmbedPreloadController(opts: {
   let queue: Promise<ILookerConnection> = connectionPromise.then((conn) => { notify(); return conn })
 
   const syncTarget = (next: LookerEmbedTarget): Promise<ILookerConnection> => {
-    const step = queue.catch(() => undefined).then(async () => {
-      const connection = await connectionPromise
+    const step = queue.catch(() => undefined).then(() => connectionPromise).then((connection) => {
       activePreviewMeta = { mode: next.previewMode, objectId: next.previewObjectId }
       const prev = lastTarget
       const isSameTarget = prev && prev.kind === next.kind && prev.target === next.target
       if (isSameTarget && prev.nonce === next.nonce) return connection
       const options = { waitUntilLoaded: true }
-      const recordLoad = async (method: string, arg: string, p: Promise<unknown>) => {
-        telemetry.calls.push({ method, arg })
-        telemetry.loadCount += 1
-        await p
+      const rec = (method: string, arg: string, p: Promise<unknown>) => {
+        telemetry.calls.push({ method, arg }); telemetry.loadCount += 1; return p
       }
-      if (next.kind !== 'preload' && isSameTarget && prev.nonce !== next.nonce) {
-        await recordLoad('loadUrl', '/preload', connection.loadUrl({ url: '/preload', pushHistory: false, options }))
-      }
-      if (next.kind === 'preload') {
-        if (prev && prev.kind !== 'preload') await recordLoad('loadUrl', '/preload', connection.loadUrl({ url: '/preload', options }))
-      } else if (next.kind === 'dashboard') {
-        await recordLoad('loadDashboard', next.target, connection.loadDashboard({ id: next.target, options }))
-      } else if (next.kind === 'look') {
-        await recordLoad('loadLook', next.target, connection.loadLook({ id: next.target, options }))
-      } else if (next.kind === 'explore') {
-        const exploreId = next.target.replace('::', '/')
-        await recordLoad('loadExplore', exploreId, connection.loadExplore({ id: exploreId, options }))
-      } else if (next.kind === 'extension') {
-        await recordLoad('loadExtension', next.target, connection.loadExtension({ id: next.target, options }))
-      } else if (next.kind === 'report') {
-        await recordLoad('loadReport', next.target, connection.loadReport({ id: next.target, options }))
-      } else {
-        await recordLoad('loadUrl', next.target, connection.loadUrl({ url: next.target, options }))
-      }
-      lastTarget = next
-      telemetry.state = next.kind === 'preload' ? 'preloaded' : next.kind
-      telemetry.target = next.target
-      const iframeEl = opts.container?.querySelector?.('iframe')
-      if (iframeEl) {
-        if (next.previewMode === 'conversational-analytics') {
-          iframeEl.setAttribute('data-testid', 'ca-embed-iframe')
-          iframeEl.setAttribute('data-ca-panels-collapsed', 'true')
-          try {
-            iframeEl.contentWindow?.postMessage?.(
-              { type: 'looker:ca:layout', hide_sidebar: true, hide_data_source_panel: true, sidebar_collapsed: true, right_panel_collapsed: true },
-              '*'
-            )
-          } catch { /* ignore cross-origin postMessage errors */ }
-        } else {
-          iframeEl.removeAttribute('data-testid')
-          iframeEl.removeAttribute('data-ca-panels-collapsed')
+      const pre = next.kind !== 'preload' && isSameTarget && prev.nonce !== next.nonce
+        ? rec('loadUrl', '/preload', connection.loadUrl({ url: '/preload', pushHistory: false, options }))
+        : Promise.resolve()
+      return pre.then(() => {
+        if (next.kind === 'preload') return prev && prev.kind !== 'preload' ? rec('loadUrl', '/preload', connection.loadUrl({ url: '/preload', options })) : undefined
+        if (next.kind === 'dashboard') return rec('loadDashboard', next.target, connection.loadDashboard({ id: next.target, options }))
+        if (next.kind === 'look') return rec('loadLook', next.target, connection.loadLook({ id: next.target, options }))
+        if (next.kind === 'explore') { const eid = next.target.replace('::', '/'); return rec('loadExplore', eid, connection.loadExplore({ id: eid, options })) }
+        if (next.kind === 'extension') return rec('loadExtension', next.target, connection.loadExtension({ id: next.target, options }))
+        if (next.kind === 'report') return rec('loadReport', next.target, connection.loadReport({ id: next.target, options }))
+        return rec('loadUrl', next.target, connection.loadUrl({ url: next.target, options }))
+      }).then(() => {
+        lastTarget = next
+        telemetry.state = next.kind === 'preload' ? 'preloaded' : next.kind
+        telemetry.target = next.target
+        const iframeEl = opts.container?.querySelector?.('iframe')
+        if (iframeEl) {
+          if (next.previewMode === 'conversational-analytics') {
+            iframeEl.setAttribute('data-testid', 'ca-embed-iframe')
+            iframeEl.setAttribute('data-ca-panels-collapsed', 'true')
+            try {
+              iframeEl.contentWindow?.postMessage?.({ type: 'looker:ca:layout', hide_sidebar: true, hide_data_source_panel: true, sidebar_collapsed: true, right_panel_collapsed: true }, '*')
+            } catch { /* ignore */ }
+          } else {
+            iframeEl.removeAttribute('data-testid'); iframeEl.removeAttribute('data-ca-panels-collapsed')
+          }
         }
-      }
-      notify()
-      return connection
+        notify()
+        return connection
+      })
     })
     queue = step.catch(() => connectionPromise)
     return step
@@ -2243,11 +2230,13 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     }
   }, [longPressUserMsgIdx])
 
+  const clearLongPress = () => {
+    if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null }
+  }
   const handleCopyUserMsg = (idx: number, text: string) => {
     const key = `user_${idx}`
     void copyTextWithExtensionSdk(text, extensionSDK)
-    setCopiedTraceKey(key)
-    setLongPressUserMsgIdx(null)
+    setCopiedTraceKey(key); setLongPressUserMsgIdx(null)
     setTimeout(() => setCopiedTraceKey((cur) => (cur === key ? null : cur)), 1800)
   }
 
@@ -2410,35 +2399,20 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               onContextMenu={m.role === 'user' ? (e) => { if (longPressFiredRef.current || longPressUserMsgIdx === idx) e.preventDefault() } : undefined}
               onTouchStart={m.role === 'user' ? (e) => {
                 if ((e.target as HTMLElement | null)?.closest?.('[data-testid^="user-msg-longpress-menu-"]')) return
-                if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
-                longPressFiredRef.current = false
+                clearLongPress(); longPressFiredRef.current = false
                 const pt = e.touches?.[0]
                 touchStartPosRef.current = pt ? { x: pt.clientX, y: pt.clientY } : { x: 0, y: 0 }
-                longPressTimerRef.current = setTimeout(() => {
-                  longPressTimerRef.current = null
-                  longPressFiredRef.current = true
-                  setLongPressUserMsgIdx(idx)
-                }, 450)
+                longPressTimerRef.current = setTimeout(() => { longPressTimerRef.current = null; longPressFiredRef.current = true; setLongPressUserMsgIdx(idx) }, 450)
               } : undefined}
               onTouchMove={m.role === 'user' ? (e) => {
-                if (!longPressTimerRef.current || !touchStartPosRef.current) return
                 const pt = e.touches?.[0]
-                if (pt && Math.hypot(pt.clientX - touchStartPosRef.current.x, pt.clientY - touchStartPosRef.current.y) > 10) {
-                  clearTimeout(longPressTimerRef.current)
-                  longPressTimerRef.current = null
-                }
+                if (longPressTimerRef.current && touchStartPosRef.current && pt && Math.hypot(pt.clientX - touchStartPosRef.current.x, pt.clientY - touchStartPosRef.current.y) > 10) clearLongPress()
               } : undefined}
               onTouchEnd={m.role === 'user' ? (e) => {
-                if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null }
-                if (longPressFiredRef.current) {
-                  e.preventDefault()
-                  setTimeout(() => { longPressFiredRef.current = false }, 350)
-                }
+                clearLongPress()
+                if (longPressFiredRef.current) { e.preventDefault(); setTimeout(() => { longPressFiredRef.current = false }, 350) }
               } : undefined}
-              onTouchCancel={m.role === 'user' ? () => {
-                if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null }
-                longPressFiredRef.current = false
-              } : undefined}
+              onTouchCancel={m.role === 'user' ? () => { clearLongPress(); longPressFiredRef.current = false } : undefined}
             >
               <div className="dab-msg-header">
                 <span data-testid={m.role === 'assistant' ? 'chat-msg-agent-author' : undefined}>
@@ -2550,14 +2524,11 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                         className={`dab-msg-pill dab-chat-object-chip ${!isDeleted && item.key === activeContentTabKey ? 'active' : ''} ${item.action === 'deleted' ? 'deleted' : ''}`}
                         onClick={() => {
                           if (isDeleted) return
-                          setActiveViewerDocument?.(null)
-                          setRightPaneCollapsed(false)
-                          if (contentItems.some((c) => c.key === item.key)) {
-                            handleSelectContentTab?.(item.key)
-                          } else {
-                            const up = ctl.upsertContentItem({ id: item.id, contentType: item.contentType, title: item.title, embedPath: item.embedPath, hidden: false }, true)
-                            handleSelectContentTab?.(up.key)
-                          }
+                          setActiveViewerDocument?.(null); setRightPaneCollapsed(false)
+                          const k = contentItems.some((c) => c.key === item.key)
+                            ? item.key
+                            : ctl.upsertContentItem({ id: item.id, contentType: item.contentType, title: item.title, embedPath: item.embedPath, hidden: false }, true).key
+                          handleSelectContentTab?.(k)
                         }}
                       >
                         {renderContentTabIcon(item.contentType)}

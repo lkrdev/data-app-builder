@@ -7367,5 +7367,4 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     expect(afterDelConv.activeContentTabKey).toBe('')
     expect(hydrateConversationContentItems(afterDelConv)).toEqual([])
   })
-  })
 })

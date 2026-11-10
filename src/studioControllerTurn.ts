@@ -611,9 +611,10 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       const deletedRe = /^DELETE\s+\/(?:api\/4\.0\/)?(dashboards|looks|boards)\/([^/?#\s)]+)\s+\(\d+ms\)$/gim
       ;(result.activitySteps || []).forEach((st) => {
         if (st.kind !== 'codemode') return
-        Array.from((st.content || '').matchAll(deletedRe)).forEach((m) => {
-          const kind = m[1].toLowerCase()
-          const delId = (() => { try { return decodeURIComponent(m[2]) } catch { return m[2] } })()
+        ;(st.content || '').replace(deletedRe, (_s, rawKind: string, rawId: string) => {
+          const kind = rawKind.toLowerCase()
+          let delId = rawId
+          try { delId = decodeURIComponent(rawId) } catch { /* ignore */ }
           deletedIds.add(delId)
           const fbType: StudioContentItemType = kind === 'looks' ? 'look' : kind === 'boards' ? 'board' : delId.includes('::') ? 'lookml_dashboard' : 'dashboard'
           const hit = contentItemsRef.current.find(
@@ -621,17 +622,13 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           )
           if (hit) {
             setContentItems((prev) => prev.filter((it) => it.key !== hit.key))
-            if (activeContentTabKeyRef.current === hit.key) {
-              setActiveContentTabKey(contentItemsRef.current.filter((it) => !it.hidden).slice(-1)[0]?.key || '')
-            }
+            if (activeContentTabKeyRef.current === hit.key) setActiveContentTabKey(contentItemsRef.current.filter((it) => !it.hidden).slice(-1)[0]?.key || '')
           }
           if (nativeContent?.id === delId) setNativeContent(null)
           if (publishedApp?.dashboardId === delId) { setPublishedApp(null); setCurrentAppCode('') }
           const ct = hit ? hit.contentType : fbType
-          recordCrudItem(toTurnCrudItem(
-            hit || { key: `${ct}:${delId}`, id: delId, title: formatStudioContentItemTitle(ct, delId), contentType: ct },
-            'deleted'
-          ))
+          recordCrudItem(toTurnCrudItem(hit || { key: `${ct}:${delId}`, id: delId, title: formatStudioContentItemTitle(ct, delId), contentType: ct }, 'deleted'))
+          return ''
         })
       })
 
@@ -658,11 +655,8 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             convTitle = saved.title
             convContent = { scriptId: saved.id, dashboardId: saved.dashboardId, elementId: saved.elementId }
             setActiveObjectId(saved.id)
-            const savedItem = contentItemsRef.current.find((it) => it.key === `script:${saved.id}`)
-            recordCrudItem(toTurnCrudItem(
-              savedItem || { key: `script:${saved.id}`, id: String(saved.id), title: saved.title || String(saved.id), contentType: 'script', embedPath: `/tile/${encodeURIComponent(String(saved.id))}` },
-              existedScript ? 'updated' : 'created'
-            ))
+            const sItem = contentItemsRef.current.find((it) => it.key === `script:${saved.id}`)
+            if (sItem) recordCrudItem(toTurnCrudItem(sItem, existedScript ? 'updated' : 'created'))
           } catch { /* ignore */ }
         }
         finalMsgs = [
@@ -797,10 +791,8 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           lastPublishedIdRef.current = upserted.dashboardId
           resolvedUseCaseByIdRef.current[upserted.dashboardId] = appUseCaseType
           setPublishedApp(upserted, { source: isExistingApp ? 'modified' : 'created', createdInConversation: true, hidden: false })
-          recordCrudItem(toTurnCrudItem(
-            contentItemsRef.current.find((it) => it.key === `${appCt}:${upserted.dashboardId}`) || { key: `${appCt}:${upserted.dashboardId}`, id: String(upserted.dashboardId), title: upserted.title, contentType: appCt, embedPath: `/embed/dashboards/${encodeURIComponent(String(upserted.dashboardId))}` },
-            isExistingApp ? 'updated' : 'created'
-          ))
+          const appItem = contentItemsRef.current.find((it) => it.key === `${appCt}:${upserted.dashboardId}`)
+          if (appItem) recordCrudItem(toTurnCrudItem(appItem, isExistingApp ? 'updated' : 'created'))
           setEmbedNonce((n) => n + 1)
           setActiveObjectId(upserted.dashboardId)
           setCurrentAppCode(result.bundle.raw_code)
