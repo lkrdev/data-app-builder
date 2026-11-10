@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 
 import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
-import { Lock, MoreVertical } from 'lucide-react'
+import { ExternalLink, Lock, MoreVertical } from 'lucide-react'
 
 import { LOOKER_PROJECT_ONBOARDING_SKILL_MD } from './antigravityPrompts'
 import { StudioBadge, StudioButton, StudioCard, StudioModal } from './components/StudioDesignSystem'
@@ -434,6 +434,17 @@ export const LookmlPreviewPane: React.FC<{
               ))
             )}
           </div>
+          {projectIdePath && (
+            <StudioButton
+              variant="secondary"
+              testId="lookml-toolbar-open-ide-btn"
+              onClick={() => openLink(projectIdePath)}
+              style={{ padding: '0 8px', fontSize: 11 }}
+            >
+              <span>Open in IDE</span>
+              <ExternalLink size={12} strokeWidth={1.75} aria-hidden="true" />
+            </StudioButton>
+          )}
           <div ref={codeMenuRef} style={{ position: 'relative', flexShrink: 0 }}>
             <button
               type="button" data-testid="lookml-code-actions-btn" className="dab-btn dab-btn-secondary dab-btn-icon"

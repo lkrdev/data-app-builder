@@ -112,7 +112,7 @@ function buildHtmlPage(scenario) {
           explores: ['thelook::order_items'],
           messages: [
             { role: 'user', text: 'Build an Executive Revenue Data App on order_items with Total Revenue, Total Orders, Avg Order Value KPIs and a Monthly Revenue trend chart.' },
-            { role: 'assistant', text: 'Built and published Executive Revenue App (Dashboard #42) with 3 KPI cards and a Highcharts monthly trend chart.', dashboardId: '42', widgetCount: 4 }
+            { role: 'assistant', text: 'Built and published Executive Revenue App (Dashboard #42) with 3 KPI cards and a Highcharts monthly trend chart.', dashboardId: '42', widgetCount: 4, crudItems: [{ key: 'data_app:42', id: '42', title: 'Executive Revenue App', contentType: 'data_app', embedPath: '/embed/dashboards/42', action: 'created' }] }
           ]
         },
         obj_dashboard_7: {
@@ -260,7 +260,7 @@ function buildHtmlPage(scenario) {
             explores: ['thelook::order_items'],
             messages: [
               { role: 'user', text: 'Build an Executive Revenue Data App on order_items with Total Revenue, Total Orders, Avg Order Value KPIs and a Monthly Revenue trend chart.' },
-              { role: 'assistant', text: 'Built and published Executive Revenue App (Dashboard #42) with 3 KPI cards and a Highcharts monthly trend chart.', dashboardId: '42', widgetCount: 4 }
+              { role: 'assistant', text: 'Built and published Executive Revenue App (Dashboard #42) with 3 KPI cards and a Highcharts monthly trend chart.', dashboardId: '42', widgetCount: 4, crudItems: [{ key: 'data_app:42', id: '42', title: 'Executive Revenue App', contentType: 'data_app', embedPath: '/embed/dashboards/42', action: 'created' }] }
             ]
           },
           {
@@ -2504,16 +2504,16 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           sameIframe: container.querySelector('iframe') === iframe0
         };
 
-        // 2. Click Reload Viewer on same Dashboard #42 -> connection.asDashboardConnection().run()
-        const reloadBtn = Array.from(document.querySelectorAll('.dab-preview-actions button')).find(
-          (b) => (b.textContent || '').includes('Reload Viewer')
-        );
+        // 2. Click Reload Viewer on same Dashboard #42 -> /preload bounce + loadDashboard('42')
+        const reloadBtn = document.querySelector('[data-testid="preview-reload-viewer-btn"]');
+        const callsBeforeReload = (window.__LOOKER_EMBED_STATE__?.calls || []).length;
         if (reloadBtn) reloadBtn.click();
         await new Promise((r) => setTimeout(r, 120));
+        const reloadCalls = (window.__LOOKER_EMBED_STATE__?.calls || []).slice(callsBeforeReload);
         const afterWarmRun = {
-          hasDashboardRunCall: (window.__LOOKER_EMBED_STATE__?.calls || []).some(
-            (c) => c.method === 'asDashboardConnection.run' && c.arg === '42'
-          ),
+          hasDashboardRunCall:
+            reloadCalls.some((c) => c.method === 'loadUrl' && c.arg === '/preload') &&
+            reloadCalls.some((c) => c.method === 'loadDashboard' && c.arg === '42'),
           sameIframe: container.querySelector('iframe') === iframe0
         };
 
@@ -5030,6 +5030,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       })
       expect(mobRes.result.value).toEqual({ initialCollapsed: true, sidebarPosition: 'absolute', collapsedAfterSelect: true })
     } finally {
+      await chrome.send('Emulation.setTouchEmulationEnabled', { enabled: false })
       await chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
     }
   }, 20000)
@@ -5265,6 +5266,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         mobileFolderBtnDisplay: 'flex', permToggled: true, folderModalOpened: true, agentNameInputOpened: true
       })
     } finally {
+      await chrome.send('Emulation.setTouchEmulationEnabled', { enabled: false })
       await chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
     }
   }, 20000)
@@ -5462,6 +5464,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         copiedOnMobile: true
       })
     } finally {
+      await chrome.send('Emulation.setTouchEmulationEnabled', { enabled: false })
       await chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
     }
   }, 20000)
@@ -5832,10 +5835,15 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         await new Promise((r) => setTimeout(r, 40));
         const openedProjIdeUrl = (window.__OPENED_WINDOWS__ || []).slice(-1)[0]?.url || '';
 
-        // 4. Hide dashboard tab -> chip disappears from chat-object-viewer-chips -> click chat /dashboards/ link -> unhides & focuses in viewer; external btn opens browser window
+        // 4. Hide dashboard tab -> per-turn crudItems pill persists in Turn 3 -> click pill unhides & focuses; hide again -> click chat /dashboards/ link -> unhides & focuses in viewer; external btn opens browser window
         document.querySelector('[data-testid="studio-content-tab-close-lookml_dashboard:bryan_test2::exec_pulse"]')?.click();
         await new Promise((r) => setTimeout(r, 80));
-        const chipHiddenWhenTabHidden = !document.querySelector('[data-testid="chat-object-viewer-chip-lookml_dashboard:bryan_test2::exec_pulse"]');
+        const crudChip = document.querySelector('[data-testid="chat-object-viewer-chip-lookml_dashboard:bryan_test2::exec_pulse"]');
+        const chipHiddenWhenTabHidden = Boolean(crudChip);
+        crudChip?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        document.querySelector('[data-testid="studio-content-tab-close-lookml_dashboard:bryan_test2::exec_pulse"]')?.click();
+        await new Promise((r) => setTimeout(r, 60));
 
         const dashChatLinks = Array.from(document.querySelectorAll('[data-testid="chat-markdown-link"]')).filter((a) => (a.getAttribute('href') || '').includes('/dashboards/bryan_test2::exec_pulse'));
         const openCountBeforeChatClick = (window.__OPENED_WINDOWS__ || []).length;
@@ -6113,4 +6121,271 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       hydratedWalkedChainWithoutPriorTurnLeak: true,
     })
   }, 20000)
+
+  test('Issue #172: full-screen View app.js + icon Copy app.js, /preload bounce Reload Viewer, per-turn CRUD pills, 180ms-bridged clickable tab popovers + LookML Open in IDE, and ArrowUp/ArrowDown prompt history + hover/long-press user copy', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=data_app` })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="preview-view-code-btn"]'))`,
+        returnByValue: true,
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 80))
+    }
+
+    const res172 = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const s = window.__DAB_STUDIO__;
+        window.__CLIPBOARD_WRITES__ = [];
+        window.__OPENED_WINDOWS__ = [];
+
+        // 1. Item 4: Full-screen View app.js (display:none on iframe without unmounting) & icon-only Copy app.js
+        const iframeContainer = document.querySelector('.dab-iframe-container');
+        const iframe0 = document.querySelector('[data-testid="looker-embed-container"] iframe');
+        const viewBtn = document.querySelector('[data-testid="preview-view-code-btn"]');
+        const viewBtnTextBefore = (viewBtn?.textContent || '').trim();
+        const viewBtnHasCodeSvg = Boolean(viewBtn?.querySelector('svg.lucide'));
+        const viewBtnNoBraces = !viewBtnTextBefore.includes('{ }');
+
+        viewBtn?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const drawer = document.querySelector('[data-testid="preview-app-code-drawer"]');
+        const rightPane = document.querySelector('.dab-right-pane');
+        const drawerStyle = drawer ? window.getComputedStyle(drawer) : null;
+        const iframeDisplayWhileCodeOpen = iframeContainer ? window.getComputedStyle(iframeContainer).display : '';
+        const drawerFillsHeight = Boolean(drawer && rightPane && drawer.getBoundingClientRect().height >= rightPane.getBoundingClientRect().height - 100);
+        const lightDrawerBg = drawerStyle ? drawerStyle.backgroundColor : '';
+
+        window.__DAB_STUDIO__.setThemeMode('dark');
+        await new Promise((r) => setTimeout(r, 40));
+        const darkDrawerBg = drawer ? window.getComputedStyle(drawer).backgroundColor : '';
+        window.__DAB_STUDIO__.setThemeMode('light');
+        await new Promise((r) => setTimeout(r, 40));
+
+        const copyCodeBtn = document.querySelector('[data-testid="preview-copy-code-btn"]');
+        const copyCodeIconOnly = Boolean(copyCodeBtn && (copyCodeBtn.textContent || '').trim() === '' && copyCodeBtn.querySelector('svg.lucide'));
+        const copyCodeTitleBefore = copyCodeBtn?.getAttribute('title') || '';
+        copyCodeBtn?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const copyCodeTitleAfter = document.querySelector('[data-testid="preview-copy-code-btn"]')?.getAttribute('title') || '';
+        const copiedAppCodeViaSdk = (window.__CLIPBOARD_WRITES__ || []).length > 0;
+
+        // Toggling Hide app.js restores iframe display without remounting or reloading iframe0
+        const loadsBeforeHide = window.__LOOKER_EMBED_STATE__?.loadCount || 0;
+        document.querySelector('[data-testid="preview-view-code-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 50));
+        const loadsAfterHide = window.__LOOKER_EMBED_STATE__?.loadCount || 0;
+        const sameIframeAfterHide = document.querySelector('[data-testid="looker-embed-container"] iframe') === iframe0;
+        const iframeRestoredAfterHide = iframeContainer ? window.getComputedStyle(iframeContainer).display !== 'none' : false;
+
+        // 2. Item 5: Reload Viewer spins <RotateCw /> and bounces /preload -> loadDashboard('42')
+        const callsIdx = (window.__LOOKER_EMBED_STATE__?.calls || []).length;
+        const reloadBtn = document.querySelector('[data-testid="preview-reload-viewer-btn"]');
+        reloadBtn?.click();
+        await new Promise((r) => setTimeout(r, 120));
+        const bounceCalls = (window.__LOOKER_EMBED_STATE__?.calls || []).slice(callsIdx);
+        const bouncedThroughPreload =
+          bounceCalls.length >= 2 &&
+          bounceCalls[0].method === 'loadUrl' && bounceCalls[0].arg === '/preload' &&
+          bounceCalls[1].method === 'loadDashboard' && bounceCalls[1].arg === '42';
+
+        // 3. Item 8: Per-turn CRUD pills only on mutating turns (omitted on chat-only and error turns), superseded deleted pills disabled, and dark-mode active/deleted colors not overridden by green .dab-msg-pill
+        window.__DAB_STUDIO__.setMessages([
+          { role: 'user', text: 'First prompt @explore:thelook::order_items' },
+          {
+            role: 'assistant',
+            text: 'Created app #42 and temp dashboard #77.',
+            crudItems: [
+              { key: 'data_app:42', id: '42', title: 'Executive Revenue App', contentType: 'data_app', embedPath: '/embed/dashboards/42', action: 'created' },
+              { key: 'dashboard:77', id: '77', title: 'Temp Dashboard 77', contentType: 'dashboard', embedPath: '/embed/dashboards/77', action: 'created' },
+            ],
+          },
+          { role: 'user', text: 'Delete temp dashboard #77' },
+          {
+            role: 'assistant',
+            text: 'Deleted temp dashboard #77.',
+            crudItems: [{ key: 'dashboard:77', id: '77', title: 'Temp Dashboard 77', contentType: 'dashboard', action: 'deleted' }],
+          },
+          { role: 'user', text: 'Second prompt\\nmultiline beta' },
+          { role: 'assistant', text: 'Chat-only explanation turn with zero mutations.' },
+          { role: 'error', text: 'Transient timeout' },
+        ]);
+        await new Promise((r) => setTimeout(r, 60));
+        const allChipStrips = document.querySelectorAll('[data-testid="chat-object-viewer-chips"]');
+        const assistantBubbles = document.querySelectorAll('.dab-msg-assistant');
+        const supersededTurn1Chip77 = assistantBubbles[0]?.querySelector('[data-testid="chat-object-viewer-chip-dashboard:77"]');
+        const deletedTurn2Chip77 = assistantBubbles[1]?.querySelector('[data-testid="chat-object-viewer-chip-dashboard:77"]');
+        const activeTurn1Chip42 = assistantBubbles[0]?.querySelector('[data-testid="chat-object-viewer-chip-data_app:42"]');
+        window.__DAB_STUDIO__.setThemeMode('dark');
+        await new Promise((r) => setTimeout(r, 40));
+        const darkActiveChipBg = activeTurn1Chip42 ? window.getComputedStyle(activeTurn1Chip42).backgroundColor : '';
+        const darkDeletedChipBg = deletedTurn2Chip77 ? window.getComputedStyle(deletedTurn2Chip77).backgroundColor : '';
+        window.__DAB_STUDIO__.setThemeMode('light');
+        await new Promise((r) => setTimeout(r, 40));
+        const crudOnlyOnFirstAssistant =
+          allChipStrips.length === 2 &&
+          Boolean(activeTurn1Chip42) &&
+          Boolean(supersededTurn1Chip77?.disabled && deletedTurn2Chip77?.disabled) &&
+          !darkActiveChipBg.includes('34, 197, 94') && !darkActiveChipBg.includes('16, 185, 129') &&
+          !darkDeletedChipBg.includes('34, 197, 94') && !darkDeletedChipBg.includes('16, 185, 129') &&
+          !assistantBubbles[2]?.querySelector('[data-testid="chat-object-viewer-chips"]');
+
+        // 4. Item 9: 180ms neighbor hover debounce + popover onMouseEnter cancellation + dark #1e293b + LookML toolbar Open in IDE
+        window.__DAB_STUDIO__.setLookmlBundle({ id: 'bryan_proj', title: 'LookML: bryan_proj', project_id: 'bryan_proj', files: [{ path: 'orders.view.lkml', action: 'created', content: 'view: orders {}' }] });
+        await new Promise((r) => setTimeout(r, 40));
+        window.__DAB_STUDIO__.upsertContentItem({ id: 'bryan_proj', projectId: 'bryan_proj', contentType: 'lookml', title: 'LookML: bryan_proj', embedPath: '/lookml/bryan_proj', hidden: false }, true);
+        await new Promise((r) => setTimeout(r, 60));
+
+        const tabA = document.querySelector('[data-testid="studio-content-tab-data_app:42"]')?.parentElement;
+        const tabB = document.querySelector('[data-testid="studio-content-tab-lookml:bryan_proj"]')?.parentElement;
+        const popA = document.querySelector('[data-testid="content-tab-popover-data_app:42"]');
+        const popB = document.querySelector('[data-testid="content-tab-popover-lookml:bryan_proj"]');
+
+        tabA?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 20));
+        const popAOpenedImmediately = popA?.classList.contains('open') === true;
+
+        // Brush neighbor tab B briefly (< 180ms) and enter popA -> popA stays open past 220ms!
+        tabB?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 50));
+        const popAStillOpenDuringBrush = popA?.classList.contains('open') === true && !popB?.classList.contains('open');
+        popA?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 210));
+        const popAStayedOpenOnEnter = popA?.classList.contains('open') === true && !popB?.classList.contains('open');
+
+        // Sustained hover on tab B (>= 200ms) switches to popB; verify dark mode #1e293b (rgb(30, 41, 59))
+        tabB?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 210));
+        const popBSwitchedAfterDebounce = popB?.classList.contains('open') === true;
+        window.__DAB_STUDIO__.setThemeMode('dark');
+        await new Promise((r) => setTimeout(r, 40));
+        const darkPopoverBg = popB ? window.getComputedStyle(popB).backgroundColor : '';
+        window.__DAB_STUDIO__.setThemeMode('light');
+        await new Promise((r) => setTimeout(r, 40));
+
+        const lookmlToolbarIdeBtn = document.querySelector('[data-testid="lookml-toolbar-open-ide-btn"]');
+        const lookmlToolbarBtnLabel = (lookmlToolbarIdeBtn?.textContent || '').trim();
+        const lookmlToolbarUnclipped = Boolean(
+          lookmlToolbarIdeBtn &&
+          lookmlToolbarIdeBtn.scrollHeight <= lookmlToolbarIdeBtn.clientHeight + 2 &&
+          lookmlToolbarIdeBtn.getBoundingClientRect().height >= 28
+        );
+        lookmlToolbarIdeBtn?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const openedIdeFromToolbar = (window.__OPENED_WINDOWS__ || []).slice(-1)[0]?.url || '';
+
+        // 5. Item 10: Composer ArrowUp/ArrowDown prompt history (suppressing @-mention popup on recall) + desktop hover copy-user-msg-btn-0
+        const ta = document.querySelector('[data-testid="studio-prompt-input"]');
+        ta.focus();
+        ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+        await new Promise((r) => setTimeout(r, 30));
+        const recalledNewest = ta.value; // 'Second prompt\\nmultiline beta' (caret at end = line 2)
+        // Put caret on line 1 so second ArrowUp steps to 'Delete temp dashboard #77', third ArrowUp steps to 'First prompt @explore:thelook::order_items'
+        ta.setSelectionRange(0, 0);
+        ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+        await new Promise((r) => setTimeout(r, 25));
+        ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+        await new Promise((r) => setTimeout(r, 30));
+        const recalledOldest = ta.value; // 'First prompt @explore:thelook::order_items'
+        const mentionSuppressedOnRecall = !document.querySelector('[data-testid="composer-at-mention-menu"]');
+        // ArrowDown twice steps forward to newest, then ArrowDown on last line restores empty draft
+        ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+        await new Promise((r) => setTimeout(r, 25));
+        ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+        await new Promise((r) => setTimeout(r, 30));
+        const steppedForward = ta.value;
+        ta.setSelectionRange(ta.value.length, ta.value.length);
+        ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+        await new Promise((r) => setTimeout(r, 30));
+        const restoredEmptyDraft = ta.value;
+
+        window.__CLIPBOARD_WRITES__ = [];
+        const userCopyBtn0 = document.querySelector('[data-testid="copy-user-msg-btn-0"]');
+        userCopyBtn0?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const copiedUserMsgDesktop = (window.__CLIPBOARD_WRITES__ || [])[0] || '';
+
+        return {
+          viewBtnTextBefore, viewBtnHasCodeSvg, viewBtnNoBraces,
+          iframeDisplayWhileCodeOpen, drawerFillsHeight,
+          drawerThemeDistinct: Boolean(lightDrawerBg && darkDrawerBg && lightDrawerBg !== darkDrawerBg),
+          copyCodeIconOnly, copyCodeTitleBefore, copyCodeTitleAfter, copiedAppCodeViaSdk,
+          noExtraLoadsOnHide: loadsAfterHide === loadsBeforeHide, sameIframeAfterHide, iframeRestoredAfterHide,
+          bouncedThroughPreload, crudOnlyOnFirstAssistant,
+          popAOpenedImmediately, popAStillOpenDuringBrush, popAStayedOpenOnEnter, popBSwitchedAfterDebounce,
+          darkPopoverBg, lookmlToolbarBtnLabel, lookmlToolbarUnclipped, openedIdeFromToolbar,
+          recalledNewest, recalledOldest, mentionSuppressedOnRecall, steppedForward, restoredEmptyDraft, copiedUserMsgDesktop,
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+    if (res172.exceptionDetails) throw new Error(JSON.stringify(res172.exceptionDetails))
+
+    expect(res172.result.value).toEqual({
+      viewBtnTextBefore: 'View app.js', viewBtnHasCodeSvg: true, viewBtnNoBraces: true,
+      iframeDisplayWhileCodeOpen: 'none', drawerFillsHeight: true,
+      drawerThemeDistinct: true,
+      copyCodeIconOnly: true, copyCodeTitleBefore: 'Copy app.js', copyCodeTitleAfter: 'Copied!', copiedAppCodeViaSdk: true,
+      noExtraLoadsOnHide: true, sameIframeAfterHide: true, iframeRestoredAfterHide: true,
+      bouncedThroughPreload: true, crudOnlyOnFirstAssistant: true,
+      popAOpenedImmediately: true, popAStillOpenDuringBrush: true, popAStayedOpenOnEnter: true, popBSwitchedAfterDebounce: true,
+      darkPopoverBg: 'rgb(30, 41, 59)', lookmlToolbarBtnLabel: 'Open in IDE', lookmlToolbarUnclipped: true, openedIdeFromToolbar: '/projects/bryan_proj',
+      recalledNewest: 'Second prompt\nmultiline beta', recalledOldest: 'First prompt @explore:thelook::order_items',
+      mentionSuppressedOnRecall: true, steppedForward: 'Second prompt\nmultiline beta', restoredEmptyDraft: '',
+      copiedUserMsgDesktop: 'First prompt @explore:thelook::order_items',
+    })
+
+    // Verify mobile touch long-press (450ms) & >10px touchmove cancellation
+    try {
+      await chrome.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
+      await chrome.send('Emulation.setTouchEmulationEnabled', { enabled: true })
+      const mobLongPress = await chrome.send('Runtime.evaluate', {
+        expression: `(async () => {
+          window.__CLIPBOARD_WRITES__ = [];
+          const userMsg0 = document.querySelectorAll('.dab-msg-user')[0];
+          const hoverCopyHiddenOnTouch = window.getComputedStyle(document.querySelector('[data-testid="copy-user-msg-btn-0"]')).display === 'none';
+
+          // 1. Touch start + >10px move cancels long-press menu
+          const mkTouch = (type, x, y) => {
+            const ev = new Event(type, { bubbles: true, cancelable: true });
+            ev.touches = [{ clientX: x, clientY: y }];
+            return ev;
+          };
+          userMsg0.dispatchEvent(mkTouch('touchstart', 50, 50));
+          await new Promise((r) => setTimeout(r, 80));
+          userMsg0.dispatchEvent(mkTouch('touchmove', 50, 75));
+          await new Promise((r) => setTimeout(r, 420));
+          const cancelledOnScroll = !document.querySelector('[data-testid="user-msg-longpress-menu-0"]');
+
+          // 2. Stationary 450ms touch opens long-press menu, survives compatibility mousedown, and copies message
+          userMsg0.dispatchEvent(mkTouch('touchstart', 50, 50));
+          await new Promise((r) => setTimeout(r, 480));
+          userMsg0.dispatchEvent(mkTouch('touchend', 50, 50));
+          userMsg0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+          const menuOpen = Boolean(document.querySelector('[data-testid="user-msg-longpress-menu-0"]'));
+          document.querySelector('[data-testid="user-msg-longpress-copy-0"]')?.click();
+          await new Promise((r) => setTimeout(r, 40));
+          const copiedViaLongPress = (window.__CLIPBOARD_WRITES__ || [])[0] || '';
+
+          return { hoverCopyHiddenOnTouch, cancelledOnScroll, menuOpen, copiedViaLongPress };
+        })()`,
+        awaitPromise: true,
+        returnByValue: true,
+      })
+      expect(mobLongPress.result.value).toEqual({
+        hoverCopyHiddenOnTouch: true,
+        cancelledOnScroll: true,
+        menuOpen: true,
+        copiedViaLongPress: 'First prompt @explore:thelook::order_items',
+      })
+    } finally {
+      await chrome.send('Emulation.setTouchEmulationEnabled', { enabled: false })
+      await chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
+    }
+  }, 25000)
 })

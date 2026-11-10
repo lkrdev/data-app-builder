@@ -4,9 +4,8 @@ import { ExtensionProvider } from '@looker/extension-sdk-react'
 import { MemoryRouter } from 'react-router-dom'
 import { SWRConfig } from 'swr'
 
-import type { AntigravityActivityStep } from '../antigravity'
 import { LookerExtensionProvider, MockLookerExtensionProvider } from '../contexts/LookerExtensionContext'
-import { parseStudioRoute, STUDIO_MODES, type StudioMode } from '../lookerApi'
+import { parseStudioRoute, type PersistedChatTurn, STUDIO_MODES, type StudioMode } from '../lookerApi'
 import { useStudioController } from '../useStudioController'
 import { PythonTile } from './PythonTile'
 import { ConfigSetupView, RipperSurfLoader, StudioTopbar } from './StudioHeader'
@@ -18,10 +17,7 @@ export type { StudioMode }
 
 const PythonTileMount: React.FC = () => <PythonTile />
 
-export interface ChatMessage {
-  role: 'user' | 'assistant' | 'error'; text: string; images?: string[]; interactionId?: string
-  dashboardId?: string; widgetCount?: number; activitySteps?: AntigravityActivityStep[]; thinkingDurationSec?: number
-}
+export interface ChatMessage extends PersistedChatTurn { images?: string[] }
 
 const StudioMain: React.FC = () => {
   const ctl = useStudioController()

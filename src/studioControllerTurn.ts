@@ -13,12 +13,12 @@ import { ChatMessage, StudioMode } from './components/App'
 import {
   buildDenseExploreSchema, copyTextWithExtensionSdk, discoverAccessibleConnections, EXPLICIT_SCRIPT_CREATION_RE,
   extractExploreIdsFromCode, extractResolvedUseCase, formatAccessibleConnectionsMarkdown,
-  formatExploreId, getArtifactNamespace, hydrateMentionedContext,
+  formatExploreId, formatStudioContentItemTitle, getArtifactNamespace, hydrateMentionedContext,
   isConversationalNoOpPrompt, matchExplicitUseCaseRule, parseExploreId,
   ResolvedStudioUseCase, saveDashboardStudioMetadata, saveNativeContentArtifact,
   saveUserArtifact, saveUserEnvironmentId, shouldRouteToIsolatedCaSubagent,
   StudioContentItemType, StudioContextMention, StudioUseCase,
-  studioUseCaseToMode, upsertPublishedDataApp,
+  studioUseCaseToMode, toTurnCrudItem, TurnCrudItem, upsertPublishedDataApp,
 } from './lookerApi'
 import {
   extractLookmlDashboardsFromBundle,
@@ -61,7 +61,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     lookmlBundle, setLookmlBundle, lastLookmlIdRef,
     publishedApp, setPublishedApp, lastPublishedIdRef,
     nativeContent, setNativeContent, lastNativeIdRef,
-    contentItems, contentItemsRef, upsertContentItem, setEmbedNonce,
+    contentItems, contentItemsRef, setContentItems, activeContentTabKeyRef, setActiveContentTabKey, upsertContentItem, setEmbedNonce,
     healthReport, scriptCode, setScriptCode, filtersJson,
     publishedTileDash, loadedScript,
     currentAppCode, setCurrentAppCode,
@@ -601,6 +601,39 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       let convExplores = turnExplores
       let convContent: Record<string, unknown> | undefined
       let finalMsgs: ChatMessage[] = []
+      const turnCrudItems: TurnCrudItem[] = []
+      const deletedIds = new Set<string>()
+      const recordCrudItem = (item: TurnCrudItem) => {
+        const idx = turnCrudItems.findIndex((x) => x.key === item.key)
+        if (idx >= 0) turnCrudItems[idx] = item
+        else turnCrudItems.push(item)
+      }
+      const deletedRe = /^DELETE\s+\/(?:api\/4\.0\/)?(dashboards|looks|boards)\/([^/?#\s)]+)\s+\(\d+ms\)$/gim
+      ;(result.activitySteps || []).forEach((st) => {
+        if (st.kind !== 'codemode') return
+        Array.from((st.content || '').matchAll(deletedRe)).forEach((m) => {
+          const kind = m[1].toLowerCase()
+          const delId = (() => { try { return decodeURIComponent(m[2]) } catch { return m[2] } })()
+          deletedIds.add(delId)
+          const fbType: StudioContentItemType = kind === 'looks' ? 'look' : kind === 'boards' ? 'board' : delId.includes('::') ? 'lookml_dashboard' : 'dashboard'
+          const hit = contentItemsRef.current.find(
+            (it) => it.id === delId && (kind === 'looks' ? it.contentType === 'look' : kind === 'boards' ? it.contentType === 'board' : ['dashboard', 'lookml_dashboard', 'data_app', 'data-investigator'].includes(it.contentType))
+          )
+          if (hit) {
+            setContentItems((prev) => prev.filter((it) => it.key !== hit.key))
+            if (activeContentTabKeyRef.current === hit.key) {
+              setActiveContentTabKey(contentItemsRef.current.filter((it) => !it.hidden).slice(-1)[0]?.key || '')
+            }
+          }
+          if (nativeContent?.id === delId) setNativeContent(null)
+          if (publishedApp?.dashboardId === delId) { setPublishedApp(null); setCurrentAppCode('') }
+          const ct = hit ? hit.contentType : fbType
+          recordCrudItem(toTurnCrudItem(
+            hit || { key: `${ct}:${delId}`, id: delId, title: formatStudioContentItemTitle(ct, delId), contentType: ct },
+            'deleted'
+          ))
+        })
+      })
 
       if (resolvedUseCase === 'tile' && !result.lookmlBundle && !result.nativeBundle && !result.bundle) {
         const isExplicitScriptRequest =
@@ -612,28 +645,36 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           !isExplicitScriptRequest && !/\b(?:save|reusable|turn\s+(?:this|it)\s+into)\b[\s\S]{0,60}\b(?:script|tile)\b/i.test(baseReply)
             ? `${baseReply}\n\nWould you like me to save this Looker API lookup as a reusable **Script**?`
             : baseReply
+        setAgentSession({ ...result.session, conversationId: convId, explores: turnExplores }, 'tile')
+        if (isExplicitScriptRequest && (extractedPy || explicitUseCase === 'tile' || loadedScript)) {
+          const nextCode = extractedPy || scriptCode
+          const prevKeys = new Set(contentItemsRef.current.map((it) => it.key))
+          if (extractedPy) setScriptCode(extractedPy)
+          await handleRunPython(nextCode, filtersJson)
+          try {
+            const saved = await handleSaveScript(nextCode, messagesWithUser, publishedTileDash)
+            const existedScript = prevKeys.has(`script:${saved.id}`)
+            convType = 'tile'
+            convTitle = saved.title
+            convContent = { scriptId: saved.id, dashboardId: saved.dashboardId, elementId: saved.elementId }
+            setActiveObjectId(saved.id)
+            const savedItem = contentItemsRef.current.find((it) => it.key === `script:${saved.id}`)
+            recordCrudItem(toTurnCrudItem(
+              savedItem || { key: `script:${saved.id}`, id: String(saved.id), title: saved.title || String(saved.id), contentType: 'script', embedPath: `/tile/${encodeURIComponent(String(saved.id))}` },
+              existedScript ? 'updated' : 'created'
+            ))
+          } catch { /* ignore */ }
+        }
         finalMsgs = [
           ...messagesWithUser,
           {
             role: 'assistant', text: replyText,
             interactionId: result.session.lastInteractionId,
             activitySteps: result.activitySteps, thinkingDurationSec: result.thinkingDurationSec,
+            ...(turnCrudItems.length > 0 ? { crudItems: turnCrudItems } : {}),
           },
         ]
-        setAgentSession({ ...result.session, conversationId: convId, explores: turnExplores }, 'tile')
         setMessages(finalMsgs)
-        if (isExplicitScriptRequest && (extractedPy || explicitUseCase === 'tile' || loadedScript)) {
-          const nextCode = extractedPy || scriptCode
-          if (extractedPy) setScriptCode(extractedPy)
-          await handleRunPython(nextCode, filtersJson)
-          try {
-            const saved = await handleSaveScript(nextCode, finalMsgs, publishedTileDash)
-            convType = 'tile'
-            convTitle = saved.title
-            convContent = { scriptId: saved.id, dashboardId: saved.dashboardId, elementId: saved.elementId }
-            setActiveObjectId(saved.id)
-          } catch { /* ignore */ }
-        }
       } else {
         const bundleExplores = result.bundle
           ? Array.from(
@@ -683,12 +724,13 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           const isExistingLookml = contentItemsRef.current.some(
             (it) => it.contentType === 'lookml' && (it.projectId || it.id) === lookmlId
           )
-          upsertContentItem({
+          const upLookml = upsertContentItem({
             id: lookmlId, sessionId: lookmlId, projectId: lookmlId,
             contentType: 'lookml', title: `LookML: ${lookmlId}`,
             embedPath: `/lookml/${encodeURIComponent(lookmlId)}`, updatedAt: new Date().toISOString(),
             source: isExistingLookml ? 'modified' : 'created', createdInConversation: true, hidden: false,
           })
+          recordCrudItem(toTurnCrudItem(upLookml, upLookml.existed ? 'updated' : 'created'))
           resolvedUseCaseByIdRef.current[lookmlId] = 'lookml'
           convType = 'lookml'
           convTitle = result.lookmlBundle.title || `LookML: ${lookmlId}`
@@ -712,6 +754,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
               },
               { source: isExistingDash ? 'modified' : 'created', createdInConversation: true, hidden: false }
             )
+            recordCrudItem(toTurnCrudItem({ key: `lookml_dashboard:${d.id}`, id: d.id, title: d.title, contentType: 'lookml_dashboard', embedPath: d.embedPath }, isExistingDash ? 'updated' : 'created'))
             setEmbedNonce((n) => n + 1)
             finalDashId = d.id
           })
@@ -720,11 +763,16 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         if (result.nativeBundle) {
           handledArtifact = true
           setBusyStatus('Indexing native Looker content in user catalog...')
-          const isExistingNative = contentItemsRef.current.some((it) => it.id === String(result.nativeBundle!.id))
+          const reqCt = (result.nativeBundle.contentType || 'dashboard') as StudioContentItemType
+          const isExistingNative = contentItemsRef.current.some(
+            (it) => it.id === String(result.nativeBundle!.id) && (it.contentType === reqCt || (['dashboard', 'lookml_dashboard'].includes(it.contentType) && ['dashboard', 'lookml_dashboard'].includes(reqCt)))
+          )
           const savedNative = await saveNativeContentArtifact(core40SDK, extensionSDK, userId, result.nativeBundle, selectedFolderId, nativeContent, studioMeta)
           lastNativeIdRef.current = savedNative.id
           resolvedUseCaseByIdRef.current[savedNative.id] = 'dashboard'
           setNativeContent(savedNative, { source: isExistingNative ? 'modified' : 'created', createdInConversation: true, hidden: false })
+          const nativeCt = (savedNative.contentType || 'dashboard') as StudioContentItemType
+          recordCrudItem(toTurnCrudItem({ key: `${nativeCt}:${savedNative.id}`, id: String(savedNative.id), title: savedNative.title, contentType: nativeCt, embedPath: savedNative.embedPath }, isExistingNative ? 'updated' : 'created'))
           setEmbedNonce((n) => n + 1)
           setActiveObjectId(savedNative.id)
           finalDashId = savedNative.id
@@ -742,10 +790,17 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           setBusyStatus('Publishing inline extension & updating Looker dashboard...')
           const upserted = await upsertPublishedDataApp(core40SDK, result.bundle, selectedFolderId, publishedApp, studioMeta)
           const appUseCaseType: ResolvedStudioUseCase = resolvedUseCase === 'data-investigator' ? 'data-investigator' : 'app'
-          const isExistingApp = contentItemsRef.current.some((it) => it.id === String(upserted.dashboardId))
+          const appCt: StudioContentItemType = appUseCaseType === 'data-investigator' ? 'data-investigator' : 'data_app'
+          const isExistingApp = contentItemsRef.current.some(
+            (it) => (it.contentType === 'data_app' || it.contentType === 'data-investigator') && it.id === String(upserted.dashboardId)
+          )
           lastPublishedIdRef.current = upserted.dashboardId
           resolvedUseCaseByIdRef.current[upserted.dashboardId] = appUseCaseType
           setPublishedApp(upserted, { source: isExistingApp ? 'modified' : 'created', createdInConversation: true, hidden: false })
+          recordCrudItem(toTurnCrudItem(
+            contentItemsRef.current.find((it) => it.key === `${appCt}:${upserted.dashboardId}`) || { key: `${appCt}:${upserted.dashboardId}`, id: String(upserted.dashboardId), title: upserted.title, contentType: appCt, embedPath: `/embed/dashboards/${encodeURIComponent(String(upserted.dashboardId))}` },
+            isExistingApp ? 'updated' : 'created'
+          ))
           setEmbedNonce((n) => n + 1)
           setActiveObjectId(upserted.dashboardId)
           setCurrentAppCode(result.bundle.raw_code)
@@ -769,7 +824,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           })
         }
 
-        if (!handledArtifact) {
+        if (!handledArtifact && deletedIds.size === 0) {
           if (explicitUseCase === 'auto' && resolvedMode !== activeMode && resolvedUseCase === 'health-check') {
             await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages, convId)
             return
@@ -798,6 +853,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             interactionId: result.session.lastInteractionId,
             ...(finalDashId ? { dashboardId: finalDashId } : {}),
             ...(finalWidgetCount !== undefined ? { widgetCount: finalWidgetCount } : {}),
+            ...(turnCrudItems.length > 0 ? { crudItems: turnCrudItems } : {}),
             activitySteps: result.activitySteps,
             thinkingDurationSec: result.thinkingDurationSec,
           },

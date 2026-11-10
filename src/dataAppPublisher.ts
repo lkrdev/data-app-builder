@@ -25,6 +25,20 @@ export interface DataAppBundle {
   warnings?: string[]
 }
 
+export type StudioContentItemType =
+  | 'board' | 'look' | 'dashboard' | 'lookml_dashboard' | 'explore'
+  | 'data_app' | 'data-investigator' | 'lookml' | 'script' | 'report'
+  | 'conversational-analytics' | 'extension'
+
+export interface TurnCrudItem {
+  key: string
+  id: string
+  title: string
+  contentType: StudioContentItemType
+  embedPath?: string
+  action: 'created' | 'updated' | 'deleted'
+}
+
 export interface PersistedChatTurn {
   role: 'user' | 'assistant' | 'error'
   text: string
@@ -33,6 +47,7 @@ export interface PersistedChatTurn {
   widgetCount?: number
   activitySteps?: AntigravityActivityStep[]
   thinkingDurationSec?: number
+  crudItems?: TurnCrudItem[]
 }
 
 export interface DashboardStudioMetadata {
@@ -71,6 +86,16 @@ export interface PublishedAppState {
   }>
 }
 
+export function compactPersistedChatTurn(m: PersistedChatTurn, includeThinkingDuration = false): PersistedChatTurn {
+  const out: PersistedChatTurn = { role: m.role, text: m.text }
+  if (m.interactionId) out.interactionId = m.interactionId
+  if (m.dashboardId) out.dashboardId = m.dashboardId
+  if (m.widgetCount !== undefined) out.widgetCount = m.widgetCount
+  if (includeThinkingDuration && m.thinkingDurationSec !== undefined) out.thinkingDurationSec = m.thinkingDurationSec
+  if (m.crudItems?.length) out.crudItems = m.crudItems
+  return out
+}
+
 // ponytail: store shared dashboard chat history + interaction pointer inside dashboard_element.rich_content_json
 // (up to 500 text turns) instead of Looker Artifact API or per-user partitioning so anyone opening the dashboard sees full history.
 export function mergeStudioMetadata(
@@ -81,13 +106,7 @@ export function mergeStudioMetadata(
   const compactMessages = (update.messages ?? prev?.messages ?? [])
     .filter((m) => m.role === 'user' || m.role === 'assistant')
     .slice(-500)
-    .map((m) => ({
-      role: m.role,
-      text: m.text,
-      ...(m.interactionId ? { interactionId: m.interactionId } : {}),
-      ...(m.dashboardId ? { dashboardId: m.dashboardId } : {}),
-      ...(m.widgetCount !== undefined ? { widgetCount: m.widgetCount } : {}),
-    }))
+    .map((m) => compactPersistedChatTurn(m))
 
   return {
     explores: update.explores ?? prev?.explores ?? [],
