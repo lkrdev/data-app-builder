@@ -3,7 +3,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AgentSession, AntigravityActivityStep, AntigravityAuth,
   CodeModePermissionDecision, CodeModePermissionRequest,
-  extractSkillNameFromPath, fetchConversationSandboxDebugMarkdown, fetchEnvironmentFile, inFlightEnvProvisionByUser,
+  extractSkillNameFromPath, fetchConversationSandboxDebugMarkdown, fetchEnvironmentFile,
+  hydrateInteractionActivitySteps, inFlightEnvProvisionByUser,
   isNewProjectOnboardingIntakePrompt, normalizeEnvironmentId, normalizeSandboxFilePath,
   PastedImage, prewarmOrWakeAntigravityEnvironment, resolveBuiltinWorkspaceFileContent,
   runAntigravityTurn, sanitizeConversationLabel, sharedEnvExploreSchemas,
@@ -67,6 +68,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     activeViewerDocument, setActiveViewerDocument,
     prompt, setPrompt, pastedImages, setPastedImages,
     activeConversationId, activeConversationIdRef, setActiveConversationId,
+    hydratedConvRouteRef, activityStepsByInteractionIdRef,
     persistConversationAndLabel,
     handleRunPython, handleSaveScript,
     handleRunHealthCheck, handleRunConversationalAnalytics,
@@ -104,75 +106,142 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   liveActivityStepsRef.current = liveActivitySteps
   const latestTurnInteractionRef = useRef<{ convId: string; id: string } | null>(null)
   const [copyThreadState, setCopyThreadState] = useState<'idle' | 'loading' | 'copied'>('idle')
+  const [hydratingInteractionIds, setHydratingInteractionIds] = useState<Record<string, boolean>>({})
+  const inFlightHydrationsRef = useRef<Record<string, Promise<AntigravityActivityStep[]> | undefined>>({})
+
+  const localFileCtxRef = useRef({ lookmlBundle, currentAppCode, schemaMarkdown })
+  localFileCtxRef.current = { lookmlBundle, currentAppCode, schemaMarkdown }
+
+  const resolveLocalWorkspaceFile = useCallback((rawPath: string): string | undefined => {
+    const raw = String(rawPath || '').trim()
+    if (!raw) return undefined
+    const norm = normalizeSandboxFilePath(raw)
+    const display = norm ? `/${norm}` : raw
+    const builtin =
+      resolveBuiltinWorkspaceFileContent(raw) ??
+      resolveBuiltinWorkspaceFileContent(display) ??
+      resolveBuiltinWorkspaceFileContent(norm)
+    if (typeof builtin === 'string') return builtin
+    const base = norm.split('/').filter(Boolean).pop() || norm
+    const relLkml = norm.replace(/^workspace\/(?:lookml\/)?/i, '')
+    const ctx = localFileCtxRef.current
+    const lkml = ctx.lookmlBundle?.files?.find(
+      (f) => f.path === raw || normalizeSandboxFilePath(f.path) === norm || normalizeSandboxFilePath(f.path) === relLkml || f.path.endsWith(`/${base}`) || f.path === base
+    )?.content
+    if (lkml) return lkml
+    if ((base === 'app.js' || norm.endsWith('/app.js')) && ctx.currentAppCode?.trim()) return ctx.currentAppCode
+    if ((base === 'schema.md' || norm.endsWith('/schema.md')) && ctx.schemaMarkdown?.trim()) return ctx.schemaMarkdown
+    return undefined
+  }, [])
+
+  const hydrateMessageActivitySteps = useCallback(
+    (interactionId: string, stopAtInteractionId?: string): Promise<AntigravityActivityStep[]> => {
+      const cleanId = String(interactionId || '').trim()
+      if (!cleanId) return Promise.resolve([])
+      const mem = activityStepsByInteractionIdRef.current[cleanId]
+      if (mem?.length) {
+        setMessages((prev) => prev.map((m) => (m.role === 'assistant' && m.interactionId === cleanId && !m.activitySteps?.length ? { ...m, activitySteps: mem } : m)))
+        return Promise.resolve(mem)
+      }
+      const inFlight = inFlightHydrationsRef.current[cleanId]
+      if (inFlight) return inFlight
+      setHydratingInteractionIds((p) => ({ ...p, [cleanId]: true }))
+      const p = hydrateInteractionActivitySteps({
+        extensionSDK,
+        auth: { mode: authMode, oauthToken, clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true) },
+        interactionId: cleanId,
+        stopAtInteractionId,
+      })
+        .then((steps) => {
+          activityStepsByInteractionIdRef.current[cleanId] = steps
+          setMessages((prev) => prev.map((m) => (m.role === 'assistant' && m.interactionId === cleanId ? { ...m, activitySteps: steps } : m)))
+          return steps
+        })
+        .finally(() => {
+          delete inFlightHydrationsRef.current[cleanId]
+          setHydratingInteractionIds((prev) => ({ ...prev, [cleanId]: false }))
+        })
+      inFlightHydrationsRef.current[cleanId] = p
+      return p
+    },
+    [activityStepsByInteractionIdRef, apiKey, authMode, clientId, extensionSDK, oauthToken, projectId, setMessages, triggerSilentOAuthRefresh]
+  )
 
   const loadSandboxMarkdownFile = useCallback(
-    async (rawPath: string, opts?: { openModal?: boolean }): Promise<string> => {
+    (rawPath: string, opts?: { openModal?: boolean; fallbackContent?: string }): Promise<string> => {
       const normalizedPath = normalizeSandboxFilePath(rawPath)
-      if (!normalizedPath) return ''
+      if (!normalizedPath) return Promise.resolve('')
       const displayPath = `/${normalizedPath}`
       if (opts?.openModal) setActiveSandboxMarkdownModalPath(displayPath)
       const activeEnv = agentSessionRef.current.environmentId
       const envId = normalizeEnvironmentId(sharedEnvIdRef.current) || normalizeEnvironmentId(activeEnv) || sharedEnvIdRef.current || activeEnv || 'mock_env_1'
       const cacheKey = `${envId}:${normalizedPath}`
-      const cached = sandboxMarkdownCacheRef.current[cacheKey] ?? sandboxMarkdownCacheRef.current[normalizedPath] ?? sandboxMarkdownCacheRef.current[displayPath]
-      if (typeof cached === 'string' && cached.length > 0) return cached
-      const inFlight = inFlightSandboxFilesRef.current[cacheKey]
-      if (inFlight) return inFlight
-      const setLoading = (flag: boolean) => setSandboxMarkdownLoading((p) => ({ ...p, [cacheKey]: flag, [normalizedPath]: flag, [displayPath]: flag }))
       const storeCache = (val: string) => {
         const next = { ...sandboxMarkdownCacheRef.current, [cacheKey]: val, [normalizedPath]: val, [displayPath]: val }
         sandboxMarkdownCacheRef.current = next
         setSandboxMarkdownCache(next)
         return val
       }
+      const localContent = resolveLocalWorkspaceFile(rawPath) ?? resolveLocalWorkspaceFile(displayPath)
+      if (typeof localContent === 'string' && localContent.length > 0) return Promise.resolve(storeCache(localContent))
+      const cached = sandboxMarkdownCacheRef.current[cacheKey] ?? sandboxMarkdownCacheRef.current[normalizedPath] ?? sandboxMarkdownCacheRef.current[displayPath]
+      if (typeof cached === 'string' && cached.length > 0 && !cached.startsWith('# Error Loading File\n')) return Promise.resolve(cached)
+      const inFlight = inFlightSandboxFilesRef.current[cacheKey]
+      if (inFlight) return inFlight
+      const setLoading = (flag: boolean) => setSandboxMarkdownLoading((p) => ({ ...p, [cacheKey]: flag, [normalizedPath]: flag, [displayPath]: flag }))
       setLoading(true)
-      const reqPromise = (async () => {
-        try {
-          const content = await fetchEnvironmentFile({
-            extensionSDK,
-            auth: { mode: authMode, oauthToken, clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true) },
-            environmentId: envId, path: normalizedPath,
-          })
-          return storeCache(content)
-        } catch (err: unknown) {
-          return storeCache(`# Error Loading File\n\nUnable to load \`${displayPath}\` from sandbox environment \`${envId}\`: ${getErrorMessage(err)}`)
-        } finally {
+      const reqPromise = fetchEnvironmentFile({
+        extensionSDK,
+        auth: { mode: authMode, oauthToken, clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true) },
+        environmentId: envId, path: normalizedPath,
+      })
+        .then(storeCache, (err: unknown) =>
+          opts?.fallbackContent ? opts.fallbackContent : storeCache(`# Error Loading File\n\nUnable to load \`${displayPath}\` from sandbox environment \`${envId}\`: ${getErrorMessage(err)}`)
+        )
+        .finally(() => {
           delete inFlightSandboxFilesRef.current[cacheKey]
           setLoading(false)
-        }
-      })()
+        })
       inFlightSandboxFilesRef.current[cacheKey] = reqPromise
       return reqPromise
     },
-    [agentSessionRef, apiKey, authMode, clientId, extensionSDK, oauthToken, projectId, sharedEnvIdRef, triggerSilentOAuthRefresh]
+    [agentSessionRef, apiKey, authMode, clientId, extensionSDK, oauthToken, projectId, resolveLocalWorkspaceFile, sharedEnvIdRef, triggerSilentOAuthRefresh]
   )
 
   const openViewerDocument = useCallback(
-    async (input: { path: string; title?: string; kind?: 'skill' | 'file'; content?: string }): Promise<string> => {
+    (input: { path: string; title?: string; kind?: 'skill' | 'file'; content?: string; initialContent?: string }): Promise<string> => {
       const raw = String(input.path || '').trim()
-      if (!raw) return ''
+      if (!raw) return Promise.resolve('')
       const skillName = extractSkillNameFromPath(raw)
       const resolvedRawPath = !raw.includes('/') && skillName ? `/workspace/skills/${skillName}/SKILL.md` : raw
       const normalizedPath = normalizeSandboxFilePath(resolvedRawPath)
       const displayPath = normalizedPath ? `/${normalizedPath}` : resolvedRawPath
-      const kind: 'skill' | 'file' = input.kind || (skillName ? 'skill' : 'file')
+      const kind: 'skill' | 'file' = input.kind === 'skill' ? 'skill' : input.kind === 'file' ? 'file' : skillName ? 'skill' : 'file'
       const isMarkdown = kind === 'skill' || /\.md$/i.test(displayPath)
       const title = input.title || (skillName ? `Reading skill ${skillName}` : displayPath.split('/').filter(Boolean).pop() || displayPath)
-      const initialContent =
-        (typeof input.content === 'string' && input.content.trim()) ||
-        sandboxMarkdownCacheRef.current[normalizedPath] ||
-        sandboxMarkdownCacheRef.current[displayPath] ||
-        resolveBuiltinWorkspaceFileContent(resolvedRawPath) ||
-        resolveBuiltinWorkspaceFileContent(displayPath) ||
-        ''
       const docBase = { path: normalizedPath || resolvedRawPath, displayPath, title, kind, isMarkdown }
+      const localContent = resolveLocalWorkspaceFile(resolvedRawPath) ?? resolveLocalWorkspaceFile(displayPath)
       setRightPaneCollapsed(false)
-      setActiveViewerDocument({ ...docBase, content: initialContent, loading: !initialContent })
-      const finalContent = (await loadSandboxMarkdownFile(resolvedRawPath)) || initialContent
-      setActiveViewerDocument({ ...docBase, content: finalContent, loading: false })
-      return finalContent
+      if (typeof localContent === 'string' && localContent.length > 0) {
+        setActiveViewerDocument({ ...docBase, content: localContent, loading: false })
+        return Promise.resolve(localContent)
+      }
+      const cached = sandboxMarkdownCacheRef.current[normalizedPath] || sandboxMarkdownCacheRef.current[displayPath] || ''
+      const validCached = cached && !cached.startsWith('# Error Loading File\n') ? cached : ''
+      const rawIn = typeof input.content === 'string' && input.content.trim() ? input.content.trim() : typeof input.initialContent === 'string' && input.initialContent.trim() ? input.initialContent.trim() : ''
+      const initialContent = rawIn || validCached || ''
+      if (initialContent) {
+        setActiveViewerDocument({ ...docBase, content: initialContent, loading: false })
+        return Promise.resolve(initialContent)
+      }
+      setActiveViewerDocument({ ...docBase, content: '', loading: true })
+      return loadSandboxMarkdownFile(resolvedRawPath, { fallbackContent: initialContent || undefined }).then((fetched) => {
+        const finalContent = fetched && (!fetched.startsWith('# Error Loading File\n') || !initialContent) ? fetched : initialContent
+        setActiveViewerDocument({ ...docBase, content: finalContent, loading: false })
+        return finalContent
+      })
     },
-    [loadSandboxMarkdownFile, setActiveViewerDocument, setRightPaneCollapsed]
+    [loadSandboxMarkdownFile, resolveLocalWorkspaceFile, setActiveViewerDocument, setRightPaneCollapsed]
   )
 
   const wakeContextRef = useRef({ agentSession, selectedExplores, schemaMarkdown, currentAppCode })
@@ -316,17 +385,14 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     [activeModeRef, handleStopTurn, setAgentSession, sharedEnvIdRef, syncSharedEnvironmentId]
   )
 
-  const handleResetEnvironment = useCallback(async () => {
+  const handleResetEnvironment = useCallback((): Promise<void> => {
     if (envResetNoticeTimerRef.current) clearTimeout(envResetNoticeTimerRef.current)
     envResetNoticeTimerRef.current = null
     setEnvResetNotice(false)
     clearAllEnvSessions('resetting')
     sharedEnvExploreSchemas.clear()
     inFlightEnvProvisionByUser.clear()
-    await saveUserEnvironmentId(core40SDK, userIdRef.current || userId, '', getArtifactNamespace(extensionSDK)).catch(() => {})
-    try {
-      await handleWakeModeEnv(activeModeRef.current, true)
-    } finally {
+    const finish = () => {
       environmentStatusRef.current = 'active'
       setEnvironmentStatus('active')
       setEnvResetNotice(true)
@@ -335,6 +401,10 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         envResetNoticeTimerRef.current = null
       }, 2500)
     }
+    return saveUserEnvironmentId(core40SDK, userIdRef.current || userId, '', getArtifactNamespace(extensionSDK))
+      .catch(() => {})
+      .then(() => handleWakeModeEnv(activeModeRef.current, true))
+      .then(finish, (err) => { finish(); throw err })
   }, [activeModeRef, clearAllEnvSessions, core40SDK, extensionSDK, handleWakeModeEnv, userId, userIdRef])
 
   const handleStopEnvironment = useCallback(() => {
@@ -748,8 +818,12 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         setMessages(finalMsgs)
       }
 
+      if (result.session.lastInteractionId && result.activitySteps?.length) {
+        activityStepsByInteractionIdRef.current[result.session.lastInteractionId] = result.activitySteps
+      }
       setActiveConversationId(convId)
       const nextConvRoute = `/c/${encodeURIComponent(convId)}`
+      hydratedConvRouteRef.current = `${nextConvRoute}:${convId}`
       if (location.pathname !== nextConvRoute) history.replace(nextConvRoute)
 
       void persistConversationAndLabel({
@@ -856,6 +930,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     environmentStatus, setEnvironmentStatus, envResetNotice, setEnvResetNotice,
     handleResetEnvironment, handleStopEnvironment, handleWakeModeEnv,
     liveActivitySteps, setLiveActivitySteps,
+    hydratingInteractionIds, hydrateMessageActivitySteps,
     copyThreadState, handleCopyThreadDebugTrace,
     queuedPrompts, updateQueuedPrompts,
     handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt,

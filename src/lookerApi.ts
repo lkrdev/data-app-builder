@@ -177,7 +177,12 @@ function parseLookerRawBody<T = unknown>(rawResp: RawLookerTransportResponse): T
 
 export function createDeduplicatedLookerSdkProxy(
   sdk: Looker40SDK,
-  onRawRequest?: (res: RawLookerTransportResponse | undefined, elapsedMs: number, err?: unknown) => void
+  onRawRequest?: (
+    res: RawLookerTransportResponse | undefined,
+    elapsedMs: number,
+    err?: unknown,
+    reqMeta?: { method: string; path: string }
+  ) => void
 ): Looker40SDK {
   if (!sdk || typeof sdk !== 'object') return sdk
   const sdkRec = sdk as unknown as Record<string, unknown> & {
@@ -199,18 +204,19 @@ export function createDeduplicatedLookerSdkProxy(
   if (typeof origRawReq === 'function') {
     const wrappedRawRequest: LookerRawRequestFn = async (method, path, queryParams, body, ...rest) => {
       const reqStart = Date.now()
+      const meta = { method: String(method || 'GET').toUpperCase(), path: String(path || '') }
       const isMetaGet =
-        String(method || 'GET').toUpperCase() === 'GET' &&
-        /\/(?:lookml_models|connections|content_search|content_summary|global_search_v2|user|folders|session)(?:\/|$|\?)/i.test(String(path || ''))
+        meta.method === 'GET' &&
+        /\/(?:lookml_models|connections|content_search|content_summary|global_search_v2|user|folders|session)(?:\/|$|\?)/i.test(meta.path)
       const execRaw = () => origRawReq.call(rawTransport, method, path, queryParams, body, ...rest)
       try {
         const res = isMetaGet
           ? await coalesceLookerMetadataRequest(`raw:GET:${path}:${JSON.stringify(queryParams || {})}`, execRaw)
           : await execRaw()
-        onRawRequest?.(res, Date.now() - reqStart)
+        onRawRequest?.(res, Date.now() - reqStart, undefined, meta)
         return res
       } catch (err) {
-        onRawRequest?.(undefined, Date.now() - reqStart, err)
+        onRawRequest?.(undefined, Date.now() - reqStart, err, meta)
         throw err
       }
     }

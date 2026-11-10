@@ -34,9 +34,9 @@ import {
   extractThoughtText,
   formatConversationThreadMarkdown,
   formatFriendlyLookerActivityLabel,
-  INTERNAL_JARGON_THOUGHT_RE,
   parseStepArguments,
   SANDBOX_AGENT_SKILL_FILES,
+  sanitizeActivityThought,
   summarizeProgress,
 } from './antigravitySteps'
 import {
@@ -139,7 +139,7 @@ const toSafeConversationId = (rawId?: string, session?: AgentSession): string =>
     .trim()
     .replace(/[^a-zA-Z0-9_-]/g, '_') || 'current'
 
-async function withCoalescedEnvProvision<T>(
+function withCoalescedEnvProvision<T>(
   userProvisionKey: string,
   task: () => Promise<{ envId: string; value: T }>
 ): Promise<T> {
@@ -147,13 +147,11 @@ async function withCoalescedEnvProvision<T>(
   const envPromise = promise.then((r) => r.envId)
   envPromise.catch(() => {})
   inFlightEnvProvisionByUser.set(userProvisionKey, envPromise)
-  try {
-    return (await promise).value
-  } finally {
+  return promise.then((r) => r.value).finally(() => {
     if (inFlightEnvProvisionByUser.get(userProvisionKey) === envPromise) {
       inFlightEnvProvisionByUser.delete(userProvisionKey)
     }
-  }
+  })
 }
 
 export function buildWorkspaceSources(params: {
@@ -207,7 +205,7 @@ export function buildWorkspaceSources(params: {
   ]
 }
 
-async function persistUserEnvIfChanged(params: {
+function persistUserEnvIfChanged(params: {
   sdk?: Looker40SDK
   extensionSDK?: AntigravityExtensionHostLike
   userId?: string
@@ -216,20 +214,21 @@ async function persistUserEnvIfChanged(params: {
   onEnvironmentUpdated?: (environmentId: string) => void | Promise<void>
 }): Promise<void> {
   const next = normalizeEnvironmentId(params.nextEnvId)
-  if (!next || next === normalizeEnvironmentId(params.previousEnvId)) return
-  await params.onEnvironmentUpdated?.(next)
-  if (params.sdk && typeof (params.sdk as Partial<Looker40SDK>).update_artifacts === 'function') {
-    let uid = String(params.userId || '').trim()
-    if (!uid && typeof (params.sdk as Partial<Looker40SDK>).me === 'function') {
-      try {
-        const me = await (params.sdk.ok ? params.sdk.ok(params.sdk.me('id')) : params.sdk.me('id'))
-        uid = String((me as { id?: string | number } | undefined)?.id || '').trim()
-      } catch {
-        // Ignore error resolving user ID
-      }
-    }
-    if (uid) await saveUserEnvironmentId(params.sdk, uid, next, getArtifactNamespace(params.extensionSDK))
-  }
+  if (!next || next === normalizeEnvironmentId(params.previousEnvId)) return Promise.resolve()
+  return Promise.resolve(params.onEnvironmentUpdated?.(next)).then(() => {
+    if (!params.sdk || typeof (params.sdk as Partial<Looker40SDK>).update_artifacts !== 'function') return
+    const explicitUid = String(params.userId || '').trim()
+    const uidPromise =
+      explicitUid || typeof (params.sdk as Partial<Looker40SDK>).me !== 'function'
+        ? Promise.resolve(explicitUid)
+        : Promise.resolve(params.sdk.ok ? params.sdk.ok(params.sdk.me('id')) : params.sdk.me('id')).then(
+            (me) => String((me as { id?: string | number } | undefined)?.id || '').trim(),
+            () => ''
+          )
+    return uidPromise.then((uid) =>
+      uid ? saveUserEnvironmentId(params.sdk!, uid, next, getArtifactNamespace(params.extensionSDK)).then(() => {}) : undefined
+    )
+  })
 }
 
 export interface RunAntigravityTurnOptions {
@@ -326,12 +325,14 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
     onRequestWritePermission, onProgressSteps, pollScheduleMs = DEFAULT_POLL_SCHEDULE_MS, signal, onInteractionCreated, onStatus,
   } = params
 
-  const throwIfAborted = async (interactionId?: string): Promise<void> => {
-    if (!signal?.aborted) return
-    if (interactionId) {
-      try { await callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(interactionId)}:cancel`, 'POST', {}) } catch { /* ignore */ }
-    }
-    throw Object.assign(new Error('Turn stopped by user'), { name: 'AbortError' })
+  const throwIfAborted = (interactionId?: string): Promise<void> => {
+    if (!signal?.aborted) return Promise.resolve()
+    const cancelP = interactionId
+      ? callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(interactionId)}:cancel`, 'POST', {}).catch(() => {})
+      : Promise.resolve()
+    return cancelP.then(() => {
+      throw Object.assign(new Error('Turn stopped by user'), { name: 'AbortError' })
+    })
   }
 
   const effectivePermissionHandler = onPermissionRequest || onRequestWritePermission
@@ -354,7 +355,7 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
   let activeEnvId = initialEnvId
   const userProvisionKey = resolveUserProvisionKey(userId, auth)
   if (activeEnvId && schemaMarkdown && selectedExplores.length > 0) {
-    for (const expKey of selectedExplores) recordSharedEnvExploreSchema(activeEnvId, expKey, schemaMarkdown)
+    selectedExplores.forEach((expKey) => recordSharedEnvExploreSchema(activeEnvId, expKey, schemaMarkdown))
   }
 
   // ponytail: decouple container state (environmentId) from conversation history (lastInteractionId).
@@ -480,7 +481,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
   const autoRoutingDirective =
     useCase === 'auto'
-      ? `\n\n[AUTO USE-CASE ROUTING: Consult /workspace/AGENTS.md ("## Use Case Auto-Classification (Turn 1 Routing)"). Allowed use cases for this user: ${JSON.stringify(allowedModes && allowedModes.length > 0 ? allowedModes : ['app', 'data-investigator', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics'])}. Start your response with <USE_CASE>...</USE_CASE> naming the single best allowed use case for this request, then execute that workflow. CRITICAL: (1) Conversational & Follow-Up Questions (No-Op): when the prompt is a greeting, help request, meta/error summary ("summarize the errors you experienced", "what went wrong?", "how can I make you better?"), or general follow-up question in an active conversation that does not ask to build or modify a right-pane artifact ("hello", "hi", "help", "what can you do?"), answer directly in chat (calling zero tools for greetings/meta-questions) and do NOT create or open any right-pane content item (do NOT run bundle_app.py, emit_native_bundle, or redirect to an isolated CA sub-agent). (2) Ad-Hoc Looker Instance / Folder / Content Inventory / SDK Queries (<USE_CASE>tile</USE_CASE>): route prompts asking to inspect or query Looker spaces, folders, personal spaces, favorite dashboards, dashboards/Looks in folders, users, permissions, schedules, or instance metadata via SDK (e.g. "tell me what my personal space is", "What dashboards are in my personal", "what are my favorite dashboards", "can you find me all personal spaces that don't have dashboards") to <USE_CASE>tile</USE_CASE> and call run_looker_codemode (using format_content_inventory(folders) to format clickable /dashboards/<id>, /looks/<id>, /folders/<id> links, capped at 2 items per folder when >5 total items or multiple folders, with full list saved to /workspace/content_inventory.md). Answer directly in chat without creating a right-pane Script unless explicitly requested, and ask if the user wants to save it as a reusable Script. (3) Open-Ended Analytical Questions & search_agents() in CodeMode: for open-ended analytical questions without a pre-selected explore, call search_agents() inside run_looker_codemode to inspect accessible Looker Conversational Analytics (CA) agents, their explores, description, and golden_queries; if a CA agent covers the question, emit <USE_CASE>conversational-analytics</USE_CASE> and <CA_AGENT_SELECTION>{"agent_id":"<matched_id>","rationale":"<1-sentence reason>"}</CA_AGENT_SELECTION>; if no CA agent matches, answer directly via run_inline_query in run_looker_codemode. (4) Data Investigator Routing: route prompts asking to "investigate", "find out", "figure out", "dig into", "what drove", or "what caused" across data, metrics, dashboards, Looks, or explores to <USE_CASE>data-investigator</USE_CASE> and follow /workspace/skills/data-investigator/SKILL.md and /workspace/skills/key-driver-analysis/SKILL.md.]`
+      ? `\n\n[AUTO USE-CASE ROUTING: Consult /workspace/AGENTS.md ("## Use Case Auto-Classification (Turn 1 Routing)"). Allowed use cases for this user: ${JSON.stringify(allowedModes && allowedModes.length > 0 ? allowedModes : ['app', 'data-investigator', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics'])}. Start your response with <USE_CASE>...</USE_CASE> naming the single best allowed use case, then execute that workflow. CRITICAL: (1) Conversational/Follow-Up No-Op: for greetings, help, meta/error summaries, or follow-up questions not requesting a right-pane artifact, answer directly in chat with zero tools and do NOT run bundle_app.py, emit_native_bundle, or redirect to CA. (2) Ad-Hoc Looker Instance/Folder/Content/SDK Queries (<USE_CASE>tile</USE_CASE>): route folder, personal space, favorite, user, permission, schedule, or metadata lookups to <USE_CASE>tile</USE_CASE> via run_looker_codemode (use format_content_inventory(folders) for clickable /dashboards/<id>, /looks/<id>, /folders/<id> links, max 2 per folder when >5 items or multiple folders, saving full list to /workspace/content_inventory.md) without creating a right-pane Script unless asked, and offer to save as a reusable Script. (3) Open-Ended Analytical Questions: when no explore is pre-selected, call search_agents() in run_looker_codemode; if a CA agent covers it, emit <USE_CASE>conversational-analytics</USE_CASE> and <CA_AGENT_SELECTION>{"agent_id":"<matched_id>","rationale":"<1-sentence reason>"}</CA_AGENT_SELECTION>; else answer via run_inline_query. (4) Data Investigator: route "investigate"/"find out"/"figure out"/"dig into"/"what drove"/"what caused" prompts to <USE_CASE>data-investigator</USE_CASE> using /workspace/skills/data-investigator/SKILL.md and /workspace/skills/key-driver-analysis/SKILL.md.]`
       : ''
 
   const uploadsSection = uploadedFileNotices.length > 0 ? `\n\nAttached files in /workspace/uploads:\n${uploadedFileNotices.join('\n')}` : ''
@@ -575,7 +576,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   await throwIfAborted(interaction.id)
   let trackedEnvId: string | undefined = normalizeEnvironmentId(interaction.environment_id) || activeEnvId
   if (trackedEnvId && schemaMarkdown && selectedExplores.length > 0) {
-    for (const expKey of selectedExplores) recordSharedEnvExploreSchema(trackedEnvId, expKey, schemaMarkdown)
+    selectedExplores.forEach((expKey) => recordSharedEnvExploreSchema(trackedEnvId, expKey, schemaMarkdown))
   }
   await persistUserEnvIfChanged({ sdk, extensionSDK, userId, previousEnvId: initialEnvId, nextEnvId: trackedEnvId, onEnvironmentUpdated })
 
@@ -627,21 +628,38 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     ...(activeContentVars ? { active_content: activeContentVars, active_dashboard_state: activeContentVars } : {}),
   }
 
-  const turnSdk = createDeduplicatedLookerSdkProxy(sdk, (res, elapsedMs, err) => {
+  const endpointLogsByCallId = new Map<string, string[]>()
+  let activeLookerCallId = ''
+  const attachEndpointLogs = (steps?: AntigravityInteractionStep[]): AntigravityInteractionStep[] | undefined =>
+    steps?.map((st) => {
+      const logs = st?.id ? endpointLogsByCallId.get(String(st.id)) : undefined
+      return logs?.length ? ({ ...st, endpoint_logs: [...logs] } as AntigravityInteractionStep) : st
+    })
+  const emitProgressSteps = (currInteraction: AntigravityInteractionPayload): AntigravityActivityStep[] => {
+    const rawCombined = accumulatedSteps.length > 0 ? [...accumulatedSteps, ...(currInteraction?.steps || [])] : currInteraction?.steps
+    const steps = extractInteractionActivitySteps({ ...currInteraction, steps: attachEndpointLogs(rawCombined) })
+    if (steps.length > 0) onProgressSteps?.(steps)
+    return steps
+  }
+  const turnSdk = createDeduplicatedLookerSdkProxy(sdk, (res, elapsedMs, err, reqMeta) => {
     lookerHttpCalls += 1
     lookerHttpMs += elapsedMs
     if (err || (res && (res.ok === false || Number(res.statusCode) >= 400))) apiRetries += 1
+    if (reqMeta?.path) {
+      const epLine = `${reqMeta.method} ${reqMeta.path} (${elapsedMs}ms)`
+      if (activeLookerCallId) {
+        const list = endpointLogsByCallId.get(activeLookerCallId) || []
+        list.push(epLine)
+        endpointLogsByCallId.set(activeLookerCallId, list)
+      }
+      const friendly = formatFriendlyLookerActivityLabel('', { path: reqMeta.path })
+      onStatus(`${friendly.statusText.replace(/\.\.\.$/, '')} (${epLine})`)
+      if (activeLookerCallId && interaction) emitProgressSteps(interaction)
+    }
   })
   const envSlotKey = normalizeEnvironmentId(trackedEnvId) || 'remote'
   const envConcurrencySlot = activeInteractionsByEnv.get(envSlotKey) || 0
   activeInteractionsByEnv.set(envSlotKey, envConcurrencySlot + 1)
-
-  const emitProgressSteps = (currInteraction: AntigravityInteractionPayload): AntigravityActivityStep[] => {
-    const merged = accumulatedSteps.length > 0 ? { ...currInteraction, steps: [...accumulatedSteps, ...(currInteraction?.steps || [])] } : currInteraction
-    const steps = extractInteractionActivitySteps(merged)
-    if (steps.length > 0) onProgressSteps?.(steps)
-    return steps
-  }
 
   try {
     for (;;) {
@@ -667,7 +685,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
             actionRound += 1
             await throwIfAborted(interaction.id)
             const preBridgeReqs = getPendingBridgeReqs(interaction)
-            for (const req of preBridgeReqs) {
+            for (let bIdx = 0; bIdx < preBridgeReqs.length; bIdx += 1) {
+              const req = preBridgeReqs[bIdx]
               await throwIfAborted(interaction.id)
               try {
                 const { cacheKey } = await executeLkrExtensionToolRequest({
@@ -689,9 +708,9 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
             )
             const firstThought = pendingLookerCalls
               .map((c: AntigravityInteractionStep) =>
-                String(parseStepArguments(c.arguments ?? c.args).thought || '').trim()
+                sanitizeActivityThought(parseStepArguments(c.arguments ?? c.args).thought)
               )
-              .find((t) => Boolean(t) && !INTERNAL_JARGON_THOUGHT_RE.test(t))
+              .find(Boolean)
             const friendlyCall = formatFriendlyLookerActivityLabel(
               String(firstCallArgs.code || ''),
               { ...defaultCodeModeVars, ...firstCallArgs }
@@ -701,9 +720,10 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
             codemodeCalls += pendingLookerCalls.length
             const resultsInput = await Promise.all(
               pendingLookerCalls.map(async (call: AntigravityInteractionStep) => {
+                activeLookerCallId = String(call.id || '')
                 const args = parseStepArguments(call.arguments ?? call.args)
                 const callThought =
-                  (typeof args.thought === 'string' && args.thought.trim()) ||
+                  sanitizeActivityThought(args.thought) ||
                   (call.name === 'lkr_cli_extension_bridge' && (args.method || args.path)
                     ? `${String(args.method || 'GET').toUpperCase()} ${String(args.path || '/')}`
                     : undefined)
@@ -750,38 +770,32 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                       requirePermission,
                       approvedOperations,
                       onPermissionRequest: wrappedPermissionRequest,
-                      vars: {
-                        ...defaultCodeModeVars,
-                        ...customVars,
-                      },
+                      vars: { ...defaultCodeModeVars, ...customVars },
                     })
                   }
                 } catch (err: unknown) {
                   apiRetries += 1
-                  const errMsg = err instanceof Error ? err.message : String(err)
-                  codeModeOutput = JSON.stringify({
-                    ok: false,
-                    error: errMsg,
-                  })
+                  codeModeOutput = JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) })
                 }
-                // ponytail: /v1beta/interactions requires function_result.result to be a JSON object (Struct); top-level arrays/primitives get dropped
-                let structResult = codeModeOutput
+                // ponytail: /v1beta/interactions requires function_result.result to be a plain JS Struct object (never a JSON string)
+                let structResult: Record<string, unknown>
                 try {
-                  const parsed = JSON.parse(codeModeOutput)
-                  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-                    structResult = JSON.stringify({ result: parsed })
-                  }
+                  const parsed: unknown = JSON.parse(codeModeOutput)
+                  structResult = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+                    ? (parsed as Record<string, unknown>)
+                    : { result: parsed }
                 } catch {
-                  // Non-JSON string: /v1beta/interactions wraps raw strings automatically
+                  structResult = { result: codeModeOutput }
                 }
                 return {
-                  type: 'function_result',
+                  type: 'function_result' as const,
                   name: call.name || 'run_looker_codemode',
                   call_id: call.id,
                   result: structResult,
                 }
               })
             )
+            activeLookerCallId = ''
             codemodeExecMs += Date.now() - cmStart
             await throwIfAborted(interaction.id)
             accumulateInteractionUsage(interaction)
@@ -903,8 +917,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       if (pendingBridgeReqs.length > 0 && bridgeRound < 8) {
         await throwIfAborted(interaction.id)
         const firstBridgeThought = pendingBridgeReqs
-          .map((r) => String(r.thought || '').trim())
-          .find((t) => Boolean(t) && !INTERNAL_JARGON_THOUGHT_RE.test(t))
+          .map((r) => sanitizeActivityThought(r.thought))
+          .find(Boolean)
         const firstBridgeReq = pendingBridgeReqs[0]
         const friendlyBridge = formatFriendlyLookerActivityLabel(
           String(firstBridgeReq?.code || ''),
@@ -913,7 +927,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         onStatus(firstBridgeThought || friendlyBridge.statusText)
         const bridgeStart = Date.now()
         const bridgedLines: string[] = []
-        for (const req of pendingBridgeReqs) {
+        for (let bIdx = 0; bIdx < pendingBridgeReqs.length; bIdx += 1) {
+          const req = pendingBridgeReqs[bIdx]
           await throwIfAborted(interaction.id)
           if (req.kind !== 'sdk_request') codemodeCalls += 1
           try {
@@ -1002,6 +1017,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
   const activitySteps = extractInteractionActivitySteps({
     ...interaction,
+    steps: attachEndpointLogs(interaction.steps),
     status: 'completed',
   }).map((s) => ({ ...s, status: 'done' as const }))
   if (activitySteps.length > 0) {
@@ -1117,7 +1133,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
 // ponytail: pre-launch or wake a single per-user Antigravity remote environment shared across
 // tool modes (app, dashboard, lookml, health, tile), with automatic 404 environment recovery.
-export async function prewarmOrWakeAntigravityEnvironment(params: {
+export function prewarmOrWakeAntigravityEnvironment(params: {
   sdk?: Looker40SDK
   userId?: string
   extensionSDK: AntigravityExtensionHostLike
@@ -1134,91 +1150,31 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
   extraSources?: Array<{ type: 'inline'; content: string; target: string }>
   forceFresh?: boolean
   onEnvironmentUpdated?: (environmentId: string) => void | Promise<void>
-}): Promise<{
-  session: AgentSession
-  status: 'woken' | 'prelaunched' | 'standby'
-}> {
+}): Promise<{ session: AgentSession; status: 'woken' | 'prelaunched' | 'standby' }> {
   const {
-    sdk,
-    userId,
-    extensionSDK,
-    auth,
-    toolType,
-    model = DEFAULT_ANTIGRAVITY_MODEL,
-    maxTotalTokens = DEFAULT_MAX_TOTAL_TOKENS,
-    environmentId,
-    conversationId: rawConversationId,
-    existingSession,
-    selectedExplores = [],
-    schemaMarkdown = '',
-    existingAppCode,
-    extraSources = [],
-    forceFresh = false,
-    onEnvironmentUpdated,
+    sdk, userId, extensionSDK, auth, toolType, model = DEFAULT_ANTIGRAVITY_MODEL,
+    maxTotalTokens = DEFAULT_MAX_TOTAL_TOKENS, environmentId, conversationId: rawConversationId,
+    existingSession, selectedExplores = [], schemaMarkdown = '', existingAppCode, extraSources = [],
+    forceFresh = false, onEnvironmentUpdated,
   } = params
-
-  const conversationId = toSafeConversationId(rawConversationId, existingSession)
-  const appFilePath = `/workspace/apps/${conversationId}/app.js`
-
-  const initialEnvId = forceFresh
-    ? undefined
-    : normalizeEnvironmentId(environmentId || existingSession?.environmentId)
+  const appFilePath = `/workspace/apps/${toSafeConversationId(rawConversationId, existingSession)}/app.js`
+  const initialEnvId = forceFresh ? undefined : normalizeEnvironmentId(environmentId || existingSession?.environmentId)
   let activeEnvId = initialEnvId
+  const canAuth = Boolean(auth.mode === 'apikey' || auth.oauthToken)
+  const persistEnv = (nextEnvId?: string) =>
+    persistUserEnvIfChanged({ sdk, extensionSDK, userId, previousEnvId: initialEnvId, nextEnvId, onEnvironmentUpdated })
+  const standby = () => ({
+    session: {
+      environmentId: activeEnvId || existingSession?.environmentId || `env_${toolType}_isolated`,
+      lastInteractionId: existingSession?.lastInteractionId,
+      explores: selectedExplores,
+      toolType,
+    },
+    status: 'standby' as const,
+  })
 
-  const hasValidExisting =
-    !forceFresh &&
-    existingSession?.lastInteractionId &&
-    (!existingSession.toolType || existingSession.toolType === toolType)
-
-  // 1. If the artifact or mode already has a saved interaction, wake & verify it
-  if (hasValidExisting && existingSession?.lastInteractionId) {
-    if (auth.mode === 'apikey' || auth.oauthToken) {
-      try {
-        const res = await callInteractionsApi(
-          extensionSDK,
-          auth,
-          `interactions/${encodeURIComponent(existingSession.lastInteractionId)}`,
-          'GET'
-        )
-        const resolvedEnvId =
-          normalizeEnvironmentId(res?.environment_id) ||
-          activeEnvId ||
-          `env_${toolType}`
-        await persistUserEnvIfChanged({
-          sdk,
-          extensionSDK,
-          userId,
-          previousEnvId: initialEnvId,
-          nextEnvId: resolvedEnvId,
-          onEnvironmentUpdated,
-        })
-        return {
-          session: {
-            ...existingSession,
-            environmentId: resolvedEnvId,
-            toolType,
-          },
-          status: 'woken',
-        }
-      } catch (err) {
-        if (isEnvironmentNotFoundError(err)) {
-          activeEnvId = undefined
-        }
-      }
-    } else {
-      return {
-        session: {
-          ...existingSession,
-          environmentId: activeEnvId || existingSession.environmentId || `env_${toolType}_warm`,
-          toolType,
-        },
-        status: 'woken',
-      }
-    }
-  }
-
-  // 2. If signed in (OAuth token or API key), wake existing shared environmentId or pre-launch a new one
-  if (auth.mode === 'apikey' || auth.oauthToken) {
+  const step2WakeOrProvision = (): Promise<{ session: AgentSession; status: 'woken' | 'prelaunched' | 'standby' }> => {
+    if (!canAuth) return Promise.resolve(standby())
     const prewarmTools =
       toolType === 'dashboard'
         ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
@@ -1226,122 +1182,151 @@ export async function prewarmOrWakeAntigravityEnvironment(params: {
     const resolvedMaxTokens = Number(maxTotalTokens) > 0 ? Number(maxTotalTokens) : DEFAULT_MAX_TOTAL_TOKENS
     const prewarmBase = {
       agent: 'antigravity-preview-09-2026',
-      agent_config: {
-        type: 'antigravity',
-        model: model || DEFAULT_ANTIGRAVITY_MODEL,
-        max_total_tokens: String(resolvedMaxTokens),
-      },
+      agent_config: { type: 'antigravity', model: model || DEFAULT_ANTIGRAVITY_MODEL, max_total_tokens: String(resolvedMaxTokens) },
       background: true,
       tools: prewarmTools,
-      input: [
-        {
-          type: 'text',
-          text: `[PREWARM:${toolType.toUpperCase()}] Initialize ${toolType} workspace and reply READY.`,
-        },
-      ],
+      input: [{ type: 'text', text: `[PREWARM:${toolType.toUpperCase()}] Initialize ${toolType} workspace and reply READY.` }],
     }
-
     const userProvisionKey = resolveUserProvisionKey(userId, auth)
-    if (!forceFresh && !activeEnvId && inFlightEnvProvisionByUser.has(userProvisionKey)) {
-      try {
-        const coalescedId = normalizeEnvironmentId(await inFlightEnvProvisionByUser.get(userProvisionKey)!)
-        if (coalescedId) activeEnvId = coalescedId
-      } catch {
-        // Ignore coalesced provisioning failure
-      }
-    }
+    const coalesceStep =
+      !forceFresh && !activeEnvId && inFlightEnvProvisionByUser.has(userProvisionKey)
+        ? inFlightEnvProvisionByUser.get(userProvisionKey)!.then(
+            (id) => { const c = normalizeEnvironmentId(id); if (c) activeEnvId = c },
+            () => {}
+          )
+        : Promise.resolve()
 
-    if (activeEnvId) {
-      try {
-        const woken = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
-          ...prewarmBase,
-          environment: activeEnvId,
-        })
-        const resolvedEnvId = normalizeEnvironmentId(woken?.environment_id) || activeEnvId
-        await persistUserEnvIfChanged({
-          sdk,
-          extensionSDK,
-          userId,
-          previousEnvId: initialEnvId,
-          nextEnvId: resolvedEnvId,
-          onEnvironmentUpdated,
-        })
-        return {
-          session: { ...existingSession, environmentId: resolvedEnvId, explores: selectedExplores, toolType },
-          status: 'woken',
-        }
-      } catch (err) {
-        if (!isEnvironmentNotFoundError(err)) {
-          return {
-            session: { ...existingSession, environmentId: activeEnvId, explores: selectedExplores, toolType },
-            status: 'woken',
-          }
-        }
-        // 404 Environment '<env_id>' not found -> fall through to create fresh remote environment
-        activeEnvId = undefined
-      }
-    }
-
-    try {
-      return await withCoalescedEnvProvision(userProvisionKey, async () => {
+    const provisionFresh = () =>
+      withCoalescedEnvProvision(userProvisionKey, () => {
         const sources = buildWorkspaceSources({
-          schemaMarkdown,
-          appFilePath,
-          existingAppCode: toolType === 'app' ? existingAppCode : undefined,
-          cachedExploreSchemas: getSharedEnvExploreSchemas(activeEnvId),
-          extraSources,
+          schemaMarkdown, appFilePath, existingAppCode: toolType === 'app' ? existingAppCode : undefined,
+          cachedExploreSchemas: getSharedEnvExploreSchemas(activeEnvId), extraSources,
         })
-        const pre = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
+        return callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
           ...prewarmBase,
           tools: [{ type: 'code_execution' }, LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL],
-          input: [
-            {
-              type: 'text',
-              text: `[PREWARM:${toolType.toUpperCase()}] Initialize ${toolType} workspace: run \`python3 /workspace/bootstrap_lookml.py cli\` (${BOOTSTRAP_SANDBOX_SH}) so \`uv\` and \`${LKR_DEV_CLI_SPEC}\` are installed in \`/usr/local/bin\`, then reply READY.`,
-            },
-          ],
+          input: [{
+            type: 'text',
+            text: `[PREWARM:${toolType.toUpperCase()}] Initialize ${toolType} workspace: run \`python3 /workspace/bootstrap_lookml.py cli\` (${BOOTSTRAP_SANDBOX_SH}) so \`uv\` and \`${LKR_DEV_CLI_SPEC}\` are installed in \`/usr/local/bin\`, then reply READY.`,
+          }],
           environment: { type: 'remote', sources },
-        })
-        const newEnvId =
-          normalizeEnvironmentId(pre?.environment_id) ||
-          `env_${toolType}_${Date.now().toString(36).slice(-4)}`
-        await persistUserEnvIfChanged({
-          sdk,
-          extensionSDK,
-          userId,
-          previousEnvId: initialEnvId,
-          nextEnvId: newEnvId,
-          onEnvironmentUpdated,
-        })
-        return {
-          envId: newEnvId,
-          value: {
-            session: {
-              ...existingSession,
-              environmentId: newEnvId,
-              lastInteractionId: forceFresh ? undefined : existingSession?.lastInteractionId,
-              explores: selectedExplores,
-              toolType,
+        }).then((pre) => {
+          const newEnvId = normalizeEnvironmentId(pre?.environment_id) || `env_${toolType}_${Date.now().toString(36).slice(-4)}`
+          return persistEnv(newEnvId).then(() => ({
+            envId: newEnvId,
+            value: {
+              session: {
+                ...existingSession,
+                environmentId: newEnvId,
+                lastInteractionId: forceFresh ? undefined : existingSession?.lastInteractionId,
+                explores: selectedExplores,
+                toolType,
+              },
+              status: 'prelaunched' as const,
             },
-            status: 'prelaunched' as const,
-          },
+          }))
+        })
+      }).catch(standby)
+
+    return coalesceStep.then(() => {
+      if (!activeEnvId) return provisionFresh()
+      return callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', { ...prewarmBase, environment: activeEnvId }).then(
+        (woken) => {
+          const resolvedEnvId = normalizeEnvironmentId(woken?.environment_id) || activeEnvId!
+          return persistEnv(resolvedEnvId).then(() => ({
+            session: { ...existingSession, environmentId: resolvedEnvId, explores: selectedExplores, toolType },
+            status: 'woken' as const,
+          }))
+        },
+        (err) => {
+          if (!isEnvironmentNotFoundError(err)) {
+            return { session: { ...existingSession, environmentId: activeEnvId, explores: selectedExplores, toolType }, status: 'woken' as const }
+          }
+          activeEnvId = undefined
+          return provisionFresh()
         }
-      })
-    } catch {
-      // Fall back to standby session slot
-    }
+      )
+    })
   }
 
-  return {
-    session: {
-      environmentId:
-        activeEnvId || existingSession?.environmentId || `env_${toolType}_isolated`,
-      lastInteractionId: existingSession?.lastInteractionId,
-      explores: selectedExplores,
-      toolType,
-    },
-    status: 'standby',
+  if (!forceFresh && existingSession?.lastInteractionId && (!existingSession.toolType || existingSession.toolType === toolType)) {
+    if (!canAuth) {
+      return Promise.resolve({
+        session: { ...existingSession, environmentId: activeEnvId || existingSession.environmentId || `env_${toolType}_warm`, toolType },
+        status: 'woken',
+      })
+    }
+    return callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(existingSession.lastInteractionId)}`, 'GET').then(
+      (res) => {
+        const resolvedEnvId = normalizeEnvironmentId(res?.environment_id) || activeEnvId || `env_${toolType}`
+        return persistEnv(resolvedEnvId).then(() => ({
+          session: { ...existingSession, environmentId: resolvedEnvId, toolType },
+          status: 'woken' as const,
+        }))
+      },
+      (err) => {
+        if (isEnvironmentNotFoundError(err)) activeEnvId = undefined
+        return step2WakeOrProvision()
+      }
+    )
   }
+  return step2WakeOrProvision()
+}
+
+export function hydrateInteractionActivitySteps(opts: {
+  extensionSDK?: AntigravityExtensionHostLike
+  auth: AntigravityAuth
+  interactionId: string
+  stopAtInteractionId?: string
+  maxHops?: number
+}): Promise<AntigravityActivityStep[]> {
+  const { extensionSDK, auth, maxHops = 12 } = opts
+  const startId = String(opts.interactionId || '').trim()
+  const stopId = String(opts.stopAtInteractionId || '').trim()
+  const canFetch = Boolean(auth && (auth.mode === 'apikey' ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy) : Boolean(auth.oauthToken?.trim())))
+  if (!startId || !canFetch) return Promise.resolve([])
+  const chainNewestFirst: AntigravityInteractionPayload[] = []
+  const seen = new Set<string>()
+  const walk = (currId: string): Promise<void> => {
+    if (!currId || currId === stopId || seen.has(currId) || seen.size >= maxHops) return Promise.resolve()
+    seen.add(currId)
+    return callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(currId)}`, 'GET').then(
+      (fetched) => {
+        const rawInput = JSON.stringify(fetched.input ?? '')
+        if (rawInput.includes('[PREWARM:')) return
+        chainNewestFirst.push({ ...fetched, id: fetched.id || currId })
+        const isFreshUserTurnRoot =
+          !stopId &&
+          Array.isArray(fetched.input) &&
+          fetched.input.some((it) => it && typeof it === 'object' && (it as { type?: string }).type === 'text') &&
+          !rawInput.includes('[LKR_EXTENSION_BRIDGE_RESULT]') &&
+          !fetched.input.some((it) => it && typeof it === 'object' && (it as { type?: string }).type === 'function_result')
+        if (isFreshUserTurnRoot) return
+        return walk(typeof fetched.previous_interaction_id === 'string' ? fetched.previous_interaction_id.trim() : '')
+      },
+      () => {}
+    )
+  }
+  return walk(startId).then(() => {
+    if (!chainNewestFirst.length) return []
+    const chronological = chainNewestFirst.slice().reverse()
+    const mergedSteps: AntigravityInteractionStep[] = []
+    chronological.forEach((inter) => {
+      if (Array.isArray(inter.input)) {
+        inter.input.forEach((it) => {
+          if (it && typeof it === 'object' && (it as { type?: string }).type === 'function_result') {
+            mergedSteps.push(it as AntigravityInteractionStep)
+          }
+        })
+      }
+      if (Array.isArray(inter.steps)) mergedSteps.push(...inter.steps)
+    })
+    const latest = chronological[chronological.length - 1]
+    return extractInteractionActivitySteps({ ...latest, id: startId, status: 'completed', steps: mergedSteps }).map((s) => ({
+      ...s,
+      status: 'done' as const,
+    }))
+  })
 }
 
 const STATIC_SANDBOX_PATH_RE =

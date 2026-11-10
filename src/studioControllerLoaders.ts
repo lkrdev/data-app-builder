@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
-  AntigravityAuth, generateConversationLabel, LkrCodeMode,
+  AntigravityActivityStep, AntigravityAuth, generateConversationLabel, LkrCodeMode,
   PastedImage, runAntigravityTurn,
 } from './antigravity'
 import { ChatMessage, StudioMode } from './components/App'
@@ -225,6 +225,13 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     })
   }, [])
   const hydratedConvRouteRef = useRef<string>('')
+  const activityStepsByInteractionIdRef = useRef<Record<string, AntigravityActivityStep[]>>({})
+  const mergeCachedActivitySteps = useCallback((msgs: ChatMessage[]): ChatMessage[] =>
+    msgs.map((m) =>
+      m.role === 'assistant' && !m.activitySteps?.length && m.interactionId && activityStepsByInteractionIdRef.current[m.interactionId]?.length
+        ? { ...m, activitySteps: activityStepsByInteractionIdRef.current[m.interactionId] }
+        : m
+    ), [])
 
   const modeAllowedConversations = useMemo(
     () => conversations.filter((conv) => !disabledModes.includes(normalizeCatalogMode(conv.type))),
@@ -294,11 +301,13 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         opts.mode
       )
       setMessages(
-        msgs?.length ? msgs : [{ role: 'assistant', text: opts.fallbackText, ...(opts.dashboardId ? { dashboardId: opts.dashboardId } : {}) }]
+        msgs?.length
+          ? mergeCachedActivitySteps(msgs)
+          : [{ role: 'assistant', text: opts.fallbackText, ...(opts.dashboardId ? { dashboardId: opts.dashboardId } : {}) }]
       )
       if (opts.pushRoute && location.pathname !== opts.route) history.replace(opts.route)
     },
-    [conversations, history, location.pathname, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setAgentSession, setMessages, setSelectedExplores, sharedEnvIdRef, upsertContentItem]
+    [conversations, history, location.pathname, mergeCachedActivitySteps, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setAgentSession, setMessages, setSelectedExplores, sharedEnvIdRef, upsertContentItem]
   )
 
   const persistConversationAndLabel = useCallback(
@@ -307,6 +316,12 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       explores?: string[]; content?: Record<string, unknown>; messages: ChatMessage[]
       isFirstTurn?: boolean; userPrompt?: string; assistantText?: string; updateArtifactIndex?: boolean
     }) => {
+      opts.messages.forEach((m) => {
+        if (m.role === 'assistant' && m.interactionId && m.activitySteps?.length) {
+          activityStepsByInteractionIdRef.current[m.interactionId] = m.activitySteps
+        }
+      })
+      hydratedConvRouteRef.current = `/c/${encodeURIComponent(opts.id)}:${opts.id}`
       const namespace = getArtifactNamespace(extensionSDK)
       const authCfg: AntigravityAuth = { mode: authMode, oauthToken, clientId, projectId, apiKey }
       const baseConv = {
@@ -467,88 +482,85 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   )
 
   const handleRunPython = useCallback(
-    async (codeToRun = scriptCode, rawFilters = filtersJson) => {
-      try {
-        setBusyStatus('Executing Looker queries...')
-        let parsedFilters: Record<string, string> = {}
-        try { parsedFilters = JSON.parse(rawFilters || '{}') } catch { parsedFilters = {} }
-        const out = await LkrCodeMode.runPythonCode({
-          code: codeToRun, sdk: core40SDK, extensionSDK,
-          vars: {
-            mode: scriptMode, dashboard_filters: { script_mode: scriptMode, ...parsedFilters },
-            target_explores: selectedExplores, target_folder_id: selectedFolderId,
-          },
-        })
-        setScriptOutput(out)
-        return out
-      } catch (err: unknown) {
-        const errOut = JSON.stringify({ error: getErrorMessage(err) })
-        setScriptOutput(errOut)
-        return errOut
-      } finally {
-        setBusyStatus(mockExt?.initialBusyStatus || null)
-      }
+    (codeToRun = scriptCode, rawFilters = filtersJson): Promise<string> => {
+      setBusyStatus('Executing Looker queries...')
+      let parsedFilters: Record<string, string> = {}
+      try { parsedFilters = JSON.parse(rawFilters || '{}') } catch { parsedFilters = {} }
+      return LkrCodeMode.runPythonCode({
+        code: codeToRun, sdk: core40SDK, extensionSDK,
+        vars: {
+          mode: scriptMode, dashboard_filters: { script_mode: scriptMode, ...parsedFilters },
+          target_explores: selectedExplores, target_folder_id: selectedFolderId,
+        },
+      }).then(
+        (out) => { setScriptOutput(out); setBusyStatus(mockExt?.initialBusyStatus || null); return out },
+        (err: unknown) => {
+          const errOut = JSON.stringify({ error: getErrorMessage(err) })
+          setScriptOutput(errOut); setBusyStatus(mockExt?.initialBusyStatus || null)
+          return errOut
+        }
+      )
     },
     [core40SDK, extensionSDK, filtersJson, mockExt?.initialBusyStatus, scriptCode, scriptMode, selectedExplores, selectedFolderId, setBusyStatus]
   )
 
   const loadScriptById = useCallback(
-    async (rawId: string, pushRoute = true) => {
+    (rawId: string, pushRoute = true): Promise<void> => {
       const id = rawId.trim()
-      if (!id) return
+      if (!id) return Promise.resolve()
       lastScriptIdRef.current = id
       resolvedUseCaseByIdRef.current[id] = 'tile'
       setSelectedUseCase('tile'); setLoadedScript(true); setScriptId(id)
-      const loaded = await loadScriptArtifact(core40SDK, id)
-      const effectiveCode = loaded?.code || scriptCode
-      if (loaded) {
-        setScriptId(loaded.id); setScriptTitle(loaded.title || loaded.id); setScriptCode(loaded.code || DEFAULT_PYTHON_SCRIPT)
-        if (loaded.dashboardId) setPublishedTileDash({ dashboardId: loaded.dashboardId, elementId: loaded.elementId || '' })
-      }
-      const effectiveScriptId = loaded?.id || id
-      upsertContentItem({
-        id: String(effectiveScriptId), scriptId: String(effectiveScriptId), contentType: 'script',
-        title: loaded?.title || scriptTitle || effectiveScriptId, embedPath: `/tile/${encodeURIComponent(String(effectiveScriptId))}`,
-        updatedAt: loaded?.updatedAt,
+      return loadScriptArtifact(core40SDK, id).then((loaded) => {
+        const effectiveCode = loaded?.code || scriptCode
+        if (loaded) {
+          setScriptId(loaded.id); setScriptTitle(loaded.title || loaded.id); setScriptCode(loaded.code || DEFAULT_PYTHON_SCRIPT)
+          if (loaded.dashboardId) setPublishedTileDash({ dashboardId: loaded.dashboardId, elementId: loaded.elementId || '' })
+        }
+        const effectiveScriptId = loaded?.id || id
+        upsertContentItem({
+          id: String(effectiveScriptId), scriptId: String(effectiveScriptId), contentType: 'script',
+          title: loaded?.title || scriptTitle || effectiveScriptId, embedPath: `/tile/${encodeURIComponent(String(effectiveScriptId))}`,
+          updatedAt: loaded?.updatedAt,
+        })
+        hydrateLoadedArtifact({
+          mode: 'tile', id: effectiveScriptId, route: `/c/${encodeURIComponent(effectiveScriptId)}`,
+          pushRoute, convTypes: ['tile', 'script'], studio: loaded,
+          messages: loaded?.messages as ChatMessage[] | undefined, defaultEnvId: 'env_tile_isolated',
+          fallbackText: loaded ? `Loaded script "${loaded.title}" (${loaded.id}).` : `Opened Script "${scriptTitle}" (${id}).`,
+        })
+        return handleRunPython(effectiveCode, filtersJson).then(() => {})
       })
-      hydrateLoadedArtifact({
-        mode: 'tile', id: effectiveScriptId, route: `/c/${encodeURIComponent(effectiveScriptId)}`,
-        pushRoute, convTypes: ['tile', 'script'], studio: loaded,
-        messages: loaded?.messages as ChatMessage[] | undefined, defaultEnvId: 'env_tile_isolated',
-        fallbackText: loaded ? `Loaded script "${loaded.title}" (${loaded.id}).` : `Opened Script "${scriptTitle}" (${id}).`,
-      })
-      await handleRunPython(effectiveCode, filtersJson)
     },
     [core40SDK, filtersJson, handleRunPython, hydrateLoadedArtifact, resolvedUseCaseByIdRef, scriptCode, scriptTitle, setSelectedUseCase, upsertContentItem]
   )
 
   const handleSaveScript = useCallback(
-    async (overrideCode = scriptCode, _overrideMsgs = messages, dashInfo = publishedTileDash): Promise<SavedScript> => {
+    (overrideCode = scriptCode, _overrideMsgs = messages, dashInfo = publishedTileDash): Promise<SavedScript> => {
       const cleanId = scriptId.trim().replace(/[^a-zA-Z0-9_-]/g, '_') || `script_${Date.now().toString(36).slice(-5)}`
       setBusyStatus(`Saving script "${cleanId}" to Looker Artifacts...`)
-      try {
-        const isExisting = contentItemsRef.current.some((it) => it.key === `script:${cleanId}`)
-        const saved = await saveScriptArtifact(core40SDK, userId, {
-          id: cleanId, title: scriptTitle.trim() || cleanId, code: overrideCode,
-          updatedAt: new Date().toISOString(),
-          ...(dashInfo?.dashboardId ? { dashboardId: dashInfo.dashboardId } : {}),
-          ...(dashInfo?.elementId ? { elementId: dashInfo.elementId } : {}),
-        })
-        lastScriptIdRef.current = saved.id
-        resolvedUseCaseByIdRef.current[saved.id] = 'tile'
-        setLoadedScript(true); setScriptId(saved.id); setSavedScripts(await listSavedScripts(core40SDK, userId))
-        upsertContentItem({
-          id: String(saved.id), scriptId: String(saved.id), contentType: 'script',
-          title: saved.title || saved.id, embedPath: `/tile/${encodeURIComponent(String(saved.id))}`,
-          updatedAt: saved.updatedAt, source: isExisting ? 'modified' : 'created', createdInConversation: true, hidden: false,
-        })
-        if (location.pathname === '/') {
-          history.replace(`/c/${encodeURIComponent(activeConversationIdRef.current)}`)
-        }
-        return saved
-      } finally {
-        setBusyStatus(mockExt?.initialBusyStatus || null)
-      }
+      const isExisting = contentItemsRef.current.some((it) => it.key === `script:${cleanId}`)
+      return saveScriptArtifact(core40SDK, userId, {
+        id: cleanId, title: scriptTitle.trim() || cleanId, code: overrideCode,
+        updatedAt: new Date().toISOString(),
+        ...(dashInfo?.dashboardId ? { dashboardId: dashInfo.dashboardId } : {}),
+        ...(dashInfo?.elementId ? { elementId: dashInfo.elementId } : {}),
+      }).then(
+        (saved) => listSavedScripts(core40SDK, userId).then((list) => {
+          lastScriptIdRef.current = saved.id
+          resolvedUseCaseByIdRef.current[saved.id] = 'tile'
+          setLoadedScript(true); setScriptId(saved.id); setSavedScripts(list)
+          upsertContentItem({
+            id: String(saved.id), scriptId: String(saved.id), contentType: 'script',
+            title: saved.title || saved.id, embedPath: `/tile/${encodeURIComponent(String(saved.id))}`,
+            updatedAt: saved.updatedAt, source: isExisting ? 'modified' : 'created', createdInConversation: true, hidden: false,
+          })
+          if (location.pathname === '/') history.replace(`/c/${encodeURIComponent(activeConversationIdRef.current)}`)
+          setBusyStatus(mockExt?.initialBusyStatus || null)
+          return saved
+        }),
+        (err) => { setBusyStatus(mockExt?.initialBusyStatus || null); throw err }
+      )
     },
     [core40SDK, history, location.pathname, messages, mockExt?.initialBusyStatus, publishedTileDash, resolvedUseCaseByIdRef, scriptCode, scriptId, scriptTitle, setBusyStatus, setSavedScripts, upsertContentItem, userId]
   )
@@ -812,7 +824,8 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
           ['conversational-analytics', 'conversational-analytics'], ['lookml', 'lookml'],
           ['health_check', 'health'], ['script', 'tile'], ['dashboard', 'dashboard'],
         ]
-        for (const [artifactType, loaderKey] of probes) {
+        for (let pIdx = 0; pIdx < probes.length; pIdx += 1) {
+          const [artifactType, loaderKey] = probes[pIdx]
           if (await loadObjectArtifact(core40SDK, artifactType, id, ns)) {
             return loaders[loaderKey](id, pushRoute)
           }
@@ -868,7 +881,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     if (!id) return
     if (convMatch) {
       const hydrationKey = `${location.pathname}:${convMatch.id}`
-      const isOptimisticInFlight = convMatch.use_case === 'auto' && !convMatch.interactionId && messages.length > 0
+      const isOptimisticInFlight = !convMatch.interactionId && messages.length > 0
       if (hydratedConvRouteRef.current !== hydrationKey && !isOptimisticInFlight) {
         hydratedConvRouteRef.current = hydrationKey
         const initialItems = hydrateConversationContentItems(convMatch)
@@ -877,7 +890,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
           const fallbackTab = initialItems.filter((it) => !it.hidden).slice(-1)[0]?.key || ''
           setActiveContentTabKey(convMatch.activeContentTabKey ?? fallbackTab)
         }
-        if (convMatch.messages?.length) setMessages(convMatch.messages as ChatMessage[])
+        if (convMatch.messages?.length) setMessages(mergeCachedActivitySteps(convMatch.messages as ChatMessage[]))
         if (convMatch.explores?.length) setSelectedExplores(convMatch.explores)
         if (convMatch.interactionId || convMatch.environmentId) {
           const mode = normalizeCatalogMode(convMatch.type)
@@ -930,7 +943,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     parsedRoute.objectId, parsedRoute.useCase, inferredRouteUseCase, isCaMode, publishedApp?.dashboardId,
     nativeContent?.id, lookmlBundle?.id, lookmlBundle?.project_id, healthReport?.id, caConversation?.caConversationId, loadedScript, scriptId,
     openArtifactByMode, conversations, catalogItems, messages.length, activeConversationId, activeObjectId,
-    agentSession.lastInteractionId, setActiveContentTabKey,
+    agentSession.lastInteractionId, mergeCachedActivitySteps, setActiveContentTabKey,
     setActiveConversationId, setAgentSession, setContentItems, setMessages, setSelectedExplores, sharedEnvIdRef,
   ])
 
@@ -1106,7 +1119,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         syncContentItemViewer(contentItemsRef.current.find((it) => it.key === initialTabKey))
       }
       setActiveConversationId(conv.id)
-      if (conv.messages?.length) setMessages(conv.messages as ChatMessage[])
+      if (conv.messages?.length) setMessages(mergeCachedActivitySteps(conv.messages as ChatMessage[]))
       else if (!targetId) setMessages([])
       if (conv.interactionId || conv.environmentId || sharedEnvIdRef.current) {
         setAgentSession(
@@ -1119,7 +1132,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         )
       }
     },
-    [explicitUseCaseRef, history, location.pathname, openArtifactByMode, resolvedUseCaseByIdRef, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setAgentSession, setContentItems, setMessages, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef, syncContentItemViewer]
+    [explicitUseCaseRef, history, location.pathname, mergeCachedActivitySteps, openArtifactByMode, resolvedUseCaseByIdRef, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setAgentSession, setContentItems, setMessages, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef, syncContentItemViewer]
   )
 
   const handleToggleArchiveConversation = (
@@ -1220,6 +1233,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     showArchivedConversations, setShowArchivedConversations,
     pendingDeleteConv, setPendingDeleteConv, deleteRelatedContent, setDeleteRelatedContent,
     activeConversationId, activeConversationIdRef, setActiveConversationId,
+    hydratedConvRouteRef, activityStepsByInteractionIdRef, mergeCachedActivitySteps,
     modeAllowedConversations, filteredConversations, archivedConversations,
     persistConversationAndLabel,
     loadNativeById, loadLookmlSessionById, loadCaConversationById, loadScriptById,

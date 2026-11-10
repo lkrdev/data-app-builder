@@ -22,8 +22,8 @@ export function extractNonThoughtText(val: unknown): string {
   if (val && typeof val === 'object') {
     const obj = val as Record<string, unknown>
     if (obj.type === 'thought' || obj.type === 'thinking' || obj.thought) return ''
-    for (const key of ['text', 'content', 'parts']) {
-      const extracted = extractNonThoughtText(obj[key])
+    for (let i = 0; i < 3; i++) {
+      const extracted = extractNonThoughtText(obj[['text', 'content', 'parts'][i]])
       if (extracted) return extracted
     }
   }
@@ -32,13 +32,13 @@ export function extractNonThoughtText(val: unknown): string {
 
 export function collectInteractionTextCandidates(interaction: AntigravityInteractionPayload | null | undefined): string {
   const out: unknown[] = [interaction?.output_text]
-  for (const o of interaction?.outputs || []) {
+  ;(interaction?.outputs || []).forEach((o) => {
     out.push(o?.text)
     if (o && o.type !== 'thought' && o.type !== 'thinking' && !o.thought) {
       out.push(extractNonThoughtText(o.content ?? o.parts))
     }
-  }
-  for (const s of interaction?.steps || []) {
+  })
+  ;(interaction?.steps || []).forEach((s) => {
     out.push(
       s?.output,
       s?.stdout,
@@ -47,7 +47,7 @@ export function collectInteractionTextCandidates(interaction: AntigravityInterac
       s?.code_execution_result?.output,
       extractNonThoughtText((s as Record<string, unknown>)?.content ?? (s as Record<string, unknown>)?.parts)
     )
-  }
+  })
   return out.filter((x): x is string => typeof x === 'string' && x.length > 0).join('\n')
 }
 
@@ -67,16 +67,19 @@ export function extractInteractionOutputText(interaction: AntigravityInteraction
     .trim()
   if (stepText) return stepText
 
-  for (const s of [...(interaction?.steps || [])].reverse()) {
+  const steps = interaction?.steps || []
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const s = steps[i]
     if (s?.type === 'function_result' && (s?.name === 'run_looker_codemode' || !s?.name)) {
       const rawRes = typeof s.result === 'string' ? s.result.trim() : s.result ? JSON.stringify(s.result) : ''
       if (!rawRes) continue
       try {
         const parsed = JSON.parse(rawRes) as Record<string, unknown>
         const inner = (parsed && typeof parsed.result === 'object' && parsed.result !== null ? parsed.result : parsed) as Record<string, unknown>
-        for (const k of ['summary_markdown', 'summaryMarkdown', 'markdown', 'summary', 'text', 'answer']) {
-          if (typeof inner?.[k] === 'string' && String(inner[k]).trim()) return String(inner[k]).trim()
-        }
+        const hitKey = ['summary_markdown', 'summaryMarkdown', 'markdown', 'summary', 'text', 'answer'].find(
+          (k) => typeof inner?.[k] === 'string' && String(inner[k]).trim()
+        )
+        if (hitKey) return String(inner[hitKey]).trim()
         if (typeof parsed?.result === 'string' && parsed.result.trim()) return parsed.result.trim()
       } catch {
         return rawRes
@@ -145,7 +148,9 @@ function normalizeNativeBundleCandidate(raw: unknown, allowUnwrapped = false): N
 export function extractNativeContentFromInteraction(
   interaction: AntigravityInteractionPayload | null | undefined
 ): NativeContentBundle | null {
-  for (const step of [...(interaction?.steps || [])].reverse()) {
+  const steps = interaction?.steps || []
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const step = steps[i]
     if (step?.type === 'function_result' && step?.name === 'run_looker_codemode') {
       const rawStr = typeof step.result === 'string' ? step.result : JSON.stringify(step.result || '')
       const tagMatches = Array.from(rawStr.matchAll(/<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g))
@@ -186,10 +191,10 @@ const CODEMODE_MACROS = new Set([
 
 function extractLookerSdkMethodPreview(code: string): string {
   const seen = new Set<string>()
-  for (const m of String(code || '').matchAll(KNOWN_LOOKER_SDK_CALL_RE)) {
+  Array.from(String(code || '').matchAll(KNOWN_LOOKER_SDK_CALL_RE)).forEach((m) => {
     const name = m[1] || m[2]
     if (name) seen.add(m[1] || !CODEMODE_MACROS.has(name) ? `sdk.${name}` : name)
-  }
+  })
   return Array.from(seen).join(', ')
 }
 
@@ -205,8 +210,8 @@ export function extractThoughtText(val: unknown): string {
   if (Array.isArray(val)) return val.map(extractThoughtText).filter(Boolean).join('\n\n')
   if (val && typeof val === 'object') {
     const obj = val as Record<string, unknown>
-    for (const key of ['text', 'summary', 'content', 'parts']) {
-      const extracted = extractThoughtText(obj[key])
+    for (let i = 0; i < 4; i++) {
+      const extracted = extractThoughtText(obj[['text', 'summary', 'content', 'parts'][i]])
       if (extracted) return extracted
     }
   }
@@ -254,7 +259,7 @@ export const BUILTIN_SKILLS_FILES: Record<string, string> = {
 }
 SANDBOX_AGENT_SKILL_FILES['looker-dashboard/SKILL.md'] = LOOKER_DASHBOARD_SKILL_MD
 SANDBOX_AGENT_SKILL_FILES['looker-field-profiler/SKILL.md'] = LOOKER_FIELD_PROFILER_SKILL_MD
-for (const [relPath, content] of Object.entries(SANDBOX_AGENT_SKILL_FILES)) {
+Object.entries(SANDBOX_AGENT_SKILL_FILES).forEach(([relPath, content]) => {
   BUILTIN_SKILLS_FILES[`/workspace/skills/${relPath}`] ??= content
   BUILTIN_SKILLS_FILES[`skills/${relPath}`] ??= content
   BUILTIN_SKILLS_FILES[`/workspace/.agents/skills/${relPath}`] ??= content
@@ -263,15 +268,15 @@ for (const [relPath, content] of Object.entries(SANDBOX_AGENT_SKILL_FILES)) {
     const skillId = relPath.slice(0, -'/SKILL.md'.length)
     const leafId = skillId.split('/').pop()!
     const compactId = skillId.replace('/sub-skills/', '-')
-    for (const id of [skillId, leafId, compactId]) {
+    ;[skillId, leafId, compactId].forEach((id) => {
       BUILTIN_SKILLS_FILES[`/workspace/skills/${id}/SKILL.md`] ??= content
       BUILTIN_SKILLS_FILES[`skills/${id}/SKILL.md`] ??= content
       BUILTIN_SKILLS_FILES[`/workspace/skills/${id}/skill.md`] ??= content
       BUILTIN_SKILLS_FILES[`skills/${id}/skill.md`] ??= content
       BUILTIN_SKILLS_FILES[id] ??= content
-    }
+    })
   }
-}
+})
 
 export const SANDBOX_WORKSPACE_SKILL_FILES = BUILTIN_SKILLS_FILES
 
@@ -286,12 +291,14 @@ export const BUILTIN_WORKSPACE_FILES: Record<string, string> = {
 }
 
 export function resolveBuiltinWorkspaceFileContent(pathOrName?: string): string | undefined {
-  const raw = String(pathOrName || '').trim()
+  const raw = String(pathOrName || '').trim().replace(/^file:\/\//i, '')
   if (!raw) return undefined
-  if (BUILTIN_WORKSPACE_FILES[raw]) return BUILTIN_WORKSPACE_FILES[raw]
-  if (BUILTIN_WORKSPACE_FILES[raw.toLowerCase()]) return BUILTIN_WORKSPACE_FILES[raw.toLowerCase()]
+  const noSlash = raw.replace(/^\/+/, '')
+  const rel = noSlash.replace(/^workspace\//i, '')
+  const directKey = [raw, raw.toLowerCase(), `/${noSlash}`, noSlash, rel, rel.toLowerCase()].find((k) => Boolean(BUILTIN_WORKSPACE_FILES[k]))
+  if (directKey) return BUILTIN_WORKSPACE_FILES[directKey]
   const skill = extractSkillNameFromPath(raw)
-  return (skill && BUILTIN_SKILLS_FILES[skill]) || BUILTIN_WORKSPACE_FILES[raw.split('/').filter(Boolean).pop() || raw]
+  return (skill && BUILTIN_SKILLS_FILES[skill]) || BUILTIN_WORKSPACE_FILES[noSlash.split('/').filter(Boolean).pop() || raw]
 }
 
 const IGNORED_TARGET_TOKENS = new Set([
@@ -307,10 +314,12 @@ function humanizeLookerTargetLabel(raw: unknown): string | undefined {
     const exp = str.match(/\/lookml_models\/[^/]+\/explores\/([^/?#]+)/i)?.[1]
     const dash = str.match(/\/dashboards\/([^/?#]+)/i)?.[1]
     const fold = str.match(/\/folders\/([^/?#]+)/i)?.[1]
+    const conn = str.match(/\/connections\/([^/?#]+)/i)?.[1]
     const mod = str.match(/\/(?:lookml_models|projects)\/([^/?#]+)/i)?.[1]
     if (exp) str = exp
     else if (dash) return /^\d+$/.test(dash) ? `Dashboard #${dash}` : humanizeLookerTargetLabel(dash)
     else if (fold) return /^\d+$/.test(fold) ? `Folder #${fold}` : humanizeLookerTargetLabel(fold)
+    else if (conn) str = conn
     else if (mod) str = mod
     else return undefined
   }
@@ -327,6 +336,8 @@ export function formatFriendlyLookerActivityLabel(
   code: string, args?: Record<string, unknown>
 ): { statusText: string; stepTitle: string; title?: string; targetLabel?: string; isQuery: boolean } {
   const codeStr = String(code || '')
+  const pathStr = String(args?.path || '')
+  const combined = `${codeStr} ${pathStr}`
   const vars = args?.vars && typeof args.vars === 'object' && !Array.isArray(args.vars) ? (args.vars as Record<string, unknown>) : undefined
   const activeContent = vars?.active_content && typeof vars.active_content === 'object' && !Array.isArray(vars.active_content) ? (vars.active_content as Record<string, unknown>) : undefined
   const rawCandidates: unknown[] = [
@@ -334,8 +345,9 @@ export function formatFriendlyLookerActivityLabel(
     codeStr.match(/['"](?:view|explore|explore_name)['"]\s*:\s*['"]([^'"]+)['"]/i)?.[1],
     codeStr.match(/\b(?:view|explore|explore_name)\s*=\s*['"]([^'"]+)['"]/i)?.[1],
     codeStr.match(/\b[a-z][a-z0-9_]*::([a-z][a-z0-9_]*)\b/i)?.[1],
-    codeStr.match(/(?:upsert_udd|create_dashboard|update_dashboard|upsert_lookml_dashboard)\s*\(\s*['"]([^'"]+)['"]/i)?.[1],
-    codeStr.match(/['"](?:title|dashboard_title|folder_name|name)['"]\s*:\s*['"]([^'"]+)['"]/i)?.[1],
+    codeStr.match(/(?:upsert_udd|create_dashboard|update_dashboard|upsert_lookml_dashboard|import_lookml_dashboard)\s*\(\s*['"]([^'"]+)['"]/i)?.[1],
+    codeStr.match(/\b(?:validate_project|run_lookml_test|create_project|update_project|connection_schemas|connection_tables|generate_lookml_with_new_files|folder_children)\s*\(\s*['"]([^'"]+)['"]/i)?.[1],
+    codeStr.match(/['"](?:title|dashboard_title|folder_name|project_id|connection_name|name)['"]\s*:\s*['"]([^'"]+)['"]/i)?.[1],
     codeStr.match(/['"]([a-z][a-z0-9_]*)\.[a-z][a-z0-9_]*['"]/i)?.[1],
     codeStr.match(/lookml_model\s*\(\s*['"]([^'"]+)['"]/i)?.[1],
     codeStr.match(/['"]model['"]\s*:\s*['"]([^'"]+)['"]/i)?.[1],
@@ -346,11 +358,11 @@ export function formatFriendlyLookerActivityLabel(
     Array.isArray(args?.explores) ? args?.explores[0] : undefined,
     Array.isArray(vars?.explores) ? vars?.explores[0] : undefined,
     args?.title, args?.dashboard_title, args?.folder_name, activeContent?.title,
-    args?.path, args?.model, args?.target_model, vars?.target_model, vars?.model,
+    args?.path, args?.project_id, args?.model, args?.target_model, vars?.target_model, vars?.model,
   ]
   let targetLabel: string | undefined
-  for (const cand of rawCandidates) {
-    targetLabel = humanizeLookerTargetLabel(cand)
+  for (let i = 0; i < rawCandidates.length; i++) {
+    targetLabel = humanizeLookerTargetLabel(rawCandidates[i])
     if (targetLabel) break
   }
   if (/\bprofile_fields\s*\(/i.test(codeStr)) {
@@ -362,7 +374,7 @@ export function formatFriendlyLookerActivityLabel(
       isQuery: true,
     }
   }
-  if (/_field_value_search_/i.test(`${codeStr} ${String(args?.path || '')} ${String(args?.explore || args?.view || '')}`)) {
+  if (/_field_value_search_/i.test(`${combined} ${String(args?.explore || args?.view || '')}`)) {
     return {
       title: 'Searching model field value index',
       stepTitle: 'Searching model field value index',
@@ -371,12 +383,27 @@ export function formatFriendlyLookerActivityLabel(
       isQuery: true,
     }
   }
-  const isQuery = LOOKER_QUERY_EXEC_RE.test(codeStr) || /\/(?:queries|sql_queries)\b|run_inline_query|run_query|run_sql_query/i.test(String(args?.path || ''))
-  const isAgentSearch = !isQuery && /\b(?:search_agents|agents_search)\b|\/agents\/search\b/i.test(`${codeStr} ${String(args?.path || '')}`)
-  const statusText = isAgentSearch
-    ? 'Searching accessible Looker Conversational Analytics agents and golden queries...'
-    : isQuery
+  const isQuery = LOOKER_QUERY_EXEC_RE.test(codeStr) || /\/(?:queries|sql_queries)\b|run_inline_query|run_query|run_sql_query/i.test(pathStr)
+  const statusText = isQuery
     ? (targetLabel ? `Executing Looker queries for ${targetLabel}...` : 'Executing Looker queries...')
+    : /\b(?:search_agents|agents_search)\b|\/agents\/search\b/i.test(combined)
+    ? 'Searching accessible Looker Conversational Analytics agents and golden queries...'
+    : /\b(?:upsert_lookml_dashboard|upsert_udd|import_lookml_dashboard|sync_lookml_dashboard)\b/i.test(combined)
+    ? (targetLabel ? `Building Looker dashboard ${targetLabel}...` : 'Building Looker dashboard...')
+    : /\b(?:validate_project|run_lookml_test)\b|\/projects\/[^/]+\/(?:validate|lookml_tests)\b/i.test(combined)
+    ? (targetLabel ? `Validating LookML project ${targetLabel}...` : 'Validating LookML & running data tests...')
+    : /\bgenerate_lookml_with_new_files\b/i.test(combined)
+    ? (targetLabel ? `Generating LookML files for ${targetLabel}...` : 'Generating & pushing LookML files...')
+    : /\b(?:create_project|update_project|create_lookml_model|update_lookml_model)\b/i.test(combined)
+    ? (targetLabel ? `Configuring LookML project ${targetLabel}...` : 'Configuring LookML project & model...')
+    : /\b(?:connection_schemas|connection_tables|connection_columns|all_connections|test_connection)\b|\/connections(?:\b|\/)/i.test(combined)
+    ? (targetLabel ? `Inspecting database connection ${targetLabel}...` : 'Inspecting database connections & schemas...')
+    : /\b(?:folder_children|folder_ancestors|all_folders|search_folders|format_content_inventory)\b|\/folders(?:\b|\/)/i.test(combined)
+    ? (targetLabel ? `Inspecting Looker folder ${targetLabel}...` : 'Inspecting Looker folders & content...')
+    : /\blookml_model_explore\b|\/lookml_models\/[^/]+\/explores\//i.test(combined)
+    ? (targetLabel ? `Inspecting ${targetLabel} explore schema...` : 'Inspecting LookML explore schema...')
+    : /\ball_lookml_models\b|\/lookml_models\/?$/i.test(combined.trim())
+    ? 'Listing accessible LookML models & explores...'
     : (targetLabel ? `Executing Looker API calls for ${targetLabel}...` : 'Executing Looker API calls...')
   return { statusText, stepTitle: statusText, ...(targetLabel ? { targetLabel } : {}), isQuery }
 }
@@ -385,13 +412,72 @@ const RESULT_STEP_TYPE_RE = /^(?:function_result|tool_result|view_file_result|ed
 const FILE_TOOL_FN_RE = /^(?:view_file|edit_file|read_file|write_file|open_file|cat_file)(?:_call)?$/i
 const SKILL_TOOL_FN_RE = /^(?:skill_lookup|lookup_skill)(?:_call)?$/i
 export const INTERNAL_JARGON_THOUGHT_RE = /\b(?:LkrCodeMode|Monty|WASM|lkr-dev-cli|Looker Code Mode|Looker CLI Bridge)\b/i
+const JARGON_PHRASE_STRIP_RE =
+  /(?:[ \t]+(?:via|in|using|with|through|inside|from|on))?(?:[ \t]+the)?[ \t]*\b(?:WASM[ \t]+|Monty[ \t]+|Python[ \t]+)*(?:LkrCodeMode|Looker[ \t]+Code[ \t]*Mode|Looker[ \t]+CLI[ \t]+Bridge|bridged[ \t]+lkr-dev-cli|lkr-dev-cli|WASM[ \t]+Monty|Monty[ \t]+WASM|Monty|WASM)\b(?:[ \t]+(?:Python[ \t]+)?(?:sandbox|tool|bridge|runtime))*/gi
+const GENERIC_STEP_TITLE_RE = /^Executing Looker (?:API calls|queries)|^Running (?:sandbox|Python|tool)/i
+const BUNDLE_ENVELOPE_STRIP_RE =
+  /<(?:DATA_APP_BUNDLE|LOOKML_BUNDLE|NATIVE_CONTENT_BUNDLE)>[\s\S]*?<\/(?:DATA_APP_BUNDLE|LOOKML_BUNDLE|NATIVE_CONTENT_BUNDLE)>/g
+
+export function sanitizeActivityThought(raw: unknown): string {
+  const cleaned = extractThoughtText(raw)
+    .replace(JARGON_PHRASE_STRIP_RE, '')
+    .replace(/^(?:using|running|calling|invoking)[ \t]+to[ \t]+/i, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+([.,;:!?\n])/g, '$1')
+    .replace(/^[\s\-–—:,;]+|[\s\-–—:,;]+$/g, '')
+    .trim()
+  if (!cleaned || /^(?:running|using|executing|calling)\.?$/i.test(cleaned)) return ''
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1)
+}
+
+function stripBundleEnvelopes(raw: string): string {
+  return String(raw || '').replace(BUNDLE_ENVELOPE_STRIP_RE, '').trim()
+}
+
+function buildExecStepContent(
+  code: string,
+  stepObj: Record<string, unknown> | undefined,
+  pairedResultObj: Record<string, unknown> | undefined
+): string | undefined {
+  const cleanCode = stripBundleEnvelopes(code)
+  const epLogs = [
+    ...(Array.isArray(stepObj?.endpoint_logs) ? (stepObj.endpoint_logs as string[]) : []),
+    ...(Array.isArray(pairedResultObj?.endpoint_logs) ? (pairedResultObj.endpoint_logs as string[]) : []),
+  ].filter(Boolean)
+  const execRes = stepObj?.code_execution_result && typeof stepObj.code_execution_result === 'object'
+    ? (stepObj.code_execution_result as Record<string, unknown>)
+    : undefined
+  const outParts: string[] = []
+  const seenOut = new Set<string>()
+  ;[
+    stepObj?.stdout, execRes?.stdout, stepObj?.stderr, execRes?.stderr,
+    stepObj?.output, execRes?.output, pairedResultObj?.stdout, pairedResultObj?.stderr,
+    pairedResultObj?.output, pairedResultObj?.result,
+  ].forEach((val) => {
+    if (val === undefined || val === null) return
+    const rawStr = typeof val === 'string' ? val : JSON.stringify(val, null, 2)
+    const stripped = stripBundleEnvelopes(rawStr)
+    if (stripped && stripped !== cleanCode && !seenOut.has(stripped)) {
+      seenOut.add(stripped)
+      outParts.push(stripped)
+    }
+  })
+  const sections = [
+    cleanCode,
+    epLogs.length ? `# Looker API Telemetry\n${Array.from(new Set(epLogs)).map((l) => `# ${l}`).join('\n')}` : '',
+    outParts.length ? `# Output\n${outParts.join('\n')}` : '',
+  ].filter(Boolean)
+  return sections.length ? sections.join('\n\n') : undefined
+}
 const FILE_PATH_KEYS = ['path', 'file_path', 'filename', 'file', 'filepath', 'uri', 'target', 'Path', 'FilePath', 'TargetFile', 'AbsolutePath', 'name', 'query', 'input'] as const
 const SKILL_NAME_KEYS = ['skill', 'skill_name', 'name', 'target', 'path', 'file_path', 'filename', 'file', 'filepath', 'uri', 'Path', 'FilePath', 'TargetFile', 'query', 'input'] as const
 
 function pickFirstStringField(sources: Array<Record<string, unknown> | undefined>, keys: readonly string[], ignoreRe?: RegExp): string {
-  for (const src of sources) {
+  for (let i = 0; i < sources.length; i++) {
+    const src = sources[i]
     if (!src || typeof src !== 'object') continue
-    for (const k of keys) {
+    for (let j = 0; j < keys.length; j++) {
+      const k = keys[j]
       const trimmed = typeof src[k] === 'string' ? String(src[k]).trim() : ''
       if (trimmed && !trimmed.startsWith('{') && (!ignoreRe || !ignoreRe.test(trimmed))) return trimmed
     }
@@ -399,17 +485,21 @@ function pickFirstStringField(sources: Array<Record<string, unknown> | undefined
   return ''
 }
 
+const STEP_OUT_KEYS = ['content', 'new_content', 'file_content', 'markdown', 'output', 'result', 'text', 'stdout'] as const
+const INNER_OUT_KEYS = ['content', 'text', 'output', 'result', 'markdown', 'file_content'] as const
+
 function extractStepContentFromSources(sources: Array<Record<string, unknown> | undefined>, fallbackPathOrSkill?: string): string | undefined {
-  for (const src of sources) {
+  for (let i = 0; i < sources.length; i++) {
+    const src = sources[i]
     if (!src || typeof src !== 'object') continue
-    for (const key of ['content', 'new_content', 'file_content', 'markdown', 'output', 'result', 'text', 'stdout']) {
+    for (let j = 0; j < STEP_OUT_KEYS.length; j++) {
+      const key = STEP_OUT_KEYS[j]
       const trimmed = typeof src[key] === 'string' ? String(src[key]).trim() : ''
       if (!trimmed) continue
       if (trimmed.startsWith('{')) {
         const parsed = parseStepArguments(trimmed)
-        for (const ik of ['content', 'text', 'output', 'result', 'markdown', 'file_content']) {
-          if (typeof parsed[ik] === 'string' && String(parsed[ik]).trim()) return String(parsed[ik]).trim()
-        }
+        const ik = INNER_OUT_KEYS.find((k) => typeof parsed[k] === 'string' && String(parsed[k]).trim())
+        if (ik) return String(parsed[ik]).trim()
       }
       return trimmed
     }
@@ -426,8 +516,8 @@ const WRITTEN_MD_RES = [
 
 export function extractWrittenMarkdownPathFromCode(rawCode: string): string | undefined {
   const code = String(rawCode || '').trim()
-  for (const re of WRITTEN_MD_RES) {
-    const matched = code.match(re)?.[1]?.trim()
+  for (let i = 0; i < WRITTEN_MD_RES.length; i++) {
+    const matched = code.match(WRITTEN_MD_RES[i])?.[1]?.trim()
     if (matched) return matched
   }
   return undefined
@@ -438,12 +528,12 @@ export function extractInteractionActivitySteps(interaction: AntigravityInteract
   const rawOutputs: AntigravityInteractionOutput[] = Array.isArray(interaction?.outputs) ? interaction.outputs : []
   const completedCallIds = new Set<string>()
   const resultStepByCallId = new Map<string, AntigravityInteractionStep>()
-  for (const s of rawSteps) {
+  rawSteps.forEach((s) => {
     if (RESULT_STEP_TYPE_RE.test(String(s?.type || '').trim())) {
       const cid = String(s?.call_id || s?.id || '').trim()
       if (cid) { completedCallIds.add(cid); resultStepByCallId.set(cid, s) }
     }
-  }
+  })
   const interactionDone = /^(?:completed|failed|cancelled)$/.test(String(interaction?.status || ''))
   const byKey = new Map<string, AntigravityActivityStep>()
   const seenContent = new Set<string>()
@@ -456,10 +546,18 @@ export function extractInteractionActivitySteps(interaction: AntigravityInteract
     const mapKey = explicitId || contentKey
     const existing = byKey.get(mapKey)
     if (existing) {
+      if (
+        step.title &&
+        step.title !== existing.title &&
+        GENERIC_STEP_TITLE_RE.test(existing.title) &&
+        (!GENERIC_STEP_TITLE_RE.test(step.title) || (!/\bfor\s+\S/i.test(existing.title) && /\bfor\s+\S/i.test(step.title)))
+      ) {
+        existing.title = step.title
+      }
       if (step.status === 'done') existing.status = 'done'
-      if (step.detail && !existing.detail) existing.detail = step.detail
+      if (step.detail && (!existing.detail || step.detail.length > existing.detail.length)) existing.detail = step.detail
       if (step.path && !existing.path) existing.path = step.path
-      if (step.content && !existing.content) existing.content = step.content
+      if (step.content && (!existing.content || step.content.length > existing.content.length)) existing.content = step.content
       return
     }
     if (seenContent.has(contentKey) || (!step.detail && seenKindTitle.has(kindTitleKey))) return
@@ -468,8 +566,8 @@ export function extractInteractionActivitySteps(interaction: AntigravityInteract
 
   const addThought = (item: AntigravityInteractionStep | AntigravityInteractionOutput, stepId: string, explicitId: string | undefined, status: 'running' | 'done') => {
     const tObj = item.thought && typeof item.thought === 'object' && !Array.isArray(item.thought) ? (item.thought as Record<string, unknown>) : null
-    const summary = extractThoughtText(tObj?.summary ?? item.summary)
-    const text = extractThoughtText(tObj?.text ?? (typeof item.thought === 'string' || Array.isArray(item.thought) ? item.thought : undefined) ?? item.text ?? tObj?.content ?? item.content ?? tObj?.parts ?? item.parts)
+    const summary = sanitizeActivityThought(tObj?.summary ?? item.summary)
+    const text = sanitizeActivityThought(tObj?.text ?? (typeof item.thought === 'string' || Array.isArray(item.thought) ? item.thought : undefined) ?? item.text ?? tObj?.content ?? item.content ?? tObj?.parts ?? item.parts)
     const raw = summary && text && summary !== text ? `${summary}\n${text}` : summary || text
     const [firstLine = '', ...restLines] = raw.split(/\r?\n/)
     const title = stripThoughtHeading(firstLine)
@@ -548,24 +646,26 @@ export function extractInteractionActivitySteps(interaction: AntigravityInteract
 
     if (/^(?:run_looker_codemode|lkr_cli_extension_bridge)$/.test(fnName) || /^(?:run_looker_codemode|lkr_cli_extension_bridge)$/.test(sType)) {
       const isBridge = fnName === 'lkr_cli_extension_bridge' || sType === 'lkr_cli_extension_bridge'
+      const stepObj = step as unknown as Record<string, unknown>
       const args = parseStepArguments(step.arguments ?? step.args ?? step.function_call?.arguments ?? step.function_call?.args ?? step)
-      const rawThought = extractThoughtText(args.thought ?? step.thought)
-      const thought = INTERNAL_JARGON_THOUGHT_RE.test(rawThought) ? '' : rawThought
+      const thought = sanitizeActivityThought(args.thought ?? step.thought)
       const codeStr = String(args.code || step.code || '').trim()
       const sdkPreview = extractLookerSdkMethodPreview(codeStr)
-      const firstCodeLine = codeStr.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('#')) || ''
       const friendly = formatFriendlyLookerActivityLabel(codeStr, args)
       if (isBridge) {
         const method = String(args.method || step.method || '').trim().toUpperCase()
         const pathStr = String(args.path || step.path || '').trim()
         const methodPath = method || pathStr ? `${method || 'GET'} ${pathStr || '/'}` : ''
         const title = thought || methodPath || friendly.stepTitle
-        const detail = methodPath || sdkPreview || (codeStr ? codeStr.split('\n')[0].trim().slice(0, 140) : undefined)
-        upsertStep({ id: stepId, kind: 'cli_bridge', title, ...(detail ? { detail } : {}), ...(codeStr ? { language: 'PYTHON' } : {}), status: resolveStatus(true) }, explicitId)
+        const detail = methodPath || sdkPreview || undefined
+        const bridgeCode = codeStr || (Object.keys(args).length > 0 ? JSON.stringify(args, null, 2) : methodPath)
+        const content = buildExecStepContent(bridgeCode, stepObj, pairedResultObj)
+        upsertStep({ id: stepId, kind: 'cli_bridge', title, ...(detail ? { detail } : {}), ...(content ? { content } : {}), language: 'PYTHON', status: resolveStatus(true) }, explicitId)
       } else {
         const title = thought || friendly.stepTitle
-        const detail = sdkPreview || (firstCodeLine ? firstCodeLine.slice(0, 140) : undefined)
-        upsertStep({ id: stepId, kind: 'codemode', title, ...(detail ? { detail } : {}), language: 'PYTHON', status: resolveStatus(true) }, explicitId)
+        const detail = sdkPreview || undefined
+        const content = buildExecStepContent(codeStr, stepObj, pairedResultObj)
+        upsertStep({ id: stepId, kind: 'codemode', title, ...(detail ? { detail } : {}), ...(content ? { content } : {}), language: 'PYTHON', status: resolveStatus(true) }, explicitId)
       }
       continue
     }
@@ -606,17 +706,17 @@ export function extractInteractionActivitySteps(interaction: AntigravityInteract
       }
 
       const conciseCmd = firstLine.replace(/\s*<<\s*['"]?\w+['"]?.*$/, '').trim().slice(0, 140) || (language === 'PYTHON' ? 'Running Python script' : 'Running sandbox command')
-      const detail = rawCode ? rawCode.split('\n').slice(0, 3).join('\n').slice(0, 200) : undefined
-      upsertStep({ id: stepId, kind: 'code_execution', title: conciseCmd, ...(detail ? { detail } : {}), language, status: resolveStatus(false) }, explicitId)
+      const content = buildExecStepContent(rawCode, stepObj, pairedResultObj)
+      upsertStep({ id: stepId, kind: 'code_execution', title: conciseCmd, ...(content ? { content } : {}), language, status: resolveStatus(false) }, explicitId)
     }
   }
 
-  for (const out of rawOutputs) {
+  rawOutputs.forEach((out) => {
     if (out && typeof out === 'object' && (out.type === 'thought' || out.type === 'thinking' || out.thought)) {
       const outId = out.id ? String(out.id) : undefined
       addThought(out, outId || `step_${++autoIdx}`, outId, interactionDone ? 'done' : 'running')
     }
-  }
+  })
   return Array.from(byKey.values())
 }
 
@@ -637,7 +737,12 @@ export function formatThinkingTraceMarkdown(
     if (step.detail && step.detail !== step.title) {
       lines.push(step.kind === 'thought' ? `   ${step.detail.replace(/\r?\n/g, '\n   ')}` : `   \`${step.detail.replace(/\r?\n/g, ' ')}\``)
     }
-    if (step.content?.trim()) lines.push('   ```', `   ${step.content.trim().replace(/\r?\n/g, '\n   ')}`, '   ```')
+    if (step.content?.trim()) {
+      const fenceLang = step.kind === 'codemode' || step.kind === 'cli_bridge' || step.language === 'PYTHON' ? 'python'
+        : step.kind === 'code_execution' || step.language === 'BASH' ? 'bash' : ''
+      const fence = step.content.includes('```') ? '````' : '```'
+      lines.push(`   ${fence}${fenceLang}`, `   ${step.content.trim().replace(/\r?\n/g, '\n   ')}`, `   ${fence}`)
+    }
   })
   if (meta?.assistantText?.trim()) lines.push('', '### Assistant Response', '', meta.assistantText.trim())
   return lines.join('\n').trim()
@@ -692,7 +797,7 @@ export function summarizeProgress(interaction: AntigravityInteractionPayload | n
   if (lastTitle) return lastTitle
   const last = (interaction?.steps || []).slice(-1)[0]
   if (last?.type === 'function_call') {
-    return extractThoughtText(parseStepArguments(last.arguments ?? last.args).thought) || `Running tool: ${last.name || 'sandbox command'}...`
+    return sanitizeActivityThought(parseStepArguments(last.arguments ?? last.args).thought) || `Running tool: ${last.name || 'sandbox command'}...`
   }
   return 'Thinking...'
 }

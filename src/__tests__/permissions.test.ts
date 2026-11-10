@@ -23,7 +23,7 @@ import {
   extractNativeContentFromInteraction, extractNonThoughtText, extractSkillNameFromPath, extractThoughtText, extractWrittenMarkdownPathFromCode,
   fetchEnvironmentFile, formatAccessibleConnectionsMarkdown, formatContentInventoryMarkdown, formatFriendlyLookerActivityLabel,
   formatThinkingTraceMarkdown, generateConversationLabel, generateDynamicStarterPrompts,
-  getCachedStarterPrompts, getInitialStoredOAuthToken, getSharedEnvExploreSchemas,
+  getCachedStarterPrompts, getInitialStoredOAuthToken, getSharedEnvExploreSchemas, hydrateInteractionActivitySteps,
   isConnectionSchemaDiscoveryPrompt, isEnvironmentNotFoundError, isHostOAuthWedged, isLookerInstanceMetadataQuery,
   isNewProjectOnboardingIntakePrompt, isTextAttachmentFile, KDA_SKILL_MD, KDA_TOOLKIT_PY,
   listAvailableAntigravityModels, LKR_CLI_BRIDGE_TOOL, LKR_CLI_SITECUSTOMIZE_PY, LKR_DEV_CLI_SPEC,
@@ -35,7 +35,7 @@ import {
   prewarmOrWakeAntigravityEnvironment, readInitialRightPaneCollapsed, readInitialThinkingLevel, recordSharedEnvExploreSchema,
   refreshOAuthSessionIfNeeded, resetHostOAuthWedged, resolveAdaptivePollScheduleMs, resolveBuiltinWorkspaceFileContent,
   resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, runAntigravityTurn,
-  SANDBOX_AGENT_SKILL_FILES, SANDBOX_WORKSPACE_SKILL_FILES, sanitizeConversationLabel, saveStoredLeftPaneWidth,
+  SANDBOX_AGENT_SKILL_FILES, SANDBOX_WORKSPACE_SKILL_FILES, sanitizeActivityThought, sanitizeConversationLabel, saveStoredLeftPaneWidth,
   saveStoredRightPaneCollapsed, STARTER_PROMPTS_REQUEST_TAG, STARTER_PROMPTS_RESPONSE_FORMAT,
   streamInteractionUntilActionOrDone, stripStarterPromptEmojis, STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY,
   STUDIO_MAX_TOTAL_TOKENS_OPTIONS, STUDIO_OAUTH_REFRESH_INTERVAL_MS,
@@ -101,7 +101,7 @@ interface MockInteractionPostBody {
   previous_interaction_id?: string
   tools?: unknown[]
   agent_config?: { type: string; model: string; max_total_tokens?: string }
-  input?: Array<{ type?: string; text?: string }>
+  input?: Array<{ type?: string; text?: string; name?: string; call_id?: string; result?: unknown }>
 }
 const asSdk = (mock: Record<string, unknown>): Looker40SDK => mock as unknown as Looker40SDK
 
@@ -5104,11 +5104,11 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
     const queryLabel = formatFriendlyLookerActivityLabel(`sdk.run_inline_query({"model": "agentic_thelook", "view": "order_items", "fields": ["order_items.total_sale_price"]})`)
     expect(queryLabel).toEqual({ statusText: 'Executing Looker queries for Order Items...', stepTitle: 'Executing Looker queries for Order Items...', targetLabel: 'Order Items', isQuery: true })
     const apiLabel = formatFriendlyLookerActivityLabel(`sdk.lookml_model_explore("thelook", "users")`)
-    expect(apiLabel).toEqual({ statusText: 'Executing Looker API calls for Users...', stepTitle: 'Executing Looker API calls for Users...', targetLabel: 'Users', isQuery: false })
+    expect(apiLabel).toEqual({ statusText: 'Inspecting Users explore schema...', stepTitle: 'Inspecting Users explore schema...', targetLabel: 'Users', isQuery: false })
     const genericQueryLabel = formatFriendlyLookerActivityLabel(`sdk.run_sql_query("slug_123", "json")`)
     expect(genericQueryLabel).toMatchObject({ statusText: 'Executing Looker queries...', isQuery: true })
     const genericApiLabel = formatFriendlyLookerActivityLabel(`sdk.all_lookml_models()`)
-    expect(genericApiLabel).toMatchObject({ statusText: 'Executing Looker API calls...', isQuery: false })
+    expect(genericApiLabel).toMatchObject({ statusText: 'Listing accessible LookML models & explores...', stepTitle: 'Listing accessible LookML models & explores...', isQuery: false })
     for (const lbl of [queryLabel.statusText, apiLabel.statusText, genericQueryLabel.statusText, genericApiLabel.statusText]) {
       expect(lbl).not.toMatch(/LkrCodeMode|Monty|WASM|bridged lkr-dev-cli/i)
     }
@@ -6978,5 +6978,279 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     expect(mdHtml).toContain('<code class="dab-md-inline-code">$\\rightarrow$</code>')
     expect(mdHtml).toContain('const raw = &quot;$\\rightarrow$&quot;')
     expect(mdHtml).toContain('data-testid="markdown-link-external-btn"')
+  })
+
+  test('68. Issue #165: passes plain Struct function_result.result, concatenates SSE arguments + upgrades live step titles + streams turnSdk telemetry, preserves untruncated fenced code traces, lazy-hydrates historical activitySteps, and resolves local SKILL.md without remote 404 overwrite', async () => {
+    clearLookerMetadataCache()
+    clearArtifactServiceCache()
+
+    // 1. Struct function_result.result (object, array/primitive wrapper, non-JSON fallback) + live turnSdk endpoint telemetry
+    const postedBodies: MockInteractionPostBody[] = []
+    const seenStatuses: string[] = []
+    const liveStepSnapshots: AntigravityActivityStep[][] = []
+    const origRunPython = LkrCodeMode.runPythonCode
+    let callNum = 0
+    const mockTurnSdk = asSdk({
+      ok: async <T>(p: T) => p,
+      authSession: {
+        transport: {
+          rawRequest: async (method: string, reqPath: string) => ({
+            ok: true,
+            statusCode: 200,
+            body: JSON.stringify({ rows: [{ id: 1, method, path: reqPath }] }),
+          }),
+        },
+      },
+    })
+
+    LkrCodeMode.runPythonCode = async (opts: { code: string; sdk: Looker40SDK }) => {
+      callNum += 1
+      if (callNum === 1) {
+        const tr = (opts.sdk as unknown as { authSession: { transport: { rawRequest: (m: string, p: string) => Promise<unknown> } } }).authSession.transport
+        await tr.rawRequest('GET', '/lookml_models/thelook/explores/users')
+        await tr.rawRequest('POST', '/queries/run/json')
+        return JSON.stringify({ model: 'thelook', explore: 'users', row_count: 5 })
+      }
+      if (callNum === 2) return JSON.stringify(['alpha', 'beta'])
+      return 'plain non-json stdout summary'
+    }
+
+    try {
+      const mockExt = {
+        serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+          const b = init?.body ? (JSON.parse(String(init.body)) as MockInteractionPostBody) : {}
+          postedBodies.push(b)
+          if (postedBodies.length === 1) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_165_r1',
+                environment_id: 'env_165',
+                status: 'requires_action',
+                steps: [
+                  {
+                    id: 'fc_obj',
+                    type: 'function_call',
+                    name: 'run_looker_codemode',
+                    arguments: {
+                      thought: 'Inspecting Users explore schema via Looker Code Mode',
+                      code: 'exp = lookml_model_explore("thelook", "users")\nreturn run_inline_query("json", {"model": "thelook", "view": "users"})',
+                    },
+                  },
+                ],
+              }),
+            }
+          }
+          if (postedBodies.length === 2) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_165_r2',
+                environment_id: 'env_165',
+                status: 'requires_action',
+                steps: [
+                  { id: 'fc_arr', type: 'function_call', name: 'run_looker_codemode', arguments: { thought: 'Listing tags in LkrCodeMode', code: 'return ["alpha", "beta"]' } },
+                ],
+              }),
+            }
+          }
+          if (postedBodies.length === 3) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_165_r3',
+                environment_id: 'env_165',
+                status: 'requires_action',
+                steps: [
+                  { id: 'fc_txt', type: 'function_call', name: 'run_looker_codemode', arguments: { thought: 'Checking raw text in the WASM Monty sandbox', code: 'return "raw"' } },
+                ],
+              }),
+            }
+          }
+          return { ok: true, status: 200, body: JSON.stringify({ id: 'int_165_done', environment_id: 'env_165', status: 'completed', output_text: 'Completed Struct verification.' }) }
+        },
+      }
+
+      const turnRes = await runAntigravityTurn({
+        sdk: mockTurnSdk,
+        extensionSDK: mockExt,
+        auth: { mode: 'apikey', apiKey: 'key_165' },
+        session: { environmentId: 'env_165', toolType: 'app' },
+        selectedExplores: ['thelook::users'],
+        schemaMarkdown: '# Schema',
+        userPrompt: 'Check users explore',
+        onProgressSteps: (st) => liveStepSnapshots.push(st.map((x) => ({ ...x }))),
+        onStatus: (s) => seenStatuses.push(s),
+      })
+
+      const res1 = postedBodies[1]?.input?.[0]?.result
+      const res2 = postedBodies[2]?.input?.[0]?.result
+      const res3 = postedBodies[3]?.input?.[0]?.result
+      expect(typeof res1).toBe('object')
+      expect(res1).toEqual({ model: 'thelook', explore: 'users', row_count: 5 })
+      expect(typeof res2).toBe('object')
+      expect(res2).toEqual({ result: ['alpha', 'beta'] })
+      expect(typeof res3).toBe('object')
+      expect(res3).toEqual({ result: 'plain non-json stdout summary' })
+
+      expect(seenStatuses.some((s) => /GET \/lookml_models\/thelook\/explores\/users \(\d+ms\)/.test(s))).toBe(true)
+      expect(seenStatuses.some((s) => /POST \/queries\/run\/json \(\d+ms\)/.test(s))).toBe(true)
+      const fcObjStep = turnRes.activitySteps?.find((s) => s.id === 'fc_obj')
+      expect(fcObjStep?.title).toBe('Inspecting Users explore schema')
+      expect(fcObjStep?.content).toMatch(/GET \/lookml_models\/thelook\/explores\/users \(\d+ms\)/)
+      expect(fcObjStep?.content).toMatch(/POST \/queries\/run\/json \(\d+ms\)/)
+      expect(liveStepSnapshots.some((snap) => snap.some((s) => /GET \/lookml_models\/thelook\/explores\/users \(\d+ms\)/.test(s.content || '')))).toBe(true)
+    } finally {
+      LkrCodeMode.runPythonCode = origRunPython
+    }
+
+    // 2. SSE arguments concatenation + plain-object shallow merge + upsertStep title upgrade + sanitizeActivityThought + expanded friendly labels
+    expect(sanitizeActivityThought('Validating LookML project ecom via Looker Code Mode')).toBe('Validating LookML project ecom')
+    expect(sanitizeActivityThought('Profiling order_items in the WASM Monty sandbox')).toBe('Profiling order_items')
+    expect(sanitizeActivityThought('Running LkrCodeMode')).toBe('')
+
+    let sseState = mergeInteractionSseEvent(
+      { id: 'int_sse_165', status: 'in_progress' },
+      'step.delta',
+      { step: { id: 'fc_sse_1', type: 'function_call', name: 'run_looker_codemode', arguments: '{"thought":"Validating ' } }
+    )
+    expect(extractInteractionActivitySteps(sseState)[0]?.title).toBe('Executing Looker API calls...')
+    sseState = mergeInteractionSseEvent(
+      sseState,
+      'step.delta',
+      { step_delta: { id: 'fc_sse_1', arguments: 'sales_core LookML via Looker Code Mode","code":"return validate_project(\\"sales_core\\")"}' } }
+    )
+    expect(sseState.steps?.[0]?.arguments).toBe(
+      '{"thought":"Validating sales_core LookML via Looker Code Mode","code":"return validate_project(\\"sales_core\\")"}'
+    )
+    const upgradedSteps = extractInteractionActivitySteps({
+      status: 'in_progress',
+      steps: [
+        { id: 'fc_sse_1', type: 'function_call', name: 'run_looker_codemode', arguments: '{}' },
+        sseState.steps![0],
+      ],
+    })
+    expect(upgradedSteps).toHaveLength(1)
+    expect(upgradedSteps[0]).toMatchObject({
+      id: 'fc_sse_1',
+      kind: 'codemode',
+      title: 'Validating sales_core LookML',
+      detail: 'sdk.validate_project',
+    })
+
+    const objMerged = mergeInteractionSseEvent(
+      mergeInteractionSseEvent({ id: 'int_obj', status: 'in_progress' }, 'step.delta', { step: { id: 'fc_o', type: 'function_call', name: 'run_looker_codemode', arguments: { thought: 'Checking folders' } } }),
+      'step.delta',
+      { step_delta: { id: 'fc_o', arguments: { code: 'return folder_children("5")' } } }
+    )
+    expect(objMerged.steps?.[0]?.arguments).toEqual({ thought: 'Checking folders', code: 'return folder_children("5")' })
+
+    expect(formatFriendlyLookerActivityLabel('create_project({"name": "ecom_dw"})').statusText).toContain('Configuring LookML project Ecom Dw')
+    expect(formatFriendlyLookerActivityLabel('connection_schemas("bq_prod")').statusText).toContain('Inspecting database connection Bq Prod')
+    expect(formatFriendlyLookerActivityLabel('generate_lookml_with_new_files("ecom_dw")').statusText).toContain('Generating LookML files for Ecom Dw')
+    expect(formatFriendlyLookerActivityLabel('validate_project("ecom_dw")').statusText).toContain('Validating LookML project Ecom Dw')
+    expect(formatFriendlyLookerActivityLabel('upsert_udd("Q4 Revenue Pulse")').statusText).toContain('Building Looker dashboard Q4 Revenue Pulse')
+    expect(formatFriendlyLookerActivityLabel('folder_children("5")').statusText).toContain('Inspecting Looker folder')
+
+    // 3. Untruncated step.content (stripping duplicate bundle envelopes) + fenced ```bash / ```python blocks in formatThinkingTraceMarkdown
+    const tenLineApp = Array.from({ length: 12 }, (_, i) => `const metricLine_${i + 1} = "UNTRUNCATED_LINE_${i + 1}";`).join('\n')
+    const bundleCmd = `python3 /workspace/bundle_app.py --app-dir /workspace/apps/c1 --stdin "App" << 'EOF'\nimport { DataApp, html } from '/runtime/data-app.js';\n${tenLineApp}\nEOF`
+    const fullSteps = extractInteractionActivitySteps({
+      status: 'completed',
+      steps: [
+        {
+          id: 'ce_full',
+          type: 'code_execution',
+          language: 'BASH',
+          command: bundleCmd,
+          stdout: `Bundled 3 widgets OK.\n<DATA_APP_BUNDLE>{"title":"App","prod_code":"huge","raw_code":"huge","widgets":[]}</DATA_APP_BUNDLE>`,
+        },
+      ],
+    })
+    expect(fullSteps[0]?.detail).toBeUndefined()
+    expect(fullSteps[0]?.content).toContain('UNTRUNCATED_LINE_12')
+    expect(fullSteps[0]?.content).toContain('Bundled 3 widgets OK.')
+    expect(fullSteps[0]?.content).not.toContain('<DATA_APP_BUNDLE>')
+    const fencedTrace = formatThinkingTraceMarkdown([fullSteps[0], upgradedSteps[0]])
+    expect(fencedTrace).toContain('```bash')
+    expect(fencedTrace).toContain('UNTRUNCATED_LINE_12')
+    expect(fencedTrace).toContain('```python')
+    expect(fencedTrace).toContain('return validate_project("sales_core")')
+
+    // 4. Lazy multi-hop hydrateInteractionActivitySteps (walking back to stopAtInteractionId, skipping [PREWARM:, max 12 hops)
+    const fetchedHopUrls: string[] = []
+    const hopMap: Record<string, Record<string, unknown>> = {
+      int_t2_final: {
+        id: 'int_t2_final',
+        previous_interaction_id: 'int_t2_call',
+        status: 'completed',
+        input: [{ type: 'function_result', name: 'run_looker_codemode', call_id: 'fc_t2', result: { total_orders: 1280 } }],
+        steps: [{ id: 'ce_t2', type: 'code_execution', language: 'BASH', command: 'echo "FINAL_STEP_T2"', stdout: 'FINAL_STEP_T2' }],
+      },
+      int_t2_call: {
+        id: 'int_t2_call',
+        previous_interaction_id: 'int_t1_done',
+        status: 'requires_action',
+        input: [{ type: 'text', text: 'Update orders tile' }],
+        steps: [
+          { id: 'th_t2', type: 'thought', thought: 'Planning Turn 2 query' },
+          { id: 'fc_t2', type: 'function_call', name: 'run_looker_codemode', arguments: { thought: 'Querying order count', code: 'return run_inline_query("json", {"model":"thelook","view":"orders"})' } },
+        ],
+      },
+      int_t1_done: {
+        id: 'int_t1_done',
+        status: 'completed',
+        steps: [{ id: 'th_t1', type: 'thought', thought: 'MUST_NOT_INCLUDE_TURN_1' }],
+      },
+    }
+    const hydratedTurn2 = await hydrateInteractionActivitySteps({
+      extensionSDK: {
+        serverProxy: async (url: string) => {
+          fetchedHopUrls.push(url)
+          const id = decodeURIComponent(url.split('/interactions/')[1] || '')
+          return { ok: true, status: 200, body: JSON.stringify(hopMap[id] || {}) }
+        },
+      },
+      auth: { mode: 'apikey', apiKey: 'k' },
+      interactionId: 'int_t2_final',
+      stopAtInteractionId: 'int_t1_done',
+    })
+    expect(fetchedHopUrls).toHaveLength(2)
+    expect(hydratedTurn2.map((s) => s.id)).toEqual(['th_t2', 'fc_t2', 'ce_t2'])
+    expect(hydratedTurn2.find((s) => s.id === 'fc_t2')?.content).toContain('1280')
+    expect(JSON.stringify(hydratedTurn2)).not.toContain('MUST_NOT_INCLUDE_TURN_1')
+
+    let runawayCalls = 0
+    await hydrateInteractionActivitySteps({
+      extensionSDK: {
+        serverProxy: async (url: string) => {
+          runawayCalls += 1
+          const cur = Number((url.match(/hop_(\d+)/) || [])[1] || 0)
+          return { ok: true, status: 200, body: JSON.stringify({ id: `hop_${cur}`, previous_interaction_id: `hop_${cur + 1}`, status: 'completed', steps: [] }) }
+        },
+      },
+      auth: { mode: 'apikey', apiKey: 'k' },
+      interactionId: 'hop_1',
+    })
+    expect(runawayCalls).toBe(12)
+
+    // 5. Unconditional local SKILL.md resolution in fetchEnvironmentFile with zero remote HTTP calls
+    let remoteSkillCalls = 0
+    const skillText = await fetchEnvironmentFile({
+      extensionSDK: {
+        serverProxy: async () => {
+          remoteSkillCalls += 1
+          return { ok: false, status: 404, body: 'Not Found' }
+        },
+      },
+      auth: { mode: 'apikey', apiKey: 'k' },
+      environmentId: 'env_404',
+      path: '/workspace/skills/looker-dashboard/SKILL.md',
+    })
+    expect(remoteSkillCalls).toBe(0)
+    expect(skillText).toBe(LOOKER_DASHBOARD_SKILL_MD)
   })
 })

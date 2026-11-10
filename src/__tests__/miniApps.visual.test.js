@@ -849,8 +849,20 @@ function buildHtmlPage(scenario) {
         },
         serverProxy: async (url, init) => {
           window.__INTERACTION_CALLS__ = window.__INTERACTION_CALLS__ || [];
+          const method = (init && init.method) || 'GET';
           const body = init && init.body ? JSON.parse(init.body) : undefined;
-          window.__INTERACTION_CALLS__.push({ url, method: (init && init.method) || 'GET', body });
+          window.__INTERACTION_CALLS__.push({ url, method, body });
+          if (window.__MOCK_FORCE_ENV_FILE_404__ && url.includes('/environments/') && url.includes('/files/')) {
+            return { ok: false, status: 404, body: JSON.stringify({ error: { message: 'File not found in remote sandbox' } }) };
+          }
+          if (method === 'GET' && url.includes('/interactions/') && !url.includes(':cancel') && window.__MOCK_LOOKER_EXTENSION__ && window.__MOCK_LOOKER_EXTENSION__.mockInteractions) {
+            const rawId = url.split('/interactions/').pop().split(/[?#]/)[0];
+            const hit = window.__MOCK_LOOKER_EXTENSION__.mockInteractions[decodeURIComponent(rawId)];
+            if (window.__MOCK_INTERACTION_DELAY_MS__) {
+              await new Promise((r) => setTimeout(r, window.__MOCK_INTERACTION_DELAY_MS__));
+            }
+            if (hit) return { ok: true, status: 200, body: JSON.stringify(hit) };
+          }
           const inputText = (body && body.input && body.input[0] && body.input[0].text) || '';
           if (inputText.includes('[CA_AGENT_SELECTION_REQUEST]')) {
             return {
@@ -5653,6 +5665,8 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
   }, 20000)
 
   test('Issue #166: keeps right pane hidden on chat-only intake turns, merges multi-turn LookML into single lookml:<projectId> tab, auto-opens .dashboard.lookml & chat content links in viewer, and renders LookML details modal + tab hover popover', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
     await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=data_app` })
 
     const deadline = Date.now() + 8000
@@ -5893,6 +5907,210 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       activeAfterChatLinkClick: 'lookml_dashboard:bryan_test2::exec_pulse',
       chipRestoredAfterChatClick: true,
       openedViaExtBtn: '/dashboards/bryan_test2::exec_pulse',
+    })
+  }, 20000)
+
+  test('Issue #165: expandable untruncated step code, retained Thinking & Activity after turn completion, lazy reload hydration via hydrateInteractionActivitySteps, and local SKILL.md resolution without 404 overwrite', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=data_app` })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="new-conversation-btn"]'))`,
+        returnByValue: true,
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 60))
+    }
+
+    const res = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        window.__DAB_STUDIO__.setAuthMode('apikey');
+        window.__DAB_STUDIO__.setApiKey('mock-api-key');
+        await new Promise((r) => setTimeout(r, 80));
+
+        window.__INTERACTION_CALLS__ = [];
+        window.__ARTIFACT_UPDATES__ = [];
+        window.__MOCK_FORCE_ENV_FILE_404__ = true;
+        window.__MOCK_LOOKER_EXTENSION__.mockInteractions = {
+          int_165_hist_prev: {
+            id: 'int_165_hist_prev',
+            status: 'completed',
+            steps: [{ id: 's_old_leak', type: 'thought', summary: 'Prior turn step must NOT leak into turn 2' }],
+          },
+          int_165_hist_2a: {
+            id: 'int_165_hist_2a',
+            previous_interaction_id: 'int_165_hist_prev',
+            status: 'requires_action',
+            steps: [
+              { id: 's_skill_165', type: 'function_call', name: 'lookup_skill', arguments: { skill: 'looker-dashboard' } },
+              {
+                id: 's_cm_165',
+                type: 'function_call',
+                name: 'run_looker_codemode',
+                arguments: {
+                  thought: 'Profile order_items distributions via Looker Code Mode before charting',
+                  code: Array.from({ length: 12 }, (_, i) => '# line ' + (i + 1) + '\\nres = profile_fields("thelook", "order_items")').join('\\n'),
+                },
+                endpoint_logs: ['GET /api/4.0/lookml_models/thelook/explores/order_items (41ms)'],
+              },
+            ],
+          },
+          int_165_hist_2b: {
+            id: 'int_165_hist_2b',
+            previous_interaction_id: 'int_165_hist_2a',
+            status: 'completed',
+            input: [{ type: 'function_result', call_id: 's_cm_165', name: 'run_looker_codemode', result: { row_count: 42 } }],
+            steps: [{ id: 's_bash_165', type: 'code_execution', code: 'ls -la /workspace/skills/looker-dashboard\\nwc -l /workspace/AGENTS.md', stdout: 'total 12\\n148 /workspace/AGENTS.md' }],
+            output_text: 'Built KPI dashboard.',
+          },
+        };
+
+        const ext = window.__DAB_STUDIO__.extensionSDK;
+        const origProxy = ext.serverProxy.bind(ext);
+        ext.serverProxy = async (url, init) => {
+          const body = init && init.body ? JSON.parse(init.body) : {};
+          const inputText = (body.input && body.input[0] && body.input[0].text) || '';
+          if (inputText.includes('Inspect order_items for #165')) {
+            window.__INTERACTION_CALLS__.push({ url, method: (init && init.method) || 'GET', body });
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_165_live_turn1',
+                environment_id: 'env_165_live',
+                status: 'completed',
+                steps: [
+                  { id: 's_live_skill', type: 'function_call', name: 'lookup_skill', arguments: { skill: 'looker-dashboard' } },
+                  {
+                    id: 's_live_exec',
+                    type: 'code_execution',
+                    code: Array.from({ length: 10 }, (_, i) => 'echo "step line ' + (i + 1) + '"').join('\\n'),
+                    stdout: 'step line 1\\nstep line 10',
+                  },
+                ],
+                output_text: '<USE_CASE>conversational-analytics</USE_CASE>\\nOrder revenue is $14.01M across 303,454 orders.',
+              }),
+            };
+          }
+          return origProxy(url, init);
+        };
+
+        // 1. Fresh Turn 1: verify completed-thinking-block stays mounted after user_conversations:1 persistence & expandable step <pre> works
+        document.querySelector('[data-testid="new-conversation-btn"]').click();
+        await new Promise((r) => setTimeout(r, 60));
+        await window.__DAB_STUDIO__.handleSendPrompt({ text: 'Inspect order_items for #165' });
+        await new Promise((r) => setTimeout(r, 160));
+
+        const liveThinkingBlock = document.querySelector('[data-testid="completed-thinking-block"]');
+        const retainedAfterPersist = Boolean(liveThinkingBlock);
+        liveThinkingBlock.querySelector('summary').click();
+        await new Promise((r) => setTimeout(r, 50));
+
+        const expandableStep = liveThinkingBlock.querySelector('[data-testid="thinking-step-expandable"]');
+        const collapsedByDefault = Boolean(expandableStep && !expandableStep.open);
+        expandableStep.querySelector('summary').click();
+        await new Promise((r) => setTimeout(r, 40));
+        const preEl = expandableStep.querySelector('.dab-thinking-step-pre');
+        const preText = preEl ? preEl.textContent : '';
+        const lightPreBg = preEl ? window.getComputedStyle(preEl).backgroundColor : '';
+        window.__DAB_STUDIO__.setThemeMode('dark');
+        await new Promise((r) => setTimeout(r, 40));
+        const darkPreBg = preEl ? window.getComputedStyle(preEl).backgroundColor : '';
+        window.__DAB_STUDIO__.setThemeMode('light');
+        await new Promise((r) => setTimeout(r, 40));
+
+        const convUpdates = (window.__ARTIFACT_UPDATES__ || []).filter((u) => u.key === 'user_conversations:1');
+        const latestConvs = convUpdates.length ? JSON.parse(convUpdates[convUpdates.length - 1].value) : [];
+        const zeroPersistedActivitySteps = !latestConvs.some((c) => (c.messages || []).some((m) => Boolean(m.activitySteps)));
+
+        // 2. Clicking built-in skill step with __MOCK_FORCE_ENV_FILE_404__ = true resolves locally with 0 remote /files calls
+        const envCallsBeforeSkillClick = window.__INTERACTION_CALLS__.filter((c) => c.url.includes('/environments/')).length;
+        const skillStepEl = liveThinkingBlock.querySelector('[data-testid="thinking-step-skill"]');
+        skillStepEl.click();
+        await new Promise((r) => setTimeout(r, 80));
+        const envCallsAfterSkillClick = window.__INTERACTION_CALLS__.filter((c) => c.url.includes('/environments/')).length;
+        const viewerDocText = document.querySelector('[data-testid="viewer-document-pane"]')?.innerText || '';
+        const skillResolvedLocally =
+          envCallsAfterSkillClick === envCallsBeforeSkillClick &&
+          viewerDocText.length > 100 &&
+          !viewerDocText.includes('Error Loading File');
+
+        // Also verify non-builtin openViewerDocument with initialContent is NEVER overwritten when remote 404s
+        await window.__DAB_STUDIO__.openViewerDocument({
+          path: '/workspace/custom_investigation_notes.md',
+          title: 'Custom Notes',
+          kind: 'markdown',
+          initialContent: '# Preserved Local Snapshot\\nKeep this exact body on 404.',
+        });
+        await new Promise((r) => setTimeout(r, 80));
+        const preservedViewerText = document.querySelector('[data-testid="viewer-document-pane"]')?.innerText || '';
+        const initialContentPreservedOn404 =
+          preservedViewerText.includes('Preserved Local Snapshot') &&
+          !preservedViewerText.includes('Error Loading File');
+
+        // 3. Reload / historical messages with interactionId & NO activitySteps -> collapsed block + lazy StudioSkeleton + chain walk
+        window.__MOCK_INTERACTION_DELAY_MS__ = 110;
+        window.__DAB_STUDIO__.setMessages([
+          { role: 'user', text: 'First question' },
+          { role: 'assistant', text: 'First answer', interactionId: 'int_165_hist_prev' },
+          { role: 'user', text: 'Second question' },
+          { role: 'assistant', text: 'Built KPI dashboard.', interactionId: 'int_165_hist_2b' },
+        ]);
+        await new Promise((r) => setTimeout(r, 60));
+
+        const blocks = Array.from(document.querySelectorAll('[data-testid="completed-thinking-block"]'));
+        const turn2Block = blocks[1];
+        const renderedCollapsedFromInteractionIdOnly = blocks.length === 2 && !turn2Block.open;
+        turn2Block.open = true;
+        turn2Block.dispatchEvent(new Event('toggle'));
+        await new Promise((r) => setTimeout(r, 30));
+        const sawSkeletonWhileHydrating = Boolean(turn2Block.querySelector('[data-testid="thinking-hydration-loading"]'));
+        await new Promise((r) => setTimeout(r, 260));
+
+        const hydratedText = turn2Block.innerText || '';
+        const hydratedExpandables = Array.from(turn2Block.querySelectorAll('[data-testid="thinking-step-expandable"]'));
+        hydratedExpandables.forEach((d) => { d.open = true; });
+        await new Promise((r) => setTimeout(r, 30));
+        const hydratedPreText = Array.from(turn2Block.querySelectorAll('.dab-thinking-step-pre')).map((el) => el.textContent).join('\\n');
+
+        return {
+          retainedAfterPersist,
+          collapsedByDefault,
+          untruncatedPreLines: preText.includes('step line 1') && preText.includes('step line 10') && preText.includes('# Output'),
+          themeDistinctPreBg: Boolean(lightPreBg && darkPreBg && lightPreBg !== darkPreBg),
+          zeroPersistedActivitySteps,
+          skillResolvedLocally,
+          initialContentPreservedOn404,
+          renderedCollapsedFromInteractionIdOnly,
+          sawSkeletonWhileHydrating,
+          hydratedWalkedChainWithoutPriorTurnLeak:
+            hydratedText.includes('Reading skill looker-dashboard') &&
+            hydratedText.includes('Profile order_items distributions before charting') &&
+            !hydratedText.includes('via Looker Code Mode') &&
+            !hydratedText.includes('Prior turn step must NOT leak') &&
+            hydratedPreText.includes('# line 12') &&
+            hydratedPreText.includes('GET /api/4.0/lookml_models/thelook/explores/order_items (41ms)') &&
+            hydratedPreText.includes('"row_count": 42'),
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+
+    expect(res.result.value).toEqual({
+      retainedAfterPersist: true,
+      collapsedByDefault: true,
+      untruncatedPreLines: true,
+      themeDistinctPreBg: true,
+      zeroPersistedActivitySteps: true,
+      skillResolvedLocally: true,
+      initialContentPreservedOn404: true,
+      renderedCollapsedFromInteractionIdOnly: true,
+      sawSkeletonWhileHydrating: true,
+      hydratedWalkedChainWithoutPriorTurnLeak: true,
     })
   }, 20000)
 })
