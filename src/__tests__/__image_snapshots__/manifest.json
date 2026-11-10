@@ -161,7 +161,7 @@
     "height": 416,
     "clipSelector": ".dab-modal",
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "conversational_analytics",
