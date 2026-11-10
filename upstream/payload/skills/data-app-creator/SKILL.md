@@ -110,7 +110,7 @@ composes with tabs, drawers, sidebars and anything else you need.
 ```html
 <div class="da-container">
 
-  <!-- KPI strip: fits as many ~200px columns as there is room for -->
+  <!-- KPI strip: step via @container (4 -> 2 -> 1) so 4 cards never wrap 3 + 1 -->
   <section class="da-kpi-grid">
     <app-kpi label="Revenue" query-field="orders.total" format="usd"></app-kpi>
     <app-kpi label="Orders"  query-field="orders.count" format="int"></app-kpi>
@@ -126,10 +126,9 @@ composes with tabs, drawers, sidebars and anything else you need.
   <app-grid ...></app-grid>
 </div>
 ```
-These utility classes are shortcuts for the common shapes. All of them are
-`auto-fit` grids, so they reflow by themselves — no breakpoints to write:
+These utility classes cover the common layout shapes (chart/section grids reflow automatically, while KPI strips step via `@container` divisor columns so 4 cards never wrap into `3 + 1`):
 
-- `.da-kpi-grid` — auto-fitting KPI strip (`minmax(min(210px, 100%), 1fr)`).
+- `.da-kpi-grid` — KPI strip; override with `container-type: inline-size` on `.da-container` and explicit `@container` divisor stepping (`repeat(4, minmax(0, 1fr))` -> `@container (max-width: 820px) { .da-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }` -> `@container (max-width: 420px) { .da-kpi-grid { grid-template-columns: 1fr; } }` for 4 cards; `3 -> 1` for 3; `6 -> 3 -> 2 -> 1` for 6) rather than `auto-fit`/`auto-fill` so 4 KPIs never wrap into `3 + 1`.
 - `.da-grid-1` — full-width row (`1fr`).
 - `.da-grid-2` — 2 equal columns (`minmax(min(380px, 100%), 1fr)`).
 - `.da-grid-3` — 3 equal columns (`minmax(min(280px, 100%), 1fr)`).
@@ -503,24 +502,28 @@ When dashboard titles, airport names, or filter strings contain apostrophes (e.g
 17. **Flat pie with no center total:** to render a flat pie with no donut hole or center total, set `options = { plotOptions: { pie: { innerSize: '0%' } } }`.
 
 ### 15. Metric Selector Data App UX & Data-Binding Contract
-When building a **Metric Selector / Timeframe Switcher Data App**, enforce all 5 rules:
+When building a **Metric Selector / Timeframe Switcher Data App**, enforce all 6 rules:
 1. **LookML `date` Timeframe Key (Never `*_day`)**:
    - LookML `dimension_group` (`type: time`) timeframes are `date`, `week`, `month`, `quarter`, `year` (never `_day`). Key `PERIOD_DEFAULTS = { date: 90, week: 53, month: 60, year: 10 }`, `WINDOW_OPTIONS = { date: [14, 30, 60, 90, 180], week: [12, 26, 53, 104], month: [6, 12, 24, 60], year: [3, 5, 10] }`, and `UNITS = { date: 'days', week: 'weeks', month: 'months', year: 'years' }` (`Period` `Daily` -> `'date'`). Strictly forbid `${dateBase}_day` / `*_day`.
-2. **Custom 4-Row PoP KPI Cards (Forbid `<app-kpi>` on PoP Switcher Cards, Pill Below Headline)**:
+2. **Smart Balanced `@container` KPI Card Grid (`4 -> 2x2 -> 1`, Never `3 + 1`)**:
+   - Forbid `repeat(auto-fit, ...)` and `repeat(auto-fill, ...)` on KPI card strips.
+   - Mandate `container-type: inline-size` on `.da-container` and explicit `@container` divisor stepping on `.da-kpi-grid`: for 4 KPI cards use `grid-template-columns: repeat(4, minmax(0, 1fr))` -> `@container (max-width: 820px) { .da-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }` (`2x2`) -> `@container (max-width: 420px) { .da-kpi-grid { grid-template-columns: 1fr; } }` (`1x4`, never 3 columns; `N = 3`: `3 -> 1`; `N = 6`: `6 -> 3 -> 2 -> 1`).
+3. **Custom 4-Row PoP KPI Cards (Forbid `<app-kpi>` on PoP Switcher Cards, Pill Below Headline)**:
    - Remove any `Metric` `<app-select>` dropdown and **never** render `"ACTIVE METRIC"` badges or `<app-kpi>` on PoP switcher cards (hosted `<app-kpi>` places `.kpi-change` beside `.kpi-value` and compares `last` vs `last - 1`).
-   - Query `2 * this.periodCount` periods per KPI (`filterVal = "${2 * n} ${UNITS[this.period]}"`, `sorts: ["${dateDim} asc"]`, `limit: '500'`) on its matched lifecycle date dimension (`created_*`, `returned_*`, `cancelled_*`), split into `prevRows` (first `n`) and `currRows` (last `n`), compute window aggregates (`currAgg` vs `prevAgg`), and render 4 vertical rows:
+   - Query `2 * this.periodCount` periods per KPI (`filterVal = "${2 * n} ${UNITS[this.period]}"`, `sorts: ["${dateDim} asc"]`, dynamic `limit: String(Math.min(5000, Math.max(500, 2 * this.periodCount + 10)))`) on its matched lifecycle date dimension (`created_*`, `returned_*`, `cancelled_*`), split into `prevRows` (first `n`) and `currRows` (last `n`), compute window aggregates (`currAgg` vs `prevAgg`), and render 4 vertical rows:
      1. Row 1: Uppercase metric label
      2. Row 2: Standalone formatted headline value (**zero** pill beside the value)
      3. Row 3 (below value): Inline flex row (`display: flex; align-items: center; gap: 6px; margin-top: 4px`) placing `<span class="kpi-change ${tone}">${pctStr}</span>` **directly before** `<span>vs. prev ${n} ${UNITS[this.period]}</span>` (respecting `polarity="higher-better|lower-better"` so increases in `lower-better` returns/cancellations color red)
      4. Row 4: Current-`N` SVG sparkline (`currRows`).
-3. **Secondary KPI Card-Border Compare State Machine (No `"Compare against"` Dropdown) + Top-Right `⋮` Menu**:
+4. **Secondary KPI Card-Border Compare State Machine (No `"Compare against"` Dropdown) + Top-Right `⋮` Menu**:
    - Delete `<app-select label="Compare against">` completely (leaving only the top-right `⋮` Chart Type menu in the Trend card header). Set `--app-chart-2: #34a853;` on `.da-container`, styling Primary (`this.selectedMetric === key`) with `border: 2px solid var(--app-chart-1, #4285f4)` and Secondary / Compare (`this.compareMetric === key`) with `border: 2px solid var(--app-chart-2, #34a853)`:
      - **When `!this.compareMetric`**: regular click on `key !== selectedMetric` switches `selectedMetric = key`; `Shift+Click` (`e.shiftKey`) sets `compareMetric = key`; right-click (`@contextmenu`, `e.preventDefault()`) opens a floating context menu (`Compare`) setting `compareMetric = key`.
      - **When `Boolean(this.compareMetric)`**: regular click on `key === compareMetric` clears `compareMetric = ''`; regular click on any other card keeps `selectedMetric` locked (with `title` tooltip hint to click the secondary card to clear comparison first); `Shift+Click` or right-click (`Remove comparison`) on `compareMetric` or a 3rd metric (`key !== selectedMetric`) clears `compareMetric = ''`.
-   - When `compareMetric` uses a different `dateBase` than `selectedMetric` (`created_*` vs `returned_*`), run two parallel `this.runQuery` trend queries on their respective lifecycle dates and merge by period bucket, configuring dual `yAxis` (`opposite: true` on axis 2, `yAxis.title.text` set to metric label(s)), omitting `"Longitudinal Trend"` titles, and placing `Chart Type` (`areaspline`/`line`/`column`/`bar`) inside the top-right **3-dot (`⋮`) action menu** (`this.chartMenuOpen`).
-4. **Separate `Period` & `Window` (`periodCount`) Controls + Universal Filter Wiring**:
-   - Render separate `Period` (`Daily` -> `'date'`, `Weekly` -> `'week'`, `Monthly` -> `'month'`, `Yearly` -> `'year'`) and `Window` (`periodCount`) controls wired via `this.getEffectiveFilters(...)` to every KPI, chart, and table.
-5. **Titleless Bottom PoP Variance `<app-grid>` + Multi-Select `"Dimensions"` (Up to 5 Relevant Dimensions)**:
+   - When `compareMetric` uses a different `dateBase` than `selectedMetric` (`created_*` vs `returned_*`), run two parallel `this.runQuery` trend queries on their respective lifecycle dates and merge by period bucket (passing dynamic `limit: String(Math.min(5000, Math.max(500, 2 * this.periodCount + 10)))` on Trend `<app-chart>` / `this.runQuery` trend queries as well), configuring dual `yAxis` (`opposite: true` on axis 2, `yAxis.title.text` set to metric label(s)), omitting `"Longitudinal Trend"` titles, and placing `Chart Type` (`areaspline`/`line`/`column`/`bar`) inside the top-right **3-dot (`⋮`) action menu** (`this.chartMenuOpen`).
+5. **Separate `Period` & `Window` (`periodCount`) Controls, Custom `Window:` Number Popover & Universal Filter Wiring**:
+   - Declare `customWindowOpen` (`Boolean`) and `customWindowDraft` (`String`) in `static properties`. Render separate `Period` (`Daily` -> `'date'`, `Weekly` -> `'week'`, `Monthly` -> `'month'`, `Yearly` -> `'year'`) and `Window` (`periodCount`) controls wired via `this.getEffectiveFilters(...)` to every KPI, chart, and table.
+   - Immediately to the right of the preset `Window:` pills, render: (1) an active pill `${this.periodCount} ${UNITS[this.period]}` whenever `!WINDOW_OPTIONS[this.period].includes(this.periodCount)`, and (2) a compact icon button (`this.customWindowOpen`, inline `<svg>` icon with `title="Custom window length"`, seeding `this.customWindowDraft = String(this.periodCount)` on open and closing `this.customWindowOpen = false` on `Period`/preset clicks) opening a small anchored popover containing `<input type="number" min="1" max="1000" .value=${this.customWindowDraft ?? String(this.periodCount)} @input=${(e) => { this.customWindowDraft = e.target.value; }}>` + `${UNITS[this.period]}` label + `Apply` button (`Enter` key submit / `Escape` close), setting `this.periodCount = Math.max(1, Math.min(1000, Math.round(Number(this.customWindowDraft) || this.periodCount)))` and `this.customWindowOpen = false` (`limit: String(Math.min(5000, Math.max(500, 2 * this.periodCount + 10)))`).
+6. **Titleless Bottom PoP Variance `<app-grid>` + Multi-Select `"Dimensions"` (Up to 5 Relevant Dimensions)**:
    - Omit `title` on `<app-grid>`, provide a `"Dimensions"` multi-select (`this.selectedDimensions`, <= 5 categorical dimensions, `>= 1` active), and join current (`"${N} ${unit}"`) + prior (`"${2 * N} ${unit} ago for ${N} ${unit}"`) queries on `this.selectedDimensions` into `.data` with `<Metric 1> — This Period`, `<Metric 1> — Last Period`, `<Metric 1> — Variance` (`percent1-signed`), plus Metric 2 columns when `compareMetric` is active.
 
 ---
