@@ -193,31 +193,24 @@ export function isSandboxMarkdownPath(raw: string): boolean {
   return /^(?:file:\/\/)?(?:\/workspace\/|[a-zA-Z0-9_./-]*\/)?[a-zA-Z0-9_.-]+\.md$/i.test(trimmed.split(/[?#]/)[0] || '')
 }
 
-const LATEX_INLINE_OP_RE = /\\(?:rightarrow|to|leftarrow|leftrightarrow|times|geq?|leq?|approx)\b/
-
-function replaceLatexOperators(inner: string): string {
-  return inner
-    .replace(/\\(?:rightarrow|to)\b/g, '→')
-    .replace(/\\leftarrow\b/g, '←')
-    .replace(/\\leftrightarrow\b/g, '↔')
-    .replace(/\\times\b/g, '×')
-    .replace(/\\geq?\b/g, '>=')
-    .replace(/\\leq?\b/g, '<=')
-    .replace(/\\approx\b/g, '≈')
-    .trim()
+const LATEX_OPS: Record<string, string> = {
+  rightarrow: '→', to: '→', leftarrow: '←', leftrightarrow: '↔',
+  times: '×', ge: '>=', geq: '>=', le: '<=', leq: '<=', approx: '≈',
 }
+const LATEX_INLINE_OP_RE = /\\(rightarrow|to|leftarrow|leftrightarrow|times|geq?|leq?|approx)\b/g
 
 function normalizeInlineMarkdownArtifacts(input: string): string {
-  const normalizedLinks = String(input ?? '')
+  return String(input ?? '')
     .replace(/\[([^\][]+)\]\(\s*([^)]+?)\s*\)/g, (_m, lbl: string, url: string) => `[${lbl.replace(/\s*\n\s*/g, ' ').trim()}](${url.replace(/\s+/g, '')})`)
     .replace(/\*\*([^*]+?)\*\*/g, (m, inner: string) => (inner.includes('\n') && !inner.includes('\n\n') && !/\n\s*(?:[-*]|\d+\.|#{1,4})\s/.test(inner) ? `**${inner.replace(/\s*\n\s*/g, ' ').trim()}**` : m))
-  return normalizedLinks
     .split(/(`[^`\n]+`)/g)
     .map((part, idx) =>
       idx % 2 === 1
         ? part
         : part.replace(/\$([^$\n]{1,120})\$/g, (m, inner: string) =>
-            LATEX_INLINE_OP_RE.test(inner) ? replaceLatexOperators(inner) : m
+            inner.includes('\\') && /\\(?:rightarrow|to|leftarrow|leftrightarrow|times|geq?|leq?|approx)\b/.test(inner)
+              ? inner.replace(LATEX_INLINE_OP_RE, (_op, k: string) => LATEX_OPS[k] || '').trim()
+              : m
           )
     )
     .join('')

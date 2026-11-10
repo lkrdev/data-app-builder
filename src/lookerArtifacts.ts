@@ -328,16 +328,7 @@ export function hydrateConversationContentItems(conv: Partial<UserConversationEn
     const projId = typeof c.projectId === 'string' ? c.projectId.trim() : ''
     const sid = String(c.sessionId || projId || c.id || conv.objectId || '').trim()
     const canonId = projId || sid
-    if (canonId) {
-      pushItem({
-        id: canonId,
-        sessionId: sid || canonId,
-        projectId: projId || undefined,
-        contentType: 'lookml',
-        title: projId ? `LookML: ${projId}` : fallbackTitle,
-        updatedAt: conv.updatedAt,
-      })
-    }
+    if (canonId) pushItem({ id: canonId, sessionId: sid || canonId, projectId: projId || undefined, contentType: 'lookml', title: projId ? `LookML: ${projId}` : fallbackTitle, updatedAt: conv.updatedAt })
     return items
   }
   if (rawType === 'tile' || rawType === 'script' || c.scriptId) {

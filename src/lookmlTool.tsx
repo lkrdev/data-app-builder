@@ -428,13 +428,7 @@ export const LookmlPreviewPane: React.FC<{
                   className={idx === selectedFileIdx ? 'dab-btn-primary' : 'dab-btn-secondary'}
                   style={{ fontFamily: 'monospace', fontSize: 11, flexShrink: 0 }}
                 >
-                  {viewMode === 'diff'
-                    ? f.action === 'created'
-                      ? '+ '
-                      : f.action === 'deleted'
-                      ? '- '
-                      : 'Δ '
-                    : ''}
+                  {viewMode === 'diff' ? (f.action === 'created' ? '+ ' : f.action === 'deleted' ? '- ' : 'Δ ') : ''}
                   {f.path}
                 </button>
               ))
@@ -442,74 +436,43 @@ export const LookmlPreviewPane: React.FC<{
           </div>
           <div ref={codeMenuRef} style={{ position: 'relative', flexShrink: 0 }}>
             <button
-              type="button"
-              data-testid="lookml-code-actions-btn"
-              className="dab-btn dab-btn-secondary dab-btn-icon"
-              title="LookML file actions"
-              aria-label="LookML file actions"
-              aria-haspopup="menu"
-              aria-expanded={codeMenuOpen}
+              type="button" data-testid="lookml-code-actions-btn" className="dab-btn dab-btn-secondary dab-btn-icon"
+              title="LookML file actions" aria-label="LookML file actions" aria-haspopup="menu" aria-expanded={codeMenuOpen}
               onClick={() => setCodeMenuOpen((prev) => !prev)}
             >
               <MoreVertical size={14} strokeWidth={1.75} aria-hidden="true" />
             </button>
             {codeMenuOpen && (
               <div
-                data-testid="lookml-code-actions-menu"
-                role="menu"
-                aria-label="LookML file actions"
-                className="dab-studio-menu align-right"
-                style={{ minWidth: 176 }}
+                data-testid="lookml-code-actions-menu" role="menu" aria-label="LookML file actions"
+                className="dab-studio-menu align-right" style={{ minWidth: 176 }}
               >
                 <button
-                  type="button"
-                  role="menuitem"
-                  data-testid="lookml-toggle-view-mode-btn"
-                  className="dab-studio-menu-item"
-                  onClick={() => {
-                    setViewMode((m) => (m === 'content' ? 'diff' : 'content'))
-                    setCodeMenuOpen(false)
-                  }}
+                  type="button" role="menuitem" data-testid="lookml-toggle-view-mode-btn" className="dab-studio-menu-item"
+                  onClick={() => { setViewMode((m) => (m === 'content' ? 'diff' : 'content')); setCodeMenuOpen(false) }}
                 >
                   <span>{viewMode === 'content' ? 'View Changeset' : 'Back to Files'}</span>
                 </button>
                 <button
-                  type="button"
-                  role="menuitem"
-                  data-testid="lookml-view-details-btn"
-                  className="dab-studio-menu-item"
-                  onClick={() => {
-                    setDetailsOpen(true)
-                    setCodeMenuOpen(false)
-                  }}
+                  type="button" role="menuitem" data-testid="lookml-view-details-btn" className="dab-studio-menu-item"
+                  onClick={() => { setDetailsOpen(true); setCodeMenuOpen(false) }}
                 >
                   <span>View Details</span>
                 </button>
                 {activeFileIdePath && (
                   <button
-                    type="button"
-                    role="menuitem"
-                    data-testid="lookml-open-file-ide-btn"
-                    className="dab-studio-menu-item"
-                    onClick={() => {
-                      openLink(activeFileIdePath)
-                      setCodeMenuOpen(false)
-                    }}
+                    type="button" role="menuitem" data-testid="lookml-open-file-ide-btn" className="dab-studio-menu-item"
+                    onClick={() => { openLink(activeFileIdePath); setCodeMenuOpen(false) }}
                   >
                     <span>Open File in IDE</span>
                   </button>
                 )}
                 {activeFile && (
                   <button
-                    type="button"
-                    role="menuitem"
-                    data-testid="lookml-copy-file-btn"
-                    className="dab-studio-menu-item"
+                    type="button" role="menuitem" data-testid="lookml-copy-file-btn" className="dab-studio-menu-item"
                     onClick={() => {
                       void copyTextWithExtensionSdk(activeFile.content || activeFile.diff || '', extensionSDK)
-                      setCopiedFile(true)
-                      setTimeout(() => setCopiedFile(false), 1800)
-                      setCodeMenuOpen(false)
+                      setCopiedFile(true); setTimeout(() => setCopiedFile(false), 1800); setCodeMenuOpen(false)
                     }}
                   >
                     <span>{copiedFile ? 'Copied .lkml' : 'Copy .lkml'}</span>
@@ -526,13 +489,10 @@ export const LookmlPreviewPane: React.FC<{
                 .map((line, i) => {
                   const isAdd = viewMode === 'diff' && line.startsWith('+') && !line.startsWith('+++')
                   const isDel = viewMode === 'diff' && line.startsWith('-') && !line.startsWith('---')
-                  const isHunk = viewMode === 'diff' && line.startsWith('@@')
                   return (
                     <div
                       key={i}
-                      style={{
-                        color: isAdd ? '#4ade80' : isDel ? '#f87171' : isHunk ? '#38bdf8' : '#e2e8f0',
-                      }}
+                      style={{ color: isAdd ? '#4ade80' : isDel ? '#f87171' : viewMode === 'diff' && line.startsWith('@@') ? '#38bdf8' : '#e2e8f0' }}
                     >
                       {line}
                     </div>

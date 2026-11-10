@@ -112,12 +112,23 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     []
   )
 
+  const applyStateWithSync = <T,>(
+    setter: React.Dispatch<React.SetStateAction<T>>,
+    next: T | ((prev: T) => T),
+    sync: (resolved: T) => void
+  ) => {
+    if (typeof next !== 'function') {
+      sync(next); setter(next); return
+    }
+    setter((prev) => { const r = (next as (p: T) => T)(prev); sync(r); return r })
+  }
+
   const setPublishedApp = useCallback(
     (
       next: PublishedAppState | null | ((prev: PublishedAppState | null) => PublishedAppState | null),
       metaOpts?: { source?: 'created' | 'modified' | 'mention'; createdInConversation?: boolean; hidden?: boolean }
     ) => {
-      const syncAppItem = (resolved: PublishedAppState | null) => {
+      applyStateWithSync(setPublishedAppState, next, (resolved) => {
         if (resolved?.dashboardId) {
           const uc = resolvedUseCaseByIdRef.current[resolved.dashboardId]
           upsertContentItem({
@@ -127,16 +138,6 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
             folderId: resolved.folderId, extensionId: resolved.extensionId, ...metaOpts,
           })
         }
-      }
-      if (typeof next !== 'function') {
-        syncAppItem(next)
-        setPublishedAppState(next)
-        return
-      }
-      setPublishedAppState((prev) => {
-        const resolved = next(prev)
-        syncAppItem(resolved)
-        return resolved
       })
     },
     [resolvedUseCaseByIdRef, upsertContentItem]
@@ -147,7 +148,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       next: NativeContentState | null | ((prev: NativeContentState | null) => NativeContentState | null),
       metaOpts?: { source?: 'created' | 'modified' | 'mention'; createdInConversation?: boolean; hidden?: boolean }
     ) => {
-      const syncNativeItem = (resolved: NativeContentState | null) => {
+      applyStateWithSync(setNativeContentState, next, (resolved) => {
         if (resolved?.id) {
           const ct = (resolved.contentType || 'dashboard') as StudioContentItemType
           upsertContentItem({
@@ -158,16 +159,6 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
             ...metaOpts,
           })
         }
-      }
-      if (typeof next !== 'function') {
-        syncNativeItem(next)
-        setNativeContentState(next)
-        return
-      }
-      setNativeContentState((prev) => {
-        const resolved = next(prev)
-        syncNativeItem(resolved)
-        return resolved
       })
     },
     [upsertContentItem]
