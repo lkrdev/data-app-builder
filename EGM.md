@@ -63,12 +63,12 @@ Core execution flow across subsystem boundaries:
 
 ## Architectural History & Open Evolution (GitHub Issues)
 
-Summary of key architectural milestones from `lkrdev/data-app-builder` issues (`#1`–`#158`):
+Summary of key architectural milestones from `lkrdev/data-app-builder` issues (`#1`–`#173`):
 
 - **Multi-Tool Agentic Platform & Artifacts (`#1`, `#5`, `#55`, `#99`, `#100`)**: Evolved from a single-purpose Data App builder into a multi-use-case Looker Agent with dynamic per-turn routing (`#100`), SWR-backed Looker GET deduplication + `ArtifactService` (`#55`), and multi-tab `contentItems` per conversation (`#99`).
 - **RBAC, Safe Mode & Transport Hardening (`#13`, `#33`, `#77`, `#83`, `#104`, `#127`)**: Enforced 4-layer Looker RBAC (`#13`), routed online `lkr-dev-cli` calls back through the Extension Bridge (`#33`), enforced `/spartan/oauth2_redirect` + Safe Mode `sdk_request` gating (`#83`), switched browser `LkrCodeMode` to CDN loading (`#104`), eliminated all `any` lint violations (`#77`), and replaced `core_api_methods` with `raw_api_request: yes` + `transport.rawRequest` (`#127`).
 - **Skills, Profiling & Performance (`#130`, `#145`, `#149`, `#157`)**: Mounted skills at `/workspace/skills/<name>/SKILL.md` (`#130`), unified `looker-dashboard` and `looker-field-profiler` (`#145`), bumped `lkr-dev-cli` to `0.0.66` with `scratch-search` (`#149`), and cut Turn-1 project onboarding latency below 4s (`#157`).
-- **Recent & Ongoing Evolution (`#155`–`#158`, PRs `#159`–`#162`)**: Centralized immutable `Conversation` (`conv_<id>`) state with SWR sidebar + unified `contentItems` ribbon (`#155/#162`), topbar/sidebar/markdown/Viewer polish (`#156/#161`), Turn-1 <4s onboarding + Monty global fixes (`#157/#160`), and PoP KPI / Metric Selector Data App upgrades (`#158/#159`).
+- **Recent & Ongoing Evolution (`#155`–`#173`, PRs `#159`–`#170`)**: Centralized immutable `Conversation` (`conv_<id>`) state with SWR sidebar + unified `contentItems` ribbon (`#155/#162`), topbar/sidebar/markdown/Viewer polish (`#156/#161`), Turn-1 <4s onboarding + Monty global fixes (`#157/#160`), PoP KPI / Metric Selector Data App upgrades (`#158/#159`), plain-Struct `function_result.result` + live telemetry (`#165/#170`), and `@container` `4 -> 2x2 -> 1` balanced KPI grids (`unbalanced-kpi-grid`) + custom `Window:` number popover (`#173`).
 
 ## System Verification
 

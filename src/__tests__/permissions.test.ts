@@ -5935,8 +5935,11 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     const requiredTokens = [
       'ACTIVE METRIC', '--app-chart-1', '--app-chart-2', 'shiftKey', 'contextmenu', 'Remove comparison',
       'kpi-change', 'vs. prev', 'lower-better',
+      'container-type: inline-size', '@container', 'repeat(4, minmax(0, 1fr))', 'repeat(2, minmax(0, 1fr))', 'auto-fit',
       'opposite: true', 'Longitudinal Trend', 'yAxis.title.text', '⋮',
       'PERIOD_DEFAULTS = { date:', 'Period', 'Window', 'periodCount', 'getEffectiveFilters',
+      '!WINDOW_OPTIONS[this.period].includes(this.periodCount)', 'customWindowOpen', 'Custom window length', 'type="number"',
+      'Math.min(5000, Math.max(500, 2 * this.periodCount + 10))',
       'Dimensions', 'selectedDimensions', 'ago for', 'This Period', 'Last Period', 'Variance',
     ]
     for (const targetDoc of [LOOKER_PROJECT_ONBOARDING_SKILL_MD, DATA_APP_GUIDE_MD, step3Line, creatorSkillDisk, litRefDisk]) {
@@ -5944,7 +5947,7 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
       for (const tok of requiredTokens) expect(targetDoc).toContain(tok)
     }
 
-    for (const checkKey of ['noInvalidDayField', 'noMetricDropdownOrActiveBadge', 'hasPopClickableKpis', 'hasCardBorderCompareDualAxis', 'hasTrendMenuAndYAxis', 'hasDecoupledPeriodAndWindow', 'hasMultiSelectDimensions', 'hasTitlelessPopVarianceGrid']) {
+    for (const checkKey of ['noInvalidDayField', 'noMetricDropdownOrActiveBadge', 'hasBalancedKpiGrid', 'hasPopClickableKpis', 'hasCardBorderCompareDualAxis', 'hasTrendMenuAndYAxis', 'hasDecoupledPeriodAndWindow', 'hasCustomWindowPopover', 'hasMultiSelectDimensions', 'hasTitlelessPopVarianceGrid']) {
       expect(evalNewProjectDisk).toContain(checkKey)
     }
   })
@@ -7252,5 +7255,42 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     })
     expect(remoteSkillCalls).toBe(0)
     expect(skillText).toBe(LOOKER_DASHBOARD_SKILL_MD)
+  })
+
+  test('69. Issue #173: rejects repeat(auto-fit/auto-fill) KPI grids in BUNDLE_APP_PY while permitting @container 4 -> 2 -> 1 balanced KPI grids and custom Window number popovers', () => {
+    const repoRoot = path.resolve(__dirname, '../..')
+    const rawMatch = readFileSync(path.join(repoRoot, 'src/antigravityPrompts.ts'), 'utf8').match(/export const BUNDLE_APP_PY = `([\s\S]*?)`\n/)
+    expect(rawMatch?.[1]).toBe(BUNDLE_APP_PY)
+
+    const workDir = mkdtempSync(path.join(tmpdir(), 'dab-173-test-'))
+    try {
+      const bundlePyPath = path.join(workDir, 'bundle_app.py')
+      writeFileSync(bundlePyPath, BUNDLE_APP_PY.replace('Path("/workspace/bundle.json")', `Path(${JSON.stringify(path.join(workDir, 'bundle.json'))})`), 'utf8')
+      const env = { ...process.env, TOOLKIT_DIR: path.join(repoRoot, 'upstream/payload') }
+      for (const badMarkup of [
+        '<style>.da-kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }</style><section class="da-kpi-grid"><app-kpi query-field="orders.count"></app-kpi></section>',
+        '<style>.summary-cards, .da-kpi-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }</style><div class="da-kpi-grid"></div>',
+        '<style>.top-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }</style><div class="top-cards"><span>Banner</span></div><div class="top-cards"><app-kpi query-field="orders.count"></app-kpi></div>',
+        '<div @click=${(e) => e} style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr))" class="da-kpi-grid"><app-kpi query-field="orders.count"></app-kpi></div>',
+        '<div class="da-kpi-grid"><div class="card"><span class="kpi-change">+4%</span></div></div>',
+        '<style>.da-container { container-type: inline-size; } @container (max-width: 820px) { .da-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }</style><div class="da-container"><div class="da-kpi-grid"><div class="card"><span class="kpi-change">+4%</span></div></div></div>',
+      ]) {
+        const badSrc = `import { DataApp, html } from '/runtime/data-app.js';\nexport class BadKpi extends DataApp { constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; } render() { return html\`${badMarkup}<app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; } }\ncustomElements.define('bad-kpi', BadKpi);`
+        expect(() => execFileSync('python3', [bundlePyPath, '--stdin', 'Bad KPI', path.join(workDir, 'bad.js')], { input: badSrc, env, encoding: 'utf8', stdio: 'pipe' })).toThrow(/unbalanced-kpi-grid[\s\S]*4 -> 2 -> 1/)
+      }
+
+      const goodSrc = `import { DataApp, html } from '/runtime/data-app.js';\n// Override .da-kpi-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }\nconst PERIOD_DEFAULTS = { date: 90, week: 53, month: 60, year: 10 };\nconst WINDOW_OPTIONS = { date: [14, 30, 60, 90, 180] };\nconst UNITS = { date: 'days' };\nexport class GoodBalanced extends DataApp { static properties = { period: { type: String }, periodCount: { type: Number }, customWindowOpen: { type: Boolean }, customWindowDraft: { type: String } }; constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; this.period = 'date'; this.periodCount = PERIOD_DEFAULTS.date + 30; this.customWindowOpen = false; this.selectedMetric = 'orders.count'; } render() { const sel = this.selectedMetric\n    return html\`<style>/* avoid .da-kpi-grid repeat(auto-fit) */ .da-container { container-type: inline-size; } .da-kpi-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); } @container (max-width: 820px) { .da-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } } @container (max-width: 420px) { .da-kpi-grid { grid-template-columns: 1fr; } } .metric-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); }</style><div class="da-container"><div class="da-filter-bar"><span>Period: \${this.period}</span><span>Window: \${!(WINDOW_OPTIONS[this.period] || []).includes(this.periodCount) ? html\`<button class="active">\${this.periodCount} \${UNITS[this.period]}</button>\` : ''}</span><button title="Custom window length" @click=\${() => { this.customWindowDraft = String(this.periodCount); this.customWindowOpen = !this.customWindowOpen; }}><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"></svg></button>\${this.customWindowOpen ? html\`<input @keydown=\${(e) => e} type="number" min="1" max="1000" .value=\${this.customWindowDraft ?? String(this.periodCount)}>\` : ''}</div><div class="metric-charts"><app-chart type="areaspline" .query=\${{ fields: ['orders.created_date', sel], limit: String(Math.min(5000, Math.max(500, 2 * this.periodCount + 10))) }}></app-chart></div><div class="da-kpi-grid"><div class="card"><span class="kpi-change">+4%</span><span>vs. prev 120 days</span></div></div><app-grid .query=\${{ fields: ['orders.count'] }}></app-grid></div>\`; } }\ncustomElements.define('good-balanced', GoodBalanced);`
+      expect(execFileSync('python3', [bundlePyPath, '--stdin', 'Good Balanced', path.join(workDir, 'good.js')], { input: goodSrc, env, encoding: 'utf8' })).toContain('<DATA_APP_BUNDLE>')
+
+      const fnBodyMatch = readFileSync(path.join(repoRoot, 'scripts/eval-new-project.mjs'), 'utf8').match(/const cleanCode =[\s\S]*?const hasDecoupledPeriodAndWindow =[^\n]+/)
+      expect(fnBodyMatch).toBeTruthy()
+      const runTurn6Checks = new Function('code', `${fnBodyMatch?.[0]}\nreturn { hasBalancedKpiGrid, hasCustomWindowPopover, hasDecoupledPeriodAndWindow };`) as (c: string) => Record<string, boolean>
+      const expectedChecks = { hasBalancedKpiGrid: true, hasCustomWindowPopover: true, hasDecoupledPeriodAndWindow: true }
+      expect(runTurn6Checks(`${goodSrc}\n// getEffectiveFilters`)).toEqual(expectedChecks)
+      const aliasVariant = `${goodSrc.replace('!(WINDOW_OPTIONS[this.period] || []).includes(this.periodCount)', '!presets.includes(n)').replace('limit: String(Math.min(5000, Math.max(500, 2 * this.periodCount + 10)))', 'limit')}\nconst limit = String(Math.min(5000, Math.max(500, n * 2 + 10))); function getEffectiveFilters() {}`
+      expect(runTurn6Checks(aliasVariant)).toEqual(expectedChecks)
+    } finally {
+      rmSync(workDir, { recursive: true, force: true })
+    }
   })
 })

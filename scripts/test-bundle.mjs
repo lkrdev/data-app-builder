@@ -747,6 +747,26 @@ chmod +x "${fakeBinDir}/uv"
   const validDateOut = execFileSync('python3', [bundlePyPath, '--stdin', 'Valid Date App', path.join(workDir, 'valid_date_app.js')], { input: validDateApp, encoding: 'utf8' })
   assert(validDateOut.includes('<DATA_APP_BUNDLE>'), 'BUNDLE_APP_PY must allow _day_of_week, _hour_of_day, and date: 90 timeframe keys')
 
+  // Issue #173: BUNDLE_APP_PY unbalanced-kpi-grid rejection (repeat(auto-fit/auto-fill) on KPI strips) & @container 4->2->1 pass
+  for (const badKpiMarkup of [
+    '<style>.da-kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }</style><section class="da-kpi-grid"><app-kpi query-field="orders.count"></app-kpi></section>',
+    '<style>.kpi-strip { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }</style><div class="kpi-strip"></div>',
+    '<style>.cards { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }</style><div class="cards"><span>Header</span></div><div class="cards"><app-kpi query-field="orders.count"></app-kpi></div>',
+    '<section class="da-kpi-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));"><app-kpi query-field="orders.count"></app-kpi></section>',
+    '<div class="da-kpi-grid"><div class="kpi-card"><span class="kpi-change">+5%</span></div></div>',
+    '<style>.da-container { container-type: inline-size; } @container (max-width: 820px) { .da-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }</style><div class="da-container"><div class="da-kpi-grid"><div class="kpi-card"><span class="kpi-change">+5%</span></div></div></div>',
+  ]) {
+    const badKpiApp = `import { DataApp, html } from '/runtime/data-app.js';\nexport class BadKpiApp extends DataApp { constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; } render() { return html\`${badKpiMarkup}<app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; } }\ncustomElements.define('bad-kpi-app', BadKpiApp);\n`
+    assert.throws(
+      () => execFileSync('python3', [bundlePyPath, '--stdin', 'Bad KPI App', path.join(workDir, 'bad_kpi_app.js')], { input: badKpiApp, encoding: 'utf8', stdio: 'pipe' }),
+      /unbalanced-kpi-grid[\s\S]*@container/,
+      'BUNDLE_APP_PY must reject auto-fit/auto-fill KPI grids and un-overridden PoP .da-kpi-grid strips with @container 4 -> 2 -> 1 guidance'
+    )
+  }
+  const balancedKpiApp = `import { DataApp, html } from '/runtime/data-app.js';\nexport class BalancedKpiApp extends DataApp { constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; this.periodCount = 90; this.selectedMetric = 'orders.count'; } render() { const m = this.selectedMetric\n    return html\`<style>/* avoid .da-kpi-grid repeat(auto-fit) */ .da-container { container-type: inline-size; } .da-kpi-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); } @container (max-width: 820px) { .da-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } } @container (max-width: 420px) { .da-kpi-grid { grid-template-columns: 1fr; } } .metric-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); }</style><div class="da-container"><div class="metric-charts"><app-chart type="line" .query=\${{ fields: ['orders.created_date', m], limit: String(Math.min(5000, Math.max(500, 2 * this.periodCount + 10))) }}></app-chart></div><div class="da-kpi-grid"><div class="kpi-card"><span class="kpi-change">+5%</span></div></div><app-grid .query=\${{ fields: ['orders.count'] }}></app-grid></div>\`; } }\ncustomElements.define('balanced-kpi-app', BalancedKpiApp);\n`
+  const balancedKpiOut = execFileSync('python3', [bundlePyPath, '--stdin', 'Balanced KPI App', path.join(workDir, 'balanced_kpi_app.js')], { input: balancedKpiApp, encoding: 'utf8' })
+  assert(balancedKpiOut.includes('<DATA_APP_BUNDLE>'), 'BUNDLE_APP_PY must accept @container 4 -> 2 -> 1 .da-kpi-grid and non-KPI .metric-charts auto-fit grids placed above .da-kpi-grid')
+
   const dashPreambleMatch = antigravityTs.match(/export const DASHBOARD_CODEMODE_PREAMBLE_PY = `([\s\S]*?)`\n\nexport function wrapDashboardCodeMode/)
   assert(dashPreambleMatch, 'Could not extract DASHBOARD_CODEMODE_PREAMBLE_PY')
   const dashPreamblePy = dashPreambleMatch[1].replace(/\\\\n/g, '\\n')

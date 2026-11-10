@@ -349,10 +349,11 @@ async function main() {
     },
     {
       turn: 6,
-      name: 'Turn 6: Build responsive metric selector Data App (date timeframe, custom 4-row PoP KPIs, card-border compare, 3-dot chart menu & PoP variance grid)',
+      name: 'Turn 6: Build responsive metric selector Data App (date timeframe, balanced @container KPI grid, custom 4-row PoP KPIs, card-border compare, custom Window popover & PoP variance grid)',
       prompt: 'Yes, build that metric selector data app.',
       grade: async (res) => {
         const code = res.bundle?.raw_code || ''
+        const cleanCode = code.replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->|(?<!:)\/\/[^\n]*/g, ' ')
         const hasBundle = Boolean(code.trim())
         const has90Days = /90\s*days|90d|\bdate\s*:\s*['"]?90\b/i.test(code)
         const has53Weeks = /53\s*weeks|53w|\bweek\s*:\s*['"]?53\b/i.test(code)
@@ -384,8 +385,19 @@ async function main() {
           /@contextmenu|contextmenu/i.test(code) &&
           /opposite\s*:\s*true/.test(code)
         const hasTrendMenuAndYAxis = !/longitudinal\s+trend/i.test(code) && !/<app-select[^>]*\blabel\s*=\s*["']Chart\s*Type["']/i.test(code) && /yAxis[\s\S]{0,500}title\s*:\s*\{\s*text\s*:/.test(code) && /⋮|\\u22ee|&#8942;|&vellip;|chartMenuOpen|more-vertical/i.test(code) && ['areaspline', 'line', 'column', 'bar'].every((t) => new RegExp(`\\b${t}\\b`, 'i').test(code))
-        // 5 & 6. Decoupled Period & Window (periodCount) + universal getEffectiveFilters, Multi-Select Dimensions, and titleless PoP Variance <app-grid>
-        const hasDecoupledPeriodAndWindow = /label\s*=\s*["']Period["']/i.test(code) && /label\s*=\s*["']Window["']/i.test(code) && /periodCount/.test(code) && /getEffectiveFilters/.test(code) && noInvalidDayField && has90Days && has53Weeks && has60Months && has10Years
+        // 5 & 6. Balanced @container KPI grid (4 -> 2x2 -> 1, no auto-fit/auto-fill on KPI strip), decoupled Period & Window + custom Window number popover + dynamic 2*periodCount row limit, Multi-Select Dimensions, and titleless PoP Variance <app-grid>
+        const hasBalancedKpiGrid =
+          !/[.#][a-z0-9_-]*kpi[a-z0-9_-]*[^{};<>`=]*\{[^}]*repeat\(\s*auto-(?:fit|fill)/i.test(cleanCode) &&
+          !/<(?:div|section)(?:[^>]|=>)*?kpi(?:[^>]|=>)*?style\s*=\s*["'][^"']*repeat\(\s*auto-(?:fit|fill)/i.test(cleanCode) &&
+          !/<(?:div|section)(?:[^>]|=>)*?style\s*=\s*["'][^"']*repeat\(\s*auto-(?:fit|fill)[^"']*["'](?:[^>]|=>)*?kpi/i.test(cleanCode) &&
+          /container-type\s*:\s*inline-size/i.test(cleanCode) &&
+          /@container\b[\s\S]*?(?:repeat\(\s*2\b|1fr\s+1fr|\b1fr\s*[;}])/i.test(cleanCode)
+        const hasCustomWindowPopover =
+          /customWindowOpen|Custom\s+window\s+length/i.test(code) &&
+          /<input(?:[^>]|=>)*\btype\s*=\s*["']number["']/i.test(code) &&
+          /!\s*(?:\([^)\n]+\)|[a-zA-Z0-9_$.[\]?]+)\.includes\(\s*(?:Number\(\s*)?(?:this\.)?(?:periodCount|n)\b/i.test(code) &&
+          /(?:limit\s*:|(?:const|let|var)\s+[a-zA-Z0-9_$]*(?:limit|rows)[a-zA-Z0-9_$]*\s*=)[^\n;{}]*(?:2\s*\*\s*(?:Number\(\s*)?(?:this\.)?(?:periodCount|n|window\w*)\b|(?:this\.)?(?:periodCount|n|window\w*)\b\s*\*\s*2)/i.test(code)
+        const hasDecoupledPeriodAndWindow = /(?:(?:aria-)?label\s*=\s*["']Period["']|>\s*Period\s*:?\s*(?:<|\$\{))/i.test(code) && /(?:(?:aria-)?label\s*=\s*["']Window["']|>\s*Window\s*:?\s*(?:<|\$\{))/i.test(code) && /periodCount/.test(code) && /getEffectiveFilters/.test(code) && noInvalidDayField && has90Days && has53Weeks && has60Months && has10Years
         const hasMultiSelectDimensions = /Dimensions/i.test(code) && /selectedDimensions/.test(code)
         const hasTitlelessPopVarianceGrid = /<app-grid(?![^>]*\btitle\s*=)/i.test(code) && /\.data\s*=\s*\$\{/.test(code) && /ago\s+for/i.test(code) && /This\s+Period/i.test(code) && /Last\s+Period/i.test(code) && /Variance/i.test(code)
         const activeModel = lookmlProjectId || projectName
@@ -416,8 +428,8 @@ async function main() {
           })
         )
         return {
-          passed: hasBundle && noInvalidDayField && matchesMeasureDate && hasPopClickableKpis && hasCardBorderCompareDualAxis && hasTrendMenuAndYAxis && hasDecoupledPeriodAndWindow && hasMultiSelectDimensions && hasTitlelessPopVarianceGrid && liveQueriesAllValid,
-          checks: { hasBundle, noInvalidDayField, has90Days, has53Weeks, has60Months, has10Years, matchesMeasureDate, noMetricDropdownOrActiveBadge, hasPopClickableKpis, hasCardBorderCompareDualAxis, hasTrendMenuAndYAxis, hasDecoupledPeriodAndWindow, hasMultiSelectDimensions, hasTitlelessPopVarianceGrid, liveQueriesAllValid, liveQueryChecks, codeLength: code.length },
+          passed: hasBundle && noInvalidDayField && matchesMeasureDate && hasBalancedKpiGrid && hasPopClickableKpis && hasCardBorderCompareDualAxis && hasTrendMenuAndYAxis && hasDecoupledPeriodAndWindow && hasCustomWindowPopover && hasMultiSelectDimensions && hasTitlelessPopVarianceGrid && liveQueriesAllValid,
+          checks: { hasBundle, noInvalidDayField, has90Days, has53Weeks, has60Months, has10Years, matchesMeasureDate, noMetricDropdownOrActiveBadge, hasBalancedKpiGrid, hasPopClickableKpis, hasCardBorderCompareDualAxis, hasTrendMenuAndYAxis, hasDecoupledPeriodAndWindow, hasCustomWindowPopover, hasMultiSelectDimensions, hasTitlelessPopVarianceGrid, liveQueriesAllValid, liveQueryChecks, codeLength: code.length },
         }
       },
     },
