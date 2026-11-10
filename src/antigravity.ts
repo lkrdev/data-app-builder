@@ -644,9 +644,10 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const turnSdk = createDeduplicatedLookerSdkProxy(sdk, (res, elapsedMs, err, reqMeta) => {
     lookerHttpCalls += 1
     lookerHttpMs += elapsedMs
-    if (err || (res && (res.ok === false || Number(res.statusCode) >= 400))) apiRetries += 1
+    const failed = Boolean(err || (res && (res.ok === false || Number(res.statusCode) >= 400)))
+    if (failed) apiRetries += 1
     if (reqMeta?.path) {
-      const epLine = `${reqMeta.method} ${reqMeta.path} (${elapsedMs}ms)`
+      const epLine = `${reqMeta.method} ${reqMeta.path}${failed ? ' [ERR]' : ''} (${elapsedMs}ms)`
       if (activeLookerCallId) {
         const list = endpointLogsByCallId.get(activeLookerCallId) || []
         list.push(epLine)

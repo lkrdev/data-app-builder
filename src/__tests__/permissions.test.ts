@@ -1752,7 +1752,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(attrs['data-embed-target']).toBe('42')
     expect(fakeIframe.srcdoc).toContain('data_app:42')
 
-    // 3. Warm-turn update on same Dashboard #42 triggers connection.asDashboardConnection().run()
+    // 3. Warm-turn update on same Dashboard #42 bounces through /preload (pushHistory: false) then loadDashboard('42')
     const tApp42Warm = resolveLookerEmbedTarget({
       builderMode: 'data_app',
       publishedApp: { dashboardId: '42' },
@@ -1760,10 +1760,11 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     })
     const connApp42Warm = await ctl.syncTarget(tApp42Warm)
     expect(connApp42Warm).toBe(conn0)
-    expect(ctl.getTelemetry().calls).toContainEqual({
-      method: 'asDashboardConnection.run',
-      arg: '42',
-    })
+    expect(ctl.getTelemetry().calls.slice(2, 5)).toEqual([
+      { method: 'loadDashboard', arg: '42' },
+      { method: 'loadUrl', arg: '/preload' },
+      { method: 'loadDashboard', arg: '42' },
+    ])
     expect(ctl.getTelemetry().runCount).toBeGreaterThanOrEqual(2)
 
     // 4. Switch to Saved Look #15 via connection.loadLook
@@ -1821,7 +1822,8 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
       'init',
       'preload',
       'loadDashboard',
-      'asDashboardConnection.run',
+      'loadUrl',
+      'loadDashboard',
       'loadLook',
       'loadDashboard',
       'loadUrl',
@@ -7292,5 +7294,77 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     } finally {
       rmSync(workDir, { recursive: true, force: true })
     }
+  })
+
+  test('70. Issue #172: prunePersistedMessages preserves compact crudItems on mutating turns and omits crudItems on chat-only turns', async () => {
+    const store = new Map<string, string>()
+    const mockSdk = {
+      authSession: {
+        transport: {
+          rawRequest: async (method: string, path: string, _q?: unknown, body?: unknown) => {
+            if (method === 'GET' && path.includes('/artifacts/')) {
+              const key = decodeURIComponent(path.split('/artifacts/')[1]?.split('/').pop() || '')
+              const val = store.get(key)
+              return val ? { ok: true, statusCode: 200, body: [{ key, value: val, version: 1 }] } : { ok: false, statusCode: 404, body: { message: 'Not Found' } }
+            }
+            if (method === 'PUT' && path.includes('/artifacts/')) {
+              const rows = Array.isArray(body) ? body : [body]
+              rows.forEach((r: { key?: string; value?: string }) => { if (r?.key && typeof r.value === 'string') store.set(r.key, r.value) })
+              return { ok: true, statusCode: 200, body: rows }
+            }
+            return { ok: true, statusCode: 200, body: [] }
+          },
+        },
+      },
+    } as unknown as Parameters<typeof saveUserConversation>[0]
+
+    await saveUserConversation(mockSdk, 'u172', {
+      id: 'conv_crud_172',
+      type: 'app',
+      label: 'CRUD Turn Persistence',
+      updatedAt: '2026-11-10T19:00:00Z',
+      messages: [
+        { role: 'user', text: 'Create app' },
+        {
+          role: 'assistant',
+          text: 'Created app #42.',
+          dashboardId: '42',
+          activitySteps: [{ id: 's1', kind: 'thought', title: 'Thinking', status: 'done' }],
+          crudItems: [{ key: 'data_app:42', id: '42', title: 'Exec App', contentType: 'data_app', embedPath: '/embed/dashboards/42', action: 'created' }],
+        },
+        { role: 'user', text: 'Explain KPIs' },
+        { role: 'assistant', text: 'KPIs use net revenue.', crudItems: [] },
+      ],
+    })
+    const loaded = await loadUserConversations(mockSdk, 'u172')
+    const conv = loaded.find((c) => c.id === 'conv_crud_172')
+    expect(conv?.messages?.[1]?.crudItems).toEqual([
+      { key: 'data_app:42', id: '42', title: 'Exec App', contentType: 'data_app', embedPath: '/embed/dashboards/42', action: 'created' },
+    ])
+    expect(conv?.messages?.[1]?.activitySteps).toBeUndefined()
+    expect('crudItems' in (conv?.messages?.[3] || {})).toBe(false)
+
+    // Deleting the last remaining tab persists contentItems: [] without resurrecting prev.contentItems or conv.content
+    await saveUserConversation(mockSdk, 'u172', {
+      id: 'conv_crud_172',
+      type: 'app',
+      content: { dashboardId: '42' },
+      contentItems: [{ key: 'data_app:42', id: '42', title: 'Exec App', contentType: 'data_app', embedPath: '/embed/dashboards/42' }],
+      activeContentTabKey: 'data_app:42',
+    })
+    const afterDelList = await saveUserConversation(mockSdk, 'u172', {
+      id: 'conv_crud_172',
+      type: 'app',
+      contentItems: [],
+      activeContentTabKey: '',
+      messages: [
+        { role: 'user', text: 'Delete dashboard 42' },
+        { role: 'assistant', text: 'Deleted.', crudItems: [{ key: 'data_app:42', id: '42', title: 'Exec App', contentType: 'data_app', action: 'deleted' }] },
+      ],
+    })
+    const afterDelConv = afterDelList.find((c) => c.id === 'conv_crud_172')!
+    expect(afterDelConv.contentItems).toEqual([])
+    expect(afterDelConv.activeContentTabKey).toBe('')
+    expect(hydrateConversationContentItems(afterDelConv)).toEqual([])
   })
 })

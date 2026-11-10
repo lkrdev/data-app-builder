@@ -593,9 +593,9 @@ chmod +x "${fakeBinDir}/uv"
       appTsx.includes('loadDashboard(') &&
       appTsx.includes('loadLook(') &&
       appTsx.includes('loadUrl(') &&
-      appTsx.includes('asDashboardConnection().run()') &&
+      appTsx.includes('pushHistory: false') &&
       appTsx.includes('data-testid="looker-embed-container"'),
-    'Issue #45: StudioWorkspace.tsx must adopt @looker/embed-sdk with immediate .preload() and persistent ILookerConnection loadDashboard/loadLook/loadUrl/asDashboardConnection().run()'
+    'Issues #45 & #172: StudioWorkspace.tsx must adopt @looker/embed-sdk with immediate .preload() and persistent ILookerConnection loadDashboard/loadLook/loadUrl plus /preload bounce on reload'
   )
   execFileSync(
     process.execPath,

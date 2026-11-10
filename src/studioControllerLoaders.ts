@@ -20,7 +20,7 @@ import {
   saveScriptArtifact, saveUserArtifact, saveUserConversation,
   selectCaAgentViaIsolatedSubagent, StudioContentItem, StudioContentItemType,
   studioModeToUseCase, StudioToolMode, StudioUseCase, studioUseCaseToMode,
-  upsertStudioContentItem,
+  toTurnCrudItem, upsertStudioContentItem,
 } from './lookerApi'
 import { loadLookmlSessionArtifact, LookmlBundle } from './lookmlTool'
 import { getErrorMessage, normalizeCatalogMode, StudioAuthAndPrefs } from './studioControllerAuth'
@@ -81,11 +81,9 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
 
   const setContentItems = useCallback(
     (next: StudioContentItem[] | ((prev: StudioContentItem[]) => StudioContentItem[])) => {
-      setContentItemsState((prev) => {
-        const resolved = typeof next === 'function' ? next(prev) : next
-        contentItemsRef.current = resolved
-        return resolved
-      })
+      const resolved = typeof next === 'function' ? next(contentItemsRef.current) : next
+      contentItemsRef.current = resolved
+      setContentItemsState(resolved)
     },
     []
   )
@@ -99,7 +97,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     (
       rawItem: Partial<StudioContentItem> & { id: string; contentType: StudioContentItemType },
       activate = true
-    ): StudioContentItem => {
+    ): StudioContentItem & { existed: boolean } => {
       const res = upsertStudioContentItem(contentItemsRef.current, rawItem)
       contentItemsRef.current = res.items
       setContentItemsState(res.items)
@@ -107,7 +105,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         activeContentTabKeyRef.current = res.activeKey
         setActiveContentTabKeyState(res.activeKey)
       }
-      return res.item
+      return Object.assign({}, res.item, { existed: res.existed })
     },
     []
   )
@@ -324,11 +322,13 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       hydratedConvRouteRef.current = `/c/${encodeURIComponent(opts.id)}:${opts.id}`
       const namespace = getArtifactNamespace(extensionSDK)
       const authCfg: AntigravityAuth = { mode: authMode, oauthToken, clientId, projectId, apiKey }
+      const hasDeletedCrud = opts.messages.some((m) => m.crudItems?.some((x) => x.action === 'deleted'))
       const baseConv = {
         id: opts.id, type: opts.type, interactionId: opts.interactionId, environmentId: opts.environmentId,
         explores: opts.explores, ...(opts.content ? { content: opts.content } : {}),
-        ...(contentItemsRef.current.length > 0 ? { contentItems: contentItemsRef.current } : {}),
-        ...(activeContentTabKeyRef.current ? { activeContentTabKey: activeContentTabKeyRef.current } : {}),
+        ...(contentItemsRef.current.length > 0 || hasDeletedCrud
+          ? { contentItems: contentItemsRef.current, activeContentTabKey: activeContentTabKeyRef.current }
+          : activeContentTabKeyRef.current ? { activeContentTabKey: activeContentTabKeyRef.current } : {}),
         messages: opts.messages,
       }
       setActiveConversationId(opts.id)
@@ -575,10 +575,10 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       })
       const nextDash = { dashboardId: pub.dashboardId, elementId: pub.elementId }
       setPublishedTileDash(nextDash)
-      upsertContentItem({
+      const upDash = upsertContentItem({
         id: String(pub.dashboardId), dashboardId: String(pub.dashboardId), contentType: 'dashboard',
         title: saved.title || `Dashboard #${pub.dashboardId}`, embedPath: `/embed/dashboards/${encodeURIComponent(String(pub.dashboardId))}`,
-        folderId: selectedFolderId, source: 'created', createdInConversation: true,
+        folderId: selectedFolderId, source: contentItemsRef.current.some((it) => it.key === `dashboard:${pub.dashboardId}`) ? 'modified' : 'created', createdInConversation: true,
       })
       await handleSaveScript(saved.code, saved.messages || [], nextDash)
       setMessages((prev) => [
@@ -587,6 +587,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
           role: 'assistant',
           text: `Published Dashboard #${pub.dashboardId} (load_configuration="wait", show_dashboard_header=true, layout="extension") and bound tile_element_${pub.elementId} -> ${saved.id}.`,
           dashboardId: pub.dashboardId,
+          crudItems: [toTurnCrudItem(upDash, upDash.existed ? 'updated' : 'created')],
         },
       ])
     } catch (err: unknown) {
@@ -674,10 +675,6 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       setBusyStatus(`Creating Looker CA conversation with "${selection.agentName}"...`)
       const created = await createLookerCaConversation(core40SDK, selection.agentId, userQuestion, selection.agentName)
       const assistantText = `Routed via isolated CA sub-agent to **${selection.agentName}** (\`${selection.agentId}\`) and opened embedded Looker CA conversation \`${created.caConversationId}\`.\n\n**Sub-Agent Rationale:** ${selection.rationale}`
-      const nextMsgs: ChatMessage[] = [
-        ...baseMessages,
-        { role: 'assistant', text: assistantText, interactionId: selection.isolatedInteractionId },
-      ]
       const nextCaState: CaConversationState = {
         id: created.caConversationId, caConversationId: created.caConversationId,
         agentId: selection.agentId, agentName: selection.agentName, embedPath: created.embedPath,
@@ -689,10 +686,17 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       resolvedUseCaseByIdRef.current[created.caConversationId] = 'conversational-analytics'
       resolvedUseCaseByIdRef.current[convId] = 'conversational-analytics'
       setCaConversation(nextCaState)
-      upsertContentItem({
+      const upCa = upsertContentItem({
         id: created.caConversationId, contentType: 'conversational-analytics', title: created.label,
         embedPath: created.embedPath, updatedAt: nextCaState.updatedAt, source: 'created', createdInConversation: true, hidden: false,
       })
+      const nextMsgs: ChatMessage[] = [
+        ...baseMessages,
+        {
+          role: 'assistant', text: assistantText, interactionId: selection.isolatedInteractionId,
+          crudItems: [toTurnCrudItem(upCa, 'created')],
+        },
+      ]
       setSelectedUseCase('conversational-analytics'); setActiveObjectId(created.caConversationId)
       if (selection.explores.length > 0) setSelectedExplores(selection.explores)
       setMessages(nextMsgs)
@@ -774,7 +778,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       resolvedUseCaseByIdRef.current[convId] = 'health-check'
       const isExistingRep = contentItemsRef.current.some((it) => it.key === `report:${finalReport.id}`)
       setHealthReport(finalReport); setActiveObjectId(finalReport.id)
-      upsertContentItem({
+      const upRep = upsertContentItem({
         id: String(finalReport.id), reportId: String(finalReport.id), contentType: 'report',
         title: finalReport.title, embedPath: `/health-check/${encodeURIComponent(String(finalReport.id))}`,
         updatedAt: finalReport.updatedAt, source: isExistingRep ? 'modified' : 'created',
@@ -788,6 +792,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         {
           role: 'assistant',
           text: `3-Pillar Health Check complete: **${finalReport.scores.overallScore}% (${finalReport.scores.grade})** | Pillar 1: ${finalReport.scores.pillar1Score}% · Pillar 2: ${finalReport.scores.pillar2Score}% (Transcriber ${finalReport.scores.transcriberScore}/4.00) · Pillar 3: ${finalReport.scores.pillar3Score}%.\nSaved to \`${baseRes.userKey}\` and \`${baseRes.objKey}\`.`,
+          crudItems: [toTurnCrudItem(upRep, upRep.existed ? 'updated' : 'created')],
         },
       ]
       setMessages(nextHealthMsgs)

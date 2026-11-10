@@ -6,7 +6,7 @@ import type { Looker40SDK } from '@looker/sdk'
 import {
   Archive, ArchiveRestore, AtSign, BookOpen, Brain, Bug, Check, ChevronDown, Code2, Copy,
   CornerDownRight, Database, ExternalLink, Eye, FileText, Folder, Kanban, LayoutDashboard, Loader2,
-  MessageSquare, MoreVertical, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Paperclip, Pencil, Plus, Shield,
+  MessageSquare, MoreVertical, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Paperclip, Pencil, Plus, RotateCw, Shield,
   Sparkles, Square, Terminal, Trash2, Wrench, X, Zap,
 } from 'lucide-react'
 
@@ -590,7 +590,7 @@ export function createLookerEmbedPreloadController(opts: {
               emit('dashboard:run:start'); emit('dashboard:run:complete')
             }
           },
-          sendAndReceive: async (event: string, payload?: { url?: string }) => {
+          sendAndReceive: (event: string, payload?: { url?: string }) => {
             if (event === 'page:load' && payload?.url) {
               const nextUrl = String(payload.url)
               syncIframe(nextUrl)
@@ -605,7 +605,7 @@ export function createLookerEmbedPreloadController(opts: {
                 emit('page:changed', { page: { url: nextUrl, lookerVersion: '25.20.0' } })
               }, 0)
             }
-            return []
+            return Promise.resolve([])
           },
         }
         return {
@@ -657,66 +657,48 @@ export function createLookerEmbedPreloadController(opts: {
   let queue: Promise<ILookerConnection> = connectionPromise.then((conn) => { notify(); return conn })
 
   const syncTarget = (next: LookerEmbedTarget): Promise<ILookerConnection> => {
-    queue = queue.then(async () => {
-      const connection = await connectionPromise
+    const step = queue.catch(() => undefined).then(() => connectionPromise).then((connection) => {
       activePreviewMeta = { mode: next.previewMode, objectId: next.previewObjectId }
       const prev = lastTarget
       const isSameTarget = prev && prev.kind === next.kind && prev.target === next.target
       if (isSameTarget && prev.nonce === next.nonce) return connection
-      lastTarget = next
       const options = { waitUntilLoaded: true }
-      const recordLoad = async (method: string, arg: string, p: Promise<unknown>) => {
-        telemetry.calls.push({ method, arg })
-        telemetry.loadCount += 1
-        await p
+      const rec = (method: string, arg: string, p: Promise<unknown>) => {
+        telemetry.calls.push({ method, arg }); telemetry.loadCount += 1; return p
       }
-      if (next.kind === 'preload') {
-        if (prev && prev.kind !== 'preload') await recordLoad('loadUrl', '/preload', connection.loadUrl({ url: '/preload', options }))
-      } else if (next.kind === 'dashboard') {
-        if (isSameTarget && prev.nonce !== next.nonce) {
-          try {
-            telemetry.calls.push({ method: 'asDashboardConnection.run', arg: next.target })
-            connection.asDashboardConnection().run()
-          } catch {
-            await recordLoad('loadDashboard', next.target, connection.loadDashboard({ id: next.target, options }))
+      const pre = next.kind !== 'preload' && isSameTarget && prev.nonce !== next.nonce
+        ? rec('loadUrl', '/preload', connection.loadUrl({ url: '/preload', pushHistory: false, options }))
+        : Promise.resolve()
+      return pre.then(() => {
+        if (next.kind === 'preload') return prev && prev.kind !== 'preload' ? rec('loadUrl', '/preload', connection.loadUrl({ url: '/preload', options })) : undefined
+        if (next.kind === 'dashboard') return rec('loadDashboard', next.target, connection.loadDashboard({ id: next.target, options }))
+        if (next.kind === 'look') return rec('loadLook', next.target, connection.loadLook({ id: next.target, options }))
+        if (next.kind === 'explore') { const eid = next.target.replace('::', '/'); return rec('loadExplore', eid, connection.loadExplore({ id: eid, options })) }
+        if (next.kind === 'extension') return rec('loadExtension', next.target, connection.loadExtension({ id: next.target, options }))
+        if (next.kind === 'report') return rec('loadReport', next.target, connection.loadReport({ id: next.target, options }))
+        return rec('loadUrl', next.target, connection.loadUrl({ url: next.target, options }))
+      }).then(() => {
+        lastTarget = next
+        telemetry.state = next.kind === 'preload' ? 'preloaded' : next.kind
+        telemetry.target = next.target
+        const iframeEl = opts.container?.querySelector?.('iframe')
+        if (iframeEl) {
+          if (next.previewMode === 'conversational-analytics') {
+            iframeEl.setAttribute('data-testid', 'ca-embed-iframe')
+            iframeEl.setAttribute('data-ca-panels-collapsed', 'true')
+            try {
+              iframeEl.contentWindow?.postMessage?.({ type: 'looker:ca:layout', hide_sidebar: true, hide_data_source_panel: true, sidebar_collapsed: true, right_panel_collapsed: true }, '*')
+            } catch { /* ignore */ }
+          } else {
+            iframeEl.removeAttribute('data-testid'); iframeEl.removeAttribute('data-ca-panels-collapsed')
           }
-        } else {
-          await recordLoad('loadDashboard', next.target, connection.loadDashboard({ id: next.target, options }))
         }
-      } else if (next.kind === 'look') {
-        await recordLoad('loadLook', next.target, connection.loadLook({ id: next.target, options }))
-      } else if (next.kind === 'explore') {
-        const exploreId = next.target.replace('::', '/')
-        await recordLoad('loadExplore', exploreId, connection.loadExplore({ id: exploreId, options }))
-      } else if (next.kind === 'extension') {
-        await recordLoad('loadExtension', next.target, connection.loadExtension({ id: next.target, options }))
-      } else if (next.kind === 'report') {
-        await recordLoad('loadReport', next.target, connection.loadReport({ id: next.target, options }))
-      } else {
-        await recordLoad('loadUrl', next.target, connection.loadUrl({ url: next.target, options }))
-      }
-      telemetry.state = next.kind === 'preload' ? 'preloaded' : next.kind
-      telemetry.target = next.target
-      const iframeEl = opts.container?.querySelector?.('iframe')
-      if (iframeEl) {
-        if (next.previewMode === 'conversational-analytics') {
-          iframeEl.setAttribute('data-testid', 'ca-embed-iframe')
-          iframeEl.setAttribute('data-ca-panels-collapsed', 'true')
-          try {
-            iframeEl.contentWindow?.postMessage?.(
-              { type: 'looker:ca:layout', hide_sidebar: true, hide_data_source_panel: true, sidebar_collapsed: true, right_panel_collapsed: true },
-              '*'
-            )
-          } catch { /* ignore cross-origin postMessage errors */ }
-        } else {
-          iframeEl.removeAttribute('data-testid')
-          iframeEl.removeAttribute('data-ca-panels-collapsed')
-        }
-      }
-      notify()
-      return connection
+        notify()
+        return connection
+      })
     })
-    return queue
+    queue = step.catch(() => connectionPromise)
+    return step
   }
 
   return {
@@ -1223,7 +1205,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     lookmlBundle, nativeContent, infoModalUseCase, setInfoModalUseCase,
     folderTreeNodes, selectedFolderId, requirePermission, setRequirePermission,
     setFolderModalOpen, setEditingAgentName,
-    messages, liveActivitySteps, copyThreadState, handleCopyThreadDebugTrace,
+    messages, liveActivitySteps, copyThreadState, handleCopyThreadDebugTrace, activeConversationId,
   } = ctl
 
   const mockExt = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
@@ -1245,13 +1227,25 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   const [slashDismissedAt, setSlashDismissedAt] = useState<string | null>(null)
   const [remoteSearchResults, setRemoteSearchResults] = useState<StudioContextMention[]>([])
   const [mentionLoading, setMentionLoading] = useState(false)
+  const historyRef = useRef<{ convId?: string; idx: number | null; draft: string }>({ idx: null, draft: '' })
+  const userHistory = useMemo(
+    () => messages.filter((m) => m.role === 'user' && m.text.trim()).map((m) => m.text),
+    [messages]
+  )
   const selectedFolderLabel = folderTreeNodes?.[selectedFolderId]?.name || 'My folder'
 
   useEffect(() => { setCursorPos((prev) => Math.min(prev, prompt.length)) }, [prompt.length])
+  const applyRecalledPrompt = (idx: number | null, text: string) => {
+    historyRef.current.convId = activeConversationId
+    historyRef.current.idx = idx
+    setPrompt(text); setCursorPos(text.length)
+    setSlashDismissedAt(text || null); setForceMentionCategory(null)
+    requestAnimationFrame(() => textareaRef.current?.setSelectionRange(text.length, text.length))
+  }
 
   const detectedMention = useMemo(() => {
     const uptoCursor = prompt.slice(0, cursorPos || prompt.length)
-    const m = uptoCursor.match(AT_MENTION_DETECT_RE)
+    const m = slashDismissedAt !== uptoCursor ? uptoCursor.match(AT_MENTION_DETECT_RE) : null
     if (m) {
       const category = (m[1]?.toLowerCase() as StudioContextCategory | undefined) || 'all'
       const query = (m[1] ? m[2] || '' : m[3] || '').trim()
@@ -1262,7 +1256,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       open: forceMentionCategory !== null, category: forceMentionCategory ?? ('all' as const),
       query: '', tokenStart: prompt.length, tokenEnd: prompt.length,
     }
-  }, [prompt, cursorPos, forceMentionCategory])
+  }, [prompt, cursorPos, forceMentionCategory, slashDismissedAt])
 
   useEffect(() => {
     if (detectedMention.open && mentionMenuRef.current && typeof mockExt?.initialExploreScrollTop === 'number') {
@@ -1676,6 +1670,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
           onChange={(e) => {
             setPrompt(e.target.value)
             setCursorPos(e.target.selectionStart ?? e.target.value.length)
+            historyRef.current.idx = null
             if (forceMentionCategory !== null) setForceMentionCategory(null)
             if (slashDismissedAt !== null) setSlashDismissedAt(null)
           }}
@@ -1704,7 +1699,26 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 return
               }
             }
-            if (e.key === 'Escape' && detectedMention.open) { e.preventDefault(); setForceMentionCategory(null); return }
+            if (e.key === 'Escape' && detectedMention.open) { e.preventDefault(); setSlashDismissedAt(prompt.slice(0, cursorPos || prompt.length)); setForceMentionCategory(null); return }
+            if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+              const h = historyRef.current
+              const curIdx = h.convId === activeConversationId && h.idx !== null && prompt === userHistory[h.idx] ? h.idx : null
+              const selStart = e.currentTarget.selectionStart ?? prompt.length
+              const selEnd = e.currentTarget.selectionEnd ?? selStart
+              if (e.key === 'ArrowUp' && userHistory.length > 0 && !prompt.slice(0, selStart).includes('\n') && (curIdx !== null || !prompt.trim())) {
+                e.preventDefault()
+                if (curIdx === null) h.draft = prompt
+                const nextIdx = curIdx === null ? userHistory.length - 1 : Math.max(0, curIdx - 1)
+                applyRecalledPrompt(nextIdx, userHistory[nextIdx])
+                return
+              }
+              if (e.key === 'ArrowDown' && curIdx !== null && !prompt.slice(selEnd).includes('\n')) {
+                e.preventDefault()
+                if (curIdx < userHistory.length - 1) applyRecalledPrompt(curIdx + 1, userHistory[curIdx + 1])
+                else applyRecalledPrompt(null, h.draft)
+                return
+              }
+            }
             if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
               e.preventDefault()
               if (busyStatus) {
@@ -2172,7 +2186,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     setPrompt, busyStatus, liveActivitySteps, hydratingInteractionIds, hydrateMessageActivitySteps,
     pendingPerm, resolvePermDecision,
     leftPaneWidth, setLeftPaneWidth, flushLeftPaneWidthSave, rightPaneCollapsed, setRightPaneCollapsed,
-    contentItems = [], activeContentTabKey = '', handleSelectContentTab, publishedApp, nativeContent,
+    contentItems = [], activeContentTabKey = '', handleSelectContentTab,
     lookmlBundle, currentAppCode, schemaMarkdown,
     sandboxMarkdownCache, sandboxMarkdownLoading, loadSandboxMarkdownFile, setActiveSandboxMarkdownModalPath,
     openViewerDocument, setActiveViewerDocument,
@@ -2187,6 +2201,50 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   const prevBusyRef = useRef(Boolean(busyStatus))
   const [isResizingSplit, setIsResizingSplit] = useState(false)
   const [copiedTraceKey, setCopiedTraceKey] = useState<string | null>(null)
+  const [longPressUserMsgIdx, setLongPressUserMsgIdx] = useState<number | null>(null)
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const longPressFiredRef = useRef(false)
+  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null)
+
+  useEffect(() => {
+    setLongPressUserMsgIdx(null)
+    longPressFiredRef.current = false
+    return () => { if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current) }
+  }, [activeConversationId])
+
+  useEffect(() => {
+    if (longPressUserMsgIdx === null || typeof document === 'undefined') return
+    const close = (ev: Event) => {
+      if (ev.type === 'mousedown' && longPressFiredRef.current) return
+      if ((ev.target as HTMLElement | null)?.closest?.(`[data-testid="user-msg-longpress-menu-${longPressUserMsgIdx}"]`)) return
+      setLongPressUserMsgIdx(null)
+    }
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setLongPressUserMsgIdx(null) }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('touchstart', close)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('touchstart', close)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [longPressUserMsgIdx])
+
+  const clearLongPress = () => {
+    if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null }
+  }
+  const handleCopyUserMsg = (idx: number, text: string) => {
+    const key = `user_${idx}`
+    void copyTextWithExtensionSdk(text, extensionSDK)
+    setCopiedTraceKey(key); setLongPressUserMsgIdx(null)
+    setTimeout(() => setCopiedTraceKey((cur) => (cur === key ? null : cur)), 1800)
+  }
+
+  const deletedCrudKeys = useMemo(() => {
+    const latest = new Map<string, string>()
+    messages.forEach((m) => m.crudItems?.forEach((it) => latest.set(it.key, it.action)))
+    return new Set(Array.from(latest.entries()).filter(([, a]) => a === 'deleted').map(([k]) => k))
+  }, [messages])
 
   useEffect(() => {
     const el = chatLogRef.current
@@ -2216,14 +2274,6 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     }),
     [lookmlBundle, currentAppCode, schemaMarkdown, sandboxMarkdownCache, sandboxMarkdownLoading, loadSandboxMarkdownFile, setActiveSandboxMarkdownModalPath, openViewerDocument]
   )
-  const chatViewerObjects = useMemo<Array<{ key: string; title: string; contentType: StudioContentItemType }>>(() => {
-    if (contentItems.length > 0) {
-      return contentItems.filter((item) => !item.hidden).map((item) => ({ key: item.key, title: item.title, contentType: item.contentType }))
-    }
-    if (nativeContent) return [{ key: `${nativeContent.contentType}:${nativeContent.id}`, title: nativeContent.title, contentType: nativeContent.contentType }]
-    if (publishedApp) return [{ key: `data_app:${publishedApp.dashboardId}`, title: publishedApp.title, contentType: 'data_app' }]
-    return []
-  }, [contentItems, nativeContent, publishedApp])
 
   const handleOpenContentLinkInViewer = (target: InViewerLookerLinkTarget) => {
     setActiveViewerDocument?.(null)
@@ -2341,18 +2391,65 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               ? messages.slice(0, idx).reverse().find((pm) => pm.role === 'assistant' && pm.interactionId)?.interactionId
               : undefined
           const isHydratingTurn = Boolean(!hasSteps && m.interactionId && hydratingInteractionIds?.[m.interactionId])
+          const isUserCopied = copiedTraceKey === `user_${idx}`
           return (
-            <div key={idx} className={`dab-msg dab-msg-${m.role}`}>
+            <div
+              key={idx}
+              className={`dab-msg dab-msg-${m.role}`}
+              onContextMenu={m.role === 'user' ? (e) => { if (longPressFiredRef.current || longPressUserMsgIdx === idx) e.preventDefault() } : undefined}
+              onTouchStart={m.role === 'user' ? (e) => {
+                if ((e.target as HTMLElement | null)?.closest?.('[data-testid^="user-msg-longpress-menu-"]')) return
+                clearLongPress(); longPressFiredRef.current = false
+                const pt = e.touches?.[0]
+                touchStartPosRef.current = pt ? { x: pt.clientX, y: pt.clientY } : { x: 0, y: 0 }
+                longPressTimerRef.current = setTimeout(() => { longPressTimerRef.current = null; longPressFiredRef.current = true; setLongPressUserMsgIdx(idx) }, 450)
+              } : undefined}
+              onTouchMove={m.role === 'user' ? (e) => {
+                const pt = e.touches?.[0]
+                if (longPressTimerRef.current && touchStartPosRef.current && pt && Math.hypot(pt.clientX - touchStartPosRef.current.x, pt.clientY - touchStartPosRef.current.y) > 10) clearLongPress()
+              } : undefined}
+              onTouchEnd={m.role === 'user' ? (e) => {
+                clearLongPress()
+                if (longPressFiredRef.current) { e.preventDefault(); setTimeout(() => { longPressFiredRef.current = false }, 350) }
+              } : undefined}
+              onTouchCancel={m.role === 'user' ? () => { clearLongPress(); longPressFiredRef.current = false } : undefined}
+            >
               <div className="dab-msg-header">
                 <span data-testid={m.role === 'assistant' ? 'chat-msg-agent-author' : undefined}>
                   {m.role === 'user' ? 'You' : m.role === 'error' ? 'Error' : agentName}
                 </span>
+                {m.role === 'user' && (
+                  <button
+                    type="button"
+                    data-testid={`copy-user-msg-btn-${idx}`}
+                    data-copied={isUserCopied ? 'true' : 'false'}
+                    className="dab-user-msg-copy-btn"
+                    title={isUserCopied ? 'Copied!' : 'Copy message'}
+                    aria-label="Copy message"
+                    onClick={(e) => { e.stopPropagation(); handleCopyUserMsg(idx, m.text) }}
+                  >
+                    {isUserCopied ? <Check size={13} strokeWidth={2} aria-hidden="true" /> : <Copy size={13} strokeWidth={1.75} aria-hidden="true" />}
+                  </button>
+                )}
                 {m.dashboardId && (
                   <button type="button" className="dab-msg-pill" onClick={() => { setActiveViewerDocument?.(null); setRightPaneCollapsed(false) }}>
                     Dashboard #{m.dashboardId}{typeof m.widgetCount === 'number' ? ` · ${m.widgetCount} queries` : ''}
                   </button>
                 )}
               </div>
+              {m.role === 'user' && longPressUserMsgIdx === idx && (
+                <div data-testid={`user-msg-longpress-menu-${idx}`} role="menu" aria-label="Message actions" className="dab-user-msg-longpress-menu">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-testid={`user-msg-longpress-copy-${idx}`}
+                    className="dab-composer-add-item"
+                    onClick={(e) => { e.stopPropagation(); handleCopyUserMsg(idx, m.text) }}
+                  >
+                    <Copy size={13} strokeWidth={1.75} aria-hidden="true" /><span>Copy message</span>
+                  </button>
+                </div>
+              )}
               {m.role === 'assistant' && (hasSteps || Boolean(m.interactionId)) && (
                 <details
                   className="dab-thinking-block"
@@ -2413,6 +2510,35 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                   {m.images.map((src, i) => <img key={i} src={src} alt="Attached screenshot" style={{ maxHeight: 80, borderRadius: 4, border: '1px solid #cbd5e1' }} />)}
                 </div>
               )}
+              {m.role === 'assistant' && m.crudItems && m.crudItems.length > 0 && (
+                <div className="dab-chat-object-chips dab-turn-crud-chips" data-testid="chat-object-viewer-chips">
+                  {m.crudItems.map((item) => {
+                    const isDeleted = item.action === 'deleted' || deletedCrudKeys.has(item.key)
+                    return (
+                      <button
+                        key={`${item.key}:${item.action}`}
+                        type="button"
+                        disabled={isDeleted}
+                        data-testid={`chat-object-viewer-chip-${item.key}`}
+                        data-crud-action={item.action}
+                        className={`dab-msg-pill dab-chat-object-chip ${!isDeleted && item.key === activeContentTabKey ? 'active' : ''} ${item.action === 'deleted' ? 'deleted' : ''}`}
+                        onClick={() => {
+                          if (isDeleted) return
+                          setActiveViewerDocument?.(null); setRightPaneCollapsed(false)
+                          const k = contentItems.some((c) => c.key === item.key)
+                            ? item.key
+                            : ctl.upsertContentItem({ id: item.id, contentType: item.contentType, title: item.title, embedPath: item.embedPath, hidden: false }, true).key
+                          handleSelectContentTab?.(k)
+                        }}
+                      >
+                        {renderContentTabIcon(item.contentType)}
+                        <span>{item.title}</span>
+                        <span className="dab-crud-action-label">{item.action}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )
         })}
@@ -2433,24 +2559,6 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 
         {busyStatus && (!liveActivitySteps || liveActivitySteps.length === 0) && (
           <div className="dab-status-banner"><span className="dab-spinner" /><span>{busyStatus}</span></div>
-        )}
-
-        {chatViewerObjects.length > 0 && (
-          <div className="dab-chat-object-chips" data-testid="chat-object-viewer-chips">
-            {chatViewerObjects.map((item) => (
-              <button
-                key={item.key} type="button" data-testid={`chat-object-viewer-chip-${item.key}`}
-                className={`dab-msg-pill dab-chat-object-chip ${item.key === activeContentTabKey ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveViewerDocument?.(null)
-                  if (contentItems.some((c) => c.key === item.key)) handleSelectContentTab?.(item.key)
-                  setRightPaneCollapsed(false)
-                }}
-              >
-                {renderContentTabIcon(item.contentType)}<span>{item.title}</span>
-              </button>
-            ))}
-          </div>
         )}
       </div>
 
@@ -2538,25 +2646,55 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const [tddViewMode, setTddViewMode] = useState<'rendered' | 'raw'>(() => mockExt?.initialTddViewMode || 'rendered')
   const [copiedTdd, setCopiedTdd] = useState(false)
   const [showAppCode, setShowAppCode] = useState(false)
+  const [copiedAppCode, setCopiedAppCode] = useState(false)
+  const [reloadingViewer, setReloadingViewer] = useState(false)
   const [iframeRev, setIframeRev] = useState(0)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
   const [hoveredTab, setHoveredTab] = useState<{ key: string; left: number; top: number } | null>(null)
-  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const hoveredTabRef = useRef(hoveredTab)
+  hoveredTabRef.current = hoveredTab
+  const hoverCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const hoverOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const moreMenuWrapRef = useRef<HTMLDivElement | null>(null)
   const embedContainerRef = useRef<HTMLDivElement | null>(null)
   const embedControllerRef = useRef<ReturnType<typeof createLookerEmbedPreloadController> | null>(null)
+  const prevEmbedTargetRef = useRef<LookerEmbedTarget | null>(null)
   const hadViewerContentRef = useRef(false)
   const trackedConvIdRef = useRef(activeConversationId)
 
-  const openTabPopover = (key: string, el: HTMLElement | null) => {
-    if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null }
-    const r = el?.getBoundingClientRect()
-    const maxLeft = typeof window !== 'undefined' ? Math.max(8, window.innerWidth - 250) : 1200
-    setHoveredTab({ key, left: r ? Math.max(8, Math.min(Math.round(r.left), maxLeft)) : 8, top: r ? Math.round(r.bottom + 2) : 40 })
+  const clearTabPopoverTimers = () => {
+    if (hoverCloseTimerRef.current) { clearTimeout(hoverCloseTimerRef.current); hoverCloseTimerRef.current = null }
+    if (hoverOpenTimerRef.current) { clearTimeout(hoverOpenTimerRef.current); hoverOpenTimerRef.current = null }
   }
-  const scheduleCloseTabPopover = (key: string) => {
-    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)
-    hoverTimerRef.current = setTimeout(() => setHoveredTab((cur) => (cur?.key === key ? null : cur)), 140)
+
+  useEffect(() => {
+    setShowAppCode(false)
+    setCopiedAppCode(false)
+  }, [activeContentTabKey, activeConversationId, embedNonce])
+
+  useEffect(() => {
+    clearTabPopoverTimers()
+    setHoveredTab(null)
+  }, [activeConversationId, rightPaneCollapsed])
+
+  useEffect(() => clearTabPopoverTimers, [])
+
+  const openTabPopover = (key: string, el: HTMLElement | null, immediate = false) => {
+    clearTabPopoverTimers()
+    const commit = () => {
+      const r = el?.getBoundingClientRect()
+      const maxLeft = typeof window !== 'undefined' ? Math.max(8, window.innerWidth - 328) : 1120
+      setHoveredTab({ key, left: r ? Math.max(8, Math.min(Math.round(r.left), maxLeft)) : 8, top: r ? Math.round(r.bottom + 2) : 40 })
+    }
+    if (immediate || !hoveredTabRef.current || hoveredTabRef.current.key === key) {
+      commit()
+    } else {
+      hoverOpenTimerRef.current = setTimeout(() => { hoverOpenTimerRef.current = null; commit() }, 180)
+    }
+  }
+  const scheduleCloseTabPopover = () => {
+    clearTabPopoverTimers()
+    hoverCloseTimerRef.current = setTimeout(() => setHoveredTab(null), 280)
   }
 
   const visibleTabs = useMemo(() => contentItems.filter((it) => !it.hidden), [contentItems])
@@ -2607,8 +2745,17 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   }, [hostUrl, mockExt])
 
   useEffect(() => {
-    if (!embedControllerRef.current) return
-    void embedControllerRef.current.syncTarget(embedTarget)
+    const prev = prevEmbedTargetRef.current
+    prevEmbedTargetRef.current = embedTarget
+    if (!embedControllerRef.current) { setReloadingViewer(false); return }
+    if (prev && embedTarget.kind !== 'preload' && prev.kind === embedTarget.kind && prev.target === embedTarget.target && prev.nonce !== embedTarget.nonce) {
+      setReloadingViewer(true)
+    }
+    let cancelled = false
+    void embedControllerRef.current.syncTarget(embedTarget).catch(() => undefined).finally(() => {
+      if (!cancelled) setReloadingViewer(false)
+    })
+    return () => { cancelled = true }
   }, [embedTarget])
 
   const handleCopyTddMarkdown = () => {
@@ -2627,6 +2774,8 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const isDataAppPane = activeContentItem
     ? activeContentItem.contentType === 'data_app' || activeContentItem.contentType === 'data-investigator'
     : builderMode !== 'dashboard'
+  const isShowingAppCodeFullscreen =
+    activePaneKind === 'embed' && !rightPaneCollapsed && !allTabsHidden && showAppCode && Boolean(currentAppCode) && isDataAppPane && !activeViewerDocument
   const activePreviewId = allTabsHidden
     ? ''
     : activeContentItem?.id || (builderMode === 'dashboard' ? nativeContent?.id : publishedApp?.dashboardId)
@@ -2745,10 +2894,10 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                   key={item.key}
                   className="dab-content-tab-item"
                   onMouseEnter={(e) => openTabPopover(item.key, e.currentTarget)}
-                  onMouseLeave={() => scheduleCloseTabPopover(item.key)}
-                  onFocus={(e) => openTabPopover(item.key, e.currentTarget)}
+                  onMouseLeave={scheduleCloseTabPopover}
+                  onFocus={(e) => openTabPopover(item.key, e.currentTarget, true)}
                   onBlur={(e) => {
-                    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) scheduleCloseTabPopover(item.key)
+                    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) scheduleCloseTabPopover()
                   }}
                 >
                   <div
@@ -2772,6 +2921,8 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                       title="Hide tab"
                       onClick={(e) => {
                         e.stopPropagation()
+                        clearTabPopoverTimers()
+                        setHoveredTab(null)
                         handleHideContentTab?.(item.key)
                       }}
                     >
@@ -2782,17 +2933,17 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                     data-testid={`content-tab-popover-${item.key}`}
                     className={`dab-content-tab-popover ${isPopOpen ? 'open' : ''}`}
                     style={isPopOpen && hoveredTab ? { left: hoveredTab.left, top: hoveredTab.top } : undefined}
-                    onMouseEnter={() => { if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null } }}
-                    onMouseLeave={() => scheduleCloseTabPopover(item.key)}
+                    onMouseEnter={clearTabPopoverTimers}
+                    onMouseLeave={scheduleCloseTabPopover}
                   >
                     <span className="dab-tab-popover-meta">
                       {isLookmlTab ? <>Project: <code>{pid}</code></> : isNonEmbed ? <>{formatContentTypeLabel(item.contentType)}: <code>{item.id}</code></> : formatContentTypeLabel(item.contentType)}
                     </span>
                     {popHref && (
-                      <button
-                        type="button"
-                        data-testid={isLookmlTab ? 'lookml-open-ide-btn' : undefined}
-                        className="dab-btn dab-btn-secondary dab-tab-popover-btn"
+                      <StudioButton
+                        variant="secondary"
+                        testId={isLookmlTab ? 'lookml-open-ide-btn' : undefined}
+                        className="dab-tab-popover-btn"
                         onClick={(e) => {
                           e.stopPropagation()
                           void openOrCopyMarkdownLink(popHref, hostUrl, extensionSDK)
@@ -2800,7 +2951,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                       >
                         <span>{isLookmlTab ? 'Open in IDE' : 'Open in Looker'}</span>
                         <ExternalLink size={11} strokeWidth={1.75} aria-hidden="true" />
-                      </button>
+                      </StudioButton>
                     )}
                   </div>
                 </div>
@@ -2932,13 +3083,22 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             actions={
               <>
                 {!allTabsHidden && isDataAppPane && currentAppCode && (
-                  <button type="button" data-testid="preview-view-code-btn" className="dab-btn-secondary" onClick={() => setShowAppCode((v) => !v)}>
-                    {showAppCode ? 'Hide app.js' : '{ } View app.js'}
-                  </button>
+                  <StudioButton variant="secondary" testId="preview-view-code-btn" onClick={() => setShowAppCode((v) => !v)}>
+                    <Code2 size={13} strokeWidth={1.75} aria-hidden="true" />
+                    <span>{showAppCode ? 'Hide app.js' : 'View app.js'}</span>
+                  </StudioButton>
                 )}
                 {!allTabsHidden && activePreviewId && (
                   <>
-                    <button type="button" className="dab-btn-secondary" onClick={() => setIframeRev((r) => r + 1)}>Reload Viewer</button>
+                    <StudioButton
+                      variant="secondary"
+                      testId="preview-reload-viewer-btn"
+                      data-reloading={reloadingViewer ? 'true' : 'false'}
+                      onClick={() => { setShowAppCode(false); setReloadingViewer(true); setIframeRev((r) => r + 1) }}
+                    >
+                      <RotateCw size={13} strokeWidth={1.75} className={reloadingViewer ? 'dab-spin' : undefined} aria-hidden="true" />
+                      <span>Reload Viewer</span>
+                    </StudioButton>
                     <button type="button" className="dab-btn-secondary" onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}>Open in Looker ↗</button>
                   </>
                 )}
@@ -2950,13 +3110,26 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         )
       )}
 
-      {!rightPaneCollapsed && !allTabsHidden && showAppCode && currentAppCode && isDataAppPane && (
-        <div className="dab-code-drawer" data-testid="preview-app-code-drawer" style={{ padding: 12, background: 'var(--dab-code-bg, #0f172a)', color: '#e2e8f0', borderBottom: '1px solid var(--dab-border, #e2e8f0)', maxHeight: 260, overflow: 'auto', fontSize: 12 }}>
-          <div className="dab-inspector-bar">
+      {isShowingAppCodeFullscreen && (
+        <div className="dab-code-drawer" data-testid="preview-app-code-drawer">
+          <div className="dab-code-drawer-header">
             <strong>app.js ({currentAppCode.length} B)</strong>
-            <button type="button" className="dab-btn-secondary" onClick={() => void copyTextWithExtensionSdk(currentAppCode, extensionSDK)}>Copy app.js</button>
+            <StudioButton
+              variant="secondary"
+              testId="preview-copy-code-btn"
+              className="dab-btn-icon"
+              title={copiedAppCode ? 'Copied!' : 'Copy app.js'}
+              aria-label="Copy app.js"
+              onClick={() => {
+                void copyTextWithExtensionSdk(currentAppCode, extensionSDK)
+                setCopiedAppCode(true)
+                setTimeout(() => setCopiedAppCode(false), 1800)
+              }}
+            >
+              {copiedAppCode ? <Check size={14} strokeWidth={2} aria-hidden="true" /> : <Copy size={14} strokeWidth={1.75} aria-hidden="true" />}
+            </StudioButton>
           </div>
-          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{currentAppCode}</pre>
+          <pre className="dab-code-drawer-pre">{currentAppCode}</pre>
         </div>
       )}
 
@@ -3006,7 +3179,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         </div>
       )}
 
-      <div className="dab-iframe-container" data-testid="ca-embed-preview" style={activePaneKind === 'script' || rightPaneCollapsed || Boolean(activeViewerDocument) ? { display: 'none' } : undefined}>
+      <div className="dab-iframe-container" data-testid="ca-embed-preview" style={activePaneKind === 'script' || rightPaneCollapsed || Boolean(activeViewerDocument) || isShowingAppCodeFullscreen ? { display: 'none' } : undefined}>
         <div ref={embedContainerRef} data-testid="looker-embed-container" className="dab-embed-container" style={{ width: '100%', height: '100%', display: hasActiveEmbed ? 'block' : 'none' }} />
         {activePaneKind === 'empty_hidden' ? (
           <div className="dab-placeholder" data-testid="studio-content-tabs-all-hidden">

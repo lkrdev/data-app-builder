@@ -7,11 +7,15 @@ import {
   normalizeCaEmbedPath,
 } from './conversationalAnalytics'
 import {
+  compactPersistedChatTurn,
   DashboardStudioMetadata,
   mergeStudioMetadata,
   PersistedChatTurn,
+  type StudioContentItemType,
   StudioMetadataUpdate,
+  type TurnCrudItem,
 } from './dataAppPublisher'
+export type { StudioContentItemType, TurnCrudItem }
 import { rawLookerRequest } from './lookerApi'
 
 export const ARTIFACT_NAMESPACE = 'data_app_builder::data_app_builder'
@@ -117,11 +121,6 @@ export interface TileScriptBinding {
   title?: string
   updatedAt?: string
 }
-
-export type StudioContentItemType =
-  | 'board' | 'look' | 'dashboard' | 'lookml_dashboard' | 'explore'
-  | 'data_app' | 'data-investigator' | 'lookml' | 'script' | 'report'
-  | 'conversational-analytics' | 'extension'
 
 export interface StudioContentItem {
   key: string // `${contentType}:${id}`
@@ -233,10 +232,19 @@ export function normalizeStudioContentItem(
   return out
 }
 
+export function toTurnCrudItem(
+  item: Pick<StudioContentItem, 'key' | 'id' | 'title' | 'contentType'> & { embedPath?: string },
+  action: TurnCrudItem['action']
+): TurnCrudItem {
+  const out: TurnCrudItem = { key: item.key, id: item.id, title: item.title, contentType: item.contentType, action }
+  if (item.embedPath) out.embedPath = item.embedPath
+  return out
+}
+
 export function upsertStudioContentItem(
   items: StudioContentItem[],
   nextRaw: Partial<StudioContentItem> & { id: string; contentType: StudioContentItemType }
-): { items: StudioContentItem[]; activeKey: string; item: StudioContentItem } {
+): { items: StudioContentItem[]; activeKey: string; item: StudioContentItem; existed: boolean } {
   const hidden = typeof nextRaw.hidden === 'boolean' ? nextRaw.hidden : false
   const normalized = normalizeStudioContentItem(Object.assign({}, nextRaw, { hidden }))
   const existingIdx = items.findIndex(
@@ -267,9 +275,9 @@ export function upsertStudioContentItem(
     )
     const nextItems = items.slice()
     nextItems[existingIdx] = merged
-    return { items: nextItems, activeKey: merged.key, item: merged }
+    return { items: nextItems, activeKey: merged.key, item: merged, existed: true }
   }
-  return { items: items.concat(normalized), activeKey: normalized.key, item: normalized }
+  return { items: items.concat(normalized), activeKey: normalized.key, item: normalized, existed: false }
 }
 
 export interface UserConversationContent {
@@ -307,7 +315,8 @@ export interface UserConversationEntry {
 }
 
 export function hydrateConversationContentItems(conv: Partial<UserConversationEntry>): StudioContentItem[] {
-  if (Array.isArray(conv.contentItems) && conv.contentItems.length > 0) {
+  const hadDeletedTurn = Boolean(conv.messages?.some((m) => m.crudItems?.some((x) => x.action === 'deleted')))
+  if (Array.isArray(conv.contentItems) && (conv.contentItems.length > 0 || hadDeletedTurn)) {
     return conv.contentItems.filter((it): it is StudioContentItem => Boolean(it && it.id && it.contentType)).map((it) => normalizeStudioContentItem(it))
   }
   const c = conv.content || {}
@@ -622,15 +631,7 @@ function prunePersistedContentItem(raw: StudioContentItem): StudioContentItem {
 }
 
 function prunePersistedMessages(messages?: PersistedChatTurn[]): PersistedChatTurn[] | undefined {
-  if (!Array.isArray(messages)) return undefined
-  return messages.map((m) => ({
-    role: m.role,
-    text: m.text,
-    ...(m.interactionId ? { interactionId: m.interactionId } : {}),
-    ...(m.dashboardId ? { dashboardId: m.dashboardId } : {}),
-    ...(m.widgetCount !== undefined ? { widgetCount: m.widgetCount } : {}),
-    ...(m.thinkingDurationSec !== undefined ? { thinkingDurationSec: m.thinkingDurationSec } : {}),
-  }))
+  return Array.isArray(messages) ? messages.map((m) => compactPersistedChatTurn(m, true)) : undefined
 }
 
 function normalizeConversationsArray(raw: unknown): UserConversationEntry[] {
@@ -1172,7 +1173,7 @@ export class ArtifactService {
       : await this.listConversations(uid)
     const prev = existing.find((c) => c.id === cleanId)
     let mergedContentItems = entry.contentItems
-    if (!mergedContentItems && prev?.contentItems?.length) {
+    if (mergedContentItems === undefined && prev?.contentItems?.length) {
       mergedContentItems = prev.contentItems
     }
     const mergedMessages = prunePersistedMessages(entry.messages ?? prev?.messages)
