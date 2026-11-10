@@ -232,22 +232,36 @@ async function main() {
         const hasSilverExplores = files.some((f) => f.includes('silver/')) || /silver\/explores/.test(allText)
         const calledProfileFields = /profile_fields/.test(stepsText)
         const showsExampleQueryData = /run_inline_query/.test(allText) && /\d/.test(text)
-        const offlineParse = validateBundleOfflineWithLkrParse(res.lookmlBundle?.files || [])
+        const rawFiles = res.lookmlBundle?.files || []
+        const bronzeRefinementsSingleTable = rawFiles
+          .filter((f) => typeof f?.path === 'string' && f.path.includes('bronze/') && f.path.endsWith('.refinement.lkml'))
+          .every((f) => {
+            const viewMatch = String(f.content || '').match(/view\s*:\s*\+?([a-z0-9_]+)/i)
+            const vname = viewMatch?.[1] || ''
+            const dottedRefs = Array.from(String(f.content || '').matchAll(/\$\{\s*([a-z0-9_]+)\.[a-z0-9_]+\s*\}/gi)).map((m) => m[1])
+            return dottedRefs.every((ref) => ref.toUpperCase() === 'TABLE' || ref === vname)
+          })
+        const noBaseFieldExclusions = rawFiles
+          .filter((f) => typeof f?.path === 'string' && f.path.endsWith('_base.explore.lkml'))
+          .every((f) => !/\bfields\s*:\s*\[[^\]]*-[a-z0-9_.]+/i.test(String(f.content || '')))
+        const offlineParse = validateBundleOfflineWithLkrParse(rawFiles)
         const activeProj = res.lookmlBundle?.project_id || lookmlProjectId || projectName
         let liveProjectValid = false
-        let liveProjectFatalErrors = []
+        let liveProjectDiagnostics = []
         try {
           const valRes = await sdk.validate_project(activeProj)
-          liveProjectFatalErrors = (valRes?.errors || []).filter((e) => e.severity === 'fatal' && (!e.explore || e.explore === 'order_items'))
-          liveProjectValid = Array.isArray(valRes?.errors) && liveProjectFatalErrors.length === 0
+          liveProjectDiagnostics = (valRes?.errors || []).filter(
+            (e) => (e.severity === 'fatal' || e.severity === 'warning') && (!e.explore || e.explore === 'order_items' || e.explore === 'order_items_base')
+          )
+          liveProjectValid = Array.isArray(valRes?.errors) && liveProjectDiagnostics.length === 0
         } catch (err) {
-          liveProjectFatalErrors = [String(err?.message || err)]
+          liveProjectDiagnostics = [String(err?.message || err)]
         }
         const asksForDashboard = /dashboard/.test(text) && /\?/.test(text)
         const hasProjectLink = /\/projects\/[^/\s)]+/i.test(res.assistantText || '')
         return {
-          passed: hasRefinements && hasSilverExplores && calledProfileFields && showsExampleQueryData && offlineParse.ok && liveProjectValid && asksForDashboard && hasProjectLink,
-          checks: { hasRefinements, hasSilverExplores, calledProfileFields, showsExampleQueryData, offlineParseOk: offlineParse.ok, offlineParseError: offlineParse.error, liveProjectValid, liveProjectFatalErrors, asksForDashboard, hasProjectLink, files },
+          passed: hasRefinements && hasSilverExplores && bronzeRefinementsSingleTable && noBaseFieldExclusions && calledProfileFields && showsExampleQueryData && offlineParse.ok && liveProjectValid && asksForDashboard && hasProjectLink,
+          checks: { hasRefinements, hasSilverExplores, bronzeRefinementsSingleTable, noBaseFieldExclusions, calledProfileFields, showsExampleQueryData, offlineParseOk: offlineParse.ok, offlineParseError: offlineParse.error, liveProjectValid, liveProjectDiagnostics, asksForDashboard, hasProjectLink, files },
         }
       },
     },
@@ -256,76 +270,143 @@ async function main() {
       name: 'Turn 5: Create LookML dashboard, copy into selected UI folder via CodeMode, ask for metric selector Data App',
       prompt: 'Yes, create a dashboard with these metrics.',
       grade: async (res) => {
-        const text = (res.assistantText || '').toLowerCase()
+        const rawText = res.assistantText || ''
+        const text = rawText.toLowerCase()
         const stepsText = JSON.stringify(res.activitySteps || []).toLowerCase()
         const createdLookmlDashboard = /\.dashboard\.lookml/.test(stepsText) || /\.dashboard\.lookml/.test(text)
         const copiedToSelectedFolder =
           (/import_lookml_dashboard|sync_lookml_dashboard|create_dashboard|upsert_lookml_dashboard|upsert_udd/.test(stepsText)) &&
           (stepsText.includes(`"${selectedFolderId}"`) || stepsText.includes('target_folder_id') || String(res.nativeBundle?.folder_id || res.nativeBundle?.folderId || '') === String(selectedFolderId))
+        const activeProj = lookmlProjectId || projectName
+        let lookmlDashValidationClean = false
+        let lookmlDashValidationErrors = []
+        try {
+          const valRes = await sdk.validate_project(activeProj)
+          lookmlDashValidationErrors = (valRes?.errors || []).filter((e) => {
+            const sev = String(e?.severity || '').toLowerCase()
+            const hay = `${e?.file_path || ''} ${e?.message || ''} ${e?.details || ''}`
+            return (sev === 'fatal' || sev === 'warning') && (/\.dashboard\.lookml/i.test(hay) || /unknown field/i.test(hay))
+          })
+          lookmlDashValidationClean = Array.isArray(valRes?.errors) && lookmlDashValidationErrors.length === 0
+        } catch (err) {
+          lookmlDashValidationErrors = [String(err?.message || err)]
+        }
         let liveDashExists = false
         let liveDashFolderMatches = false
         let liveDashTileCount = 0
+        let liveDashTilesAllValid = false
+        const liveTileErrors = []
         const rawDashId = extractUddId(res.nativeBundle)
         if (rawDashId) {
           try {
             const liveDash = await sdk.dashboard(rawDashId)
             liveDashExists = Boolean(liveDash && String(liveDash.id) === rawDashId)
             liveDashFolderMatches = String(liveDash?.folder?.id || liveDash?.space?.id || '') === String(selectedFolderId)
-            liveDashTileCount = (liveDash?.dashboard_elements || []).length
+            const elements = liveDash?.dashboard_elements || []
+            liveDashTileCount = elements.length
+            const queryElements = elements.filter((el) => el?.type !== 'text')
+            if (queryElements.length >= 4) {
+              await Promise.all(
+                queryElements.map(async (el) => {
+                  const q = el?.query || el?.result_maker?.query
+                  const qFields = Array.isArray(q?.fields) ? q.fields : []
+                  if (!q?.model || !q?.view || qFields.length === 0) {
+                    liveTileErrors.push(`${el?.title || el?.id}: empty fields or missing query`)
+                    return
+                  }
+                  try {
+                    const rows = await sdk.run_inline_query('json', {
+                      model: q.model,
+                      view: q.view,
+                      fields: qFields,
+                      filters: q.filters || {},
+                      sorts: q.sorts || [],
+                      ...(Array.isArray(q.pivots) && q.pivots.length > 0 ? { pivots: q.pivots } : {}),
+                      limit: '5',
+                    })
+                    if (!Array.isArray(rows) || rows[0]?.looker_error) {
+                      liveTileErrors.push(`${el?.title || el?.id}: ${JSON.stringify(rows).slice(0, 160)}`)
+                    }
+                  } catch (qErr) {
+                    liveTileErrors.push(`${el?.title || el?.id}: ${String(qErr?.message || qErr)}`)
+                  }
+                })
+              )
+              liveDashTilesAllValid = liveTileErrors.length === 0
+            }
           } catch {}
         }
+        const noGridOrVisJargon =
+          !/\brow\s+\d+\b|\b(?:width|height|col)\s*:\s*\d+|\b24-column\s+grid\b|\b(?:single_value|looker_area|looker_pie|looker_column|looker_bar|looker_grid)\b/i.test(rawText)
         const asksForMetricSelectorApp =
-          /data app|metric selector/.test(text) && /day|week|month|year/.test(text)
-        const hasDashboardLink = /\/dashboards\/[^\s)]+/i.test(res.assistantText || '')
+          /data app|metric selector/.test(text) && /day|date|week|month|year/.test(text)
+        const hasDashboardLink = /\/dashboards\/[^\s)]+/i.test(rawText)
         return {
-          passed: createdLookmlDashboard && copiedToSelectedFolder && liveDashExists && liveDashFolderMatches && liveDashTileCount >= 4 && asksForMetricSelectorApp && hasDashboardLink,
-          checks: { createdLookmlDashboard, copiedToSelectedFolder, liveDashExists, liveDashFolderMatches, liveDashTileCount, asksForMetricSelectorApp, hasDashboardLink, nativeBundle: res.nativeBundle || null },
+          passed: createdLookmlDashboard && copiedToSelectedFolder && lookmlDashValidationClean && liveDashExists && liveDashFolderMatches && liveDashTileCount >= 4 && liveDashTilesAllValid && noGridOrVisJargon && asksForMetricSelectorApp && hasDashboardLink,
+          checks: { createdLookmlDashboard, copiedToSelectedFolder, lookmlDashValidationClean, lookmlDashValidationErrors, liveDashExists, liveDashFolderMatches, liveDashTileCount, liveDashTilesAllValid, liveTileErrors, noGridOrVisJargon, asksForMetricSelectorApp, hasDashboardLink, nativeBundle: res.nativeBundle || null },
         }
       },
     },
     {
       turn: 6,
-      name: 'Turn 6: Build responsive metric selector Data App (PoP KPIs, Compare against, 3-dot chart menu, Period/Window split & PoP variance grid)',
+      name: 'Turn 6: Build responsive metric selector Data App (date timeframe, custom 4-row PoP KPIs, card-border compare, 3-dot chart menu & PoP variance grid)',
       prompt: 'Yes, build that metric selector data app.',
       grade: async (res) => {
         const code = res.bundle?.raw_code || ''
         const hasBundle = Boolean(code.trim())
-        const has90Days = /90\s*days|90d|\bday\s*:\s*['"]?90\b/i.test(code)
+        const has90Days = /90\s*days|90d|\bdate\s*:\s*['"]?90\b/i.test(code)
         const has53Weeks = /53\s*weeks|53w|\bweek\s*:\s*['"]?53\b/i.test(code)
         const has60Months = /60\s*months|60m|\bmonth\s*:\s*['"]?60\b/i.test(code)
         const has10Years = /10\s*years|10y|\byear\s*:\s*['"]?10\b/i.test(code)
+        const noInvalidDayField =
+          !/(?:\.[a-z0-9_]+(?<!_hour_of)|\$\{[^}]+\})_day(?![a-zA-Z0-9_])/i.test(code) &&
+          !(/\bday\s*:/.test(code) && /_\$\{[^}]*period\b/.test(code))
         const matchesMeasureDate =
           /return/i.test(code) && /returned_date|returned_week|returned_month|returned_year|returned/i.test(code) &&
           /cancel/i.test(code) && /cancelled|canceled|shipped|delivered/i.test(code)
-        // 1 & 2. Border-only clickable PoP KPI cards (no "ACTIVE METRIC" badge or Metric <app-select>), 2 * periodCount, inline vs. prev, polarity, sparkline
-        const noMetricDropdownOrActiveBadge = !/active\s+metric/i.test(code) && !/<app-select[^>]*\blabel\s*=\s*["'](?:Primary\s+)?Metric["']/i.test(code)
-        const hasPopClickableKpis = noMetricDropdownOrActiveBadge && /border-color[\s\S]{0,160}--app-primary|--app-primary[\s\S]{0,160}border-color/i.test(code) && /2\s*\*/.test(code) && /vs\.?\s*prev/i.test(code) && /lower-better/i.test(code) && /<svg\b|sparkline/i.test(code)
-        // 3 & 4. Dual-metric "Compare against" + dual yAxis (opposite: true), no "Longitudinal Trend", yAxis.title.text, and top-right 3-dot (⋮) Chart Type menu
-        const hasCompareAgainstDualAxis = /compare\s*against/i.test(code) && /opposite\s*:\s*true/.test(code)
+        // 1 & 2. Custom 4-row clickable PoP KPI cards (forbid <app-kpi>, "ACTIVE METRIC" badge, and Metric <app-select>), Row-3 kpi-change pill before vs. prev, 2 * periodCount, lower-better, sparkline SVG
+        const noMetricDropdownOrActiveBadge =
+          !/active\s+metric/i.test(code) &&
+          !/<app-select[^>]*\blabel\s*=\s*["'](?:Primary\s+)?Metric["']/i.test(code) &&
+          !/<app-kpi\b/i.test(code)
+        const hasPopClickableKpis =
+          noMetricDropdownOrActiveBadge &&
+          /--app-chart-1/.test(code) &&
+          /2\s*\*/.test(code) &&
+          /<span[^>]*class\s*=\s*["'][^"']*kpi-change[\s\S]{0,240}vs\.?\s*prev/i.test(code) &&
+          /lower-better/i.test(code) &&
+          /<svg\b/i.test(code)
+        // 3 & 4. Secondary KPI card-border comparison (--app-chart-2, shiftKey, contextmenu, no "Compare against" <app-select>) + dual yAxis (opposite: true), no "Longitudinal Trend", yAxis.title.text, and top-right 3-dot (⋮) Chart Type menu
+        const hasCardBorderCompareDualAxis =
+          !/<app-select[^>]*\blabel\s*=\s*["']Compare\s+against["']/i.test(code) &&
+          /--app-chart-2/.test(code) &&
+          /\bshiftKey\b/.test(code) &&
+          /@contextmenu|contextmenu/i.test(code) &&
+          /opposite\s*:\s*true/.test(code)
         const hasTrendMenuAndYAxis = !/longitudinal\s+trend/i.test(code) && !/<app-select[^>]*\blabel\s*=\s*["']Chart\s*Type["']/i.test(code) && /yAxis[\s\S]{0,500}title\s*:\s*\{\s*text\s*:/.test(code) && /⋮|\\u22ee|&#8942;|&vellip;|chartMenuOpen|more-vertical/i.test(code) && ['areaspline', 'line', 'column', 'bar'].every((t) => new RegExp(`\\b${t}\\b`, 'i').test(code))
         // 5 & 6. Decoupled Period & Window (periodCount) + universal getEffectiveFilters, Multi-Select Dimensions, and titleless PoP Variance <app-grid>
-        const hasDecoupledPeriodAndWindow = /label\s*=\s*["']Period["']/i.test(code) && /label\s*=\s*["']Window["']/i.test(code) && /periodCount/.test(code) && /getEffectiveFilters/.test(code) && has90Days && has53Weeks && has60Months && has10Years
+        const hasDecoupledPeriodAndWindow = /label\s*=\s*["']Period["']/i.test(code) && /label\s*=\s*["']Window["']/i.test(code) && /periodCount/.test(code) && /getEffectiveFilters/.test(code) && noInvalidDayField && has90Days && has53Weeks && has60Months && has10Years
         const hasMultiSelectDimensions = /Dimensions/i.test(code) && /selectedDimensions/.test(code)
         const hasTitlelessPopVarianceGrid = /<app-grid(?![^>]*\btitle\s*=)/i.test(code) && /\.data\s*=\s*\$\{/.test(code) && /ago\s+for/i.test(code) && /This\s+Period/i.test(code) && /Last\s+Period/i.test(code) && /Variance/i.test(code)
         const activeModel = lookmlProjectId || projectName
         const pairs = [
-          ['order_items.created_date', 'order_items.total_sale_price'],
-          ['order_items.returned_date', 'order_items.return_count'],
-          ['order_items.cancelled_date', 'order_items.cancel_count'],
+          ['order_items.created_date', 'order_items.total_sale_price', 14],
+          ['order_items.returned_date', 'order_items.return_count', 1],
+          ['order_items.cancelled_date', 'order_items.cancel_count', 1],
         ]
         const liveQueryChecks = {}
         let liveQueriesAllValid = true
         await Promise.all(
-          pairs.map(async ([dim, meas]) => {
+          pairs.map(async ([dim, meas, minRows]) => {
             try {
               const rows = await sdk.run_inline_query('json', {
                 model: activeModel,
                 view: 'order_items',
                 fields: [dim, meas],
                 filters: { [dim]: '10 years' },
-                limit: '5',
+                limit: '500',
               })
-              const ok = Array.isArray(rows) && rows.length > 0 && !rows[0]?.looker_error
+              const ok = Array.isArray(rows) && rows.length >= minRows && !rows[0]?.looker_error
               liveQueryChecks[`${dim}+${meas}`] = ok ? rows.length : rows
               if (!ok) liveQueriesAllValid = false
             } catch (err) {
@@ -335,8 +416,8 @@ async function main() {
           })
         )
         return {
-          passed: hasBundle && matchesMeasureDate && hasPopClickableKpis && hasCompareAgainstDualAxis && hasTrendMenuAndYAxis && hasDecoupledPeriodAndWindow && hasMultiSelectDimensions && hasTitlelessPopVarianceGrid && liveQueriesAllValid,
-          checks: { hasBundle, has90Days, has53Weeks, has60Months, has10Years, matchesMeasureDate, noMetricDropdownOrActiveBadge, hasPopClickableKpis, hasCompareAgainstDualAxis, hasTrendMenuAndYAxis, hasDecoupledPeriodAndWindow, hasMultiSelectDimensions, hasTitlelessPopVarianceGrid, liveQueriesAllValid, liveQueryChecks, codeLength: code.length },
+          passed: hasBundle && noInvalidDayField && matchesMeasureDate && hasPopClickableKpis && hasCardBorderCompareDualAxis && hasTrendMenuAndYAxis && hasDecoupledPeriodAndWindow && hasMultiSelectDimensions && hasTitlelessPopVarianceGrid && liveQueriesAllValid,
+          checks: { hasBundle, noInvalidDayField, has90Days, has53Weeks, has60Months, has10Years, matchesMeasureDate, noMetricDropdownOrActiveBadge, hasPopClickableKpis, hasCardBorderCompareDualAxis, hasTrendMenuAndYAxis, hasDecoupledPeriodAndWindow, hasMultiSelectDimensions, hasTitlelessPopVarianceGrid, liveQueriesAllValid, liveQueryChecks, codeLength: code.length },
         }
       },
     },

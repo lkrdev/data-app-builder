@@ -731,6 +731,79 @@ chmod +x "${fakeBinDir}/uv"
     )
   }
 
+  // Issue #167: BUNDLE_APP_PY *_day rejection (allowing _day_of_week / _hour_of_day / date: 90) & DASHBOARD_CODEMODE_PREAMBLE_PY field/warning gates
+  for (const badDaySnippet of [
+    "fields: ['order_items.created_day', 'order_items.count']",
+    "const PERIOD_DEFAULTS = { day: 90, week: 53 }; const d = `${m.dateBase}_${this.period}`;",
+  ]) {
+    const badDayApp = `import { DataApp, html } from '/runtime/data-app.js';
+export class BadDayApp extends DataApp {
+  constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; this.period = 'date'; }
+  render() { const m = { dateBase: 'orders.created' }; ${badDaySnippet}; return html\`<app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; }
+}
+customElements.define('bad-day-app', BadDayApp);
+`
+    assert.throws(
+      () => execFileSync('python3', [bundlePyPath, '--stdin', 'Bad Day App', path.join(workDir, 'bad_day_app.js')], { input: badDayApp, encoding: 'utf8', stdio: 'pipe' }),
+      /invalid-lookml-day-timeframe/,
+      'BUNDLE_APP_PY must reject *_day LookML fields and day: keys paired with _${...period}'
+    )
+  }
+  const validDateApp = `import { DataApp, html } from '/runtime/data-app.js';
+const PERIOD_DEFAULTS = { date: 90, week: 53, month: 60, year: 10 };
+const UNITS = { date: 'days', week: 'weeks', month: 'months', year: 'years' };
+export class ValidDateApp extends DataApp {
+  constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; this.period = 'date'; }
+  render() {
+    const m = { dateBase: 'orders.created' };
+    const dateDim = \`\${m.dateBase}_\${this.period}\`;
+    return html\`
+      <app-chart type="line" .query=\${{ fields: ['orders.created_day_of_week', 'orders.created_hour_of_day', 'orders.count'], limit: String(PERIOD_DEFAULTS[this.period]) }}></app-chart>
+      <app-grid .query=\${{ fields: [dateDim, 'orders.count'], filters: { 'orders.created_date': \`90 \${UNITS[this.period]}\` } }}></app-grid>
+    \`;
+  }
+}
+customElements.define('valid-date-app', ValidDateApp);
+`
+  const validDateOut = execFileSync(
+    'python3',
+    [bundlePyPath, '--stdin', 'Valid Date App', path.join(workDir, 'valid_date_app.js')],
+    { input: validDateApp, encoding: 'utf8' }
+  )
+  assert(validDateOut.includes('<DATA_APP_BUNDLE>'), 'BUNDLE_APP_PY must allow _day_of_week, _hour_of_day, and date: 90 timeframe keys')
+
+  const dashPreambleMatch = antigravityTs.match(/export const DASHBOARD_CODEMODE_PREAMBLE_PY = `([\s\S]*?)`\n\nexport function wrapDashboardCodeMode/)
+  assert(dashPreambleMatch, 'Could not extract DASHBOARD_CODEMODE_PREAMBLE_PY')
+  const dashPreamblePy = dashPreambleMatch[1].replace(/\\\\n/g, '\\n')
+  const gateMockHandler = async (method, urlPath) => {
+    const p = String(urlPath || '')
+    if (String(method).toUpperCase() === 'GET' && p.includes('/explores/')) {
+      return { fields: { dimensions: [{ name: 'orders.created_date' }], measures: [{ name: 'orders.count' }] } }
+    }
+    if (String(method).toUpperCase() === 'POST' && p.includes('/validate')) {
+      return { errors: [{ severity: 'warning', file_path: 'dashboards/pulse.dashboard.lookml', message: 'Unknown field "orders.excluded_metric" referenced in dashboard element' }] }
+    }
+    return { path: 'dashboards/pulse.dashboard.lookml' }
+  }
+  const unknownFieldOut = await LkrCodeMode.runPythonCode({
+    code: `${dashPreamblePy}\nreturn upsert_udd("Bad UDD", "1", tiles=[{"title": "Bad KPI", "fields": ["orders.missing_metric"], "vis_config": {"type": "single_value"}}])`,
+    requestHandler: gateMockHandler,
+    vars: { target_model: 'ecom', target_explore: 'orders' },
+  })
+  assert(
+    unknownFieldOut.includes('ValueError') && unknownFieldOut.includes('orders.missing_metric') && unknownFieldOut.includes('orders.count'),
+    `Expected ValueError on unknown field in upsert_udd, got: ${unknownFieldOut}`
+  )
+  const warnGateOut = await LkrCodeMode.runPythonCode({
+    code: `${dashPreamblePy}\nreturn upsert_lookml_dashboard(project_id="ecom_proj", model="ecom", dashboard_name="pulse", title="Pulse", tiles=[{"title": "Orders", "explore": "orders", "fields": ["orders.count"], "vis_config": {"type": "single_value"}}])`,
+    requestHandler: gateMockHandler,
+    vars: { target_model: 'ecom', target_explore: 'orders', target_project_id: 'ecom_proj' },
+  })
+  assert(
+    warnGateOut.includes('ValueError') && warnGateOut.includes('Unknown field'),
+    `Expected ValueError on validate_project warning in upsert_lookml_dashboard, got: ${warnGateOut}`
+  )
+
   console.log('✓ test-bundle.mjs: all assertions passed!')
 } finally {
   rmSync(workDir, { recursive: true, force: true })

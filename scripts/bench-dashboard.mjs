@@ -51,6 +51,7 @@ async function verifyMontyWasmMacros() {
             { name: 'order_items.created_date' },
             { name: 'order_items.created_month' },
             { name: 'order_items.status' },
+            { name: 'order_items.sale_price' },
             { name: 'products.category' },
             { name: 'users.country' },
           ],
