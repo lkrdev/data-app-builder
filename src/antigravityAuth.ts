@@ -503,10 +503,7 @@ export function fetchEnvironmentFile(params: {
   const normalizedPath = normalizeSandboxFilePath(rawKey)
   if (!normalizedPath) return Promise.reject(new Error('Sandbox file path is required.'))
   const slashKey = `/${normalizedPath}`
-  const builtin =
-    resolveBuiltinWorkspaceFileContent(rawKey) ??
-    resolveBuiltinWorkspaceFileContent(slashKey) ??
-    resolveBuiltinWorkspaceFileContent(normalizedPath)
+  const builtin = resolveBuiltinWorkspaceFileContent(rawKey)
   const envId = String(params.environmentId || '').trim()
 
   const mockWin = typeof window !== 'undefined'

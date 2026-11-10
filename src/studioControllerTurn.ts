@@ -115,13 +115,9 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   const resolveLocalWorkspaceFile = useCallback((rawPath: string): string | undefined => {
     const raw = String(rawPath || '').trim()
     if (!raw) return undefined
-    const norm = normalizeSandboxFilePath(raw)
-    const display = norm ? `/${norm}` : raw
-    const builtin =
-      resolveBuiltinWorkspaceFileContent(raw) ??
-      resolveBuiltinWorkspaceFileContent(display) ??
-      resolveBuiltinWorkspaceFileContent(norm)
+    const builtin = resolveBuiltinWorkspaceFileContent(raw)
     if (typeof builtin === 'string') return builtin
+    const norm = normalizeSandboxFilePath(raw)
     const base = norm.split('/').filter(Boolean).pop() || norm
     const relLkml = norm.replace(/^workspace\/(?:lookml\/)?/i, '')
     const ctx = localFileCtxRef.current
@@ -168,7 +164,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   )
 
   const loadSandboxMarkdownFile = useCallback(
-    (rawPath: string, opts?: { openModal?: boolean; fallbackContent?: string }): Promise<string> => {
+    (rawPath: string, opts?: { openModal?: boolean }): Promise<string> => {
       const normalizedPath = normalizeSandboxFilePath(rawPath)
       if (!normalizedPath) return Promise.resolve('')
       const displayPath = `/${normalizedPath}`
@@ -182,7 +178,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         setSandboxMarkdownCache(next)
         return val
       }
-      const localContent = resolveLocalWorkspaceFile(rawPath) ?? resolveLocalWorkspaceFile(displayPath)
+      const localContent = resolveLocalWorkspaceFile(rawPath)
       if (typeof localContent === 'string' && localContent.length > 0) return Promise.resolve(storeCache(localContent))
       const cached = sandboxMarkdownCacheRef.current[cacheKey] ?? sandboxMarkdownCacheRef.current[normalizedPath] ?? sandboxMarkdownCacheRef.current[displayPath]
       if (typeof cached === 'string' && cached.length > 0 && !cached.startsWith('# Error Loading File\n')) return Promise.resolve(cached)
@@ -196,7 +192,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         environmentId: envId, path: normalizedPath,
       })
         .then(storeCache, (err: unknown) =>
-          opts?.fallbackContent ? opts.fallbackContent : storeCache(`# Error Loading File\n\nUnable to load \`${displayPath}\` from sandbox environment \`${envId}\`: ${getErrorMessage(err)}`)
+          storeCache(`# Error Loading File\n\nUnable to load \`${displayPath}\` from sandbox environment \`${envId}\`: ${getErrorMessage(err)}`)
         )
         .finally(() => {
           delete inFlightSandboxFilesRef.current[cacheKey]
@@ -220,25 +216,20 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       const isMarkdown = kind === 'skill' || /\.md$/i.test(displayPath)
       const title = input.title || (skillName ? `Reading skill ${skillName}` : displayPath.split('/').filter(Boolean).pop() || displayPath)
       const docBase = { path: normalizedPath || resolvedRawPath, displayPath, title, kind, isMarkdown }
-      const localContent = resolveLocalWorkspaceFile(resolvedRawPath) ?? resolveLocalWorkspaceFile(displayPath)
       setRightPaneCollapsed(false)
-      if (typeof localContent === 'string' && localContent.length > 0) {
-        setActiveViewerDocument({ ...docBase, content: localContent, loading: false })
-        return Promise.resolve(localContent)
-      }
       const cached = sandboxMarkdownCacheRef.current[normalizedPath] || sandboxMarkdownCacheRef.current[displayPath] || ''
-      const validCached = cached && !cached.startsWith('# Error Loading File\n') ? cached : ''
-      const rawIn = typeof input.content === 'string' && input.content.trim() ? input.content.trim() : typeof input.initialContent === 'string' && input.initialContent.trim() ? input.initialContent.trim() : ''
-      const initialContent = rawIn || validCached || ''
-      if (initialContent) {
-        setActiveViewerDocument({ ...docBase, content: initialContent, loading: false })
-        return Promise.resolve(initialContent)
+      const immediate =
+        resolveLocalWorkspaceFile(resolvedRawPath) ||
+        (input.content || input.initialContent || '').trim() ||
+        (!cached.startsWith('# Error Loading File\n') ? cached : '')
+      if (immediate) {
+        setActiveViewerDocument({ ...docBase, content: immediate, loading: false })
+        return Promise.resolve(immediate)
       }
       setActiveViewerDocument({ ...docBase, content: '', loading: true })
-      return loadSandboxMarkdownFile(resolvedRawPath, { fallbackContent: initialContent || undefined }).then((fetched) => {
-        const finalContent = fetched && (!fetched.startsWith('# Error Loading File\n') || !initialContent) ? fetched : initialContent
-        setActiveViewerDocument({ ...docBase, content: finalContent, loading: false })
-        return finalContent
+      return loadSandboxMarkdownFile(resolvedRawPath).then((fetched) => {
+        setActiveViewerDocument({ ...docBase, content: fetched, loading: false })
+        return fetched
       })
     },
     [loadSandboxMarkdownFile, resolveLocalWorkspaceFile, setActiveViewerDocument, setRightPaneCollapsed]

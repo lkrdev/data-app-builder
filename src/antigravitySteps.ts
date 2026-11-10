@@ -430,16 +430,13 @@ export function sanitizeActivityThought(raw: unknown): string {
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1)
 }
 
-function stripBundleEnvelopes(raw: string): string {
-  return String(raw || '').replace(BUNDLE_ENVELOPE_STRIP_RE, '').trim()
-}
-
 function buildExecStepContent(
   code: string,
   stepObj: Record<string, unknown> | undefined,
   pairedResultObj: Record<string, unknown> | undefined
 ): string | undefined {
-  const cleanCode = stripBundleEnvelopes(code)
+  const strip = (s: string) => String(s || '').replace(BUNDLE_ENVELOPE_STRIP_RE, '').trim()
+  const cleanCode = strip(code)
   const epLogs = [
     ...(Array.isArray(stepObj?.endpoint_logs) ? (stepObj.endpoint_logs as string[]) : []),
     ...(Array.isArray(pairedResultObj?.endpoint_logs) ? (pairedResultObj.endpoint_logs as string[]) : []),
@@ -455,8 +452,7 @@ function buildExecStepContent(
     pairedResultObj?.output, pairedResultObj?.result,
   ].forEach((val) => {
     if (val === undefined || val === null) return
-    const rawStr = typeof val === 'string' ? val : JSON.stringify(val, null, 2)
-    const stripped = stripBundleEnvelopes(rawStr)
+    const stripped = strip(typeof val === 'string' ? val : JSON.stringify(val, null, 2))
     if (stripped && stripped !== cleanCode && !seenOut.has(stripped)) {
       seenOut.add(stripped)
       outParts.push(stripped)
