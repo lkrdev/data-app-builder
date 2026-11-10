@@ -34,6 +34,8 @@ No child subdirectories exist under `scripts/`. Every file below is a standalone
   - Env var: `LKR_CLI_DIR` (defaults to `/usr/local/google/home/bryanweber/lkrdev/cli`) (`[sync-codemode.sh:CLI_DIR]`).
 - **`scripts/sync-upstream.sh`** — Redownloads upstream Looker Data Apps installer & toolkit into `upstream/` (`npm run sync-upstream`):
   - Env var: `DATA_APPS_PREFIX_URL` (defaults to `https://dl.google.com/looker-data-apps`) (`[sync-upstream.sh:PREFIX_URL]`).
+- **`scripts/clean-artifacts.sh`** — Purges all Looker Artifact namespaces owned by Data App Studio / Ripper (`data_app_builder`, `ripper`, `<project>::data_app_builder`, `<project>::ripper`) on a target Looker instance via `lkr --oauth-account=<account> code-mode sandbox` (`npm run clean:artifacts <oauth-account>`):
+  - Positional CLI arg (required, exact count `1`, non-flag): `<oauth-account>` (`[clean-artifacts.sh:LKR]`); exits `1` when omitted or invalid.
 
 ## Invariants
 
