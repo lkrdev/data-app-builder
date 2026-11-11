@@ -5,6 +5,7 @@ import path from 'node:path'
 
 import React from 'react'
 
+import { ChattyClient } from '@looker/chatty'
 import type { FetchCustomParameters } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -57,7 +58,7 @@ import {
   USE_CASE_GUIDE_ORDER, USE_CASE_GUIDES,
 } from '../components/StudioWorkspace'
 import {
-  archiveUserConversation, ARTIFACT_NAMESPACE, ArtifactService, buildCaEmbedPath, buildDenseExploreSchema,
+  archiveUserConversation, ARTIFACT_NAMESPACE, ArtifactService, buildCaEmbedPath, buildCodeModeApiCallEntry, buildDenseExploreSchema,
   buildRootLookerFolders, buildStudioRoute, CA_AGENT_SELECTION_REQUEST_TAG, CA_AGENT_SELECTION_RESPONSE_FORMAT,
   classifyLooker404Error, classifyStudioUseCase, clearArtifactServiceCache,
   clearLookerMetadataCache, ConversationRecord, convertRelativeDateFilterToFixed,
@@ -66,8 +67,9 @@ import {
   fetchFolderWithAncestors, fetchInitialLookerMetadata, fetchLookerCaAgentsCatalog,
   fetchPreloadedContentSummary, formatStudioContentItemTitle, formatUserConversationsArtifactKey,
   formatUserConversationsKey, formatUserEnvArtifactKey, getAllowedUseCases, getArtifactNamespace,
-  getArtifactService, getConvTargetId, getUseCaseLabel, hydrateConversationContentItems, hydrateMentionedContext,
-  isConversationalNoOpPrompt, isLookmlTargetAlreadyLoaded, listUserArtifacts, loadStoredSelectedFolderId,
+  getArtifactService, getConvTargetId, getUseCaseLabel, hookChattyHostApiLogger, hydrateConversationContentItems, hydrateMentionedContext,
+  installChattyApiLogger, isConversationalNoOpPrompt, isLookmlTargetAlreadyLoaded, isTransportChattyHooked,
+  LkrCodeModeApiCallEntry, listUserArtifacts, loadStoredSelectedFolderId,
   loadUserConversations, loadUserEnvironmentId, matchExplicitUseCaseRule,
   normalizeArtifactNamespace, normalizeBusySendAction, normalizeCaEmbedPath, normalizeQueryFiltersToFixedDates,
   normalizeStudioAgentName, normalizeStudioContentItem,
@@ -7718,5 +7720,253 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     } finally {
       rmSync(tmpWs, { recursive: true, force: true })
     }
+  })
+
+  test('Issue #178: hooks @looker/chatty RAW_INVOKE_CORE_SDK + INVOKE_CORE_SDK + errors into window.lkr_codemode_api_calls with query/body/response normalization and zero double-logging across non-Chatty fallbacks', async () => {
+    const g = globalThis as unknown as {
+      lkr_codemode_api_calls?: LkrCodeModeApiCallEntry[]
+      window?: unknown
+    }
+    clearLookerMetadataCache()
+    g.lkr_codemode_api_calls = []
+
+    // 1. Direct buildCodeModeApiCallEntry normalization (query stripping, URLSearchParams + params merge, JSON parsing, null empty body)
+    const normalizedRaw = buildCodeModeApiCallEntry({
+      requestType: 'RAW_INVOKE_CORE_SDK',
+      httpMethod: 'post',
+      path: '/api/4.0/queries/run/json?limit=500&cache=true&filter_config=%7B%22region%22%3A%22West%22%7D',
+      params: { fields: 'orders.id,orders.count', sorts: '["orders.count desc"]', apply_vis: 'false', folder_id: '502', ignored: undefined },
+      body: '{"model":"thelook","view":"order_items"}',
+      rawResp: { ok: true, statusCode: 200, body: '[{"orders.count":42}]' },
+      timestamp: '2026-11-11T00:00:00.000Z',
+      durationMs: 18.4,
+    })
+    expect(normalizedRaw).toEqual({
+      method: 'POST',
+      route: '/api/4.0/queries/run/json',
+      query_params: {
+        limit: '500',
+        cache: true,
+        filter_config: { region: 'West' },
+        fields: 'orders.id,orders.count',
+        sorts: ['orders.count desc'],
+        apply_vis: false,
+        folder_id: '502',
+      },
+      body: { model: 'thelook', view: 'order_items' },
+      response: { ok: true, status: 200, body: [{ 'orders.count': 42 }] },
+      timestamp: '2026-11-11T00:00:00.000Z',
+      duration_ms: 18,
+    })
+
+    const normalizedEmptyBody = buildCodeModeApiCallEntry({
+      httpMethod: 'GET',
+      path: '/api/4.0/user',
+      params: '{"fields":"id,display_name"}',
+      body: '',
+      rawResp: { ok: false, statusCode: 403, body: 'Forbidden' },
+      timestamp: '2026-11-11T00:00:01.000Z',
+      durationMs: 5,
+    })
+    expect(normalizedEmptyBody.body).toBeNull()
+    expect(normalizedEmptyBody.query_params).toEqual({ fields: 'id,display_name' })
+    expect(normalizedEmptyBody.response).toEqual({ ok: false, status: 403, body: 'Forbidden' })
+
+    const normalizedZeroStatus = buildCodeModeApiCallEntry({
+      requestType: 'INVOKE_CORE_SDK',
+      httpMethod: 'GET',
+      path: '/api/4.0/offline',
+      rawResp: { ok: false, error: { message: 'Aborted', statusCode: 0 } },
+    })
+    expect(normalizedZeroStatus.response).toEqual({ ok: false, status: 500, body: { message: 'Aborted', statusCode: 0 } })
+    expect(buildCodeModeApiCallEntry({ path: '/api/4.0/net', rawResp: { statusCode: 0, body: '' } }).response).toEqual({
+      ok: false,
+      status: 0,
+      body: null,
+    })
+
+    // 2. Chatty host interception (RAW_INVOKE_CORE_SDK [envelope] array & direct object, INVOKE_CORE_SDK ok/error, rejected promise, non-SDK event passthrough, WeakSet idempotence)
+    const mockChattyHost = {
+      sendAndReceive: async (_eventName: string, req: { type: string; payload?: Record<string, unknown> }) => {
+        if (req.type === 'LOCAL_STORAGE' || req.type === 'VERIFY_HOST') return ['stored_val']
+        if (req.type === 'INVOKE_CORE_SDK') {
+          if (req.payload?.path === '/api/4.0/denied') {
+            return [{ ok: false, error: { message: 'Access denied', statusCode: 403 } }]
+          }
+          return [{ ok: true, value: { id: '7', title: 'Pulse' } }]
+        }
+        if (req.payload?.path === '/api/4.0/direct_obj') {
+          return { ok: true, statusCode: 200, body: '{"direct":true}' }
+        }
+        if (req.payload?.path === '/api/4.0/timeout') {
+          throw new Error('{"error":"Chatty Timeout"}')
+        }
+        return [{ ok: true, statusCode: 200, body: JSON.stringify({ ok: true, path: req.payload?.path }) }]
+      },
+    }
+    const mockExtSdk = {
+      chattyHost: mockChattyHost,
+      invokeCoreSdkRaw: (httpMethod: string, reqPath: string, params?: unknown, body?: unknown) =>
+        mockChattyHost
+          .sendAndReceive('EXTENSION_API_REQUEST', {
+            type: 'RAW_INVOKE_CORE_SDK',
+            payload: { httpMethod, path: reqPath, params, body, apiVersion: '4.0' },
+          })
+          .then((vals) => (Array.isArray(vals) ? vals[0] : vals)),
+    }
+
+    // Wrap twice to prove WeakSet idempotence (must not log twice)
+    hookChattyHostApiLogger(mockExtSdk)
+    hookChattyHostApiLogger(mockChattyHost)
+
+    expect(await mockChattyHost.sendAndReceive('EXTENSION_API_REQUEST', { type: 'LOCAL_STORAGE', payload: { type: 'get', name: 'k' } })).toEqual(['stored_val'])
+    expect(await mockChattyHost.sendAndReceive('EXTENSION_API_REQUEST', { type: 'VERIFY_HOST' })).toEqual(['stored_val'])
+    expect(await mockChattyHost.sendAndReceive('EXTENSION_NOTIFICATION', { type: 'RAW_INVOKE_CORE_SDK' })).toBeTruthy()
+    expect(g.lkr_codemode_api_calls).toHaveLength(0)
+
+    await mockChattyHost.sendAndReceive('EXTENSION_API_REQUEST', {
+      type: 'INVOKE_CORE_SDK',
+      payload: { httpMethod: 'GET', path: '/api/4.0/dashboards/7?fields=id,title' },
+    })
+    await mockChattyHost.sendAndReceive('EXTENSION_API_REQUEST', {
+      type: 'INVOKE_CORE_SDK',
+      payload: { httpMethod: 'DELETE', path: '/api/4.0/denied' },
+    })
+    await mockChattyHost.sendAndReceive('EXTENSION_API_REQUEST', {
+      type: 'RAW_INVOKE_CORE_SDK',
+      payload: { httpMethod: 'GET', path: '/api/4.0/direct_obj' },
+    })
+    await expect(
+      mockChattyHost.sendAndReceive('EXTENSION_API_REQUEST', {
+        type: 'RAW_INVOKE_CORE_SDK',
+        payload: { httpMethod: 'POST', path: '/api/4.0/timeout', body: '{"q":1}' },
+      })
+    ).rejects.toThrow('Chatty Timeout')
+
+    expect(g.lkr_codemode_api_calls).toHaveLength(4)
+    expect(g.lkr_codemode_api_calls[0]).toMatchObject({
+      method: 'GET',
+      route: '/api/4.0/dashboards/7',
+      query_params: { fields: 'id,title' },
+      body: null,
+      response: { ok: true, status: 200, body: { id: '7', title: 'Pulse' } },
+    })
+    expect(g.lkr_codemode_api_calls[1]).toMatchObject({
+      method: 'DELETE',
+      route: '/api/4.0/denied',
+      response: { ok: false, status: 403, body: { message: 'Access denied', statusCode: 403 } },
+    })
+    expect(g.lkr_codemode_api_calls[2]).toMatchObject({
+      method: 'GET',
+      route: '/api/4.0/direct_obj',
+      response: { ok: true, status: 200, body: { direct: true } },
+    })
+    expect(g.lkr_codemode_api_calls[3]).toMatchObject({
+      method: 'POST',
+      route: '/api/4.0/timeout',
+      body: { q: 1 },
+      response: { ok: false, status: null, body: { error: 'Chatty Timeout' } },
+    })
+
+    // 3. Zero double-logging when ExtensionTransport -> SdkConnection -> ExtensionHostApiImpl -> chattyHost is hooked AND wrapped in nested createDeduplicatedLookerSdkProxy + rawLookerRequest + LkrCodeMode
+    g.lkr_codemode_api_calls = []
+    const chattyBackedTransport = {
+      hostConnection: {
+        hostConnection: mockExtSdk,
+        rawRequest: (m: string, p: string, b?: unknown, q?: unknown) => mockExtSdk.invokeCoreSdkRaw(m, p, q, b),
+      },
+      rawRequest: (m: string, p: string, q?: Record<string, unknown>, b?: unknown) =>
+        mockExtSdk.invokeCoreSdkRaw(m, p, q, b) as Promise<{ ok: boolean; statusCode: number; body: string }>,
+    }
+    expect(isTransportChattyHooked(chattyBackedTransport)).toBe(true)
+    const chattySdkL1 = createDeduplicatedLookerSdkProxy({ authSession: { transport: chattyBackedTransport } } as unknown as Looker40SDK)
+    const chattySdkL2 = createDeduplicatedLookerSdkProxy(chattySdkL1)
+    await rawLookerRequest(chattySdkL2, 'GET', '/api/4.0/folders/5?fields=id,name')
+    await LkrCodeMode.runPythonCode({ code: 'return dashboard("42")', sdk: chattySdkL2 })
+    expect(g.lkr_codemode_api_calls).toHaveLength(2)
+    expect(g.lkr_codemode_api_calls.map((c) => [c.method, c.route, c.query_params])).toEqual([
+      ['GET', '/api/4.0/folders/5', { fields: 'id,name' }],
+      ['GET', '/dashboards/42', {}],
+    ])
+
+    // 4. Non-Chatty fallback (Node/Jest & mock SDKs): exact 1x logging across nested createDeduplicatedLookerSdkProxy, unproxied rawLookerRequest, and LkrCodeMode.runPythonCode
+    clearLookerMetadataCache()
+    g.lkr_codemode_api_calls = []
+    const plainTransport = {
+      rawRequest: async (method: string, reqPath: string, queryParams?: Record<string, unknown>, body?: unknown) => ({
+        ok: true,
+        statusCode: 200,
+        body: JSON.stringify({ method, path: reqPath, queryParams, body }),
+      }),
+    }
+    expect(isTransportChattyHooked(plainTransport)).toBe(false)
+    const plainRawSdk = { authSession: { transport: plainTransport } } as unknown as Looker40SDK
+    await rawLookerRequest(plainRawSdk, 'POST', '/api/4.0/dashboards?notify=false', { folder_id: '5' }, { title: 'Unproxied' })
+    const proxiedL1 = createDeduplicatedLookerSdkProxy(plainRawSdk)
+    const proxiedL2 = createDeduplicatedLookerSdkProxy(proxiedL1)
+    await rawLookerRequest(proxiedL2, 'PATCH', '/api/4.0/dashboards/99', undefined, { title: 'Proxied Nested' })
+    await LkrCodeMode.runPythonCode({ code: 'return me()', sdk: proxiedL2 })
+
+    expect(g.lkr_codemode_api_calls).toHaveLength(3)
+    expect(g.lkr_codemode_api_calls[0]).toMatchObject({
+      method: 'POST',
+      route: '/api/4.0/dashboards',
+      query_params: { notify: false, folder_id: '5' },
+      body: { title: 'Unproxied' },
+      response: { ok: true, status: 200 },
+    })
+    expect(g.lkr_codemode_api_calls[1]).toMatchObject({
+      method: 'PATCH',
+      route: '/api/4.0/dashboards/99',
+      body: { title: 'Proxied Nested' },
+    })
+    expect(g.lkr_codemode_api_calls[2]).toMatchObject({
+      method: 'GET',
+      route: '/user',
+      query_params: {},
+    })
+
+    // 5. installChattyApiLogger safely no-ops when window is undefined and patches ChattyClient.prototype.connect when window is defined
+    expect(() => installChattyApiLogger()).not.toThrow()
+    const hadWindow = 'window' in g
+    const prevWindow = g.window
+    try {
+      g.window = globalThis
+      installChattyApiLogger()
+      const fakeClient = Object.create(ChattyClient.prototype) as {
+        _connection: Promise<unknown>
+        connect: () => Promise<unknown>
+      }
+      const connectedHost = {
+        sendAndReceive: async () => [{ ok: true, statusCode: 200, body: '{"connected":true}' }],
+      }
+      fakeClient._connection = Promise.resolve(connectedHost)
+      await fakeClient.connect()
+      g.lkr_codemode_api_calls = []
+      await connectedHost.sendAndReceive('EXTENSION_API_REQUEST' as never, {
+        type: 'RAW_INVOKE_CORE_SDK',
+        payload: { httpMethod: 'GET', path: '/api/4.0/session' },
+      } as never)
+      expect(g.lkr_codemode_api_calls).toHaveLength(1)
+      expect(g.lkr_codemode_api_calls[0]).toMatchObject({
+        method: 'GET',
+        route: '/api/4.0/session',
+        response: { ok: true, status: 200, body: { connected: true } },
+      })
+    } finally {
+      if (hadWindow) g.window = prevWindow
+      else delete g.window
+    }
+
+    // Source-level checks for StudioHeader (/config subtitle & folder-popover-open-target-btn) and index.tsx
+    const rootDir = path.resolve(__dirname, '../..')
+    const headerSrc = readFileSync(path.join(rootDir, 'src/components/StudioHeader.tsx'), 'utf8')
+    const indexSrc = readFileSync(path.join(rootDir, 'src/index.tsx'), 'utf8')
+    expect(headerSrc).not.toContain('extensionSDK.saveContextData')
+    expect(headerSrc).toContain('Configure extension-wide authentication')
+    expect(headerSrc).toContain('testId="folder-popover-open-target-btn"')
+    expect(headerSrc).toContain('disabled={!selectedFolderId}')
+    expect(indexSrc).toContain('installChattyApiLogger()')
+    expect(indexSrc).toContain('window.lkr_codemode_api_calls')
   })
 })

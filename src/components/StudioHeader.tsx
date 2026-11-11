@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
-  AlertTriangle, Check, ChevronDown, Folder, FolderOpen, Lock, LogOut,
+  AlertTriangle, Check, ChevronDown, ExternalLink, Folder, FolderOpen, Lock, LogOut,
   Maximize2, Minimize2, Pencil, RotateCcw, Search, Server, Square, User,
 } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
@@ -167,7 +167,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           <div>
             <strong style={{ fontSize: 16 }}>Agent &amp; Vertex / Gemini Setup</strong>
             <div className="dab-muted" style={{ fontSize: 12, marginTop: 2 }}>
-              Configure extension-wide authentication (`extensionSDK.saveContextData`)
+              Configure extension-wide authentication
             </div>
           </div>
           <div className="dab-controls">
@@ -511,7 +511,26 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                 )}
               </div>
               <div className="dab-folder-popover-footer">
-                <span className="dab-muted" style={{ fontSize: 11 }}>Target: <strong>{selectedFolderLabel}</strong></span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0, marginRight: 6 }}>
+                  <span className="dab-muted" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    Target: <strong>{selectedFolderLabel}</strong>
+                  </span>
+                  <StudioButton
+                    testId="folder-popover-open-target-btn"
+                    className="dab-btn-icon"
+                    style={{ width: 22, height: 22, minWidth: 22, minHeight: 22 }}
+                    disabled={!selectedFolderId}
+                    title={`Open ${selectedFolderLabel} in Looker`}
+                    aria-label={`Open ${selectedFolderLabel} in Looker`}
+                    onClick={() => {
+                      if (selectedFolderId) {
+                        extensionSDK?.openBrowserWindow?.(`/folders/${encodeURIComponent(selectedFolderId)}`, '_blank')
+                      }
+                    }}
+                  >
+                    <ExternalLink size={12} strokeWidth={1.75} aria-hidden="true" />
+                  </StudioButton>
+                </span>
                 <button type="button" data-testid="folder-advanced-search-btn" className="dab-btn-secondary dab-folder-adv-btn" onClick={handleOpenAdvancedSearch}>
                   <Search size={14} strokeWidth={1.75} aria-hidden="true" /> Advanced Search...
                 </button>

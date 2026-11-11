@@ -27,6 +27,7 @@ function buildHtmlPage(scenario) {
   <script>
     (function() {
       const scenario = ${JSON.stringify(scenario)};
+      window.lkr_codemode_api_calls = [];
       const catalogEntries = [
         {
           key: 'user_1_app_42',
@@ -6388,4 +6389,112 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       await chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
     }
   }, 25000)
+
+  test('Issue #178: populates window.lkr_codemode_api_calls on session API calls, opens target Looker folder via folder-popover-open-target-btn in light/dark themes, and omits extensionSDK.saveContextData on /config', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+
+    // 1. Verify /config subtitle omits SDK jargon
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=config_page` })
+    const cfgDeadline = Date.now() + 8000
+    while (Date.now() < cfgDeadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="config-auth-mode-select"]'))`,
+        returnByValue: true,
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 80))
+    }
+    const cfgCopyRes = await chrome.send('Runtime.evaluate', {
+      expression: `(() => {
+        const txt = document.body.innerText || '';
+        return {
+          hasCleanSubtitle: txt.includes('Configure extension-wide authentication'),
+          hasSdkJargon: txt.includes('extensionSDK.saveContextData'),
+        };
+      })()`,
+      returnByValue: true,
+    })
+    expect(cfgCopyRes.result.value).toEqual({
+      hasCleanSubtitle: true,
+      hasSdkJargon: false,
+    })
+
+    // 2. Verify window.lkr_codemode_api_calls & folder-popover-open-target-btn in light & dark themes
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=data_app` })
+    const appDeadline = Date.now() + 8000
+    while (Date.now() < appDeadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="topbar-folder-trigger"]'))`,
+        returnByValue: true,
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 80))
+    }
+
+    const folderAndTelemetryRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        window.__OPENED_WINDOWS__ = [];
+        const calls = Array.isArray(window.lkr_codemode_api_calls) ? window.lkr_codemode_api_calls : null;
+        const hasInitialApiCalls = Boolean(calls && calls.length > 0 && calls.every((c) => typeof c.method === 'string' && !c.route.includes('?') && typeof c.query_params === 'object' && c.response && typeof c.response.ok === 'boolean'));
+
+        const trigger = document.querySelector('[data-testid="topbar-folder-trigger"]');
+        trigger.click();
+        await new Promise((r) => setTimeout(r, 80));
+
+        const openBtn = document.querySelector('[data-testid="folder-popover-open-target-btn"]');
+        const rect = openBtn.getBoundingClientRect();
+        const lightStyle = window.getComputedStyle(openBtn);
+        const lightBg = lightStyle.backgroundColor;
+        const lightColor = lightStyle.color;
+        const titleBefore = openBtn.getAttribute('title');
+        const ariaBefore = openBtn.getAttribute('aria-label');
+        const unclipped = openBtn.scrollHeight <= openBtn.clientHeight + 2;
+
+        openBtn.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const openedDefault = (window.__OPENED_WINDOWS__ || [])[0] || null;
+
+        window.__DAB_STUDIO__.setThemeMode('dark');
+        await new Promise((r) => setTimeout(r, 60));
+        const darkStyle = window.getComputedStyle(openBtn);
+        const darkBg = darkStyle.backgroundColor;
+        const darkColor = darkStyle.color;
+
+        window.__DAB_STUDIO__.setSelectedFolderId('folder/special 502');
+        await new Promise((r) => setTimeout(r, 60));
+        openBtn.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const openedEncoded = (window.__OPENED_WINDOWS__ || [])[1] || null;
+
+        return {
+          hasInitialApiCalls,
+          btnWidth: Math.round(rect.width),
+          btnHeight: Math.round(rect.height),
+          unclipped,
+          titleBefore,
+          ariaBefore,
+          lightDarkDistinct: lightBg !== darkBg && lightColor !== darkColor,
+          openedDefault,
+          openedEncoded,
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+    if (folderAndTelemetryRes.exceptionDetails) {
+      throw new Error(JSON.stringify(folderAndTelemetryRes.exceptionDetails))
+    }
+    expect(folderAndTelemetryRes.result.value).toEqual({
+      hasInitialApiCalls: true,
+      btnWidth: 22,
+      btnHeight: 22,
+      unclipped: true,
+      titleBefore: 'Open My folder in Looker',
+      ariaBefore: 'Open My folder in Looker',
+      lightDarkDistinct: true,
+      openedDefault: { url: '/folders/5', target: '_blank' },
+      openedEncoded: { url: '/folders/folder%2Fspecial%20502', target: '_blank' },
+    })
+  }, 20000)
 })

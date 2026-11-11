@@ -1,3 +1,4 @@
+import { ChattyClient } from '@looker/chatty/lib/client'
 import type { ExtensionSDK } from '@looker/extension-sdk'
 import type {
   IFolder,
@@ -164,15 +165,227 @@ export const SWR_DEDUPED_METHODS = [
 const serializeLookerBody = (body: unknown): unknown =>
   body !== undefined && body !== null ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined
 
+function parseJsonString(val: unknown, allowNumbers: boolean): unknown {
+  if (typeof val !== 'string') return val
+  const t = val.trim()
+  const c = t[0]
+  if (
+    c === '{' ||
+    c === '[' ||
+    (c === '"' && t[t.length - 1] === '"') ||
+    t === 'true' ||
+    t === 'false' ||
+    t === 'null' ||
+    (allowNumbers && /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(t))
+  ) {
+    try { return JSON.parse(t) } catch { return val }
+  }
+  return val
+}
+
 function parseLookerRawBody<T = unknown>(rawResp: RawLookerTransportResponse): T {
-  const val = rawResp?.body !== undefined ? rawResp.body : rawResp
-  if (typeof val === 'string') {
-    const trimmed = val.trim()
-    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-      try { return JSON.parse(trimmed) as T } catch { return val as unknown as T }
+  const val = rawResp && rawResp.body !== undefined ? rawResp.body : rawResp
+  const c = typeof val === 'string' ? val.trim()[0] : ''
+  return (c === '{' || c === '[' ? parseJsonString(val, false) : val) as T
+}
+
+export interface LkrCodeModeApiCallEntry {
+  method: string
+  route: string
+  query_params: Record<string, unknown>
+  body: unknown
+  response: {
+    ok: boolean
+    status: number | null
+    body: unknown
+  }
+  timestamp: string
+  duration_ms: number
+}
+
+export interface BuildCodeModeApiCallEntryInput {
+  requestType?: 'RAW_INVOKE_CORE_SDK' | 'INVOKE_CORE_SDK'
+  httpMethod?: unknown
+  method?: unknown
+  path?: unknown
+  params?: unknown
+  body?: unknown
+  rawResp?: unknown
+  error?: unknown
+  timestamp?: string
+  durationMs?: number
+}
+
+function parseJsonIfPossible(val: unknown): unknown {
+  if (val === undefined || val === null || val === '') return null
+  if (val instanceof Error) return val.message ? parseJsonString(val.message, false) : null
+  return parseJsonString(val, true)
+}
+
+export function buildCodeModeApiCallEntry(input: BuildCodeModeApiCallEntryInput): LkrCodeModeApiCallEntry {
+  const rawPath = String(input.path || '')
+  const qIdx = rawPath.indexOf('?')
+  const queryParams: Record<string, unknown> = {}
+  const addQs = (qs: string) => {
+    if (qs && typeof URLSearchParams !== 'undefined') {
+      new URLSearchParams(qs).forEach((v, k) => { queryParams[k] = parseJsonString(v, false) })
     }
   }
-  return val as T
+  if (qIdx >= 0) addQs(rawPath.slice(qIdx + 1))
+  let extra: unknown = input.params
+  if (typeof extra === 'string') {
+    const pt = extra.trim()
+    if (pt[0] === '{') {
+      try { extra = JSON.parse(pt) } catch { extra = null }
+    } else {
+      addQs(pt)
+      extra = null
+    }
+  }
+  if (extra && typeof extra === 'object' && !Array.isArray(extra)) {
+    const rec = extra as Record<string, unknown>
+    Object.keys(rec).forEach((k) => { if (rec[k] !== undefined) queryParams[k] = parseJsonString(rec[k], false) })
+  }
+  const r = input.rawResp && typeof input.rawResp === 'object' ? (input.rawResp as Record<string, unknown>) : null
+  let response: LkrCodeModeApiCallEntry['response']
+  if ('error' in input && input.error !== undefined) {
+    response = { ok: false, status: null, body: parseJsonIfPossible(input.error) }
+  } else if (input.requestType === 'INVOKE_CORE_SDK') {
+    const ok = Boolean(r && r.ok)
+    const errObj = r && r.error && typeof r.error === 'object' ? (r.error as Record<string, unknown>) : null
+    const errStatus = Number(errObj ? (errObj.statusCode != null ? errObj.statusCode : errObj.status) : NaN)
+    response = {
+      ok,
+      status: ok ? 200 : Number.isFinite(errStatus) && errStatus > 0 ? errStatus : 500,
+      body: parseJsonIfPossible(r ? (ok ? r.value : r.error) : null),
+    }
+  } else {
+    const rawCode = r ? (r.statusCode != null ? r.statusCode : r.status) : undefined
+    const rawStatus = Number(rawCode != null ? rawCode : 200)
+    const status = Number.isFinite(rawStatus) ? rawStatus : 200
+    response = {
+      ok: (!r || r.ok !== false) && status >= 200 && status < 400,
+      status,
+      body: parseJsonIfPossible(r && r.body !== undefined ? r.body : input.rawResp),
+    }
+  }
+  return {
+    method: String(input.httpMethod || input.method || 'GET').toUpperCase(),
+    route: qIdx >= 0 ? rawPath.slice(0, qIdx) : rawPath,
+    query_params: queryParams,
+    body: parseJsonIfPossible(input.body),
+    response,
+    timestamp: input.timestamp || new Date().toISOString(),
+    duration_ms: Math.max(0, Math.round(Number(input.durationMs || 0))),
+  }
+}
+
+function getCodeModeApiCallsStore(): LkrCodeModeApiCallEntry[] {
+  const g = globalThis as { lkr_codemode_api_calls?: LkrCodeModeApiCallEntry[] }
+  if (!Array.isArray(g.lkr_codemode_api_calls)) g.lkr_codemode_api_calls = []
+  return g.lkr_codemode_api_calls
+}
+
+function traceCodeModeCall<T>(
+  reqType: 'RAW_INVOKE_CORE_SDK' | 'INVOKE_CORE_SDK',
+  httpMethod: unknown,
+  path: unknown,
+  params: unknown,
+  body: unknown,
+  exec: () => Promise<T>,
+  unwrap?: (val: T) => unknown
+): Promise<T> {
+  const startedAt = Date.now()
+  const timestamp = new Date(startedAt).toISOString()
+  const push = (extra: Partial<BuildCodeModeApiCallEntryInput>) =>
+    getCodeModeApiCallsStore().push(
+      buildCodeModeApiCallEntry(
+        Object.assign({ requestType: reqType, httpMethod, path, params, body, timestamp, durationMs: Date.now() - startedAt }, extra)
+      )
+    )
+  return Promise.resolve().then(exec).then(
+    (res) => (push({ rawResp: unwrap ? unwrap(res) : res }), res),
+    (err: unknown) => { push({ error: err }); throw err }
+  )
+}
+
+const hookedChattyHosts = new WeakSet<object>()
+const loggedRawRequestFns = new WeakSet<LookerRawRequestFn>()
+let chattyConnectPatched = false
+
+export function isTransportChattyHooked(transport: unknown): boolean {
+  let cur = transport as Record<string, unknown> | null | undefined
+  for (let i = 0; cur && typeof cur === 'object' && i < 4; i += 1) {
+    if (cur.chattyHost && typeof cur.chattyHost === 'object' && hookedChattyHosts.has(cur.chattyHost as object)) return true
+    cur = (cur.hostConnection || cur.extensionHost) as Record<string, unknown> | undefined
+  }
+  return false
+}
+
+export function hookChattyHostApiLogger(hostOrExtensionSdk: unknown): void {
+  if (!hostOrExtensionSdk || typeof hostOrExtensionSdk !== 'object') return
+  const hostObj = (hostOrExtensionSdk as { chattyHost?: unknown }).chattyHost
+  const candidate = hostObj !== undefined ? hostObj : hostOrExtensionSdk
+  if (!candidate || typeof candidate !== 'object') return
+  const host = candidate as { sendAndReceive?: (...args: unknown[]) => Promise<unknown> }
+  if (typeof host.sendAndReceive !== 'function' || hookedChattyHosts.has(host)) return
+  hookedChattyHosts.add(host)
+  const orig = host.sendAndReceive
+  host.sendAndReceive = function (this: unknown, eventName: unknown, rawMsg?: unknown): Promise<unknown> {
+    // eslint-disable-next-line prefer-rest-params
+    const callArgs = arguments as unknown as unknown[]
+    const reqMsg = rawMsg && typeof rawMsg === 'object' ? (rawMsg as { type?: unknown; payload?: Record<string, unknown> }) : null
+    const reqType = reqMsg ? reqMsg.type : undefined
+    if (eventName !== 'EXTENSION_API_REQUEST' || (reqType !== 'RAW_INVOKE_CORE_SDK' && reqType !== 'INVOKE_CORE_SDK')) {
+      return orig.apply(this, callArgs)
+    }
+    const p = (reqMsg && reqMsg.payload) || {}
+    return traceCodeModeCall(
+      reqType,
+      p.httpMethod,
+      p.path,
+      p.params,
+      p.body,
+      () => orig.apply(this, callArgs),
+      (values) => {
+        const v0 = Array.isArray(values) && values.length === 1 ? values[0] : null
+        return v0 && typeof v0 === 'object' && ('ok' in v0 || 'statusCode' in v0 || 'status' in v0 || 'body' in v0 || 'value' in v0 || 'error' in v0)
+          ? v0
+          : values
+      }
+    )
+  }
+}
+
+export function installChattyApiLogger(): void {
+  if (typeof window === 'undefined') return
+  getCodeModeApiCallsStore()
+  if (chattyConnectPatched) return
+  const proto = ChattyClient && (ChattyClient.prototype as { connect?: (...args: unknown[]) => Promise<unknown> } | undefined)
+  if (!proto || typeof proto.connect !== 'function') return
+  chattyConnectPatched = true
+  const origConnect = proto.connect
+  proto.connect = function (this: unknown): Promise<unknown> {
+    // eslint-disable-next-line prefer-rest-params
+    return origConnect.apply(this, arguments as unknown as unknown[]).then((conn) => (hookChattyHostApiLogger(conn), conn))
+  }
+}
+
+function invokeAndLogRawTransport(
+  rawTransport: unknown,
+  origRawReq: LookerRawRequestFn,
+  method: string,
+  path: string,
+  queryParams: Record<string, unknown> | undefined,
+  body: unknown,
+  callArgs: ArrayLike<unknown>
+): Promise<RawLookerTransportResponse> {
+  if (loggedRawRequestFns.has(origRawReq) || isTransportChattyHooked(rawTransport)) {
+    return Promise.resolve(origRawReq.apply(rawTransport, callArgs as unknown as Parameters<LookerRawRequestFn>))
+  }
+  return traceCodeModeCall('RAW_INVOKE_CORE_SDK', method, path, queryParams, body, () =>
+    origRawReq.apply(rawTransport, callArgs as unknown as Parameters<LookerRawRequestFn>)
+  )
 }
 
 export function createDeduplicatedLookerSdkProxy(
@@ -189,77 +402,87 @@ export function createDeduplicatedLookerSdkProxy(
     __rawSdk?: Looker40SDK
     authSession?: { transport?: { rawRequest?: LookerRawRequestFn; [key: string]: unknown }; [key: string]: unknown }
   }
-  const rawTransport = sdkRec?.authSession?.transport
-  const origRawReq = rawTransport?.rawRequest
+  const rawTransport = sdkRec.authSession && sdkRec.authSession.transport
+  const origRawReq = rawTransport && rawTransport.rawRequest
   const wrappedsdk: Record<string, unknown> = Object.create(sdk)
   wrappedsdk.__rawSdk = sdkRec.__rawSdk || sdk
   for (const method of SWR_DEDUPED_METHODS) {
     const fn = sdkRec[method]
     if (typeof fn === 'function') {
       const origFn = (fn as (...args: unknown[]) => unknown).bind(wrappedsdk)
-      wrappedsdk[method] = (...args: unknown[]) =>
-        coalesceLookerMetadataRequest(`sdk:${method}:${JSON.stringify(args)}`, () => Promise.resolve(origFn(...args)))
+      wrappedsdk[method] = function () {
+        // eslint-disable-next-line prefer-rest-params
+        const args = Array.from(arguments)
+        return coalesceLookerMetadataRequest(`sdk:${method}:${JSON.stringify(args)}`, () => Promise.resolve(origFn.apply(wrappedsdk, args)))
+      }
     }
   }
   if (typeof origRawReq === 'function') {
-    const wrappedRawRequest: LookerRawRequestFn = async (method, path, queryParams, body, ...rest) => {
+    const wrappedRawRequest: LookerRawRequestFn = function (method, path, queryParams, body) {
+      // eslint-disable-next-line prefer-rest-params
+      const callArgs = arguments
       const reqStart = Date.now()
       const meta = { method: String(method || 'GET').toUpperCase(), path: String(path || '') }
       const isMetaGet =
         meta.method === 'GET' &&
         /\/(?:lookml_models|connections|content_search|content_summary|global_search_v2|user|folders|session)(?:\/|$|\?)/i.test(meta.path)
-      const execRaw = () => origRawReq.call(rawTransport, method, path, queryParams, body, ...rest)
-      try {
-        const res = isMetaGet
-          ? await coalesceLookerMetadataRequest(`raw:GET:${path}:${JSON.stringify(queryParams || {})}`, execRaw)
-          : await execRaw()
-        onRawRequest?.(res, Date.now() - reqStart, undefined, meta)
-        return res
-      } catch (err) {
-        onRawRequest?.(undefined, Date.now() - reqStart, err, meta)
-        throw err
-      }
+      const execRaw = () => invokeAndLogRawTransport(rawTransport, origRawReq, method, path, queryParams, body, callArgs)
+      const p = isMetaGet
+        ? coalesceLookerMetadataRequest(`raw:GET:${path}:${JSON.stringify(queryParams || {})}`, execRaw)
+        : execRaw()
+      return p.then(
+        (res) => (onRawRequest && onRawRequest(res, Date.now() - reqStart, undefined, meta), res),
+        (err: unknown) => { if (onRawRequest) onRawRequest(undefined, Date.now() - reqStart, err, meta); throw err }
+      )
     }
-    wrappedsdk.authSession = {
-      ...sdkRec.authSession,
-      transport: {
-        ...rawTransport,
+    loggedRawRequestFns.add(wrappedRawRequest)
+    wrappedsdk.authSession = Object.assign({}, sdkRec.authSession, {
+      transport: Object.assign({}, rawTransport, {
         rawRequest: wrappedRawRequest,
-        request: async (method: string, path: string, queryParams?: Record<string, unknown>, body?: unknown, ...rest: unknown[]) => {
-          const rawResp = await wrappedRawRequest(method, path, queryParams, serializeLookerBody(body), ...rest)
-          const status = Number(rawResp?.statusCode ?? rawResp?.status ?? 200)
-          if (rawResp?.ok === false || status >= 400) {
-            const errText = typeof rawResp?.body === 'string' ? rawResp.body : JSON.stringify(rawResp?.body ?? rawResp)
-            return { ok: false, error: new Error(`Looker ${method} ${path} failed (${status}): ${errText}`) }
-          }
-          return { ok: true, value: parseLookerRawBody(rawResp) }
+        request: function (method: string, path: string, queryParams?: Record<string, unknown>, body?: unknown, extraA?: unknown, extraB?: unknown) {
+          return wrappedRawRequest(method, path, queryParams, serializeLookerBody(body), extraA, extraB).then((rawResp) => {
+            const code = rawResp && (rawResp.statusCode !== undefined ? rawResp.statusCode : rawResp.status)
+            const status = Number(code !== undefined ? code : 200)
+            if ((rawResp && rawResp.ok === false) || status >= 400) {
+              const b = rawResp ? rawResp.body : undefined
+              const errText = typeof b === 'string' ? b : JSON.stringify(b !== undefined ? b : rawResp)
+              return { ok: false, error: new Error(`Looker ${method} ${path} failed (${status}): ${errText}`) }
+            }
+            return { ok: true, value: parseLookerRawBody(rawResp) }
+          })
         },
-      },
-    }
+      }),
+    })
   }
   return wrappedsdk as unknown as Looker40SDK
 }
 
 // ponytail: use SDK's underlying transport.rawRequest (requires raw_api_request: yes in manifest.lkml)
 // instead of generating custom SDK bindings for /data_app_extension and /inline_extension.
-export async function rawLookerRequest<T = unknown>(
+export function rawLookerRequest<T = unknown>(
   sdk: Looker40SDK,
   method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
   path: string,
   queryParams?: Record<string, unknown>,
   body?: unknown
 ): Promise<T> {
-  const transport = (sdk.authSession as unknown as { transport: { rawRequest: LookerRawRequestFn } }).transport
-  const rawResp = await transport.rawRequest(method, path, queryParams, serializeLookerBody(body))
-  if (rawResp.ok === false || (rawResp.statusCode && rawResp.statusCode >= 400)) {
-    const errBody = typeof rawResp.body === 'string' ? rawResp.body : JSON.stringify(rawResp.body)
-    if (Number(rawResp.statusCode) === 404) {
-      const diag = classifyLooker404Error(404, path, errBody)
-      throw new Error(`Looker ${method} ${path} failed (404 ${diag.kind}): ${diag.remediation} — ${errBody}`)
-    }
-    throw new Error(`Looker ${method} ${path} failed (${rawResp.statusCode}): ${errBody}`)
-  }
-  return parseLookerRawBody<T>(rawResp)
+  return Promise.resolve()
+    .then(() => {
+      const transport = (sdk.authSession as unknown as { transport: { rawRequest: LookerRawRequestFn } }).transport
+      const sBody = serializeLookerBody(body)
+      return invokeAndLogRawTransport(transport, transport.rawRequest, method, path, queryParams, sBody, [method, path, queryParams, sBody])
+    })
+    .then((rawResp) => {
+      if (rawResp.ok === false || (rawResp.statusCode && rawResp.statusCode >= 400)) {
+        const errBody = typeof rawResp.body === 'string' ? rawResp.body : JSON.stringify(rawResp.body)
+        if (Number(rawResp.statusCode) === 404) {
+          const diag = classifyLooker404Error(404, path, errBody)
+          throw new Error(`Looker ${method} ${path} failed (404 ${diag.kind}): ${diag.remediation} — ${errBody}`)
+        }
+        throw new Error(`Looker ${method} ${path} failed (${rawResp.statusCode}): ${errBody}`)
+      }
+      return parseLookerRawBody<T>(rawResp)
+    })
 }
 
 export const rawCoreSdkRequest = rawLookerRequest
@@ -311,7 +534,7 @@ export async function discoverAccessibleConnections(
           .filter((c) => typeof c?.name === 'string' && c.name.trim())
           .map((c) => {
             const d = String(c.dialect_name || '').trim(), db = String(c.database || '').trim(), s = String(c.schema || '').trim()
-            return { name: String(c.name).trim(), ...(d ? { dialect_name: d } : {}), ...(db ? { database: db } : {}), ...(s ? { schema: s } : {}), source: 'connections' as const }
+            return Object.assign({ name: String(c.name).trim(), source: 'connections' as const }, d ? { dialect_name: d } : null, db ? { database: db } : null, s ? { schema: s } : null)
           })
         if (items.length > 0) return items
       } catch { /* non-admin 403/404 -> fallback to /lookml_models */ }
@@ -324,7 +547,7 @@ export async function discoverAccessibleConnections(
             if (cname) { if (!byConn.has(cname)) byConn.set(cname, new Set()); if (label) byConn.get(cname)!.add(label) }
           }
         }
-        return Array.from(byConn.entries()).map(([name, p]) => ({ name, ...(p.size ? { models: Array.from(p) } : {}), source: 'lookml_models' as const }))
+        return Array.from(byConn.entries()).map(([name, p]) => Object.assign({ name, source: 'lookml_models' as const }, p.size ? { models: Array.from(p) } : null))
       } catch { return [] }
     },
     LOOKER_METADATA_CACHE_TTL_MS,
@@ -391,22 +614,24 @@ export function normalizeLookerFolderNode(
     raw?.parent_id !== undefined && raw?.parent_id !== null && raw?.parent_id !== ''
       ? String(raw.parent_id)
       : fallbackParentId ?? null
-  return {
-    id: fid,
-    name: String(raw?.name || `Folder #${fid}`),
-    parent_id: parentId,
-    ...(childCount !== undefined ? { child_count: childCount } : {}),
-    is_personal: Boolean(raw?.is_personal),
-    is_personal_descendant: Boolean(raw?.is_personal_descendant),
-    ...(raw?.creator_id != null ? { creator_id: String(raw.creator_id) } : {}),
-    has_children:
-      typeof raw?.has_children === 'boolean'
-        ? raw.has_children
-        : childCount === undefined
-        ? true
-        : childCount > 0,
-    ...(raw?.can ? { can: raw.can } : {}),
-  }
+  return Object.assign(
+    {
+      id: fid,
+      name: String(raw?.name || `Folder #${fid}`),
+      parent_id: parentId,
+      is_personal: Boolean(raw?.is_personal),
+      is_personal_descendant: Boolean(raw?.is_personal_descendant),
+      has_children:
+        typeof raw?.has_children === 'boolean'
+          ? raw.has_children
+          : childCount === undefined
+          ? true
+          : childCount > 0,
+    },
+    childCount !== undefined ? { child_count: childCount } : null,
+    raw?.creator_id != null ? { creator_id: String(raw.creator_id) } : null,
+    raw?.can ? { can: raw.can } : null
+  )
 }
 
 export function buildRootLookerFolders(user?: Partial<IUser> | null): LookerFolderNode[] {
@@ -614,7 +839,7 @@ export async function searchLookerFolders(
     `search_folders:${JSON.stringify(req)}`,
     async () => {
       const s = sdk as unknown as LookerFolderSdkLike
-      const execReq: Record<string, unknown> = { ...req }
+      const execReq: Record<string, unknown> = Object.assign({}, req)
       const safeCall = async <T>(fn: () => Promise<T>): Promise<T | null> => {
         try { return await fn() } catch { return null }
       }
@@ -671,8 +896,9 @@ export async function searchLookerFolders(
         const rows = await safeCall(async () => {
           let r = await unwrapSdkCall(s, s.search_folders!(execReq))
           if ((!Array.isArray(r) || r.length === 0) && rawName && /^\d+$/.test(rawName) && !execReq.id) {
-            const { name: _omit, ...byIdReq } = execReq
-            r = await unwrapSdkCall(s, s.search_folders!({ ...byIdReq, id: rawName }))
+            const byIdReq = Object.assign({}, execReq, { id: rawName })
+            delete byIdReq.name
+            r = await unwrapSdkCall(s, s.search_folders!(byIdReq))
           }
           return r
         })
@@ -1256,16 +1482,21 @@ export async function searchGlobalContentV2(
 
   let payload: unknown = null
   try {
-    payload = await rawLookerRequest<unknown>(sdk, 'GET', '/api/4.0/global_search_v2', {
-      term: cleanTerm, curate: true, limit, ...(sections ? { sections } : {}),
-    })
+    payload = await rawLookerRequest<unknown>(
+      sdk,
+      'GET',
+      '/api/4.0/global_search_v2',
+      Object.assign({ term: cleanTerm, curate: true, limit }, sections ? { sections } : null)
+    )
   } catch {
     try {
       payload = await sdk.ok(
-        sdk.search_content({
-          terms: cleanTerm, limit,
-          ...(category === 'look' ? { types: 'look' } : category === 'dashboard' ? { types: 'dashboard' } : {}),
-        } as Parameters<Looker40SDK['search_content']>[0])
+        sdk.search_content(
+          Object.assign(
+            { terms: cleanTerm, limit },
+            category === 'look' ? { types: 'look' } : category === 'dashboard' ? { types: 'dashboard' } : null
+          ) as Parameters<Looker40SDK['search_content']>[0]
+        )
       )
     } catch {
       payload = []
