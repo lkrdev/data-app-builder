@@ -793,6 +793,20 @@ chmod +x "${fakeBinDir}/uv"
   const balancedKpiOut = execFileSync('python3', [bundlePyPath, '--stdin', 'Balanced KPI App', path.join(workDir, 'balanced_kpi_app.js')], { input: balancedKpiApp, encoding: 'utf8' })
   assert(balancedKpiOut.includes('<DATA_APP_BUNDLE>'), 'BUNDLE_APP_PY must accept @container 4 -> 2 -> 1 .da-kpi-grid and non-KPI .metric-charts auto-fit grids placed above .da-kpi-grid')
 
+  // Issue #179: BUNDLE_APP_PY forbidden-compare-against-dropdown & invalid-metric-comparison-query-or-axis gates
+  assert.throws(
+    () => execFileSync('python3', [bundlePyPath, '--stdin', 'Bad Compare Select', path.join(workDir, 'bad_cmp_sel.js')], { input: `import { DataApp, html } from '/runtime/data-app.js';\nexport class BadCmpSel extends DataApp { constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; } render() { return html\`<app-select label="Compare against" .options=\${[]}></app-select><app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; } }\ncustomElements.define('bad-cmp-sel', BadCmpSel);\n`, encoding: 'utf8', stdio: 'pipe' }),
+    /forbidden-compare-against-dropdown/,
+    'BUNDLE_APP_PY must reject <app-select label="Compare against">'
+  )
+  assert.throws(
+    () => execFileSync('python3', [bundlePyPath, '--stdin', 'Bad Single Compare', path.join(workDir, 'bad_single_cmp.js')], { input: `import { DataApp, html } from '/runtime/data-app.js';\nexport class BadSingleCmp extends DataApp { constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; this.compareMetric = 'orders.return_count'; } render() { return html\`<app-chart type="line" .query=\${{ fields: ['orders.returned_date', 'orders.count', this.compareMetric] }}></app-chart><app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; } }\ncustomElements.define('bad-single-cmp', BadSingleCmp);\n`, encoding: 'utf8', stdio: 'pipe' }),
+    /invalid-metric-comparison-query-or-axis/,
+    'BUNDLE_APP_PY must reject single-query or unlinked compareMetric apps'
+  )
+  const validCompareOut = execFileSync('python3', [bundlePyPath, '--stdin', 'Valid Compare App', path.join(workDir, 'valid_cmp_app.js')], { input: `import { DataApp, html } from '/runtime/data-app.js';\nexport class ValidCmp extends DataApp { constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; this.compareMetric = 'orders.return_count'; this.selectedDimensions = ['orders.status']; this.trendRows = null; } async loadTrendData() { await Promise.all(['orders.count', this.compareMetric].map((m, i) => this.runQuery({ fields: [i ? 'orders.returned_date' : 'orders.created_date', m] }))); } render() { const shareScale = true; return html\`<app-chart type="line" .data=\${this.trendRows} .options=\${{ yAxis: [{ title: { text: 'Orders' } }, { ...(shareScale ? { linkedTo: 0 } : {}), opposite: true }] }}></app-chart><app-chart type="bar" .query=\${{ fields: [...this.selectedDimensions, 'orders.count'] }}></app-chart><app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; } }\ncustomElements.define('valid-cmp', ValidCmp);\n`, encoding: 'utf8' })
+  assert(validCompareOut.includes('<DATA_APP_BUNDLE>'), 'BUNDLE_APP_PY must accept dual Promise.all + runQuery + .data + linkedTo + opposite compareMetric apps')
+
   const dashPreambleMatch = antigravityTs.match(/export const DASHBOARD_CODEMODE_PREAMBLE_PY = `([\s\S]*?)`\n\nexport function wrapDashboardCodeMode/)
   assert(dashPreambleMatch, 'Could not extract DASHBOARD_CODEMODE_PREAMBLE_PY')
   const dashPreamblePy = dashPreambleMatch[1].replace(/\\\\n/g, '\\n')
