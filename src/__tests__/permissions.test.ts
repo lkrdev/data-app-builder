@@ -5941,6 +5941,7 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
       'kpi-change', 'vs. prev', 'lower-better',
       'container-type: inline-size', '@container', 'repeat(4, minmax(0, 1fr))', 'repeat(2, minmax(0, 1fr))', 'auto-fit',
       'opposite: true', 'Longitudinal Trend', 'yAxis.title.text', '⋮',
+      'loadTrendData', 'Promise.all', 'shareScale', 'linkedTo: 0',
       'PERIOD_DEFAULTS = { date:', 'Period', 'Window', 'periodCount', 'getEffectiveFilters',
       '!WINDOW_OPTIONS[this.period].includes(this.periodCount)', 'customWindowOpen', 'Custom window length', 'type="number"',
       'Math.min(5000, Math.max(500, 2 * this.periodCount + 10))',
@@ -8284,5 +8285,182 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     expect(jsonDetailCalls).toHaveLength(1)
     expect(jsonDetailCalls[0]?.fields).toHaveLength(20)
     expect(jsonDetailCalls[0]?.fields).toEqual(expect.arrayContaining(['orders.dim_0', 'customers.country']))
+  })
+
+  test('74. Issue #179: enforces layered dual-date Promise.all comparison queries, omits .query on comparison <app-chart>, shares scale via linkedTo: 0 when close, and rejects Compare against dropdowns in BUNDLE_APP_PY & Turn 6 grader', () => {
+    const repoRoot = path.resolve(__dirname, '../..')
+    const rawMatch = readFileSync(path.join(repoRoot, 'src/antigravityPrompts.ts'), 'utf8').match(/export const BUNDLE_APP_PY = `([\s\S]*?)`\n/)
+    expect(rawMatch?.[1]).toBe(BUNDLE_APP_PY)
+    expect(BUNDLE_APP_PY).not.toContain('\\')
+    expect(BUNDLE_APP_PY).not.toContain('${')
+
+    const recipeDisk = readFileSync(path.join(repoRoot, 'upstream/payload/skills/data-app-creator/recipes/metric-switcher.md'), 'utf8')
+    expect(recipeDisk).not.toMatch(/thelook|argolis_scratch|default_bigquery_connection|demowest|looker-private-demo/i)
+    expect(DATA_APP_GUIDE_MD).toContain('formatAxisValue, escapeHtml')
+    for (const tok of ['loadTrendData', 'Promise.all', 'this.runQuery', 'shareScale', 'linkedTo: 0', 'opposite: true', '--app-chart-1', '--app-chart-2']) {
+      expect(recipeDisk).toContain(tok)
+    }
+
+    const workDir = mkdtempSync(path.join(tmpdir(), 'dab-179-test-'))
+    try {
+      const bundlePyPath = path.join(workDir, 'bundle_app.py')
+      writeFileSync(bundlePyPath, BUNDLE_APP_PY.replace('Path("/workspace/bundle.json")', `Path(${JSON.stringify(path.join(workDir, 'bundle.json'))})`), 'utf8')
+      const env = { ...process.env, TOOLKIT_DIR: path.join(repoRoot, 'upstream/payload') }
+
+      // (a1) Reject <app-select label="Compare against"> (including arrow-fn with '>' BEFORE expression-bound label)
+      for (const badSelect of [
+        '<app-select label="Compare against" .value=${this.x} .options=${[]} @change=${(e) => { if (e.detail.value.length > 0) this.x = e.detail.value; }}></app-select>',
+        "<app-select @change=${(e) => { if (e.detail.value.length > 0) this.x = e.detail.value; }} aria-label=${'Compare against'} .options=${[]}></app-select>",
+      ]) {
+        const src = `import { DataApp, html } from '/runtime/data-app.js';\nexport class BadDrop extends DataApp { constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; } render() { return html\`${badSelect}<app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; } }\ncustomElements.define('bad-drop', BadDrop);`
+        expect(() => execFileSync('python3', [bundlePyPath, '--stdin', 'Bad Drop', path.join(workDir, 'bad_drop.js')], { input: src, env, encoding: 'utf8', stdio: 'pipe' })).toThrow(/forbidden-compare-against-dropdown/)
+      }
+
+      // (a2) Reject single-query compareMetric (including nested METRICS[...] or conditional spread), missing linkedTo, missing opposite, .data + .query on same <app-chart>, dateBase !== / != branching, or multi-if updated() loop
+      for (const badCompareBody of [
+        // 1a. Single-query compareMetric via conditional spread (with nested METRICS[...] and sibling <app-chart .data=...>, plus loadGrid Promise.all)
+        `async loadGrid() { await Promise.all([this.runQuery({ fields: ['orders.count'] }), this.runQuery({ fields: ['orders.count'] })]); } render() { const METRICS = { r: { measure: 'orders.return_count' } }; const m2 = METRICS[this.compareMetric]; return html\`<app-chart type="bar" .data=\${[]}></app-chart><app-chart type="line" .query=\${{ fields: ['orders.returned_date', METRICS['r'].measure, ...(m2 ? [m2.measure] : [])] }} .options=\${{ yAxis: [{}, { linkedTo: 0, opposite: true }] }}></app-chart><app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; }`,
+        // 1b. Direct compareMetric inside .query fields: [...] even when loadTrendData Promise.all and sibling .data exist
+        `async loadTrendData() { await Promise.all([this.runQuery({ fields: ['orders.created_date', this.selectedMetric] }), this.runQuery({ fields: ['orders.returned_date', this.compareMetric] })]); } render() { const METRICS = { r: { measure: 'orders.return_count' } }; return html\`<app-chart type="bar" .data=\${[]}></app-chart><app-chart type="line" .query=\${{ fields: ['orders.returned_date', METRICS[this.compareMetric].measure] }} .options=\${{ yAxis: [{}, { linkedTo: 0, opposite: true }] }}></app-chart><app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; }`,
+        // 2. Dual runQuery present, but missing linkedTo (even if "linkedTo" appears inside a string literal)
+        `async loadTrendData() { await Promise.all([this.runQuery({ fields: ['orders.created_date', this.selectedMetric] }), this.runQuery({ fields: ['orders.returned_date', this.compareMetric] })]); } render() { const note = 'linkedTo'; return html\`<app-chart type="line" title=\${note} .data=\${this.trendRows} .options=\${{ yAxis: [{}, { opposite: true }] }}></app-chart><app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; }`,
+        // 3. Dual runQuery + linkedTo present, but opposite: false (missing opposite: true)
+        `async loadTrendData() { await Promise.all([this.runQuery({ fields: ['orders.created_date', this.selectedMetric] }), this.runQuery({ fields: ['orders.returned_date', this.compareMetric] })]); } render() { return html\`<app-chart type="line" .data=\${this.trendRows} .options=\${{ yAxis: [{}, { linkedTo: 0, opposite: false }] }}></app-chart><app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; }`,
+        // 4. Dual runQuery + linkedTo + opposite present, but .query kept alongside .data on same <app-chart>
+        `async loadTrendData() { await Promise.all([this.runQuery({ fields: ['orders.created_date', this.selectedMetric] }), this.runQuery({ fields: ['orders.returned_date', this.compareMetric] })]); } render() { return html\`<app-chart type="line" .data=\${this.trendRows} .query=\${{ fields: ['orders.created_date', this.selectedMetric] }} .options=\${{ yAxis: [{}, { linkedTo: 0, opposite: true }] }}></app-chart><app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; }`,
+        // 5. Conditional m1.dateBase != m2.dateBase single-query fallback
+        `async loadTrendData() { const m1 = { dateBase: 'a' }, m2 = { dateBase: 'b' }; if (m1.dateBase != m2.dateBase) { await Promise.all([this.runQuery({ fields: ['orders.created_date', this.selectedMetric] }), this.runQuery({ fields: ['orders.returned_date', this.compareMetric] })]); } } render() { return html\`<app-chart type="line" .data=\${this.trendRows} .options=\${{ yAxis: [{}, { linkedTo: 0, opposite: true }] }}></app-chart><app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; }`,
+        // 6. Forbidden updated(changed) loop invoking loadTrendData() after an earlier nested if-block
+        `updated(changed) { super.updated(changed); if (changed.has('chartType')) { this.chartMenuOpen = false; } if (changed.has('period')) { this.loadTrendData(); } } async loadTrendData() { await Promise.all([this.runQuery({ fields: ['orders.created_date', this.selectedMetric] }), this.runQuery({ fields: ['orders.returned_date', this.compareMetric] })]); } render() { return html\`<app-chart type="line" .data=\${this.trendRows} .options=\${{ yAxis: [{}, { linkedTo: 0, opposite: true }] }}></app-chart><app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; }`,
+      ]) {
+        const src = `import { DataApp, html } from '/runtime/data-app.js';\nexport class BadCompare extends DataApp { constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; this.selectedMetric = 'orders.count'; this.compareMetric = 'orders.return_count'; this.trendRows = null; } ${badCompareBody} }\ncustomElements.define('bad-compare', BadCompare);`
+        expect(() => execFileSync('python3', [bundlePyPath, '--stdin', 'Bad Compare', path.join(workDir, 'bad_cmp.js')], { input: src, env, encoding: 'utf8', stdio: 'pipe' })).toThrow(/invalid-metric-comparison-query-or-axis/)
+      }
+
+      // (b) Accept compliant dual-Promise.all([this.runQuery(...), this.runQuery(...)]) + DRY .map(m => this.runQuery(...)) + sibling ...this.selectedDimensions <app-chart> + shareScale ? 0 : 1 + linkedTo: 0 Metric Selector app
+      const compliantSrc = `import { DataApp, html, formatValue, formatAxisValue, escapeHtml } from '/runtime/data-app.js';
+const METRICS = {
+  orders: { label: 'Orders', measure: 'orders.count', dateBase: 'orders.created', format: 'int', polarity: 'higher-better' },
+  returns: { label: 'Returns', measure: 'orders.return_count', dateBase: 'orders.returned', format: 'int', polarity: 'lower-better' },
+  cancels: { label: 'Cancellations', measure: 'orders.cancel_count', dateBase: 'orders.cancelled', format: 'int', polarity: 'lower-better' },
+};
+const PERIOD_DEFAULTS = { date: 90, week: 53, month: 60, year: 10 };
+const WINDOW_OPTIONS = { date: [14, 30, 60, 90, 180], week: [12, 26, 53, 104], month: [6, 12, 24, 60], year: [3, 5, 10] };
+const UNITS = { date: 'days', week: 'weeks', month: 'months', year: 'years' };
+export class GoodCompareApp extends DataApp {
+  static properties = { period: { type: String }, periodCount: { type: Number }, selectedMetric: { type: String }, compareMetric: { type: String }, chartType: { type: String }, chartMenuOpen: { type: Boolean }, customWindowOpen: { type: Boolean }, customWindowDraft: { type: String }, selectedDimensions: { type: Array }, trendRows: { type: Array }, trendError: { type: String }, gridRows: { type: Array } };
+  constructor() {
+    super();
+    this.lookerModel = 'ecom';
+    this.explore = 'orders';
+    this.period = 'date';
+    this.periodCount = PERIOD_DEFAULTS.date;
+    this.selectedMetric = 'returns';
+    this.compareMetric = 'cancels';
+    this.chartType = 'areaspline';
+    this.chartMenuOpen = false;
+    this.customWindowOpen = false;
+    this.selectedDimensions = ['orders.status'];
+    this.trendRows = null;
+    this.trendError = null;
+    this.gridRows = [];
+  }
+  connectedCallback() { super.connectedCallback(); this.loadTrendData(); }
+  willUpdate(changed) { super.willUpdate(changed); if (this.hasUpdated && (changed.has('dashboardFilters') || changed.has('crossFilters'))) this.onFiltersChanged(); }
+  onFiltersChanged() { this.loadTrendData(); }
+  onRefresh() { this.loadTrendData(); }
+  async loadTrendData() {
+    const seq = (this._trendSeq = (this._trendSeq || 0) + 1);
+    if (!this.compareMetric) { this.trendRows = null; this.trendError = null; return; }
+    this.trendError = null;
+    const m1 = METRICS[this.selectedMetric], m2 = METRICS[this.compareMetric];
+    const isNonCreated = m1.dateBase !== 'orders.created';
+    const d1 = \`\${m1.dateBase}_\${this.period}\`, d2 = \`\${m2.dateBase}_\${this.period}\`;
+    const win = \`\${this.periodCount} \${UNITS[this.period]}\`;
+    const limit = String(Math.min(5000, Math.max(500, 2 * this.periodCount + (isNonCreated ? 10 : 10))));
+    try {
+      const [r1, r2] = await Promise.all([
+        this.runQuery({ explore: this.explore, fields: [d1, m1.measure], filters: this.getEffectiveFilters({ [d1]: win }), sorts: [\`\${d1} asc\`], limit }),
+        this.runQuery({ explore: this.explore, fields: [d2, m2.measure], filters: this.getEffectiveFilters({ [d2]: win }), sorts: [\`\${d2} asc\`], limit }),
+      ]);
+      if (seq !== this._trendSeq) return;
+      const map1 = new Map((r1 || []).map((r) => [String(r[d1] ?? ''), Number(r[m1.measure] ?? 0)]));
+      const map2 = new Map((r2 || []).map((r) => [String(r[d2] ?? ''), Number(r[m2.measure] ?? 0)]));
+      const periods = [...new Set([...map1.keys(), ...map2.keys()])].filter(Boolean).sort();
+      this.trendRows = periods.map((p) => ({ period: p, [m1.measure]: Number(map1.get(p) ?? 0), [m2.measure]: Number(map2.get(p) ?? 0) }));
+    } catch (err) {
+      if (seq === this._trendSeq) this.trendError = err?.message || String(err);
+    }
+  }
+  render() {
+    const m1 = METRICS[this.selectedMetric], m2 = this.compareMetric ? METRICS[this.compareMetric] : null;
+    const d1 = \`\${m1.dateBase}_\${this.period}\`;
+    const limit = String(Math.min(5000, Math.max(500, 2 * this.periodCount + 10)));
+    const rows = this.trendRows || [];
+    const max1 = Math.max(0, ...rows.map((r) => Number(r[m1.measure] ?? 0)));
+    const max2 = m2 ? Math.max(0, ...rows.map((r) => Number(r[m2.measure] ?? 0))) : 0;
+    const shareScale = Boolean(m2 && m1.format === m2.format && max1 > 0 && max2 > 0 && (Math.max(max1, max2) / Math.min(max1, max2) <= 3));
+    const priorFilter = \`\${2 * this.periodCount} \${UNITS[this.period]} ago for \${this.periodCount} \${UNITS[this.period]}\`;
+    return html\`
+      <style>
+        .da-container { --app-chart-2: #34a853; container-type: inline-size; }
+        .da-kpi-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        @container (max-width: 820px) { .da-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @container (max-width: 420px) { .da-kpi-grid { grid-template-columns: 1fr; } }
+      </style>
+      <!-- removed <app-select label="Compare against"> -->
+      <div class="da-container" data-prior=\${priorFilter}>
+        <div class="da-filter-bar">
+          <span>Period:</span>
+          <span>Window: \${!WINDOW_OPTIONS[this.period].includes(this.periodCount) ? html\`<button>\${this.periodCount}</button>\` : ''}</span>
+          <button title="Custom window length" @click=\${() => { this.customWindowOpen = !this.customWindowOpen; }}><svg viewBox="0 0 16 16"></svg></button>
+          \${this.customWindowOpen ? html\`<input type="number" min="1" max="1000" .value=\${this.customWindowDraft ?? String(this.periodCount)}>\` : ''}
+          <span>Dimensions: \${this.selectedDimensions.join(',')}</span>
+        </div>
+        <div class="da-kpi-grid">
+          <div style="border: 2px solid var(--app-chart-1, #4285f4)" @click=\${(e) => { if (e.shiftKey) { this.compareMetric = 'cancels'; this.loadTrendData(); } }} @contextmenu=\${(e) => { e.preventDefault(); this.compareMetric = ''; this.loadTrendData(); }}>
+            <div>RETURNS</div><div>120</div><div><span class="kpi-change down">+3%</span><span>vs. prev 90 days</span></div><svg></svg>
+          </div>
+        </div>
+        <div><button @click=\${() => { this.chartMenuOpen = !this.chartMenuOpen; }}>⋮</button>\${['areaspline', 'line', 'column', 'bar'].join(',')}</div>
+        \${m2
+          ? html\`<app-chart bare type=\${this.chartType} value-format=\${m1.format} .data=\${this.trendRows} .error=\${this.trendError} .options=\${{ colors: ['var(--app-chart-1, #4285f4)', 'var(--app-chart-2, #34a853)'], yAxis: [{ title: { text: m1.label }, labels: { formatter() { return formatAxisValue(this.value, m1.format); } } }, { ...(shareScale ? { linkedTo: 0 } : {}), opposite: true, title: { text: m2.label }, labels: { formatter() { return formatAxisValue(this.value, m2.format); } }, gridLineWidth: 0 }], series: [{ name: m1.label, yAxis: 0 }, { name: m2.label, yAxis: shareScale ? 0 : 1 }], ...(m1.format !== m2.format ? { tooltip: { shared: true, useHTML: true, formatter() { return escapeHtml(String(formatValue(this.y, m1.format))); } } } : {}) }}></app-chart>\`
+          : html\`<app-chart bare type=\${this.chartType} .query=\${{ fields: [d1, m1.measure], filters: { ...(this.dashboardFilters || {}) }, sorts: [\`\${d1} asc\`], limit }} .options=\${{ yAxis: { title: { text: m1.label } }, ...(this.chartType === 'bar' ? { xAxis: { reversed: true } } : {}) }}></app-chart>\`}
+        <app-chart type="bar" title=\${this.compareMetric ? 'Breakdown' : 'Single'} .query=\${{ /* no compareMetric */ fields: [...this.selectedDimensions, m1.measure], limit }}></app-chart>
+        <app-grid .data=\${this.gridRows} .columnDefs=\${[{ field: 'dim', headerName: 'Status' }, { field: 'curr', headerName: 'Returns — This Period' }, { field: 'prev', headerName: 'Returns — Last Period' }, { field: 'var', headerName: 'Returns — Variance' }]}></app-grid>
+      </div>\`;
+  }
+}
+customElements.define('good-compare-app', GoodCompareApp);`
+      const out = execFileSync('python3', [bundlePyPath, '--stdin', 'Good Compare', path.join(workDir, 'good_cmp.js')], { input: compliantSrc, env, encoding: 'utf8' })
+      const bundle = JSON.parse((out.match(/<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/) || [])[1] || '{}') as { warnings?: string[] }
+      expect((bundle.warnings || []).filter((w) => !w.includes('registered without limit') && !w.includes('read app state'))).toEqual([])
+      const dryMapSrc = compliantSrc.replace(/const \[r1, r2\] = await Promise\.all\(\[[\s\S]*?\n {6}\]\);/, 'const [r1, r2] = await Promise.all([[d1, m1], [d2, m2]].map(([d, m]) => this.runQuery({ explore: this.explore, fields: [d, m.measure], filters: this.getEffectiveFilters({ [d]: win }), sorts: [`${d} asc`], limit })));')
+      expect(execFileSync('python3', [bundlePyPath, '--stdin', 'Good DRY Compare', path.join(workDir, 'good_dry_cmp.js')], { input: dryMapSrc, env, encoding: 'utf8' })).toContain('<DATA_APP_BUNDLE>')
+
+      // Verify Turn 6 grader in scripts/eval-new-project.mjs accepts compliant apps (including DRY .map, filters/options spreads, and literal dateBase !== 'orders.created') and rejects all 9 broken variants
+      const fnBodyMatch = readFileSync(path.join(repoRoot, 'scripts/eval-new-project.mjs'), 'utf8').match(/const cleanCode =[\s\S]*?const hasTitlelessPopVarianceGrid =[^\n]+/)
+      expect(fnBodyMatch).toBeTruthy()
+      const gradeTurn6 = new Function('code', `${fnBodyMatch?.[0]}\nreturn { hasCardBorderCompareDualAxis, hasPopClickableKpis, hasTrendMenuAndYAxis, hasTitlelessPopVarianceGrid };`) as (c: string) => Record<string, boolean>
+      expect(gradeTurn6(`${compliantSrc}\n// lower-better getEffectiveFilters`)).toEqual({
+        hasCardBorderCompareDualAxis: true,
+        hasPopClickableKpis: true,
+        hasTrendMenuAndYAxis: true,
+        hasTitlelessPopVarianceGrid: true,
+      })
+      expect(gradeTurn6(`${dryMapSrc}\n// lower-better`).hasCardBorderCompareDualAxis).toBe(true)
+      expect(gradeTurn6(`${compliantSrc}\n<app-select label="Compare against"></app-select>`).hasCardBorderCompareDualAxis).toBe(false)
+      expect(gradeTurn6(`${compliantSrc}\n<app-select @change=\${(e) => { if (e.detail.value.length > 0) this.x = e.detail.value; }} aria-label=\${'Compare against'} .options=\${[]}></app-select>`).hasCardBorderCompareDualAxis).toBe(false)
+      expect(gradeTurn6(compliantSrc.replace('.data=${this.trendRows}', '.query=${{ fields: [d1, m1.measure, METRICS[this.compareMetric].measure], limit }}')).hasCardBorderCompareDualAxis).toBe(false)
+      expect(gradeTurn6(compliantSrc.replace('.data=${this.trendRows}', '.query=${{ fields: [d1, m1.measure, ...(m2 ? [m2.measure] : [])], limit }}')).hasCardBorderCompareDualAxis).toBe(false)
+      expect(gradeTurn6(compliantSrc.replace(/linkedTo/g, 'unlinkedAxis')).hasCardBorderCompareDualAxis).toBe(false)
+      expect(gradeTurn6(compliantSrc.replace(/opposite:\s*true/g, 'opposite: false')).hasCardBorderCompareDualAxis).toBe(false)
+      expect(gradeTurn6(compliantSrc.replace(/Promise\.all/g, 'Array.of')).hasCardBorderCompareDualAxis).toBe(false)
+      expect(gradeTurn6(compliantSrc.replace('.data=${this.trendRows}', '.data=${this.trendRows} .query=${{ fields: [d1] }}')).hasCardBorderCompareDualAxis).toBe(false)
+      expect(gradeTurn6(`${compliantSrc}\nif (m1.dateBase != m2.dateBase) {}`).hasCardBorderCompareDualAxis).toBe(false)
+      expect(gradeTurn6(`${compliantSrc}\nupdated(changed) { if (changed.has('chartType')) { this.chartMenuOpen = false; } if (changed.has('period')) { this.loadTrendData(); } }`).hasCardBorderCompareDualAxis).toBe(false)
+    } finally {
+      rmSync(workDir, { recursive: true, force: true })
+    }
   })
 })

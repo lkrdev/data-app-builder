@@ -377,13 +377,21 @@ async function main() {
           /<span[^>]*class\s*=\s*["'][^"']*kpi-change[\s\S]{0,240}vs\.?\s*prev/i.test(code) &&
           /lower-better/i.test(code) &&
           /<svg\b/i.test(code)
-        // 3 & 4. Secondary KPI card-border comparison (--app-chart-2, shiftKey, contextmenu, no "Compare against" <app-select>) + dual yAxis (opposite: true), no "Longitudinal Trend", yAxis.title.text, and top-right 3-dot (⋮) Chart Type menu
+        // 3 & 4. Secondary KPI card-border comparison (--app-chart-2, shiftKey, contextmenu, no "Compare against" <app-select>), layered dual-date Promise.all + runQuery, and shared-when-close dual yAxis (linkedTo, opposite: true), no "Longitudinal Trend", yAxis.title.text, and top-right 3-dot (⋮) Chart Type menu
         const hasCardBorderCompareDualAxis =
-          !/<app-select[^>]*\blabel\s*=\s*["']Compare\s+against["']/i.test(code) &&
+          !/<app-select(?![a-zA-Z0-9_-])(?:(?!<\/app-select\b)[\s\S])*?\bcompare\s+against\b/i.test(cleanCode) &&
           /--app-chart-2/.test(code) &&
           /\bshiftKey\b/.test(code) &&
           /@contextmenu|contextmenu/i.test(code) &&
-          /opposite\s*:\s*true/.test(code)
+          /<app-chart(?![a-zA-Z0-9_-])(?:(?!<\/app-chart\b|<app-(?:chart|grid|kpi|select)\b)[\s\S])*?\.data\s*=(?!=)/i.test(cleanCode) &&
+          !/<app-chart(?![a-zA-Z0-9_-])(?:(?!<\/app-chart\b|<app-(?:chart|grid|kpi|select)\b)[\s\S])*?(?:\.data\s*=(?!=)(?:(?!<\/app-chart\b|<app-(?:chart|grid|kpi|select)\b)[\s\S])*?\.query\s*=(?!=)|\.query\s*=(?!=)(?:(?!<\/app-chart\b|<app-(?:chart|grid|kpi|select)\b)[\s\S])*?\.data\s*=(?!=))/i.test(cleanCode) &&
+          !/<app-chart(?![a-zA-Z0-9_-])(?:(?!<\/app-chart\b|<app-(?:chart|grid|kpi|select)\b)[\s\S])*?\.query\s*=(?!=)(?:(?!<\/app-chart\b|<app-(?:chart|grid|kpi|select)\b)[\s\S])*?\bfields\s*:\s*\[(?:[^[\]]|\[[^\]]*\])*?(?:\bcompareMetric\b|\.\.\.\s*\(|\[[^\]]*\bcompareMetric\b)/i.test(cleanCode) &&
+          !/\bdateBase\s*\)*\s*[!=]==?[^;:\n{}&,|]*\bdateBase\b/.test(cleanCode) &&
+          !/\bupdated\s*\([^)]*\)\s*\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*(?:\{[^{}]*){0,2}\bloadTrendData\b/.test(cleanCode) &&
+          /\bPromise\s*\.\s*all\b/.test(cleanCode) &&
+          /\brunQuery\b/.test(cleanCode) &&
+          /\blinkedTo\b/.test(cleanCode) &&
+          /opposite\s*:\s*true/.test(cleanCode)
         const hasTrendMenuAndYAxis = !/longitudinal\s+trend/i.test(code) && !/<app-select[^>]*\blabel\s*=\s*["']Chart\s*Type["']/i.test(code) && /yAxis[\s\S]{0,500}title\s*:\s*\{\s*text\s*:/.test(code) && /⋮|\\u22ee|&#8942;|&vellip;|chartMenuOpen|more-vertical/i.test(code) && ['areaspline', 'line', 'column', 'bar'].every((t) => new RegExp(`\\b${t}\\b`, 'i').test(code))
         // 5 & 6. Balanced @container KPI grid (4 -> 2x2 -> 1, no auto-fit/auto-fill on KPI strip), decoupled Period & Window + custom Window number popover + dynamic 2*periodCount row limit, Multi-Select Dimensions, and titleless PoP Variance <app-grid>
         const hasBalancedKpiGrid =

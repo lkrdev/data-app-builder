@@ -163,8 +163,8 @@ for `.value` only when the value genuinely isn't a single measure.
 - Going further: `.data=${rows}` bypasses the query layer entirely (fetch with
   `await this.runQuery(...)`, transform, then bind) while keeping the
   component's reflow, abort, and error handling. `.options` deep-merges into the
-  generated Highcharts config — but arrays are *replaced*, so never pass
-  `series`.
+  generated Highcharts config (`options.series` merges index-wise onto generated
+  series while preserving fetched/`.data` points unless `series[i].data` is passed).
 - Absolute positioning inside a sized root is supported too, when you are
   matching an exact layout. Set the root's own `position: relative` and size;
   don't rely on `.da-container`, whose flex column will fight you.
