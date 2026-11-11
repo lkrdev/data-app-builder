@@ -5,7 +5,11 @@ import React, { createContext, useContext, ReactNode } from 'react';
 import { ExtensionContext, ExtensionContextData } from '@looker/extension-sdk-react';
 import type { Looker40SDK } from '@looker/sdk';
 
-import { createDeduplicatedLookerSdkProxy } from '../lookerApi';
+import {
+  createDeduplicatedLookerSdkProxy,
+  hookChattyHostApiLogger,
+  type LkrCodeModeApiCallEntry,
+} from '../lookerApi';
 
 export interface LookerExtensionContextState {
   extensionSDK: ExtensionContextData['extensionSDK'];
@@ -56,6 +60,7 @@ declare global {
     __LOOKER_EMBED_STATE__?: unknown;
     __DAB_STUDIO__?: unknown;
     __LAST_COPIED_THINKING_TRACE__?: string;
+    lkr_codemode_api_calls?: LkrCodeModeApiCallEntry[];
   }
 }
 
@@ -65,6 +70,7 @@ export const MockLookerExtensionProvider: React.FC<{
   value: MockLookerExtensionContextValue;
   children: ReactNode;
 }> = ({ value, children }) => {
+  hookChattyHostApiLogger(value?.extensionSDK);
   const [tileHostData, setTileHostData] = React.useState(value.tileHostData);
   React.useEffect(() => {
     setTileHostData(value.tileHostData);
@@ -90,6 +96,7 @@ export const LookerExtensionProvider: React.FC<{ children: ReactNode }> = ({ chi
   );
   const mockOverride =
     typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined;
+  hookChattyHostApiLogger((mockOverride || extensionContext)?.extensionSDK);
   if (mockOverride) {
     return (
       <LookerExtensionContext.Provider value={mockOverride}>

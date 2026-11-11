@@ -19,7 +19,15 @@ import React from 'react'
 import ReactDOM from 'react-dom'
 
 import { App } from './components/App'
+import { installChattyApiLogger } from './lookerApi'
 import './styles/index.css'
+
+if (typeof window !== 'undefined') {
+  window.lkr_codemode_api_calls = Array.isArray(window.lkr_codemode_api_calls)
+    ? window.lkr_codemode_api_calls
+    : []
+  installChattyApiLogger()
+}
 
 window.addEventListener('DOMContentLoaded', (_) => {
   const root = document.createElement('div')
