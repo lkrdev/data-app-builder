@@ -8449,16 +8449,18 @@ customElements.define('good-compare-app', GoodCompareApp);`
         hasTitlelessPopVarianceGrid: true,
       })
       expect(gradeTurn6(`${dryMapSrc}\n// lower-better`).hasCardBorderCompareDualAxis).toBe(true)
-      expect(gradeTurn6(`${compliantSrc}\n<app-select label="Compare against"></app-select>`).hasCardBorderCompareDualAxis).toBe(false)
-      expect(gradeTurn6(`${compliantSrc}\n<app-select @change=\${(e) => { if (e.detail.value.length > 0) this.x = e.detail.value; }} aria-label=\${'Compare against'} .options=\${[]}></app-select>`).hasCardBorderCompareDualAxis).toBe(false)
-      expect(gradeTurn6(compliantSrc.replace('.data=${this.trendRows}', '.query=${{ fields: [d1, m1.measure, METRICS[this.compareMetric].measure], limit }}')).hasCardBorderCompareDualAxis).toBe(false)
-      expect(gradeTurn6(compliantSrc.replace('.data=${this.trendRows}', '.query=${{ fields: [d1, m1.measure, ...(m2 ? [m2.measure] : [])], limit }}')).hasCardBorderCompareDualAxis).toBe(false)
-      expect(gradeTurn6(compliantSrc.replace(/linkedTo/g, 'unlinkedAxis')).hasCardBorderCompareDualAxis).toBe(false)
-      expect(gradeTurn6(compliantSrc.replace(/opposite:\s*true/g, 'opposite: false')).hasCardBorderCompareDualAxis).toBe(false)
-      expect(gradeTurn6(compliantSrc.replace(/Promise\.all/g, 'Array.of')).hasCardBorderCompareDualAxis).toBe(false)
-      expect(gradeTurn6(compliantSrc.replace('.data=${this.trendRows}', '.data=${this.trendRows} .query=${{ fields: [d1] }}')).hasCardBorderCompareDualAxis).toBe(false)
-      expect(gradeTurn6(`${compliantSrc}\nif (m1.dateBase != m2.dateBase) {}`).hasCardBorderCompareDualAxis).toBe(false)
-      expect(gradeTurn6(`${compliantSrc}\nupdated(changed) { if (changed.has('chartType')) { this.chartMenuOpen = false; } if (changed.has('period')) { this.loadTrendData(); } }`).hasCardBorderCompareDualAxis).toBe(false)
+      for (const badTurn6 of [
+        `${compliantSrc}\n<app-select label="Compare against"></app-select>`,
+        `${compliantSrc}\n<app-select @change=\${(e) => { if (e.detail.value.length > 0) this.x = e.detail.value; }} aria-label=\${'Compare against'} .options=\${[]}></app-select>`,
+        compliantSrc.replace('.data=${this.trendRows}', '.query=${{ fields: [d1, m1.measure, METRICS[this.compareMetric].measure], limit }}'),
+        compliantSrc.replace('.data=${this.trendRows}', '.query=${{ fields: [d1, m1.measure, ...(m2 ? [m2.measure] : [])], limit }}'),
+        compliantSrc.replace(/linkedTo/g, 'unlinkedAxis'),
+        compliantSrc.replace(/opposite:\s*true/g, 'opposite: false'),
+        compliantSrc.replace(/Promise\.all/g, 'Array.of'),
+        compliantSrc.replace('.data=${this.trendRows}', '.data=${this.trendRows} .query=${{ fields: [d1] }}'),
+        `${compliantSrc}\nif (m1.dateBase != m2.dateBase) {}`,
+        `${compliantSrc}\nupdated(changed) { if (changed.has('chartType')) { this.chartMenuOpen = false; } if (changed.has('period')) { this.loadTrendData(); } }`,
+      ]) expect(gradeTurn6(badTurn6).hasCardBorderCompareDualAxis).toBe(false)
     } finally {
       rmSync(workDir, { recursive: true, force: true })
     }

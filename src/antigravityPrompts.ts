@@ -717,9 +717,7 @@ def main():
         dq = lambda t, p: bool(re.search(p + ws_cls + """=""", t, re.I))
         def _bad_q(t):
             qm = re.search("""[.]query""" + ws_cls + """=""" + ws_cls + """['"]?([^'""" + chr(34) + ws_ch[1:-1] + """>]+)""", t, re.I)
-            if not qm: return False
-            qu = _um(qm.group(1))
-            return any(bool(re.search("""(?<![a-zA-Z0-9_$])compareMetric(?![a-zA-Z0-9_$])|[.][.][.]""" + ws_cls + """[(]""", (_extract_balanced_brackets(qu, fm.end() - 1) or ("", 0))[0])) for fm in re.finditer("""fields""" + ws_cls + """:""" + ws_cls + re.escape("["), qu))
+            return bool(qm) and any(bool(re.search("""(?<![a-zA-Z0-9_$])compareMetric(?![a-zA-Z0-9_$])|[.][.][.]""" + ws_cls + """[(]""", (_extract_balanced_brackets(_um(qm.group(1)), fm.end() - 1) or ("", 0))[0])) for fm in re.finditer("""fields""" + ws_cls + """:""" + ws_cls + re.escape("["), _um(qm.group(1))))
         ok_ct = any(dq(t, "[.]data") for t in cts) and not any(dq(t, "[.]data") and dq(t, "[.]query") for t in cts) and not any(_bad_q(t) for t in cts)
         lm = re.search("""(?<![a-zA-Z0-9_$])loadTrendData""" + ws_cls + """[(][^)]*[)]""" + ws_cls + """[{]""", cns)
         sc = ((_extract_balanced_braces(cns, lm.end() - 1) or (cns, 0))[0]) if lm else cns

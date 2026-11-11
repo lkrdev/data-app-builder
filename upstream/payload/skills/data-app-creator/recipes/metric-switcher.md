@@ -145,13 +145,9 @@ renderTrendSection() {
   const limit = String(Math.min(5000, Math.max(500, 2 * this.periodCount + 10)));
 
   const rows = this.trendRows || [];
-  const vals1 = rows.map((r) => Number(r[m1.measure] ?? 0));
-  const vals2 = m2 ? rows.map((r) => Number(r[m2.measure] ?? 0)) : [];
-  const max1 = Math.max(0, ...vals1);
-  const max2 = Math.max(0, ...vals2);
-  const shareScale = Boolean(
-    m2 && m1.format === m2.format && max1 > 0 && max2 > 0 && (Math.max(max1, max2) / Math.min(max1, max2) <= 3)
-  );
+  const max1 = Math.max(0, ...rows.map((r) => Number(r[m1.measure] ?? 0)));
+  const max2 = m2 ? Math.max(0, ...rows.map((r) => Number(r[m2.measure] ?? 0))) : 0;
+  const shareScale = Boolean(m2 && m1.format === m2.format && max1 > 0 && max2 > 0 && Math.max(max1, max2) / Math.min(max1, max2) <= 3);
 
   return html`
     <div class="da-section-card" style="padding: 16px;">
@@ -188,13 +184,7 @@ renderTrendSection() {
                         shared: true,
                         useHTML: true,
                         formatter() {
-                          return (this.points || [this])
-                            .map(
-                              (p, i) =>
-                                (i === 0 ? `<b>${escapeHtml(String(this.x ?? ''))}</b><br/>` : '') +
-                                `${escapeHtml(String(p.series.name ?? ''))}: <b>${escapeHtml(String(formatValue(p.y, p.series.index === 1 ? m2.format : m1.format)))}</b>`
-                            )
-                            .join('<br/>');
+                          return (this.points || [this]).map((p, i) => (i === 0 ? `<b>${escapeHtml(String(this.x ?? ''))}</b><br/>` : '') + `${escapeHtml(String(p.series.name ?? ''))}: <b>${escapeHtml(String(formatValue(p.y, p.series.index === 1 ? m2.format : m1.format)))}</b>`).join('<br/>');
                         },
                       },
                     }
