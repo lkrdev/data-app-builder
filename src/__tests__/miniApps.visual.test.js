@@ -4687,28 +4687,31 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           text: (envBtn?.textContent || '').trim()
         };
 
-        // 6. Verify right-pane Thinking logo state when busy without active embed, and neutral copy when idle
+        // 6. Verify right-pane Overview sidebar Active Step when busy without active embed, and neutral Ready copy when idle
+        window.lkr_codemode_api_calls = [];
         s.setPublishedApp(null);
         s.setContentItems([]);
+        s.setCurrentAppCode('');
+        s.setLiveActivitySteps([]);
         s.setBusyStatus('Synthesizing Looker query...');
         await new Promise((r) => setTimeout(r, 60));
-        const thinkingEl = document.querySelector('[data-testid="right-pane-thinking-state"]');
-        const rightToolbarThinkingText = (document.querySelector('.dab-right-pane .dab-ds-toolbar-title-block')?.textContent || '').trim();
+        const busyEl = document.querySelector('[data-testid="overview-busy-status"]');
+        const rightOverviewTitle = (document.querySelector('[data-testid="overview-header"] .dab-ov-title')?.textContent || '').trim();
         const thinkingCheck = {
-          hasThinkingState: Boolean(thinkingEl),
-          thinkingText: (thinkingEl?.textContent || '').trim(),
-          toolbarText: rightToolbarThinkingText
+          hasOverviewBusyState: Boolean(busyEl),
+          thinkingText: (busyEl?.textContent || '').trim(),
+          headerText: rightOverviewTitle
         };
 
         s.setBusyStatus(null);
         await new Promise((r) => setTimeout(r, 60));
-        const idlePlaceholderText = (document.querySelector('.dab-right-pane .dab-placeholder')?.textContent || '').trim();
-        const rightToolbarIdleText = (document.querySelector('.dab-right-pane .dab-ds-toolbar-title-block')?.textContent || '').trim();
+        const idleOverviewText = (document.querySelector('[data-testid="overview-empty-state"]')?.textContent || '').trim();
+        const rightHeaderIdleText = (document.querySelector('[data-testid="overview-header"] .dab-ov-title')?.textContent || '').trim();
         const idleCheck = {
-          hasThinkingState: Boolean(document.querySelector('[data-testid="right-pane-thinking-state"]')),
-          toolbarText: rightToolbarIdleText,
-          hasReadyCopy: idlePlaceholderText.includes('Ready when you are'),
-          hasHardcodedDataAppCopy: /Data App/i.test(idlePlaceholderText) || /Data App/i.test(rightToolbarIdleText)
+          hasOverviewBusyState: Boolean(document.querySelector('[data-testid="overview-busy-status"]')),
+          headerText: rightHeaderIdleText,
+          hasReadyCopy: idleOverviewText.includes('Ready when you are'),
+          hasHardcodedDataAppCopy: /Data App/i.test(idleOverviewText) || /Data App/i.test(rightHeaderIdleText)
         };
 
         return {
@@ -4780,13 +4783,13 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
         text: '✓ Environment Reset'
       },
       thinkingCheck: {
-        hasThinkingState: true,
-        thinkingText: 'Thinking...Synthesizing Looker query...',
-        toolbarText: 'Thinking...'
+        hasOverviewBusyState: true,
+        thinkingText: 'Active StepSynthesizing Looker query...',
+        headerText: 'Overview'
       },
       idleCheck: {
-        hasThinkingState: false,
-        toolbarText: 'Viewer will appear here when Looker content is ready',
+        hasOverviewBusyState: false,
+        headerText: 'Overview',
         hasReadyCopy: true,
         hasHardcodedDataAppCopy: false
       }
@@ -5767,7 +5770,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
           return origProxy(url, init);
         };
 
-        // 1. Fresh conversation -> Turn 1 chat-only intake keeps .dab-right-pane display:none and renders LaTeX arrow as →
+        // 1. Fresh conversation -> Turn 1 chat-only intake renders Overview right rail (display:flex) and normalizes LaTeX arrow as →
         document.querySelector('[data-testid="new-conversation-btn"]').click();
         await new Promise((r) => setTimeout(r, 80));
         await window.__DAB_STUDIO__.handleSendPrompt({ text: 'Hello, help me plan a new project' });
@@ -5895,7 +5898,7 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       hasExtensionDbJargon: false,
       closeDocBtnText: '',
       closeDocBtnHasSvg: true,
-      rightDisplayAfterChatIntake: 'none',
+      rightDisplayAfterChatIntake: 'flex',
       leftWidthFullOnChatIntake: true,
       normalizedArrowInChat: true,
       rightDisplayAfterLookml: 'flex',
@@ -6495,6 +6498,192 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       lightDarkDistinct: true,
       openedDefault: { url: '/folders/5', target: '_blank' },
       openedEncoded: { url: '/folders/folder%2Fspecial%20502', target: '_blank' },
+    })
+  }, 20000)
+
+  test('Overview sidebar renders when no content is selected, supports Customize Sections and Overview tab switching, and opens as a mobile bottom sheet', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    await chrome.send('Emulation.setDeviceMetricsOverride', {
+      width: 1440,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    })
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=data_app` })
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="new-conversation-btn"]'))`,
+        returnByValue: true,
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 60))
+    }
+
+    const desktopRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const s = window.__DAB_STUDIO__;
+        window.lkr_codemode_api_calls = Array.from({ length: 100 }, (_, i) => ({
+          method: i % 5 === 0 ? 'POST' : 'GET',
+          route: i === 2 || i === 7 ? '/queries/run/json' : \`/lookml_models/thelook/explores/order_items_\${i % 8}\`,
+          duration_ms: 25 + (i % 40),
+          response: { ok: i !== 2 && i !== 7, status: i === 2 || i === 7 ? 422 : 200, body: {} }
+        }));
+        s.setRightPaneCollapsed(false);
+        s.setContentItems([
+          { key: 'dashboard:42', id: '42', contentType: 'dashboard', title: 'Executive KPIs', embedPath: '/embed/dashboards/42', hidden: false }
+        ]);
+        s.setMessages([
+          { role: 'user', text: '/looker-dashboard Build Executive KPIs' },
+          { role: 'assistant', text: 'Created [Executive KPIs](/dashboards/42) and saved \`/workspace/content_inventory.md\`.' }
+        ]);
+        await new Promise((r) => setTimeout(r, 80));
+
+        // Click Overview pill in content tabs
+        document.querySelector('[data-testid="studio-overview-tab"]')?.click();
+        await new Promise((r) => setTimeout(r, 80));
+
+        const rightPane = document.querySelector('.dab-right-pane');
+        const ovSidebar = document.querySelector('[data-testid="studio-overview-sidebar"]');
+        const ovCard = document.querySelector('.dab-ov-card');
+        const rightWidth = Math.round(rightPane.getBoundingClientRect().width);
+        const overflowX = ovCard.scrollWidth > ovCard.clientWidth + 1;
+        const embedStillMounted = Boolean(document.querySelector('[data-testid="looker-embed-container"]'));
+        const noDuplicateTopNavItems =
+          !document.querySelector('[data-testid="overview-nav-api-calls"]') &&
+          !document.querySelector('[data-testid="overview-nav-content"]') &&
+          !document.querySelector('[data-testid="overview-nav-files"]');
+        const apiSec = document.querySelector('[data-testid="overview-section-api-calls"]');
+        const collapsedErrBadge = (apiSec?.querySelector('.dab-badge')?.textContent || '').trim();
+        const apiCollapsedByDefault =
+          Boolean(apiSec) &&
+          apiSec.getAttribute('data-collapsed') === 'true' &&
+          collapsedErrBadge === '2 err' &&
+          !document.querySelector('[data-testid="overview-api-call-0"]');
+
+        // Expand API Calls (100 calls) -> shows summary + 5 preview rows + See all (100) -> bounded 216px scroll container
+        document.querySelector('[data-testid="overview-section-api-calls-toggle"]')?.click();
+        await new Promise((r) => setTimeout(r, 50));
+        const apiSummaryText = (document.querySelector('[data-testid="overview-api-summary"]')?.textContent || '').trim();
+        const previewApiRows = document.querySelectorAll('[data-testid^="overview-api-call-"]').length;
+        document.querySelector('[data-testid="overview-api-calls-toggle-all"]')?.click();
+        await new Promise((r) => setTimeout(r, 50));
+        const scrollWrap = document.querySelector('[data-testid="overview-api-scroll"]');
+        const expanded100Bounded =
+          Boolean(scrollWrap) &&
+          document.querySelectorAll('[data-testid^="overview-api-call-"]').length === 100 &&
+          window.getComputedStyle(scrollWrap).maxHeight === '216px' &&
+          scrollWrap.scrollHeight > scrollWrap.clientHeight;
+
+        // Toggle Customize Sections -> uncheck Links -> verify hidden -> recheck -> Escape closes menu
+        document.querySelector('[data-testid="overview-customize-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const menuOpen = Boolean(document.querySelector('[data-testid="overview-customize-menu"]'));
+        document.querySelector('[data-testid="overview-customize-item-links"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const hasLinksAfterHide = Boolean(document.querySelector('[data-testid="overview-section-links"]'));
+        document.querySelector('[data-testid="overview-customize-item-links"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 30));
+        const menuClosedOnEscape = !document.querySelector('[data-testid="overview-customize-menu"]');
+
+        // Click Skills Used -> opens viewer-document-pane -> close document -> returns to Overview with API Calls still expanded
+        document.querySelector('[data-testid="overview-skill-item-looker-dashboard"]')?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const skillDocOpened = Boolean(document.querySelector('[data-testid="viewer-document-pane"]'));
+        document.querySelector('[data-testid="viewer-document-close-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 50));
+        const apiStillExpandedAfterDocClose =
+          document.querySelector('[data-testid="overview-section-api-calls"]')?.getAttribute('data-collapsed') === 'false';
+
+        // Click Content row -> switches to dashboard:42 viewer, then click tab ribbon Overview pill back
+        document.querySelector('[data-testid="overview-content-item-dashboard:42"]')?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const switchedBackToViewer = rightPane.getAttribute('data-overview-mode') === 'false';
+
+        return {
+          hasOverviewSidebar: Boolean(ovSidebar),
+          rightWidth,
+          overflowX,
+          embedStillMounted,
+          noDuplicateTopNavItems,
+          apiCollapsedByDefault,
+          hasApiSummary: apiSummaryText.includes('80 GET') && apiSummaryText.includes('20 POST') && apiSummaryText.includes('2 failed'),
+          previewApiRows,
+          expanded100Bounded,
+          menuOpen,
+          hasLinksAfterHide,
+          menuClosedOnEscape,
+          skillDocOpened,
+          apiStillExpandedAfterDocClose,
+          switchedBackToViewer,
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+
+    expect(desktopRes.result.value).toEqual({
+      hasOverviewSidebar: true,
+      rightWidth: 296,
+      overflowX: false,
+      embedStillMounted: true,
+      noDuplicateTopNavItems: true,
+      apiCollapsedByDefault: true,
+      hasApiSummary: true,
+      previewApiRows: 5,
+      expanded100Bounded: true,
+      menuOpen: true,
+      hasLinksAfterHide: false,
+      menuClosedOnEscape: true,
+      skillDocOpened: true,
+      apiStillExpandedAfterDocClose: true,
+      switchedBackToViewer: true,
+    })
+
+    // Mobile 390x844: hidden when chatting with no content, opens via + menu Overview button as bottom sheet
+    await chrome.send('Emulation.setDeviceMetricsOverride', {
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 2,
+      mobile: true,
+    })
+    const mobileRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const s = window.__DAB_STUDIO__;
+        s.setContentItems([]);
+        s.setPublishedApp(null);
+        s.setNativeContent(null);
+        s.setActiveContentTabKey('');
+        await new Promise((r) => setTimeout(r, 80));
+
+        const rightPane = document.querySelector('.dab-right-pane');
+        const hiddenByDefaultOnMobile = window.getComputedStyle(rightPane).display === 'none';
+
+        document.querySelector('[data-testid="composer-add-context-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 50));
+        document.querySelector('[data-testid="mobile-menu-overview-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 80));
+
+        const visibleAfterMenuOpen = window.getComputedStyle(rightPane).display === 'flex';
+        const handleTitle = (document.querySelector('.dab-mobile-viewer-card-title')?.textContent || '').trim();
+        document.querySelector('[data-testid="mobile-viewer-card-close"]')?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const collapsedAfterClose = window.getComputedStyle(rightPane).display === 'none';
+
+        return { hiddenByDefaultOnMobile, visibleAfterMenuOpen, handleTitle, collapsedAfterClose };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+
+    expect(mobileRes.result.value).toEqual({
+      hiddenByDefaultOnMobile: true,
+      visibleAfterMenuOpen: true,
+      handleTitle: 'Overview',
+      collapsedAfterClose: true,
     })
   }, 20000)
 })

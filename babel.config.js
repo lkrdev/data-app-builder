@@ -1,13 +1,13 @@
 module.exports = function (api) {
-  const isDevelopment = api.env('development'); // Checks the current environment
-  api.cache.using(() => isDevelopment); // Cache based on the environment
+  const envName = api.env();
+  api.cache.using(() => envName);
 
   return {
     presets: [
-      '@babel/preset-env',
+      ['@babel/preset-env', { targets: envName === 'test' ? { node: 'current' } : { chrome: '105', firefox: '115', safari: '15.4' } }],
       '@babel/preset-react',
       '@babel/preset-typescript'
     ],
-    plugins: [].filter(Boolean) // Removes falsy values (like null when not in development)
+    plugins: [].filter(Boolean)
   };
 };

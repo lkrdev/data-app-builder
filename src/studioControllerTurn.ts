@@ -135,8 +135,8 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       const cleanId = String(interactionId || '').trim()
       if (!cleanId) return Promise.resolve([])
       const mem = activityStepsByInteractionIdRef.current[cleanId]
-      if (mem?.length) {
-        setMessages((prev) => prev.map((m) => (m.role === 'assistant' && m.interactionId === cleanId && !m.activitySteps?.length ? { ...m, activitySteps: mem } : m)))
+      if (Array.isArray(mem)) {
+        setMessages((prev) => prev.map((m) => (m.role === 'assistant' && m.interactionId === cleanId && !Array.isArray(m.activitySteps) ? { ...m, activitySteps: mem } : m)))
         return Promise.resolve(mem)
       }
       const inFlight = inFlightHydrationsRef.current[cleanId]
