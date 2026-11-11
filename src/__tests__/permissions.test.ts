@@ -7985,25 +7985,11 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
       ['step.stop', { index: 1, event_type: 'step.stop' }],
       ['interaction.completed', { interaction: { id: 'int_177_r1', status: 'requires_action', environment_id: 'env_177' }, event_type: 'interaction.completed' }],
     ]
-    for (const [evtName, payload] of wireEvents) {
-      wireState = mergeInteractionSseEvent(wireState, evtName, payload)
-    }
+    for (const [evtName, payload] of wireEvents) wireState = mergeInteractionSseEvent(wireState, evtName, payload)
     const mergedSteps = (wireState.steps || []) as Array<Record<string, unknown>>
     expect(mergedSteps).toHaveLength(2)
-    expect(mergedSteps[0]).toMatchObject({
-      id: 'th_0',
-      index: 0,
-      type: 'thought',
-      thought: 'Inspecting cross-project BigQuery dataset...',
-      content: structuredContent,
-    })
-    expect(mergedSteps[1]).toMatchObject({
-      id: 'call_177',
-      index: 1,
-      type: 'function_call',
-      name: 'run_looker_codemode',
-      arguments: '{"thought":"Listing tables","code":"return {\\"ok\\": True, \\"rows\\": 3}"}',
-    })
+    expect(mergedSteps[0]).toMatchObject({ id: 'th_0', index: 0, type: 'thought', thought: 'Inspecting cross-project BigQuery dataset...', content: structuredContent })
+    expect(mergedSteps[1]).toMatchObject({ id: 'call_177', index: 1, type: 'function_call', name: 'run_looker_codemode', arguments: '{"thought":"Listing tables","code":"return {\\"ok\\": True, \\"rows\\": 3}"}' })
     expect(wireState.status).toBe('requires_action')
 
     // Sparse index text deltas + statusless interaction.completed event
@@ -8031,58 +8017,37 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
         const urlStr = String(input)
         if (init?.method === 'POST') {
           postNum += 1
-          const id = postNum === 1 ? 'int_oauth_177_1' : 'int_oauth_177_2'
-          return {
-            ok: true,
-            status: 200,
-            text: async () => JSON.stringify({ id, environment_id: 'env_oauth_177', status: 'in_progress' }),
-          } as unknown as Response
+          return { ok: true, status: 200, text: async () => JSON.stringify({ id: postNum === 1 ? 'int_oauth_177_1' : 'int_oauth_177_2', environment_id: 'env_oauth_177', status: 'in_progress' }) } as unknown as Response
         }
         if (urlStr.includes('stream=true&alt=sse')) {
           sseNum += 1
           const encoder = new TextEncoder()
-          const sseFrames =
-            sseNum === 1
-              ? [
-                  'id: e1\nevent: step.start\ndata: {"index":1,"step":{"id":"fc_oauth_1","type":"function_call","name":"run_looker_codemode","arguments":{}},"event_type":"step.start"}\n\n',
-                  'id: e2\nevent: step.delta\ndata: {"index":1,"delta":{"arguments":"{\\"thought\\":\\"Checking tables\\",\\"code\\":\\"return connection_tables(\\\\\\"bq_conn\\\\\\", schema_name=\\\\\\"ext_catalog.sales_dw\\\\\\")\\"}","type":"arguments_delta"},"event_type":"step.delta"}\n\n',
-                  'id: e3\nevent: step.stop\ndata: {"index":1,"event_type":"step.stop"}\n\n',
-                  'id: e4\nevent: interaction.completed\ndata: {"interaction":{"id":"int_oauth_177_1","status":"requires_action","environment_id":"env_oauth_177"},"event_type":"interaction.completed"}\n\n',
-                ]
-              : [
-                  'id: e5\nevent: step.delta\ndata: {"index":34,"delta":{"text":"<USE_CASE>lookml</USE_CASE>\\nVerified tables.","type":"text"},"event_type":"step.delta"}\n\n',
-                  'id: e6\nevent: step.stop\ndata: {"index":34,"event_type":"step.stop"}\n\n',
-                  'id: e7\nevent: interaction.completed\ndata: {"interaction":{"id":"int_oauth_177_2","status":"completed","environment_id":"env_oauth_177"},"event_type":"interaction.completed"}\n\n',
-                ]
+          const sseFrames = sseNum === 1
+            ? [
+                'id: e1\nevent: step.start\ndata: {"index":1,"step":{"id":"fc_oauth_1","type":"function_call","name":"run_looker_codemode","arguments":{}},"event_type":"step.start"}\n\n',
+                'id: e2\nevent: step.delta\ndata: {"index":1,"delta":{"arguments":"{\\"thought\\":\\"Checking tables\\",\\"code\\":\\"return connection_tables(\\\\\\"bq_conn\\\\\\", schema_name=\\\\\\"ext_catalog.sales_dw\\\\\\")\\"}","type":"arguments_delta"},"event_type":"step.delta"}\n\n',
+                'id: e3\nevent: step.stop\ndata: {"index":1,"event_type":"step.stop"}\n\n',
+                'id: e4\nevent: interaction.completed\ndata: {"interaction":{"id":"int_oauth_177_1","status":"requires_action","environment_id":"env_oauth_177"},"event_type":"interaction.completed"}\n\n',
+              ]
+            : [
+                'id: e5\nevent: step.delta\ndata: {"index":34,"delta":{"text":"<USE_CASE>lookml</USE_CASE>\\nVerified tables.","type":"text"},"event_type":"step.delta"}\n\n',
+                'id: e6\nevent: step.stop\ndata: {"index":34,"event_type":"step.stop"}\n\n',
+                'id: e7\nevent: interaction.completed\ndata: {"interaction":{"id":"int_oauth_177_2","status":"completed","environment_id":"env_oauth_177"},"event_type":"interaction.completed"}\n\n',
+              ]
           let fIdx = 0
           return {
-            ok: true,
-            status: 200,
-            headers: { get: (h: string) => (h.toLowerCase() === 'content-type' ? 'text/event-stream' : null) },
-            body: {
-              getReader: () => ({
-                read: async () => (fIdx >= sseFrames.length ? { done: true, value: undefined } : { done: false, value: encoder.encode(sseFrames[fIdx++]) }),
-                cancel: async () => {},
-                releaseLock: () => {},
-              }),
-            },
+            ok: true, status: 200, headers: { get: (h: string) => (h.toLowerCase() === 'content-type' ? 'text/event-stream' : null) },
+            body: { getReader: () => ({ read: async () => (fIdx >= sseFrames.length ? { done: true, value: undefined } : { done: false, value: encoder.encode(sseFrames[fIdx++]) }), cancel: async () => {}, releaseLock: () => {} }) },
           } as unknown as Response
         }
         throw new Error(`Unexpected fetch URL: ${urlStr}`)
       }) as typeof fetch
 
       const oauthTurn = await runAntigravityTurn({
-        sdk: asSdk({ ok: async <T>(p: T) => p }),
-        extensionSDK: {},
-        auth: { mode: 'oauth', oauthToken: 'oauth_tok_177' },
+        sdk: asSdk({ ok: async <T>(p: T) => p }), extensionSDK: {}, auth: { mode: 'oauth', oauthToken: 'oauth_tok_177' },
         session: { environmentId: 'env_oauth_177', lastInteractionId: 'int_prev_177', toolType: 'lookml' },
-        toolMode: 'lookml',
-        useCase: 'lookml',
-        lookmlProjectId: 'sales_proj',
-        selectedExplores: [],
-        schemaMarkdown: '# Schema',
-        userPrompt: 'Generate bronze views for ext_catalog.sales_dw.*',
-        onStatus: () => {},
+        toolMode: 'lookml', useCase: 'lookml', lookmlProjectId: 'sales_proj', selectedExplores: [],
+        schemaMarkdown: '# Schema', userPrompt: 'Generate bronze views for ext_catalog.sales_dw.*', onStatus: () => {},
       })
       expect(executedCodes).toEqual(['return connection_tables("bq_conn", schema_name="ext_catalog.sales_dw")'])
       expect(oauthTurn.assistantText).toBe('Verified tables.')
@@ -8202,42 +8167,16 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
             const body = typeof rawBody === 'string' ? JSON.parse(rawBody) : (rawBody as Record<string, unknown> | undefined)
             if (m === 'GET' && reqPath.includes('/explores/')) {
               return {
-                statusCode: 200,
-                ok: true,
-                body: {
-                  fields: {
-                    dimensions: [
-                      { name: 'orders.created_date' },
-                      { name: 'orders.status' },
-                      ...Array.from({ length: 22 }, (_, i) => ({ name: `orders.dim_${i}` })),
-                      { name: 'customers.country' },
-                    ],
-                    measures: [{ name: 'orders.count' }, { name: 'orders.revenue' }],
-                  },
-                },
+                statusCode: 200, ok: true,
+                body: { fields: { dimensions: [{ name: 'orders.created_date' }, { name: 'orders.status' }, ...Array.from({ length: 22 }, (_, i) => ({ name: `orders.dim_${i}` })), { name: 'customers.country' }], measures: [{ name: 'orders.count' }, { name: 'orders.revenue' }] } },
               }
             }
             if (m === 'POST' && reqPath.includes('/queries/run/json_detail')) {
               jsonDetailCalls.push(body as { model?: string; view?: string; fields?: string[]; filters?: Record<string, string>; limit?: string })
-              if (sqlCheckMode === 'throw') {
-                return { statusCode: 422, ok: false, body: { message: 'Warehouse connection timeout on orders' } }
-              }
-              if (sqlCheckMode === 'require_partition' && !body?.filters) {
-                return { statusCode: 200, ok: true, body: { errors: [{ message: 'Cannot query over table without partition filter' }] } }
-              }
+              if (sqlCheckMode === 'throw') return { statusCode: 422, ok: false, body: { message: 'Warehouse connection timeout on orders' } }
+              if (sqlCheckMode === 'require_partition' && !body?.filters) return { statusCode: 200, ok: true, body: { errors: [{ message: 'Cannot query over table without partition filter' }] } }
               if (sqlCheckMode === 'errors') {
-                return {
-                  statusCode: 200,
-                  ok: true,
-                  body: {
-                    errors: [
-                      {
-                        message: 'The Google BigQuery Standard SQL database encountered an error while running this query.',
-                        message_details: 'Not found: Dataset billing-proj:retail_dw was not found in location US',
-                      },
-                    ],
-                  },
-                }
+                return { statusCode: 200, ok: true, body: { errors: [{ message: 'The Google BigQuery Standard SQL database encountered an error while running this query.', message_details: 'Not found: Dataset billing-proj:retail_dw was not found in location US' }] } }
               }
               return { statusCode: 200, ok: true, body: { data: [{ 'orders.count': { value: 10 } }] } }
             }

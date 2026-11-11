@@ -22,16 +22,19 @@ Onboard a LookML project in 4 stages (Bronze -> Silver Metrics -> LookML Dashboa
    conn, project_id = "<connection_name>", "<project_name>"
    schema = "<schema_name>".replace("`", "").strip().removesuffix(".*").strip(".")
    db_ds = schema.split(".", 1) if "." in schema else None
+   def _sc(fn, **kw):
+       for q in ([{"schema_name": schema}] + ([{"database": db_ds[0], "schema_name": db_ds[1]}] if db_ds else [])):
+           try:
+               r = fn(conn, **dict(kw, **q))
+               if r: return r
+           except Exception: pass
+       return []
    if project_id not in [p.get("id") for p in (all_projects(fields="id") or []) if isinstance(p, dict)]:
        create_project({"name": project_id})
    update_project(project_id, {"git_service_name": "bare"})
    try: create_project_directory(project_id, "bronze")
    except Exception: pass
-   try: raw = connection_tables(conn, schema_name=schema) or []
-   except Exception: raw = []
-   if not raw and db_ds:
-       try: raw = connection_tables(conn, database=db_ds[0], schema_name=db_ds[1]) or []
-       except Exception: raw = []
+   raw = _sc(connection_tables)
    tlist = (raw[0].get("tables") or []) if raw and isinstance(raw[0], dict) else []
    names = [t.get("name") for t in tlist if isinstance(t, dict) and t.get("name") and not t.get("name", "").startswith(("LM_", "LR_", "YM_", "connection_reg"))]
    core_tables = [t for t in names if "event" not in t and "inventory" not in t][:5] or names[:5]
@@ -48,11 +51,7 @@ Onboard a LookML project in 4 stages (Bronze -> Silver Metrics -> LookML Dashboa
            except Exception: pass
        raw_views[t] = vtxt
        if not vtxt:
-           try: cmeta = connection_columns(conn, schema_name=schema, table_names=t) or []
-           except Exception: cmeta = []
-           if not cmeta and db_ds:
-               try: cmeta = connection_columns(conn, database=db_ds[0], schema_name=db_ds[1], table_names=t) or []
-               except Exception: cmeta = []
+           cmeta = _sc(connection_columns, table_names=t)
            cols = (cmeta[0].get("columns") or []) if cmeta and isinstance(cmeta[0], dict) else []
            fields[t] = [[c["name"], "time" if any(k in str(c.get("data_type", "")).upper() for k in ("DATE", "TIME")) else ("number" if any(k in str(c.get("data_type", "")).upper() for k in ("INT", "NUM", "FLOAT", "DEC")) else "string")] for c in cols if isinstance(c, dict) and c.get("name")]
    return {"schema": schema, "tables": core_tables, "raw_views": raw_views, "fields": fields}

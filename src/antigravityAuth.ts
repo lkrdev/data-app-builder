@@ -11,7 +11,6 @@ import {
   type AntigravityInteractionPayload,
   type AntigravityInteractionStep,
   type AntigravityModelOption,
-  type AntigravityUsageMetadata,
 } from './antigravityTypes'
 import { extractResolvedUseCase, type StudioUseCase } from './lookerApi'
 
@@ -682,12 +681,12 @@ export function mergeInteractionSseEvent(
         const fc = Object.assign({}, prev?.function_call, stepObj.function_call)
         const fa = prev ? mergeArgs(prev.function_call?.arguments, stepObj.function_call?.arguments) : fc.arguments
         if (fa !== undefined) fc.arguments = fa
-        if (!m.name && fc.name) m.name = fc.name
-        if (!fc.name && m.name) fc.name = m.name
-        if (stepObj.function_call?.arguments !== undefined && stepObj.arguments === undefined) m.arguments = fc.arguments
-        else if (stepObj.arguments !== undefined && stepObj.function_call?.arguments === undefined) fc.arguments = m.arguments
-        else if (typeof fc.arguments === 'string' && (m.arguments === undefined || isEmpty(m.arguments))) m.arguments = fc.arguments
-        else if (typeof m.arguments === 'string' && (fc.arguments === undefined || isEmpty(fc.arguments))) fc.arguments = m.arguments
+        m.name ||= fc.name
+        fc.name ||= m.name
+        const fcSent = stepObj.function_call?.arguments !== undefined && stepObj.arguments === undefined
+        const topSent = stepObj.arguments !== undefined && stepObj.function_call?.arguments === undefined
+        if (fcSent || (typeof fc.arguments === 'string' && (m.arguments === undefined || isEmpty(m.arguments)))) m.arguments = fc.arguments
+        else if (topSent || (typeof m.arguments === 'string' && (fc.arguments === undefined || isEmpty(fc.arguments)))) fc.arguments = m.arguments
         m.function_call = fc
       }
       if (cText !== undefined && ((stepObj.type === 'thought_summary' && typeof stepObj.thought !== 'string') || (stepObj.type === 'text' && typeof stepObj.text !== 'string'))) {
@@ -717,9 +716,9 @@ export function mergeInteractionSseEvent(
   if (nextOutputText !== undefined) out.output_text = nextOutputText
   if (Array.isArray(data.outputs)) out.outputs = data.outputs as AntigravityInteractionOutput[]
   if (nextSteps.length > 0) out.steps = nextSteps
-  if (data.error && typeof data.error === 'object') out.error = data.error as { message?: string }
-  if (data.usage && typeof data.usage === 'object') out.usage = data.usage as AntigravityUsageMetadata
-  if (data.usage_metadata && typeof data.usage_metadata === 'object') out.usage_metadata = data.usage_metadata as AntigravityUsageMetadata
+  ;(['error', 'usage', 'usage_metadata'] as const).forEach((k) => {
+    if (data[k] && typeof data[k] === 'object') (out as Record<string, unknown>)[k] = data[k]
+  })
   return out
 }
 
