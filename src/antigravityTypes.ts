@@ -119,7 +119,7 @@ export interface AntigravityNestedStepCall {
 }
 
 export interface AntigravityInteractionStep extends AntigravityNestedStepCall {
-  id?: string; call_id?: string; type?: string; status?: string
+  id?: string; call_id?: string; index?: number; type?: string; status?: string
   output?: unknown; stdout?: unknown; stderr?: unknown; result?: unknown
   text?: string; summary?: unknown; content?: unknown; parts?: unknown
   thought?: unknown

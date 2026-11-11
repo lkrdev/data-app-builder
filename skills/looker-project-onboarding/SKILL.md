@@ -1,66 +1,86 @@
 ---
 name: looker-project-onboarding
-description: End-to-end Looker Project Onboarding skill for creating a new LookML project, bare Git repo, model, Bronze/Silver views and explores, LookML dashboard, and Metric Selector Data App from a Looker connection.
+description: Onboard a LookML project, bare Git repo, Bronze/Silver views and explores, LookML dashboard, and Metric Selector Data App from a Looker connection.
 ---
 
 # Looker Project Onboarding (`skills/looker-project-onboarding/SKILL.md`)
 
-Onboard a LookML project from a database connection in 4 stages (Model & Bronze -> Profiling & Silver Metrics -> LookML Dashboard -> Metric Selector Data App) via `run_looker_codemode` (`raw_api_request: yes`) and `lkr --dev tools lookml push`. Never call `update_session` inside `run_looker_codemode`.
+Onboard a LookML project in 4 stages (Bronze -> Silver Metrics -> LookML Dashboard -> Data App) via `run_looker_codemode` (`raw_api_request: yes`) and `lkr --dev tools lookml push`. Never call `update_session` in `run_looker_codemode`.
 
 ## Step 1: Conversational Intake & Verify Connection (`run_looker_codemode`)
-1. **Turn 1 Intake**: Without **connection name**, **project name**, and **target tables/schemas**, emit `<USE_CASE>lookml</USE_CASE>`. If `Available Looker Connections` are pre-injected, make **0 tool calls**; else run **1** `run_looker_codemode` call (`all_connections(fields="name,dialect_name,database,schema")` with fallback to `all_lookml_models(fields="name,project_name,allowed_db_connection_names")` — bare Monty globals, never `sdk.*`). Ask for: **Connection name** (list connections + `[Open Looker Connections](/admin/connections)`), **Project name** (`snake_case`), and **Target tables/schemas** (or SQL from `[Open SQL Runner](/sql)`). No `code_execution`.
-2. **Turn 2 Schema Discovery (`connection_schemas`)**: Given `<connection_name>` + `<project_name>` and asked for schemas, emit `<USE_CASE>lookml</USE_CASE>`, run **1** `run_looker_codemode` call (`connection_schemas(connection_name)` with fallback to `all_connections(fields="name,dialect_name,database,schema,snippets")` and `connection_tables(connection_name, schema_name=..., table_limit=5)` — bare globals), list schemas, and ask which to use (no `code_execution` or `view_file`).
+1. **Turn 1 Intake**: Without **connection name**, **project name**, and **target tables/schemas**, emit `<USE_CASE>lookml</USE_CASE>`. Make **0 tool calls** if `Available Looker Connections` are pre-injected; else run **1** `run_looker_codemode` call (`all_connections(fields="name,dialect_name,database,schema")` or fallback `all_lookml_models(fields="name,project_name,allowed_db_connection_names")` — bare globals). Ask for **Connection name** (`[Open Looker Connections](/admin/connections)`), **Project name** (`snake_case`), and **Target tables/schemas** (or SQL from `[Open SQL Runner](/sql)`). No `code_execution`.
+2. **Turn 2 Schema Discovery (`connection_schemas`)**: Given `<connection_name>` + `<project_name>` and asked for schemas, emit `<USE_CASE>lookml</USE_CASE>`, run **1** `run_looker_codemode` call (`connection_schemas(connection_name)` with fallback `all_connections(...)` / `connection_tables(connection_name, schema_name=..., table_limit=5)` — bare globals), list schemas, and ask which to use (no `code_execution` or `view_file`).
 
 ## Step 2: `project_name` (`snake_case`) & Bounded `5 × 5` SDK Discovery (Never `INFORMATION_SCHEMA`)
-1. Normalize `project_name`: `project_name = re.sub(r'_+', '_', re.sub(r'[^a-z0-9_]', '_', raw_name.strip().lower())).strip('_')`.
-2. Use SDK globals (`connection_schemas`, `connection_tables`, `generate_lookml_with_new_files`, `profile_fields`, `run_inline_query`) — **never** query `INFORMATION_SCHEMA`.
-3. Bound discovery to `5 × 5` (max 5 schemas × 5 tables, excluding `LM_*`, `LR_*`, `YM_*`, `connection_reg*`, prioritizing core transaction fact & FK entity tables over event/inventory logs). Pass physical `schema_name` to `connection_tables`.
+1. Normalize `project_name = re.sub(r'_+', '_', re.sub(r'[^a-z0-9_]', '_', raw_name.strip().lower())).strip('_')`.
+2. Use SDK globals (`connection_schemas`, `connection_tables`, `generate_lookml_with_new_files`, `profile_fields`, `run_inline_query`) — **never** `INFORMATION_SCHEMA`.
+3. Bound to `5 × 5` (max 5 schemas × 5 tables, excluding `LM_*`, `LR_*`, `YM_*`, `connection_reg*`; prefer fact/FK tables over event/inventory logs). Normalize `schema = raw_target.replace("`", "").strip().removesuffix(".*").strip(".")` and preserve `<catalog>.<schema>` verbatim in `connection_tables(conn, schema_name=schema)` (`database, schema_name` fallback when `"." in schema`), `generate_lookml_with_new_files`, and ``sql_table_name: `${schema}.${t}` ;;`` (never strip `<catalog>.` via `connection_schemas`).
 
 ## Step 3: Stage 1 (Turn 3) — Generate Bronze Views, Validate, Push & Ask to Profile
 1. Emit `<USE_CASE>lookml</USE_CASE>`. In **1** `run_looker_codemode` call (no `import re`), discover tables and generate `bronze/*.view.lkml`:
    ```python
-   conn, project_id, schema = "<connection_name>", "<project_name>", "<schema_name>"
+   conn, project_id = "<connection_name>", "<project_name>"
+   schema = "<schema_name>".replace("`", "").strip().removesuffix(".*").strip(".")
+   db_ds = schema.split(".", 1) if "." in schema else None
+   def _sc(fn, **kw):
+       for q in ([{"schema_name": schema}] + ([{"database": db_ds[0], "schema_name": db_ds[1]}] if db_ds else [])):
+           try:
+               r = fn(conn, **dict(kw, **q))
+               if r: return r
+           except Exception: pass
+       return []
    if project_id not in [p.get("id") for p in (all_projects(fields="id") or []) if isinstance(p, dict)]:
        create_project({"name": project_id})
    update_project(project_id, {"git_service_name": "bare"})
    try: create_project_directory(project_id, "bronze")
    except Exception: pass
-   raw = connection_tables(conn, schema_name=schema) or []
+   raw = _sc(connection_tables)
    tlist = (raw[0].get("tables") or []) if raw and isinstance(raw[0], dict) else []
    names = [t.get("name") for t in tlist if isinstance(t, dict) and t.get("name") and not t.get("name", "").startswith(("LM_", "LR_", "YM_", "connection_reg"))]
    core_tables = [t for t in names if "event" not in t and "inventory" not in t][:5] or names[:5]
-   generate_lookml_with_new_files(project_id, {"tables": [{"schema": schema, "table_name": t, "base_view": True} for t in core_tables]}, connection=conn, model_name=project_id, folder_name="bronze", file_type_for_explores="none", generate_descriptions=True, add_autogenerated_header=True, allow_update_without_header=True)
-   fields = {}
+   try: generate_lookml_with_new_files(project_id, {"tables": [{"schema": schema, "table_name": t, "base_view": True} for t in core_tables]}, connection=conn, model_name=project_id, folder_name="bronze", file_type_for_explores="none", generate_descriptions=True, add_autogenerated_header=True, allow_update_without_header=True)
+   except Exception: pass
+   raw_views, fields = {}, {}
    for t in core_tables:
-       cols = []
-       for blk in (get_file_content(project_id, f"bronze/{t}.view.lkml") or "").split("\n  "):
-           if blk.startswith(("dimension:", "dimension_group:")):
-               kind, rest = blk.split(":", 1)
-               cols.append([kind.strip(), rest.split("{", 1)[0].strip(), rest.split("type:", 1)[1].split()[0].strip() if "type:" in rest else "string"])
-       fields[t] = cols
-   return {"schema": schema, "tables": core_tables, "fields": fields}
+       try: vtxt = get_file_content(project_id, f"bronze/{t}.view.lkml") or ""
+       except Exception: vtxt = ""
+       if vtxt and f"{schema}.{t}".lower() not in vtxt.lower():
+           qtbl = f"`{schema}.{t}`" if ("`" in vtxt or db_ds) else f"{schema}.{t}"
+           vtxt = "\n".join([f"  sql_table_name: {qtbl} ;;" if ln.strip().startswith("sql_table_name:") else ln for ln in vtxt.split("\n")]) if "sql_table_name:" in vtxt else vtxt.replace(f"view: {t} {{", f"view: {t} {{\n  sql_table_name: {qtbl} ;;", 1)
+           try: update_file(project_id, {"path": f"bronze/{t}.view.lkml", "content": vtxt})
+           except Exception: pass
+       raw_views[t] = vtxt
+       if not vtxt:
+           cmeta = _sc(connection_columns, table_names=t)
+           cols = (cmeta[0].get("columns") or []) if cmeta and isinstance(cmeta[0], dict) else []
+           fields[t] = [[c["name"], "time" if any(k in str(c.get("data_type", "")).upper() for k in ("DATE", "TIME")) else ("number" if any(k in str(c.get("data_type", "")).upper() for k in ("INT", "NUM", "FLOAT", "DEC")) else "string")] for c in cols if isinstance(c, dict) and c.get("name")]
+   return {"schema": schema, "tables": core_tables, "raw_views": raw_views, "fields": fields}
    ```
-2. In **1** `code_execution` call (`python3 - << 'PYEOF'`, never `python3 -c "..."`; no refinements/`silver/` yet), write `/workspace/lookml/`, validate, push (`create_lookml_model` / `update_lookml_model`), and bundle:
+2. In **1** `code_execution` call (`python3 - << 'PYEOF'`, no `silver/` yet), write `/workspace/lookml/`, validate, push (`create_lookml_model` / `update_lookml_model`), and bundle:
    ```bash
    python3 /workspace/bootstrap_lookml.py setup
    python3 - << 'PYEOF'
    from pathlib import Path
    import json
-   project_id, conn, schema, fact_table = "<project_name>", "<connection_name>", "<schema_name>", "<fact_table>"
-   fields = <FIELDS_DICT_FROM_RUN_LOOKER_CODEMODE>
+   project_id, conn, fact_table = "<project_name>", "<connection_name>", "<fact_table>"
+   schema = "<schema_name>".replace("`", "").strip().removesuffix(".*").strip(".")
+   raw_views, fields = <RAW_VIEWS_DICT_FROM_RUN_LOOKER_CODEMODE>, <FIELDS_DICT_FROM_RUN_LOOKER_CODEMODE>
    root = Path("/workspace/lookml")
    (root / "bronze/explores").mkdir(parents=True, exist_ok=True)
    (root / f"{project_id}.model.lkml").write_text(f'connection: "{conn}"\ninclude: "/bronze/*.view.lkml"\ninclude: "/bronze/explores/*.explore.lkml"\n')
    (root / "bronze/explores" / f"{fact_table}_base.explore.lkml").write_text(f'include: "/bronze/*.view.lkml"\nexplore: {fact_table}_base {{\n  view_name: {fact_table}\n}}\n')
-   for t, cols in fields.items():
-       lines = ["# AUTOGENERATED BY LKR CLI", f"view: {t} {{", f"  sql_table_name: `{schema}.{t}` ;;"]
-       for kind, cname, ctype in cols:
-           if kind == "dimension_group":
-               lines.append(f"  dimension_group: {cname} {{ type: time timeframes: [raw, time, date, week, month, quarter, year] sql: ${{TABLE}}.{cname}_at ;; }}")
-           else:
-               lines.append(f"  dimension: {cname} {{ {'primary_key: yes ' if cname == 'id' else ''}type: {ctype} sql: ${{TABLE}}.{cname} ;; }}")
-       lines.append("  measure: count { type: count }\n}\n")
-       (root / "bronze" / f"{t}.view.lkml").write_text("\n".join(lines))
+   for t in (raw_views or fields):
+       vtxt = (raw_views or {}).get(t) or ""
+       if vtxt:
+           (root / "bronze" / f"{t}.view.lkml").write_text(vtxt if vtxt.endswith("\n") else vtxt + "\n")
+       else:
+           qtbl, col_set = f"`{schema}.{t}`" if "." in schema else f"{schema}.{t}", {cn for cn, _ in fields.get(t, [])}
+           lines = [f"view: {t} {{", f"  sql_table_name: {qtbl} ;;"]
+           for cn, ct in fields.get(t, []):
+               dg = cn[:-3] if ct == "time" and cn.endswith("_at") and len(cn) > 3 and cn[:-3] not in col_set else cn
+               lines.append(f"  dimension_group: {dg} {{ type: time timeframes: [raw, time, date, week, month, quarter, year] sql: ${{TABLE}}.{cn} ;; }}" if ct == "time" else f"  dimension: {cn} {{ {'primary_key: yes ' if cn == 'id' else ''}type: {ct} sql: ${{TABLE}}.{cn} ;; }}")
+           lines.extend(["  measure: count { type: count }\n}\n"])
+           (root / "bronze" / f"{t}.view.lkml").write_text("\n".join(lines))
    Path("/workspace/lookml_result.json").write_text(json.dumps({"project_id": project_id, "model_name": project_id}))
    PYEOF
    lkr parse lookml-to-api --path /workspace/lookml --validate > /dev/null
@@ -71,17 +91,17 @@ Onboard a LookML project from a database connection in 4 stages (Model & Bronze 
 
 ## Step 4: Stage 2 (Turn 4) — Single-Table Refinements & Silver Explores, `profile_fields`, and Ask for Dashboard
 1. Emit `<USE_CASE>lookml</USE_CASE>` and apply `/workspace/skills/agentic-lookml/SKILL.md` 5-layer synthesis on `<fact_table>`:
-   - **Layer 1 — Single-Table Bronze Refinements (`bronze/<fact_table>.refinement.lkml`)**: Leave `bronze/<table>.view.lkml` untouched and keep `bronze/<fact_table>.refinement.lkml` **strictly single-table** (never reference joined `${<dim_table>.*}` fields in Bronze; cross-view measures belong in `silver/`). Add `primary_key: yes` on `id` and `dimension_group: cancelled { type: time timeframes: [raw, time, date, week, month, quarter, year] sql: CASE WHEN ${status} = 'Cancelled' THEN ${created_raw} END ;; }` when `status` + lifecycle dates exist without `cancelled`.
+   - **Layer 1 — Bronze Refinements (`bronze/<fact_table>.refinement.lkml`)**: Leave `bronze/<table>.view.lkml` untouched; keep `bronze/<fact_table>.refinement.lkml` **strictly single-table** (cross-view `${<dim_table>.*}` fields belong in `silver/`). Add `primary_key: yes` on `id` and `dimension_group: cancelled { type: time timeframes: [raw, time, date, week, month, quarter, year] sql: CASE WHEN ${status} = 'Cancelled' THEN ${created_raw} END ;; }` when `status` + lifecycle dates exist without `cancelled`.
    - **Layer 2 — Statistical Measures**: `total_<num_col>` (`sum`, `usd`), `average_<num_col>` (`average`, `usd`), `<entity>_count` (`count_distinct`).
-   - **Layer 3 — Filtered Measures**: `return_count` (`"Returned"`), `cancel_count` (`"Cancelled"`), `completed_count` (`"Complete"`) grounded in `profile_fields` (`skills/looker-field-profiler/SKILL.md`) `stats.top_values`; apply `curation.lookml_snippet` and `NULLIF` on `profile:has_zeros`.
+   - **Layer 3 — Filtered Measures**: `return_count` (`"Returned"`), `cancel_count` (`"Cancelled"`), `completed_count` (`"Complete"`) from `profile_fields` (`skills/looker-field-profiler/SKILL.md`) `stats.top_values`; apply `curation.lookml_snippet` and `NULLIF` on `profile:has_zeros`.
    - **Layer 4 — ANSI Ratios (`type: number`)**: `1.0 * ${numerator_measure} / NULLIF(${denominator_measure}, 0)` (`return_rate`, `cancel_rate` `percent_2`; `average_order_value` `usd`).
-   - **Layer 5 — Silver Explores (`silver/explores/<fact_table>.explore.lkml`)**: Deconstruct SQL (`grain_change_reagg`, `window_pre_groupby`, `union`, `non_equi_join`, `filter_dependent_cte`), extend `[<fact_table>_base]` (`hidden: no`, `view_name: <fact_table>`), join each `<dim_table>` (`left_outer`, `many_to_one`), and include `"/bronze/*.refinement.lkml"` + `"/silver/explores/*.explore.lkml"` in `<project_name>.model.lkml`. **CRITICAL**: `<fact_table>_base` must **never** set `fields: [ALL_FIELDS*, -...]` exclusions when extended by Silver (inherited exclusions strip dashboard tile `fields` to `[]`). Optionally scaffold `_field_value_search_<project_name>` (`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md`).
+   - **Layer 5 — Silver Explores (`silver/explores/<fact_table>.explore.lkml`)**: Deconstruct SQL (`grain_change_reagg`, `window_pre_groupby`, `union`, `non_equi_join`, `filter_dependent_cte`), extend `[<fact_table>_base]` (`hidden: no`, `view_name: <fact_table>`), join `<dim_table>` (`left_outer`, `many_to_one`), and include `"/bronze/*.refinement.lkml"` + `"/silver/explores/*.explore.lkml"` in `<project_name>.model.lkml`. **Never** set `fields: [ALL_FIELDS*, -...]` exclusions on `<fact_table>_base` (strips dashboard tile `fields` to `[]`). Optionally scaffold `_field_value_search_<project_name>` (`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md`).
 2. In **1** `code_execution` call, write files, validate (`lkr parse lookml-to-api --path /workspace/lookml --validate`), push (`--no-reset`), and run `bootstrap_lookml.py bundle`.
 3. In **1** `run_looker_codemode` call, run `profile_fields` + 5-row `run_inline_query`, show results, **ask if they want a dashboard**, and end with `[Open <project_name> in Looker IDE](/projects/<project_name>)`.
 
 ## Step 5: Stage 3 (Turn 5) — Validated LookML Dashboard & Clean Chat Summary
-1. Emit `<USE_CASE>dashboard</USE_CASE>`, call `upsert_lookml_dashboard(project_id=project_name, model=project_name, dashboard_name="<dashboard_slug>", title="<Dashboard Title>", folder_id=target_folder_id, filters=[...], tiles=[...])` (4+ tiles on verified Silver fields; gates `lookml_model_explore` + `validate_project` `fatal`/`warning` `Unknown field`) + `return emit_native_bundle(res, folder_id=target_folder_id, title="<Dashboard Title>")` in `run_looker_codemode`.
-2. **Clean Summary Rule**: Never output layout coordinates (`Row 0`, `col`, `width`, `height`, `24-Column Grid`) or internal vis strings (`single_value`, `looker_area`, `looker_pie`, `looker_column`, `looker_bar`, `looker_grid`). Summarize tiles, filters, what each tile measures, **ask if they want a responsive metric selector Data App** (`day`/`date`, `week`, `month`, `year`, chart types), and end with `[Open <Dashboard Title>](/dashboards/<id>)`.
+1. Emit `<USE_CASE>dashboard</USE_CASE>`, call `upsert_lookml_dashboard(project_id=project_name, model=project_name, dashboard_name="<dashboard_slug>", title="<Dashboard Title>", folder_id=target_folder_id, filters=[...], tiles=[...])` (4+ Silver tiles; gates `lookml_model_explore`, 1-row `json_detail` SQL, and `validate_project` `fatal`/`warning` `Unknown field`) + `return emit_native_bundle(res, folder_id=target_folder_id, title="<Dashboard Title>")` in `run_looker_codemode`.
+2. **Clean Summary Rule**: Never output coordinates (`Row 0`, `col`, `width`, `height`, `24-Column Grid`) or internal vis strings (`single_value`, `looker_area`, `looker_pie`, `looker_column`, `looker_bar`, `looker_grid`). Summarize tiles/filters, **ask if they want a responsive metric selector Data App** (`day`/`date`, `week`, `month`, `year`, chart types), and end with `[Open <Dashboard Title>](/dashboards/<id>)`.
 
 ## Step 6: Stage 4 (Turn 6) — Metric Selector Data App (`date` Grain, Balanced `@container` KPI Grid, PoP KPIs, Card-Border Compare & Custom `Window:`)
 1. Emit `<USE_CASE>app</USE_CASE>` and bundle in **1** `code_execution` call via `python3 /workspace/bundle_app.py --app-dir /workspace/apps/$CONV_ID --stdin "Metric Selector Explorer" << 'EOF'` (never inspect `/workspace/lookml` or `/workspace/bundle_app.py`).

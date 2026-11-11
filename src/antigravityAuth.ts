@@ -11,7 +11,6 @@ import {
   type AntigravityInteractionPayload,
   type AntigravityInteractionStep,
   type AntigravityModelOption,
-  type AntigravityUsageMetadata,
 } from './antigravityTypes'
 import { extractResolvedUseCase, type StudioUseCase } from './lookerApi'
 
@@ -136,7 +135,7 @@ export function parseValidOAuthSession(
     const storedClientId = typeof parsed?.clientId === 'string' ? parsed.clientId.trim() : ''
     const expectedClientId = clientId?.trim() || ''
     if (expectedClientId && storedClientId && storedClientId !== expectedClientId) return { session: null, expired: false }
-    return { session: { token, expiresAt, ...(storedClientId ? { clientId: storedClientId } : {}) }, expired: false }
+    return { session: Object.assign({ token, expiresAt }, storedClientId ? { clientId: storedClientId } : null), expired: false }
   } catch {
     return { session: null, expired: true }
   }
@@ -155,7 +154,7 @@ export function persistOAuthSession(extensionSDK: AntigravityExtensionHostLike |
   const expiresAt = Number(session?.expiresAt)
   if (!token || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) return
   const cid = session.clientId?.trim()
-  const serialized = JSON.stringify({ token, expiresAt, ...(cid ? { clientId: cid } : {}) })
+  const serialized = JSON.stringify(Object.assign({ token, expiresAt }, cid ? { clientId: cid } : null))
   try { if (typeof window !== 'undefined') window.localStorage?.setItem?.(STUDIO_OAUTH_STORAGE_KEY, serialized) } catch { /* ignore */ }
   try { void extensionSDK?.localStorageSetItem?.(STUDIO_OAUTH_STORAGE_KEY, serialized) } catch { /* ignore */ }
 }
@@ -168,11 +167,10 @@ export function getInitialStoredOAuthSession(clientId?: string): StoredOAuthSess
       const token = String(mockExt.initialOauthToken || '').trim()
       if (!token) return null
       const exp = Number(mockExt.initialOauthExpiresAt)
-      return {
-        token,
-        expiresAt: Number.isFinite(exp) && exp > 0 ? exp : Date.now() + STUDIO_OAUTH_REFRESH_INTERVAL_MS,
-        ...(clientId?.trim() ? { clientId: clientId.trim() } : {}),
-      }
+      return Object.assign(
+        { token, expiresAt: Number.isFinite(exp) && exp > 0 ? exp : Date.now() + STUDIO_OAUTH_REFRESH_INTERVAL_MS },
+        clientId?.trim() ? { clientId: clientId.trim() } : null
+      )
     }
     const { session, expired } = parseValidOAuthSession(w?.localStorage?.getItem?.(STUDIO_OAUTH_STORAGE_KEY), clientId)
     if (expired) clearStoredOAuthSession()
@@ -426,12 +424,14 @@ export function callInteractionsApi(
         body?.store === false || (Boolean(body?.model) && !body?.agent)
       const userReqMatch = promptText.match(/User request:\s*([\s\S]*)$/i)
       const inferred = extractResolvedUseCase(undefined, userReqMatch ? userReqMatch[1].trim() : promptText)
-      return Promise.resolve({
-        id: `int_mock_${Date.now().toString(36).slice(-5)}`,
-        ...(isDirectStatelessModel ? {} : { environment_id: `env_${inferred}_mock` }),
-        status: 'completed',
-        output_text: `<USE_CASE>${inferred}</USE_CASE>\nRouted turn via AGENTS.md to ${inferred}.`,
-      })
+      return Promise.resolve(Object.assign(
+        {
+          id: `int_mock_${Date.now().toString(36).slice(-5)}`,
+          status: 'completed',
+          output_text: `<USE_CASE>${inferred}</USE_CASE>\nRouted turn via AGENTS.md to ${inferred}.`,
+        },
+        isDirectStatelessModel ? null : { environment_id: `env_${inferred}_mock` }
+      ))
     }
     headers['Authorization'] = `Bearer ${auth.oauthToken.trim()}`
     if (auth.projectId?.trim()) headers['x-goog-user-project'] = auth.projectId.trim()
@@ -454,7 +454,7 @@ export function callInteractionsApi(
             return auth.onUnauthorizedRefresh().catch(() => null).then((rt) => {
               const refreshedToken = rt?.trim()
               if (refreshedToken) {
-                return callInteractionsApi(extensionSDK, { ...auth, oauthToken: refreshedToken, onUnauthorizedRefresh: undefined }, path, method, body)
+                return callInteractionsApi(extensionSDK, Object.assign({}, auth, { oauthToken: refreshedToken, onUnauthorizedRefresh: undefined }), path, method, body)
               }
               clearStoredOAuthSession(extensionSDK)
               return fail()
@@ -581,7 +581,7 @@ export function fetchEnvironmentFile(params: {
               if (refreshedToken) {
                 return fetchEnvironmentFile({
                   extensionSDK,
-                  auth: { ...auth, oauthToken: refreshedToken, onUnauthorizedRefresh: undefined },
+                  auth: Object.assign({}, auth, { oauthToken: refreshedToken, onUnauthorizedRefresh: undefined }),
                   environmentId: envId,
                   path: normalizedPath,
                 })
@@ -608,100 +608,118 @@ export interface StreamInteractionResult {
   interaction: AntigravityInteractionPayload | null; streamed: boolean; eventCount: number; lastEventId?: string
 }
 
+const DELTA_STEP_TYPES = new Set([
+  'arguments_delta', 'thought_summary', 'text', 'code_delta', 'command_delta', 'output_delta',
+])
+const STATUS_BY_SSE_EVENT: Record<string, string> = {
+  'interaction.complete': 'completed', 'interaction.completed': 'completed', completed: 'completed', done: 'completed',
+  'interaction.requires_action': 'requires_action', requires_action: 'requires_action',
+  'interaction.incomplete': 'incomplete', incomplete: 'incomplete',
+  'interaction.failed': 'failed', failed: 'failed', 'interaction.error': 'failed', error: 'failed',
+  'interaction.cancelled': 'cancelled', 'interaction.canceled': 'cancelled', cancelled: 'cancelled', canceled: 'cancelled',
+}
+
 export function mergeInteractionSseEvent(
   current: AntigravityInteractionPayload,
   eventType: string,
   rawData: Record<string, unknown>
 ): AntigravityInteractionPayload {
   const data = rawData.interaction && typeof rawData.interaction === 'object'
-    ? { ...rawData, ...(rawData.interaction as Record<string, unknown>) }
+    ? Object.assign({}, rawData, rawData.interaction as Record<string, unknown>)
     : rawData
-  const evt = String(eventType || data.type || '').trim()
-  let nextStatus = typeof data.status === 'string' ? data.status : current.status
-  if (!data.status) {
-    if (evt === 'interaction.complete' || evt === 'completed' || evt === 'done') nextStatus = 'completed'
-    else if (evt === 'interaction.requires_action' || evt === 'requires_action') nextStatus = 'requires_action'
-    else if (evt === 'interaction.incomplete' || evt === 'incomplete') nextStatus = 'incomplete'
-    else if (evt === 'interaction.failed' || evt === 'failed') nextStatus = 'failed'
-  }
-  let nextSteps = Array.isArray(data.steps) ? [...(data.steps as AntigravityInteractionStep[])] : [...(current.steps || [])]
-  if (evt === 'step.delta' || evt === 'step' || Boolean(data.step_delta || data.step)) {
+  const evt = String((eventType && eventType !== 'message' ? eventType : '') || data.event_type || data.type || eventType || '').trim()
+  const nextStatus = typeof data.status === 'string' ? data.status : (STATUS_BY_SSE_EVENT[evt] || current.status)
+  const nextSteps = Array.isArray(data.steps) && (data.steps.length > 0 || !current.steps?.length)
+    ? (data.steps as AntigravityInteractionStep[]).slice()
+    : (current.steps || []).slice()
+  if (evt !== 'step.stop' && (evt === 'step.start' || evt === 'step.delta' || evt === 'step' || Boolean(data.step_delta || data.step))) {
     const stepObj = (data.step_delta || data.step || data.delta || data) as AntigravityInteractionStep
     if (stepObj && typeof stepObj === 'object') {
       const stepId = stepObj.id || stepObj.call_id
       const append = evt === 'step.delta' || Boolean(data.step_delta || data.delta)
-      const stepIdx = (stepObj as { index?: unknown }).index
+      const stepIdx = typeof data.index === 'number' ? data.index : stepObj.index
+      const cText = typeof (stepObj.content as { text?: unknown } | undefined)?.text === 'string' ? (stepObj.content as { text: string }).text : undefined
+      const compat = (a?: string, b?: string) =>
+        (a === 'function_call' && b === 'function_result') || (a === 'function_result' && b === 'function_call') ? false
+        : b === 'arguments_delta' ? !a || a === 'function_call'
+        : b === 'thought_summary' ? !a || a === 'thought' || a === 'thinking'
+        : b === 'text' ? !a || !/^(?:function_call|function_result|thought|thinking|code_execution)$/.test(a) : true
       const last = nextSteps[nextSteps.length - 1]
-      const idx = stepId
-        ? nextSteps.findIndex((s) => (s.id || s.call_id) === stepId)
-        : append && typeof stepIdx === 'number'
-        ? nextSteps.findIndex((s, i) => ((s as { index?: unknown }).index ?? i) === stepIdx)
-        : append && last && (last.type === stepObj.type || !stepObj.type || !last.type)
-        ? nextSteps.length - 1
-        : -1
-      if (idx >= 0) {
-        const prev = nextSteps[idx]
-        const mergeArgs = (a: unknown, b: unknown): unknown => {
-          if (b === undefined) return a
-          if (typeof a === 'string' && typeof b === 'string') {
-            return append || !b.trimStart().startsWith('{') ? `${a}${b}` : b
+      let idx = typeof stepIdx === 'number' ? nextSteps.findIndex((s) => s.index === stepIdx && compat(s.type, stepObj.type)) : -1
+      if (idx < 0 && stepId) idx = nextSteps.findIndex((s) => compat(s.type, stepObj.type) && ((stepObj.id && s.id === stepObj.id) || (!stepObj.id && !s.id && s.call_id === stepId)))
+      if (idx < 0 && append && typeof stepIdx === 'number') idx = nextSteps.findIndex((s, i) => s.index === undefined && i === stepIdx && compat(s.type, stepObj.type))
+      if (idx < 0 && append && stepIdx === undefined && !stepId && last && (last.type === stepObj.type || !stepObj.type || !last.type)) idx = nextSteps.length - 1
+      const prev = idx >= 0 ? nextSteps[idx] : undefined
+      const m = Object.assign({}, prev, stepObj)
+      if (typeof stepIdx === 'number') m.index = stepIdx
+      const isObj = (v: unknown): v is Record<string, unknown> => Boolean(v) && typeof v === 'object' && !Array.isArray(v)
+      const isEmpty = (v: unknown) => isObj(v) && !Object.keys(v).length
+      const mergeArgs = (a: unknown, b: unknown): unknown =>
+        b === undefined ? a
+        : typeof a === 'string' && typeof b === 'string' ? (append || !b.trimStart().startsWith('{') ? a + b : b)
+        : isEmpty(a) && typeof b === 'string' ? b
+        : typeof a === 'string' && a && isEmpty(b) ? a
+        : isObj(a) && isObj(b) ? Object.assign({}, a, b) : b
+      if (prev) {
+        if (prev.type && (!stepObj.type || DELTA_STEP_TYPES.has(stepObj.type) || stepObj.type.endsWith('_delta'))) m.type = prev.type
+        if (prev.id && !stepObj.id) m.id = prev.id
+        if (prev.name && !stepObj.name) m.name = prev.name
+        const ma = mergeArgs(prev.arguments, stepObj.arguments)
+        if (ma !== undefined) m.arguments = ma
+        ;(['code', 'command', 'output', 'stdout', 'stderr', 'result', 'text', 'thought'] as const).forEach((k) => {
+          if (append && typeof prev[k] === 'string' && typeof stepObj[k] === 'string') {
+            ;(m as Record<string, unknown>)[k] = `${prev[k] as string}${stepObj[k] as string}`
           }
-          if (a && typeof a === 'object' && !Array.isArray(a) && b && typeof b === 'object' && !Array.isArray(b)) {
-            return { ...(a as Record<string, unknown>), ...(b as Record<string, unknown>) }
-          }
-          return b
+        })
+        if (append && typeof prev.code_execution_result?.output === 'string' && typeof stepObj.code_execution_result?.output === 'string') {
+          m.code_execution_result = Object.assign({}, prev.code_execution_result, stepObj.code_execution_result, {
+            output: `${prev.code_execution_result.output}${stepObj.code_execution_result.output}`,
+          })
         }
-        const mergedArgs = mergeArgs(prev.arguments, stepObj.arguments)
-        const mergedAltArgs = mergeArgs(prev.args, stepObj.args)
-        const mergedFc = prev.function_call || stepObj.function_call
-          ? {
-              ...prev.function_call,
-              ...stepObj.function_call,
-              ...(mergeArgs(prev.function_call?.arguments, stepObj.function_call?.arguments) !== undefined
-                ? { arguments: mergeArgs(prev.function_call?.arguments, stepObj.function_call?.arguments) }
-                : {}),
-              ...(mergeArgs(prev.function_call?.args, stepObj.function_call?.args) !== undefined
-                ? { args: mergeArgs(prev.function_call?.args, stepObj.function_call?.args) }
-                : {}),
-            }
-          : undefined
-        nextSteps[idx] = {
-          ...prev, ...stepObj,
-          ...(prev.type && !stepObj.type ? { type: prev.type } : {}),
-          ...(prev.id && !stepObj.id ? { id: prev.id } : {}),
-          ...(prev.name && !stepObj.name ? { name: prev.name } : {}),
-          ...(mergedArgs !== undefined ? { arguments: mergedArgs } : {}),
-          ...(mergedAltArgs !== undefined ? { args: mergedAltArgs } : {}),
-          ...(mergedFc ? { function_call: mergedFc } : {}),
-          ...(append && typeof prev.code === 'string' && typeof stepObj.code === 'string' ? { code: `${prev.code}${stepObj.code}` } : {}),
-          ...(append && typeof prev.command === 'string' && typeof stepObj.command === 'string' ? { command: `${prev.command}${stepObj.command}` } : {}),
-          ...(append && typeof prev.text === 'string' && typeof stepObj.text === 'string' ? { text: `${prev.text}${stepObj.text}` } : {}),
-          ...(append && typeof prev.thought === 'string' && typeof stepObj.thought === 'string' ? { thought: `${prev.thought}${stepObj.thought}` } : {}),
-        }
-      } else {
-        nextSteps = [...nextSteps, stepObj]
       }
+      if (prev?.function_call || stepObj.function_call) {
+        const fc = Object.assign({}, prev?.function_call, stepObj.function_call)
+        const fa = prev ? mergeArgs(prev.function_call?.arguments, stepObj.function_call?.arguments) : fc.arguments
+        if (fa !== undefined) fc.arguments = fa
+        m.name ||= fc.name
+        fc.name ||= m.name
+        const fcSent = stepObj.function_call?.arguments !== undefined && stepObj.arguments === undefined
+        const topSent = stepObj.arguments !== undefined && stepObj.function_call?.arguments === undefined
+        if (fcSent || (typeof fc.arguments === 'string' && (m.arguments === undefined || isEmpty(m.arguments)))) m.arguments = fc.arguments
+        else if (topSent || (typeof m.arguments === 'string' && (fc.arguments === undefined || isEmpty(fc.arguments)))) fc.arguments = m.arguments
+        m.function_call = fc
+      }
+      if (cText !== undefined && ((stepObj.type === 'thought_summary' && typeof stepObj.thought !== 'string') || (stepObj.type === 'text' && typeof stepObj.text !== 'string'))) {
+        const k = stepObj.type === 'thought_summary' ? 'thought' : 'text'
+        if (!prev && k === 'thought') m.type = 'thought'
+        m[k] = append && typeof prev?.[k] === 'string' ? `${prev[k] as string}${cText}` : cText
+        if (prev?.content !== undefined) m.content = prev.content
+        else delete m.content
+      }
+      if (idx >= 0) nextSteps[idx] = m
+      else nextSteps.push(m)
     }
   }
   let nextOutputText = current.output_text
   if (evt === 'content.delta' || Boolean(data.content_delta) || typeof data.text_delta === 'string') {
-    const d = (data.content_delta || data.delta || data) as { text?: string; text_delta?: string }
-    nextOutputText = `${current.output_text || ''}${String(d.text_delta ?? d.text ?? data.text_delta ?? '')}`
+    const d = (data.content_delta || data.delta || data) as { type?: string; text?: string; text_delta?: string; content?: { text?: string } }
+    if (d.type !== 'thought' && d.type !== 'thought_summary') {
+      nextOutputText = `${current.output_text || ''}${String(d.text_delta ?? d.text ?? d.content?.text ?? data.text_delta ?? '')}`
+    }
   } else if (typeof data.output_text === 'string') {
     nextOutputText = data.output_text
   }
-  return {
-    ...current,
-    ...(typeof data.id === 'string' && data.id ? { id: data.id } : {}),
-    ...(nextStatus ? { status: nextStatus } : {}),
-    ...(typeof data.environment_id === 'string' && data.environment_id ? { environment_id: data.environment_id } : {}),
-    ...(nextOutputText !== undefined ? { output_text: nextOutputText } : {}),
-    ...(Array.isArray(data.outputs) ? { outputs: data.outputs as AntigravityInteractionOutput[] } : {}),
-    ...(nextSteps.length > 0 ? { steps: nextSteps } : {}),
-    ...(data.error && typeof data.error === 'object' ? { error: data.error as { message?: string } } : {}),
-    ...(data.usage && typeof data.usage === 'object' ? { usage: data.usage as AntigravityUsageMetadata } : {}),
-    ...(data.usage_metadata && typeof data.usage_metadata === 'object' ? { usage_metadata: data.usage_metadata as AntigravityUsageMetadata } : {}),
-  }
+  const out: AntigravityInteractionPayload = Object.assign({}, current)
+  if (typeof data.id === 'string' && data.id) out.id = data.id
+  if (nextStatus) out.status = nextStatus
+  if (typeof data.environment_id === 'string' && data.environment_id) out.environment_id = data.environment_id
+  if (nextOutputText !== undefined) out.output_text = nextOutputText
+  if (Array.isArray(data.outputs)) out.outputs = data.outputs as AntigravityInteractionOutput[]
+  if (nextSteps.length > 0) out.steps = nextSteps
+  ;(['error', 'usage', 'usage_metadata'] as const).forEach((k) => {
+    if (data[k] && typeof data[k] === 'object') (out as Record<string, unknown>)[k] = data[k]
+  })
+  return out
 }
 
 export function streamInteractionUntilActionOrDone(options: StreamInteractionOptions): Promise<StreamInteractionResult> {
@@ -714,7 +732,7 @@ export function streamInteractionUntilActionOrDone(options: StreamInteractionOpt
   ) {
     return Promise.resolve({ interaction: initialInteraction || null, streamed: false, eventCount: 0, lastEventId: initialLastEventId })
   }
-  let currentInteraction: AntigravityInteractionPayload = initialInteraction ? { ...initialInteraction, id: initialInteraction.id || cleanId } : { id: cleanId, status: 'in_progress' }
+  let currentInteraction: AntigravityInteractionPayload = initialInteraction ? Object.assign({}, initialInteraction, { id: initialInteraction.id || cleanId }) : { id: cleanId, status: 'in_progress' }
   let currentLastEventId: string | undefined = initialLastEventId
   let eventCount = 0
   const isTerminal = (s?: string) =>
@@ -729,16 +747,17 @@ export function streamInteractionUntilActionOrDone(options: StreamInteractionOpt
   const runAttempt = (attempt: number): Promise<StreamInteractionResult> => {
     if (attempt > maxReconnects || signal?.aborted) return Promise.resolve(buildResult())
     const sseUrl = `https://generativelanguage.googleapis.com/v1beta/interactions/${encodeURIComponent(cleanId)}?stream=true&alt=sse${currentLastEventId ? `&last_event_id=${encodeURIComponent(currentLastEventId)}` : ''}`
+    const reqHeaders: Record<string, string> = {
+      Accept: 'text/event-stream',
+      Authorization: `Bearer ${auth.oauthToken!.trim()}`,
+    }
+    if (auth.projectId?.trim()) reqHeaders['x-goog-user-project'] = auth.projectId.trim()
+    if (currentLastEventId) reqHeaders['Last-Event-ID'] = currentLastEventId
     return Promise.resolve()
       .then(() =>
         effectiveFetch(sseUrl, {
           method: 'GET',
-          headers: {
-            Accept: 'text/event-stream',
-            Authorization: `Bearer ${auth.oauthToken!.trim()}`,
-            ...(auth.projectId?.trim() ? { 'x-goog-user-project': auth.projectId.trim() } : {}),
-            ...(currentLastEventId ? { 'Last-Event-ID': currentLastEventId } : {}),
-          },
+          headers: reqHeaders,
           signal,
         })
       )

@@ -11,7 +11,7 @@ import type { Looker40SDK } from '@looker/sdk'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 import {
-  AGENTS_MD, AntigravityActivityStep, ANTIGRAVITY_ALLOWED_MODELS, APP_BUILDER_SYSTEM_PROMPT, authenticateGoogleOAuth,
+  AGENTS_MD, AntigravityActivityStep, ANTIGRAVITY_ALLOWED_MODELS, AntigravityInteractionPayload, APP_BUILDER_SYSTEM_PROMPT, authenticateGoogleOAuth,
   BOOTSTRAP_LOOKML_PY, BOOTSTRAP_SANDBOX_SH, buildDynamicStarterPrompts, buildLookmlSystemGuide, buildNativeContentGuide, buildWorkspaceSources,
   BUNDLE_APP_PY, BUILTIN_SKILLS_FILES, callInteractionsApi, clampLeftPaneWidth, classifyLookerOperation,
   clearStarterPromptsCache, clearStoredOAuthSession, CODEMODE_CDN_URL, CodeModePermissionRequest,
@@ -7722,7 +7722,7 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     }
   })
 
-  test('Issue #178: hooks @looker/chatty RAW_INVOKE_CORE_SDK + INVOKE_CORE_SDK + errors into window.lkr_codemode_api_calls with query/body/response normalization and zero double-logging across non-Chatty fallbacks', async () => {
+  test('72. Issue #178: hooks @looker/chatty RAW_INVOKE_CORE_SDK + INVOKE_CORE_SDK + errors into window.lkr_codemode_api_calls with query/body/response normalization and zero double-logging across non-Chatty fallbacks', async () => {
     const g = globalThis as unknown as {
       lkr_codemode_api_calls?: LkrCodeModeApiCallEntry[]
       window?: unknown
@@ -7968,5 +7968,321 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     expect(headerSrc).toContain('disabled={!selectedFolderId}')
     expect(indexSrc).toContain('installChattyApiLogger()')
     expect(indexSrc).toContain('window.lkr_codemode_api_calls')
+  })
+
+  test('73. Issue #177: merges real /v1beta/interactions SSE wire events (top-level data.index, arguments_delta over {}, thought_summary content.text, step.stop, interaction.completed), preserves cross-project <catalog>.<schema> sql_table_name & raw_views, gates dashboards on 1-row json_detail live SQL, and normalizes field-backed LookML filters to field_filter', async () => {
+    // 1. Real /v1beta/interactions SSE wire event sequence + runAntigravityTurn OAuth SSE tool execution
+    const structuredContent = [{ type: 'thought', text: 'Initial structured part' }]
+    let wireState: AntigravityInteractionPayload = { id: 'int_177_r1', status: 'in_progress' }
+    const wireEvents: Array<[string, Record<string, unknown>]> = [
+      ['step.start', { index: 0, step: { id: 'th_0', type: 'thought', content: structuredContent }, event_type: 'step.start' }],
+      ['step.delta', { index: 0, delta: { content: { text: 'Inspecting cross-project ' }, type: 'thought_summary' }, event_type: 'step.delta' }],
+      ['step.delta', { index: 0, delta: { content: { text: 'BigQuery dataset...' }, type: 'thought_summary' }, event_type: 'step.delta' }],
+      ['step.stop', { index: 0, event_type: 'step.stop' }],
+      ['step.start', { index: 1, step: { id: 'call_177', type: 'function_call', name: 'run_looker_codemode', arguments: {} }, event_type: 'step.start' }],
+      ['step.delta', { index: 1, delta: { arguments: '{"thought":"Listing tables","code":', type: 'arguments_delta' }, event_type: 'step.delta' }],
+      ['step.delta', { index: 1, delta: { arguments: '"return {\\"ok\\": True, \\"rows\\": 3}"}', type: 'arguments_delta' }, event_type: 'step.delta' }],
+      ['step.stop', { index: 1, event_type: 'step.stop' }],
+      ['interaction.completed', { interaction: { id: 'int_177_r1', status: 'requires_action', environment_id: 'env_177' }, event_type: 'interaction.completed' }],
+    ]
+    for (const [evtName, payload] of wireEvents) wireState = mergeInteractionSseEvent(wireState, evtName, payload)
+    const mergedSteps = (wireState.steps || []) as Array<Record<string, unknown>>
+    expect(mergedSteps).toHaveLength(2)
+    expect(mergedSteps[0]).toMatchObject({ id: 'th_0', index: 0, type: 'thought', thought: 'Inspecting cross-project BigQuery dataset...', content: structuredContent })
+    expect(mergedSteps[1]).toMatchObject({ id: 'call_177', index: 1, type: 'function_call', name: 'run_looker_codemode', arguments: '{"thought":"Listing tables","code":"return {\\"ok\\": True, \\"rows\\": 3}"}' })
+    expect(wireState.status).toBe('requires_action')
+
+    // Sparse index text deltas + statusless interaction.completed event
+    let textWireState: AntigravityInteractionPayload = { id: 'int_177_r2', status: 'in_progress', steps: wireState.steps }
+    textWireState = mergeInteractionSseEvent(textWireState, 'step.delta', { index: 34, delta: { text: '<USE_CASE>lookml</USE_CASE>\nOnboarded ', type: 'text' }, event_type: 'step.delta' })
+    textWireState = mergeInteractionSseEvent(textWireState, 'step.delta', { index: 34, delta: { text: '`ext_catalog.sales_dw`.', type: 'text' }, event_type: 'step.delta' })
+    textWireState = mergeInteractionSseEvent(textWireState, 'step.stop', { index: 34, event_type: 'step.stop' })
+    textWireState = mergeInteractionSseEvent(textWireState, 'interaction.completed', { interaction: { id: 'int_177_r2' }, event_type: 'interaction.completed' })
+    expect(textWireState.status).toBe('completed')
+    expect((textWireState.steps as unknown[]).length).toBe(3)
+    expect(extractInteractionOutputText(textWireState)).toBe('<USE_CASE>lookml</USE_CASE>\nOnboarded `ext_catalog.sales_dw`.')
+
+    // End-to-end OAuth SSE turn through runAntigravityTurn executes streamed code (not "")
+    const originalFetch = globalThis.fetch
+    const executedCodes: string[] = []
+    const origRunPy = LkrCodeMode.runPythonCode
+    LkrCodeMode.runPythonCode = (async (opts: { code: string }) => {
+      executedCodes.push(opts.code)
+      return JSON.stringify({ tables: ['orders', 'customers'] })
+    }) as typeof LkrCodeMode.runPythonCode
+    try {
+      let postNum = 0
+      let sseNum = 0
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const urlStr = String(input)
+        if (init?.method === 'POST') {
+          postNum += 1
+          return { ok: true, status: 200, text: async () => JSON.stringify({ id: postNum === 1 ? 'int_oauth_177_1' : 'int_oauth_177_2', environment_id: 'env_oauth_177', status: 'in_progress' }) } as unknown as Response
+        }
+        if (urlStr.includes('stream=true&alt=sse')) {
+          sseNum += 1
+          const encoder = new TextEncoder()
+          const sseFrames = sseNum === 1
+            ? [
+                'id: e1\nevent: step.start\ndata: {"index":1,"step":{"id":"fc_oauth_1","type":"function_call","name":"run_looker_codemode","arguments":{}},"event_type":"step.start"}\n\n',
+                'id: e2\nevent: step.delta\ndata: {"index":1,"delta":{"arguments":"{\\"thought\\":\\"Checking tables\\",\\"code\\":\\"return connection_tables(\\\\\\"bq_conn\\\\\\", schema_name=\\\\\\"ext_catalog.sales_dw\\\\\\")\\"}","type":"arguments_delta"},"event_type":"step.delta"}\n\n',
+                'id: e3\nevent: step.stop\ndata: {"index":1,"event_type":"step.stop"}\n\n',
+                'id: e4\nevent: interaction.completed\ndata: {"interaction":{"id":"int_oauth_177_1","status":"requires_action","environment_id":"env_oauth_177"},"event_type":"interaction.completed"}\n\n',
+              ]
+            : [
+                'id: e5\nevent: step.delta\ndata: {"index":34,"delta":{"text":"<USE_CASE>lookml</USE_CASE>\\nVerified tables.","type":"text"},"event_type":"step.delta"}\n\n',
+                'id: e6\nevent: step.stop\ndata: {"index":34,"event_type":"step.stop"}\n\n',
+                'id: e7\nevent: interaction.completed\ndata: {"interaction":{"id":"int_oauth_177_2","status":"completed","environment_id":"env_oauth_177"},"event_type":"interaction.completed"}\n\n',
+              ]
+          let fIdx = 0
+          return {
+            ok: true, status: 200, headers: { get: (h: string) => (h.toLowerCase() === 'content-type' ? 'text/event-stream' : null) },
+            body: { getReader: () => ({ read: async () => (fIdx >= sseFrames.length ? { done: true, value: undefined } : { done: false, value: encoder.encode(sseFrames[fIdx++]) }), cancel: async () => {}, releaseLock: () => {} }) },
+          } as unknown as Response
+        }
+        throw new Error(`Unexpected fetch URL: ${urlStr}`)
+      }) as typeof fetch
+
+      const oauthTurn = await runAntigravityTurn({
+        sdk: asSdk({ ok: async <T>(p: T) => p }), extensionSDK: {}, auth: { mode: 'oauth', oauthToken: 'oauth_tok_177' },
+        session: { environmentId: 'env_oauth_177', lastInteractionId: 'int_prev_177', toolType: 'lookml' },
+        toolMode: 'lookml', useCase: 'lookml', lookmlProjectId: 'sales_proj', selectedExplores: [],
+        schemaMarkdown: '# Schema', userPrompt: 'Generate bronze views for ext_catalog.sales_dw.*', onStatus: () => {},
+      })
+      expect(executedCodes).toEqual(['return connection_tables("bq_conn", schema_name="ext_catalog.sales_dw")'])
+      expect(oauthTurn.assistantText).toBe('Verified tables.')
+    } finally {
+      globalThis.fetch = originalFetch
+      LkrCodeMode.runPythonCode = origRunPy
+    }
+
+    // 2. Cross-project <catalog>.<schema>.* onboarding preservation, remote update_file on # AUTOGENERATED, database/schema_name + 404 connection_columns fallback, & SSE edge cases
+    let edgeState: AntigravityInteractionPayload = { id: 'int_177_edge', status: 'in_progress' }
+    edgeState = mergeInteractionSseEvent(edgeState, 'step.start', { index: 1, step: { id: 'fc_shared', type: 'function_call', function_call: { name: 'run_looker_codemode', arguments: {} } } })
+    edgeState = mergeInteractionSseEvent(edgeState, 'message', { index: 1, delta: { function_call: { arguments: '{"code":' }, type: 'arguments_delta' }, event_type: 'step.delta' })
+    edgeState = mergeInteractionSseEvent(edgeState, 'message', { index: 1, delta: { function_call: { arguments: '"return 1"}' }, type: 'arguments_delta' }, event_type: 'step.delta' })
+    edgeState = mergeInteractionSseEvent(edgeState, 'step.start', { index: 2, step: { type: 'function_result', call_id: 'fc_shared', result: { ok: true } } })
+    edgeState = mergeInteractionSseEvent(edgeState, 'step.start', { index: 3, step: { id: 'ce_1', type: 'code_execution', stdout: '<LOOKML_' } })
+    edgeState = mergeInteractionSseEvent(edgeState, 'step.delta', { index: 3, delta: { stdout: 'BUNDLE>{"id":"p1"}</LOOKML_BUNDLE>', type: 'output_delta' } })
+    edgeState = mergeInteractionSseEvent(edgeState, 'step.delta', { index: 4, delta: { content: { text: 'Chunk A ' }, type: 'text' } })
+    edgeState = mergeInteractionSseEvent(edgeState, 'step.delta', { index: 4, delta: { content: { text: 'Chunk B' }, type: 'text' } })
+    edgeState = mergeInteractionSseEvent(edgeState, 'step.start', { index: 5, step: { id: 'fc_0delta', type: 'function_call', function_call: { name: 'run_looker_codemode', arguments: '{"code":"return 2"}' } } })
+    edgeState = mergeInteractionSseEvent(edgeState, 'interaction.cancelled', { steps: [] })
+    const edgeSteps = edgeState.steps as Array<Record<string, unknown>>
+    expect(edgeState.status).toBe('cancelled')
+    expect(edgeSteps).toHaveLength(5)
+    expect(edgeSteps[0]).toMatchObject({ id: 'fc_shared', type: 'function_call', name: 'run_looker_codemode', arguments: '{"code":"return 1"}', function_call: { name: 'run_looker_codemode', arguments: '{"code":"return 1"}' } })
+    expect(edgeSteps[1]).toMatchObject({ index: 2, type: 'function_result', call_id: 'fc_shared' })
+    expect(edgeSteps[2]?.stdout).toBe('<LOOKML_BUNDLE>{"id":"p1"}</LOOKML_BUNDLE>')
+    expect(edgeSteps[4]).toMatchObject({ id: 'fc_0delta', type: 'function_call', name: 'run_looker_codemode', arguments: '{"code":"return 2"}' })
+    expect(extractInteractionOutputText(edgeState)).toBe('Chunk A Chunk B')
+
+    const repoRoot = path.resolve(__dirname, '../..')
+    expect(readFileSync(path.join(repoRoot, 'skills/looker-project-onboarding/SKILL.md'), 'utf8')).toBe(LOOKER_PROJECT_ONBOARDING_SKILL_MD)
+    for (const tok of ['removesuffix(".*")', 'raw_views', '<catalog>.<schema>', 'update_file', 'dimension_group:']) {
+      expect(LOOKER_PROJECT_ONBOARDING_SKILL_MD).toContain(tok)
+    }
+    const step31PyMatch = LOOKER_PROJECT_ONBOARDING_SKILL_MD.match(/```python\n([\s\S]*?)\n {3}```/)
+    expect(step31PyMatch).toBeTruthy()
+    const step31Code = step31PyMatch![1]
+      .split('\n')
+      .map((l) => l.replace(/^ {3}/, ''))
+      .join('\n')
+      .replace('"<connection_name>"', '"bq_warehouse"')
+      .replace('"<project_name>"', '"cross_proj_ecom"')
+      .replace('"<schema_name>"', '"`ext-public-catalog`.`retail_dw`.*"')
+    const tableQpSeen: Array<Record<string, unknown>> = []
+    const patchedRemoteFiles: Record<string, string> = {}
+    const step31Out = JSON.parse(
+      await LkrCodeMode.runPythonCode({
+        code: step31Code,
+        allowUpdateSession: true,
+        sdk: asSdk({
+          authSession: {
+            transport: {
+              rawRequest: async (method: string, reqPath: string, queryParams?: Record<string, unknown>, rawBody?: unknown) => {
+                const m = method.toUpperCase()
+                const body = typeof rawBody === 'string' ? JSON.parse(rawBody) : (rawBody as Record<string, unknown> | undefined)
+                if (m === 'GET' && reqPath.includes('/tables')) {
+                  tableQpSeen.push(queryParams || {})
+                  if (queryParams?.database === 'ext-public-catalog' && queryParams?.schema_name === 'retail_dw') {
+                    return { statusCode: 200, ok: true, body: [{ tables: [{ name: 'orders' }, { name: 'customers' }, { name: 'LR_scratch' }] }] }
+                  }
+                  return { statusCode: 200, ok: true, body: [] }
+                }
+                if (m === 'GET' && reqPath.includes('/columns')) {
+                  return { statusCode: 200, ok: true, body: [{ columns: [{ name: 'id', data_type: 'INT64' }, { name: 'created_at', data_type: 'TIMESTAMP' }, { name: 'email', data_type: 'STRING' }] }] }
+                }
+                if (m === 'GET' && (reqPath.includes('/file/content') || reqPath.includes('/files/content'))) {
+                  if (String(queryParams?.file_path || reqPath).includes('customers')) {
+                    return { statusCode: 404, ok: false, body: { message: 'Not Found' } }
+                  }
+                  return {
+                    statusCode: 200,
+                    ok: true,
+                    body: '# AUTOGENERATED\nview: orders {\n  sql_table_name: `retail_dw.orders` ;;\n  dimension_group: ordered {\n    type: time\n    sql: ${TABLE}.order_timestamp ;;\n  }\n}\n',
+                  }
+                }
+                if ((m === 'PATCH' || m === 'POST' || m === 'PUT') && reqPath.includes('/files')) {
+                  if (body?.path && typeof body.content === 'string') patchedRemoteFiles[String(body.path)] = body.content
+                  return { statusCode: 200, ok: true, body: { path: body?.path } }
+                }
+                return { statusCode: 200, ok: true, body: [] }
+              },
+            },
+          },
+        }),
+      })
+    )
+    const step31Res = step31Out.result || step31Out
+    expect(step31Res.schema).toBe('ext-public-catalog.retail_dw')
+    expect(tableQpSeen).toEqual([
+      { schema_name: 'ext-public-catalog.retail_dw' },
+      { database: 'ext-public-catalog', schema_name: 'retail_dw' },
+    ])
+    expect(step31Res.tables).toEqual(['orders', 'customers'])
+    expect(step31Res.raw_views.orders).toContain('sql_table_name: `ext-public-catalog.retail_dw.orders` ;;')
+    expect(step31Res.raw_views.orders).toContain('sql: ${TABLE}.order_timestamp ;;')
+    expect(patchedRemoteFiles['bronze/orders.view.lkml']).toContain('sql_table_name: `ext-public-catalog.retail_dw.orders` ;;')
+    expect(step31Res.fields.orders).toBeUndefined()
+    expect(step31Res.fields.customers).toEqual([['id', 'number'], ['created_at', 'time'], ['email', 'string']])
+
+    // 3. Consolidated 1-row json_detail live SQL check in _check_dashboard_fields & LookML/UDD filter type normalization
+    expect(readFileSync(path.join(repoRoot, 'skills/looker-dashboard/SKILL.md'), 'utf8')).toBe(LOOKER_DASHBOARD_SKILL_MD)
+    expect(readFileSync(path.join(repoRoot, '.agents/skills/looker-dashboard/SKILL.md'), 'utf8')).toBe(LOOKER_DASHBOARD_SKILL_MD)
+    expect(LOOKER_DASHBOARD_SKILL_MD).toContain('json_detail')
+    expect(LOOKER_DASHBOARD_SKILL_MD).toContain('date_filter')
+
+    let jsonDetailCalls: Array<{ model?: string; view?: string; fields?: string[]; filters?: Record<string, string>; limit?: string }> = []
+    let uddFiltersCreated: Array<Record<string, unknown>> = []
+    let uddQueriesCreated: Array<Record<string, unknown>> = []
+    let importDashFail = false
+    let sqlCheckMode: 'ok' | 'errors' | 'throw' | 'require_partition' = 'errors'
+    const writtenFiles: Record<string, string> = {}
+    const sqlGateSdk = asSdk({
+      authSession: {
+        transport: {
+          rawRequest: async (method: string, reqPath: string, _qp?: unknown, rawBody?: unknown) => {
+            const m = method.toUpperCase()
+            const body = typeof rawBody === 'string' ? JSON.parse(rawBody) : (rawBody as Record<string, unknown> | undefined)
+            if (m === 'GET' && reqPath.includes('/explores/')) {
+              return {
+                statusCode: 200, ok: true,
+                body: { fields: { dimensions: [{ name: 'orders.created_date' }, { name: 'orders.status' }, ...Array.from({ length: 22 }, (_, i) => ({ name: `orders.dim_${i}` })), { name: 'customers.country' }], measures: [{ name: 'orders.count' }, { name: 'orders.revenue' }] } },
+              }
+            }
+            if (m === 'POST' && reqPath.includes('/queries/run/json_detail')) {
+              jsonDetailCalls.push(body as { model?: string; view?: string; fields?: string[]; filters?: Record<string, string>; limit?: string })
+              if (sqlCheckMode === 'throw') return { statusCode: 422, ok: false, body: { message: 'Warehouse connection timeout on orders' } }
+              if (sqlCheckMode === 'require_partition' && !body?.filters) return { statusCode: 200, ok: true, body: { errors: [{ message: 'Cannot query over table without partition filter' }] } }
+              if (sqlCheckMode === 'errors') {
+                return { statusCode: 200, ok: true, body: { errors: [{ message: 'The Google BigQuery Standard SQL database encountered an error while running this query.', message_details: 'Not found: Dataset billing-proj:retail_dw was not found in location US' }] } }
+              }
+              return { statusCode: 200, ok: true, body: { data: [{ 'orders.count': { value: 10 } }] } }
+            }
+            if (m === 'POST' && reqPath.includes('/dashboards/') && reqPath.includes('/import/')) {
+              if (importDashFail) return { statusCode: 404, ok: false, body: { message: 'LookML dashboard not deployed yet' } }
+              return { statusCode: 200, ok: true, body: { id: '777' } }
+            }
+            if (m === 'POST' && reqPath.includes('/dashboard_filters')) {
+              if (body) uddFiltersCreated.push(body)
+              return { statusCode: 200, ok: true, body: { id: String(500 + uddFiltersCreated.length) } }
+            }
+            if (m === 'POST' && reqPath.endsWith('/queries')) {
+              if (body) uddQueriesCreated.push(body)
+              return { statusCode: 200, ok: true, body: { id: String(600 + uddQueriesCreated.length) } }
+            }
+            if ((m === 'POST' || m === 'PATCH' || m === 'PUT') && reqPath.includes('/files')) {
+              if (body?.path && typeof body.content === 'string') writtenFiles[String(body.path)] = body.content
+              return { statusCode: 200, ok: true, body: { path: body?.path } }
+            }
+            if (m === 'POST' && reqPath.includes('/validate')) return { statusCode: 200, ok: true, body: { errors: [] } }
+            return { statusCode: 200, ok: true, body: { id: '99' } }
+          },
+        },
+      },
+    })
+
+    // 3a. SQL errors array in json_detail rejects both upsert_lookml_dashboard and upsert_udd
+    const sqlErrLookml = await LkrCodeMode.runPythonCode({
+      code: wrapDashboardCodeMode(
+        'return upsert_lookml_dashboard(project_id="p1", model="ecom", dashboard_name="pulse", title="Pulse", tiles=[{"title": "KPI 1", "explore": "orders", "fields": ["orders.count"]}, {"title": "KPI 2", "explore": "orders", "fields": ["orders.created_date", "orders.revenue"]}])'
+      ),
+      sdk: sqlGateSdk,
+    })
+    expect(jsonDetailCalls).toHaveLength(1)
+    expect(jsonDetailCalls[0]).toEqual({
+      model: 'ecom',
+      view: 'orders',
+      fields: ['orders.count', 'orders.created_date', 'orders.revenue'],
+      limit: '1',
+    })
+    expect(sqlErrLookml).toContain('Live 1-row SQL check failed on ecom::orders')
+    expect(sqlErrLookml).toContain('Not found: Dataset billing-proj:retail_dw was not found')
+
+    sqlCheckMode = 'throw'
+    const sqlThrowUdd = await LkrCodeMode.runPythonCode({
+      code: wrapDashboardCodeMode('return upsert_udd("Bad SQL UDD", folder_id="1", tiles=[{"title": "Orders", "fields": ["orders.count"]}])'),
+      sdk: sqlGateSdk,
+      vars: { target_model: 'ecom', target_explore: 'orders' },
+    })
+    expect(sqlThrowUdd).toContain('Live 1-row SQL check failed on ecom::orders')
+
+    // 3b. Partition-filter retry + LookML & UDD filter normalization + dev-branch UDD fallback (forwarding model="ecom" without re-running SQL probe)
+    jsonDetailCalls = []
+    uddFiltersCreated = []
+    uddQueriesCreated = []
+    importDashFail = true
+    sqlCheckMode = 'require_partition'
+    const okDashOut = JSON.parse(
+      await LkrCodeMode.runPythonCode({
+        code: wrapDashboardCodeMode(
+          'return upsert_lookml_dashboard(project_id="p1", model="ecom", dashboard_name="pulse", title="Pulse", folder_id="5", filters=[{"name": "order_date", "title": "Order Date", "type": "date_filter", "explore": "orders", "dimension": "orders.created_date", "default_value": "90 days"}, {"name": "window_override", "title": "Window", "type": "field_filter", "default_value": "30 days"}], tiles=[{"title": "Orders", "explore": "orders", "fields": ["orders.count"], "listen": {"order_date": "orders.created_date"}}])'
+        ),
+        sdk: sqlGateSdk,
+      })
+    )
+    expect((okDashOut.result || okDashOut).lookml_dashboard_id).toBe('ecom::pulse')
+    expect((okDashOut.result || okDashOut).dashboard_id).toBe('99')
+    expect(jsonDetailCalls).toHaveLength(2)
+    expect(jsonDetailCalls[1]?.filters).toEqual({ 'orders.created_date': '90 days' })
+    expect(uddFiltersCreated).toEqual([
+      expect.objectContaining({ name: 'order_date', type: 'field_filter', model: 'ecom', explore: 'orders', dimension: 'orders.created_date', allow_multiple_values: true }),
+      expect.objectContaining({ name: 'window_override', type: 'date_filter', default_value: '30 days' }),
+    ])
+    expect(uddFiltersCreated[1]).not.toHaveProperty('model')
+    expect(uddQueriesCreated[0]).toMatchObject({ model: 'ecom', view: 'orders', fields: ['orders.count'] })
+    const generatedYaml = writtenFiles['dashboards/pulse.dashboard.lookml'] || ''
+    expect(generatedYaml).toContain(
+      ['  - name: order_date', '    title: "Order Date"', '    type: field_filter', '    model: ecom', '    explore: orders', '    field: orders.created_date', '    default_value: "90 days"', '    allow_multiple_values: true'].join('\n')
+    )
+    expect(generatedYaml).toContain(
+      ['  - name: window_override', '    title: "Window"', '    type: date_filter', '    default_value: "30 days"', '  elements:'].join('\n')
+    )
+
+    // 3c. yaml_content bypasses _check_dashboard_fields (0 extra json_detail calls)
+    jsonDetailCalls = []
+    importDashFail = false
+    const rawYamlOut = JSON.parse(
+      await LkrCodeMode.runPythonCode({
+        code: wrapDashboardCodeMode('return upsert_lookml_dashboard(project_id="p1", model="ecom", dashboard_name="raw_dash", yaml_content="- dashboard: raw_dash\\n  title: \\"Raw\\"\\n  layout: newspaper\\n  elements: []\\n")'),
+        sdk: sqlGateSdk,
+      })
+    )
+    expect((rawYamlOut.result || rawYamlOut).lookml_dashboard_id).toBe('ecom::raw_dash')
+    expect(jsonDetailCalls).toHaveLength(0)
+
+    // 3d. > 20-field dashboard caps json_detail probe at 20 fields while preserving distinct joined view prefixes (orders.* + customers.country)
+    jsonDetailCalls = []
+    sqlCheckMode = 'ok'
+    const wideFields = [...Array.from({ length: 22 }, (_, i) => `orders.dim_${i}`), 'customers.country', 'orders.count']
+    await LkrCodeMode.runPythonCode({
+      code: wrapDashboardCodeMode(`return upsert_udd("Wide UDD", folder_id="1", tiles=[{"title": "Wide Grid", "fields": ${JSON.stringify(wideFields)}}])`),
+      sdk: sqlGateSdk,
+      vars: { target_model: 'ecom', target_explore: 'orders' },
+    })
+    expect(jsonDetailCalls).toHaveLength(1)
+    expect(jsonDetailCalls[0]?.fields).toHaveLength(20)
+    expect(jsonDetailCalls[0]?.fields).toEqual(expect.arrayContaining(['orders.dim_0', 'customers.country']))
   })
 })
