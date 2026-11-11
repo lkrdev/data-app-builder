@@ -18,7 +18,7 @@ import {
   loadObjectArtifact, loadScriptArtifact, NativeContentState, PublishedAppState,
   publishScriptDashboard, resolveCaEmbedPath, ResolvedStudioUseCase, SavedScript,
   saveScriptArtifact, saveUserArtifact, saveUserConversation,
-  selectCaAgentViaIsolatedSubagent, StudioContentItem, StudioContentItemType,
+  selectCaAgentViaIsolatedSubagent, STUDIO_OVERVIEW_TAB_KEY, StudioContentItem, StudioContentItemType,
   studioModeToUseCase, StudioToolMode, StudioUseCase, studioUseCaseToMode,
   toTurnCrudItem, upsertStudioContentItem,
 } from './lookerApi'
@@ -27,6 +27,7 @@ import { getErrorMessage, normalizeCatalogMode, StudioAuthAndPrefs } from './stu
 import { StudioMetadata } from './studioControllerMetadata'
 
 export { getConvTargetId }
+export { STUDIO_OVERVIEW_TAB_KEY }
 
 export interface StudioViewerDocument {
   path: string; displayPath: string; title: string; kind: 'skill' | 'file'; isMarkdown: boolean; content: string; loading?: boolean
@@ -156,6 +157,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   )
 
   const activeContentItem = useMemo<StudioContentItem | null>(() => {
+    if (activeContentTabKey === STUDIO_OVERVIEW_TAB_KEY) return null
     const visible = contentItems.filter((it) => !it.hidden)
     if (visible.length === 0) return null
     return visible.find((it) => it.key === activeContentTabKey) || visible[visible.length - 1] || null
@@ -316,12 +318,13 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       const namespace = getArtifactNamespace(extensionSDK)
       const authCfg: AntigravityAuth = { mode: authMode, oauthToken, clientId, projectId, apiKey }
       const hasDeletedCrud = opts.messages.some((m) => m.crudItems?.some((x) => x.action === 'deleted'))
+      const persistedTabKey = activeContentTabKeyRef.current === STUDIO_OVERVIEW_TAB_KEY ? '' : activeContentTabKeyRef.current
       const baseConv = {
         id: opts.id, type: opts.type, interactionId: opts.interactionId, environmentId: opts.environmentId,
         explores: opts.explores, ...(opts.content ? { content: opts.content } : {}),
         ...(contentItemsRef.current.length > 0 || hasDeletedCrud
-          ? { contentItems: contentItemsRef.current, activeContentTabKey: activeContentTabKeyRef.current }
-          : activeContentTabKeyRef.current ? { activeContentTabKey: activeContentTabKeyRef.current } : {}),
+          ? { contentItems: contentItemsRef.current, ...(persistedTabKey ? { activeContentTabKey: persistedTabKey } : {}) }
+          : persistedTabKey ? { activeContentTabKey: persistedTabKey } : {}),
         messages: opts.messages,
       }
       setActiveConversationId(opts.id)
@@ -1046,14 +1049,20 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     (nextItems: StudioContentItem[], nextActiveKey: string) => {
       const convId = activeConversationIdRef.current
       if (!convId || !conversations.some((c) => c.id === convId)) return
+      const cleanKey = nextActiveKey === STUDIO_OVERVIEW_TAB_KEY ? '' : nextActiveKey
       void saveUserConversation(
         core40SDK, userIdRef.current || userId,
-        { id: convId, contentItems: nextItems, activeContentTabKey: nextActiveKey, updatedAt: new Date().toISOString() },
+        { id: convId, contentItems: nextItems, activeContentTabKey: cleanKey, updatedAt: new Date().toISOString() },
         getArtifactNamespace(extensionSDK)
       ).then((list) => setConversations(list)).catch(() => {})
     },
     [conversations, core40SDK, extensionSDK, setConversations, userId, userIdRef]
   )
+
+  const handleSelectOverview = useCallback(() => {
+    setActiveViewerDocument(null)
+    setActiveContentTabKey(STUDIO_OVERVIEW_TAB_KEY)
+  }, [setActiveContentTabKey])
 
   const handleSelectContentTab = useCallback(
     (key: string) => {
@@ -1223,7 +1232,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     contentItems, contentItemsRef, setContentItems,
     activeContentTabKey, activeContentTabKeyRef, setActiveContentTabKey,
     activeContentItem, upsertContentItem,
-    handleSelectContentTab, handleHideContentTab,
+    handleSelectOverview, handleSelectContentTab, handleHideContentTab,
     embedNonce, setEmbedNonce, bumpEmbedNonce,
     healthReport, setHealthReport, lastHealthIdRef,
     scriptId, setScriptId, scriptTitle, setScriptTitle,

@@ -51,7 +51,7 @@ import {
 } from '../components/StudioDesignSystem'
 import {
   ALLOWED_EXTERNAL_WINDOW_PATTERNS, copyLinkWithExtensionSdk,
-  createLookerEmbedPreloadController, DOC_UI_COMPONENTS, fetchAvailableLookerConnectionsMarkdown, getStarterPromptsForUseCase,
+  createLookerEmbedPreloadController, deriveConversationOverviewData, DOC_UI_COMPONENTS, fetchAvailableLookerConnectionsMarkdown, getStarterPromptsForUseCase,
   isAllowedExternalWindowUrl, isSandboxMarkdownPath, normalizeLookerEmbedUrl, normalizeLookerProjectRootUrl, openOrCopyMarkdownLink,
   parseInViewerLookerLink, renderUseCaseGuideMarkdown, resolveLookerEmbedTarget,
   STARTER_PROMPTS_BY_USE_CASE, StarterPromptButtons, StudioMarkdown, USE_CASE_BADGES,
@@ -80,7 +80,7 @@ import {
   saveNativeContentArtifact, saveStoredBusySendAction, saveUserArtifact, saveUserConversation, saveUserEnvironmentId, searchGlobalContentV2,
   searchLookerFolders, selectCaAgentViaIsolatedSubagent, shouldRouteToIsolatedCaSubagent,
   DEFAULT_BUSY_SEND_ACTION, loadStoredBusySendAction, STUDIO_BUSY_SEND_ACTION_STORAGE_KEY,
-  STUDIO_FOLDER_STORAGE_KEY, STUDIO_MODES, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
+  STUDIO_FOLDER_STORAGE_KEY, STUDIO_MODES, STUDIO_OVERVIEW_TAB_KEY, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
   StudioContentItem, SWR_DEDUPED_METHODS, upsertStudioContentItem, UserArtifactIndexItem, userStudioConfigArtifactKey,
 } from '../lookerApi'
 import {
@@ -8464,5 +8464,146 @@ customElements.define('good-compare-app', GoodCompareApp);`
     } finally {
       rmSync(workDir, { recursive: true, force: true })
     }
+  })
+
+  test('deriveConversationOverviewData aggregates Review, Content, Changed Files, API Calls, Skills Used, Data Context, Links, and Uploads', () => {
+    expect(STUDIO_OVERVIEW_TAB_KEY).toBe('__overview__')
+
+    const overview = deriveConversationOverviewData({
+      hostUrl: 'https://demo.looker.com',
+      pendingPerm: {
+        req: { operation: 'create_dashboard', httpMethod: 'POST', path: '/dashboards' },
+      },
+      lookmlBundle: {
+        id: 'ecom_medallion',
+        title: 'Medallion Layer',
+        project_id: 'ecom_medallion',
+        validation: { passed: false, error_count: 2, errors: [{ message: 'Unknown field' }, { message: 'Join missing' }] },
+        tests: [{ test_name: 'pk_unique', success: true }, { test_name: 'margin_positive', success: false }],
+        queries: [{ query_index: 0, label: 'Revenue Parity', sql_slug: 'sql_1', explore_slug: 'exp_1' }],
+        files: [
+          { path: 'bronze/orders.view.lkml', action: 'created', diff: '+view: orders {}' },
+          { path: 'silver/orders.refinement.lkml', action: 'updated', diff: '+measure: net {}' },
+        ],
+      },
+      contentItems: [
+        { key: 'dashboard:42', id: '42', contentType: 'dashboard', title: 'Exec KPIs', embedPath: '/embed/dashboards/42', hidden: false },
+        { key: 'look:19', id: '19', contentType: 'look', title: 'Margin Look', embedPath: '/embed/looks/19', hidden: true },
+      ],
+      activatedLookmlSkills: ['agentic-lookml'],
+      selectedExplores: ['thelook::order_items'],
+      mentionedItems: [{ type: 'dashboard', id: '14', title: 'Q3 Baseline' }],
+      selectedFolderId: '1',
+      selectedFolderLabel: 'My folder',
+      pastedImages: [{ name: 'wireframe.png', mimeType: 'image/png' }],
+      windowApiCalls: [
+        { method: 'GET', route: '/api/4.0/artifacts/data_app_builder::data_app_builder/user_1', duration_ms: 12, response: { ok: true, status: 200, body: [] } },
+        { method: 'GET', route: '/api/4.0/lookml_models/thelook/explores/order_items?fields=name', duration_ms: 41.6, response: { ok: true, status: 200, body: {} } },
+        { method: 'POST', route: '/queries/run/json', duration_ms: 310, response: { ok: false, status: 422, body: { message: 'Bad field' } } },
+      ],
+      messages: [
+        {
+          role: 'user',
+          text: '/looker-dashboard Build KPIs and validate LookML',
+          images: ['data:image/png;base64,AAA'],
+        },
+        {
+          role: 'assistant',
+          text: 'Created [Exec KPIs](/dashboards/42), ignored [XSS](javascript:alert(1)), and saved `/workspace/content_inventory.md`.\n```sql\n-- https://internal-code-comment.example.com/skip\n```\nReference: https://cloud.google.com/looker/docs.',
+          activitySteps: [
+            { id: 's1', kind: 'skill', title: 'Reading skill looker-field-profiler', path: '/workspace/skills/looker-field-profiler/SKILL.md', status: 'done' },
+            { id: 's2', kind: 'file', title: 'Writing /workspace/AGENTS.md', path: '/workspace/AGENTS.md', status: 'done' },
+            { id: 's2b', kind: 'file', title: 'Viewing /workspace/readonly_note.md', path: '/workspace/readonly_note.md', status: 'done' },
+            { id: 's2c', kind: 'file', title: 'Writing /workspace/../etc/passwd', path: '/workspace/../etc/passwd', status: 'done' },
+            { id: 's3', kind: 'file', title: 'Writing /workspace/kda_report.md', path: '/workspace/kda_report.md', status: 'done' },
+            {
+              id: 's4',
+              kind: 'codemode',
+              title: 'Run inline query',
+              content: [
+                '# GET /api/4.0/lookml_models/thelook/explores/order_items (42ms)',
+                '# POST /api/4.0/artifacts/ns (9ms)',
+                '# POST /api/4.0/dashboards (95ms)',
+                '# POST /api/4.0/queries/run/sql [ERR 500] (120ms)',
+              ].join('\n'),
+              status: 'done',
+            },
+          ],
+        },
+      ],
+    })
+
+    // Review prioritizes pending permission, then LookML validation failure
+    expect(overview.primaryReview).toEqual(
+      expect.objectContaining({ kind: 'permission', badgeText: '1 pending', badgeTone: 'warning' })
+    )
+    expect(overview.reviewItems[1]).toEqual(
+      expect.objectContaining({ kind: 'lookml', badgeText: '2 errors', badgeTone: 'danger' })
+    )
+
+    // Health Check reports omit diagnostic grades in Review; Data App fallback surfaces apps/current/app.js under kind: 'files'
+    const healthOnly = deriveConversationOverviewData({
+      messages: [{ role: 'user', text: 'Audit instance' }, { role: 'assistant', text: 'Done.' }],
+      healthReport: {
+        id: 'hc_1',
+        title: '3-Pillar Audit',
+        tddMarkdown: '# TDD',
+        scores: { overallScore: 72, grade: 'B- (Optimization Recommended)', transcriberScore: 3.1 },
+      } as unknown as Parameters<typeof deriveConversationOverviewData>[0]['healthReport'],
+    })
+    expect(healthOnly.primaryReview).toBeNull()
+    expect(healthOnly.contentRows[0]?.shortTag).toBe('Health Check')
+
+    const appFallback = deriveConversationOverviewData({
+      messages: [{ role: 'user', text: 'Build app' }, { role: 'assistant', text: 'Built app.' }],
+      publishedApp: { dashboardId: '88', title: 'Revenue Data App', folderId: '1', extensionId: 'ext', elementId: '1', code: 'export default {}' },
+      currentAppCode: 'export default class App {}',
+    })
+    expect(appFallback.contentRows[0]).toEqual(expect.objectContaining({ key: 'data_app:88', shortTag: 'Data App' }))
+    expect(appFallback.primaryReview).toEqual(expect.objectContaining({ kind: 'files', subtitle: 'apps/current/app.js', badgeText: '1 file' }))
+
+    // Content preserves both visible and hidden items
+    expect(overview.contentRows.map((r) => ({ key: r.key, shortTag: r.shortTag, hidden: r.hidden }))).toEqual([
+      { key: 'dashboard:42', shortTag: 'UDD', hidden: false },
+      { key: 'look:19', shortTag: 'Look', hidden: true },
+    ])
+
+    // Changed Files excludes internal /workspace/AGENTS.md, read-only Viewing steps, and '..' traversal
+    expect(overview.changedFiles.map((f) => f.label)).toEqual([
+      'bronze/orders.view.lkml',
+      'silver/orders.refinement.lkml',
+      'kda_report.md',
+      'content_inventory.md',
+    ])
+
+    // API Calls strips /artifacts persistence, preserves 422 failure, deduplicates overlapping step logs, and parses [ERR 500]
+    expect(overview.apiCalls).toEqual([
+      expect.objectContaining({ method: 'GET', route: '/lookml_models/thelook/explores/order_items', status: 200, ok: true, durationMs: 42, source: 'window' }),
+      expect.objectContaining({ method: 'POST', route: '/queries/run/json', status: 422, ok: false, durationMs: 310, source: 'window' }),
+      expect.objectContaining({ method: 'POST', route: '/dashboards', status: null, ok: true, durationMs: 95, source: 'turn' }),
+      expect.objectContaining({ method: 'POST', route: '/queries/run/sql', status: 500, ok: false, durationMs: 120, source: 'turn' }),
+    ])
+
+    // Skills Used merges activated LookML skills, /slash commands, and skill steps without duplicates
+    expect(overview.skillsUsed.map((s) => s.id)).toEqual([
+      'agentic-lookml',
+      'looker-dashboard',
+      'looker-field-profiler',
+    ])
+
+    // Links extracts assistant markdown links, bare URLs, and LookML SQL/Explore parity slugs while skipping javascript: and fenced code URLs
+    expect(overview.links.map((l) => l.href)).toEqual([
+      '/dashboards/42',
+      'https://cloud.google.com/looker/docs',
+      '/sql/sql_1',
+      '/x/exp_1',
+    ])
+    expect(overview.links[0].inViewerTarget?.contentType).toBe('dashboard')
+
+    // Data Context & Uploads
+    expect(overview.context.explores).toEqual(['thelook::order_items'])
+    expect(overview.context.mentions).toHaveLength(1)
+    expect(overview.context.folderLabel).toBe('My folder')
+    expect(overview.context.uploads.map((u) => u.label)).toEqual(['Screenshot #1', 'wireframe.png'])
   })
 })
