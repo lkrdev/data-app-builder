@@ -522,11 +522,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
                     disabled={!selectedFolderId}
                     title={`Open ${selectedFolderLabel} in Looker`}
                     aria-label={`Open ${selectedFolderLabel} in Looker`}
-                    onClick={() => {
-                      if (selectedFolderId) {
-                        extensionSDK?.openBrowserWindow?.(`/folders/${encodeURIComponent(selectedFolderId)}`, '_blank')
-                      }
-                    }}
+                    onClick={() => selectedFolderId && extensionSDK?.openBrowserWindow?.(`/folders/${encodeURIComponent(selectedFolderId)}`, '_blank')}
                   >
                     <ExternalLink size={12} strokeWidth={1.75} aria-hidden="true" />
                   </StudioButton>
