@@ -6686,4 +6686,386 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       collapsedAfterClose: true,
     })
   }, 20000)
+
+  test('Unified Stage + pinned far-right Overview Explorer keeps Looker iframe warm (/preload <-> loadDashboard/loadLook/loadExplore) without unmounting across Review, Changed Files, Skills, API Calls, and Content', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    await chrome.send('Emulation.setDeviceMetricsOverride', {
+      width: 1440,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    })
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=data_app` })
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && window.__LOOKER_EMBED_STATE__ && document.querySelector('[data-testid="looker-embed-container"] iframe'))`,
+        returnByValue: true,
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 60))
+    }
+
+    const res = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const s = window.__DAB_STUDIO__;
+        const container = document.querySelector('[data-testid="looker-embed-container"]');
+        const iframeContainer = document.querySelector('.dab-iframe-container');
+        const iframe0 = container.querySelector('iframe');
+        const ov0 = document.querySelector('[data-testid="studio-overview-sidebar"]');
+
+        window.lkr_codemode_api_calls = [
+          {
+            method: 'GET',
+            route: '/lookml_models/thelook/explores/order_items',
+            query_params: { fields: 'id,name,dimensions' },
+            body: null,
+            response: { ok: true, status: 200, body: { name: 'order_items', label: 'Order Items' } },
+            timestamp: '2026-11-11T20:00:00Z',
+            duration_ms: 48,
+          },
+          {
+            method: 'POST',
+            route: '/queries/run/json',
+            query_params: { limit: 500 },
+            body: { model: 'thelook', view: 'order_items', fields: ['order_items.bad_field'] },
+            response: { ok: false, status: 422, body: { message: 'Unknown field order_items.bad_field' } },
+            timestamp: '2026-11-11T20:00:01Z',
+            duration_ms: 194,
+          },
+        ];
+
+        s.setLookmlBundle({
+          id: 'ecom_proj',
+          title: 'LookML: ecom_proj',
+          project_id: 'ecom_proj',
+          model_name: 'thelook',
+          branch_name: 'dev_bryan',
+          files: [
+            {
+              path: 'bronze/orders.view.lkml',
+              action: 'created',
+              content: 'view: orders {\\n  sql_table_name: ecom.orders ;;\\n}\\n',
+              diff: '--- a/bronze/orders.view.lkml\\n+++ b/bronze/orders.view.lkml\\n@@ -0,0 +1,3 @@\\n+view: orders {\\n+  sql_table_name: ecom.orders ;;\\n+}\\n',
+            },
+            {
+              path: 'silver/orders.refinement.lkml',
+              action: 'updated',
+              content: 'view: +orders {\\n  measure: total_revenue { type: sum sql: \${TABLE}.sale_price ;; }\\n}\\n',
+              diff: '--- a/silver/orders.refinement.lkml\\n+++ b/silver/orders.refinement.lkml\\n@@ -1,1 +1,3 @@\\n+view: +orders {\\n+  measure: total_revenue { type: sum sql: \${TABLE}.sale_price ;; }\\n+}\\n',
+            },
+          ],
+          validation: { passed: true, error_count: 0, errors: [] },
+          tests: [{ test_name: 'orders_pk_unique', success: true }],
+          queries: [{ query_index: 0, label: 'Revenue Parity', sql_slug: 'sql_rev_1', explore_slug: 'exp_rev_1', parity_status: 'matched' }],
+        });
+
+        s.setContentItems([
+          { key: 'dashboard:42', id: '42', dashboardId: '42', contentType: 'dashboard', title: 'Executive KPIs', embedPath: '/embed/dashboards/42', hidden: false },
+          { key: 'look:15', id: '15', lookId: '15', contentType: 'look', title: 'Top Brands Look', embedPath: '/embed/looks/15', hidden: false },
+          { key: 'explore:thelook::order_items', id: 'thelook::order_items', exploreId: 'thelook::order_items', contentType: 'explore', title: 'Order Items Explore', embedPath: '/embed/explore/thelook/order_items', hidden: false },
+          { key: 'lookml:ecom_proj', id: 'ecom_proj', projectId: 'ecom_proj', contentType: 'lookml', title: 'LookML: ecom_proj', embedPath: '/lookml/ecom_proj', hidden: false },
+        ]);
+        s.handleSelectContentTab('dashboard:42');
+        s.setMessages([
+          { role: 'user', text: '/looker-dashboard Build Executive KPIs' },
+          { role: 'assistant', text: 'Built [Executive KPIs](/dashboards/42) and LookML refinements.' },
+        ]);
+        await new Promise((r) => setTimeout(r, 120));
+
+        // 1. Option A layout: Stage + docked 264px Overview rail + active slider resizer
+        const resizer = document.querySelector('[data-testid="workspace-split-resizer"]');
+        const stageEl = document.querySelector('[data-testid="studio-unified-stage"]');
+        const ovDocked = ov0.getAttribute('data-docked') === 'true' && Math.round(ov0.getBoundingClientRect().width) === 236;
+        const dashRowActive = document.querySelector('[data-testid="overview-content-item-dashboard:42"]')?.getAttribute('aria-current') === 'true';
+        const stageWidthBeforeResize = Math.round(stageEl.getBoundingClientRect().width);
+        resizer.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+        resizer.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 40));
+        const stageWidthAfterResize = Math.round(stageEl.getBoundingClientRect().width);
+        const sliderGrewStage = stageWidthAfterResize > stageWidthBeforeResize;
+
+        // Toggle Explorer rail closed -> Stage widens -> toggle back open
+        document.querySelector('[data-testid="stage-explorer-toggle-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const stageWidthRailHidden = Math.round(stageEl.getBoundingClientRect().width);
+        document.querySelector('[data-testid="stage-explorer-toggle-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const explorerToggleWorks = stageWidthRailHidden > stageWidthAfterResize && Boolean(document.querySelector('[data-testid="studio-overview-sidebar"]'));
+
+        // 2. Click Review in pinned Overview rail -> transitions iframe to /preload (display:none) without unmounting!
+        document.querySelector('[data-testid="overview-nav-review"]')?.click();
+        await new Promise((r) => setTimeout(r, 100));
+        const reviewState = {
+          paneOpen: Boolean(document.querySelector('[data-testid="stage-review-pane"]')),
+          reviewRowActive: document.querySelector('[data-testid="overview-nav-review"]')?.getAttribute('aria-current') === 'true',
+          hasChecksCard: Boolean(document.querySelector('[data-testid="stage-review-checks-card"]')),
+          diffFileCount: document.querySelectorAll('[data-testid^="stage-review-file-"]').length,
+          embedPreloaded: container.getAttribute('data-embed-state') === 'preloaded' && container.getAttribute('data-embed-target') === '/preload',
+          iframeHidden: window.getComputedStyle(iframeContainer).display === 'none',
+          sameIframe: container.querySelector('iframe') === iframe0,
+        };
+
+        // 3. Click Changed File #1 (silver/orders.refinement.lkml) in pinned Overview rail -> selects exact .lkml file #1!
+        document.querySelector('[data-testid="overview-file-item-1"]')?.click();
+        await new Promise((r) => setTimeout(r, 80));
+        const lookmlFileState = {
+          fileRowActive: document.querySelector('[data-testid="overview-file-item-1"]')?.getAttribute('aria-current') === 'true',
+          secondTabPrimary: document.querySelector('[data-testid="lookml-file-tab-1"]')?.classList.contains('dab-btn-primary'),
+          codeContainsRefinement: (document.querySelector('[data-testid="lookml-code-pre"]')?.textContent || '').includes('view: +orders'),
+          sameIframe: container.querySelector('iframe') === iframe0,
+        };
+
+        // 4. Click Skill in pinned Overview rail -> opens unified viewer-document-pane with Rendered | Raw toggle
+        document.querySelector('[data-testid="overview-skill-item-looker-dashboard"]')?.click();
+        await new Promise((r) => setTimeout(r, 80));
+        const skillRendered = Boolean(document.querySelector('[data-testid="viewer-document-markdown"]'));
+        document.querySelector('[data-testid="viewer-document-mode-raw"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const skillRaw = Boolean(document.querySelector('[data-testid="viewer-document-code"]'));
+        const skillState = {
+          skillRowActive: document.querySelector('[data-testid="overview-skill-item-looker-dashboard"]')?.getAttribute('aria-current') === 'true',
+          skillRendered,
+          skillRaw,
+          sameIframe: container.querySelector('iframe') === iframe0,
+        };
+
+        // 5. Expand API Calls in pinned Overview rail & click failed 422 POST /queries/run/json -> opens stage-api-inspector
+        document.querySelector('[data-testid="overview-section-api-calls-toggle"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        document.querySelector('[data-testid="overview-api-call-1"]')?.click();
+        await new Promise((r) => setTimeout(r, 80));
+        const apiInspectorText = document.querySelector('[data-testid="stage-api-inspector"]')?.innerText || '';
+        const apiState = {
+          inspectorOpen: Boolean(document.querySelector('[data-testid="stage-api-inspector"]')),
+          apiRowActive: document.querySelector('[data-testid="overview-api-call-1"]')?.getAttribute('aria-current') === 'true',
+          showsQueryParams: Boolean(document.querySelector('[data-testid="stage-api-query-params"]')),
+          showsRequestBody: Boolean(document.querySelector('[data-testid="stage-api-request-body"]')),
+          shows422Body: apiInspectorText.includes('Unknown field order_items.bad_field'),
+          embedPreloaded: container.getAttribute('data-embed-state') === 'preloaded',
+          sameIframe: container.querySelector('iframe') === iframe0,
+        };
+
+        // 6. Click Look #15 -> Explore -> Dashboard #42 -> Overview in pinned Overview rail -> loadLook, loadExplore, loadDashboard, /preload on SAME iframe0!
+        const callsStart = (window.__LOOKER_EMBED_STATE__?.calls || []).length;
+        document.querySelector('[data-testid="overview-content-item-look:15"]')?.click();
+        await new Promise((r) => setTimeout(r, 100));
+        const afterLook = {
+          state: container.getAttribute('data-embed-state'),
+          target: container.getAttribute('data-embed-target'),
+          visible: window.getComputedStyle(iframeContainer).display !== 'none',
+          sameIframe: container.querySelector('iframe') === iframe0,
+        };
+
+        document.querySelector('[data-testid="overview-content-item-explore:thelook::order_items"]')?.click();
+        await new Promise((r) => setTimeout(r, 100));
+        const afterExplore = {
+          state: container.getAttribute('data-embed-state'),
+          target: container.getAttribute('data-embed-target'),
+          sameIframe: container.querySelector('iframe') === iframe0,
+        };
+
+        document.querySelector('[data-testid="overview-content-item-dashboard:42"]')?.click();
+        await new Promise((r) => setTimeout(r, 100));
+        const afterDash = {
+          state: container.getAttribute('data-embed-state'),
+          target: container.getAttribute('data-embed-target'),
+          sameIframe: container.querySelector('iframe') === iframe0,
+        };
+
+        document.querySelector('[data-testid="studio-overview-tab"]')?.click();
+        await new Promise((r) => setTimeout(r, 100));
+        const afterOverview = {
+          isOverviewMode: document.querySelector('.dab-right-pane')?.getAttribute('data-overview-mode') === 'true',
+          state: container.getAttribute('data-embed-state'),
+          target: container.getAttribute('data-embed-target'),
+          sameIframe: container.querySelector('iframe') === iframe0,
+          sameOverviewNode: document.querySelector('[data-testid="studio-overview-sidebar"]') === ov0,
+        };
+
+        const callSeq = (window.__LOOKER_EMBED_STATE__?.calls || []).slice(callsStart).map((c) => \`\${c.method}:\${c.arg}\`);
+
+        // Dark mode overflow + background-tab hide preservation on Review + Script/Report/CA iframe warmth
+        window.__DAB_STUDIO__.setThemeMode('dark');
+        document.querySelector('[data-testid="overview-nav-review"]')?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const darkNoOverflow = document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1;
+        document.querySelector('[data-testid="studio-content-tab-close-look:15"]')?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const reviewStayedOnBgTabHide = Boolean(document.querySelector('[data-testid="stage-review-pane"]'));
+
+        window.__DAB_STUDIO__.setHealthReport({ id: 'hc_1', title: 'Audit', tddMarkdown: '# Audit\\nAll clear.', scores: { overallScore: 92, grade: 'A-', transcriberScore: '3.80' } });
+        await new Promise((r) => setTimeout(r, 40));
+        window.__DAB_STUDIO__.upsertContentItem({ id: 'hc_1', contentType: 'report', title: 'Audit', embedPath: '/health/hc_1', hidden: false }, true);
+        await new Promise((r) => setTimeout(r, 50));
+        const sameIframeOnReport = container.querySelector('iframe') === iframe0 && container.getAttribute('data-embed-state') === 'preloaded';
+        window.__DAB_STUDIO__.upsertContentItem({ id: 'demo1', contentType: 'script', title: 'Script demo1', embedPath: '/tile/demo1', hidden: false }, true);
+        await new Promise((r) => setTimeout(r, 50));
+        const sameIframeOnScript = container.querySelector('iframe') === iframe0 && container.getAttribute('data-embed-state') === 'preloaded';
+        document.querySelector('[data-testid="overview-content-item-dashboard:42"]')?.click();
+        await new Promise((r) => setTimeout(r, 80));
+        const sameIframeAcrossAllModes = sameIframeOnReport && sameIframeOnScript && container.querySelector('iframe') === iframe0 && container.getAttribute('data-embed-state') === 'dashboard';
+        window.__DAB_STUDIO__.setThemeMode('light');
+
+        return {
+          ovDocked,
+          dashRowActive,
+          sliderGrewStage,
+          explorerToggleWorks,
+          reviewState,
+          lookmlFileState,
+          skillState,
+          apiState,
+          afterLook,
+          afterExplore,
+          afterDash,
+          afterOverview,
+          callSeq,
+          darkNoOverflow,
+          reviewStayedOnBgTabHide,
+          sameIframeAcrossAllModes,
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+
+    expect(res.result.value).toEqual({
+      ovDocked: true,
+      dashRowActive: true,
+      sliderGrewStage: true,
+      explorerToggleWorks: true,
+      reviewState: {
+        paneOpen: true,
+        reviewRowActive: true,
+        hasChecksCard: true,
+        diffFileCount: 3,
+        embedPreloaded: true,
+        iframeHidden: true,
+        sameIframe: true,
+      },
+      lookmlFileState: {
+        fileRowActive: true,
+        secondTabPrimary: true,
+        codeContainsRefinement: true,
+        sameIframe: true,
+      },
+      skillState: {
+        skillRowActive: true,
+        skillRendered: true,
+        skillRaw: true,
+        sameIframe: true,
+      },
+      apiState: {
+        inspectorOpen: true,
+        apiRowActive: true,
+        showsQueryParams: true,
+        showsRequestBody: true,
+        shows422Body: true,
+        embedPreloaded: true,
+        sameIframe: true,
+      },
+      afterLook: {
+        state: 'look',
+        target: '15',
+        visible: true,
+        sameIframe: true,
+      },
+      afterExplore: {
+        state: 'explore',
+        target: 'thelook/order_items',
+        sameIframe: true,
+      },
+      afterDash: {
+        state: 'dashboard',
+        target: '42',
+        sameIframe: true,
+      },
+      afterOverview: {
+        isOverviewMode: true,
+        state: 'preloaded',
+        target: '/preload',
+        sameIframe: true,
+        sameOverviewNode: true,
+      },
+      callSeq: [
+        'loadLook:15',
+        'loadExplore:thelook/order_items',
+        'loadDashboard:42',
+        'loadUrl:/preload',
+      ],
+      darkNoOverflow: true,
+      reviewStayedOnBgTabHide: true,
+      sameIframeAcrossAllModes: true,
+    })
+
+    // 7. Compact <= 1080px slide-over drawer ARIA/Escape/resize sync + 390x844 mobile bottom sheet navigation
+    await chrome.send('Emulation.setDeviceMetricsOverride', { width: 960, height: 800, deviceScaleFactor: 1, mobile: false })
+    const compactRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        window.dispatchEvent(new Event('resize'));
+        await new Promise((r) => setTimeout(r, 50));
+        const btn = document.querySelector('[data-testid="stage-explorer-toggle-btn"]');
+        const pressedClosed = btn?.getAttribute('aria-pressed');
+        btn?.click();
+        await new Promise((r) => setTimeout(r, 50));
+        const pressedOpen = btn?.getAttribute('aria-pressed');
+        const hasBackdrop = Boolean(document.querySelector('[data-testid="overview-mobile-backdrop"]'));
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 50));
+        const pressedAfterEsc = btn?.getAttribute('aria-pressed');
+        btn?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        return { pressedClosed, pressedOpen, hasBackdrop, pressedAfterEsc };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+    expect(compactRes.result.value).toEqual({
+      pressedClosed: 'false',
+      pressedOpen: 'true',
+      hasBackdrop: true,
+      pressedAfterEsc: 'false',
+    })
+
+    await chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
+    const desktopAfterResize = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        window.dispatchEvent(new Event('resize'));
+        await new Promise((r) => setTimeout(r, 50));
+        document.querySelector('[data-testid="overview-docked-hide-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 50));
+        const hiddenAfterDesktopClose = window.getComputedStyle(document.querySelector('[data-testid="studio-overview-sidebar"]')).display === 'none';
+        document.querySelector('[data-testid="stage-explorer-toggle-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        return { hiddenAfterDesktopClose };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+    expect(desktopAfterResize.result.value).toEqual({ hiddenAfterDesktopClose: true })
+
+    await chrome.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
+    const mobileRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        window.dispatchEvent(new Event('resize'));
+        document.querySelector('[data-testid="overview-nav-review"]')?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const tabsHiddenOnNonTabStage = window.getComputedStyle(document.querySelector('[data-testid="studio-content-tabs"]')).display === 'none';
+        const noMobileOverflow = document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1;
+        document.querySelector('[data-testid="mobile-viewer-overview-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const returnedToOverview = document.querySelector('.dab-right-pane')?.getAttribute('data-overview-mode') === 'true';
+        return { tabsHiddenOnNonTabStage, noMobileOverflow, returnedToOverview };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+    expect(mobileRes.result.value).toEqual({
+      tabsHiddenOnNonTabStage: true,
+      noMobileOverflow: true,
+      returnedToOverview: true,
+    })
+  }, 30000)
 })
