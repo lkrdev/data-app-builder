@@ -2,6 +2,7 @@ import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { IArtifact, IDashboard, IDashboardElement, Looker40SDK } from '@looker/sdk'
 import { mutate, SWRConfig, unstable_serialize } from 'swr'
 
+import { cleanLookmlProjectId } from './antigravityTypes'
 import {
   buildCaEmbedPath,
   normalizeCaEmbedPath,
@@ -205,8 +206,8 @@ export function normalizeStudioContentItem(
 ): StudioContentItem {
   const rawId = String(raw.id || '').trim()
   const contentType = raw.contentType
-  const canonProj = contentType === 'lookml' ? String(raw.projectId || '').trim() : ''
-  const id = canonProj || rawId
+  const canonProj = contentType === 'lookml' ? cleanLookmlProjectId(raw.projectId) : ''
+  const id = contentType === 'lookml' ? canonProj || cleanLookmlProjectId(rawId) : rawId
   const key = contentType === 'lookml' ? `lookml:${id}` : String(raw.key || `${contentType}:${id}`).trim()
   const title =
     contentType === 'lookml' && canonProj
@@ -224,8 +225,9 @@ export function normalizeStudioContentItem(
   const createdInConversation =
     raw.createdInConversation !== undefined ? Boolean(raw.createdInConversation) : source !== undefined ? source === 'created' : undefined
   const out: StudioContentItem = Object.assign({}, raw, { key, id, contentType, title, embedPath })
-  if (contentType === 'lookml' && (raw.sessionId || rawId)) out.sessionId = raw.sessionId || rawId
+  if (contentType === 'lookml' && (raw.sessionId || id)) out.sessionId = cleanLookmlProjectId(raw.sessionId) || id
   if (canonProj) out.projectId = canonProj
+  else if (contentType === 'lookml') delete out.projectId
   if (source !== undefined) out.source = source
   if (createdInConversation !== undefined) out.createdInConversation = createdInConversation
   if (typeof raw.hidden === 'boolean') out.hidden = raw.hidden
@@ -315,9 +317,13 @@ export interface UserConversationEntry {
 }
 
 export function hydrateConversationContentItems(conv: Partial<UserConversationEntry>): StudioContentItem[] {
+  const isDefaultLookml = (it?: Partial<StudioContentItem> | null) =>
+    Boolean(it && it.contentType === 'lookml' && (it.key === 'lookml:default' || !cleanLookmlProjectId(it.projectId || it.id)))
   const hadDeletedTurn = Boolean(conv.messages?.some((m) => m.crudItems?.some((x) => x.action === 'deleted')))
   if (Array.isArray(conv.contentItems) && (conv.contentItems.length > 0 || hadDeletedTurn)) {
-    return conv.contentItems.filter((it): it is StudioContentItem => Boolean(it && it.id && it.contentType)).map((it) => normalizeStudioContentItem(it))
+    return conv.contentItems
+      .filter((it): it is StudioContentItem => Boolean(it && it.id && it.contentType) && !isDefaultLookml(it))
+      .map((it) => normalizeStudioContentItem(it))
   }
   const c = conv.content || {}
   const rawType = String(conv.type || conv.use_case || 'app').trim()
@@ -334,8 +340,8 @@ export function hydrateConversationContentItems(conv: Partial<UserConversationEn
     return items
   }
   if (rawType === 'lookml' || c.sessionId) {
-    const projId = typeof c.projectId === 'string' ? c.projectId.trim() : ''
-    const sid = String(c.sessionId || projId || c.id || conv.objectId || '').trim()
+    const projId = cleanLookmlProjectId(c.projectId)
+    const sid = cleanLookmlProjectId(c.sessionId || projId || c.id || conv.objectId)
     const canonId = projId || sid
     if (canonId) pushItem({ id: canonId, sessionId: sid || canonId, projectId: projId || undefined, contentType: 'lookml', title: projId ? `LookML: ${projId}` : fallbackTitle, updatedAt: conv.updatedAt })
     return items
@@ -447,6 +453,7 @@ export function resolveConversationRelatedContent(
       const item = normalizeStudioContentItem(rawItem)
       const itemId = item.id
       const targetId = String(item.dashboardId || item.lookId || item.lookmlDashboardId || itemId).trim()
+      if (!itemId && !targetId) continue
       const isCreated = rawItem.createdInConversation === true || rawItem.source === 'created'
       if (!isCreated && itemId !== base.objectId && targetId !== base.objectId && (mentionedIds.has(itemId) || (targetId && mentionedIds.has(targetId)))) continue
       if ((rawType === 'conversational-analytics' || rawType === 'ca') && !isCreated && ['dashboard', 'data_app', 'data-investigator', 'look'].includes(item.contentType)) continue
@@ -482,7 +489,7 @@ export function resolveConversationRelatedContent(
         extraUserKeys.push(`user_${uid}_dashboard_${itemId}`)
         extraSharedKeys.push(`obj_dashboard_${itemId}`)
         extraItems.push(`Content Studio artifact (obj_dashboard_${itemId})`)
-      } else if (item.contentType === 'lookml') {
+      } else if (item.contentType === 'lookml' && itemId) {
         extraUserKeys.push(`user_${uid}_lookml_${itemId}`)
         extraSharedKeys.push(`obj_lookml_${itemId}`)
         extraItems.push(`LookML session artifact (obj_lookml_${itemId})`)
@@ -560,12 +567,13 @@ export function resolveConversationRelatedContent(
   }
 
   if (rawType === 'lookml') {
-    const objectId = stripPrefix(String(conv.objectId || c.sessionId || c.id || conv.id || ''))
-    const items = uniq(objectId && `LookML session artifact (obj_lookml_${objectId})`)
+    const objectId = cleanLookmlProjectId(stripPrefix(String(conv.objectId || c.sessionId || c.id || c.projectId || (!hasExplicitContentItems ? conv.id : '') || '')))
+    const projId = cleanLookmlProjectId(c.projectId)
+    const items = uniq(objectId && `LookML session artifact (obj_lookml_${objectId})`, projId && projId !== objectId && `LookML session artifact (obj_lookml_${projId})`)
     return enrichWithContentItems({
       mode: 'lookml', objectId,
-      userIndexKeys: uniq(objectId && `user_${uid}_lookml_${objectId}`),
-      sharedObjectKeys: uniq(objectId && `obj_lookml_${objectId}`),
+      userIndexKeys: uniq(objectId && `user_${uid}_lookml_${objectId}`, projId && `user_${uid}_lookml_${projId}`),
+      sharedObjectKeys: uniq(objectId && `obj_lookml_${objectId}`, projId && `obj_lookml_${projId}`),
       summary: items.join(' + ') || 'LookML session artifact', items,
     })
   }
@@ -653,6 +661,7 @@ function normalizeConversationsArray(raw: unknown): UserConversationEntry[] {
       type: c.type || 'app',
       label: String(c.label || c.title || c.id),
       updatedAt: String(c.updatedAt || c.createdAt || ''),
+      ...(c.activeContentTabKey === 'lookml:default' ? { activeContentTabKey: undefined } : {}),
     }))
     .sort((a: UserConversationEntry, b: UserConversationEntry) =>
       String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))

@@ -10,46 +10,13 @@ export {
 import {
   type AntigravityActivityStep, type AntigravityInteractionOutput,
   type AntigravityInteractionPayload, type AntigravityInteractionStep, type AntigravityTurnTelemetry,
+  collectInteractionTextCandidates, extractNonThoughtText, parseTaggedJsonObjects,
 } from './antigravityTypes'
+export { collectInteractionTextCandidates, extractNonThoughtText, parseTaggedJsonObjects } from './antigravityTypes'
 import { type DataAppBundle, type NativeContentBundle, resolveNativeEmbedPath } from './lookerApi'
 import { BOOTSTRAP_LOOKML_PY, LKR_CLI_SITECUSTOMIZE_PY } from './lookmlTool'
 import { SANDBOX_AGENT_SKILL_FILES } from './sandboxSkillsBundle'
 export { SANDBOX_AGENT_SKILL_FILES } from './sandboxSkillsBundle'
-
-export function extractNonThoughtText(val: unknown): string {
-  if (typeof val === 'string') return val
-  if (Array.isArray(val)) return val.map(extractNonThoughtText).filter((s) => s.length > 0).join('')
-  if (val && typeof val === 'object') {
-    const obj = val as Record<string, unknown>
-    if (obj.type === 'thought' || obj.type === 'thinking' || obj.thought) return ''
-    for (let i = 0; i < 3; i++) {
-      const extracted = extractNonThoughtText(obj[['text', 'content', 'parts'][i]])
-      if (extracted) return extracted
-    }
-  }
-  return ''
-}
-
-export function collectInteractionTextCandidates(interaction: AntigravityInteractionPayload | null | undefined): string {
-  const out: unknown[] = [interaction?.output_text]
-  ;(interaction?.outputs || []).forEach((o) => {
-    out.push(o?.text)
-    if (o && o.type !== 'thought' && o.type !== 'thinking' && !o.thought) {
-      out.push(extractNonThoughtText(o.content ?? o.parts))
-    }
-  })
-  ;(interaction?.steps || []).forEach((s) => {
-    out.push(
-      s?.output,
-      s?.stdout,
-      s?.result,
-      s?.text,
-      s?.code_execution_result?.output,
-      extractNonThoughtText((s as Record<string, unknown>)?.content ?? (s as Record<string, unknown>)?.parts)
-    )
-  })
-  return out.filter((x): x is string => typeof x === 'string' && x.length > 0).join('\n')
-}
 
 export function extractInteractionOutputText(interaction: AntigravityInteractionPayload | null | undefined): string {
   if (typeof interaction?.output_text === 'string' && interaction.output_text.trim()) return interaction.output_text.trim()
@@ -90,8 +57,8 @@ export function extractInteractionOutputText(interaction: AntigravityInteraction
 }
 
 export function extractBundleFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): DataAppBundle | null {
-  const matches = Array.from(collectInteractionTextCandidates(interaction).matchAll(/<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g))
-  return matches.length > 0 ? (JSON.parse(matches[matches.length - 1][1].trim()) as DataAppBundle) : null
+  const hit = parseTaggedJsonObjects(collectInteractionTextCandidates(interaction), /<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g).find((p) => Boolean(p.raw_code || p.prod_code))
+  return (hit as unknown as DataAppBundle) || null
 }
 
 export function extractTddFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): string | null {
@@ -152,14 +119,10 @@ export function extractNativeContentFromInteraction(
   for (let i = steps.length - 1; i >= 0; i--) {
     const step = steps[i]
     if (step?.type === 'function_result' && step?.name === 'run_looker_codemode') {
-      const rawStr = typeof step.result === 'string' ? step.result : JSON.stringify(step.result || '')
-      const tagMatches = Array.from(rawStr.matchAll(/<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g))
-      if (tagMatches.length > 0) {
-        try {
-          const norm = normalizeNativeBundleCandidate(JSON.parse(tagMatches[tagMatches.length - 1][1].trim()), true)
-          if (norm) return norm
-        } catch { /* ignore */ }
-      }
+      const rObj = step.result && typeof step.result === 'object' ? (step.result as Record<string, unknown>) : null
+      const rawStr = typeof step.result === 'string' ? step.result : typeof rObj?.result === 'string' ? rObj.result : JSON.stringify(step.result || '')
+      const fastHit = parseTaggedJsonObjects(rawStr, /<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g).map((p) => normalizeNativeBundleCandidate(p, true)).find(Boolean)
+      if (fastHit) return fastHit
       try {
         const parsed = typeof step.result === 'string' ? JSON.parse(step.result) : step.result
         const parsedObj = parsed && typeof parsed === 'object' ? (parsed as { result?: unknown }) : undefined
@@ -168,16 +131,9 @@ export function extractNativeContentFromInteraction(
       } catch { /* ignore */ }
     }
   }
-  const matches = Array.from(
-    collectInteractionTextCandidates(interaction).matchAll(/<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g)
-  )
-  if (matches.length > 0) {
-    try {
-      const parsed = JSON.parse(matches[matches.length - 1][1].trim())
-      return normalizeNativeBundleCandidate(parsed, true) || (parsed as NativeContentBundle)
-    } catch { /* ignore */ }
-  }
-  return null
+  return parseTaggedJsonObjects(collectInteractionTextCandidates(interaction), /<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g)
+    .map((p) => normalizeNativeBundleCandidate(p, true))
+    .find(Boolean) || null
 }
 
 const KNOWN_LOOKER_SDK_CALL_RE =

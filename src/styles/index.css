@@ -503,6 +503,14 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 .dab-ov-more {align-self:flex-start;padding:2px 6px;border:none;border-radius:4px;background:transparent;color:var(--dab-text-muted);font:500 11px/1.2 inherit;cursor:pointer}
 .dab-ov-more:hover {background:var(--dab-surface-subtle);color:var(--dab-text-strong)}
 .dab-ov-note {padding:2px 4px;font-size:11.5px;line-height:1.4;color:var(--dab-text-muted)}
+.dab-info-tooltip-wrap {position:relative;display:inline-flex;align-items:center;gap:4px}
+.dab-info-tooltip-btn {display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:none;border-radius:999px;background:transparent;color:var(--dab-text-secondary,#475569);cursor:help;outline-offset:2px}
+.dab-info-tooltip-btn:hover,.dab-info-tooltip-btn:focus-visible {color:var(--dab-text,#1f2937);background:var(--dab-surface-subtle,#f1f5f9)}
+.dab-info-tooltip {position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);width:310px;padding:8px 10px;border-radius:8px;background:var(--dab-surface-elevated,#ffffff);border:1px solid var(--dab-border-strong,#cbd5e1);color:var(--dab-text,#1f2937);font-size:11.5px;font-weight:400;line-height:1.42;box-shadow:0 10px 25px rgba(15,23,42,0.16);z-index:120;opacity:0;visibility:hidden;pointer-events:none}
+:root[data-theme="dark"] .dab-info-tooltip,.dab-shell[data-theme="dark"] .dab-info-tooltip {box-shadow:0 12px 28px rgba(0,0,0,0.45)}
+.dab-info-tooltip strong {color:var(--dab-text,#1f2937);font-weight:600}
+.dab-info-tooltip code {padding:0 4px;border-radius:4px;background:var(--dab-surface-subtle,#f1f5f9);color:var(--dab-text-secondary,#334155);font:10.5px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace}
+.dab-info-tooltip-wrap[data-open="true"] .dab-info-tooltip {opacity:1;visibility:visible;pointer-events:auto}
 .dab-ov-mobile-backdrop {display:none}
 @media (max-width: 1080px) {
   .dab-ov-mobile-backdrop {display:block;position:absolute;inset:0;z-index:44;background:rgba(15,23,42,.24)}

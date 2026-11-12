@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
-  AntigravityActivityStep, AntigravityAuth, generateConversationLabel, LkrCodeMode,
+  AntigravityActivityStep, AntigravityAuth, cleanLookmlProjectId, generateConversationLabel, LkrCodeMode,
   PastedImage, runAntigravityTurn,
 } from './antigravity'
 import { ChatMessage, StudioMode } from './components/App'
@@ -15,7 +15,7 @@ import {
   createLookerCaConversation, deleteUserConversation, extractExploreIdsFromCode,
   formatExploreId, getArtifactNamespace, getConvTargetId, hydrateConversationContentItems,
   isLookmlTargetAlreadyLoaded, listSavedScripts, loadExistingDashboardApp, loadNativeContentById,
-  loadObjectArtifact, loadScriptArtifact, NativeContentState, PublishedAppState,
+  loadObjectArtifact, loadScriptArtifact, NativeContentState, normalizeStudioContentItem, PublishedAppState,
   publishScriptDashboard, resolveCaEmbedPath, ResolvedStudioUseCase, SavedScript,
   saveScriptArtifact, saveUserArtifact, saveUserConversation,
   selectCaAgentViaIsolatedSubagent, STUDIO_OVERVIEW_TAB_KEY, StudioContentItem, StudioContentItemType,
@@ -42,7 +42,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   const {
     extensionSDK, core40SDK, extHostData, history, location, isTileMount, mockExt,
     authMode, oauthToken, clientId, projectId, apiKey, selectedModel,
-    thinkingLevel, maxTotalTokens, isConfigured, disabledModes,
+    thinkingLevel, maxTotalTokens, maxToolRounds, isConfigured, disabledModes,
     resolvedUseCaseByIdRef, parsedRoute, setSelectedUseCase, explicitUseCaseRef,
     sharedEnvIdRef, syncSharedEnvironmentId, setAgentSession, setMessages, setBusyStatus,
     resetOAuthOnUnauthorized, setSidebarCollapsed,
@@ -273,7 +273,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       const msgs = (matchedConv?.messages as ChatMessage[] | undefined) ?? opts.messages ?? (opts.studio?.messages as ChatMessage[] | undefined)
       if (matchedConv) {
         hydrateConversationContentItems(matchedConv).forEach((item) => upsertContentItem(item, false))
-        if (matchedConv.activeContentTabKey) setActiveContentTabKey(matchedConv.activeContentTabKey)
+        if (matchedConv.activeContentTabKey && matchedConv.activeContentTabKey !== 'lookml:default') setActiveContentTabKey(matchedConv.activeContentTabKey)
       }
       setActiveObjectId(opts.id)
       setActiveConversationId((prev) => {
@@ -449,7 +449,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
 
   const loadLookmlSessionById = useCallback(
     (rawId: string, pushRoute = true) => {
-      const id = rawId.trim()
+      const id = cleanLookmlProjectId(rawId)
       if (!id) return Promise.resolve()
       const matchedSessionId = conversations.find(
         (c) => c.type === 'lookml' && (c.id === activeConversationIdRef.current || getConvTargetId(c.content, c.type) === id)
@@ -457,12 +457,13 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       lastLookmlIdRef.current = id
       return runWithBusy(`Loading LookML session "${id}"...`, `Could not load LookML session "${id}"`, () =>
         loadLookmlSessionArtifact(core40SDK, extensionSDK, id, matchedSessionId).then((loaded) => {
-          const canonProj = loaded.bundle?.project_id?.trim() || String(loaded.id || id).trim()
+          const validProj = cleanLookmlProjectId(loaded.bundle?.project_id)
+          const canonProj = validProj || cleanLookmlProjectId(loaded.id) || id
           lastLookmlIdRef.current = canonProj
           resolvedUseCaseByIdRef.current[canonProj] = 'lookml'
           resolvedUseCaseByIdRef.current[loaded.id] = 'lookml'
           setSelectedUseCase('lookml'); setLookmlBundle(loaded.bundle)
-          if (loaded.bundle?.project_id) setLookmlProjectId(loaded.bundle.project_id)
+          if (validProj) setLookmlProjectId(validProj)
           setSelectedExplores(loaded.studio?.explores?.filter(Boolean) || [])
           upsertContentItem({
             id: canonProj, sessionId: String(loaded.id), projectId: canonProj,
@@ -754,7 +755,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
             sdk: core40SDK, extensionSDK, userId, environmentId: sharedEnvIdRef.current || agentSession.environmentId,
             conversationId: convId, onEnvironmentUpdated: syncSharedEnvironmentId,
             auth: { mode: authMode, oauthToken, clientId, projectId, apiKey }, session: agentSession,
-            model: selectedModel, thinkingLevel, maxTotalTokens, selectedExplores, folderId: selectedFolderId,
+            model: selectedModel, thinkingLevel, maxTotalTokens, maxToolRounds, selectedExplores, folderId: selectedFolderId,
             schemaMarkdown, userPrompt: customFocus, images, customSystemGuide: HEALTH_CHECK_SYSTEM_GUIDE,
             extraSources: [
               { type: 'inline', content: THREE_PILLAR_CODEMODE_PY, target: '/workspace/three_pillar_audit.py' },
@@ -889,10 +890,11 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       if (hydratedConvRouteRef.current !== hydrationKey && !isOptimisticInFlight) {
         hydratedConvRouteRef.current = hydrationKey
         const initialItems = hydrateConversationContentItems(convMatch)
-        if (initialItems.length > 0) {
+        if (initialItems.length > 0 || convMatch.contentItems?.length || convMatch.activeContentTabKey === 'lookml:default') {
           setContentItems(initialItems)
           const fallbackTab = initialItems.filter((it) => !it.hidden).slice(-1)[0]?.key || ''
-          setActiveContentTabKey(convMatch.activeContentTabKey ?? fallbackTab)
+          const savedTab = convMatch.activeContentTabKey === 'lookml:default' ? undefined : convMatch.activeContentTabKey
+          setActiveContentTabKey(savedTab ?? fallbackTab)
         }
         if (convMatch.messages?.length) setMessages(mergeCachedActivitySteps(convMatch.messages as ChatMessage[]))
         if (convMatch.explores?.length) setSelectedExplores(convMatch.explores)
@@ -977,6 +979,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       setContentItems([])
       setActiveContentTabKey('')
       setLookmlBundle(null)
+      setLookmlProjectId('')
       setHealthReport(null)
       setCaConversation(null)
       setCurrentAppCode('')
@@ -1025,9 +1028,9 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
           void loadExistingDashboardApp(core40SDK, dashId).then((l) => { setCurrentAppCode(l.code); setPublishedAppState(l) }).catch(() => {})
         }
       } else if (ct === 'lookml') {
-        const targetProj = item.projectId || item.id
-        if (!isLookmlTargetAlreadyLoaded('lookml', targetProj, lookmlBundle?.id || lookmlBundle?.project_id ? { id: lookmlBundle.id, project_id: lookmlBundle.project_id } : null, item.sessionId) && lookmlBundle?.id !== item.id) {
-          void loadLookmlSessionArtifact(core40SDK, extensionSDK, targetProj, item.sessionId).then((l) => { setLookmlBundle(l.bundle); if (l.bundle?.project_id) setLookmlProjectId(l.bundle.project_id) }).catch(() => {})
+        const targetProj = cleanLookmlProjectId(item.projectId) || cleanLookmlProjectId(item.id)
+        if (targetProj && !isLookmlTargetAlreadyLoaded('lookml', targetProj, lookmlBundle?.id || lookmlBundle?.project_id ? { id: lookmlBundle.id, project_id: lookmlBundle.project_id } : null, item.sessionId) && lookmlBundle?.id !== item.id) {
+          void loadLookmlSessionArtifact(core40SDK, extensionSDK, targetProj, item.sessionId).then((l) => { setLookmlBundle(l.bundle); const vp = cleanLookmlProjectId(l.bundle?.project_id); if (vp) setLookmlProjectId(vp) }).catch(() => {})
         }
       } else if (ct === 'script' && (!loadedScript || scriptId !== item.id)) {
         setLoadedScript(true); setScriptId(item.id)
@@ -1120,7 +1123,8 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       const initialItems = hydrateConversationContentItems(conv)
       setContentItems(initialItems)
       const initialVisible = initialItems.filter((it) => !it.hidden)
-      const initialTabKey = conv.activeContentTabKey ?? (initialVisible[initialVisible.length - 1]?.key || '')
+      const savedTab = conv.activeContentTabKey === 'lookml:default' ? undefined : conv.activeContentTabKey
+      const initialTabKey = savedTab ?? (initialVisible[initialVisible.length - 1]?.key || '')
       setActiveContentTabKey(initialTabKey)
       if (conv.explores?.length) setSelectedExplores(conv.explores)
       const targetId = getConvTargetId(conv.content, conv.type)
@@ -1131,6 +1135,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       } else {
         setLoadedScript(false)
         setActiveObjectId('')
+        if (mode === 'lookml') { setLookmlBundle(null); setLookmlProjectId('') }
       }
       if (initialTabKey && contentItemsRef.current.some((it) => it.key === initialTabKey && !it.hidden)) {
         setActiveContentTabKey(initialTabKey)
@@ -1195,7 +1200,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     const cleanId = String(conversationId || '').trim()
     const target = explicitTarget || conversations.find((c) => c.id === cleanId)
     const targetIds = new Set(
-      [cleanId, target?.objectId, getConvTargetId(target?.content, target?.type), ...(target?.contentItems || []).map((it) => it.id)]
+      [cleanId, target?.objectId, getConvTargetId(target?.content, target?.type), ...(target?.contentItems || []).map((it) => normalizeStudioContentItem(it).id)]
         .map((v) => String(v || '').trim())
         .filter(Boolean)
     )

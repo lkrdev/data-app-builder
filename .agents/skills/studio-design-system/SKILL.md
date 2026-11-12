@@ -20,7 +20,7 @@ Use this skill whenever creating, modifying, styling, or testing UI components i
 | **#64** | Embedding live React buttons/dropdowns inside Use-Case documentation Markdown allowed users or tests to accidentally trigger actions or tab-focus hidden controls inside docs. | Wrap all embedded documentation UI previews in `<StudioDocPreview component="...">`, which enforces `pointer-events: none; user-select: none`, `aria-hidden="true"`, and `tabIndex={-1}`. |
 | **#65** | `extensionSDK.oauth2Authenticate()` popups that failed (`redirect_uri_mismatch`) or were closed by the user never settled their Promise, permanently locking the Sign-In UI. | Pair OAuth popup flows with a `window` `focus`-return timeout and an `AbortController` cancel button so users can always retry or switch to API Key auth. |
 | **#60** | Native `<select>` menus render with OS-specific chrome that ignores dark mode, custom icons, and optgroup badges, while breaking existing DOM tests if removed outright. | Always use `<StudioSelect>`, which renders a custom accessible `role="listbox"` popover alongside a synchronized hidden `select.dab-studio-select-native[aria-hidden="true"]` for backwards-compatible `.value` inspection. |
-| **#86** | Decorative Unicode emojis (`✨`, `🛡️`, `⚡`, `🟢`, `📊`, `📈`, `🐍`, `📝`, `🧪`, `🔒`, `📁`, `🔍`, `📥`, `🗑️`, etc.) rendered inconsistently across OS fonts and cluttered buttons, badges, and dropdown labels. | Never put decorative emojis in text labels, buttons, tabs, starter prompts, or dropdown options. For directional/semantic UI indicators (folders, search, archive/delete, lock, warning, activity step badges), use crisp `lucide-react` SVG icons (`size={13}` or `size={14}`, `strokeWidth={1.75}`, `aria-hidden="true"`) inheriting `currentColor`. |
+| **#86** | Decorative Unicode emojis (`✨`, `🛡️`, `⚡`, `🟢`, `📊`, `📈`, `🐍`, `📝`, `🧪`, `🔒`, `📁`, `🔍`, `📥`, `🗑️`, etc.) rendered inconsistently across OS fonts and cluttered buttons, badges, and dropdown labels. | Never put decorative emojis in text labels, buttons, tabs, starter prompts, or dropdown options. For directional/semantic UI indicators (folders, search, archive/delete, lock, warning, activity step badges, `/config` `<Info />` popovers via `.dab-info-tooltip-wrap` + `.dab-info-tooltip-btn` + `.dab-info-tooltip` `[data-open="true"]`, never redefining `.dab-info-trigger` `?` buttons), use crisp `lucide-react` SVG icons (`size={13}` or `size={14}`, `strokeWidth={1.75}`, `aria-hidden="true"`) inheriting `currentColor`. |
 | **#112** | Multi-column form grids (`grid-template-columns: 1fr 1fr`) expanded/contracted horizontally when `<StudioSelect>` option labels changed length (`"Any Folder"` vs `"Personal Folders Only"`), causing Cumulative Layout Shift (`CLS`). | **Zero Layout Shift (CLS) on Dynamic Select / Grid Controls**: Always use `grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)` (never bare `1fr`) on form/modal grids and set `min-width: 0; width: 100%` on `.dab-modal-row`, `.dab-modal-row > .dab-studio-select`, and `.dab-modal-row .dab-studio-select-trigger` so selecting options of varying text length produces `0px` column width shift. |
 
 ---
@@ -30,18 +30,20 @@ Use this skill whenever creating, modifying, styling, or testing UI components i
 All theme tokens automatically adapt between `:root, :root[data-theme="light"]` and `:root[data-theme="dark"]`:
 
 ### Surface, Text & Border Tokens
-- `--dab-bg`: App canvas background (`#f8fafc` light / `#0b0f19` dark)
+- `--dab-bg`: App canvas background (`#f8fafc` light / `#0b1120` dark)
 - `--dab-surface`: Primary card, toolbar, and modal surface (`#ffffff` light / `#111827` dark)
-- `--dab-surface-2`: Secondary subtle fill for pills, code blocks, and headers (`#f1f5f9` light / `#1e293b` dark)
-- `--dab-surface-hover`: Interactive hover fill (`#f1f5f9` light / `#334155` dark)
-- `--dab-border`: Standard 1px hairline border (`#e2e8f0` light / `#1f2937` dark)
-- `--dab-border-strong`: Emphasized control border (`#cbd5e1` light / `#374151` dark)
-- `--dab-text`: Primary body & heading text (`#0f172a` light / `#f8fafc` dark)
-- `--dab-text-secondary`: Secondary labels & metadata (`#475569` light / `#cbd5e1` dark)
+- `--dab-surface-elevated`: Elevated popover, dropdown, and `.dab-info-tooltip` surface (`#ffffff` light / `#1e293b` dark)
+- `--dab-surface-muted`: Muted section/panel fill (`#f8fafc` light / `#0f172a` dark)
+- `--dab-surface-subtle`: Secondary subtle fill for pills, code blocks, and headers (`#f1f5f9` light / `#1e293b` dark)
+- `--dab-border`: Standard 1px hairline border (`#e2e8f0` light / `#1e293b` dark)
+- `--dab-border-strong`: Emphasized control & tooltip border (`#cbd5e1` light / `#334155` dark)
+- `--dab-text`: Primary body text (`#1f2937` light / `#e2e8f0` dark)
+- `--dab-text-strong`: Heading & emphasized text (`#0f172a` light / `#f8fafc` dark)
+- `--dab-text-secondary`: Secondary labels & metadata (`#334155` light / `#cbd5e1` dark)
 - `--dab-text-muted`: Muted hints & placeholders (`#64748b` light / `#94a3b8` dark)
 
 ### Accent & Semantic Status Tokens
-- **Accent**: `--dab-accent` (`#2563eb` / `#3b82f6`), `--dab-accent-hover`, `--dab-accent-soft`, `--dab-accent-border`
+- **Accent**: `--dab-accent` (`#2563eb` / `#3b82f6`), `--dab-accent-text`, `--dab-accent-subtle`, `--dab-accent-border`
 - **Success**: `--dab-success-bg`, `--dab-success-text`, `--dab-success-border` (`.dab-badge-success`)
 - **Warning**: `--dab-warning-bg`, `--dab-warning-text`, `--dab-warning-border` (`.dab-badge-warning`)
 - **Danger**: `--dab-danger-bg`, `--dab-danger-text`, `--dab-danger-border` (`.dab-badge-danger`)

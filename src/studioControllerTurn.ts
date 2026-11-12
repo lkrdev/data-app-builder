@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   AgentSession, AntigravityActivityStep, AntigravityAuth,
-  CodeModePermissionDecision, CodeModePermissionRequest,
+  cleanLookmlProjectId, CodeModePermissionDecision, CodeModePermissionRequest,
   extractSkillNameFromPath, fetchConversationSandboxDebugMarkdown, fetchEnvironmentFile,
   hydrateInteractionActivitySteps, inFlightEnvProvisionByUser,
   isNewProjectOnboardingIntakePrompt, normalizeEnvironmentId, normalizeSandboxFilePath,
@@ -39,7 +39,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   const {
     extensionSDK, core40SDK, history, location, isTileMount, mockExt,
     authMode, oauthToken, clientId, projectId, apiKey, selectedModel,
-    thinkingLevel, maxTotalTokens, isAuthenticated, disabledModes,
+    thinkingLevel, maxTotalTokens, maxToolRounds, isAuthenticated, disabledModes,
     resolvedUseCaseByIdRef, parsedRoute, setSelectedUseCase, explicitUseCaseRef,
     allowedUseCases, setRightPaneCollapsed, triggerSilentOAuthRefresh, resetOAuthOnUnauthorized,
     sharedEnvIdRef, syncSharedEnvironmentId,
@@ -559,7 +559,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         environmentId: sharedEnvIdRef.current || currentSession.environmentId,
         conversationId: convId, onEnvironmentUpdated: syncSharedEnvironmentId,
         auth: authCfg, session: currentSession,
-        model: selectedModel, thinkingLevel, maxTotalTokens,
+        model: selectedModel, thinkingLevel, maxTotalTokens, maxToolRounds,
         mode: effectiveBuilderMode, useCase: explicitUseCase, allowedModes: allowedUseCases,
         selectedExplores: turnExplores, folderId: selectedFolderId,
         toolMode: effectiveLookmlTurn ? 'lookml' : 'data_app',
@@ -694,64 +694,60 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         let finalWidgetCount: number | undefined
 
         if (result.lookmlBundle) {
-          handledArtifact = true
-          setLookerWorkspaceId('dev')
-          void syncLookerSessionWorkspace()
-          setBusyStatus('Saving LookML project changes...')
-          const canonProj = resolveLookmlCanonicalProjectId(result.lookmlBundle)
-          const prevFiles =
-            lookmlBundle && resolveLookmlCanonicalProjectId(lookmlBundle) === canonProj
-              ? lookmlBundle.files
-              : []
-          let mergedBundle: LookmlBundle = Object.assign({}, result.lookmlBundle, {
-            id: canonProj,
-            project_id: result.lookmlBundle.project_id || canonProj,
-            files: mergeLookmlFiles(prevFiles, result.lookmlBundle.files),
-          })
-          try {
-            const saved = await saveLookmlSessionArtifact({ sdk: core40SDK, extensionSDK, userId, bundle: mergedBundle, studio: studioMeta })
-            mergedBundle = saved.payload.bundle
-          } catch { /* ignore */ }
-          const lookmlId = mergedBundle.project_id?.trim() || mergedBundle.id || canonProj
-          setLookmlBundle(mergedBundle)
-          if (mergedBundle.project_id) setLookmlProjectId(mergedBundle.project_id)
-          const isExistingLookml = contentItemsRef.current.some(
-            (it) => it.contentType === 'lookml' && (it.projectId || it.id) === lookmlId
-          )
-          const upLookml = upsertContentItem({
-            id: lookmlId, sessionId: lookmlId, projectId: lookmlId,
-            contentType: 'lookml', title: `LookML: ${lookmlId}`,
-            embedPath: `/lookml/${encodeURIComponent(lookmlId)}`, updatedAt: new Date().toISOString(),
-            source: isExistingLookml ? 'modified' : 'created', createdInConversation: true, hidden: false,
-          })
-          recordCrudItem(toTurnCrudItem(upLookml, upLookml.existed ? 'updated' : 'created'))
-          resolvedUseCaseByIdRef.current[lookmlId] = 'lookml'
-          convType = 'lookml'
-          convTitle = result.lookmlBundle.title || `LookML: ${lookmlId}`
-          convContent = { sessionId: lookmlId, projectId: lookmlId, model: mergedBundle.model_name, branch: mergedBundle.branch_name }
-          lastLookmlIdRef.current = lookmlId
-          setActiveObjectId(lookmlId)
-
-          extractLookmlDashboardsFromBundle(
-            Object.assign({}, result.lookmlBundle, {
-              model_name: result.lookmlBundle.model_name || mergedBundle.model_name,
-              project_id: result.lookmlBundle.project_id || mergedBundle.project_id,
+          const canonProj = resolveLookmlCanonicalProjectId(result.lookmlBundle) || cleanLookmlProjectId(lookmlProjectId)
+          if (canonProj) {
+            handledArtifact = true
+            setLookerWorkspaceId('dev')
+            void syncLookerSessionWorkspace()
+            setBusyStatus('Saving LookML project changes...')
+            const prevFiles = lookmlBundle && resolveLookmlCanonicalProjectId(lookmlBundle) === canonProj ? lookmlBundle.files : []
+            let mergedBundle: LookmlBundle = Object.assign({}, result.lookmlBundle, {
+              id: canonProj,
+              project_id: cleanLookmlProjectId(result.lookmlBundle.project_id) || canonProj,
+              files: mergeLookmlFiles(prevFiles, result.lookmlBundle.files),
             })
-          ).forEach((d) => {
-            if (result.nativeBundle && (result.nativeBundle.id === d.id || result.nativeBundle.lookml_dashboard_id === d.id)) return
-            const isExistingDash = contentItemsRef.current.some((it) => it.key === `lookml_dashboard:${d.id}`)
-            setNativeContent(
-              {
-                id: d.id, contentType: 'lookml_dashboard', title: d.title,
-                folderId: selectedFolderId, embedPath: d.embedPath,
-                lookmlDashboardId: d.id, projectId: lookmlId, model: d.model,
-              },
-              { source: isExistingDash ? 'modified' : 'created', createdInConversation: true, hidden: false }
+            try {
+              const saved = await saveLookmlSessionArtifact({ sdk: core40SDK, extensionSDK, userId, bundle: mergedBundle, studio: studioMeta })
+              mergedBundle = saved.payload.bundle
+            } catch { /* ignore */ }
+            const lookmlId = cleanLookmlProjectId(mergedBundle.project_id) || canonProj
+            setLookmlBundle(mergedBundle)
+            setLookmlProjectId(lookmlId)
+            const isExistingLookml = contentItemsRef.current.some(
+              (it) => it.contentType === 'lookml' && (it.projectId || it.id) === lookmlId
             )
-            recordCrudItem(toTurnCrudItem({ key: `lookml_dashboard:${d.id}`, id: d.id, title: d.title, contentType: 'lookml_dashboard', embedPath: d.embedPath }, isExistingDash ? 'updated' : 'created'))
-            setEmbedNonce((n) => n + 1)
-            finalDashId = d.id
-          })
+            const upLookml = upsertContentItem({
+              id: lookmlId, sessionId: lookmlId, projectId: lookmlId,
+              contentType: 'lookml', title: `LookML: ${lookmlId}`,
+              embedPath: `/lookml/${encodeURIComponent(lookmlId)}`, updatedAt: new Date().toISOString(),
+              source: isExistingLookml ? 'modified' : 'created', createdInConversation: true, hidden: false,
+            })
+            recordCrudItem(toTurnCrudItem(upLookml, upLookml.existed ? 'updated' : 'created'))
+            resolvedUseCaseByIdRef.current[lookmlId] = 'lookml'
+            convType = 'lookml'
+            convTitle = result.lookmlBundle.title || `LookML: ${lookmlId}`
+            convContent = { sessionId: lookmlId, projectId: lookmlId, model: mergedBundle.model_name, branch: mergedBundle.branch_name }
+            lastLookmlIdRef.current = lookmlId
+            setActiveObjectId(lookmlId)
+
+            extractLookmlDashboardsFromBundle(
+              Object.assign({}, result.lookmlBundle, { model_name: result.lookmlBundle.model_name || mergedBundle.model_name, project_id: lookmlId })
+            ).forEach((d) => {
+              if (result.nativeBundle && (result.nativeBundle.id === d.id || result.nativeBundle.lookml_dashboard_id === d.id)) return
+              const isExistingDash = contentItemsRef.current.some((it) => it.key === `lookml_dashboard:${d.id}`)
+              setNativeContent(
+                {
+                  id: d.id, contentType: 'lookml_dashboard', title: d.title,
+                  folderId: selectedFolderId, embedPath: d.embedPath,
+                  lookmlDashboardId: d.id, projectId: lookmlId, model: d.model,
+                },
+                { source: isExistingDash ? 'modified' : 'created', createdInConversation: true, hidden: false }
+              )
+              recordCrudItem(toTurnCrudItem({ key: `lookml_dashboard:${d.id}`, id: d.id, title: d.title, contentType: 'lookml_dashboard', embedPath: d.embedPath }, isExistingDash ? 'updated' : 'created'))
+              setEmbedNonce((n) => n + 1)
+              finalDashId = d.id
+            })
+          }
         }
 
         if (result.nativeBundle) {

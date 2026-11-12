@@ -1,6 +1,8 @@
 import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { IFolder, ILookmlModel, IRole, IUser } from '@looker/sdk'
 
+import { cleanLookmlProjectId } from './antigravityTypes'
+
 export const STUDIO_FOLDER_STORAGE_KEY = 'dab_selected_folder_id'
 
 export function readInitialSelectedFolderId(): string | null {
@@ -213,12 +215,15 @@ export const getConvTargetId = (
   type?: string
 ): string => {
   if (!c) return ''
+  const lookmlTarget = cleanLookmlProjectId(c.projectId) || cleanLookmlProjectId(c.sessionId)
   const raw = String(type || '').trim().toLowerCase().replace(/\s+/g, '-')
   if (!raw || raw === 'auto') {
-    return String(c.dashboardId || c.lookId || c.lookmlDashboardId || c.reportId || c.projectId || c.sessionId || c.scriptId || c.caConversationId || c.id || '').trim()
+    const isLookmlObj = c.contentType === 'lookml' || c.projectId !== undefined || c.sessionId !== undefined
+    const fallbackId = isLookmlObj ? cleanLookmlProjectId(c.id) : c.id
+    return String(c.dashboardId || c.lookId || c.lookmlDashboardId || c.reportId || lookmlTarget || c.scriptId || c.caConversationId || fallbackId || '').trim()
   }
   const pick: Partial<Record<ResolvedStudioUseCase, unknown>> = {
-    lookml: c.projectId || c.sessionId,
+    lookml: lookmlTarget,
     'health-check': c.reportId,
     tile: c.scriptId || c.id,
     'conversational-analytics': c.caConversationId || c.id,

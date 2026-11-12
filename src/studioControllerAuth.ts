@@ -8,7 +8,7 @@ import {
   DEFAULT_THINKING_LEVEL, ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig,
   getInitialStoredOAuthSession, getInitialStoredOAuthToken, isHostOAuthWedged, listAvailableAntigravityModels,
   loadStoredOAuthSession, loadStoredThinkingLevel, loginWithGoogleOAuth, normalizeEnvironmentId,
-  normalizeMaxTotalTokens, normalizeThinkingLevel, parseValidOAuthSession, persistThinkingLevel,
+  normalizeMaxToolRounds, normalizeMaxTotalTokens, normalizeThinkingLevel, parseValidOAuthSession, persistThinkingLevel,
   readInitialThinkingLevel, refreshOAuthSessionIfNeeded, resetHostOAuthWedged, resolveLookerOAuthRedirectUri,
   STUDIO_OAUTH_REFRESH_INTERVAL_MS, STUDIO_OAUTH_STORAGE_KEY, StudioThinkingLevel,
 } from './antigravity'
@@ -67,6 +67,7 @@ export function useStudioAuthAndPrefs() {
     normalizeThinkingLevel(initialCtx?.defaultThinkingLevel || DEFAULT_THINKING_LEVEL)
   )
   const [maxTotalTokens, setMaxTotalTokensState] = useState<number>(() => normalizeMaxTotalTokens(initialCtx?.maxTotalTokens))
+  const [maxToolRounds, setMaxToolRoundsState] = useState<number>(() => normalizeMaxToolRounds(initialCtx?.maxToolRounds))
   const [thinkingLevel, setThinkingLevelState] = useState<StudioThinkingLevel>(() =>
     readInitialThinkingLevel(initialCtx?.defaultThinkingLevel || DEFAULT_THINKING_LEVEL)
   )
@@ -266,6 +267,8 @@ export function useStudioAuthAndPrefs() {
     setMaxTotalTokensState(normalizeMaxTotalTokens(next))
   }, [])
 
+  const setMaxToolRounds = useCallback((next: number | string) => setMaxToolRoundsState(normalizeMaxToolRounds(next)), [])
+
   useEffect(() => {
     const mql = typeof window !== 'undefined' ? window.matchMedia?.('(prefers-color-scheme: dark)') : null
     if (!mql) return
@@ -433,7 +436,7 @@ export function useStudioAuthAndPrefs() {
       setBusyStatus('Saving shared extension context...')
       await extensionSDK.saveContextData({
         authMode, clientId: clientId.trim(), projectId: projectId.trim(),
-        disabledModes, defaultModel: selectedModel, defaultThinkingLevel, maxTotalTokens,
+        disabledModes, defaultModel: selectedModel, defaultThinkingLevel, maxTotalTokens, maxToolRounds,
       })
       setIsConfigured(true)
       setBusyStatus(null)
@@ -502,7 +505,7 @@ export function useStudioAuthAndPrefs() {
     authMode, setAuthMode, clientId, setClientId, projectId, setProjectId,
     disabledModes, setDisabledModes, selectedModel, setSelectedModel,
     thinkingLevel, setThinkingLevel, defaultThinkingLevel, setDefaultThinkingLevel,
-    maxTotalTokens, setMaxTotalTokens, availableModels, enabledModes,
+    maxTotalTokens, setMaxTotalTokens, maxToolRounds, setMaxToolRounds, availableModels, enabledModes,
     oauthToken, oauthAccessToken, setOauthToken, oauthExpiresAt, setOauthExpiresAt,
     triggerSilentOAuthRefresh, resetOAuthOnUnauthorized, apiKey, setApiKey,
     isAuthenticated, isConfigured, oauthSigningIn, oauthRedirectUri,
