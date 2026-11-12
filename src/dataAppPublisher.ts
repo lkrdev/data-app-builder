@@ -274,14 +274,30 @@ export async function upsertPublishedDataApp(
       .replace(/^-|-$/g, '')
       .slice(0, 32) || 'app'
 
-  if (existing?.dashboardId && existing?.extensionId) {
-    let elementId = existing.elementId
-    if (!elementId) {
+  let resolvedExtId = existing?.extensionId || ''
+  let elementId = existing?.elementId
+  let lookupErr: unknown
+  if (existing?.dashboardId && (!resolvedExtId || !elementId)) {
+    try {
       const dash = await sdk.ok(sdk.dashboard(existing.dashboardId))
-      const extEl = (dash.dashboard_elements || []).find((e) => e.type === 'extension')
-      if (extEl?.id) elementId = String(extEl.id)
+      const elems = dash.dashboard_elements || []
+      const extEl =
+        elems.find((e) => e.type === 'extension' && String(e.extension_id || '').startsWith('db::')) ||
+        elems.find((e) => e.type === 'extension')
+      if (!elementId && extEl?.id) elementId = String(extEl.id)
+      if (!resolvedExtId && extEl?.extension_id) resolvedExtId = String(extEl.extension_id)
+    } catch (err: unknown) {
+      lookupErr = err
     }
-    const bareExistingId = String(existing.extensionId).replace(/^db::/, '')
+  }
+  if (existing?.dashboardId && !resolvedExtId) {
+    throw lookupErr instanceof Error
+      ? lookupErr
+      : new Error(`Cannot update Data App dashboard ${existing.dashboardId}: extension element not found`)
+  }
+
+  if (existing?.dashboardId && resolvedExtId) {
+    const bareExistingId = String(resolvedExtId).replace(/^db::/, '')
 
     const [extResp] = await Promise.all([
       rawLookerRequest<{ id: string }>(

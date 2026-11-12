@@ -10,6 +10,7 @@ import {
   HEALTH_CHECK_SYSTEM_GUIDE, HealthCheckReportPayload, loadHealthCheckArtifact,
   runThreePillarHealthCheckViaCodeMode, saveHealthCheckArtifact, THREE_PILLAR_CODEMODE_PY,
 } from './healthCheck'
+import type { LkrCodeModeRunOptions } from './lkrCliBridge'
 import {
   archiveUserConversation, CaConversationState, ConversationRecord,
   createLookerCaConversation, deleteUserConversation, extractExploreIdsFromCode,
@@ -72,6 +73,11 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   const contentItemsRef = useRef<StudioContentItem[]>([])
   const [activeContentTabKey, setActiveContentTabKeyState] = useState<string>('')
   const activeContentTabKeyRef = useRef<string>('')
+  const codeModePermOptsRef = useRef<
+    (() => Pick<LkrCodeModeRunOptions, 'requirePermission' | 'approvedOperations' | 'onPermissionRequest' | 'thought'> & {
+      isCanceled?: () => boolean
+    }) | null
+  >(null)
 
   const setContentItems = useCallback(
     (next: StudioContentItem[] | ((prev: StudioContentItem[]) => StudioContentItem[])) => {
@@ -211,11 +217,9 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   const activeConversationIdRef = useRef<string>(activeConversationId)
   activeConversationIdRef.current = activeConversationId
   const setActiveConversationId = useCallback((next: string | ((prev: string) => string)) => {
-    setActiveConversationIdState((prev) => {
-      const resolved = typeof next === 'function' ? next(prev) : next
-      activeConversationIdRef.current = resolved
-      return resolved
-    })
+    const resolved = typeof next === 'function' ? next(activeConversationIdRef.current) : next
+    activeConversationIdRef.current = resolved
+    setActiveConversationIdState(resolved)
   }, [])
   const hydratedConvRouteRef = useRef<string>('')
   const activityStepsByInteractionIdRef = useRef<Record<string, AntigravityActivityStep[]>>({})
@@ -482,24 +486,43 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   )
 
   const handleRunPython = useCallback(
-    (codeToRun = scriptCode, rawFilters = filtersJson): Promise<string> => {
-      setBusyStatus('Executing Looker queries...')
+    (
+      codeToRun = scriptCode,
+      rawFilters = filtersJson,
+      permOpts?: Pick<LkrCodeModeRunOptions, 'requirePermission' | 'approvedOperations' | 'onPermissionRequest' | 'thought'> & {
+        isCanceled?: () => boolean
+      }
+    ): Promise<string> => {
+      const runConvId = activeConversationIdRef.current
+      const execBusyText = 'Executing Looker queries...'
+      setBusyStatus(execBusyText)
       let parsedFilters: Record<string, string> = {}
       try { parsedFilters = JSON.parse(rawFilters || '{}') } catch { parsedFilters = {} }
-      return LkrCodeMode.runPythonCode({
-        code: codeToRun, sdk: core40SDK, extensionSDK,
-        vars: {
-          mode: scriptMode, dashboard_filters: { script_mode: scriptMode, ...parsedFilters },
-          target_explores: selectedExplores, target_folder_id: selectedFolderId,
-        },
-      }).then(
-        (out) => { setScriptOutput(out); setBusyStatus(mockExt?.initialBusyStatus || null); return out },
-        (err: unknown) => {
-          const errOut = JSON.stringify({ error: getErrorMessage(err) })
-          setScriptOutput(errOut); setBusyStatus(mockExt?.initialBusyStatus || null)
-          return errOut
-        }
-      )
+      const effectivePermOpts = permOpts || codeModePermOptsRef.current?.()
+      const finish = (v: string) => {
+        if (activeConversationIdRef.current === runConvId && !effectivePermOpts?.isCanceled?.()) setScriptOutput(v)
+        setBusyStatus((prev) => (prev === execBusyText ? mockExt?.initialBusyStatus || null : prev))
+        return v
+      }
+      return LkrCodeMode.runPythonCode(
+        Object.assign(
+          {
+            code: codeToRun, sdk: core40SDK, extensionSDK,
+            vars: {
+              mode: scriptMode, dashboard_filters: Object.assign({ script_mode: scriptMode }, parsedFilters),
+              target_explores: selectedExplores, target_folder_id: selectedFolderId,
+            },
+          },
+          effectivePermOpts
+            ? {
+                requirePermission: effectivePermOpts.requirePermission,
+                approvedOperations: effectivePermOpts.approvedOperations,
+                onPermissionRequest: effectivePermOpts.onPermissionRequest,
+                thought: effectivePermOpts.thought,
+              }
+            : null
+        )
+      ).then(finish, (err: unknown) => finish(JSON.stringify({ error: getErrorMessage(err) })))
     },
     [core40SDK, extensionSDK, filtersJson, mockExt?.initialBusyStatus, scriptCode, scriptMode, selectedExplores, selectedFolderId, setBusyStatus]
   )
@@ -508,10 +531,12 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     (rawId: string, pushRoute = true): Promise<void> => {
       const id = rawId.trim()
       if (!id) return Promise.resolve()
+      const loadConvId = activeConversationIdRef.current
       lastScriptIdRef.current = id
       resolvedUseCaseByIdRef.current[id] = 'tile'
       setSelectedUseCase('tile'); setLoadedScript(true); setScriptId(id)
       return loadScriptArtifact(core40SDK, id).then((loaded) => {
+        if (activeConversationIdRef.current !== loadConvId) return
         const effectiveCode = loaded?.code || scriptCode
         if (loaded) {
           setScriptId(loaded.id); setScriptTitle(loaded.title || loaded.id); setScriptCode(loaded.code || DEFAULT_PYTHON_SCRIPT)
@@ -963,6 +988,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       const nextUseCase: StudioUseCase = typeof presetUseCase === 'string' && presetUseCase ? presetUseCase : 'auto'
       const freshConvId = `conv_${Date.now()}`
       hydratedConvRouteRef.current = ''
+      if (location.pathname !== '/') history.replace('/')
       lastPublishedIdRef.current = ''
       lastNativeIdRef.current = ''
       lastLookmlIdRef.current = ''
@@ -996,7 +1022,6 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       explicitUseCaseRef.current = nextUseCase
       setSelectedUseCase(nextUseCase)
       if (typeof window !== 'undefined' && window.innerWidth <= 768) setSidebarCollapsed(true)
-      if (location.pathname !== '/') history.replace('/')
     },
     [explicitUseCaseRef, history, location.pathname, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setAgentSession, setContentItems, setConversations, setMentionedItems, setMessages, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef]
   )
@@ -1132,6 +1157,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         resolvedUseCaseByIdRef.current[targetId] = useCase
         setActiveObjectId(targetId)
         await openArtifactByMode(conv.type, targetId, false)
+        if (activeConversationIdRef.current !== conv.id) return
       } else {
         setLoadedScript(false)
         setActiveObjectId('')
@@ -1260,7 +1286,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     modeAllowedConversations, filteredConversations, archivedConversations,
     persistConversationAndLabel,
     loadNativeById, loadLookmlSessionById, loadCaConversationById, loadScriptById,
-    handleRunPython, handleSaveScript, handlePublishTileDashboard,
+    codeModePermOptsRef, handleRunPython, handleSaveScript, handlePublishTileDashboard,
     handleRunHealthCheck, handleRunConversationalAnalytics,
     handleResetNewApp, handleNewConversation, handleSelectConversation,
     handleToggleArchiveConversation, handleRequestDeleteConversation,

@@ -433,8 +433,87 @@ export function createDeduplicatedLookerSdkProxy(
   return wrappedsdk as unknown as Looker40SDK
 }
 
+export interface LookerExtensionSdkLike {
+  invokeCoreSdkRaw?: (m: string, p: string, q?: unknown, b?: unknown, apiVersion?: string) => Promise<unknown>
+  invokeCoreSdk?: (m: string, p: string, q?: unknown, b?: unknown, authenticator?: unknown, o?: unknown, apiVersion?: string) => Promise<unknown>
+}
+
+export const isLookerExtensionSdk = (v: unknown): v is LookerExtensionSdkLike =>
+  Boolean(
+    v &&
+      typeof v === 'object' &&
+      (typeof (v as LookerExtensionSdkLike).invokeCoreSdkRaw === 'function' || typeof (v as LookerExtensionSdkLike).invokeCoreSdk === 'function')
+  )
+
+export function normalizeLookerApiPath(rawPath?: string): string {
+  const raw = String(rawPath || '/').trim().split('#')[0].replace(/^https?:\/\/[^/?#]+/i, '')
+  const qIdx = raw.indexOf('?')
+  const pathPart = qIdx >= 0 ? raw.slice(0, qIdx) : raw
+  const queryPart = qIdx >= 0 ? raw.slice(qIdx) : ''
+  const withSlash = (pathPart.startsWith('/') ? pathPart : `/${pathPart}`).replace(/\/{2,}/g, '/')
+  return (withSlash.replace(/^\/api\/[0-9.]+(?=\/|$)/i, '') || '/') + queryPart
+}
+
+export function resolveLookerExtensionSdk(sdk?: unknown, ...candidates: unknown[]): LookerExtensionSdkLike | undefined {
+  const transportRec = (sdk as { authSession?: { transport?: Record<string, unknown> } } | undefined)?.authSession?.transport
+  const gRec = globalThis as Record<string, unknown>
+  return [
+    ...candidates,
+    transportRec?.extensionHost,
+    (transportRec?.hostConnection as Record<string, unknown> | undefined)?.hostConnection,
+    transportRec?.hostConnection,
+    gRec.__LKR_EXTENSION_SDK__,
+    gRec.extensionSDK,
+    gRec.lookerExtensionSDK,
+  ].find(isLookerExtensionSdk)
+}
+
+export function unwrapLookerRawResponse<T = unknown>(raw: unknown, method: string, path: string): T {
+  if (!raw || typeof raw !== 'object') return (raw ?? null) as T
+  const r = raw as RawLookerTransportResponse
+  const status = Number(r.statusCode ?? r.status ?? 200)
+  if (r.ok === false || (Number.isFinite(status) && status >= 400)) {
+    const errBody = typeof r.body === 'string' ? r.body : JSON.stringify(r.body !== undefined ? r.body : raw)
+    if (status === 404) {
+      const diag = classifyLooker404Error(404, path, errBody)
+      throw new Error(`Looker ${method} ${path} failed (404 ${diag.kind}): ${diag.remediation} — ${errBody}`)
+    }
+    throw new Error(`Looker ${method} ${path} failed (${status}): ${errBody}`)
+  }
+  return parseLookerRawBody<T>(r)
+}
+
+export function invokeLookerExtensionSdk<T = unknown>(
+  extSdk: LookerExtensionSdkLike,
+  method: string,
+  path: string,
+  queryParams?: unknown,
+  body?: unknown,
+  options?: unknown
+): Promise<T> {
+  hookChattyHostApiLogger(extSdk)
+  const verb = String(method || 'GET').toUpperCase()
+  const cleanP = normalizeLookerApiPath(path)
+  if (typeof extSdk.invokeCoreSdkRaw === 'function') {
+    return Promise.resolve(extSdk.invokeCoreSdkRaw(verb, cleanP, queryParams || undefined, body, '4.0')).then((raw) =>
+      unwrapLookerRawResponse<T>(raw, verb, path)
+    )
+  }
+  return Promise.resolve(extSdk.invokeCoreSdk!(verb, cleanP, queryParams || undefined, body, undefined, options, '4.0')).then((res) => {
+    if (res && typeof res === 'object' && 'ok' in res && ('value' in res || 'error' in res)) {
+      const env = res as { ok?: boolean; value?: unknown; error?: unknown }
+      if (env.ok === false) {
+        const e = env.error as { message?: unknown } | undefined
+        throw new Error(typeof e?.message === 'string' ? e.message : JSON.stringify(env.error))
+      }
+      return env.value as T
+    }
+    return res as T
+  })
+}
+
 // ponytail: use SDK's underlying transport.rawRequest (requires raw_api_request: yes in manifest.lkml)
-// instead of generating custom SDK bindings for /data_app_extension and /inline_extension.
+// or fall back to ExtensionSDK.invokeCoreSdkRaw / invokeCoreSdk instead of custom SDK bindings.
 export function rawLookerRequest<T = unknown>(
   sdk: Looker40SDK,
   method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
@@ -442,22 +521,21 @@ export function rawLookerRequest<T = unknown>(
   queryParams?: Record<string, unknown>,
   body?: unknown
 ): Promise<T> {
-  return Promise.resolve()
-    .then(() => {
-      const transport = (sdk.authSession as unknown as { transport: { rawRequest: LookerRawRequestFn } }).transport
-      return invokeAndLogRawTransport(transport, transport.rawRequest, [method, path, queryParams, serializeLookerBody(body)])
-    })
-    .then((rawResp) => {
-      if (rawResp.ok === false || (rawResp.statusCode && rawResp.statusCode >= 400)) {
-        const errBody = typeof rawResp.body === 'string' ? rawResp.body : JSON.stringify(rawResp.body)
-        if (Number(rawResp.statusCode) === 404) {
-          const diag = classifyLooker404Error(404, path, errBody)
-          throw new Error(`Looker ${method} ${path} failed (404 ${diag.kind}): ${diag.remediation} — ${errBody}`)
-        }
-        throw new Error(`Looker ${method} ${path} failed (${rawResp.statusCode}): ${errBody}`)
-      }
-      return parseLookerRawBody<T>(rawResp)
-    })
+  return Promise.resolve().then(() => {
+    const transport = (sdk?.authSession as unknown as { transport?: { rawRequest?: LookerRawRequestFn } } | undefined)?.transport
+    const safePath =
+      /^(?:https?:)?\/\//i.test(path) || path.includes('#')
+        ? path.trim().split('#')[0].replace(/^https?:\/\/[^/?#]+/i, '').replace(/^\/{2,}/, '/') || '/'
+        : path
+    if (typeof transport?.rawRequest === 'function') {
+      return invokeAndLogRawTransport(transport, transport.rawRequest, [method, safePath, queryParams, serializeLookerBody(body)]).then((rawResp) =>
+        unwrapLookerRawResponse<T>(rawResp, method, safePath)
+      )
+    }
+    const extSdk = resolveLookerExtensionSdk(sdk)
+    if (extSdk) return invokeLookerExtensionSdk<T>(extSdk, method, path, queryParams, body)
+    throw new Error(`Looker SDK transport is not configured for ${method} ${path}`)
+  })
 }
 
 export const rawCoreSdkRequest = rawLookerRequest

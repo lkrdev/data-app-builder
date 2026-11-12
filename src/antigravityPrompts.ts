@@ -53,6 +53,9 @@ def reflow_24col(dashboard_id, boxes, layout_id=None, comp_map=None):
 
 _exp_field_cache = {}
 
+def _re_perm(e):
+    if "PermissionError" in str(e): raise e
+
 def _valid_explore_fields(tm, te):
     key = f"{tm}::{te}"
     if key in _exp_field_cache: return _exp_field_cache[key]
@@ -266,14 +269,18 @@ def upsert_lookml_dashboard(project_id="", model="", dashboard_name="executive_p
     fpath = f"dashboards/{slug}.dashboard.lookml"
     if proj:
         try: create_project_directory(proj, "dashboards")
-        except Exception: pass
+        except Exception as _e: _re_perm(_e)
         try: create_file(proj, {"path": fpath, "content": ytxt})
-        except Exception:
+        except Exception as _e:
+            _re_perm(_e)
             try: update_file(proj, {"path": fpath, "content": ytxt})
-            except Exception:
+            except Exception as _e2:
+                _re_perm(_e2)
                 fpath = f"{slug}.dashboard.lookml"
                 try: create_file(proj, {"path": fpath, "content": ytxt})
-                except Exception: update_file(proj, {"path": fpath, "content": ytxt})
+                except Exception as _e3:
+                    _re_perm(_e3)
+                    update_file(proj, {"path": fpath, "content": ytxt})
         mpath, mc = model_file_path or f"models/{m}.model.lkml", ""
         try: mc = str(get_file_content(proj, mpath) or "")
         except Exception:
@@ -283,7 +290,7 @@ def upsert_lookml_dashboard(project_id="", model="", dashboard_name="executive_p
         if mc and ".dashboard.lookml" not in mc:
             inc = 'include: "/dashboards/*.dashboard.lookml"\\n' if fpath.startswith("dashboards/") else 'include: "*.dashboard.lookml"\\n'
             try: update_file(proj, {"path": mpath, "content": inc + mc})
-            except Exception: pass
+            except Exception as _e: _re_perm(_e)
         try: val_res = validate_project(proj)
         except Exception: val_res = None
         if isinstance(val_res, dict):
@@ -298,18 +305,18 @@ def upsert_lookml_dashboard(project_id="", model="", dashboard_name="executive_p
     synced_udd, fid = str(sync_udd_id or ""), str(folder_id or _t_folder_id or _active.get("folderId") or _active.get("folder_id") or "")
     if synced_udd:
         try: sync_lookml_dashboard(lookml_id, dashboard_ids=[synced_udd])
-        except Exception: pass
+        except Exception as _e: _re_perm(_e)
     elif fid:
         try:
             imp = import_lookml_dashboard(lookml_id, fid)
             if imp and imp.get("id"): synced_udd = str(imp["id"])
-        except Exception: pass
+        except Exception as _e: _re_perm(_e)
         if not synced_udd:
             try:
                 udd_res = upsert_udd(title, folder_id=fid, filters=filters, tiles=tiles, model=m, explore=default_exp, _checked=not bool(yaml_content))
                 if udd_res and udd_res.get("dashboard_id"): synced_udd = str(udd_res["dashboard_id"])
             except ValueError: raise
-            except Exception: pass
+            except Exception as _e: _re_perm(_e)
     return {"id": lookml_id, "lookml_dashboard_id": lookml_id, "dashboard_id": synced_udd or lookml_id, "content_type": "lookml_dashboard", "project_id": proj, "model": m, "file_path": fpath, "folder_id": fid, "sync_action": "import_lookml_dashboard", "title": title, "embed_path": f"/embed/dashboards/{synced_udd or lookml_id}", "tile_count": len(tiles or []), "filter_count": len(filters or [])}
 
 def pin_to_board(title, description="", section_title="Executive Overview", dashboard_id=None, lookml_dashboard_id=None, look_id=None, board_id=None):
