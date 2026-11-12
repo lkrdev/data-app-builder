@@ -25,7 +25,7 @@ import {
   resolveConversationRelatedContent, STUDIO_OVERVIEW_TAB_KEY, StudioContentItem, StudioContentItemType,
   StudioContextCategory, StudioContextMention,
 } from '../lookerApi'
-import { extractSlashSkillIds, LookmlBundle, LookmlPreviewPane, LookmlSkillCatalogEntry, renderLineNumberedPre, STUDIO_SLASH_SKILLS } from '../lookmlTool'
+import { extractSlashSkillIds, LookmlBundle, LookmlPreviewPane, LookmlSkillCatalogEntry, parseLookmlFileDisplay, renderLineNumberedPre, STUDIO_SLASH_SKILLS } from '../lookmlTool'
 export { copyTextWithExtensionSdk, fetchConversationSandboxDebugMarkdown, formatConversationThreadMarkdown }
 import { StudioController } from '../useStudioController'
 import { ChatMessage } from './App'
@@ -3106,18 +3106,29 @@ export const StudioOverviewSidebar: React.FC<{
             <OvSec testId="overview-section-files" title="Changed Files" count={data.changedFiles.length} open={isSecOpen('files', true)} onToggle={() => toggleSec('files', true)}>
               {visFiles.map((row, idx) => {
                 const isFileActive = matchesSelectedFile(row.path)
+                const hoverPath = row.label || row.path
+                const parsed = parseLookmlFileDisplay(hoverPath)
                 return (
                   <button
                     key={row.key}
                     type="button"
                     data-testid={`overview-file-item-${idx}`}
                     aria-current={isFileActive ? 'true' : undefined}
+                    aria-label={row.action ? `${hoverPath} (${row.action})` : hoverPath}
                     className={`dab-ov-row ${isFileActive ? 'active' : ''}`}
                     onClick={() => onFile(row)}
-                    title={row.path}
+                    title={hoverPath}
                   >
-                    <span className="dab-ov-ic">{row.kind === 'sandbox' && /\.md$/i.test(row.path) ? <FileText size={13} strokeWidth={1.75} aria-hidden="true" /> : <Code2 size={13} strokeWidth={1.75} aria-hidden="true" />}</span>
-                    <span className="dab-ov-txt dab-ov-mono">{row.label}</span>
+                    <span className="dab-ov-ic">
+                      {parsed.letter ? (
+                        <span className="dab-lkml-kind-badge" data-kind={parsed.letter} aria-hidden="true">{parsed.letter}</span>
+                      ) : row.kind === 'sandbox' && /\.md$/i.test(row.path) ? (
+                        <FileText size={13} strokeWidth={1.75} aria-hidden="true" />
+                      ) : (
+                        <Code2 size={13} strokeWidth={1.75} aria-hidden="true" />
+                      )}
+                    </span>
+                    <span className="dab-ov-txt dab-ov-mono">{parsed.stem}</span>
                     {row.action && <span className="dab-ov-stat" style={{ color: row.action === 'created' ? 'var(--dab-success-text)' : row.action === 'deleted' ? 'var(--dab-danger-text)' : 'var(--dab-accent-text)' }}>{row.action === 'created' ? '+' : row.action === 'deleted' ? '-' : 'M'}</span>}
                   </button>
                 )
