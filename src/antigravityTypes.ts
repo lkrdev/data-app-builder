@@ -38,6 +38,25 @@ export function normalizeMaxTotalTokens(raw: unknown): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_MAX_TOTAL_TOKENS
 }
 
+export const DEFAULT_MAX_TOOL_ROUNDS = 50
+export const STUDIO_MAX_TOOL_ROUNDS_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 15, label: '15 rounds' },
+  { value: 25, label: '25 rounds' },
+  { value: 50, label: '50 rounds (Default — High)' },
+  { value: 100, label: '100 rounds (Max)' },
+]
+
+export function normalizeMaxToolRounds(raw: unknown): number {
+  if (typeof raw === 'boolean' || raw === null || raw === undefined || String(raw).trim() === '') return DEFAULT_MAX_TOOL_ROUNDS
+  const n = Math.floor(Number(raw))
+  return Number.isFinite(n) && n >= 1 ? Math.min(100, n) : DEFAULT_MAX_TOOL_ROUNDS
+}
+
+export function cleanLookmlProjectId(raw?: unknown): string {
+  const s = String(raw ?? '').trim()
+  return s && s !== 'default' ? s : ''
+}
+
 export function normalizeThinkingLevel(raw: unknown): StudioThinkingLevel {
   return raw === 'low' || raw === 'medium' || raw === 'high' ? raw : DEFAULT_THINKING_LEVEL
 }
@@ -78,6 +97,7 @@ export interface ExtensionAuthContextConfig {
   defaultModel?: string
   defaultThinkingLevel?: StudioThinkingLevel
   maxTotalTokens?: number
+  maxToolRounds?: number
 }
 
 export interface AntigravityAuth {
@@ -127,7 +147,7 @@ export interface AntigravityInteractionStep extends AntigravityNestedStepCall {
   function_call?: AntigravityNestedStepCall; view_file_call?: AntigravityNestedStepCall
   edit_file_call?: AntigravityNestedStepCall; skill_lookup_call?: AntigravityNestedStepCall
   code_execution?: AntigravityNestedStepCall; code_execution_call?: AntigravityNestedStepCall
-  executable_code?: AntigravityNestedStepCall; code_execution_result?: { output?: unknown }
+  executable_code?: AntigravityNestedStepCall; code_execution_result?: { output?: unknown; stdout?: unknown }
 }
 
 export interface AntigravityInteractionOutput {
@@ -350,4 +370,103 @@ export function resolveAdaptivePollScheduleMs(customSchedule?: number[], environ
     return CONCURRENT_POLL_SCHEDULE_MS.map((ms, idx) => (idx === 0 ? ms + offset : ms))
   }
   return DEFAULT_POLL_SCHEDULE_MS
+}
+
+export function extractNonThoughtText(val: unknown): string {
+  if (typeof val === 'string') return val
+  if (Array.isArray(val)) return val.map(extractNonThoughtText).filter((s) => s.length > 0).join('')
+  if (val && typeof val === 'object') {
+    const obj = val as Record<string, unknown>
+    if (obj.type === 'thought' || obj.type === 'thinking' || obj.thought) return ''
+    for (let i = 0; i < 3; i++) {
+      const extracted = extractNonThoughtText(obj[['text', 'content', 'parts'][i]])
+      if (extracted) return extracted
+    }
+  }
+  return ''
+}
+
+const IGNORED_INSPECTION_STEP_RE =
+  /^(?:thought|thinking|(?:view|read|open|cat|edit|write)_file(?:_call|_result)?|(?:skill_lookup|lookup_skill)(?:_call|_result)?)$/i
+const ALLOWED_RESULT_TOOL_RE = /^(?:run_looker_codemode|lkr_cli_extension_bridge)$/i
+const EXEC_STEP_TYPE_RE = /^(?:code_execution|code_execution_call|executable_code)$/i
+const isIgnoredInspectionStep = (s: AntigravityInteractionStep, sType: string, fnName: string): boolean =>
+  Boolean(
+    IGNORED_INSPECTION_STEP_RE.test(sType) ||
+      IGNORED_INSPECTION_STEP_RE.test(fnName) ||
+      s.view_file_call ||
+      s.edit_file_call ||
+      s.skill_lookup_call
+  )
+
+export function collectInteractionTextCandidates(interaction: AntigravityInteractionPayload | null | undefined): string {
+  const out: unknown[] = [interaction?.output_text]
+  ;(interaction?.outputs || []).forEach((o) => {
+    if (o && o.type !== 'thought' && o.type !== 'thinking' && !o.thought) {
+      out.push(o.text, extractNonThoughtText(o.content ?? o.parts))
+    }
+  })
+  const steps = interaction?.steps || []
+  const ignoredCallIds = new Set<string>()
+  const callNameById = new Map<string, string>()
+  steps.forEach((s) => {
+    if (!s || typeof s !== 'object') return
+    const sType = String(s.type || '').trim()
+    const fnName = String(s.name || s.function_call?.name || '').trim()
+    const id = s.id ? String(s.id).trim() : ''
+    if (id && fnName && sType !== 'function_result' && sType !== 'tool_result') callNameById.set(id, fnName)
+    if (id && isIgnoredInspectionStep(s, sType, fnName)) ignoredCallIds.add(id)
+  })
+  steps.forEach((s) => {
+    if (!s || typeof s !== 'object') return
+    const sType = String(s.type || '').trim()
+    const fnName = String(s.name || s.function_call?.name || '').trim()
+    const callId = String(s.call_id || '').trim()
+    if (isIgnoredInspectionStep(s, sType, fnName) || (callId && ignoredCallIds.has(callId))) return
+    if (sType === 'function_call' || sType === 'tool_call') return
+    if (sType === 'function_result' || sType === 'tool_result') {
+      const effName = fnName || (callId ? callNameById.get(callId) || '' : '')
+      if (!ALLOWED_RESULT_TOOL_RE.test(effName)) return
+      const rObj = s.result && typeof s.result === 'object' ? (s.result as Record<string, unknown>) : null
+      const resStr =
+        typeof s.result === 'string'
+          ? s.result
+          : rObj
+          ? [rObj.result, rObj.stdout, rObj.output].filter((v): v is string => typeof v === 'string').join('\n') || JSON.stringify(s.result)
+          : ''
+      out.push(s.output, s.stdout, resStr)
+      return
+    }
+    if (EXEC_STEP_TYPE_RE.test(sType) || s.code_execution || s.code_execution_call || s.executable_code) {
+      out.push(s.output, s.stdout, s.result, s.code_execution_result?.output, s.code_execution_result?.stdout)
+      return
+    }
+    if (s.thought) return
+    out.push(
+      s.output,
+      s.stdout,
+      s.result,
+      s.text,
+      s.code_execution_result?.output,
+      s.code_execution_result?.stdout,
+      extractNonThoughtText((s as Record<string, unknown>).content ?? (s as Record<string, unknown>).parts)
+    )
+  })
+  return out.filter((x): x is string => typeof x === 'string' && x.length > 0).join('\n')
+}
+
+export function parseTaggedJsonObjects(text: string, tagRe: RegExp): Array<Record<string, unknown>> {
+  const matches = Array.from(text.matchAll(tagRe))
+  const out: Array<Record<string, unknown>> = []
+  for (let i = matches.length - 1; i >= 0; i -= 1) {
+    const raw = matches[i][1]?.trim() || ''
+    if (!raw.startsWith('{') || !raw.endsWith('}')) continue
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        out.push(parsed as Record<string, unknown>)
+      }
+    } catch { /* skip malformed/source match */ }
+  }
+  return out
 }

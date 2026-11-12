@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 
 import {
-  AntigravityActivityStep, buildDynamicStarterPrompts, fetchConversationSandboxDebugMarkdown,
+  AntigravityActivityStep, buildDynamicStarterPrompts, cleanLookmlProjectId, fetchConversationSandboxDebugMarkdown,
   formatConversationThreadMarkdown, formatThinkingTraceMarkdown,
   handleFileInputSelection, handleImageClipboardPaste, MAX_LEFT_PANE_WIDTH,
   MIN_LEFT_PANE_WIDTH, normalizeSandboxFilePath, resolveBuiltinWorkspaceFileContent,
@@ -715,8 +715,10 @@ function formatConversationContentTag(conv: ConversationRecord): string {
   if (c.reportId) return `TDD #${c.reportId}${typeof c.overallScore === 'number' ? ` (${c.overallScore}%)` : ''}`
   if (c.scriptId) return `Script ${c.scriptId}${c.dashboardId ? ` · #${c.dashboardId}` : ''}`
   if (c.lookmlDashboardId || c.lookId || c.dashboardId) return `${c.lookmlDashboardId ? 'LookML' : c.lookId ? 'Look' : 'Dash'} #${c.lookmlDashboardId || c.lookId || c.dashboardId}`
-  if (c.sessionId || c.projectId || c.branch) return `${c.projectId || c.sessionId}${c.branch ? ` · ${c.branch}` : ''}`
-  return c.id ? `#${c.id}` : ''
+  const lkId = cleanLookmlProjectId(c.projectId) || cleanLookmlProjectId(c.sessionId)
+  if (lkId || c.branch) return `${lkId || 'LookML'}${c.branch ? `${lkId ? ' · ' : ' '}${c.branch}` : ''}`
+  const rawId = cleanLookmlProjectId(c.id)
+  return rawId ? `#${rawId}` : ''
 }
 
 export const DOC_UI_COMPONENTS: Record<string, () => React.ReactElement> = {
@@ -2672,7 +2674,7 @@ const CONTENT_TYPE_LABELS: Partial<Record<StudioContentItemType, string>> = {
 }
 export const formatContentTypeLabel = (ct: StudioContentItemType): string => CONTENT_TYPE_LABELS[ct] || ct.charAt(0).toUpperCase() + ct.slice(1)
 const resolveContentLookerPath = (ct: StudioContentItemType, id?: string, embedPath?: string): string =>
-  ct === 'lookml' ? (id ? `/projects/${encodeURIComponent(id)}` : '') : ct !== 'script' && ct !== 'report' && embedPath ? embedPath.replace(/^\/embed/, '') : ''
+  ct === 'lookml' ? (cleanLookmlProjectId(id) ? `/projects/${encodeURIComponent(cleanLookmlProjectId(id))}` : '') : ct !== 'script' && ct !== 'report' && embedPath ? embedPath.replace(/^\/embed/, '') : ''
 
 export type LkrCodeModeApiCallLike = Partial<LkrCodeModeApiCallEntry> & Pick<LkrCodeModeApiCallEntry, 'method' | 'route'>
 export type OverviewStageSelection =
@@ -2737,8 +2739,9 @@ export function deriveConversationOverviewData(input: DeriveOverviewInput) {
   if (lk) {
     const val = lk.validation, ok = val ? val.passed : true, errN = (val ? val.errors?.length || val.error_count || 0 : 0) || 1
     const tests = lk.tests || [], passed = tests.filter((t) => t.success).length, par = lk.queries?.length || 0
+    const lkProj = cleanLookmlProjectId(lk.project_id)
     reviewItems.push({
-      kind: 'lookml', title: `LookML: ${lk.project_id || lk.title || 'Project'}`,
+      kind: 'lookml', title: `LookML: ${lkProj || lk.title || 'Project'}`,
       subtitle: [`${lk.files?.length || 0} .lkml`, tests.length ? `${passed}/${tests.length} tests` : '', par ? `${par} parity` : ''].filter(Boolean).join(' · '),
       badgeText: ok ? 'LookML valid' : `${errN} ${errN === 1 ? 'error' : 'errors'}`, badgeTone: ok ? 'success' : 'danger',
     })
@@ -2746,15 +2749,19 @@ export function deriveConversationOverviewData(input: DeriveOverviewInput) {
 
   const contentRows: OverviewContentRow[] = []
   const pushRow = (r: OverviewContentRow) => { if (!contentRows.some((x) => x.key === r.key)) contentRows.push(r) }
-  items.forEach((it) => pushRow({
-    key: it.key, id: it.id, title: it.title, contentType: it.contentType, typeLabel: formatContentTypeLabel(it.contentType),
-    shortTag: SHORT_CONTENT_TAGS[it.contentType] || formatContentTypeLabel(it.contentType), hidden: Boolean(it.hidden),
-    openInLookerPath: resolveContentLookerPath(it.contentType, it.projectId || it.id, it.embedPath),
-  }))
+  items.forEach((it) => {
+    const lkId = it.contentType === 'lookml' ? cleanLookmlProjectId(it.projectId) || cleanLookmlProjectId(it.id) : ''
+    if (it.contentType === 'lookml' && !lkId) return
+    pushRow({
+      key: it.key, id: it.id, title: it.title, contentType: it.contentType, typeLabel: formatContentTypeLabel(it.contentType),
+      shortTag: SHORT_CONTENT_TAGS[it.contentType] || formatContentTypeLabel(it.contentType), hidden: Boolean(it.hidden),
+      openInLookerPath: resolveContentLookerPath(it.contentType, it.contentType === 'lookml' ? lkId : it.projectId || it.id, it.embedPath),
+    })
+  })
   if (!contentRows.length) {
     if (pub?.dashboardId) pushRow({ key: `data_app:${pub.dashboardId}`, id: String(pub.dashboardId), title: pub.title, contentType: 'data_app', typeLabel: 'Data App', shortTag: 'Data App', hidden: false, openInLookerPath: `/dashboards/${encodeURIComponent(String(pub.dashboardId))}` })
     if (nat?.id) pushRow({ key: `${nat.contentType}:${nat.id}`, id: String(nat.id), title: nat.title, contentType: nat.contentType, typeLabel: formatContentTypeLabel(nat.contentType), shortTag: SHORT_CONTENT_TAGS[nat.contentType] || 'Content', hidden: false, openInLookerPath: resolveContentLookerPath(nat.contentType, nat.id, nat.embedPath) })
-    if (lk?.id) { const pid = lk.project_id || lk.id; pushRow({ key: `lookml:${pid}`, id: pid, title: lk.title || pid, contentType: 'lookml', typeLabel: 'LookML Project', shortTag: 'LookML', hidden: false, openInLookerPath: `/projects/${encodeURIComponent(pid)}` }) }
+    if (lk) { const pid = cleanLookmlProjectId(lk.project_id) || cleanLookmlProjectId(lk.id); if (pid) pushRow({ key: `lookml:${pid}`, id: pid, title: lk.title || pid, contentType: 'lookml', typeLabel: 'LookML Project', shortTag: 'LookML', hidden: false, openInLookerPath: `/projects/${encodeURIComponent(pid)}` }) }
     if (hr?.id) pushRow({ key: `report:${hr.id}`, id: hr.id, title: hr.title || 'Health Check Report', contentType: 'report', typeLabel: 'Health Check Report', shortTag: 'Health Check', hidden: false, openInLookerPath: '' })
     if (ca?.caConversationId) pushRow({ key: `conversational-analytics:${ca.caConversationId}`, id: ca.caConversationId, title: ca.title || ca.agentName || 'Conversational Analytics', contentType: 'conversational-analytics', typeLabel: 'Conversational Analytics', shortTag: 'CA', hidden: false, openInLookerPath: resolveContentLookerPath('conversational-analytics', ca.caConversationId, ca.embedPath) })
     if (input.loadedScript && input.scriptId) pushRow({ key: `script:${input.scriptId}`, id: input.scriptId, title: input.scriptTitle || input.scriptId, contentType: 'script', typeLabel: input.savedScheduleBadge ? `Script (${input.savedScheduleBadge})` : 'Python Script', shortTag: input.savedScheduleBadge ? 'Scheduled' : 'Script', hidden: false, openInLookerPath: '' })
@@ -2830,7 +2837,7 @@ export function deriveConversationOverviewData(input: DeriveOverviewInput) {
   const links: OverviewLinkRow[] = [], seenHrefs = new Set<string>()
   const addLink = (rawHref: string, rawLabel?: string, meta?: string) => {
     const href = String(rawHref || '').trim().replace(/[.,;:)'"`]+$/, '')
-    if (!href || seenHrefs.has(href)) return
+    if (!href || seenHrefs.has(href) || /(?:^|\/)projects\/default(?:\/|$|[?#])/i.test(href)) return
     const isSandboxMd = isSandboxMarkdownPath(href)
     if (!isSandboxMd && !/^https?:\/\//i.test(href) && !/^\/(?!\/)/.test(href)) return
     seenHrefs.add(href)
@@ -3541,10 +3548,10 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   }
 
   const handleSelectLookmlFileFromOverview = (filePath: string) => {
-    const lkTab = contentItems.find((c) => c.contentType === 'lookml')
+    const lkTab = contentItems.find((c) => c.contentType === 'lookml' && cleanLookmlProjectId(c.projectId || c.id))
     if (lkTab) { selectContentTabInStage(lkTab.key, filePath); return }
-    if (lookmlBundle) {
-      const pid = lookmlBundle.project_id || lookmlBundle.id || 'project'
+    const pid = lookmlBundle ? cleanLookmlProjectId(lookmlBundle.project_id) || cleanLookmlProjectId(lookmlBundle.id) : ''
+    if (lookmlBundle && pid) {
       const up = ctl.upsertContentItem({ id: pid, projectId: pid, contentType: 'lookml', title: lookmlBundle.title || `LookML: ${pid}`, embedPath: `/lookml/${encodeURIComponent(pid)}`, hidden: false }, true)
       setStageInspector(null); setShowAppCode(false); setSelectedLookmlFilePath(filePath); setMobileExplorerOpen(false)
       handleSelectContentTab?.(up.key)
@@ -3573,7 +3580,8 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const railArtifacts = useMemo<Array<{ key: string; title: string; contentType: StudioContentItemType }>>(() => {
     if (visibleTabs.length > 0) return visibleTabs.map((item) => ({ key: item.key, title: item.title, contentType: item.contentType }))
     if (allTabsHidden) return []
-    if (isLookmlMode && lookmlBundle) return [{ key: `lookml:${lookmlBundle.id}`, title: lookmlBundle.title || 'Agentic LookML', contentType: 'lookml' }]
+    const lkPid = lookmlBundle ? cleanLookmlProjectId(lookmlBundle.project_id) || cleanLookmlProjectId(lookmlBundle.id) : ''
+    if (isLookmlMode && lookmlBundle && lkPid) return [{ key: `lookml:${lkPid}`, title: lookmlBundle.title || 'Agentic LookML', contentType: 'lookml' }]
     if (isHealthCheckMode && healthReport) return [{ key: `report:${healthReport.id}`, title: healthReport.title || 'Health Check Report', contentType: 'report' }]
     if (isTileMode && scriptId) return [{ key: `script:${scriptId}`, title: scriptTitle || scriptId, contentType: 'script' }]
     if (caConversation) return [{ key: `ca:${caConversation.caConversationId}`, title: caConversation.title || 'Conversational Analytics', contentType: 'conversational-analytics' }]
@@ -3756,7 +3764,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             {visibleTabs.map((item) => {
               const isSelected = item.key === resolvedActiveTabKey
               const isPopOpen = hoveredTab?.key === item.key
-              const pid = item.projectId || item.id
+              const pid = item.contentType === 'lookml' ? cleanLookmlProjectId(item.projectId) || cleanLookmlProjectId(item.id) : item.projectId || item.id
               const isLookmlTab = item.contentType === 'lookml'
               const isNonEmbed = item.contentType === 'script' || item.contentType === 'report'
               const popHref = resolveContentLookerPath(item.contentType, pid, item.embedPath)
@@ -3893,11 +3901,11 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                 }
                 actions={
                   <>
-                    {lookmlBundle?.project_id && (
+                    {cleanLookmlProjectId(lookmlBundle?.project_id) && (
                       <StudioButton
                         variant="secondary"
                         testId="stage-review-open-ide-btn"
-                        onClick={() => void openOrCopyMarkdownLink(`/projects/${encodeURIComponent(lookmlBundle.project_id)}`, hostUrl, extensionSDK)}
+                        onClick={() => void openOrCopyMarkdownLink(`/projects/${encodeURIComponent(cleanLookmlProjectId(lookmlBundle?.project_id))}`, hostUrl, extensionSDK)}
                       >
                         <span>IDE</span>
                         <ExternalLink size={11} strokeWidth={1.75} aria-hidden="true" />
@@ -4160,7 +4168,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                 title={lookmlBundle ? (
                   <>
                     {overviewCrumb}
-                    <strong>{lookmlBundle.title || lookmlBundle.project_id}</strong>
+                    <strong>{lookmlBundle.title || cleanLookmlProjectId(lookmlBundle.project_id) || lookmlBundle.model_name || 'LookML Session'}</strong>
                     <StudioBadge tone={lookmlBundle.validation?.passed === false ? 'danger' : 'success'}>
                       {lookmlBundle.validation?.passed === false ? 'Invalid' : 'Valid'}
                     </StudioBadge>

@@ -9,11 +9,11 @@ import { useStudioMetadata } from './studioControllerMetadata'
 import { QueuedPromptItem, StudioEnvironmentStatus, useStudioTurn } from './studioControllerTurn'
 
 export {
-  authenticateGoogleOAuth, computeIsAuthenticated, DEFAULT_MAX_TOTAL_TOKENS,
-  DEFAULT_THINKING_LEVEL, loadStoredThinkingLevel, normalizeMaxTotalTokens,
+  authenticateGoogleOAuth, computeIsAuthenticated, DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_MAX_TOTAL_TOKENS,
+  DEFAULT_THINKING_LEVEL, loadStoredThinkingLevel, normalizeMaxToolRounds, normalizeMaxTotalTokens,
   normalizeThinkingLevel, persistThinkingLevel, readInitialThinkingLevel,
   refreshOAuthSessionIfNeeded, resolveLookerOAuthRedirectUri,
-  resolveLookerOAuthRedirectUris, STUDIO_MAX_TOTAL_TOKENS_OPTIONS,
+  resolveLookerOAuthRedirectUris, STUDIO_MAX_TOOL_ROUNDS_OPTIONS, STUDIO_MAX_TOTAL_TOKENS_OPTIONS,
   STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY,
   STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY,
 } from './antigravity'

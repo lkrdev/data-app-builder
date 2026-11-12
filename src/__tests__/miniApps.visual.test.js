@@ -7303,4 +7303,122 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       docHasDescWithoutLabel: true,
     })
   }, 25000)
+
+  test('Issue #186: renders Max Tool Rounds select + accessible Info tooltip in light/dark themes on /config and persists maxToolRounds without .dab-info-trigger regression', async () => {
+    await chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
+    await chrome.send('Page.bringToFront')
+    await chrome.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=config_page` })
+    const cfgDeadline = Date.now() + 8000
+    while (Date.now() < cfgDeadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="config-max-tool-rounds-select"]'))`,
+        returnByValue: true,
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 80))
+    }
+
+    const cfgRes = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        window.__DAB_STUDIO__.setThemeMode('light');
+        await new Promise((r) => setTimeout(r, 40));
+
+        const roundsSelect = document.querySelector('[data-testid="config-max-tool-rounds-select"]');
+        const initialValue = roundsSelect ? roundsSelect.value : '';
+        const optionValues = roundsSelect ? Array.from(roundsSelect.options).map((o) => o.value) : [];
+        const optionLabels = roundsSelect ? Array.from(roundsSelect.options).map((o) => (o.textContent || '').trim()) : [];
+
+        const infoBtn = document.querySelector('[data-testid="config-max-tool-rounds-info"]');
+        const tooltipEl = document.querySelector('[data-testid="config-max-tool-rounds-tooltip"]');
+        const tabIndexAttr = infoBtn ? infoBtn.getAttribute('tabindex') : null;
+        const roleAttr = tooltipEl ? tooltipEl.getAttribute('role') : null;
+        const hiddenBeforeFocus = tooltipEl ? window.getComputedStyle(tooltipEl).visibility === 'hidden' : false;
+
+        infoBtn?.focus();
+        await new Promise((r) => setTimeout(r, 40));
+        const lightCs = tooltipEl ? window.getComputedStyle(tooltipEl) : null;
+        const lightVisible = Boolean(lightCs && lightCs.visibility === 'visible' && Number(lightCs.opacity) === 1);
+        const lightBg = lightCs ? lightCs.backgroundColor : '';
+        const lightColor = lightCs ? lightCs.color : '';
+        const lightFits = tooltipEl ? tooltipEl.scrollHeight <= tooltipEl.clientHeight + 2 : false;
+        const tooltipText = (tooltipEl?.textContent || '').trim();
+
+        window.__DAB_STUDIO__.setThemeMode('dark');
+        await new Promise((r) => setTimeout(r, 40));
+        const darkCs = tooltipEl ? window.getComputedStyle(tooltipEl) : null;
+        const darkVisible = Boolean(darkCs && darkCs.visibility === 'visible' && Number(darkCs.opacity) === 1);
+        const darkBg = darkCs ? darkCs.backgroundColor : '';
+        const darkColor = darkCs ? darkCs.color : '';
+        const darkFits = tooltipEl ? tooltipEl.scrollHeight <= tooltipEl.clientHeight + 2 : false;
+
+        infoBtn?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 40));
+        const hiddenAfterEscape = tooltipEl ? window.getComputedStyle(tooltipEl).visibility === 'hidden' : false;
+
+        infoBtn?.blur();
+        window.__DAB_STUDIO__.setThemeMode('light');
+        await new Promise((r) => setTimeout(r, 40));
+
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+        setter.call(roundsSelect, '25');
+        roundsSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 40));
+
+        const saveBtn = Array.from(document.querySelectorAll('button')).find((b) => (b.textContent || '').includes('Save Setup'));
+        saveBtn?.click();
+        await new Promise((r) => setTimeout(r, 120));
+
+        const useCaseInfoBtn = document.querySelector('[data-testid="use-case-info-btn"]');
+        const useCaseInfoWidth = useCaseInfoBtn ? Math.round(useCaseInfoBtn.getBoundingClientRect().width) : 24;
+
+        return {
+          initialValue,
+          optionValues,
+          optionLabels,
+          tabIndexAttr,
+          roleAttr,
+          hiddenBeforeFocus,
+          hiddenAfterEscape,
+          lightVisible,
+          darkVisible,
+          lightFits,
+          darkFits,
+          distinctThemeSurfaces: Boolean(lightBg && darkBg && lightBg !== darkBg && lightColor !== darkColor),
+          hasCeilingCopy: tooltipText.includes('50 default, 100 max') && tooltipText.includes('1M-token') && tooltipText.includes('OAuth'),
+          hasLowerCopy: tooltipText.includes('15–25') && tooltipText.includes('BigQuery') && tooltipText.includes('quota'),
+          hasSdkJargon: tooltipText.includes('saveContextData'),
+          savedMaxToolRounds: window.__LAST_SAVED_CONTEXT_DATA__?.maxToolRounds,
+          useCaseInfoPreserved: useCaseInfoWidth >= 24,
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+
+    expect(cfgRes.result.value).toEqual({
+      initialValue: '50',
+      optionValues: ['15', '25', '50', '100'],
+      optionLabels: [
+        '15 rounds',
+        '25 rounds',
+        '50 rounds (Default — High)',
+        '100 rounds (Max)',
+      ],
+      tabIndexAttr: '0',
+      roleAttr: 'tooltip',
+      hiddenBeforeFocus: true,
+      hiddenAfterEscape: true,
+      lightVisible: true,
+      darkVisible: true,
+      lightFits: true,
+      darkFits: true,
+      distinctThemeSurfaces: true,
+      hasCeilingCopy: true,
+      hasLowerCopy: true,
+      hasSdkJargon: false,
+      savedMaxToolRounds: 25,
+      useCaseInfoPreserved: true,
+    })
+  }, 20000)
 })

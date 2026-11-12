@@ -5,6 +5,12 @@ import type { Looker40SDK } from '@looker/sdk'
 import { ExternalLink, Lock, MoreVertical } from 'lucide-react'
 
 import { LOOKER_PROJECT_ONBOARDING_SKILL_MD } from './antigravityPrompts'
+import {
+  type AntigravityInteractionPayload,
+  cleanLookmlProjectId,
+  collectInteractionTextCandidates,
+  parseTaggedJsonObjects,
+} from './antigravityTypes'
 import { StudioBadge, StudioButton, StudioCard, StudioModal } from './components/StudioDesignSystem'
 import { LKR_DEV_CLI_SPEC } from './lkrCliBridge'
 import {
@@ -92,37 +98,26 @@ export interface LookmlArtifactPayload {
   }
 }
 
-export interface LookmlInteractionLike {
-  output_text?: string
-  outputs?: Array<{ text?: string }>
-  steps?: Array<{
-    output?: string
-    stdout?: string
-    result?: string
-    text?: string
-    content?: unknown
-    code_execution_result?: { output?: string }
-  }>
-}
+export type LookmlInteractionLike = AntigravityInteractionPayload
 
 export function extractLookmlBundleFromInteraction(
   interaction?: LookmlInteractionLike | null
 ): LookmlBundle | null {
-  const texts = [
-    interaction?.output_text,
-    ...(interaction?.outputs || []).map((o) => o?.text),
-    ...(interaction?.steps || []).flatMap((s) => [
-      s?.output,
-      s?.stdout,
-      s?.result,
-      s?.text,
-      s?.code_execution_result?.output,
-      ...(Array.isArray(s?.content) ? s.content.map((c) => (c as { text?: string })?.text) : [s?.content]),
-    ]),
-  ].filter((x): x is string => typeof x === 'string')
-  const matches = Array.from(texts.join('\n').matchAll(/<LOOKML_BUNDLE>([\s\S]*?)<\/LOOKML_BUNDLE>/g))
-  if (!matches.length) return null
-  const bundle = JSON.parse(matches[matches.length - 1][1].trim()) as LookmlBundle
+  const hit = parseTaggedJsonObjects(
+    collectInteractionTextCandidates(interaction),
+    /<LOOKML_BUNDLE>([\s\S]*?)<\/LOOKML_BUNDLE>/g
+  ).find((p) =>
+    Boolean(
+      cleanLookmlProjectId(p.project_id) ||
+        cleanLookmlProjectId(p.model_name) ||
+        (Array.isArray(p.files) && p.files.length > 0) ||
+        (typeof p.summary_markdown === 'string' && p.summary_markdown.trim())
+    )
+  )
+  if (!hit) return null
+  const bundle = Object.assign({}, hit) as unknown as LookmlBundle
+  bundle.project_id = cleanLookmlProjectId(bundle.project_id) || undefined
+  bundle.id = cleanLookmlProjectId(bundle.id) || undefined
   // ponytail: synthesize unified diff for newly created files on client so sandbox stdout omits duplicate content
   for (const f of bundle.files || []) {
     if (!f.diff && f.content) {
@@ -198,6 +193,8 @@ export function buildLookmlSystemGuide(params: {
     ...(activeSkillList.includes('looker-project-onboarding') || !projectId?.trim() || selectedExplores.length === 0 ? [LOOKER_PROJECT_ONBOARDING_SKILL_MD] : []),
     `2. **Host-Bridged LookML Sync via Browser WASM \`run_looker_codemode(code, thought, vars)\`**:`,
     `   - Zero sandbox Looker credentials are needed: \`run_looker_codemode\` runs in the browser extension, requires a concise 1-sentence \`thought\` description, accepts \`vars: {...}\`, and has all \`ExtendedLooker40SDK\` methods pre-bound as bare globals (never prefix with \`sdk.\`). Do NOT call \`update_session\` inside \`run_looker_codemode\` — dev mode is controlled by the app session or the \`--dev\` CLI flag.`,
+    `   - NEVER call \`view_file\` on \`/workspace/bootstrap_lookml.py\` or \`/workspace/sitecustomize.py\`.`,
+    `   - Batch project creation, model registration, and \`INFORMATION_SCHEMA.COLUMNS\` / Bronze discovery into **1** \`run_looker_codemode\` call (and skip \`create_github_pr.sh\` whenever \`git_remote_url\` is empty on bare repos).`,
     `   - Use whatever branch/state is already in the user's dev mode (inspect via \`git_branch(project_id)\` — do NOT reset to production or create a new git branch unless explicitly asked). Pull LookML files via \`all_project_files\` + \`get_file_content\` into \`/workspace/lookml_baseline/\` and \`/workspace/data/$RUN_ID/lookml/\`.`,
     `3. **100% Offline \`lkr-dev-cli[parse]\` CLI Commands in \`/workspace\`**:`,
     `   - Run offline CLI commands against \`/workspace/data/$RUN_ID/lookml\`: \`lkr parse sql --dialect bigquery --summary\`, \`lkr parse sql-lookml-compare --offline\`, \`lkr parse lookml-to-api --validate\`, \`lkr schema validate --explore-file\`, and \`lkr parse lookml snapshot\` & \`lkr parse curation-meta\`.`,
@@ -210,7 +207,7 @@ export function buildLookmlSystemGuide(params: {
 }
 
 export function resolveLookmlCanonicalProjectId(bundle?: Partial<LookmlBundle> | null): string {
-  return String(bundle?.project_id || bundle?.model_name || bundle?.id || 'default').trim()
+  return cleanLookmlProjectId(bundle?.project_id) || cleanLookmlProjectId(bundle?.model_name) || cleanLookmlProjectId(bundle?.id)
 }
 
 export function mergeLookmlFiles(prevFiles: LookmlFileChange[] = [], nextFiles: LookmlFileChange[] = []): LookmlFileChange[] {
@@ -229,7 +226,7 @@ export function mergeLookmlFiles(prevFiles: LookmlFileChange[] = [], nextFiles: 
 
 export function extractLookmlDashboardsFromBundle(bundle?: LookmlBundle | null) {
   const files = bundle?.files || []
-  const model = String(bundle?.model_name || files.map((f) => f.path?.match(/(?:^|\/)([^/]+)\.model\.lkml$/i)?.[1]).find(Boolean) || bundle?.project_id || bundle?.id || '').trim()
+  const model = cleanLookmlProjectId(bundle?.model_name) || cleanLookmlProjectId(files.map((f) => f.path?.match(/(?:^|\/)([^/]+)\.model\.lkml$/i)?.[1]).find(Boolean)) || cleanLookmlProjectId(bundle?.project_id) || cleanLookmlProjectId(bundle?.id)
   if (!model) return []
   const seen = new Set<string>()
   return files.flatMap((f) => {
@@ -247,7 +244,7 @@ export function extractLookmlDashboardsFromBundle(bundle?: LookmlBundle | null) 
 
 export function getLookmlArtifactKeys(userId: string, id: string) {
   const cleanUser = String(userId || 'anon').trim()
-  const cleanId = String(id || 'default').trim().replace(/[^a-zA-Z0-9_-]/g, '_')
+  const cleanId = (cleanLookmlProjectId(id) || 'project').replace(/[^a-zA-Z0-9_-]/g, '_')
   return { id: cleanId, userKey: `user_${cleanUser}_lookml_${cleanId}`, objKey: `obj_lookml_${cleanId}` }
 }
 
@@ -268,12 +265,12 @@ export function saveLookmlSessionArtifact(params: {
     .catch((): null => null)
     .then((existing) => {
       const updatedAt = new Date().toISOString()
-      const projectLabel = bundle.project_id?.trim() || rawId
-      const title = `LookML: ${projectLabel}`
+      const validProj = cleanLookmlProjectId(bundle.project_id) || cleanLookmlProjectId(existing?.bundle?.project_id) || rawId || id
+      const title = `LookML: ${validProj}`
       const explores = studio.explores || existing?.studio?.explores || []
       const mergedBundle: LookmlBundle = Object.assign({}, existing?.bundle, bundle, {
         id,
-        project_id: bundle.project_id || existing?.bundle?.project_id || rawId,
+        project_id: validProj,
         title: bundle.title || existing?.bundle?.title || title,
         files: mergeLookmlFiles(existing?.bundle?.files, bundle.files),
       })
@@ -308,8 +305,20 @@ export function loadLookmlSessionArtifact(
   candidates.forEach((cid) => {
     chain = chain.then((hit) => hit || svc.get<LookmlArtifactPayload>(`obj_lookml_${cid}`).catch((): null => null))
   })
+  const sanitizeLoaded = (p: LookmlArtifactPayload): LookmlArtifactPayload => {
+    const cleanBundle = p.bundle
+      ? Object.assign({}, p.bundle, {
+          project_id: cleanLookmlProjectId(p.bundle.project_id) || undefined,
+          id: cleanLookmlProjectId(p.bundle.id) || undefined,
+        })
+      : p.bundle
+    return Object.assign({}, p, {
+      project_id: cleanLookmlProjectId(p.project_id) || undefined,
+      bundle: cleanBundle,
+    })
+  }
   return chain.then((hit) => {
-    if (hit) return hit
+    if (hit) return sanitizeLoaded(hit)
     return svc
       .search(`obj_lookml_${cleanId}_%`)
       .then((rows) => {
@@ -322,7 +331,7 @@ export function loadLookmlSessionArtifact(
       .catch((): null => null)
       .then((fallbackHit) => {
         if (!fallbackHit) throw new Error(`LookML session artifact "obj_lookml_${cleanId}" not found.`)
-        return fallbackHit
+        return sanitizeLoaded(fallbackHit)
       })
   })
 }
@@ -412,7 +421,8 @@ export const LookmlPreviewPane: React.FC<{
   const queries = bundle.queries || []
   const cleanHost = hostUrl.replace(/\/$/, '')
 
-  const projectIdePath = bundle.project_id?.trim() ? `/projects/${encodeURIComponent(bundle.project_id.trim())}` : ''
+  const validProjectId = cleanLookmlProjectId(bundle.project_id)
+  const projectIdePath = validProjectId ? `/projects/${encodeURIComponent(validProjectId)}` : ''
   const activeFileIdePath =
     activeFile && projectIdePath ? `${projectIdePath}/files/${activeFile.path.replace(/^\/+/, '')}` : ''
   const openLink = (pathOrUrl: string) => {
@@ -567,7 +577,7 @@ export const LookmlPreviewPane: React.FC<{
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div className="dab-controls">
             <div>
-              <strong>Project:</strong> <code>{bundle.project_id || 'default'}</code>
+              <strong>Project:</strong> <code>{validProjectId || '—'}</code>
             </div>
             {projectIdePath && (
               <StudioButton variant="secondary" testId="lookml-open-ide-btn" onClick={() => openLink(projectIdePath)}>

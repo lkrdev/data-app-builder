@@ -14,12 +14,12 @@ import {
   AGENTS_MD, AntigravityActivityStep, ANTIGRAVITY_ALLOWED_MODELS, AntigravityInteractionPayload, APP_BUILDER_SYSTEM_PROMPT, authenticateGoogleOAuth,
   BOOTSTRAP_LOOKML_PY, BOOTSTRAP_SANDBOX_SH, buildDynamicStarterPrompts, buildLookmlSystemGuide, buildNativeContentGuide, buildWorkspaceSources,
   BUNDLE_APP_PY, BUILTIN_SKILLS_FILES, callInteractionsApi, clampLeftPaneWidth, classifyLookerOperation,
-  clearStarterPromptsCache, clearStoredOAuthSession, CODEMODE_CDN_URL, CodeModePermissionRequest,
-  computeIsAuthenticated, computeLkrExtensionCacheKey, CONCURRENT_POLL_SCHEDULE_MS,
+  cleanLookmlProjectId, clearStarterPromptsCache, clearStoredOAuthSession, CODEMODE_CDN_URL, CodeModePermissionRequest,
+  collectInteractionTextCandidates, computeIsAuthenticated, computeLkrExtensionCacheKey, CONCURRENT_POLL_SCHEDULE_MS,
   CONVERSATION_LABEL_REQUEST_TAG, DASHBOARD_CODEMODE_PREAMBLE_PY, DATA_APP_GUIDE_MD, DATA_INVESTIGATOR_GUIDE_MD,
-  DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_LEFT_PANE_WIDTH, DEFAULT_MAX_TOTAL_TOKENS, DEFAULT_THINKING_LEVEL,
+  DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_LEFT_PANE_WIDTH, DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_MAX_TOTAL_TOKENS, DEFAULT_THINKING_LEVEL,
   discoverAccessibleConnections, discoverStarterContentSummaries, discoverStarterExploreContext, ensureCodeModeLoaded,
-  executeLkrExtensionToolRequest, EXPLICIT_SCRIPT_CREATION_RE, extractInteractionActivitySteps,
+  executeLkrExtensionToolRequest, EXPLICIT_SCRIPT_CREATION_RE, extractBundleFromInteraction, extractInteractionActivitySteps,
   extractInteractionOutputText, extractLkrExtensionToolRequests, extractSlashSkillIds,
   extractNativeContentFromInteraction, extractNonThoughtText, extractSkillNameFromPath, extractThoughtText, extractWrittenMarkdownPathFromCode,
   fetchEnvironmentFile, formatAccessibleConnectionsMarkdown, formatContentInventoryMarkdown, formatFriendlyLookerActivityLabel,
@@ -31,15 +31,15 @@ import {
   LKR_DEV_CLI_VERSION, LkrCodeMode, loadStoredLeftPaneWidth, loadStoredOAuthSession,
   loadStoredRightPaneCollapsed, loadStoredThinkingLevel, loginWithGoogleOAuth,
   LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD, LOOKER_PROJECT_ONBOARDING_SKILL_MD, LOOKML_SKILLS_CATALOG, MAX_LEFT_PANE_WIDTH,
-  mergeInteractionSseEvent, MIN_LEFT_PANE_WIDTH, NATIVE_CONTENT_GUIDE_MD, normalizeMaxTotalTokens, normalizeSandboxFilePath,
-  normalizeThinkingLevel, parseStarterPromptsResponse, persistOAuthSession, persistThinkingLevel,
+  mergeInteractionSseEvent, MIN_LEFT_PANE_WIDTH, NATIVE_CONTENT_GUIDE_MD, normalizeMaxToolRounds, normalizeMaxTotalTokens, normalizeSandboxFilePath,
+  normalizeThinkingLevel, parseStarterPromptsResponse, parseTaggedJsonObjects, persistOAuthSession, persistThinkingLevel,
   prewarmOrWakeAntigravityEnvironment, readInitialRightPaneCollapsed, readInitialThinkingLevel, recordSharedEnvExploreSchema,
   refreshOAuthSessionIfNeeded, resetHostOAuthWedged, resolveAdaptivePollScheduleMs, resolveBuiltinWorkspaceFileContent,
   resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, runAntigravityTurn,
   SANDBOX_AGENT_SKILL_FILES, SANDBOX_WORKSPACE_SKILL_FILES, sanitizeActivityThought, sanitizeConversationLabel, saveStoredLeftPaneWidth,
   saveStoredRightPaneCollapsed, STARTER_PROMPTS_REQUEST_TAG, STARTER_PROMPTS_RESPONSE_FORMAT,
   streamInteractionUntilActionOrDone, stripStarterPromptEmojis, STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY,
-  STUDIO_MAX_TOTAL_TOKENS_OPTIONS, STUDIO_OAUTH_REFRESH_INTERVAL_MS,
+  STUDIO_MAX_TOOL_ROUNDS_OPTIONS, STUDIO_MAX_TOTAL_TOKENS_OPTIONS, STUDIO_OAUTH_REFRESH_INTERVAL_MS,
   STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY, STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY,
   STUDIO_SLASH_SKILLS, STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY, StudioAttachedFile,
   summarizeProgress, wrapDashboardCodeMode,
@@ -79,11 +79,13 @@ import {
   resolveStudioContentEmbedPath, resolveStudioTheme, resolveSystemTheme, resolveUserCapabilities,
   saveNativeContentArtifact, saveStoredBusySendAction, saveUserArtifact, saveUserConversation, saveUserEnvironmentId, searchGlobalContentV2,
   searchLookerFolders, selectCaAgentViaIsolatedSubagent, shouldRouteToIsolatedCaSubagent,
-  DEFAULT_BUSY_SEND_ACTION, loadStoredBusySendAction, STUDIO_BUSY_SEND_ACTION_STORAGE_KEY,
-  STUDIO_FOLDER_STORAGE_KEY, STUDIO_MODES, STUDIO_OVERVIEW_TAB_KEY, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
+  DEFAULT_BUSY_SEND_ACTION, DEFAULT_MAX_TOOL_ROUNDS as LOOKER_API_DEFAULT_MAX_TOOL_ROUNDS, loadStoredBusySendAction,
+  normalizeMaxToolRounds as lookerApiNormalizeMaxToolRounds, STUDIO_BUSY_SEND_ACTION_STORAGE_KEY,
+  STUDIO_FOLDER_STORAGE_KEY, STUDIO_MAX_TOOL_ROUNDS_OPTIONS as LOOKER_API_MAX_TOOL_ROUNDS_OPTIONS, STUDIO_MODES, STUDIO_OVERVIEW_TAB_KEY, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
   StudioContentItem, SWR_DEDUPED_METHODS, upsertStudioContentItem, UserArtifactIndexItem, userStudioConfigArtifactKey,
 } from '../lookerApi'
 import {
+  extractLookmlBundleFromInteraction,
   extractLookmlDashboardsFromBundle,
   loadLookmlSessionArtifact,
   LookmlPreviewPane,
@@ -7188,7 +7190,7 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     expect(fencedTrace).toContain('```python')
     expect(fencedTrace).toContain('return validate_project("sales_core")')
 
-    // 4. Lazy multi-hop hydrateInteractionActivitySteps (walking back to stopAtInteractionId, skipping [PREWARM:, max 12 hops)
+    // 4. Lazy multi-hop hydrateInteractionActivitySteps (walking back to stopAtInteractionId, skipping [PREWARM:, max 105 hops)
     const fetchedHopUrls: string[] = []
     const hopMap: Record<string, Record<string, unknown>> = {
       int_t2_final: {
@@ -7243,7 +7245,22 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
       auth: { mode: 'apikey', apiKey: 'k' },
       interactionId: 'hop_1',
     })
-    expect(runawayCalls).toBe(12)
+    expect(runawayCalls).toBe(105)
+
+    let customCapCalls = 0
+    await hydrateInteractionActivitySteps({
+      extensionSDK: {
+        serverProxy: async (url: string) => {
+          customCapCalls += 1
+          const cur = Number((url.match(/hop_(\d+)/) || [])[1] || 0)
+          return { ok: true, status: 200, body: JSON.stringify({ id: `hop_${cur}`, previous_interaction_id: `hop_${cur + 1}`, status: 'completed', steps: [] }) }
+        },
+      },
+      auth: { mode: 'apikey', apiKey: 'k' },
+      interactionId: 'hop_1',
+      maxHops: 12,
+    })
+    expect(customCapCalls).toBe(12)
 
     // 5. Unconditional local SKILL.md resolution in fetchEnvironmentFile with zero remote HTTP calls
     let remoteSkillCalls = 0
@@ -8605,5 +8622,381 @@ customElements.define('good-compare-app', GoodCompareApp);`
     expect(overview.context.mentions).toHaveLength(1)
     expect(overview.context.folderLabel).toBe('My folder')
     expect(overview.context.uploads.map((u) => u.label)).toEqual(['Screenshot #1', 'wireframe.png'])
+  })
+
+  test('75. Issue #186: rejects view_file/inspection false-positive bundles, suppresses & heals lookml:default / /projects/default, runs >8 tool rounds under default 50, and wraps up gracefully with tools: [] when maxToolRounds is reached', async () => {
+    // 1. Constants, Looker API re-export parity & normalizeMaxToolRounds edge-case matrix
+    expect(DEFAULT_MAX_TOOL_ROUNDS).toBe(50)
+    expect(LOOKER_API_DEFAULT_MAX_TOOL_ROUNDS).toBe(50)
+    expect(LOOKER_API_MAX_TOOL_ROUNDS_OPTIONS).toEqual(STUDIO_MAX_TOOL_ROUNDS_OPTIONS)
+    expect(STUDIO_MAX_TOOL_ROUNDS_OPTIONS).toEqual([
+      { value: 15, label: '15 rounds' },
+      { value: 25, label: '25 rounds' },
+      { value: 50, label: '50 rounds (Default — High)' },
+      { value: 100, label: '100 rounds (Max)' },
+    ])
+    expect(lookerApiNormalizeMaxToolRounds).toBe(normalizeMaxToolRounds)
+    expect([
+      normalizeMaxToolRounds(undefined),
+      normalizeMaxToolRounds(null),
+      normalizeMaxToolRounds(true),
+      normalizeMaxToolRounds(false),
+      normalizeMaxToolRounds(''),
+      normalizeMaxToolRounds('   '),
+      normalizeMaxToolRounds(0),
+      normalizeMaxToolRounds(-10),
+      normalizeMaxToolRounds(Number.NaN),
+      normalizeMaxToolRounds('25'),
+      normalizeMaxToolRounds(1),
+      normalizeMaxToolRounds(15.9),
+      normalizeMaxToolRounds(150),
+    ]).toEqual([50, 50, 50, 50, 50, 50, 50, 50, 50, 25, 1, 15, 100])
+
+    // 2. view_file / read_file / skill_lookup / code_execution inputs / nameless call_id results returning bootstrap_lookml.py & bundle_app.py return null
+    const falsePositiveInteraction: AntigravityInteractionPayload = {
+      id: 'int_186_fp',
+      status: 'completed',
+      outputs: [{ type: 'thought', text: '<LOOKML_BUNDLE>{"project_id":"thought_leak","files":[{"path":"a.view.lkml"}]}</LOOKML_BUNDLE>' }],
+      steps: [
+        { type: 'view_file', id: 'vf_1', path: '/workspace/bootstrap_lookml.py', content: BOOTSTRAP_LOOKML_PY },
+        { type: 'read_file_result', call_id: 'rf_1', output: BUNDLE_APP_PY },
+        { type: 'function_call', id: 'fc_vf', name: 'view_file', arguments: { path: '/workspace/bootstrap_lookml.py' } },
+        { type: 'function_result', call_id: 'fc_vf', result: { content: BOOTSTRAP_LOOKML_PY } },
+        { type: 'function_call', id: 'fc_grep', name: 'grep_search', arguments: { query: 'LOOKML_BUNDLE' } },
+        { type: 'function_result', call_id: 'fc_grep', result: { output: '<LOOKML_BUNDLE>{"project_id":"grep_leak","files":[{"path":"x.lkml"}]}</LOOKML_BUNDLE>' } },
+        { type: 'function_result', call_id: 'fc_unpaired_prev_hop', result: { output: '<LOOKML_BUNDLE>{"project_id":"unpaired_leak","files":[{"path":"y.lkml"}]}</LOOKML_BUNDLE>' } },
+        { type: 'skill_lookup', content: '<DATA_APP_BUNDLE>{"raw_code":"leak","prod_code":"leak"}</DATA_APP_BUNDLE>' },
+        {
+          type: 'code_execution',
+          code: 'python3 -c \'print("<LOOKML_BUNDLE>{\\"project_id\\":\\"input_leak\\",\\"files\\":[{\\"path\\":\\"x.lkml\\"}]}</LOOKML_BUNDLE>")\'',
+          stdout: 'print("<LOOKML_BUNDLE>" + json.dumps(bundle) + "</LOOKML_BUNDLE>")\nprint("<NATIVE_CONTENT_BUNDLE>" + json.dumps(b) + "</NATIVE_CONTENT_BUNDLE>")',
+        },
+        { type: 'code_execution', stdout: '<LOOKML_BUNDLE>{"id":"default","project_id":"default"}</LOOKML_BUNDLE>' },
+        { type: 'code_execution', stdout: '<DATA_APP_BUNDLE>{"title":"Missing Code"}</DATA_APP_BUNDLE>' },
+      ],
+      output_text: 'Inspected workspace helpers.',
+    }
+    expect(extractLookmlBundleFromInteraction(falsePositiveInteraction)).toBeNull()
+    expect(extractBundleFromInteraction(falsePositiveInteraction)).toBeNull()
+    expect(extractNativeContentFromInteraction(falsePositiveInteraction)).toBeNull()
+
+    // Valid bundle in code_execution (with attached thought metadata / code_execution_result.stdout) still extracts cleanly even when followed by prose placeholder
+    const mixedValidInteraction: AntigravityInteractionPayload = {
+      id: 'int_186_mixed',
+      status: 'completed',
+      steps: [
+        {
+          type: 'code_execution',
+          thought: {},
+          code_execution_result: {
+            stdout:
+              '<LOOKML_BUNDLE>{"id":"ecom_1","title":"LookML: ecom","project_id":"ecom","model_name":"ecom","files":[{"path":"views/orders.view.lkml","action":"created","content":"view: orders {}"}]}</LOOKML_BUNDLE>\n' +
+              '<DATA_APP_BUNDLE>{"title":"Sales App","raw_code":"export default class {}","prod_code":"export default class {}","widgets":[]}</DATA_APP_BUNDLE>\n' +
+              '<NATIVE_CONTENT_BUNDLE>{"id":"77","content_type":"dashboard","title":"Sales UDD"}</NATIVE_CONTENT_BUNDLE>',
+          },
+        },
+      ],
+      output_text: 'Emitted <LOOKML_BUNDLE>{...}</LOOKML_BUNDLE>, <DATA_APP_BUNDLE>{...}</DATA_APP_BUNDLE>, and <NATIVE_CONTENT_BUNDLE>{...}</NATIVE_CONTENT_BUNDLE>.',
+    }
+    expect(extractLookmlBundleFromInteraction(mixedValidInteraction)?.project_id).toBe('ecom')
+    expect(extractLookmlBundleFromInteraction(mixedValidInteraction)?.files[0]?.diff).toContain('+view: orders {}')
+    expect(extractBundleFromInteraction(mixedValidInteraction)?.title).toBe('Sales App')
+    expect(extractNativeContentFromInteraction(mixedValidInteraction)?.id).toBe('77')
+    expect(
+      extractNativeContentFromInteraction({
+        id: 'int_186_struct_native',
+        status: 'completed',
+        steps: [
+          {
+            type: 'function_result',
+            name: 'run_looker_codemode',
+            result: { result: 'Done\n<NATIVE_CONTENT_BUNDLE>{"id":"88","content_type":"dashboard","title":"Struct Wrapped UDD"}</NATIVE_CONTENT_BUNDLE>\n<NATIVE_CONTENT_BUNDLE>{...}</NATIVE_CONTENT_BUNDLE>' },
+          },
+        ],
+      })?.id
+    ).toBe('88')
+    expect(parseTaggedJsonObjects(collectInteractionTextCandidates(mixedValidInteraction), /<LOOKML_BUNDLE>([\s\S]*?)<\/LOOKML_BUNDLE>/g)).toHaveLength(1)
+
+    // 3. Suppress lookml:default & /projects/default and heal poisoned saved conversations on load
+    expect(cleanLookmlProjectId('default')).toBe('')
+    expect(cleanLookmlProjectId('  sales_core  ')).toBe('sales_core')
+    expect(resolveLookmlCanonicalProjectId({ id: 'default', project_id: 'default' })).toBe('')
+    expect(resolveLookmlCanonicalProjectId({ id: 'default', project_id: 'default', model_name: 'ecom' })).toBe('ecom')
+    expect(extractLookmlDashboardsFromBundle({ id: 'default', title: 't', project_id: 'default', files: [{ path: 'dash.dashboard.lookml', content: '- dashboard: pulse\n  title: Pulse\n' }] })).toEqual([])
+    expect(getConvTargetId({ projectId: 'default', sessionId: 'default', id: 'default' }, 'lookml')).toBe('')
+    expect(getConvTargetId({ projectId: 'default', sessionId: 'default', id: 'default' }, 'auto')).toBe('')
+    expect(getConvTargetId({ id: 'default' }, 'auto')).toBe('default')
+    const relatedPoisoned = resolveConversationRelatedContent(
+      {
+        id: 'default',
+        type: 'lookml',
+        objectId: 'default',
+        content: { projectId: 'default', sessionId: 'default', id: 'default' },
+        contentItems: [{ key: 'lookml:default', id: 'default', projectId: 'default', contentType: 'lookml', title: 'LookML: default', createdInConversation: true }],
+      },
+      '1'
+    )
+    expect(relatedPoisoned.sharedObjectKeys).toEqual([])
+    expect(relatedPoisoned.userIndexKeys).toEqual([])
+    const healedLookmlItem = normalizeStudioContentItem({ id: 'real_proj', projectId: 'default', contentType: 'lookml' })
+    expect(healedLookmlItem.key).toBe('lookml:real_proj')
+    expect(healedLookmlItem.projectId).toBeUndefined()
+    expect(
+      hydrateConversationContentItems({
+        id: 'conv_poisoned_only',
+        type: 'lookml',
+        content: { projectId: 'default', sessionId: 'default' },
+        contentItems: [{ key: 'lookml:default', id: 'default', projectId: 'default', contentType: 'lookml', title: 'LookML: default' }],
+      })
+    ).toEqual([])
+    expect(
+      hydrateConversationContentItems({
+        id: 'conv_poisoned_legacy',
+        type: 'lookml',
+        content: { projectId: 'default', sessionId: 'default' },
+      })
+    ).toEqual([])
+    const overviewHealed = deriveConversationOverviewData({
+      messages: [{ role: 'assistant', text: 'Ignore [Bad](/projects/default) and keep [Good](/projects/ecom).' }],
+      contentItems: [
+        { key: 'lookml:default', id: 'default', projectId: 'default', contentType: 'lookml', title: 'LookML: default' },
+        { key: 'lookml:ecom', id: 'ecom', projectId: 'ecom', contentType: 'lookml', title: 'LookML: ecom' },
+      ],
+      lookmlBundle: { id: 'default', title: 'Orders Model', project_id: 'default', files: [{ path: 'orders.view.lkml', content: 'view: orders {}' }] },
+    })
+    expect(overviewHealed.contentRows.map((r) => r.key)).toEqual(['lookml:ecom'])
+    expect(overviewHealed.contentRows[0]?.openInLookerPath).toBe('/projects/ecom')
+    expect(overviewHealed.reviewItems[0]?.title).toBe('LookML: Orders Model')
+    expect(overviewHealed.links.map((l) => l.href)).toEqual(['/projects/ecom'])
+
+    // 4. buildLookmlSystemGuide includes the 2 Issue #186 rules
+    const lookmlGuide186 = buildLookmlSystemGuide({ selectedExplores: ['thelook::order_items'], primaryModel: 'thelook', primaryExplore: 'order_items', projectId: 'thelook' })
+    expect(lookmlGuide186).toContain('/workspace/bootstrap_lookml.py')
+    expect(lookmlGuide186).toContain('/workspace/sitecustomize.py')
+    expect(lookmlGuide186).toContain('INFORMATION_SCHEMA.COLUMNS')
+    expect(lookmlGuide186).toContain('create_github_pr.sh')
+
+    // 5. >8 (10) run_looker_codemode rounds succeed under DEFAULT_MAX_TOOL_ROUNDS = 50
+    const mockTransportSdk = {
+      ok: async <T>(p: T) => p,
+      authSession: { transport: { rawRequest: async () => ({ ok: true, statusCode: 200, body: '{}' }) } },
+    } as unknown as Parameters<typeof runAntigravityTurn>[0]['sdk']
+    const spyCodeMode = jest.spyOn(LkrCodeMode, 'runPythonCode').mockImplementation(async (opts) => JSON.stringify({ step_code: opts.code }))
+    let tenRoundCalls = 0
+    const tenRoundTurn = await runAntigravityTurn({
+      sdk: mockTransportSdk,
+      extensionSDK: {
+        serverProxy: async (_url: string, init?: { method?: string }) => {
+          if (init?.method !== 'POST') return { ok: true, status: 200, body: '{}' }
+          tenRoundCalls += 1
+          if (tenRoundCalls <= 10) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: `int_10r_${tenRoundCalls}`,
+                environment_id: 'env_186',
+                status: 'requires_action',
+                steps: [{ type: 'function_call', id: `fc_10r_${tenRoundCalls}`, name: 'run_looker_codemode', arguments: { code: `return ${tenRoundCalls}`, thought: `Step ${tenRoundCalls}` } }],
+              }),
+            }
+          }
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_10r_done',
+              environment_id: 'env_186',
+              status: 'completed',
+              output_text: 'Completed all 10 Looker CodeMode rounds.',
+            }),
+          }
+        },
+      },
+      auth: { mode: 'apikey', apiKey: 'test-key' },
+      session: { environmentId: 'env_186', lastInteractionId: 'int_prev_186' },
+      mode: 'dashboard',
+      useCase: 'dashboard',
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      userPrompt: 'Build 10-step executive dashboard',
+      onStatus: () => {},
+    })
+    expect(tenRoundCalls).toBe(11)
+    expect(tenRoundTurn.telemetry.tool_calls.codemode).toBe(10)
+    expect(tenRoundTurn.assistantText).toBe('Completed all 10 Looker CodeMode rounds.')
+    expect(tenRoundTurn.session.lastInteractionId).toBe('int_10r_done')
+
+    // 6. Hitting maxToolRounds: 2 on pendingLookerCalls sends tools: [] wrap-up continuation and returns Markdown summary
+    spyCodeMode.mockClear()
+    const wrapPostBodies: MockInteractionPostBody[] = []
+    const wrapTurn = await runAntigravityTurn({
+      sdk: mockTransportSdk,
+      extensionSDK: {
+        serverProxy: async (_url: string, init?: { method?: string; body?: string }) => {
+          if (init?.method !== 'POST') return { ok: true, status: 200, body: '{}' }
+          const parsedBody = JSON.parse(String(init.body || '{}')) as MockInteractionPostBody
+          wrapPostBodies.push(parsedBody)
+          const hop = wrapPostBodies.length
+          if (hop <= 3) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: `int_wrap_${hop}`,
+                environment_id: 'env_186',
+                status: 'requires_action',
+                steps: [{ type: 'function_call', id: `fc_wrap_${hop}`, name: 'run_looker_codemode', arguments: { code: `return ${hop}`, thought: `Round ${hop}` } }],
+              }),
+            }
+          }
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_wrap_summary',
+              environment_id: 'env_186',
+              status: 'completed',
+              output_text: "## Progress Completed\n- Created Bronze views\n\nReply `continue` to finish Silver explores.",
+            }),
+          }
+        },
+      },
+      auth: { mode: 'apikey', apiKey: 'test-key' },
+      session: { environmentId: 'env_186', lastInteractionId: 'int_prev_wrap' },
+      maxToolRounds: 2,
+      toolMode: 'lookml',
+      useCase: 'lookml',
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      userPrompt: 'Refactor 5 SQL queries into LookML',
+      onStatus: () => {},
+    })
+    expect(spyCodeMode).toHaveBeenCalledTimes(2)
+    expect(wrapPostBodies).toHaveLength(4)
+    expect(wrapPostBodies[3].tools).toEqual([])
+    expect(wrapPostBodies[3].input).toEqual([
+      {
+        type: 'function_result',
+        name: 'run_looker_codemode',
+        call_id: 'fc_wrap_3',
+        result: {
+          ok: false,
+          error: "Max Tool Rounds (2) reached for this turn — summarize all progress completed so far and ask the user to reply 'continue' for remaining steps.",
+        },
+      },
+    ])
+    expect(wrapTurn.session.lastInteractionId).toBe('int_wrap_summary')
+    expect(wrapTurn.assistantText).toContain("Reply `continue` to finish Silver explores.")
+
+    // 7. Unified actionRound + bridgeRound cap (1 codemode + 1 bridge = 2) wraps up pendingBridgeReqs with tools: [] and hydrates full chain
+    const bridgeWrapBodies: MockInteractionPostBody[] = []
+    const bridgeInteractionsById: Record<string, Record<string, unknown>> = {}
+    const bridgeWrapTurn = await runAntigravityTurn({
+      sdk: mockTransportSdk,
+      extensionSDK: {
+        serverProxy: async (url: string, init?: { method?: string; body?: string }) => {
+          if (init?.method !== 'POST') {
+            const getId = decodeURIComponent(url.split('/interactions/')[1]?.split('?')[0] || '')
+            return { ok: true, status: 200, body: JSON.stringify(bridgeInteractionsById[getId] || {}) }
+          }
+          const parsedBody = JSON.parse(String(init.body || '{}')) as MockInteractionPostBody
+          bridgeWrapBodies.push(parsedBody)
+          const hop = bridgeWrapBodies.length
+          const resp =
+            hop === 1
+              ? {
+                  id: 'int_bw_1',
+                  environment_id: 'env_186',
+                  status: 'requires_action',
+                  input: parsedBody.input,
+                  steps: [{ type: 'function_call', id: 'fc_bw_1', name: 'run_looker_codemode', arguments: { code: 'return 1', thought: 'Inspect connection' } }],
+                }
+              : hop === 2
+              ? {
+                  id: 'int_bw_2',
+                  previous_interaction_id: 'int_bw_1',
+                  environment_id: 'env_186',
+                  status: 'completed',
+                  input: parsedBody.input,
+                  steps: [{ type: 'code_execution', code: 'lkr --dev tools lookml push', stdout: `<LKR_EXTENSION_TOOL_REQUEST>${JSON.stringify({ kind: 'sdk_request', method: 'GET', path: '/api/4.0/projects', thought: 'List projects' })}</LKR_EXTENSION_TOOL_REQUEST>` }],
+                }
+              : hop === 3
+              ? {
+                  id: 'int_bw_3',
+                  previous_interaction_id: 'int_bw_2',
+                  environment_id: 'env_186',
+                  status: 'completed',
+                  input: parsedBody.input,
+                  steps: [{ type: 'code_execution', code: 'lkr --dev tools lookml validate', stdout: `<LKR_EXTENSION_TOOL_REQUEST>${JSON.stringify({ kind: 'sdk_request', method: 'POST', path: '/api/4.0/projects/ecom/validate', thought: 'Validate project' })}</LKR_EXTENSION_TOOL_REQUEST>` }],
+                }
+              : {
+                  id: 'int_bw_4',
+                  previous_interaction_id: 'int_bw_3',
+                  environment_id: 'env_186',
+                  status: 'completed',
+                  input: parsedBody.input,
+                  output_text: "Summarized 2 rounds of progress; reply 'continue' to validate.",
+                }
+          bridgeInteractionsById[String(resp.id)] = resp
+          return { ok: true, status: 200, body: JSON.stringify(resp) }
+        },
+      },
+      auth: { mode: 'apikey', apiKey: 'test-key' },
+      session: { environmentId: 'env_186' },
+      maxToolRounds: 2,
+      toolMode: 'lookml',
+      useCase: 'lookml',
+      selectedExplores: ['thelook::order_items'],
+      schemaMarkdown: '# Schema',
+      userPrompt: 'Push and validate LookML',
+      onStatus: () => {},
+    })
+    expect(bridgeWrapBodies).toHaveLength(4)
+    expect(bridgeWrapBodies[3].tools).toEqual([])
+    expect(String((bridgeWrapBodies[3].input as Array<{ text?: string }>)?.[0]?.text || '')).toContain('Max Tool Rounds (2) reached')
+    expect(bridgeWrapTurn.assistantText).toBe("Summarized 2 rounds of progress; reply 'continue' to validate.")
+
+    const hydratedChain = await hydrateInteractionActivitySteps({
+      extensionSDK: {
+        serverProxy: async (url: string) => {
+          const getId = decodeURIComponent(url.split('/interactions/')[1]?.split('?')[0] || '')
+          return { ok: true, status: 200, body: JSON.stringify(bridgeInteractionsById[getId] || {}) }
+        },
+      },
+      auth: { mode: 'apikey', apiKey: 'test-key' },
+      interactionId: 'int_bw_4',
+    })
+    expect(hydratedChain.some((s) => s.kind === 'codemode')).toBe(true)
+
+    // Verify default maxHops (>= 105) hydrates 15+ chained tool-round hops back to root without truncating at 12
+    const deepChainById: Record<string, Record<string, unknown>> = {
+      int_deep_0: {
+        id: 'int_deep_0',
+        input: [{ type: 'text', text: 'Run 15-step workflow' }],
+        steps: [{ type: 'function_call', id: 'fc_deep_0', name: 'run_looker_codemode', arguments: { code: 'all_projects()', thought: 'Root step 0' } }],
+      },
+    }
+    for (let h = 1; h <= 15; h += 1) {
+      deepChainById[`int_deep_${h}`] = {
+        id: `int_deep_${h}`,
+        previous_interaction_id: `int_deep_${h - 1}`,
+        input: [{ type: 'function_result', call_id: `fc_deep_${h - 1}`, result: { ok: true } }],
+        steps: h < 15 ? [{ type: 'function_call', id: `fc_deep_${h}`, name: 'run_looker_codemode', arguments: { code: `return ${h}`, thought: `Hop ${h}` } }] : [],
+      }
+    }
+    const deepHydrated = await hydrateInteractionActivitySteps({
+      extensionSDK: {
+        serverProxy: async (url: string) => {
+          const getId = decodeURIComponent(url.split('/interactions/')[1]?.split('?')[0] || '')
+          return { ok: true, status: 200, body: JSON.stringify(deepChainById[getId] || {}) }
+        },
+      },
+      auth: { mode: 'apikey', apiKey: 'test-key' },
+      interactionId: 'int_deep_15',
+    })
+    expect(deepHydrated.some((s) => s.title === 'Root step 0')).toBe(true)
+
+    spyCodeMode.mockRestore()
   })
 })

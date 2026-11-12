@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
-  AlertTriangle, Check, ChevronDown, ExternalLink, Folder, FolderOpen, Lock, LogOut,
+  AlertTriangle, Check, ChevronDown, ExternalLink, Folder, FolderOpen, Info, Lock, LogOut,
   Maximize2, Minimize2, Pencil, RotateCcw, Search, Server, Square, User,
 } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 
 import {
   getGeminiUserAttributeName, resolveLookerOAuthRedirectUris,
-  STUDIO_MAX_TOTAL_TOKENS_OPTIONS, STUDIO_THINKING_LEVEL_OPTIONS, StudioThinkingLevel,
+  STUDIO_MAX_TOOL_ROUNDS_OPTIONS, STUDIO_MAX_TOTAL_TOKENS_OPTIONS, STUDIO_THINKING_LEVEL_OPTIONS, StudioThinkingLevel,
 } from '../antigravity'
 import { useLookerExtension } from '../contexts/LookerExtensionContext'
 import { copyTextWithExtensionSdk, LookerFolderNode, normalizeStudioAgentName } from '../lookerApi'
@@ -129,12 +129,13 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const {
     themeMode, resolvedTheme, setThemeMode, authMode, setAuthMode, clientId, setClientId,
     projectId, setProjectId, disabledModes, setDisabledModes, selectedModel, setSelectedModel,
-    defaultThinkingLevel, setDefaultThinkingLevel, maxTotalTokens, setMaxTotalTokens,
+    defaultThinkingLevel, setDefaultThinkingLevel, maxTotalTokens, setMaxTotalTokens, maxToolRounds, setMaxToolRounds,
     availableModels, enabledModes, apiKey, setApiKey, oauthRedirectUri, capabilities,
     extensionSDK, busyStatus, messages, handleSaveAuthSetup, isLookerDevMode,
   } = ctl
   const [copiedRedirectUri, setCopiedRedirectUri] = useState(false)
   const [copiedSpartanRedirectUri, setCopiedSpartanRedirectUri] = useState(false)
+  const [roundsInfoOpen, setRoundsInfoOpen] = useState(false)
   const { extensionUri: extensionRedirectUri, spartanUri: spartanRedirectUri } = resolveLookerOAuthRedirectUris(
     oauthRedirectUri?.replace(/\/(extensions|spartan)\/oauth2_redirect\/?$/, '')
   )
@@ -238,6 +239,42 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               testId="config-max-total-tokens-select" value={String(maxTotalTokens)}
               onChange={(val) => setMaxTotalTokens(Number(val))}
               options={STUDIO_MAX_TOTAL_TOKENS_OPTIONS.map((o) => ({ value: String(o.value), label: o.label }))}
+            />
+            <span
+              className="dab-info-tooltip-wrap"
+              data-open={roundsInfoOpen ? 'true' : undefined}
+              onMouseEnter={() => setRoundsInfoOpen(true)}
+              onMouseLeave={() => setRoundsInfoOpen(false)}
+            >
+              <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Max Tool Rounds:</strong>
+              <button
+                type="button"
+                tabIndex={0}
+                className="dab-info-tooltip-btn"
+                data-testid="config-max-tool-rounds-info"
+                aria-label="About Max Tool Rounds"
+                aria-describedby="config-max-tool-rounds-tooltip"
+                onFocus={() => setRoundsInfoOpen(true)}
+                onBlur={() => setRoundsInfoOpen(false)}
+                onClick={() => setRoundsInfoOpen((v) => !v)}
+                onKeyDown={(e) => { if (e.key === 'Escape') setRoundsInfoOpen(false) }}
+              >
+                <Info size={13} strokeWidth={1.75} aria-hidden="true" />
+              </button>
+              <span
+                id="config-max-tool-rounds-tooltip"
+                role="tooltip"
+                data-testid="config-max-tool-rounds-tooltip"
+                className="dab-info-tooltip"
+              >
+                <strong>Ceiling (50 default, 100 max):</strong> <code>/v1beta/interactions</code> has no round cap; practical limits are Gemini&apos;s ~1M-token context window and the 60-min browser OAuth token TTL.{' '}
+                <strong>Why lower (15–25):</strong> stops runaway LookML validation or SQL parity retry loops faster to protect token spend, BigQuery scan costs, and shared API key RPM/TPM quota.
+              </span>
+            </span>
+            <StudioSelect
+              testId="config-max-tool-rounds-select" value={String(maxToolRounds)}
+              onChange={(val) => setMaxToolRounds(Number(val))}
+              options={STUDIO_MAX_TOOL_ROUNDS_OPTIONS.map((o) => ({ value: String(o.value), label: o.label }))}
             />
           </div>
           <div style={{ borderTop: '1px solid var(--dab-border, #e2e8f0)', paddingTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 12 }}>

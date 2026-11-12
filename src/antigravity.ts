@@ -49,9 +49,11 @@ import {
   type AntigravityInteractionStep,
   type AntigravityToolType,
   type AntigravityTurnTelemetry,
+  cleanLookmlProjectId,
   type CodeModePermissionDecision,
   type CodeModePermissionRequest,
   DEFAULT_ANTIGRAVITY_MODEL,
+  DEFAULT_MAX_TOOL_ROUNDS,
   DEFAULT_MAX_TOTAL_TOKENS,
   DEFAULT_POLL_SCHEDULE_MS,
   DEFAULT_THINKING_LEVEL,
@@ -59,6 +61,7 @@ import {
   inFlightEnvProvisionByUser,
   isEnvironmentNotFoundError,
   normalizeEnvironmentId,
+  normalizeMaxToolRounds,
   type PastedImage,
   recordSharedEnvExploreSchema,
   resolveAdaptivePollScheduleMs,
@@ -243,6 +246,7 @@ export interface RunAntigravityTurnOptions {
   model?: string
   thinkingLevel?: StudioThinkingLevel
   maxTotalTokens?: number
+  maxToolRounds?: number
   mode?: 'data_app' | 'dashboard'
   useCase?: StudioUseCase
   allowedModes?: string[]
@@ -317,7 +321,7 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
 
   const {
     sdk, extensionSDK, userId, environmentId, conversationId: rawConversationId, onEnvironmentUpdated, auth, session,
-    model = DEFAULT_ANTIGRAVITY_MODEL, thinkingLevel = DEFAULT_THINKING_LEVEL, maxTotalTokens = DEFAULT_MAX_TOTAL_TOKENS, mode = 'data_app', useCase = 'auto',
+    model = DEFAULT_ANTIGRAVITY_MODEL, thinkingLevel = DEFAULT_THINKING_LEVEL, maxTotalTokens = DEFAULT_MAX_TOTAL_TOKENS, maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS, mode = 'data_app', useCase = 'auto',
     allowedModes, selectedExplores, folderId, toolMode = 'data_app', lookmlProjectId, activatedLookmlSkills,
     developableProjects, canDeploy, availableConnections: providedConnections, warmEnvironmentInBackground = false,
     schemaMarkdown, userPrompt, images, existingAppCode, existingNativeContent,
@@ -582,7 +586,9 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   }
   await persistUserEnvIfChanged({ sdk, extensionSDK, userId, previousEnvId: initialEnvId, nextEnvId: trackedEnvId, onEnvironmentUpdated })
 
-  let pollIdx = 0, prevStepCount = (interaction.steps || []).length, prevStatus = interaction.status, bridgeRound = 0, actionRound = 0, incompleteRound = 0
+  const resolvedMaxToolRounds = normalizeMaxToolRounds(maxToolRounds)
+  const wrapUpErrorText = `Max Tool Rounds (${resolvedMaxToolRounds}) reached for this turn — summarize all progress completed so far and ask the user to reply 'continue' for remaining steps.`
+  let pollIdx = 0, prevStepCount = (interaction.steps || []).length, prevStatus = interaction.status, bridgeRound = 0, actionRound = 0, incompleteRound = 0, wrapUpSent = false
   let accInputTokens = 0, accOutputTokens = 0, accThoughtTokens = 0
   const accumulateInteractionUsage = (snap: AntigravityInteractionPayload | null | undefined) => {
     const u = snap?.usage || snap?.usage_metadata
@@ -663,13 +669,18 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const envSlotKey = normalizeEnvironmentId(trackedEnvId) || 'remote'
   const envConcurrencySlot = activeInteractionsByEnv.get(envSlotKey) || 0
   activeInteractionsByEnv.set(envSlotKey, envConcurrencySlot + 1)
-  const postContinuation = async (input: Array<Record<string, unknown>>, envFallback?: string, extraSteps: AntigravityInteractionStep[] = []) => {
+  const postContinuation = async (
+    input: Array<Record<string, unknown>>,
+    envFallback?: string,
+    extraSteps: AntigravityInteractionStep[] = [],
+    toolsOverride?: unknown[]
+  ) => {
     accumulateInteractionUsage(interaction)
     accumulatedSteps.push(...(interaction.steps || []), ...extraSteps)
     const resumeEnv = interaction.environment_id || trackedEnvId || envFallback
     interaction = await callInteractionsApi(
       extensionSDK, auth, 'interactions', 'POST',
-      Object.assign({ agent: 'antigravity-preview-09-2026', agent_config: agentConfig, background: true, previous_interaction_id: interaction.id, tools: activeTools, input }, resumeEnv ? { environment: resumeEnv } : null)
+      Object.assign({ agent: 'antigravity-preview-09-2026', agent_config: agentConfig, background: true, previous_interaction_id: interaction.id, tools: toolsOverride ?? activeTools, input }, resumeEnv ? { environment: resumeEnv } : null)
     )
     if (interaction.id) onInteractionCreated?.(interaction.id)
     await throwIfAborted(interaction.id)
@@ -697,7 +708,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
               !executedIds.has(s.id)
           )
 
-          if (pendingLookerCalls.length > 0 && actionRound < 8) {
+          if (pendingLookerCalls.length > 0 && actionRound + bridgeRound < resolvedMaxToolRounds) {
             actionRound += 1
             await throwIfAborted(interaction.id)
             const preBridgeReqs = getPendingBridgeReqs(interaction)
@@ -817,6 +828,19 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
             await postContinuation(resultsInput, requiresBashSandbox ? 'remote' : undefined, resultsInput)
             continue
           }
+          if (pendingLookerCalls.length > 0 && !wrapUpSent) {
+            wrapUpSent = true
+            await throwIfAborted(interaction.id)
+            onStatus(`Max Tool Rounds (${resolvedMaxToolRounds}) reached — summarizing progress...`)
+            const wrapUpResults = pendingLookerCalls.map((call: AntigravityInteractionStep) => ({
+              type: 'function_result' as const,
+              name: call.name || 'run_looker_codemode',
+              call_id: call.id,
+              result: { ok: false, error: wrapUpErrorText },
+            }))
+            await postContinuation(wrapUpResults, requiresBashSandbox ? 'remote' : undefined, wrapUpResults, [])
+            continue
+          }
           break
         }
 
@@ -902,7 +926,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       )
       const pendingBridgeReqs = getPendingBridgeReqs(interaction)
 
-      if (pendingBridgeReqs.length > 0 && bridgeRound < 8) {
+      if (pendingBridgeReqs.length > 0 && actionRound + bridgeRound < resolvedMaxToolRounds) {
         await throwIfAborted(interaction.id)
         const firstBridgeThought = pendingBridgeReqs
           .map((r) => sanitizeActivityThought(r.thought))
@@ -952,6 +976,13 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           await postContinuation([{ type: 'text', text: seedText }], 'remote')
           continue
         }
+      } else if (pendingBridgeReqs.length > 0 && !hasFinalBundle && !wrapUpSent) {
+        wrapUpSent = true
+        pendingBridgeReqs.forEach((r) => resolvedBridgeCacheKeys.add(r.cache_key || computeLkrExtensionCacheKey(r)))
+        await throwIfAborted(interaction.id)
+        onStatus(`Max Tool Rounds (${resolvedMaxToolRounds}) reached — summarizing progress...`)
+        await postContinuation([{ type: 'text', text: wrapUpErrorText }], 'remote', [], [])
+        continue
       }
 
       if (
@@ -965,7 +996,12 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         incompleteRound += 1
         await throwIfAborted(interaction.id)
         onStatus('Resuming incomplete turn...')
-        await postContinuation([{ type: 'text', text: 'Continue and complete the current request.' }], requiresBashSandbox ? 'remote' : undefined)
+        await postContinuation(
+          [{ type: 'text', text: 'Continue and complete the current request.' }],
+          requiresBashSandbox ? 'remote' : undefined,
+          [],
+          wrapUpSent ? [] : undefined
+        )
         continue
       }
 
@@ -1073,7 +1109,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : lookmlBundle ? `Updated LookML "${lookmlBundle.title}".`
       : tddMarkdown ? 'Synthesized 7-section Technical Design Document (TECHNICAL_DESIGN_DOCUMENT.md).'
       : 'Done.')
-  const lookmlPid = lookmlBundle?.project_id?.trim()
+  const lookmlPid = cleanLookmlProjectId(lookmlBundle?.project_id)
   if (lookmlPid && !/\/projects\/[^/\s)]+/i.test(finalAssistantText)) {
     finalAssistantText = `${finalAssistantText}\n\n[Open ${lookmlPid} in Looker IDE](/projects/${encodeURIComponent(lookmlPid)})`
   }
@@ -1256,7 +1292,7 @@ export function hydrateInteractionActivitySteps(opts: {
   stopAtInteractionId?: string
   maxHops?: number
 }): Promise<AntigravityActivityStep[]> {
-  const { extensionSDK, auth, maxHops = 12 } = opts
+  const { extensionSDK, auth, maxHops = 105 } = opts
   const startId = String(opts.interactionId || '').trim()
   const stopId = String(opts.stopAtInteractionId || '').trim()
   const canFetch = Boolean(auth && (auth.mode === 'apikey' ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy) : Boolean(auth.oauthToken?.trim())))
@@ -1277,6 +1313,7 @@ export function hydrateInteractionActivitySteps(opts: {
           fetched.input.some((it) => it && typeof it === 'object' && (it as { type?: string }).type === 'text') &&
           !rawInput.includes('[LKR_EXTENSION_BRIDGE_RESULT]') &&
           !rawInput.includes('Continue and complete the current request.') &&
+          !rawInput.includes('Max Tool Rounds (') &&
           !fetched.input.some((it) => it && typeof it === 'object' && (it as { type?: string }).type === 'function_result')
         if (isFreshUserTurnRoot) return
         return walk(typeof fetched.previous_interaction_id === 'string' ? fetched.previous_interaction_id.trim() : '')
@@ -1376,7 +1413,7 @@ export interface FetchConversationSandboxDebugOptions {
 }
 
 export function fetchConversationSandboxDebugMarkdown(opts: FetchConversationSandboxDebugOptions): Promise<string> {
-  const { extensionSDK, auth, conversationId, label, useCase, model, thinkingLevel, messages = [], liveActivitySteps = [], busyStatus, contentItems = [], maxTurns = 30, maxWorkspaceFiles = 10 } = opts
+  const { extensionSDK, auth, conversationId, label, useCase, model, thinkingLevel, messages = [], liveActivitySteps = [], busyStatus, contentItems = [], maxTurns = 120, maxWorkspaceFiles = 10 } = opts
   const startId = String(opts.lastInteractionId || messages.slice().reverse().find((m) => m.interactionId)?.interactionId || '').trim()
   let resolvedEnvId = normalizeEnvironmentId(opts.environmentId) || String(opts.environmentId || '').trim()
   const canFetch = Boolean(auth && (auth.mode === 'apikey' ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy) : Boolean(auth.oauthToken?.trim())))
