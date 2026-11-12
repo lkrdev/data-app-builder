@@ -2486,26 +2486,13 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 id={isLongUserMsg ? `user-msg-body-${idx}` : undefined}
                 className={isLongUserMsg && !isExpanded ? 'dab-msg-body dab-msg-body-collapsed' : 'dab-msg-body'}
                 data-collapsed={isLongUserMsg ? String(!isExpanded) : undefined}
-                onScroll={
-                  isLongUserMsg && !isExpanded
-                    ? (e) => {
-                        if (e.currentTarget.scrollTop > 0) {
-                          e.currentTarget.scrollTop = 0
-                          setExpandedUserMsgIndices((prev) => Object.assign({}, prev, { [idx]: true }))
-                        }
-                      }
-                    : undefined
-                }
-                onClick={
-                  isLongUserMsg && !isExpanded
-                    ? (e) => {
-                        if (longPressFiredRef.current) return
-                        if (typeof window !== 'undefined' && window.getSelection?.()?.toString()) return
-                        if ((e.target as HTMLElement | null)?.closest?.('a, button, :not(pre) > code, [role="menu"]')) return
-                        setExpandedUserMsgIndices((prev) => Object.assign({}, prev, { [idx]: true }))
-                      }
-                    : undefined
-                }
+                onScroll={isLongUserMsg && !isExpanded ? (e) => {
+                  if (e.currentTarget.scrollTop > 0) { e.currentTarget.scrollTop = 0; setExpandedUserMsgIndices((prev) => Object.assign({}, prev, { [idx]: true })) }
+                } : undefined}
+                onClick={isLongUserMsg && !isExpanded ? (e) => {
+                  if (longPressFiredRef.current || (typeof window !== 'undefined' && window.getSelection?.()?.toString())) return
+                  if (!(e.target as HTMLElement | null)?.closest?.('a, button, :not(pre) > code, [role="menu"]')) setExpandedUserMsgIndices((prev) => Object.assign({}, prev, { [idx]: true }))
+                } : undefined}
               >
                 <StudioMarkdown
                   text={m.text} hostUrl={hostUrl} extensionSDK={extensionSDK}
@@ -2525,21 +2512,12 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               </div>
               {isLongUserMsg && (
                 <button
-                  type="button"
-                  data-testid={`toggle-user-msg-expand-${idx}`}
-                  className="dab-user-msg-expand-btn"
-                  aria-expanded={isExpanded}
-                  aria-controls={`user-msg-body-${idx}`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setExpandedUserMsgIndices((prev) => Object.assign({}, prev, { [idx]: !isExpanded }))
-                  }}
+                  type="button" data-testid={`toggle-user-msg-expand-${idx}`} className="dab-user-msg-expand-btn"
+                  aria-expanded={isExpanded} aria-controls={`user-msg-body-${idx}`}
+                  onClick={(e) => { e.stopPropagation(); setExpandedUserMsgIndices((prev) => Object.assign({}, prev, { [idx]: !isExpanded })) }}
                 >
-                  {isExpanded ? (
-                    <><ChevronUp size={12} strokeWidth={1.75} aria-hidden="true" /><span>Show less</span></>
-                  ) : (
-                    <><ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" /><span>Show more</span></>
-                  )}
+                  {isExpanded ? <ChevronUp size={12} strokeWidth={1.75} aria-hidden="true" /> : <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />}
+                  <span>{isExpanded ? 'Show less' : 'Show more'}</span>
                 </button>
               )}
               {m.images && m.images.length > 0 && (
