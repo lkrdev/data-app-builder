@@ -1,7 +1,5 @@
 import React from 'react'
 
-import { PanelRightClose } from 'lucide-react'
-
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import type { StudioController } from '../useStudioController'
 import { StudioBadge, StudioModal, StudioSelect, StudioToolbar } from './StudioDesignSystem'
@@ -84,7 +82,10 @@ export const ScriptOutputRenderer: React.FC<{ output: string }> = ({ output }) =
   return <pre className="dab-py-pre">{JSON.stringify(parsed, null, 2)}</pre>
 }
 
-export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
+export const TilePreviewPane: React.FC<{
+  ctl: StudioController
+  stageTrailActions?: React.ReactNode
+}> = ({ ctl, stageTrailActions }) => {
   const {
     scriptId,
     setScriptId,
@@ -215,35 +216,24 @@ export const TilePreviewPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
             >
               ?
             </button>
-            {!ctl.rightPaneCollapsed && (
-              <button
-                type="button"
-                data-testid="right-pane-collapse-toggle"
-                className="dab-btn dab-btn-secondary dab-right-collapse-btn"
-                onClick={() => ctl.setRightPaneCollapsed(true)}
-                title="Collapse viewer"
-                aria-label="Collapse viewer"
-              >
-                <PanelRightClose size={14} strokeWidth={1.75} aria-hidden="true" />
-              </button>
-            )}
+            {stageTrailActions}
           </>
         }
       />
 
       <div
-        className="dab-iframe-container"
-        style={{ padding: 14, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}
+        className="dab-script-stage-body"
+        style={{ flex: 1, minHeight: 0, padding: '8px 10px', overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}
       >
         <div
           style={{
             display: 'flex',
             flexDirection: 'column',
-            gap: 6,
+            gap: 5,
             background: 'var(--dab-surface-muted, #f8fafc)',
             border: '1px solid var(--dab-border, #e2e8f0)',
-            borderRadius: 8,
-            padding: 10,
+            borderRadius: 6,
+            padding: 8,
           }}
         >
           <div className="dab-inspector-bar" style={{ gap: 8, flexWrap: 'wrap' }}>

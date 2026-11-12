@@ -1062,11 +1062,13 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   const handleSelectOverview = useCallback(() => {
     setActiveViewerDocument(null)
     setActiveContentTabKey(STUDIO_OVERVIEW_TAB_KEY)
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('dab:stage-nav'))
   }, [setActiveContentTabKey])
 
   const handleSelectContentTab = useCallback(
     (key: string) => {
       setActiveViewerDocument(null)
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event('dab:stage-nav'))
       const existing = contentItemsRef.current.find((it) => it.key === key)
       if (!existing) { setActiveContentTabKey(key); return }
       const nextItems = existing.hidden
@@ -1086,13 +1088,14 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       const closedIdx = visibleBefore.findIndex((it) => it.key === key)
       const nextItems = contentItemsRef.current.map((it) => (it.key === key ? { ...it, hidden: true } : it))
       const rem = nextItems.filter((it) => !it.hidden)
+      const stayInOverview = rem.length > 0 && activeContentTabKeyRef.current === STUDIO_OVERVIEW_TAB_KEY
       const nextActiveItem =
-        rem.length === 0
+        rem.length === 0 || stayInOverview
           ? null
           : activeContentTabKeyRef.current !== key && rem.some((it) => it.key === activeContentTabKeyRef.current)
           ? rem.find((it) => it.key === activeContentTabKeyRef.current) || null
           : rem[Math.min(Math.max(0, closedIdx), rem.length - 1)] || null
-      const nextKey = nextActiveItem?.key || ''
+      const nextKey = stayInOverview ? STUDIO_OVERVIEW_TAB_KEY : nextActiveItem?.key || ''
       setContentItems(nextItems)
       setActiveContentTabKey(nextKey)
       if (nextActiveItem) syncContentItemViewer(nextActiveItem)

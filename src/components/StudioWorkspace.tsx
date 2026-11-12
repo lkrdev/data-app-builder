@@ -4,7 +4,7 @@ import { ChattyHostBuilderFactory, getEmbedSDK, ILookerConnection, LookerEmbedEx
 import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
 import {
-  AlertTriangle, Archive, ArchiveRestore, AtSign, BookOpen, Brain, Bug, Check, ChevronDown, Code2, Copy,
+  AlertTriangle, Archive, ArchiveRestore, AtSign, BookOpen, Brain, Bug, Check, ChevronDown, Code2, Columns2, Copy,
   CornerDownRight, Database, ExternalLink, Eye, FileText, Folder, Kanban, LayoutDashboard, Loader2,
   MessageSquare, MoreVertical, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Paperclip, Pencil, Plus, RotateCw, Shield,
   Sparkles, Square, Terminal, Trash2, Wrench, X, Zap,
@@ -25,7 +25,7 @@ import {
   resolveConversationRelatedContent, STUDIO_OVERVIEW_TAB_KEY, StudioContentItem, StudioContentItemType,
   StudioContextCategory, StudioContextMention,
 } from '../lookerApi'
-import { extractSlashSkillIds, LookmlBundle, LookmlPreviewPane, LookmlSkillCatalogEntry, STUDIO_SLASH_SKILLS } from '../lookmlTool'
+import { extractSlashSkillIds, LookmlBundle, LookmlPreviewPane, LookmlSkillCatalogEntry, renderLineNumberedPre, STUDIO_SLASH_SKILLS } from '../lookmlTool'
 export { copyTextWithExtensionSdk, fetchConversationSandboxDebugMarkdown, formatConversationThreadMarkdown }
 import { StudioController } from '../useStudioController'
 import { ChatMessage } from './App'
@@ -2417,7 +2417,11 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                   </button>
                 )}
                 {m.dashboardId && (
-                  <button type="button" className="dab-msg-pill" onClick={() => { setActiveViewerDocument?.(null); setRightPaneCollapsed(false) }}>
+                  <button
+                    type="button"
+                    className="dab-msg-pill"
+                    onClick={() => openContentLinkTargetInViewer(ctl, { contentType: 'dashboard', id: String(m.dashboardId), embedPath: `/embed/dashboards/${encodeURIComponent(String(m.dashboardId))}` })}
+                  >
                     Dashboard #{m.dashboardId}{typeof m.widgetCount === 'number' ? ` · ${m.widgetCount} queries` : ''}
                   </button>
                 )}
@@ -2645,6 +2649,13 @@ const resolveContentLookerPath = (ct: StudioContentItemType, id?: string, embedP
   ct === 'lookml' ? (id ? `/projects/${encodeURIComponent(id)}` : '') : ct !== 'script' && ct !== 'report' && embedPath ? embedPath.replace(/^\/embed/, '') : ''
 
 export type LkrCodeModeApiCallLike = Partial<LkrCodeModeApiCallEntry> & Pick<LkrCodeModeApiCallEntry, 'method' | 'route'>
+export type OverviewStageSelection =
+  | { kind: 'review' }
+  | { kind: 'content'; key: string }
+  | { kind: 'file'; path: string }
+  | { kind: 'api'; id: string }
+  | { kind: 'skill'; id: string }
+  | null
 export interface OverviewReviewSummary {
   kind: 'permission' | 'lookml' | 'files'; title: string; subtitle: string; badgeText: string; badgeTone: StudioBadgeTone
 }
@@ -2652,13 +2663,14 @@ export interface OverviewContentRow {
   key: string; id: string; title: string; contentType: StudioContentItemType; typeLabel: string; shortTag: string; hidden: boolean; openInLookerPath: string
 }
 export interface OverviewFileRow {
-  key: string; path: string; label: string; kind: 'lookml' | 'app' | 'script' | 'sandbox'; action?: 'created' | 'updated' | 'deleted'; content?: string
+  key: string; path: string; label: string; kind: 'lookml' | 'app' | 'script' | 'sandbox'; action?: 'created' | 'updated' | 'deleted'; content?: string; diff?: string
 }
 export interface OverviewSkillRow { id: string; label: string; path: string }
 export interface OverviewApiCallRow {
   id: string; method: string; route: string; status: number | null; ok: boolean; durationMs?: number; source: 'window' | 'turn'
+  queryParams?: Record<string, unknown>; body?: unknown; responseBody?: unknown; timestamp?: string
 }
-export interface OverviewLinkRow { href: string; label: string; inViewerTarget: InViewerLookerLinkTarget | null; isSandboxMd: boolean }
+export interface OverviewLinkRow { href: string; label: string; meta?: string; inViewerTarget: InViewerLookerLinkTarget | null; isSandboxMd: boolean }
 export interface DeriveOverviewInput {
   messages: ReadonlyArray<ChatMessage>; liveActivitySteps?: ReadonlyArray<AntigravityActivityStep>; contentItems?: ReadonlyArray<StudioContentItem>
   publishedApp?: PublishedAppState | null; nativeContent?: NativeContentState | null; lookmlBundle?: LookmlBundle | null
@@ -2728,7 +2740,7 @@ export function deriveConversationOverviewData(input: DeriveOverviewInput) {
     const n = normalizeSandboxFilePath(r.path) || r.path.replace(/^\/+/, '')
     if (n && !seenFiles.has(n)) { seenFiles.add(n); changedFiles.push(r) }
   }
-  lk?.files?.forEach((f) => pushFile({ key: `lookml:${f.path}`, path: f.path, label: f.path, kind: 'lookml', action: f.action || 'updated', content: f.content || f.diff }))
+  lk?.files?.forEach((f) => pushFile({ key: `lookml:${f.path}`, path: f.path, label: f.path, kind: 'lookml', action: f.action || 'updated', content: f.content || f.diff, diff: f.diff }))
   if (appCode.trim()) pushFile({ key: 'app:apps/current/app.js', path: '/workspace/apps/current/app.js', label: 'apps/current/app.js', kind: 'app', action: 'updated', content: appCode })
   if ((input.loadedScript || contentRows.some((c) => c.contentType === 'script')) && scCode.trim()) {
     const fn = `${input.scriptId || 'script'}.py`; pushFile({ key: `script:${fn}`, path: `/workspace/scripts/${fn}`, label: `scripts/${fn}`, kind: 'script', action: 'updated', content: scCode })
@@ -2766,30 +2778,38 @@ export function deriveConversationOverviewData(input: DeriveOverviewInput) {
     const route = normRoute(c.route); if (!route || HOUSEKEEPING_API_RE.test(route)) return
     const method = String(c.method || 'GET').toUpperCase(), sig = `${method} ${route}`, resp = c.response
     winCounts.set(sig, (winCounts.get(sig) || 0) + 1)
-    apiCalls.push({ id: `win_${idx}_${sig}`, method, route, status: resp ? resp.status : null, ok: resp ? Boolean(resp.ok) : true, durationMs: typeof c.duration_ms === 'number' ? Math.round(c.duration_ms) : undefined, source: 'window' })
+    apiCalls.push({
+      id: `win_${idx}_${sig}`, method, route, status: resp ? resp.status : null, ok: resp ? Boolean(resp.ok) : true,
+      durationMs: typeof c.duration_ms === 'number' ? Math.round(c.duration_ms) : undefined, source: 'window',
+      queryParams: c.query_params, body: c.body, responseBody: resp?.body, timestamp: c.timestamp,
+    })
   })
   allSteps.forEach((st, sIdx) => {
     if (st.kind !== 'codemode' && st.kind !== 'cli_bridge') return
     const hay = [st.content, st.detail, st.title].filter(Boolean).join('\n')
+    const stepOut = st.content?.match(/(?:^|\n)# Output\n([\s\S]*)$/)?.[1]?.trim() || undefined
     ENDPOINT_LOG_RE.lastIndex = 0
     let m: RegExpExecArray | null, n = 0
     while ((m = ENDPOINT_LOG_RE.exec(hay)) !== null) {
       const method = m[1].toUpperCase(), route = normRoute(m[2]); if (HOUSEKEEPING_API_RE.test(route)) continue
       n += 1; const sig = `${method} ${route}`, sc = (stepCounts.get(sig) || 0) + 1; stepCounts.set(sig, sc)
       if (sc <= (winCounts.get(sig) || 0)) continue
-      apiCalls.push({ id: `step_${sIdx}_${n}_${sig}`, method, route, status: m[4] ? Number(m[4]) : null, ok: !m[3], durationMs: m[5] ? Number(m[5]) : undefined, source: 'turn' })
+      apiCalls.push({
+        id: `step_${sIdx}_${n}_${sig}`, method, route, status: m[4] ? Number(m[4]) : null, ok: !m[3],
+        durationMs: m[5] ? Number(m[5]) : undefined, source: 'turn', responseBody: stepOut,
+      })
     }
   })
 
   const links: OverviewLinkRow[] = [], seenHrefs = new Set<string>()
-  const addLink = (rawHref: string, rawLabel?: string) => {
+  const addLink = (rawHref: string, rawLabel?: string, meta?: string) => {
     const href = String(rawHref || '').trim().replace(/[.,;:)'"`]+$/, '')
     if (!href || seenHrefs.has(href)) return
     const isSandboxMd = isSandboxMarkdownPath(href)
     if (!isSandboxMd && !/^https?:\/\//i.test(href) && !/^\/(?!\/)/.test(href)) return
     seenHrefs.add(href)
     const inViewerTarget = !isSandboxMd ? parseInViewerLookerLink(href, rawLabel, host) : null
-    links.push({ href, label: String(rawLabel || '').trim() || inViewerTarget?.title || href.replace(/^https?:\/\/[^/]+/i, '') || href, inViewerTarget, isSandboxMd })
+    links.push({ href, label: String(rawLabel || '').trim() || inViewerTarget?.title || href.replace(/^https?:\/\/[^/]+/i, '') || href, meta, inViewerTarget, isSandboxMd })
   }
   msgs.forEach((m) => {
     if (m.role !== 'assistant' || !m.text) return
@@ -2801,8 +2821,8 @@ export function deriveConversationOverviewData(input: DeriveOverviewInput) {
   })
   lk?.queries?.forEach((q, i) => {
     const p = q.label || `Parity #${(q.query_index ?? i) + 1}`
-    if (q.sql_runner_url || q.sql_slug) addLink(q.sql_runner_url || `/sql/${q.sql_slug}`, `${p} — SQL Runner`)
-    if (q.explore_url || q.explore_slug) addLink(q.explore_url || `/x/${q.explore_slug}`, `${p} — Explore`)
+    if (q.sql_runner_url || q.sql_slug) addLink(q.sql_runner_url || `/sql/${q.sql_slug}`, p, 'SQL')
+    if (q.explore_url || q.explore_slug) addLink(q.explore_url || `/x/${q.explore_slug}`, p, 'Explore')
   })
 
   const uploads: Array<{ key: string; label: string; sub: string }> = []
@@ -2836,33 +2856,43 @@ const OvSec: React.FC<{
   </div>
 )
 
+export type DerivedOverviewData = ReturnType<typeof deriveConversationOverviewData>
+
+const EMPTY_WIN_CALLS: ReadonlyArray<LkrCodeModeApiCallLike> = []
+
+const formatPrettyPayload = (val: unknown): string => {
+  if (val === undefined || val === null) return ''
+  if (typeof val === 'string') {
+    const t = val.trim()
+    if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+      try { return JSON.stringify(JSON.parse(t), null, 2) } catch { return val }
+    }
+    return val
+  }
+  try { return JSON.stringify(val, null, 2) } catch { return String(val) }
+}
+
 export const StudioOverviewSidebar: React.FC<{
   ctl: StudioController; allTabsHidden?: boolean; collapseToggleBtn?: React.ReactNode
-  windowApiCalls?: ReadonlyArray<LkrCodeModeApiCallLike>
-  openSecs?: Record<string, boolean>; setOpenSecs?: React.Dispatch<React.SetStateAction<Record<string, boolean>>>
-  showAll?: Record<string, boolean>; setShowAll?: React.Dispatch<React.SetStateAction<Record<string, boolean>>>
-  hiddenSecs?: Record<string, boolean | undefined>; setHiddenSecs?: React.Dispatch<React.SetStateAction<Record<string, boolean | undefined>>>
-  onOpenContentLinkInViewer?: (target: InViewerLookerLinkTarget) => void
+  data: DerivedOverviewData
+  docked?: boolean; hiddenInStage?: boolean; mobileOverlayOpen?: boolean; activeSelection?: OverviewStageSelection
+  openSecs: Record<string, boolean>; setOpenSecs: React.Dispatch<React.SetStateAction<Record<string, boolean>>>
+  showAll: Record<string, boolean>; setShowAll: React.Dispatch<React.SetStateAction<Record<string, boolean>>>
+  hiddenSecs: Record<string, boolean | undefined>; setHiddenSecs: React.Dispatch<React.SetStateAction<Record<string, boolean | undefined>>>
+  onOpenContentLinkInViewer: (target: InViewerLookerLinkTarget) => void
+  onOpenReview: () => void
+  onSelectContentRow: (row: OverviewContentRow) => void
+  onSelectLookmlFile: (path: string) => void
+  onOpenApiCall: (call: OverviewApiCallRow) => void
+  onCloseDockedExplorer: () => void
 }> = ({
-  ctl, allTabsHidden = false, collapseToggleBtn, windowApiCalls = [],
-  openSecs: extOpenSecs, setOpenSecs: extSetOpenSecs, showAll: extShowAll, setShowAll: extSetShowAll,
-  hiddenSecs: extHiddenSecs, setHiddenSecs: extSetHiddenSecs, onOpenContentLinkInViewer,
+  ctl, allTabsHidden = false, collapseToggleBtn, data,
+  docked = false, hiddenInStage = false, mobileOverlayOpen = false, activeSelection = null,
+  openSecs, setOpenSecs, showAll, setShowAll, hiddenSecs, setHiddenSecs,
+  onOpenContentLinkInViewer, onOpenReview, onSelectContentRow, onSelectLookmlFile, onOpenApiCall, onCloseDockedExplorer,
 }) => {
-  const {
-    messages, liveActivitySteps, busyStatus, contentItems, publishedApp, nativeContent, lookmlBundle, healthReport,
-    caConversation, loadedScript, scriptId, scriptTitle, scriptCode, savedScheduleBadge, currentAppCode,
-    activatedLookmlSkills, selectedExplores, mentionedItems, selectedFolderId, folderTreeNodes, pastedImages,
-    pendingPerm, extensionSDK, hydratingInteractionIds, hydrateMessageActivitySteps,
-    handleSelectContentTab, setActiveContentTabKey, openViewerDocument, isAuthenticated,
-  } = ctl
+  const { messages, busyStatus, extensionSDK, hydratingInteractionIds, hydrateMessageActivitySteps, openViewerDocument, isAuthenticated } = ctl
   const hostUrl = extensionSDK?.lookerHostData?.hostUrl || (typeof window !== 'undefined' ? window.location.origin : '')
-  const selectedFolderLabel = folderTreeNodes?.[selectedFolderId]?.name || 'My folder'
-  const [localShowAll, setLocalShowAll] = useState<Record<string, boolean>>({})
-  const [localOpenSecs, setLocalOpenSecs] = useState<Record<string, boolean>>({ api: false })
-  const [localHiddenSecs, setLocalHiddenSecs] = useState<Record<string, boolean | undefined>>({})
-  const showAll = extShowAll || localShowAll, setShowAll = extSetShowAll || setLocalShowAll
-  const openSecs = extOpenSecs || localOpenSecs, setOpenSecs = extSetOpenSecs || setLocalOpenSecs
-  const hiddenSecs = extHiddenSecs || localHiddenSecs, setHiddenSecs = extSetHiddenSecs || setLocalHiddenSecs
   const [menuOpen, setMenuOpen] = useState(false)
   const menuWrapRef = useRef<HTMLDivElement | null>(null)
 
@@ -2881,45 +2911,20 @@ export const StudioOverviewSidebar: React.FC<{
     void hydrateMessageActivitySteps(messages[idx].interactionId!, prev?.interactionId)
   }, [isAuthenticated, hydrateMessageActivitySteps, hydratingInteractionIds, messages])
 
-  const windowCallsKey = `${windowApiCalls.length}:${windowApiCalls[0] ? `${windowApiCalls[0].method}:${windowApiCalls[0].route}` : ''}`
-
-  const data = useMemo(() => deriveConversationOverviewData({
-    messages, liveActivitySteps, contentItems, publishedApp, nativeContent, lookmlBundle, healthReport, caConversation,
-    loadedScript, scriptId, scriptTitle, scriptCode, savedScheduleBadge, currentAppCode, activatedLookmlSkills,
-    selectedExplores, mentionedItems, selectedFolderId, selectedFolderLabel, pastedImages, pendingPerm,
-    windowApiCalls, hostUrl,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [
-    messages, liveActivitySteps, contentItems, publishedApp, nativeContent, lookmlBundle, healthReport, caConversation,
-    loadedScript, scriptId, scriptTitle, scriptCode, savedScheduleBadge, currentAppCode, activatedLookmlSkills,
-    selectedExplores, mentionedItems, selectedFolderId, selectedFolderLabel, pastedImages, pendingPerm, windowCallsKey, hostUrl,
-  ])
-
   const isHydratingAny = messages.some((m) => Boolean(m.interactionId && hydratingInteractionIds?.[m.interactionId]))
   const hasExplicitCtx = data.context.explores.length > 0 || data.context.mentions.length > 0 || Boolean(data.context.caAgentLabel)
   const isSecOpen = (k: string, defOpen = true) => (k in openSecs ? Boolean(openSecs[k]) : defOpen)
   const toggleSec = (k: string, defOpen = true) => setOpenSecs((p) => ({ ...p, [k]: !(k in p ? p[k] : defOpen) }))
-  const scrollTo = (sel: string) => {
-    const el = typeof document !== 'undefined' ? document.querySelector<HTMLElement>(sel) : null
-    el?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' })
-  }
   const toggleAll = (k: string) => setShowAll((p) => ({ ...p, [k]: !p[k] }))
-  const selectOrClearTab = (ctype?: StudioContentItemType, key?: string) => {
-    const found = key ? contentItems.find((c) => c.key === key) : ctype ? contentItems.find((c) => c.contentType === ctype) : undefined
-    if (found) handleSelectContentTab(found.key); else setActiveContentTabKey('')
-  }
-  const onReview = (it: OverviewReviewSummary | null) => {
-    if (!it) return
-    if (it.kind === 'permission') { scrollTo('.dab-permission-bar'); return }
-    if (it.kind === 'lookml') { selectOrClearTab('lookml'); return }
-    if (it.kind === 'files' && data.changedFiles[0]) {
-      if (data.changedFiles.length === 1) onFile(data.changedFiles[0])
-      else { setOpenSecs((p) => ({ ...p, files: true })); scrollTo('[data-testid="overview-section-files"]') }
-    }
-  }
   const onFile = (row: OverviewFileRow) => {
-    if (row.kind === 'lookml') { selectOrClearTab('lookml'); return }
+    if (row.kind === 'lookml') { onSelectLookmlFile(row.path); return }
     void openViewerDocument({ path: row.path, title: row.label, kind: 'file', content: row.content })
+  }
+  const matchesSelectedFile = (rowPath: string) => {
+    if (activeSelection?.kind !== 'file') return false
+    const a = normalizeSandboxFilePath(activeSelection.path) || activeSelection.path.replace(/^\/+/, '')
+    const b = normalizeSandboxFilePath(rowPath) || rowPath.replace(/^\/+/, '')
+    return a === b
   }
 
   const visContent = showAll.content ? data.contentRows : data.contentRows.slice(0, 4)
@@ -2943,8 +2948,17 @@ export const StudioOverviewSidebar: React.FC<{
     return parts.join(' · ')
   }, [data.apiCalls, failedApiCount])
 
+  const isReviewActive = activeSelection?.kind === 'review'
+
   return (
-    <div className="dab-ov" data-testid="studio-overview-sidebar" role="region" aria-label="Conversation overview">
+    <div
+      className={`dab-ov ${docked ? 'dab-ov-docked' : ''} ${mobileOverlayOpen ? 'dab-ov-mobile-open' : ''}`}
+      data-testid="studio-overview-sidebar"
+      data-docked={docked ? 'true' : 'false'}
+      style={hiddenInStage ? { display: 'none' } : undefined}
+      role="region"
+      aria-label="Conversation overview"
+    >
       <div className="dab-ov-card">
         <div className="dab-ov-head" data-testid="overview-header">
           <span className="dab-ov-title">
@@ -2959,7 +2973,17 @@ export const StudioOverviewSidebar: React.FC<{
             >
               <MoreVertical size={14} strokeWidth={1.75} aria-hidden="true" />
             </button>
-            {collapseToggleBtn}
+            {docked ? (
+              <button
+                type="button" data-testid="overview-docked-hide-btn" className="dab-ov-icon-btn"
+                aria-label="Hide Overview explorer" title="Hide Overview explorer"
+                onClick={onCloseDockedExplorer}
+              >
+                <X size={13} strokeWidth={1.75} aria-hidden="true" />
+              </button>
+            ) : (
+              collapseToggleBtn
+            )}
             {menuOpen && (
               <div className="dab-ov-menu" data-testid="overview-customize-menu" role="menu" aria-label="Customize Sections">
                 <div className="dab-ov-menu-lbl">Customize Sections</div>
@@ -2985,7 +3009,14 @@ export const StudioOverviewSidebar: React.FC<{
         </div>
         <div className="dab-ov-scroll">
           <nav className="dab-ov-nav" data-testid="overview-top-nav" aria-label="Overview navigation">
-            <button type="button" data-testid="overview-nav-review" className="dab-ov-row" disabled={!data.primaryReview} onClick={() => onReview(data.primaryReview)}>
+            <button
+              type="button"
+              data-testid="overview-nav-review"
+              aria-current={isReviewActive ? 'true' : undefined}
+              className={`dab-ov-row ${isReviewActive ? 'active' : ''}`}
+              disabled={!data.primaryReview}
+              onClick={onOpenReview}
+            >
               <span className="dab-ov-ic">{data.primaryReview?.kind === 'permission' ? <AlertTriangle size={14} strokeWidth={1.75} aria-hidden="true" /> : <Code2 size={14} strokeWidth={1.75} aria-hidden="true" />}</span>
               <span className="dab-ov-txt">Review</span>
               {data.primaryReview && <StudioBadge tone={data.primaryReview.badgeTone}>{data.primaryReview.badgeText}</StudioBadge>}
@@ -3010,33 +3041,54 @@ export const StudioOverviewSidebar: React.FC<{
 
           {!hiddenSecs.content && data.contentRows.length > 0 && (
             <OvSec testId="overview-section-content" title="Content" count={data.contentRows.length} open={isSecOpen('content', true)} onToggle={() => toggleSec('content', true)}>
-              {visContent.map((row) => (
-                <div key={row.key} className="dab-ov-grp">
-                  <button type="button" data-testid={`overview-content-item-${row.key}`} className="dab-ov-row" onClick={() => selectOrClearTab(undefined, row.key)} title={`${row.title} (${row.typeLabel})`}>
-                    <span className="dab-ov-ic">{renderContentTabIcon(row.contentType)}</span>
-                    <span className="dab-ov-txt">{row.title}</span>
-                    <span className="dab-ov-meta">{row.hidden ? 'Hidden' : row.shortTag}</span>
-                  </button>
-                  {row.openInLookerPath && (
-                    <button type="button" data-testid={`overview-content-external-${row.key}`} className="dab-ov-icon-btn" title="Open in Looker" aria-label={`Open ${row.title} in Looker`} onClick={(e) => { e.stopPropagation(); void openOrCopyMarkdownLink(row.openInLookerPath, hostUrl, extensionSDK) }}>
-                      <ExternalLink size={11} strokeWidth={1.75} aria-hidden="true" />
+              {visContent.map((row) => {
+                const isRowActive = activeSelection?.kind === 'content' && activeSelection.key === row.key
+                return (
+                  <div key={row.key} className="dab-ov-grp">
+                    <button
+                      type="button"
+                      data-testid={`overview-content-item-${row.key}`}
+                      aria-current={isRowActive ? 'true' : undefined}
+                      className={`dab-ov-row ${isRowActive ? 'active' : ''}`}
+                      onClick={() => onSelectContentRow(row)}
+                      title={`${row.title} (${row.typeLabel})`}
+                    >
+                      <span className="dab-ov-ic">{renderContentTabIcon(row.contentType)}</span>
+                      <span className="dab-ov-txt">{row.title}</span>
+                      <span className="dab-ov-meta">{row.hidden ? 'Hidden' : row.shortTag}</span>
                     </button>
-                  )}
-                </div>
-              ))}
+                    {row.openInLookerPath && (
+                      <button type="button" data-testid={`overview-content-external-${row.key}`} className="dab-ov-icon-btn" title="Open in Looker" aria-label={`Open ${row.title} in Looker`} onClick={(e) => { e.stopPropagation(); void openOrCopyMarkdownLink(row.openInLookerPath, hostUrl, extensionSDK) }}>
+                        <ExternalLink size={11} strokeWidth={1.75} aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
               {data.contentRows.length > 4 && <button type="button" className="dab-ov-more" onClick={() => toggleAll('content')}>{showAll.content ? 'Show fewer' : `See all (${data.contentRows.length})`}</button>}
             </OvSec>
           )}
 
           {!hiddenSecs.files && data.changedFiles.length > 0 && (
             <OvSec testId="overview-section-files" title="Changed Files" count={data.changedFiles.length} open={isSecOpen('files', true)} onToggle={() => toggleSec('files', true)}>
-              {visFiles.map((row, idx) => (
-                <button key={row.key} type="button" data-testid={`overview-file-item-${idx}`} className="dab-ov-row" onClick={() => onFile(row)} title={row.path}>
-                  <span className="dab-ov-ic">{row.kind === 'sandbox' && /\.md$/i.test(row.path) ? <FileText size={13} strokeWidth={1.75} aria-hidden="true" /> : <Code2 size={13} strokeWidth={1.75} aria-hidden="true" />}</span>
-                  <span className="dab-ov-txt dab-ov-mono">{row.label}</span>
-                  {row.action && <span className="dab-ov-stat" style={{ color: row.action === 'created' ? 'var(--dab-success-text)' : row.action === 'deleted' ? 'var(--dab-danger-text)' : 'var(--dab-accent-text)' }}>{row.action === 'created' ? '+' : row.action === 'deleted' ? '-' : 'M'}</span>}
-                </button>
-              ))}
+              {visFiles.map((row, idx) => {
+                const isFileActive = matchesSelectedFile(row.path)
+                return (
+                  <button
+                    key={row.key}
+                    type="button"
+                    data-testid={`overview-file-item-${idx}`}
+                    aria-current={isFileActive ? 'true' : undefined}
+                    className={`dab-ov-row ${isFileActive ? 'active' : ''}`}
+                    onClick={() => onFile(row)}
+                    title={row.path}
+                  >
+                    <span className="dab-ov-ic">{row.kind === 'sandbox' && /\.md$/i.test(row.path) ? <FileText size={13} strokeWidth={1.75} aria-hidden="true" /> : <Code2 size={13} strokeWidth={1.75} aria-hidden="true" />}</span>
+                    <span className="dab-ov-txt dab-ov-mono">{row.label}</span>
+                    {row.action && <span className="dab-ov-stat" style={{ color: row.action === 'created' ? 'var(--dab-success-text)' : row.action === 'deleted' ? 'var(--dab-danger-text)' : 'var(--dab-accent-text)' }}>{row.action === 'created' ? '+' : row.action === 'deleted' ? '-' : 'M'}</span>}
+                  </button>
+                )
+              })}
               {data.changedFiles.length > 3 && <button type="button" className="dab-ov-more" onClick={() => toggleAll('files')}>{showAll.files ? 'Show fewer' : `See all (${data.changedFiles.length})`}</button>}
             </OvSec>
           )}
@@ -3052,13 +3104,24 @@ export const StudioOverviewSidebar: React.FC<{
             >
               {apiSummary && <div className="dab-ov-api-sum" data-testid="overview-api-summary">{apiSummary}</div>}
               <div className={showAll.api ? 'dab-ov-api-scroll' : undefined} data-testid={showAll.api ? 'overview-api-scroll' : undefined}>
-                {visCalls.map((call, idx) => (
-                  <div key={call.id} data-testid={`overview-api-call-${idx}`} className={`dab-ov-row dab-ov-static ${!call.ok ? 'dab-ov-err' : ''}`} title={`${call.method} ${call.route}${call.status ? ` (${call.status})` : ''}`}>
-                    <span className={`dab-ov-mth dab-ov-mth-${call.ok ? call.method.toLowerCase() : 'err'}`}>{call.method}</span>
-                    <span className="dab-ov-txt dab-ov-mono">{call.route}</span>
-                    <span className="dab-ov-meta">{call.status && call.status >= 400 ? `${call.status}` : call.durationMs !== undefined ? `${call.durationMs}ms` : call.status ? `${call.status}` : ''}</span>
-                  </div>
-                ))}
+                {visCalls.map((call, idx) => {
+                  const isApiActive = activeSelection?.kind === 'api' && activeSelection.id === call.id
+                  return (
+                    <button
+                      key={call.id}
+                      type="button"
+                      data-testid={`overview-api-call-${idx}`}
+                      aria-current={isApiActive ? 'true' : undefined}
+                      className={`dab-ov-row ${!call.ok ? 'dab-ov-err' : ''} ${isApiActive ? 'active' : ''}`}
+                      onClick={() => onOpenApiCall(call)}
+                      title={`${call.method} ${call.route}${call.status ? ` (${call.status})` : ''}`}
+                    >
+                      <span className={`dab-ov-mth dab-ov-mth-${call.ok ? call.method.toLowerCase() : 'err'}`}>{call.method}</span>
+                      <span className="dab-ov-txt dab-ov-mono">{call.route}</span>
+                      <span className="dab-ov-meta">{call.status && call.status >= 400 ? `${call.status}` : call.durationMs !== undefined ? `${call.durationMs}ms` : call.status ? `${call.status}` : ''}</span>
+                    </button>
+                  )
+                })}
               </div>
               {data.apiCalls.length > 5 && <button type="button" data-testid="overview-api-calls-toggle-all" className="dab-ov-more" onClick={() => toggleAll('api')}>{showAll.api ? 'Show fewer' : `See all (${data.apiCalls.length})`}</button>}
             </OvSec>
@@ -3066,12 +3129,23 @@ export const StudioOverviewSidebar: React.FC<{
 
           {!hiddenSecs.skills && data.skillsUsed.length > 0 && (
             <OvSec testId="overview-section-skills" title="Skills Used" count={data.skillsUsed.length} open={isSecOpen('skills', true)} onToggle={() => toggleSec('skills', true)}>
-              {data.skillsUsed.map((sk) => (
-                <button key={sk.id} type="button" data-testid={`overview-skill-item-${sk.id}`} className="dab-ov-row" onClick={() => void openViewerDocument({ path: sk.path, title: sk.label, kind: 'skill' })} title={sk.path}>
-                  <span className="dab-ov-ic"><BookOpen size={13} strokeWidth={1.75} aria-hidden="true" /></span>
-                  <span className="dab-ov-txt dab-ov-mono">{sk.label}</span>
-                </button>
-              ))}
+              {data.skillsUsed.map((sk) => {
+                const isSkillActive = activeSelection?.kind === 'skill' && activeSelection.id === sk.id
+                return (
+                  <button
+                    key={sk.id}
+                    type="button"
+                    data-testid={`overview-skill-item-${sk.id}`}
+                    aria-current={isSkillActive ? 'true' : undefined}
+                    className={`dab-ov-row ${isSkillActive ? 'active' : ''}`}
+                    onClick={() => void openViewerDocument({ path: sk.path, title: sk.label, kind: 'skill' })}
+                    title={sk.path}
+                  >
+                    <span className="dab-ov-ic"><BookOpen size={13} strokeWidth={1.75} aria-hidden="true" /></span>
+                    <span className="dab-ov-txt dab-ov-mono">{sk.label}</span>
+                  </button>
+                )
+              })}
             </OvSec>
           )}
 
@@ -3081,7 +3155,7 @@ export const StudioOverviewSidebar: React.FC<{
                 const parts = exp.split('::')
                 const tgt = parts[0] && parts[1] ? parseInViewerLookerLink(`/explore/${parts[0]}/${parts[1]}`, exp, hostUrl) : null
                 return (
-                  <button key={exp} type="button" data-testid={`overview-explore-${exp}`} className="dab-ov-row" onClick={() => { if (tgt && onOpenContentLinkInViewer) onOpenContentLinkInViewer(tgt) }} title={`Explore ${exp}`}>
+                  <button key={exp} type="button" data-testid={`overview-explore-${exp}`} className="dab-ov-row" onClick={() => { if (tgt) onOpenContentLinkInViewer(tgt) }} title={`Explore ${exp}`}>
                     <span className="dab-ov-ic"><Database size={13} strokeWidth={1.75} aria-hidden="true" /></span>
                     <span className="dab-ov-txt dab-ov-mono">{exp}</span>
                   </button>
@@ -3117,13 +3191,14 @@ export const StudioOverviewSidebar: React.FC<{
                   <button
                     type="button" data-testid={`overview-link-item-${idx}`} className="dab-ov-row" title={lnk.href}
                     onClick={() => {
-                      if (lnk.inViewerTarget && onOpenContentLinkInViewer) { onOpenContentLinkInViewer(lnk.inViewerTarget); return }
+                      if (lnk.inViewerTarget) { onOpenContentLinkInViewer(lnk.inViewerTarget); return }
                       if (lnk.isSandboxMd) { void openViewerDocument({ path: lnk.href }); return }
                       void openOrCopyMarkdownLink(lnk.href, hostUrl, extensionSDK)
                     }}
                   >
                     <span className="dab-ov-ic">{lnk.inViewerTarget ? renderContentTabIcon(lnk.inViewerTarget.contentType) : lnk.isSandboxMd ? <FileText size={13} strokeWidth={1.75} aria-hidden="true" /> : <ExternalLink size={13} strokeWidth={1.75} aria-hidden="true" />}</span>
                     <span className="dab-ov-txt">{lnk.label}</span>
+                    {lnk.meta && <span className="dab-ov-meta">{lnk.meta}</span>}
                   </button>
                   {lnk.inViewerTarget && (
                     <button type="button" data-testid={`overview-link-external-${idx}`} className="dab-ov-icon-btn" title="Open in Looker" aria-label={`Open ${lnk.label} in Looker`} onClick={(e) => { e.stopPropagation(); void openOrCopyMarkdownLink(lnk.inViewerTarget ? lnk.inViewerTarget.externalPath : lnk.href, hostUrl, extensionSDK) }}>
@@ -3164,10 +3239,12 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     activeMode, selectedUseCase, isEmptyConversation, isHealthCheckMode, isLookmlMode, isCaMode,
     builderMode, healthReport, lookmlBundle, caConversation, canDeployLookml, nativeContent,
     publishedApp, contentItems = [], activeContentTabKey = '', activeContentItem = null,
-    handleSelectOverview, handleSelectContentTab, handleHideContentTab,
+    handleSelectOverview, handleSelectContentTab, handleHideContentTab, setActiveContentTabKey,
     currentAppCode, embedNonce, extensionSDK, setInfoModalUseCase,
-    busyStatus, rightPaneCollapsed, setRightPaneCollapsed, scriptId, scriptTitle,
+    busyStatus, rightPaneCollapsed, setRightPaneCollapsed, scriptId, scriptTitle, scriptCode, loadedScript, savedScheduleBadge,
     activeViewerDocument = null, setActiveViewerDocument, openViewerDocument, activeConversationId,
+    messages, liveActivitySteps, activatedLookmlSkills, selectedExplores, mentionedItems, selectedFolderId, folderTreeNodes, pastedImages,
+    pendingPerm, resolvePermDecision,
   } = ctl
   const isTileMode = activeMode === 'tile' && Boolean(ctl.loadedScript || ctl.explicitUseCase === 'tile')
   const hostUrl = extensionSDK?.lookerHostData?.hostUrl || window.location.origin
@@ -3195,11 +3272,65 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const [ovOpenSecs, setOvOpenSecs] = useState<Record<string, boolean>>({ api: false })
   const [ovShowAll, setOvShowAll] = useState<Record<string, boolean>>({})
   const [ovHiddenSecs, setOvHiddenSecs] = useState<Record<string, boolean | undefined>>({})
+  const [stageInspector, setStageInspector] = useState<{ kind: 'review' } | { kind: 'api'; callId: string } | null>(null)
+  const [selectedLookmlFilePath, setSelectedLookmlFilePath] = useState('')
+  const [explorerRailOpen, setExplorerRailOpen] = useState(true)
+  const [mobileExplorerOpen, setMobileExplorerOpen] = useState(false)
+  const [isCompactViewport, setIsCompactViewport] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 1080)
+  const [docViewMode, setDocViewMode] = useState<'rendered' | 'raw'>('rendered')
+  const [copiedDoc, setCopiedDoc] = useState(false)
+  const [copiedApiJson, setCopiedApiJson] = useState(false)
+  const [fullApiResponse, setFullApiResponse] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onResize = () => {
+      const compact = window.innerWidth <= 1080
+      setIsCompactViewport(compact)
+      if (!compact) setMobileExplorerOpen(false)
+    }
+    const onStageNav = () => {
+      setStageInspector(null)
+      setShowAppCode(false)
+      setMobileExplorerOpen(false)
+    }
+    window.addEventListener('resize', onResize)
+    window.addEventListener('dab:stage-nav', onStageNav)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('dab:stage-nav', onStageNav)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!mobileExplorerOpen || typeof document === 'undefined') return
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setMobileExplorerOpen(false) }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [mobileExplorerOpen])
 
   useEffect(() => {
     setOvOpenSecs({ api: false })
     setOvShowAll({})
+    setStageInspector(null)
+    setSelectedLookmlFilePath('')
+    setMobileExplorerOpen(false)
   }, [activeConversationId])
+
+  useEffect(() => {
+    if (activeContentTabKey && activeContentTabKey !== STUDIO_OVERVIEW_TAB_KEY) {
+      setStageInspector(null)
+    }
+  }, [activeContentTabKey])
+
+  useEffect(() => {
+    if (activeViewerDocument) {
+      setStageInspector(null)
+      setDocViewMode('rendered')
+      setCopiedDoc(false)
+      setMobileExplorerOpen(false)
+    }
+  }, [activeViewerDocument])
 
   useEffect(() => {
     const raw = typeof window !== 'undefined' ? (window as Window & { lkr_codemode_api_calls?: unknown }).lkr_codemode_api_calls : undefined
@@ -3211,13 +3342,27 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     }
     winCallsCursorRef.current = raw.length
     wasBusyForCallsRef.current = Boolean(busyStatus)
-  }, [busyStatus, activeConversationId])
+  }, [busyStatus, activeConversationId, liveActivitySteps?.length])
 
   const rawWinCalls = typeof window !== 'undefined' ? (window as Window & { lkr_codemode_api_calls?: unknown }).lkr_codemode_api_calls : undefined
   const overviewWinCalls: ReadonlyArray<LkrCodeModeApiCallLike> =
     Array.isArray(rawWinCalls) && rawWinCalls !== initialWinCallsRef.current
       ? (rawWinCalls as LkrCodeModeApiCallLike[])
-      : convWinCalls[activeConversationId || '__default__'] || []
+      : convWinCalls[activeConversationId || '__default__'] || EMPTY_WIN_CALLS
+  const lastWinCall = overviewWinCalls[overviewWinCalls.length - 1]
+  const winCallsMemoKey = `${overviewWinCalls.length}:${overviewWinCalls[0]?.route || ''}:${lastWinCall?.timestamp || lastWinCall?.duration_ms || ''}`
+  const selectedFolderLabel = folderTreeNodes?.[selectedFolderId]?.name || 'My folder'
+
+  const overviewData = useMemo(() => deriveConversationOverviewData({
+    messages, liveActivitySteps, contentItems, publishedApp, nativeContent, lookmlBundle, healthReport, caConversation,
+    loadedScript, scriptId, scriptTitle, scriptCode, savedScheduleBadge, currentAppCode, activatedLookmlSkills,
+    selectedExplores, mentionedItems, selectedFolderId, selectedFolderLabel, pastedImages, pendingPerm,
+    windowApiCalls: winCallsMemoKey ? overviewWinCalls : EMPTY_WIN_CALLS, hostUrl,
+  }), [
+    messages, liveActivitySteps, contentItems, publishedApp, nativeContent, lookmlBundle, healthReport, caConversation,
+    loadedScript, scriptId, scriptTitle, scriptCode, savedScheduleBadge, currentAppCode, activatedLookmlSkills,
+    selectedExplores, mentionedItems, selectedFolderId, selectedFolderLabel, pastedImages, pendingPerm, overviewWinCalls, winCallsMemoKey, hostUrl,
+  ])
 
   const clearTabPopoverTimers = () => {
     if (hoverCloseTimerRef.current) { clearTimeout(hoverCloseTimerRef.current); hoverCloseTimerRef.current = null }
@@ -3279,9 +3424,16 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     ? ct === 'script' || ct === 'lookml' || ct === 'report' ? ct : ct === 'conversational-analytics' ? 'ca' : 'embed'
     : isTileMode ? 'script' : isHealthCheckMode ? 'report' : isLookmlMode ? 'lookml' : isCaMode || caConversation ? 'ca' : 'embed'
 
+  const activeApiCall = stageInspector?.kind === 'api'
+    ? overviewData.apiCalls.find((c) => c.id === stageInspector.callId) || overviewData.apiCalls[0] || null
+    : null
+  const resolvedStageInspector = stageInspector?.kind === 'api' && !activeApiCall ? null : stageInspector
+  const explicitOverview = activeContentTabKey === STUDIO_OVERVIEW_TAB_KEY
+  const isNonEmbedStageView = Boolean(resolvedStageInspector || activeViewerDocument || explicitOverview)
+
   const embedTarget = useMemo(
     () => resolveLookerEmbedTarget({
-      isEmptyConversation: isEmptyConversation || allTabsHidden,
+      isEmptyConversation: isEmptyConversation || allTabsHidden || isNonEmbedStageView,
       isHealthCheckMode: activePaneKind === 'report',
       isLookmlMode: activePaneKind === 'lookml',
       isTileMode: activePaneKind === 'script',
@@ -3289,7 +3441,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
       builderMode, activeContentItem, caConversation, nativeContent, publishedApp,
       hostUrl, nonce: (embedNonce || 0) + iframeRev,
     }),
-    [isEmptyConversation, allTabsHidden, activePaneKind, builderMode, activeContentItem, caConversation, nativeContent, publishedApp, hostUrl, embedNonce, iframeRev]
+    [isEmptyConversation, allTabsHidden, isNonEmbedStageView, activePaneKind, builderMode, activeContentItem, caConversation, nativeContent, publishedApp, hostUrl, embedNonce, iframeRev]
   )
 
   useEffect(() => {
@@ -3328,11 +3480,58 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     URL.revokeObjectURL(url)
   }
 
+  const closeStageToOverview = () => {
+    setStageInspector(null)
+    setSelectedLookmlFilePath('')
+    setShowAppCode(false)
+    setMobileExplorerOpen(false)
+    handleSelectOverview?.()
+  }
+
+  const selectContentTabInStage = (key: string, lkFilePath = '') => {
+    setActiveViewerDocument?.(null)
+    setStageInspector(null)
+    setShowAppCode(false)
+    setSelectedLookmlFilePath(lkFilePath)
+    setMobileExplorerOpen(false)
+    if (key && contentItems.some((c) => c.key === key)) handleSelectContentTab?.(key)
+    else setActiveContentTabKey?.('')
+  }
+
+  const handleOpenReviewStage = () => {
+    setActiveViewerDocument?.(null)
+    setActiveContentTabKey?.(STUDIO_OVERVIEW_TAB_KEY)
+    setStageInspector({ kind: 'review' })
+    setMobileExplorerOpen(false)
+  }
+
+  const handleOpenApiCallStage = (call: OverviewApiCallRow) => {
+    setActiveViewerDocument?.(null)
+    setActiveContentTabKey?.(STUDIO_OVERVIEW_TAB_KEY)
+    setCopiedApiJson(false)
+    setFullApiResponse(false)
+    setStageInspector({ kind: 'api', callId: call.id })
+    setMobileExplorerOpen(false)
+  }
+
+  const handleSelectLookmlFileFromOverview = (filePath: string) => {
+    const lkTab = contentItems.find((c) => c.contentType === 'lookml')
+    if (lkTab) { selectContentTabInStage(lkTab.key, filePath); return }
+    if (lookmlBundle) {
+      const pid = lookmlBundle.project_id || lookmlBundle.id || 'project'
+      const up = ctl.upsertContentItem({ id: pid, projectId: pid, contentType: 'lookml', title: lookmlBundle.title || `LookML: ${pid}`, embedPath: `/lookml/${encodeURIComponent(pid)}`, hidden: false }, true)
+      setStageInspector(null); setShowAppCode(false); setSelectedLookmlFilePath(filePath); setMobileExplorerOpen(false)
+      handleSelectContentTab?.(up.key)
+      return
+    }
+    void openViewerDocument?.({ path: filePath, title: filePath, kind: 'file' })
+  }
+
   const isDataAppPane = activeContentItem
     ? activeContentItem.contentType === 'data_app' || activeContentItem.contentType === 'data-investigator'
     : builderMode !== 'dashboard'
   const isShowingAppCodeFullscreen =
-    activePaneKind === 'embed' && !rightPaneCollapsed && !allTabsHidden && showAppCode && Boolean(currentAppCode) && isDataAppPane && !activeViewerDocument
+    activePaneKind === 'embed' && !rightPaneCollapsed && !allTabsHidden && showAppCode && Boolean(currentAppCode) && isDataAppPane && !activeViewerDocument && !resolvedStageInspector
   const activePreviewId = allTabsHidden
     ? ''
     : activeContentItem?.id || (builderMode === 'dashboard' ? nativeContent?.id : publishedApp?.dashboardId)
@@ -3343,7 +3542,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     : publishedApp ? `/dashboards/${encodeURIComponent(publishedApp.dashboardId)}` : ''
   const hasActiveEmbed = embedTarget.kind !== 'preload'
   const showContentTabs = visibleTabs.length > 0 || hiddenTabs.length > 0
-  const resolvedActiveTabKey = activeContentItem?.key || activeContentTabKey || ''
+  const resolvedActiveTabKey = explicitOverview || resolvedStageInspector || activeViewerDocument ? '' : activeContentItem?.key || activeContentTabKey || ''
 
   const railArtifacts = useMemo<Array<{ key: string; title: string; contentType: StudioContentItemType }>>(() => {
     if (visibleTabs.length > 0) return visibleTabs.map((item) => ({ key: item.key, title: item.title, contentType: item.contentType }))
@@ -3357,18 +3556,56 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     return []
   }, [visibleTabs, allTabsHidden, isLookmlMode, lookmlBundle, isHealthCheckMode, healthReport, isTileMode, scriptId, scriptTitle, caConversation, nativeContent, publishedApp])
 
+  const isExplorerOpen = isCompactViewport ? mobileExplorerOpen : explorerRailOpen
+
   const collapseToggleBtn = !rightPaneCollapsed ? (
     <button
-      type="button" data-testid="right-pane-collapse-toggle" className="dab-btn dab-btn-secondary dab-right-collapse-btn"
-      title="Collapse viewer" aria-label="Collapse viewer" onClick={() => setRightPaneCollapsed(true)}
+      type="button" data-testid="right-pane-collapse-toggle" className="dab-btn dab-btn-secondary dab-btn-icon dab-right-collapse-btn"
+      title="Collapse viewer" aria-label="Collapse viewer" onClick={() => { setStageInspector(null); setRightPaneCollapsed(true) }}
     >
       <PanelRightClose size={14} strokeWidth={1.75} aria-hidden="true" />
     </button>
   ) : null
 
-  const explicitOverview = activeContentTabKey === STUDIO_OVERVIEW_TAB_KEY
+  const toggleExplorerBtn = !rightPaneCollapsed ? (
+    <button
+      type="button"
+      data-testid="stage-explorer-toggle-btn"
+      className={`dab-btn dab-btn-secondary dab-btn-icon dab-stage-explorer-btn ${isExplorerOpen ? 'active' : ''}`}
+      title={isExplorerOpen ? 'Hide Overview explorer' : 'Show Overview explorer'}
+      aria-label={isExplorerOpen ? 'Hide Overview explorer' : 'Show Overview explorer'}
+      aria-pressed={isExplorerOpen}
+      onClick={() => {
+        if (isCompactViewport) setMobileExplorerOpen((o) => !o)
+        else setExplorerRailOpen((o) => !o)
+      }}
+    >
+      <Columns2 size={13} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+  ) : null
+
+  const stageCloseBtn = (testId: string, label: string) => (
+    <button
+      type="button"
+      data-testid={testId}
+      className="dab-btn dab-btn-secondary dab-btn-icon"
+      title={label}
+      aria-label={label}
+      onClick={closeStageToOverview}
+    >
+      <X size={14} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+  )
+
+  const overviewCrumb = showContentTabs ? null : (
+    <button type="button" className="dab-stage-crumb-btn" data-testid="stage-breadcrumb-overview" onClick={closeStageToOverview}>
+      Overview /
+    </button>
+  )
+
   const hasActiveViewerPane =
     !explicitOverview &&
+    !resolvedStageInspector &&
     Boolean(
       activeContentItem ||
       (!allTabsHidden &&
@@ -3378,17 +3615,48 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           (activePaneKind === 'ca' && caConversation) ||
           activePaneKind === 'script'))
     )
-  const isOverviewMode = !isEmptyConversation && !activeViewerDocument && !hasActiveViewerPane
-  const hasViewerContent = Boolean(activeViewerDocument || hasActiveViewerPane)
+  const isOverviewMode = !isEmptyConversation && !activeViewerDocument && !resolvedStageInspector && !hasActiveViewerPane
+  const hasViewerContent = Boolean(activeViewerDocument || resolvedStageInspector || hasActiveViewerPane)
   const hideRightPane = isEmptyConversation && !activeViewerDocument
   const idleToolbarText = <span className="dab-muted">{busyStatus ? 'Thinking...' : 'Viewer will appear here when Looker content is ready'}</span>
+
+  const activeStageSelection = useMemo<OverviewStageSelection>(() => {
+    if (isOverviewMode) return null
+    if (resolvedStageInspector?.kind === 'review') return { kind: 'review' }
+    if (resolvedStageInspector?.kind === 'api' && activeApiCall) return { kind: 'api', id: activeApiCall.id }
+    if (activeViewerDocument) {
+      if (activeViewerDocument.kind === 'skill') {
+        const docPath = normalizeSandboxFilePath(activeViewerDocument.path)
+        const sid = overviewData.skillsUsed.find((s) => normalizeSandboxFilePath(s.path) === docPath || s.label === activeViewerDocument.title)?.id || activeViewerDocument.title
+        return { kind: 'skill', id: sid }
+      }
+      return { kind: 'file', path: activeViewerDocument.displayPath || activeViewerDocument.path }
+    }
+    if (activePaneKind === 'lookml' && selectedLookmlFilePath) return { kind: 'file', path: selectedLookmlFilePath }
+    if (isShowingAppCodeFullscreen) return { kind: 'file', path: '/workspace/apps/current/app.js' }
+    if (activeContentItem?.key) return { kind: 'content', key: activeContentItem.key }
+    if (overviewData.contentRows[0]) return { kind: 'content', key: overviewData.contentRows[0].key }
+    return null
+  }, [isOverviewMode, resolvedStageInspector, activeApiCall, activeViewerDocument, overviewData.skillsUsed, overviewData.contentRows, activePaneKind, selectedLookmlFilePath, isShowingAppCodeFullscreen, activeContentItem?.key])
+
+  const mobileHeaderTitle = isOverviewMode
+    ? 'Overview'
+    : resolvedStageInspector?.kind === 'review'
+    ? 'Review Changeset'
+    : activeApiCall
+    ? `${activeApiCall.method} ${activeApiCall.route}`
+    : activeViewerDocument?.title || activeContentItem?.title || publishedApp?.title || nativeContent?.title || lookmlBundle?.title || healthReport?.title || caConversation?.title || 'Viewer'
+
+  const hideIframeContainer =
+    activePaneKind === 'script' || rightPaneCollapsed || Boolean(activeViewerDocument) || Boolean(resolvedStageInspector) || isShowingAppCodeFullscreen || isOverviewMode
 
   return (
     <main
       className={`dab-right-pane ${rightPaneCollapsed ? 'dab-right-pane-collapsed' : ''}`}
       data-has-viewer-content={hasViewerContent ? 'true' : 'false'}
       data-overview-mode={isOverviewMode ? 'true' : 'false'}
-      data-explicit-overview={explicitOverview ? 'true' : 'false'}
+      data-explicit-overview={explicitOverview && !resolvedStageInspector ? 'true' : 'false'}
+      data-non-tab-stage={resolvedStageInspector || activeViewerDocument ? 'true' : 'false'}
       data-right-hidden={hideRightPane ? 'true' : 'false'}
       style={hideRightPane ? { display: 'none' } : undefined}
     >
@@ -3396,18 +3664,24 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         <div className="dab-mobile-viewer-card-handle" data-testid="mobile-viewer-card-handle">
           <div className="dab-mobile-viewer-grab-bar" aria-hidden="true" />
           <div className="dab-mobile-viewer-card-header">
-            <span className="dab-mobile-viewer-card-title">
-              {isOverviewMode
-                ? 'Overview'
-                : activeViewerDocument?.title || activeContentItem?.title || publishedApp?.title || nativeContent?.title || lookmlBundle?.title || healthReport?.title || caConversation?.title || 'Viewer'}
-            </span>
-            <button
-              type="button" data-testid="mobile-viewer-card-close" className="dab-btn dab-btn-secondary dab-mobile-viewer-close-btn"
-              title="Collapse viewer" aria-label="Collapse viewer"
-              onClick={() => { if (explicitOverview) ctl.setActiveContentTabKey(''); setRightPaneCollapsed(true) }}
-            >
-              <PanelRightClose size={14} strokeWidth={1.75} aria-hidden="true" /><span>Close</span>
-            </button>
+            <span className="dab-mobile-viewer-card-title">{mobileHeaderTitle}</span>
+            <div className="dab-controls" style={{ gap: 4 }}>
+              {!isOverviewMode && (
+                <button
+                  type="button" data-testid="mobile-viewer-overview-btn" className="dab-btn dab-btn-secondary dab-mobile-viewer-close-btn"
+                  title="Back to Overview" aria-label="Back to Overview" onClick={closeStageToOverview}
+                >
+                  <span>Overview</span>
+                </button>
+              )}
+              <button
+                type="button" data-testid="mobile-viewer-card-close" className="dab-btn dab-btn-secondary dab-mobile-viewer-close-btn"
+                title="Collapse viewer" aria-label="Collapse viewer"
+                onClick={() => { if (explicitOverview) ctl.setActiveContentTabKey(''); setStageInspector(null); setRightPaneCollapsed(true) }}
+              >
+                <PanelRightClose size={14} strokeWidth={1.75} aria-hidden="true" /><span>Close</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -3429,7 +3703,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                   title={item.title} aria-label={item.title}
                   onClick={() => {
                     setRightPaneCollapsed(false)
-                    if (contentItems.some((c) => c.key === item.key)) handleSelectContentTab?.(item.key)
+                    if (contentItems.some((c) => c.key === item.key)) selectContentTabInStage(item.key)
                   }}
                 >
                   {renderContentTabIcon(item.contentType)}
@@ -3448,7 +3722,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               aria-selected={isOverviewMode}
               data-testid="studio-overview-tab"
               className={`dab-content-tab dab-ov-pill ${isOverviewMode ? 'active' : ''}`}
-              onClick={() => handleSelectOverview?.()}
+              onClick={closeStageToOverview}
               title="View conversation overview"
             >
               <span className="dab-content-tab-label">Overview</span>
@@ -3474,11 +3748,11 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                   <div
                     role="tab" tabIndex={0} aria-selected={isSelected}
                     data-testid={`studio-content-tab-${item.key}`} className={`dab-content-tab ${isSelected ? 'active' : ''}`}
-                    onClick={() => handleSelectContentTab?.(item.key)}
+                    onClick={() => selectContentTabInStage(item.key)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault()
-                        handleSelectContentTab?.(item.key)
+                        selectContentTabInStage(item.key)
                       }
                     }}
                   >
@@ -3559,7 +3833,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                       className="dab-content-tabs-more-item"
                       onClick={() => {
                         setMoreMenuOpen(false)
-                        handleSelectContentTab?.(item.key)
+                        selectContentTabInStage(item.key)
                       }}
                     >
                       <span className="dab-content-tab-icon">{renderContentTabIcon(item.contentType)}</span>
@@ -3572,204 +3846,554 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           )}
         </div>
       )}
-      {!rightPaneCollapsed && isOverviewMode && (
-        <StudioOverviewSidebar
-          ctl={ctl}
-          allTabsHidden={allTabsHidden}
-          collapseToggleBtn={collapseToggleBtn}
-          windowApiCalls={overviewWinCalls}
-          openSecs={ovOpenSecs}
-          setOpenSecs={setOvOpenSecs}
-          showAll={ovShowAll}
-          setShowAll={setOvShowAll}
-          hiddenSecs={ovHiddenSecs}
-          setHiddenSecs={setOvHiddenSecs}
-          onOpenContentLinkInViewer={(target) => openContentLinkTargetInViewer(ctl, target)}
-        />
-      )}
-      {!rightPaneCollapsed && !isOverviewMode && !activeViewerDocument && (
-        activePaneKind === 'script' ? (
-          <TilePreviewPane ctl={ctl} />
-        ) : activePaneKind === 'report' ? (
-          <StudioToolbar
-            title={healthReport ? (
-              <>
-                <strong>{healthReport.title}</strong>{' '}
-                <StudioBadge>Health Score: {healthReport.scores.overallScore}% ({healthReport.scores.grade})</StudioBadge>{' '}
-                <StudioBadge>Transcriber: {healthReport.scores.transcriberScore}/4.00</StudioBadge>
-              </>
-            ) : idleToolbarText}
-            actions={
-              <>
-                {healthReport && (
+
+      <div className="dab-right-pane-split" style={rightPaneCollapsed ? { display: 'none' } : undefined}>
+        <div className="dab-stage-shell" data-testid="studio-unified-stage" style={isOverviewMode ? { display: 'none' } : undefined}>
+          {!rightPaneCollapsed && !isOverviewMode && resolvedStageInspector?.kind === 'review' && (
+            <div className="dab-stage-screen" data-testid="stage-review-pane">
+              <StudioToolbar
+                testId="stage-review-toolbar"
+                className="dab-stage-compact-bar"
+                title={
                   <>
-                    <button type="button" className="dab-btn-secondary" onClick={() => setTddViewMode((m) => (m === 'rendered' ? 'raw' : 'rendered'))}>
-                      {tddViewMode === 'rendered' ? '{ } Raw Markdown' : 'Rendered Report'}
-                    </button>
-                    <button type="button" className="dab-btn-secondary" onClick={handleCopyTddMarkdown}>{copiedTdd ? '✓ Copied Markdown' : 'Copy Markdown'}</button>
-                    <button type="button" className="dab-btn-gemini" onClick={handleDownloadTddMarkdown}>Download Markdown (.md)</button>
+                    <strong>Review</strong>
+                    {overviewData.reviewItems.filter((rv) => rv.kind !== 'files').map((rv, idx) => (
+                      <StudioBadge key={idx} tone={rv.badgeTone}>{rv.badgeText}</StudioBadge>
+                    ))}
+                    {overviewData.changedFiles.length > 0 && (
+                      <StudioBadge tone="neutral">{`${overviewData.changedFiles.length} ${overviewData.changedFiles.length === 1 ? 'file' : 'files'}`}</StudioBadge>
+                    )}
                   </>
+                }
+                actions={
+                  <>
+                    {lookmlBundle?.project_id && (
+                      <StudioButton
+                        variant="secondary"
+                        testId="stage-review-open-ide-btn"
+                        onClick={() => void openOrCopyMarkdownLink(`/projects/${encodeURIComponent(lookmlBundle.project_id)}`, hostUrl, extensionSDK)}
+                      >
+                        <span>IDE</span>
+                        <ExternalLink size={11} strokeWidth={1.75} aria-hidden="true" />
+                      </StudioButton>
+                    )}
+                    {stageCloseBtn('stage-review-close-btn', 'Close Review')}
+                    {toggleExplorerBtn}
+                    {collapseToggleBtn}
+                  </>
+                }
+              />
+              <div className="dab-stage-scroll">
+                {pendingPerm && (
+                  <div className="dab-review-perm-strip" data-testid="stage-review-permission-card">
+                    <div className="dab-review-strip-row">
+                      <AlertTriangle size={13} strokeWidth={1.75} style={{ color: 'var(--dab-warning-text)', flexShrink: 0 }} aria-hidden="true" />
+                      <strong>Safe Mode:</strong>
+                      <code>{pendingPerm.req.operation}</code>
+                      <span>·</span>
+                      <code>{pendingPerm.req.httpMethod} {pendingPerm.req.path}</code>
+                      {pendingPerm.req.thought && <span>— {pendingPerm.req.thought}</span>}
+                    </div>
+                    <div className="dab-permission-actions">
+                      <button type="button" className="dab-btn-primary dab-btn-xs" data-testid="stage-perm-allow-once" onClick={() => resolvePermDecision('allow_once')}>Allow once</button>
+                      <button type="button" className="dab-btn-secondary dab-btn-xs" data-testid="stage-perm-allow-op" onClick={() => resolvePermDecision('allow_op')}>Allow &apos;{pendingPerm.req.operation}&apos;</button>
+                      <button type="button" className="dab-btn-secondary dab-btn-xs" data-testid="stage-perm-allow-all" onClick={() => resolvePermDecision('allow_all')}>Allow all</button>
+                      <button type="button" className="dab-btn-secondary dab-btn-xs" data-testid="stage-perm-deny" onClick={() => resolvePermDecision('deny')}>Deny</button>
+                    </div>
+                  </div>
                 )}
-                <UseCaseInfoTrigger useCase="health-check" onOpen={setInfoModalUseCase} />
-                {collapseToggleBtn}
-              </>
-            }
-          />
-        ) : activePaneKind === 'lookml' ? (
-          <StudioToolbar
-            title={lookmlBundle ? (
-              <><strong>{lookmlBundle.title || lookmlBundle.project_id}</strong> <span className="dab-muted">({lookmlBundle.files?.length || 0} .lkml files)</span></>
-            ) : idleToolbarText}
-            actions={<><UseCaseInfoTrigger useCase="lookml" onOpen={setInfoModalUseCase} />{collapseToggleBtn}</>}
-          />
-        ) : activePaneKind === 'ca' ? (
-          <>
-            <StudioToolbar
-              testId="ca-preview-toolbar"
-              title={caConversation ? (
-                <>
-                  <strong>{caConversation.title}</strong>{' '}
-                  <StudioBadge testId="ca-selected-agent-badge">Agent: {caConversation.agentName} ({caConversation.agentId})</StudioBadge>{' '}
-                  <span className="dab-muted">(Conversation <code>{caConversation.caConversationId}</code> · <code>{caConversation.embedPath}</code>)</span>
-                </>
-              ) : idleToolbarText}
-              actions={
-                <>
-                  {caConversation && (
-                    <>
-                      <button type="button" className="dab-btn-secondary" onClick={() => setIframeRev((r) => r + 1)}>Reload CA Chat</button>
-                      <button type="button" className="dab-btn-secondary" onClick={() => extensionSDK.openBrowserWindow(caConversation.embedPath.replace(/^\/embed/, ''), '_blank')}>Open in Looker ↗</button>
-                    </>
-                  )}
-                  <UseCaseInfoTrigger useCase="conversational-analytics" onOpen={setInfoModalUseCase} />
-                  {collapseToggleBtn}
-                </>
-              }
-            />
-            {caConversation?.selectionRationale && (
-              <div data-testid="ca-selection-rationale" style={{ padding: '6px 12px', fontSize: 12, background: 'var(--dab-surface-muted, #f8fafc)', borderBottom: '1px solid var(--dab-border, #e2e8f0)', color: 'var(--dab-text-secondary, #334155)' }}>
-                <strong>Isolated Sub-Agent Selection:</strong> {caConversation.selectionRationale}
-                {caConversation.explores?.length > 0 && <span style={{ marginLeft: 8, color: 'var(--dab-text-muted, #64748b)' }}>· Explores: <code>{caConversation.explores.join(', ')}</code></span>}
+
+                {lookmlBundle && (
+                  <div className="dab-review-checks-strip" data-testid="stage-review-checks-card">
+                    <div className="dab-review-strip-row">
+                      <Shield size={13} strokeWidth={1.75} style={{ flexShrink: 0 }} aria-hidden="true" />
+                      <StudioBadge tone={lookmlBundle.validation?.passed === false ? 'danger' : 'success'}>
+                        {lookmlBundle.validation?.passed === false
+                          ? `${lookmlBundle.validation.errors?.length || lookmlBundle.validation.error_count || 1} error(s)`
+                          : 'Validator Passed'}
+                      </StudioBadge>
+                      {lookmlBundle.branch_name && <code className="dab-stage-inline-meta">{lookmlBundle.branch_name}</code>}
+                      {(lookmlBundle.tests || []).map((t, i) => (
+                        <StudioBadge key={i} pill tone={t.success ? 'success' : 'danger'}>
+                          {t.success ? '✓' : '✕'} {t.test_name}
+                        </StudioBadge>
+                      ))}
+                      {(lookmlBundle.queries || []).map((q, i) => {
+                        const sqlPath = q.sql_runner_url || (q.sql_slug ? `/sql/${q.sql_slug}` : '')
+                        const expPath = q.explore_url || (q.explore_slug ? `/x/${q.explore_slug}` : '')
+                        return (
+                          <span key={i} className="dab-review-inline-parity">
+                            <span className="dab-stage-inline-meta">{q.label || `Parity #${(q.query_index ?? i) + 1}`}{q.parity_status ? ` (${q.parity_status})` : ''}</span>
+                            {sqlPath && <button type="button" className="dab-btn-secondary dab-btn-xs" onClick={() => void openOrCopyMarkdownLink(sqlPath, hostUrl, extensionSDK)}>SQL ↗</button>}
+                            {expPath && <button type="button" className="dab-btn-secondary dab-btn-xs" onClick={() => void openOrCopyMarkdownLink(expPath, hostUrl, extensionSDK)}>Explore ↗</button>}
+                          </span>
+                        )
+                      })}
+                    </div>
+                    {(lookmlBundle.validation?.errors || []).map((err, i) => (
+                      <div key={i} className="dab-review-err-line">
+                        {err.file_path ? `${err.file_path}${err.line_number ? `:${err.line_number}` : ''} — ` : ''}
+                        {err.message}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {overviewData.changedFiles.length > 0 ? (
+                  <div className="dab-review-files" data-testid="stage-review-files">
+                    {overviewData.changedFiles.map((file, idx) => {
+                      const rawDiffOrBody = file.diff || file.content || ''
+                      const hasDiffMarkers = Boolean(file.diff) || /^(?:@@|\+\+\+|---)/m.test(rawDiffOrBody)
+                      const lines = rawDiffOrBody ? rawDiffOrBody.split('\n') : []
+                      const adds = hasDiffMarkers ? lines.filter((l) => l.startsWith('+') && !l.startsWith('+++')).length : 0
+                      const dels = hasDiffMarkers ? lines.filter((l) => l.startsWith('-') && !l.startsWith('---')).length : 0
+                      return (
+                        <details key={file.key} className="dab-review-file-card" data-testid={`stage-review-file-${idx}`} open={idx < 5}>
+                          <summary className="dab-review-file-head">
+                            <span className="dab-ov-stat" style={{ color: file.action === 'created' ? 'var(--dab-success-text)' : file.action === 'deleted' ? 'var(--dab-danger-text)' : 'var(--dab-accent-text)' }}>
+                              {file.action === 'created' ? '+' : file.action === 'deleted' ? '-' : 'M'}
+                            </span>
+                            <code className="dab-review-file-path">{file.label}</code>
+                            {hasDiffMarkers ? (
+                              <span className="dab-review-diff-stat">
+                                {adds > 0 && <span className="is-add">+{adds}</span>}
+                                {dels > 0 && <span className="is-del">-{dels}</span>}
+                              </span>
+                            ) : lines.length > 0 ? (
+                              <span className="dab-stage-inline-meta">{lines.length}L</span>
+                            ) : null}
+                            <button
+                              type="button"
+                              data-testid={`stage-review-open-file-${idx}`}
+                              className="dab-btn dab-btn-secondary dab-review-open-btn"
+                              onClick={(e) => {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                if (file.kind === 'lookml') handleSelectLookmlFileFromOverview(file.path)
+                                else void openViewerDocument?.({ path: file.path, title: file.label, kind: 'file', content: file.content })
+                              }}
+                            >
+                              <span>Open file</span>
+                            </button>
+                          </summary>
+                          {rawDiffOrBody
+                            ? renderLineNumberedPre(rawDiffOrBody, hasDiffMarkers)
+                            : <div className="dab-review-empty-file">Click &ldquo;Open file&rdquo; to load contents from sandbox.</div>}
+                        </details>
+                      )
+                    })}
+                  </div>
+                ) : !pendingPerm && !lookmlBundle ? (
+                  <div className="dab-placeholder">
+                    <p>No pending changes or approvals</p>
+                    <p className="dab-muted">Modified files, LookML checks, and Safe Mode approvals appear here.</p>
+                  </div>
+                ) : null}
               </div>
-            )}
-          </>
-        ) : (
-          <StudioToolbar
-            title={
-              allTabsHidden ? (
-                <span className="dab-muted">All tabs hidden — restore an item from the menu above</span>
-              ) : activeContentItem && activeContentItem.contentType !== 'data_app' && activeContentItem.contentType !== 'data-investigator' ? (
-                <><strong>{activeContentItem.title}</strong> <span className="dab-muted">({activeContentItem.contentType} #{activeContentItem.id} · <code>{activeContentItem.embedPath}</code>)</span></>
-              ) : !activeContentItem && builderMode === 'dashboard' && nativeContent ? (
-                <><strong>{nativeContent.title}</strong> <span className="dab-muted">({nativeContent.contentType} #{nativeContent.id} · <code>{nativeContent.embedPath}</code>)</span></>
-              ) : publishedApp ? (
-                <><strong>{publishedApp.title}</strong> <span className="dab-muted">(Dashboard #{publishedApp.dashboardId})</span></>
-              ) : idleToolbarText
-            }
-            actions={
-              <>
-                {!allTabsHidden && isDataAppPane && currentAppCode && (
-                  <StudioButton variant="secondary" testId="preview-view-code-btn" onClick={() => setShowAppCode((v) => !v)}>
-                    <Code2 size={13} strokeWidth={1.75} aria-hidden="true" />
-                    <span>{showAppCode ? 'Hide app.js' : 'View app.js'}</span>
-                  </StudioButton>
-                )}
-                {!allTabsHidden && activePreviewId && (
+            </div>
+          )}
+
+          {!rightPaneCollapsed && !isOverviewMode && resolvedStageInspector?.kind === 'api' && activeApiCall && (
+            <div className="dab-stage-screen" data-testid="stage-api-inspector">
+              <StudioToolbar
+                testId="stage-api-toolbar"
+                className="dab-stage-compact-bar"
+                title={
+                  <>
+                    <span className={`dab-ov-mth dab-ov-mth-${activeApiCall.ok ? activeApiCall.method.toLowerCase() : 'err'}`}>{activeApiCall.method}</span>
+                    <code className="dab-api-route-code" data-testid="stage-api-route">{activeApiCall.route}</code>
+                    <StudioBadge tone={activeApiCall.ok ? 'success' : 'danger'}>
+                      {activeApiCall.status !== null ? String(activeApiCall.status) : activeApiCall.ok ? 'OK' : 'ERR'}
+                    </StudioBadge>
+                    <span className="dab-stage-inline-meta" data-testid="stage-api-meta">
+                      {[
+                        activeApiCall.durationMs !== undefined ? `${activeApiCall.durationMs}ms` : '',
+                        activeApiCall.timestamp ? activeApiCall.timestamp.replace(/^.*T/, '').replace(/\.\d+Z$/, 'Z') : activeApiCall.source === 'turn' ? 'turn log' : '',
+                      ].filter(Boolean).join(' · ')}
+                    </span>
+                  </>
+                }
+                actions={
                   <>
                     <StudioButton
                       variant="secondary"
-                      testId="preview-reload-viewer-btn"
-                      data-reloading={reloadingViewer ? 'true' : 'false'}
-                      onClick={() => { setShowAppCode(false); setReloadingViewer(true); setIframeRev((r) => r + 1) }}
+                      testId="stage-api-copy-btn"
+                      onClick={() => {
+                        const snapshot = formatPrettyPayload({
+                          method: activeApiCall.method,
+                          route: activeApiCall.route,
+                          status: activeApiCall.status,
+                          duration_ms: activeApiCall.durationMs,
+                          query_params: activeApiCall.queryParams,
+                          body: activeApiCall.body,
+                          response: activeApiCall.responseBody,
+                        })
+                        void copyTextWithExtensionSdk(snapshot, extensionSDK)
+                        setCopiedApiJson(true)
+                        setTimeout(() => setCopiedApiJson(false), 1800)
+                      }}
                     >
-                      <RotateCw size={13} strokeWidth={1.75} className={reloadingViewer ? 'dab-spin' : undefined} aria-hidden="true" />
-                      <span>Reload Viewer</span>
+                      {copiedApiJson ? <Check size={12} strokeWidth={2} aria-hidden="true" /> : <Copy size={12} strokeWidth={1.75} aria-hidden="true" />}
+                      <span>{copiedApiJson ? 'Copied' : 'Copy'}</span>
                     </StudioButton>
-                    <button type="button" className="dab-btn-secondary" onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}>Open in Looker ↗</button>
+                    {stageCloseBtn('stage-api-close-btn', 'Close API inspector')}
+                    {toggleExplorerBtn}
+                    {collapseToggleBtn}
                   </>
+                }
+              />
+              <div className="dab-stage-scroll">
+                {activeApiCall.queryParams && Object.keys(activeApiCall.queryParams).length > 0 && (
+                  <div className="dab-api-panel" data-testid="stage-api-query-params">
+                    <div className="dab-api-panel-head">
+                      <span>Query Params</span>
+                      <span className="dab-stage-inline-meta">{Object.keys(activeApiCall.queryParams).length}</span>
+                    </div>
+                    {renderLineNumberedPre(formatPrettyPayload(activeApiCall.queryParams))}
+                  </div>
                 )}
-                <UseCaseInfoTrigger useCase={!isDataAppPane ? 'dashboard' : selectedUseCase === 'data-investigator' ? 'data-investigator' : 'app'} onOpen={setInfoModalUseCase} />
-                {collapseToggleBtn}
-              </>
-            }
-          />
-        )
-      )}
 
-      {!isOverviewMode && isShowingAppCodeFullscreen && (
-        <div className="dab-code-drawer" data-testid="preview-app-code-drawer">
-          <div className="dab-code-drawer-header">
-            <strong>app.js ({currentAppCode.length} B)</strong>
-            <StudioButton
-              variant="secondary"
-              testId="preview-copy-code-btn"
-              className="dab-btn-icon"
-              title={copiedAppCode ? 'Copied!' : 'Copy app.js'}
-              aria-label="Copy app.js"
-              onClick={() => {
-                void copyTextWithExtensionSdk(currentAppCode, extensionSDK)
-                setCopiedAppCode(true)
-                setTimeout(() => setCopiedAppCode(false), 1800)
-              }}
-            >
-              {copiedAppCode ? <Check size={14} strokeWidth={2} aria-hidden="true" /> : <Copy size={14} strokeWidth={1.75} aria-hidden="true" />}
-            </StudioButton>
-          </div>
-          <pre className="dab-code-drawer-pre">{currentAppCode}</pre>
-        </div>
-      )}
+                {activeApiCall.body !== undefined && activeApiCall.body !== null && (
+                  <div className="dab-api-panel" data-testid="stage-api-request-body">
+                    <div className="dab-api-panel-head"><span>Request Body</span></div>
+                    {renderLineNumberedPre(formatPrettyPayload(activeApiCall.body))}
+                  </div>
+                )}
 
-      {!rightPaneCollapsed && activeViewerDocument && (
-        <div className="dab-viewer-document-pane" data-testid="viewer-document-pane">
-          <div className="dab-viewer-document-header">
-            <div className="dab-viewer-document-title-group">
-              <strong data-testid="viewer-document-title">{activeViewerDocument.title}</strong>
-              <StudioBadge tone="accent" testId="viewer-document-path-badge">{activeViewerDocument.displayPath}</StudioBadge>
-            </div>
-            <div className="dab-viewer-document-actions">
-              <button
-                type="button"
-                data-testid="viewer-document-close-btn"
-                className="dab-btn dab-btn-secondary dab-btn-icon"
-                title="Close document"
-                aria-label="Close document"
-                onClick={() => setActiveViewerDocument?.(null)}
-              >
-                <X size={14} strokeWidth={1.75} aria-hidden="true" />
-              </button>
-            </div>
-          </div>
-          <div className="dab-viewer-document-body" data-testid="viewer-document-body">
-            {activeViewerDocument.loading ? (
-              <div className="dab-viewer-document-loading" data-testid="viewer-document-loading">
-                <StudioSkeleton width="100%" height={32} /><span className="dab-muted">Loading from sandbox...</span>
+                <div className="dab-api-panel" data-testid="stage-api-response">
+                  <div className="dab-api-panel-head">
+                    <span>Response</span>
+                    <span className="dab-stage-inline-meta">
+                      {activeApiCall.status !== null ? `HTTP ${activeApiCall.status}` : activeApiCall.ok ? 'OK' : 'Error'}
+                    </span>
+                  </div>
+                  {(() => {
+                    const pretty = formatPrettyPayload(activeApiCall.responseBody)
+                    if (!pretty) {
+                      return (
+                        <div className="dab-review-empty-file">
+                          {activeApiCall.source === 'turn'
+                            ? 'Recorded in historical turn step telemetry (response body omitted from persisted conversation index).'
+                            : 'Empty response body.'}
+                        </div>
+                      )
+                    }
+                    const truncated = !fullApiResponse && pretty.length > 24000
+                    return (
+                      <>
+                        {renderLineNumberedPre(truncated ? `${pretty.slice(0, 24000)}\n… [truncated ${pretty.length - 24000} chars]` : pretty)}
+                        {truncated && (
+                          <div style={{ padding: '4px 8px' }}>
+                            <button type="button" className="dab-btn-secondary dab-btn-xs" onClick={() => setFullApiResponse(true)}>Show full payload</button>
+                          </div>
+                        )}
+                      </>
+                    )
+                  })()}
+                </div>
               </div>
-            ) : activeViewerDocument.isMarkdown ? (
-              <div className="dab-viewer-document-markdown" data-testid="viewer-document-markdown">
-                <StudioMarkdown
-                  text={activeViewerDocument.content}
-                  hostUrl={hostUrl}
-                  extensionSDK={extensionSDK}
-                  onOpenSandboxMarkdownFile={(p) => void openViewerDocument?.({ path: p })}
-                  onOpenContentInViewer={(target) => openContentLinkTargetInViewer(ctl, target)}
+            </div>
+          )}
+
+          {!rightPaneCollapsed && !isOverviewMode && !resolvedStageInspector && !activeViewerDocument && (
+            activePaneKind === 'script' ? (
+              <TilePreviewPane
+                ctl={ctl}
+                stageTrailActions={<>{toggleExplorerBtn}{collapseToggleBtn}</>}
+              />
+            ) : activePaneKind === 'report' ? (
+              <StudioToolbar
+                title={healthReport ? (
+                  <>
+                    {overviewCrumb}
+                    <strong>{healthReport.title}</strong>{' '}
+                    <StudioBadge>Health Score: {healthReport.scores.overallScore}% ({healthReport.scores.grade})</StudioBadge>{' '}
+                    <StudioBadge>Transcriber: {healthReport.scores.transcriberScore}/4.00</StudioBadge>
+                  </>
+                ) : idleToolbarText}
+                actions={
+                  <>
+                    {healthReport && (
+                      <>
+                        <button type="button" className="dab-btn-secondary" onClick={() => setTddViewMode((m) => (m === 'rendered' ? 'raw' : 'rendered'))}>
+                          {tddViewMode === 'rendered' ? '{ } Raw Markdown' : 'Rendered Report'}
+                        </button>
+                        <button type="button" className="dab-btn-secondary" onClick={handleCopyTddMarkdown}>{copiedTdd ? '✓ Copied Markdown' : 'Copy Markdown'}</button>
+                        <button type="button" className="dab-btn-gemini" onClick={handleDownloadTddMarkdown}>Download Markdown (.md)</button>
+                      </>
+                    )}
+                    <UseCaseInfoTrigger useCase="health-check" onOpen={setInfoModalUseCase} />
+                    {toggleExplorerBtn}
+                    {collapseToggleBtn}
+                  </>
+                }
+              />
+            ) : activePaneKind === 'lookml' ? (
+              <StudioToolbar
+                className="dab-stage-compact-bar"
+                title={lookmlBundle ? (
+                  <>
+                    {overviewCrumb}
+                    <strong>{lookmlBundle.title || lookmlBundle.project_id}</strong>
+                    <StudioBadge tone={lookmlBundle.validation?.passed === false ? 'danger' : 'success'}>
+                      {lookmlBundle.validation?.passed === false ? 'Invalid' : 'Valid'}
+                    </StudioBadge>
+                    {lookmlBundle.branch_name && <code className="dab-stage-inline-meta">{lookmlBundle.branch_name}</code>}
+                    <span className="dab-stage-inline-meta">{lookmlBundle.files?.length || 0} files</span>
+                    {(lookmlBundle.tests?.length || 0) > 0 && (
+                      <StudioBadge tone="neutral">
+                        {`${(lookmlBundle.tests || []).filter((t) => t.success).length}/${lookmlBundle.tests?.length} tests`}
+                      </StudioBadge>
+                    )}
+                  </>
+                ) : idleToolbarText}
+                actions={<><UseCaseInfoTrigger useCase="lookml" onOpen={setInfoModalUseCase} />{toggleExplorerBtn}{collapseToggleBtn}</>}
+              />
+            ) : activePaneKind === 'ca' ? (
+              <>
+                <StudioToolbar
+                  testId="ca-preview-toolbar"
+                  title={caConversation ? (
+                    <>
+                      {overviewCrumb}
+                      <strong>{caConversation.title}</strong>{' '}
+                      <StudioBadge testId="ca-selected-agent-badge">Agent: {caConversation.agentName} ({caConversation.agentId})</StudioBadge>{' '}
+                      <span className="dab-muted">(Conversation <code>{caConversation.caConversationId}</code> · <code>{caConversation.embedPath}</code>)</span>
+                    </>
+                  ) : idleToolbarText}
+                  actions={
+                    <>
+                      {caConversation && (
+                        <>
+                          <button type="button" className="dab-btn-secondary" onClick={() => setIframeRev((r) => r + 1)}>Reload CA Chat</button>
+                          <button type="button" className="dab-btn-secondary" onClick={() => extensionSDK.openBrowserWindow(caConversation.embedPath.replace(/^\/embed/, ''), '_blank')}>Open in Looker ↗</button>
+                        </>
+                      )}
+                      <UseCaseInfoTrigger useCase="conversational-analytics" onOpen={setInfoModalUseCase} />
+                      {toggleExplorerBtn}
+                      {collapseToggleBtn}
+                    </>
+                  }
                 />
-              </div>
+                {caConversation?.selectionRationale && (
+                  <div data-testid="ca-selection-rationale" style={{ padding: '6px 12px', fontSize: 12, background: 'var(--dab-surface-muted, #f8fafc)', borderBottom: '1px solid var(--dab-border, #e2e8f0)', color: 'var(--dab-text-secondary, #334155)' }}>
+                    <strong>Isolated Sub-Agent Selection:</strong> {caConversation.selectionRationale}
+                    {caConversation.explores?.length > 0 && <span style={{ marginLeft: 8, color: 'var(--dab-text-muted, #64748b)' }}>· Explores: <code>{caConversation.explores.join(', ')}</code></span>}
+                  </div>
+                )}
+              </>
             ) : (
-              <pre className="dab-viewer-document-code" data-testid="viewer-document-code"><code>{activeViewerDocument.content}</code></pre>
-            )}
+              <StudioToolbar
+                title={
+                  allTabsHidden ? (
+                    <span className="dab-muted">All tabs hidden — restore an item from the menu above</span>
+                  ) : activeContentItem && activeContentItem.contentType !== 'data_app' && activeContentItem.contentType !== 'data-investigator' ? (
+                    <>{overviewCrumb}<strong>{activeContentItem.title}</strong> <span className="dab-muted">({activeContentItem.contentType} #{activeContentItem.id} · <code>{activeContentItem.embedPath}</code>)</span></>
+                  ) : !activeContentItem && builderMode === 'dashboard' && nativeContent ? (
+                    <>{overviewCrumb}<strong>{nativeContent.title}</strong> <span className="dab-muted">({nativeContent.contentType} #{nativeContent.id} · <code>{nativeContent.embedPath}</code>)</span></>
+                  ) : publishedApp ? (
+                    <>{overviewCrumb}<strong>{publishedApp.title}</strong></>
+                  ) : idleToolbarText
+                }
+                actions={
+                  <>
+                    {!allTabsHidden && isDataAppPane && currentAppCode && (
+                      <StudioButton variant="secondary" testId="preview-view-code-btn" aria-pressed={showAppCode} onClick={() => setShowAppCode((v) => !v)}>
+                        <Code2 size={13} strokeWidth={1.75} aria-hidden="true" />
+                        <span>{showAppCode ? 'Hide app.js' : 'View app.js'}</span>
+                      </StudioButton>
+                    )}
+                    {!allTabsHidden && activePreviewId && (
+                      <>
+                        <StudioButton
+                          variant="secondary"
+                          testId="preview-reload-viewer-btn"
+                          data-reloading={reloadingViewer ? 'true' : 'false'}
+                          onClick={() => { setShowAppCode(false); setReloadingViewer(true); setIframeRev((r) => r + 1) }}
+                        >
+                          <RotateCw size={13} strokeWidth={1.75} className={reloadingViewer ? 'dab-spin' : undefined} aria-hidden="true" />
+                          <span>Reload Viewer</span>
+                        </StudioButton>
+                        <button type="button" className="dab-btn-secondary" onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}>Open in Looker ↗</button>
+                      </>
+                    )}
+                    <UseCaseInfoTrigger useCase={!isDataAppPane ? 'dashboard' : selectedUseCase === 'data-investigator' ? 'data-investigator' : 'app'} onOpen={setInfoModalUseCase} />
+                    {toggleExplorerBtn}
+                    {collapseToggleBtn}
+                  </>
+                }
+              />
+            )
+          )}
+
+          {!isOverviewMode && isShowingAppCodeFullscreen && (
+            <div className="dab-code-drawer" data-testid="preview-app-code-drawer">
+              <div className="dab-code-drawer-header">
+                <strong>app.js ({currentAppCode.length} B)</strong>
+                <StudioButton
+                  variant="secondary"
+                  testId="preview-copy-code-btn"
+                  className="dab-btn-icon"
+                  title={copiedAppCode ? 'Copied!' : 'Copy app.js'}
+                  aria-label="Copy app.js"
+                  onClick={() => {
+                    void copyTextWithExtensionSdk(currentAppCode, extensionSDK)
+                    setCopiedAppCode(true)
+                    setTimeout(() => setCopiedAppCode(false), 1800)
+                  }}
+                >
+                  {copiedAppCode ? <Check size={14} strokeWidth={2} aria-hidden="true" /> : <Copy size={14} strokeWidth={1.75} aria-hidden="true" />}
+                </StudioButton>
+              </div>
+              {renderLineNumberedPre(currentAppCode)}
+            </div>
+          )}
+
+          {!rightPaneCollapsed && activeViewerDocument && (
+            <div className="dab-viewer-document-pane" data-testid="viewer-document-pane">
+              <StudioToolbar
+                testId="viewer-document-header"
+                className="dab-stage-compact-bar"
+                title={
+                  <>
+                    <strong data-testid="viewer-document-title">{activeViewerDocument.title}</strong>
+                    <StudioBadge tone="accent" testId="viewer-document-path-badge" className="dab-doc-path-pill">{activeViewerDocument.displayPath}</StudioBadge>
+                  </>
+                }
+                actions={
+                  <>
+                    {activeViewerDocument.isMarkdown && !activeViewerDocument.loading && (
+                      <div className="dab-seg-group" role="group" aria-label="Document view mode">
+                        <button
+                          type="button"
+                          data-testid="viewer-document-mode-rendered"
+                          aria-pressed={docViewMode === 'rendered'}
+                          className={`dab-seg-btn ${docViewMode === 'rendered' ? 'active' : ''}`}
+                          onClick={() => setDocViewMode('rendered')}
+                        >
+                          Rendered
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="viewer-document-mode-raw"
+                          aria-pressed={docViewMode === 'raw'}
+                          className={`dab-seg-btn ${docViewMode === 'raw' ? 'active' : ''}`}
+                          onClick={() => setDocViewMode('raw')}
+                        >
+                          Raw
+                        </button>
+                      </div>
+                    )}
+                    {!activeViewerDocument.loading && activeViewerDocument.content && (
+                      <button
+                        type="button"
+                        data-testid="viewer-document-copy-btn"
+                        className="dab-btn dab-btn-secondary dab-btn-icon"
+                        title={copiedDoc ? 'Copied!' : 'Copy file'}
+                        aria-label="Copy file"
+                        onClick={() => {
+                          void copyTextWithExtensionSdk(activeViewerDocument.content, extensionSDK)
+                          setCopiedDoc(true)
+                          setTimeout(() => setCopiedDoc(false), 1800)
+                        }}
+                      >
+                        {copiedDoc ? <Check size={14} strokeWidth={2} aria-hidden="true" /> : <Copy size={14} strokeWidth={1.75} aria-hidden="true" />}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      data-testid="viewer-document-close-btn"
+                      className="dab-btn dab-btn-secondary dab-btn-icon"
+                      title="Close document"
+                      aria-label="Close document"
+                      onClick={() => setActiveViewerDocument?.(null)}
+                    >
+                      <X size={14} strokeWidth={1.75} aria-hidden="true" />
+                    </button>
+                    {toggleExplorerBtn}
+                    {collapseToggleBtn}
+                  </>
+                }
+              />
+              <div className="dab-viewer-document-body" data-testid="viewer-document-body">
+                {activeViewerDocument.loading ? (
+                  <div className="dab-viewer-document-loading" data-testid="viewer-document-loading">
+                    <StudioSkeleton width="100%" height={32} /><span className="dab-muted">Loading from sandbox...</span>
+                  </div>
+                ) : activeViewerDocument.isMarkdown && docViewMode === 'rendered' ? (
+                  <div className="dab-viewer-document-markdown" data-testid="viewer-document-markdown">
+                    <StudioMarkdown
+                      text={activeViewerDocument.content}
+                      hostUrl={hostUrl}
+                      extensionSDK={extensionSDK}
+                      onOpenSandboxMarkdownFile={(p) => void openViewerDocument?.({ path: p })}
+                      onOpenContentInViewer={(target) => openContentLinkTargetInViewer(ctl, target)}
+                    />
+                  </div>
+                ) : (
+                  <div className="dab-viewer-document-code-wrap" data-testid="viewer-document-code">
+                    {renderLineNumberedPre(activeViewerDocument.content)}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="dab-iframe-container" data-testid="ca-embed-preview" style={hideIframeContainer ? { display: 'none' } : undefined}>
+            <div ref={embedContainerRef} data-testid="looker-embed-container" className="dab-embed-container" style={{ width: '100%', height: '100%', display: hasActiveEmbed ? 'block' : 'none' }} />
+            {activePaneKind === 'report' && healthReport ? (
+              <div className="dab-tdd-viewer">
+                {tddViewMode === 'rendered' ? <div className="dab-tdd-rendered" dangerouslySetInnerHTML={{ __html: renderTddMarkdownToHtml(healthReport.tddMarkdown) }} /> : <pre className="dab-tdd-markdown">{healthReport.tddMarkdown}</pre>}
+              </div>
+            ) : activePaneKind === 'lookml' && lookmlBundle ? (
+              <LookmlPreviewPane
+                bundle={lookmlBundle}
+                hostUrl={hostUrl}
+                extensionSDK={extensionSDK}
+                canDeploy={canDeployLookml}
+                selectedFilePath={selectedLookmlFilePath}
+                onSelectFilePath={setSelectedLookmlFilePath}
+              />
+            ) : null}
           </div>
         </div>
-      )}
 
-      <div className="dab-iframe-container" data-testid="ca-embed-preview" style={activePaneKind === 'script' || rightPaneCollapsed || Boolean(activeViewerDocument) || isShowingAppCodeFullscreen || isOverviewMode ? { display: 'none' } : undefined}>
-        <div ref={embedContainerRef} data-testid="looker-embed-container" className="dab-embed-container" style={{ width: '100%', height: '100%', display: hasActiveEmbed ? 'block' : 'none' }} />
-        {activePaneKind === 'report' && healthReport ? (
-          <div className="dab-tdd-viewer">
-            {tddViewMode === 'rendered' ? <div className="dab-tdd-rendered" dangerouslySetInnerHTML={{ __html: renderTddMarkdownToHtml(healthReport.tddMarkdown) }} /> : <pre className="dab-tdd-markdown">{healthReport.tddMarkdown}</pre>}
-          </div>
-        ) : activePaneKind === 'lookml' && lookmlBundle ? (
-          <LookmlPreviewPane bundle={lookmlBundle} hostUrl={hostUrl} extensionSDK={extensionSDK} canDeploy={canDeployLookml} />
-        ) : null}
+        {!isOverviewMode && isCompactViewport && mobileExplorerOpen && (
+          <div className="dab-ov-mobile-backdrop" data-testid="overview-mobile-backdrop" aria-hidden="true" onClick={() => setMobileExplorerOpen(false)} />
+        )}
+
+        {!isEmptyConversation && (
+          <StudioOverviewSidebar
+            ctl={ctl}
+            allTabsHidden={allTabsHidden}
+            collapseToggleBtn={collapseToggleBtn}
+            data={overviewData}
+            docked={!isOverviewMode}
+            hiddenInStage={!isOverviewMode && !isExplorerOpen}
+            mobileOverlayOpen={!isOverviewMode && isCompactViewport && mobileExplorerOpen}
+            activeSelection={activeStageSelection}
+            openSecs={ovOpenSecs}
+            setOpenSecs={setOvOpenSecs}
+            showAll={ovShowAll}
+            setShowAll={setOvShowAll}
+            hiddenSecs={ovHiddenSecs}
+            setHiddenSecs={setOvHiddenSecs}
+            onOpenContentLinkInViewer={(target) => {
+              setStageInspector(null)
+              setShowAppCode(false)
+              setMobileExplorerOpen(false)
+              openContentLinkTargetInViewer(ctl, target)
+            }}
+            onOpenReview={handleOpenReviewStage}
+            onSelectContentRow={(row) => selectContentTabInStage(row.key)}
+            onSelectLookmlFile={handleSelectLookmlFileFromOverview}
+            onOpenApiCall={handleOpenApiCallStage}
+            onCloseDockedExplorer={() => {
+              if (isCompactViewport) setMobileExplorerOpen(false)
+              else setExplorerRailOpen(false)
+            }}
+          />
+        )}
       </div>
     </main>
   )

@@ -327,19 +327,56 @@ export function loadLookmlSessionArtifact(
   })
 }
 
+export function renderLineNumberedPre(raw: string, diffMode = false, testId?: string): React.ReactElement {
+  const lines = String(raw || '').replace(/\n$/, '').split('\n')
+  return (
+    <pre className="dab-code-lines" data-testid={testId}>
+      {lines.map((line, i) => {
+        const isAdd = diffMode && line.startsWith('+') && !line.startsWith('+++')
+        const isDel = diffMode && line.startsWith('-') && !line.startsWith('---')
+        const isHunk = diffMode && (line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++'))
+        return (
+          <div key={i} className={`dab-code-line ${isAdd ? 'is-add' : isDel ? 'is-del' : isHunk ? 'is-hunk' : ''}`}>
+            <span className="dab-code-ln" aria-hidden="true">{i + 1}</span>
+            <span className="dab-code-txt">{line || ' '}</span>
+          </div>
+        )
+      })}
+    </pre>
+  )
+}
+
 export const LookmlPreviewPane: React.FC<{
   bundle: LookmlBundle | null
   hostUrl: string
   extensionSDK?: Partial<ExtensionSDK>
   canDeploy?: boolean
   initialDetailsOpen?: boolean
-}> = ({ bundle, hostUrl, extensionSDK, canDeploy = true, initialDetailsOpen = false }) => {
+  selectedFilePath?: string
+  onSelectFilePath?: (path: string) => void
+}> = ({
+  bundle,
+  hostUrl,
+  extensionSDK,
+  canDeploy = true,
+  initialDetailsOpen = false,
+  selectedFilePath,
+  onSelectFilePath,
+}) => {
   const [selectedFileIdx, setSelectedFileIdx] = useState(0)
   const [viewMode, setViewMode] = useState<'diff' | 'content'>('content')
   const [codeMenuOpen, setCodeMenuOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(initialDetailsOpen)
   const [copiedFile, setCopiedFile] = useState(false)
   const codeMenuRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!bundle?.files?.length) return
+    if (!selectedFilePath) { setSelectedFileIdx(0); return }
+    const clean = selectedFilePath.replace(/^\/+/, '')
+    const idx = bundle.files.findIndex((f) => f.path === selectedFilePath || f.path.replace(/^\/+/, '') === clean)
+    if (idx >= 0) setSelectedFileIdx(idx)
+  }, [bundle?.id, bundle?.project_id, bundle?.files, selectedFilePath])
 
   useEffect(() => {
     if (!codeMenuOpen) return
@@ -365,7 +402,8 @@ export const LookmlPreviewPane: React.FC<{
   }
 
   const files = bundle.files || []
-  const activeFile = files[selectedFileIdx] || files[0] || null
+  const safeFileIdx = selectedFileIdx < files.length ? selectedFileIdx : 0
+  const activeFile = files[safeFileIdx] || null
   const valPassed = bundle.validation ? bundle.validation.passed : true
   const valErrors = bundle.validation?.errors || []
   const fatalErrors = valErrors.filter((e) => e.severity === 'fatal')
@@ -387,30 +425,27 @@ export const LookmlPreviewPane: React.FC<{
     }
   }
 
+  const activeText = activeFile
+    ? viewMode === 'diff'
+      ? activeFile.diff || activeFile.content || ''
+      : activeFile.content ?? activeFile.diff ?? ''
+    : ''
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'auto', padding: 16, gap: 12 }}>
+    <div className="dab-lookml-pane dab-lookml-pane-unified">
       {fatalErrors.length > 0 && (
-        <StudioCard style={{ borderColor: 'var(--dab-danger-border)', background: 'var(--dab-danger-bg)' }}>
+        <div className="dab-lookml-fatal-banner">
           {fatalErrors.map((e, i) => (
-            <div key={i} style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--dab-danger-text)' }}>
+            <div key={i} style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 11.5, color: 'var(--dab-danger-text)' }}>
               {e.file_path ? `${e.file_path}${e.line_number ? `:${e.line_number}` : ''} — ` : ''}
               {e.message}
             </div>
           ))}
-        </StudioCard>
+        </div>
       )}
 
-      <StudioCard style={{ padding: 0, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 240 }}>
-        <div
-          className="dab-inspector-bar"
-          style={{
-            padding: '8px 12px',
-            gap: 8,
-            borderBottom: '1px solid var(--dab-border, #e2e8f0)',
-            background: 'var(--dab-surface-muted, #f8fafc)',
-            borderRadius: '7px 7px 0 0',
-          }}
-        >
+      <StudioCard className="dab-lookml-editor-shell">
+        <div className="dab-inspector-bar dab-lookml-subbar">
           <div
             className="dab-controls"
             data-testid="lookml-file-tabs"
@@ -424,9 +459,13 @@ export const LookmlPreviewPane: React.FC<{
                   key={f.path}
                   type="button"
                   data-testid={`lookml-file-tab-${idx}`}
-                  onClick={() => setSelectedFileIdx(idx)}
-                  className={idx === selectedFileIdx ? 'dab-btn-primary' : 'dab-btn-secondary'}
-                  style={{ fontFamily: 'monospace', fontSize: 11, flexShrink: 0 }}
+                  aria-current={idx === safeFileIdx ? 'true' : undefined}
+                  onClick={() => {
+                    setSelectedFileIdx(idx)
+                    onSelectFilePath?.(f.path)
+                  }}
+                  className={idx === safeFileIdx ? 'dab-btn-primary' : 'dab-btn-secondary'}
+                  style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 11, flexShrink: 0 }}
                 >
                   {viewMode === 'diff' ? (f.action === 'created' ? '+ ' : f.action === 'deleted' ? '- ' : 'Δ ') : ''}
                   {f.path}
@@ -434,12 +473,34 @@ export const LookmlPreviewPane: React.FC<{
               ))
             )}
           </div>
+          {activeFile && (
+            <div className="dab-seg-group" role="group" aria-label="LookML view mode">
+              <button
+                type="button"
+                data-testid="lookml-mode-file-btn"
+                aria-pressed={viewMode === 'content'}
+                className={`dab-seg-btn ${viewMode === 'content' ? 'active' : ''}`}
+                onClick={() => setViewMode('content')}
+              >
+                File
+              </button>
+              <button
+                type="button"
+                data-testid="lookml-mode-diff-btn"
+                aria-pressed={viewMode === 'diff'}
+                className={`dab-seg-btn ${viewMode === 'diff' ? 'active' : ''}`}
+                onClick={() => setViewMode('diff')}
+              >
+                Diff
+              </button>
+            </div>
+          )}
           {projectIdePath && (
             <StudioButton
               variant="secondary"
               testId="lookml-toolbar-open-ide-btn"
               onClick={() => openLink(projectIdePath)}
-              style={{ padding: '0 8px', fontSize: 11 }}
+              style={{ padding: '0 6px', fontSize: 11 }}
             >
               <span>Open in IDE</span>
               <ExternalLink size={12} strokeWidth={1.75} aria-hidden="true" />
@@ -493,24 +554,7 @@ export const LookmlPreviewPane: React.FC<{
             )}
           </div>
         </div>
-        <pre style={{ margin: 0, padding: 12, flex: 1, overflow: 'auto', background: '#0f172a', color: '#e2e8f0', fontSize: 12, borderRadius: '0 0 7px 7px' }}>
-          {activeFile
-            ? (viewMode === 'diff' ? activeFile.diff || activeFile.content || '' : activeFile.content ?? activeFile.diff ?? '')
-                .split('\n')
-                .map((line, i) => {
-                  const isAdd = viewMode === 'diff' && line.startsWith('+') && !line.startsWith('+++')
-                  const isDel = viewMode === 'diff' && line.startsWith('-') && !line.startsWith('---')
-                  return (
-                    <div
-                      key={i}
-                      style={{ color: isAdd ? '#4ade80' : isDel ? '#f87171' : viewMode === 'diff' && line.startsWith('@@') ? '#38bdf8' : '#e2e8f0' }}
-                    >
-                      {line}
-                    </div>
-                  )
-                })
-            : 'No .lkml file selected.'}
-        </pre>
+        {activeFile ? renderLineNumberedPre(activeText, viewMode === 'diff', 'lookml-code-pre') : <pre className="dab-code-lines" data-testid="lookml-code-pre">No .lkml file selected.</pre>}
       </StudioCard>
 
       <StudioModal

@@ -136,7 +136,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "chatbar_error_banner",
@@ -161,7 +161,7 @@
     "height": 416,
     "clipSelector": ".dab-modal",
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "conversational_analytics",
