@@ -1153,23 +1153,23 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(savedList[0].content?.agentId).toBe('ca_agent_bq_ops')
   })
 
-  test('13. pins LKR_DEV_CLI_VERSION=0.0.66, bootstraps uv via pip --break-system-packages + uv tool install in new environments, and configures Monday/Thursday PyPI auto-PR workflow', async () => {
+  test('13. pins LKR_DEV_CLI_VERSION=0.0.67, bootstraps uv via pip --break-system-packages + uv tool install in new environments, and configures Monday/Thursday PyPI auto-PR workflow', async () => {
     const repoRoot = path.resolve(__dirname, '../..')
     const versionTxt = readFileSync(path.join(repoRoot, 'lkr-dev-cli-version.txt'), 'utf8').trim()
-    expect(LKR_DEV_CLI_VERSION).toBe('0.0.66')
+    expect(LKR_DEV_CLI_VERSION).toBe('0.0.67')
     expect(versionTxt).toBe(LKR_DEV_CLI_VERSION)
-    expect(LKR_DEV_CLI_SPEC).toBe('lkr-dev-cli[tools,code-mode,parse]==0.0.66')
+    expect(LKR_DEV_CLI_SPEC).toBe('lkr-dev-cli[tools,code-mode,parse]==0.0.67')
 
     expect(BOOTSTRAP_SANDBOX_SH).toContain('pip install --break-system-packages --quiet uv')
     expect(BOOTSTRAP_SANDBOX_SH).toContain(
-      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.66"'
+      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.67"'
     )
     expect(BOOTSTRAP_LOOKML_PY).toContain('"install", "--break-system-packages", "--quiet", "uv"')
     expect(BOOTSTRAP_LOOKML_PY).toContain('"UV_TOOL_BIN_DIR": "/usr/local/bin"')
     expect(BOOTSTRAP_LOOKML_PY).toContain('["uv", "tool", "install", "--force", "--quiet", pkg_spec]')
     expect(AGENTS_MD).toContain('pip install --break-system-packages --quiet uv')
     expect(AGENTS_MD).toContain(
-      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.66"'
+      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.67"'
     )
 
     const workflowYml = readFileSync(
@@ -1212,7 +1212,7 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
     expect(postedBodies[0].input?.[0]?.text).toContain('python3 /workspace/bootstrap_lookml.py cli')
     expect(postedBodies[0].input?.[0]?.text).toContain('pip install --break-system-packages --quiet uv')
     expect(postedBodies[0].input?.[0]?.text).toContain(
-      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.66"'
+      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.67"'
     )
     expect(
       typeof postedBodies[0].environment === 'object' ? postedBodies[0].environment.sources : []
@@ -4411,7 +4411,7 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
   })
 
   test('32. Issue #104: provides CODEMODE_CDN_URL, synchronous LkrCodeMode tool & operation classification, and ensureCodeModeLoaded() runtime loader', async () => {
-    expect(CODEMODE_CDN_URL).toBe('https://cdn.lkr.dev/cli/codemode/0.0.66/codemode.js')
+    expect(CODEMODE_CDN_URL).toBe('https://cdn.lkr.dev/cli/codemode/0.0.67/codemode.js')
     expect(CODEMODE_CDN_URL).toContain(`/${LKR_DEV_CLI_VERSION}/codemode.js`)
     const preCommitHook = readFileSync(path.resolve(__dirname, '../../.githooks/pre-commit'), 'utf8')
     expect(preCommitHook).toContain('lkr-dev-cli-version.txt')
@@ -5240,20 +5240,12 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
       expect(LOOKER_PROJECT_ONBOARDING_SKILL_MD).toContain(token)
     }
     const wsSources = buildWorkspaceSources({ schemaMarkdown: '# Schema' })
-    for (const relPath of [
-      'agentic-lookml/SKILL.md',
-      'agentic-lookml/references/01-simple-single-table.md',
-      'agentic-lookml-workflow/SKILL.md',
-      'agentic-lookml-workflow/scripts/pre_gate.py',
-      'looker-field-profiler/SKILL.md',
-      'lookml-field-curation/SKILL.md',
-      'lookml-field-curation/scripts/profile_string_fields.py',
-      'generate-view-from-table/SKILL.md',
-      'generate-view-from-table/scripts/generate_bronze_view.py',
-      'lookml-tests/SKILL.md',
-      'lookml-view/references/derived_table.md',
-    ]) {
+    const bundledEntries = Object.entries(SANDBOX_AGENT_SKILL_FILES)
+    expect(bundledEntries.length).toBe(136)
+    for (const [relPath, bundledContent] of bundledEntries) {
+      expect(relPath).not.toMatch(/^(issue-authoring|studio-conversation-debugger|studio-design-system)\//)
       const diskContent = readFileSync(path.join(repoRoot, '.agents/skills', relPath), 'utf8')
+      expect(bundledContent).toBe(diskContent)
       expect(wsSources.find((s) => s.target === `/workspace/skills/${relPath}`)?.content).toBe(diskContent)
       expect(resolveBuiltinWorkspaceFileContent(`/workspace/skills/${relPath}`)).toBe(diskContent)
       expect(diskContent).not.toMatch(/thelook|argolis_scratch|default_bigquery_connection|demowest|looker-private-demo/i)
@@ -7472,7 +7464,7 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
               status: 'completed',
               output_text: '<USE_CASE>lookml</USE_CASE>\nCompleted field curation on `thelook_proj`.',
               usage: { input_tokens: 200, output_tokens: 45, thought_tokens: 20 },
-              steps: [{ id: 'ce_2', type: 'code_execution', command: 'lkr --version', stdout: '0.0.66' }],
+              steps: [{ id: 'ce_2', type: 'code_execution', command: 'lkr --version', stdout: '0.0.67' }],
             }),
           }
         },
@@ -7648,7 +7640,7 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
                   previous_interaction_id: 'int_171_inc1',
                   status: 'completed',
                   input: [{ type: 'text', text: 'Continue and complete the current request.' }],
-                  steps: [{ id: 'ce_2', type: 'code_execution', command: 'lkr --version', stdout: '0.0.66' }],
+                  steps: [{ id: 'ce_2', type: 'code_execution', command: 'lkr --version', stdout: '0.0.67' }],
                 }
               : {
                   id: 'int_171_inc1',
@@ -7666,7 +7658,7 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
 
     // 3. Persist lkr-dev-cli under /workspace/.uv_tools + re-symlink /usr/local/bin/lkr after hibernation (Python + Shell + dangling shebang OSError fallback)
     expect(BOOTSTRAP_SANDBOX_SH).toContain(
-      'UV_TOOL_DIR=/workspace/.uv_tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.66"'
+      'UV_TOOL_DIR=/workspace/.uv_tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.67"'
     )
     expect(BOOTSTRAP_SANDBOX_SH).toContain('UV_PYTHON_INSTALL_DIR=/workspace/.uv_python')
     expect(BOOTSTRAP_SANDBOX_SH).toContain('ln -sf /workspace/.uv_tools/lkr-dev-cli/bin/lkr /usr/local/bin/lkr')

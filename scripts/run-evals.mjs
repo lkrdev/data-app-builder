@@ -26,7 +26,6 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '..')
 const require = createRequire(import.meta.url)
-const LkrCodeMode = require(path.join(repoRoot, 'src/vendor/codemode.js'))
 
 const babel = require('@babel/core')
 const Module = require('node:module')
@@ -44,6 +43,7 @@ for (const ext of ['.ts', '.tsx']) {
     mod._compile(out.code, filename)
   }
 }
+const { LkrCodeMode } = require(path.join(repoRoot, 'src/lkrCliBridge.ts'))
 const { fetchConversationSandboxDebugMarkdown } = require(path.join(repoRoot, 'src/antigravity.ts'))
 
 function resolveLiveGeminiAuth() {
@@ -85,17 +85,6 @@ function extractTsTemplateConstant(source, constName) {
   assert(match, `Could not extract ${constName}`)
   return match[1].replace(/\\`/g, '`').replace(/\\\$\{/g, '${').replace(/\\\\/g, '\\')
 }
-
-function extractJoinedPyPreamble(source, constName) {
-  const re = new RegExp(`const ${constName} = \\[([\\s\\S]*?)\\]\\.join\\('\\\\n'\\)`, 'm')
-  const match = source.match(re)
-  assert(match, `Could not extract ${constName}`)
-  return Function(`"use strict"; return [${match[1]}].join("\\n")`)()
-}
-
-const SEARCH_AGENTS_PREAMBLE_PY = extractJoinedPyPreamble(lkrCliBridgeTs, 'SEARCH_AGENTS_PREAMBLE_PY')
-const FORMAT_CONTENT_INVENTORY_PREAMBLE_PY = extractJoinedPyPreamble(lkrCliBridgeTs, 'FORMAT_CONTENT_INVENTORY_PREAMBLE_PY')
-const DATE_HELPER_PREAMBLE_PY = extractJoinedPyPreamble(lkrCliBridgeTs, 'DATE_HELPER_PREAMBLE_PY')
 
 async function eval01ContentFolderInventory() {
   const mockFolders = [
@@ -141,7 +130,7 @@ async function eval01ContentFolderInventory() {
 
   // Run short list (<= 5 items in 1 folder) and long list (10 items across 2 folders) in real Monty WASM
   const wasmResRaw = await LkrCodeMode.runPythonCode({
-    code: `${FORMAT_CONTENT_INVENTORY_PREAMBLE_PY}
+    code: `
 me_user = me()
 short_inv = format_content_inventory([{"id": "42", "name": "Bryan Personal Folder", "dashboards": [{"id": "101", "title": "Executive Revenue Pulse"}, {"id": "102", "title": "Customer Retention Cohort"}], "looks": [{"id": "201", "title": "Top 50 SKU Velocity"}]}])
 long_inv = format_content_inventory(folders_data)
@@ -234,13 +223,13 @@ async function eval02CaVsCodemodeRouting() {
   }
 
   // Case A & B: Run search_agents() and sdk.search_agents() inside Monty WASM
-  const rawCode = `${SEARCH_AGENTS_PREAMBLE_PY}
+  const rawCode = `
 all_agents = search_agents()
-ecom_hits = search_agents(query="margin")
+ecom_hits = sdk.search_agents(query="margin")
 no_hits = search_agents(query="payroll")
 fallback_rows = run_inline_query("json", {"model": "thelook", "view": "order_items", "fields": ["order_items.total_sale_price"], "limit": "5"}) if len(no_hits) == 0 else []
 return {"count": len(all_agents), "ecom_id": ecom_hits[0]["id"], "gq_count": len(ecom_hits[0]["golden_queries"]), "no_hits": len(no_hits), "fallback_rows": len(fallback_rows)}
-`.replace(/\bsdk\.(search_agents|agents_search)\s*\(/g, '$1(')
+`
 
   const wasmOut = JSON.parse(
     await LkrCodeMode.runPythonCode({
@@ -417,7 +406,7 @@ async function eval06DataInvestigatorKda() {
 
     const wasmOut = JSON.parse(
       await LkrCodeMode.runPythonCode({
-        code: `${DATE_HELPER_PREAMBLE_PY}
+        code: `
 fixed_window = to_fixed_date_range("last 30 days", "2026-03-30")
 kda_res = run_key_driver_analysis({
   "data_source": {"model_name": "thelook", "explore_name": "order_items"},
