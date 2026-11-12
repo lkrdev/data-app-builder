@@ -22,7 +22,11 @@ from pathlib import Path
 # imported as part of a package, so the sibling shared helper is not importable
 # until its directory is on the path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from version_utils import parse_version  # noqa: E402
+from version_utils import (  # noqa: E402
+    CANONICAL_TOOLKIT_URL,
+    normalize_toolkit_url,
+    parse_version,
+)
 
 
 SCHEMA_VERSION = 1
@@ -30,7 +34,7 @@ CACHE_FILENAME = ".update-check.json"
 DEFAULT_TTL_SECONDS = 86400  # 24 hours
 RETRY_TTL_SECONDS = 3600  # 1 hour retry on offline/network failure
 DEFAULT_TIMEOUT_SECONDS = 5.0
-DEFAULT_BASE_URL = "https://dl.google.com/looker-data-apps"
+DEFAULT_BASE_URL = CANONICAL_TOOLKIT_URL
 POINTER_FILENAME = "latest-version.txt"
 # The release pointer is a single short version string. Anything larger is either a
 # misconfigured URL or a hostile server; read a bounded prefix rather than the stream.
@@ -54,9 +58,13 @@ def find_root(start):
         if parents[3].name != "dist":
             return parents[3]
 
-    # 2. Search upwards for data-apps-config.json or looker-config.json (customer install)
+    # 2. Search upwards for data-apps-config.json, looker-config.json, or canvas-config.json (customer install)
     for candidate in [cur, *cur.parents]:
-        if (candidate / "data-apps-config.json").is_file() or (candidate / "looker-config.json").is_file():
+        if (
+            (candidate / "data-apps-config.json").is_file()
+            or (candidate / "looker-config.json").is_file()
+            or (candidate / "canvas-config.json").is_file()
+        ):
             return candidate
 
     # 3. For customer installations without config yet, search upwards for VERSION
@@ -88,12 +96,18 @@ def load_config(root: Path, config_arg: str = None) -> dict:
     candidates = []
     if config_arg:
         candidates.append(Path(config_arg))
-    candidates.extend([root / "data-apps-config.json", root / "looker-config.json"])
+    candidates.extend([
+        root / "data-apps-config.json",
+        root / "looker-config.json",
+        root / "canvas-config.json",
+    ])
     for p in candidates:
         if p.is_file():
             try:
-                with open(p, encoding="utf-8") as f:
-                    return json.load(f)
+                with open(p, encoding="utf-8-sig") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        return data
             except Exception:
                 pass
     return {}
@@ -148,12 +162,22 @@ def get_version_url(cfg: dict, override: str = None) -> str:
     env_val = os.environ.get("DATA_APPS_VERSION_URL")
     if env_val:
         return env_val
+    env_shared_base = os.environ.get("DATA_APPS_SHARED_BASE")
+    if env_shared_base and env_shared_base.strip():
+        return f"{env_shared_base.strip().rstrip('/')}/{POINTER_FILENAME}"
+    env_base_url = (
+        os.environ.get("DATA_APPS_BASE_URL")
+        or os.environ.get("CANVAS_BASE_URL")
+        or ""
+    ).strip().rstrip("/")
+    if env_base_url:
+        base = re.sub(r"/versions/[^/]+$", "", env_base_url).rstrip("/")
+        return f"{base}/{POINTER_FILENAME}"
     if cfg.get("version_url"):
         return cfg["version_url"]
-    base = str(cfg.get("toolkit_url") or "").rstrip("/")
-    if base:
-        return f"{base}/{POINTER_FILENAME}"
-    return f"{DEFAULT_BASE_URL}/{POINTER_FILENAME}"
+    raw_base = cfg.get("toolkit_url") or cfg.get("shared_base_url")
+    base = normalize_toolkit_url(raw_base, DEFAULT_BASE_URL)
+    return f"{base}/{POINTER_FILENAME}"
 
 
 
@@ -175,7 +199,7 @@ def read_cache(cache_path: Path) -> dict:
     if not cache_path.is_file():
         return {}
     try:
-        with open(cache_path, encoding="utf-8") as f:
+        with open(cache_path, encoding="utf-8-sig") as f:
             data = json.load(f)
         if isinstance(data, dict):
             return data

@@ -1643,6 +1643,10 @@ app-grid .ag-theme-quartz-dark .ag-cell-focus {
   transition: opacity 0.15s ease;
 }
 
+[hide-actions] .da-widget-actions {
+  display: none !important;
+}
+
 app-kpi:hover .da-widget-actions,
 app-kpi:focus-within .da-widget-actions,
 .da-kpi-wrap:hover .da-widget-actions,

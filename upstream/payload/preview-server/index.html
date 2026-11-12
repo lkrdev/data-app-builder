@@ -5,28 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Data Apps Gallery</title>
 <link rel="icon" type="image/svg+xml" href="/preview-server/favicon.svg">
-<link rel="stylesheet" href="../runtime/data-app.css?v=2">
-
-
-<!-- AG Grid Community (vendored, no third-party CDN) -->
-<link rel="stylesheet" href="../vendor/ag-grid/31.3.4/ag-grid.css">
-<link rel="stylesheet" href="../vendor/ag-grid/31.3.4/ag-theme-quartz.css">
-<script src="../vendor/ag-grid/31.3.4/ag-grid-community.min.js"></script>
-
-<!-- Highcharts (vendored) -->
-<script src="../vendor/highcharts/11.4.8/highcharts.js"></script>
-<script src="../vendor/highcharts/11.4.8/highcharts-more.js"></script>
-<script src="../vendor/highcharts/11.4.8/highcharts-solid-gauge.js"></script>
-<script src="../vendor/highcharts/11.4.8/highcharts-funnel.js"></script>
-<script src="../vendor/highcharts/11.4.8/highcharts-treemap.js"></script>
+<script type="importmap">{"imports": {"/runtime/": "/runtime/", "/vendor/": "https://www.gstatic.com/looker-data-apps/vendor/"}}</script>
 </head>
 <body>
 
 <preview-host></preview-host>
 
 <script type="module">
-  import './preview-host.js';
-
   // Install local dev server queryRunner for standalone preview environment
   window.DataApps = window.DataApps || {};
   window.DataApps.queryRunner = async (rawQuery, signal) => {
@@ -59,6 +44,29 @@
     }
     return r.json();
   };
+
+  import('/preview-server/preview-host.js').catch((err) => {
+    console.error('Failed to load preview host:', err);
+    const rawMsg = (err && (err.stack || err.message)) ? String(err.stack || err.message) : String(err);
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const hostEl = document.querySelector('preview-host') || document.body;
+    const card = document.createElement('div');
+    card.className = 'preview-load-error';
+    card.style.cssText = 'max-width:720px;margin:48px auto;padding:24px;border:1px solid #fecaca;border-radius:12px;background:#fef2f2;color:#991b1b;font-family:system-ui,sans-serif;';
+    card.innerHTML = '<h3>Error Loading Preview</h3>'
+      + '<p>Failed to load preview host libraries from the assets host. Check your internet connection.</p>'
+      + '<pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;">' + esc(rawMsg) + '</pre>';
+    hostEl.appendChild(card);
+    let diag = document.getElementById('preview-diagnostics');
+    if (!diag) {
+      diag = document.createElement('div');
+      diag.id = 'preview-diagnostics';
+      diag.style.display = 'none';
+      document.body.appendChild(diag);
+    }
+    diag.setAttribute('data-error-count', '1');
+    diag.textContent = JSON.stringify([{ id: 1, kind: 'Preview Bootstrap Error', message: rawMsg }]);
+  });
 </script>
 </body>
 </html>

@@ -9,12 +9,18 @@ End-to-end: from zero to a Data App rendering in your Looker instance. About 10 
   Find or create one at `<your-looker>/admin/users` → pick a user → **Edit API keys**.
 - **An AI coding agent** (like Antigravity, Claude Code, or Cursor) installed and authenticated.
 - **Python 3.9+** (`python3`, `python`, or `py -3` on `PATH`).
-- macOS, Linux, or Windows (via Git Bash or WSL).
+- macOS, Linux, or Windows (native cmd.exe, PowerShell, Git Bash, or WSL).
 
 ## Step 1 — Install
 
+**macOS / Linux:**
 ```bash
 bash <(curl -fsSL https://dl.google.com/looker-data-apps/install.sh)
+```
+
+**Windows (`cmd.exe` / PowerShell) or cross-platform Python:**
+```cmd
+curl.exe -fsSL https://dl.google.com/looker-data-apps/install.py | python
 ```
 
 This downloads the latest curated payload into `~/looker-data-apps`
@@ -22,7 +28,7 @@ This downloads the latest curated payload into `~/looker-data-apps`
 checksum against the one published next to it, and immediately runs
 the bootstrap walkthrough.
 
-Re-running the installer later is the upgrade path: your
+Re-running the installer later (`python3 install.py --upgrade` or re-running the install command) is the upgrade path: your
 `data-apps-config.json` is preserved, and bootstrap shows each existing config
 with a keep/re-enter prompt instead of asking everything again.
 
@@ -39,7 +45,9 @@ You'll be prompted for:
 1. **Looker instance URL** — e.g. `https://mycompany.looker.com`. Paste
    it straight from your browser; any path is stripped for you.
 2. **Looker API client_id and client_secret** — written to
-   `data-apps-config.json` at the repo root, with owner-only permissions.
+   `data-apps-config.json` at the repo root, with owner-only permissions
+   (`0600` on macOS/Linux; on Windows, access is governed by your user profile
+   directory's NTFS ACLs).
    The toolkit ships no `.gitignore`; if you keep the installation in a git
    repository, exclude `data-apps-config.json` and `backups/` yourself.
 3. **Looker folder ID** — where new dashboards land when you publish.
@@ -104,7 +112,7 @@ gallery's two preview modes and when to use each.
   is a server-side fault on the instance, not a config problem; its
   logs will have the exception.
 - **`data-apps-config.json` has wrong creds and I can't get past the
-  install step** — re-run `bootstrap.sh`; it shows the stored values
+  install step** — re-run `python3 scripts/bootstrap.py` (or `python scripts\bootstrap.py` on Windows); it shows the stored values
   and asks whether to keep or re-enter them.
 - **Publishing fails with an `extension_id` error** — the Data App
   extension the publish just created has gone missing. Re-run

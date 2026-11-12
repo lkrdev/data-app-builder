@@ -233,7 +233,7 @@ def main():
     if not (base and cid and sec):
         sys.exit("error: config is missing base_url/client_id/client_secret.\n"
                  "  Populate it, set LOOKERSDK_BASE_URL / LOOKERSDK_CLIENT_ID /\n"
-                 "  LOOKERSDK_CLIENT_SECRET, or re-run scripts/bootstrap.sh.")
+                 "  LOOKERSDK_CLIENT_SECRET, or re-run python3 scripts/bootstrap.py (or scripts/bootstrap.sh).")
 
     print(f"target: {base}")
     print()

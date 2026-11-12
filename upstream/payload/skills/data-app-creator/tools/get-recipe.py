@@ -17,6 +17,9 @@ import sys
 from pathlib import Path
 
 
+DEFAULT_LINE_BUDGET = 250
+
+
 def find_recipes_dir() -> Path | None:
     candidates = [
         Path(__file__).resolve().parent.parent / "recipes",
@@ -39,6 +42,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Fetch full Data App recipe documentation for one or more patterns.")
     parser.add_argument("recipes", nargs="*", help="Recipe names or keywords (e.g. line-trend, filter-dropdown)")
     parser.add_argument("--list", "-l", action="store_true", help="List all available recipes")
+    parser.add_argument(
+        "--max-lines",
+        type=int,
+        default=DEFAULT_LINE_BUDGET,
+        help=f"Maximum output line budget across recipes (default: {DEFAULT_LINE_BUDGET})",
+    )
     args = parser.parse_args()
 
     rdir = find_recipes_dir()
@@ -63,8 +72,8 @@ def main() -> int:
             print(f"  • {name:<26} {first_line}")
         return 0
 
-    found_any = False
-    printed: set[Path] = set()
+    matched_files: list[Path] = []
+    seen: set[Path] = set()
     for req in args.recipes:
         req_norm = req.lower().replace(".md", "").strip()
         matches = []
@@ -81,16 +90,41 @@ def main() -> int:
             continue
 
         for m in matches:
-            if m in printed:
-                continue
-            printed.add(m)
-            found_any = True
-            content = m.read_text(encoding="utf-8")
+            if m not in seen:
+                seen.add(m)
+                matched_files.append(m)
+
+    if not matched_files:
+        return 1
+
+    deferred: list[Path] = []
+    total_lines = 0
+
+    for i, m in enumerate(matched_files):
+        content = m.read_text(encoding="utf-8")
+        recipe_lines = len(content.splitlines())
+        if i == 0:
+            total_lines += recipe_lines
             print(f"=== Recipe: {m.stem} ===")
             print(content.strip())
             print()
+        elif not deferred and (total_lines + recipe_lines <= args.max_lines):
+            total_lines += recipe_lines
+            print(f"=== Recipe: {m.stem} ===")
+            print(content.strip())
+            print()
+        else:
+            deferred.append(m)
 
-    return 0 if found_any else 1
+    if deferred:
+        print("--- Deferred recipes (output limit reached) ---")
+        print("The following requested recipes were held back to stay within the output limit:")
+        for d in deferred:
+            print(f"  • {d.stem}")
+        print()
+        print("Fetch them individually with get-recipe.py <name> or read the recipe file directly.")
+
+    return 0
 
 
 if __name__ == "__main__":

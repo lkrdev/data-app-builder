@@ -112,7 +112,9 @@ const RUNTIME_BASE = new URL('./', import.meta.url).href;
 // directory above the runtime, not beside it. Keeping the reference relative
 // means the same bytes resolve correctly from the local preview server, from
 // GCS, and from gstatic, none of which share a hostname.
-const VENDOR_BASE = new URL('../vendor/', import.meta.url).href;
+const VENDOR_BASE = typeof import.meta.resolve === 'function'
+  ? import.meta.resolve('../vendor/')
+  : new URL('../vendor/', import.meta.url).href;
 
 const VENDOR_CSS = [
   'ag-grid/31.3.4/ag-grid.css',
@@ -142,12 +144,39 @@ const VENDOR_JS_PARALLEL = [
  * @return {Promise<{ok: boolean, href: string, error?: Error}>}
  */
 export function loadCSS(href) {
+  if (typeof document !== 'undefined' && document.head && typeof document.head.querySelectorAll === 'function') {
+    const existing = Array.from(document.head.querySelectorAll('link[rel="stylesheet"]')).find(
+      (el) => el.href === href || (typeof el.getAttribute === 'function' && el.getAttribute('href') === href)
+    );
+    if (existing) {
+      if (existing.dataset && existing.dataset.daLoaded === '1') {
+        return Promise.resolve({ ok: true, href });
+      }
+      if (typeof existing.addEventListener === 'function') {
+        return new Promise((resolve) => {
+          existing.addEventListener('load', () => resolve({ ok: true, href }), { once: true });
+          existing.addEventListener('error', () => {
+            const err = new Error('failed to load CSS: ' + href);
+            resolve({ ok: false, href, error: err });
+          }, { once: true });
+        });
+      }
+    }
+  }
   return new Promise((resolve) => {
     const link = document.createElement('link');
     link.rel = 'stylesheet';
     link.href = href;
-    link.onload = () => resolve({ ok: true, href });
+    link.onload = () => {
+      if (link.dataset) link.dataset.daLoaded = '1';
+      resolve({ ok: true, href });
+    };
     link.onerror = () => {
+      if (typeof link.remove === 'function') {
+        link.remove();
+      } else if (link.parentNode && typeof link.parentNode.removeChild === 'function') {
+        link.parentNode.removeChild(link);
+      }
       const err = new Error('failed to load CSS: ' + href);
       reportRuntimeError('loadCSS', err, { href });
       resolve({ ok: false, href, error: err });
@@ -168,11 +197,38 @@ export function loadCSS(href) {
  * @return {Promise<{ok: boolean, src: string, error?: Error}>}
  */
 export function loadJS(src) {
+  if (typeof document !== 'undefined' && document.head && typeof document.head.querySelectorAll === 'function') {
+    const existing = Array.from(document.head.querySelectorAll('script')).find(
+      (el) => el.src === src || (typeof el.getAttribute === 'function' && el.getAttribute('src') === src)
+    );
+    if (existing) {
+      if (existing.dataset && existing.dataset.daLoaded === '1') {
+        return Promise.resolve({ ok: true, src });
+      }
+      if (typeof existing.addEventListener === 'function') {
+        return new Promise((resolve) => {
+          existing.addEventListener('load', () => resolve({ ok: true, src }), { once: true });
+          existing.addEventListener('error', () => {
+            const err = new Error('failed to load JS: ' + src);
+            resolve({ ok: false, src, error: err });
+          }, { once: true });
+        });
+      }
+    }
+  }
   return new Promise((resolve) => {
     const el = document.createElement('script');
     el.src = src;
-    el.onload = () => resolve({ ok: true, src });
+    el.onload = () => {
+      if (el.dataset) el.dataset.daLoaded = '1';
+      resolve({ ok: true, src });
+    };
     el.onerror = () => {
+      if (typeof el.remove === 'function') {
+        el.remove();
+      } else if (el.parentNode && typeof el.parentNode.removeChild === 'function') {
+        el.parentNode.removeChild(el);
+      }
       const err = new Error('failed to load JS: ' + src);
       reportRuntimeError('loadJS', err, { src });
       resolve({ ok: false, src, error: err });
@@ -728,12 +784,14 @@ async function bootstrapLookerTile() {
       tileHostDataChangedCallback: (newData) => {
         latestTileHostData = newData;
         _setWidgetActions(newData?.widgetActions);
+        _setDataPointActions(newData?.dataPointActions, Boolean(newData?.isDashboardEditing));
         const elementId = newData && (newData.elementId || newData.tileId);
         if (firstTileResolve && elementId) {
           firstTileResolve(newData);
           firstTileResolve = null;
         }
         applyIfReady();
+        _handleTileHostRefresh(newData);
       },
     });
     _extensionSDK = extensionSDK;
@@ -758,13 +816,7 @@ async function bootstrapLookerTile() {
 
   const coreSDK = sdkModule.LookerExtensionSDK.createClient(extensionSDK);
 
-  window.DataApps.queryRunner = async (rawQuery, signal) => {
-    const normalized = normalizeQueryPayload(rawQuery);
-    return await coreSDK.ok(coreSDK.run_inline_query({
-      result_format: 'json',
-      body: { ...normalized, view: normalized.view || normalized.explore },
-    }));
-  };
+  window.DataApps.queryRunner = createTileQueryRunner(coreSDK);
 
   // Cross-filtering goes through the tile SDK and comes back via
   // tileHostDataChangedCallback. There is no local fallback, so a missing
@@ -1370,6 +1422,8 @@ export class DataApp extends LitElement {
      * section). Absent → default theme. See applyAppLayout().
      */
     appLayout: { type: Object, attribute: false },
+    /** When true, suppresses host-offered widget action buttons across all widgets in the app. */
+    hideActions: { type: Boolean, attribute: 'hide-actions', reflect: true },
   };
 
   constructor() {
@@ -1510,19 +1564,35 @@ export class DataApp extends LitElement {
    * Refreshes every KPI, chart, and grid in this Data App.
    * Triggered by the global 'R' shortcut, filter changes, or manual invocations.
    */
-  refreshAll() {
-    const widgets = findAppWidgets(this);
-    widgets.forEach(c => {
-      if (typeof c.refresh === 'function') {
-        try { c.refresh(); } catch {}
-      } else if (typeof c.fetchData === 'function') {
-        try { c.fetchData(); } catch {}
+  refreshAll(options) {
+    const restoreRefreshCache = typeof options?.cache === 'boolean'
+      ? _pushRefreshCache(options.cache)
+      : null;
+    let onRefreshResult;
+    try {
+      const widgets = findAppWidgets(this);
+      widgets.forEach(c => {
+        if (typeof c.refresh === 'function') {
+          try { options !== undefined ? c.refresh(options) : c.refresh(); } catch {}
+        } else if (typeof c.fetchData === 'function') {
+          try { options !== undefined ? c.fetchData(options) : c.fetchData(); } catch {}
+        }
+      });
+      if (typeof this.onRefresh === 'function') {
+        try {
+          onRefreshResult = options !== undefined ? this.onRefresh(options) : this.onRefresh();
+        } catch {}
       }
-    });
-    if (typeof this.onRefresh === 'function') {
-      try { this.onRefresh(); } catch {}
+      this.requestUpdate();
+    } finally {
+      if (restoreRefreshCache) {
+        if (onRefreshResult && typeof onRefreshResult.then === 'function') {
+          onRefreshResult.then(restoreRefreshCache, restoreRefreshCache);
+        } else {
+          restoreRefreshCache();
+        }
+      }
     }
-    this.requestUpdate();
   }
 
   setCrossFilter(field, value, originElement) {
@@ -1710,7 +1780,11 @@ export class DataApp extends LitElement {
 
   _resolveToolkitVersion(runtimeUrl = RUNTIME_BASE) {
     const match = typeof runtimeUrl === 'string' ? runtimeUrl.match(/\/versions\/([^/]+)\//) : null;
-    return match ? match[1].trim().replace(/^v/i, '') : '';
+    if (match) return match[1].trim().replace(/^v/i, '');
+    const raw =
+      (typeof window !== 'undefined' && window.__lookerDataAppMeta?.toolkitVersion) ||
+      '';
+    return String(raw || '').trim().replace(/^v/i, '');
   }
 
   _resolveLastUpdated() {
@@ -1723,9 +1797,9 @@ export class DataApp extends LitElement {
   _formatStampText(runtimeUrl = RUNTIME_BASE) {
     const ver = this._resolveToolkitVersion(runtimeUrl);
     const upd = this._resolveLastUpdated();
-    const verPart = ver ? ` v${ver}` : '';
-    const datePart = upd ? ` - last update ${upd}` : ' - local dev';
-    return `powered by Looker Data Apps${verPart}${datePart}`;
+    const verPart = ver ? `v${ver}` : '';
+    const datePart = upd ? `last update ${upd}` : 'local dev';
+    return [verPart, datePart].filter(Boolean).join(' - ');
   }
 
   _syncStamp() {
@@ -1794,6 +1868,23 @@ export class DataApp extends LitElement {
     try {
       this._syncStamp();
     } catch (_) {}
+    const hideActionsChanged = Boolean(
+      changedProps && typeof changedProps.has === 'function' && changedProps.has('hideActions')
+    );
+    const owned = new Set(findAppWidgets(this));
+    for (const w of _themeAware) {
+      if (typeof w._hostApp === 'function' && w._hostApp() === this) {
+        owned.add(w);
+      }
+    }
+    for (const w of owned) {
+      if (typeof w._isWidgetActionsHidden !== 'function') continue;
+      if (hideActionsChanged ||
+          (w._renderedActionsHidden !== undefined &&
+           w._isWidgetActionsHidden() !== w._renderedActionsHidden)) {
+        w.requestUpdate?.();
+      }
+    }
   }
 
   async _initLookerContext() {
@@ -1815,7 +1906,9 @@ export class DataApp extends LitElement {
    * @param {Object} [query.filters] - Map of filter expressions (supports substrings `%...%`, measure bounds `<0.60`, dates).
    * @param {string[]} [query.sorts] - Sort directives (e.g. `['orders.created_date desc']`).
    * @param {string|number} [query.limit='500'] - Maximum rows to return.
-   * @param {AbortSignal} [signal] - Optional AbortSignal for request cancellation.
+   * @param {AbortSignal|Object} [signal] - Optional AbortSignal for request cancellation, or options object when `options` is omitted.
+   * @param {Object} [options] - Optional execution options.
+   * @param {boolean} [options.cache] - Pass `false` to bypass Looker query cache.
    * @return {Promise<Array<Object>>} Resolves to array of raw Looker row dictionaries with dotted LookML keys.
    * 
    * @example
@@ -1828,8 +1921,13 @@ export class DataApp extends LitElement {
    * });
    * ```
    */
-  async runQuery(query, signal) {
+  async runQuery(query, signal, options) {
     if (!query) throw new Error('runQuery: query definition is required');
+    if (signal && typeof signal === 'object' && !('aborted' in signal) && options === undefined) {
+      options = signal;
+      signal = undefined;
+    }
+    const inheritedCache = _activeRefreshCache;
     // Holds the render-complete signal while in flight: the app renders what
     // this returns, which no widget's state reflects.
     _pendingAppQueries++;
@@ -1842,8 +1940,16 @@ export class DataApp extends LitElement {
         throw new Error('runQuery: model must be specified on query or DataApp');
       }
       const fullQuery = normalizeQueryPayload({ ...query, model: query.model || model });
+      const effectiveCache = options?.cache !== undefined
+        ? options.cache
+        : (typeof query.cache === 'boolean' ? query.cache : inheritedCache);
+      const runnerOpts = effectiveCache === false
+        ? { ...(options || {}), cache: false }
+        : (options && typeof options === 'object' ? options : undefined);
       try {
-        return await window.DataApps.queryRunner(fullQuery, signal);
+        return runnerOpts !== undefined
+          ? await window.DataApps.queryRunner(fullQuery, signal, runnerOpts)
+          : await window.DataApps.queryRunner(fullQuery, signal);
       } catch (err) {
         reportRuntimeError('DataApp.runQuery failed', err, { query: fullQuery });
         throw err;
@@ -1884,14 +1990,19 @@ export class DataApp extends LitElement {
       queryList = Object.values(options.queries);
     } else {
       for (const [k, v] of Object.entries(options)) {
-        if (k !== 'on' && k !== 'signal' && k !== 'model' && k !== 'explore' && k !== 'view' && v && typeof v === 'object' && Array.isArray(v.fields)) {
+        if (k !== 'on' && k !== 'signal' && k !== 'cache' && k !== 'model' && k !== 'explore' && k !== 'view' && v && typeof v === 'object' && Array.isArray(v.fields)) {
           queryList.push(v);
         }
       }
     }
 
+    const runQueryOpts = typeof options.cache === 'boolean' ? { cache: options.cache } : undefined;
     if (queryList.length === 0) return [];
-    if (queryList.length === 1) return await this.runQuery(queryList[0], options.signal);
+    if (queryList.length === 1) {
+      return runQueryOpts !== undefined
+        ? await this.runQuery(queryList[0], options.signal, runQueryOpts)
+        : await this.runQuery(queryList[0], options.signal);
+    }
 
     let joinKeys = options.on;
     if (typeof joinKeys === 'string') {
@@ -1909,7 +2020,11 @@ export class DataApp extends LitElement {
 
     const signal = options.signal;
     const results = await Promise.all(
-      queryList.map(q => this.runQuery(q, signal))
+      queryList.map(q =>
+        runQueryOpts !== undefined
+          ? this.runQuery(q, signal, runQueryOpts)
+          : this.runQuery(q, signal)
+      )
     );
 
     const getRowKey = (row) => joinKeys.map(k => String(row[k] ?? '')).join(':::');
@@ -2332,6 +2447,177 @@ export function _setWidgetActions(actions) {
   }
 }
 
+let _hasSeenTileHostData = false;
+let _lastRunStartTime = null;
+let _activeRefreshCache = undefined;
+const _activeRefreshStack = [];
+
+function _pushRefreshCache(cache) {
+  const token = { cache };
+  _activeRefreshStack.push(token);
+  _activeRefreshCache = cache;
+  return () => {
+    const idx = _activeRefreshStack.lastIndexOf(token);
+    if (idx !== -1) _activeRefreshStack.splice(idx, 1);
+    _activeRefreshCache = _activeRefreshStack.length > 0
+      ? _activeRefreshStack[_activeRefreshStack.length - 1].cache
+      : undefined;
+  };
+}
+
+export function createTileQueryRunner(coreSDK) {
+  return async (rawQuery, signal, options) => {
+    if (signal && typeof signal === 'object' && !('aborted' in signal) && options === undefined) {
+      options = signal;
+      signal = undefined;
+    }
+    const normalized = normalizeQueryPayload(rawQuery);
+    const useCache = options?.cache !== undefined
+      ? options.cache
+      : (typeof rawQuery?.cache === 'boolean' ? rawQuery.cache : undefined);
+    const { cache: _ignoredCache, ...queryBody } = normalized || {};
+    return await coreSDK.ok(coreSDK.run_inline_query({
+      result_format: 'json',
+      body: { ...queryBody, view: queryBody.view || queryBody.explore },
+      ...(useCache === false ? { cache: false } : {}),
+    }));
+  };
+}
+
+export function _resetTileHostRefreshForTesting() {
+  _hasSeenTileHostData = false;
+  _lastRunStartTime = null;
+  _activeRefreshStack.length = 0;
+  _activeRefreshCache = undefined;
+}
+
+export function _handleTileHostRefresh(tileHostData) {
+  if (!tileHostData || typeof tileHostData !== 'object') return false;
+  const nextStartTime = tileHostData.lastRunStartTime;
+  if (!_hasSeenTileHostData) {
+    _hasSeenTileHostData = true;
+    if (nextStartTime != null) {
+      _lastRunStartTime = nextStartTime;
+    }
+    return false;
+  }
+  if (nextStartTime == null || nextStartTime === _lastRunStartTime) {
+    return false;
+  }
+  _lastRunStartTime = nextStartTime;
+  const useCache = tileHostData.lastRunUseCache !== false;
+  const refreshOpts = { cache: useCache };
+
+  const refreshedWidgets = new Set();
+  for (const app of _connectedDataApps) {
+    if (typeof app.refreshAll === 'function') {
+      try { app.refreshAll(refreshOpts); } catch (_) {}
+    }
+    for (const w of findAppWidgets(app)) {
+      refreshedWidgets.add(w);
+    }
+  }
+  for (const w of _themeAware) {
+    if (refreshedWidgets.has(w) || !(w instanceof AppWidget)) continue;
+    const hostApp = typeof w._hostApp === 'function' ? w._hostApp() : null;
+    if (hostApp && _connectedDataApps.has(hostApp)) continue;
+    if (typeof w.refresh === 'function') {
+      try { w.refresh(refreshOpts); } catch (_) {}
+    }
+  }
+  try {
+    window.dispatchEvent(new CustomEvent('looker-dashboard-refresh', {
+      detail: { lastRunStartTime: nextStartTime, useCache },
+    }));
+  } catch (_) {}
+  return true;
+}
+
+let _dataPointActions = [];
+let _isDashboardEditing = false;
+
+export function _setDataPointActions(actions, isEditing = false) {
+  const nextActions = Array.isArray(actions)
+    ? actions.filter((a) => a && typeof a === 'object' && typeof a.id === 'string')
+    : [];
+  const nextEditing = Boolean(isEditing);
+  if (areQueriesEqual(_dataPointActions, nextActions) && _isDashboardEditing === nextEditing) return;
+  _dataPointActions = nextActions;
+  _isDashboardEditing = nextEditing;
+  for (const w of _themeAware) {
+    w.requestUpdate();
+  }
+}
+
+export function getDataPointAction(actionId = 'drill') {
+  return _dataPointActions.find((a) => a && a.id === actionId) || null;
+}
+
+export function isDrillingActive() {
+  return !_isDashboardEditing && Boolean(getDataPointAction('drill'));
+}
+
+const SAFE_EXPLORE_DRILL_TYPES = new Set(['drill', 'measure_default', 'dimension_default']);
+const SAFE_EXPLORE_BASE_ORIGIN = 'https://looker.internal';
+const EXPLORE_DRILL_PATH_RE = /^\/(?:embed\/)?explore(?:-next)?\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+)$/;
+
+export function isSafeExploreDrillLink(link) {
+  if (
+    !link ||
+    typeof link !== 'object' ||
+    typeof link.url !== 'string' ||
+    !SAFE_EXPLORE_DRILL_TYPES.has(link.type) ||
+    !link.url.startsWith('/') ||
+    link.url.startsWith('//') ||
+    link.url.includes('\\') ||
+    link.url.includes('#') ||
+    /[\u0000-\u001f\u007f]/.test(link.url)
+  ) {
+    return false;
+  }
+  try {
+    const rawPath = link.url.split('?', 1)[0];
+    // Use a fixed base origin because sandboxed tile iframes have an opaque ('null') origin.
+    const { origin, pathname, hash } = new URL(link.url, SAFE_EXPLORE_BASE_ORIGIN);
+    if (origin !== SAFE_EXPLORE_BASE_ORIGIN || pathname !== rawPath || hash !== '') {
+      return false;
+    }
+    return EXPLORE_DRILL_PATH_RE.test(pathname);
+  } catch {
+    return false;
+  }
+}
+
+export function openTileDrillMenu(links, mouseEvent) {
+  if (!isDrillingActive()) return false;
+  const validLinks = Array.isArray(links) ? links.filter(isSafeExploreDrillLink) : [];
+  if (validLinks.length === 0) return false;
+  if (!_extensionSDK) return false;
+  if (!_extensionSDK.tileSDK || typeof _extensionSDK.tileSDK.openDrillMenu !== 'function') {
+    reportRuntimeWarning(
+      'drill capability missing',
+      new Error('tileSDK.openDrillMenu is not available on this host.')
+    );
+    return false;
+  }
+  const raw = mouseEvent?.browserEvent || mouseEvent;
+  const scrollX = typeof window !== 'undefined' ? (window.scrollX || 0) : 0;
+  const scrollY = typeof window !== 'undefined' ? (window.scrollY || 0) : 0;
+  const normalizedEvent = {
+    pageX: raw?.clientX ?? (raw?.pageX != null ? raw.pageX - scrollX : 0),
+    pageY: raw?.clientY ?? (raw?.pageY != null ? raw.pageY - scrollY : 0),
+    metaKey: Boolean(raw?.metaKey),
+    type: (raw && typeof raw.type === 'string' && raw.type) || 'click',
+  };
+  try {
+    _extensionSDK.tileSDK.openDrillMenu({ links: validLinks }, normalizedEvent);
+    return true;
+  } catch (err) {
+    reportRuntimeWarning('drill menu open failed', err);
+    return false;
+  }
+}
+
 
 /**
  * First-paint filter gate (tile context only).
@@ -2470,7 +2756,7 @@ export function noteCrossFilterOrigin(field, element) {
 // Every property declared on AppWidget and AppChart must appear in exactly one of
 // CHART_IDENTITY_PROPS or CHART_NON_IDENTITY_PROPS. tests/unit_runtime.test.js enforces this partition.
 export const CHART_IDENTITY_PROPS = ['cell', 'type', 'title', 'yScaleGroup', 'lookerModel', 'explore', 'query', 'fields', 'dimensions', 'measures', 'pivots', 'pivotBy', 'crossFilter', 'sorts', 'limit'];
-export const CHART_NON_IDENTITY_PROPS = ['height', 'filters', 'valueFormat', 'color', 'polarity', 'categoryColors', 'selectedValue', 'selected', 'options', 'data', 'sampleData', 'bare', 'theme', 'loading', 'error'];
+export const CHART_NON_IDENTITY_PROPS = ['height', 'filters', 'valueFormat', 'color', 'polarity', 'categoryColors', 'selectedValue', 'selected', 'options', 'data', 'sampleData', 'bare', 'hideActions', 'theme', 'loading', 'error'];
 
 /** Properties that feed `_buildQuery()`. A change to any of them schedules a fetch; `fetchData()` still skips the round-trip when the effective query is unchanged. */
 export const QUERY_INPUT_PROPS = new Set(['lookerModel', 'explore', 'queryField', 'fields', 'dimensions', 'pivots', 'pivotBy', 'measures', 'sorts', 'limit']);
@@ -2543,6 +2829,8 @@ export class AppWidget extends LitElement {
      * widget is not a grid tile (nested content, or a free-form custom layout).
      */
     cell: { type: String, reflect: true },
+    /** When true (or when set on an ancestor container), suppresses host-offered widget action buttons on this widget. */
+    hideActions: { type: Boolean, attribute: 'hide-actions', reflect: true },
   };
 
   /** `da-<tag>-<slug>` from the title, label, query-field or fields: the name the
@@ -2603,15 +2891,45 @@ export class AppWidget extends LitElement {
     return this.getQueryKey();
   }
 
+  _isWidgetActionsHidden() {
+    const hasHideAttr = (el) => {
+      if (!el) return false;
+      if (el.hideActions === true) return true;
+      if (el.hideActions === false) return false;
+      return Boolean(
+        el.hasAttribute?.('hide-actions') ||
+        (typeof el.getAttribute === 'function' && el.getAttribute('hide-actions') !== null)
+      );
+    };
+    if (hasHideAttr(this)) return true;
+    let cur = this.parentElement;
+    while (cur) {
+      if (hasHideAttr(cur)) return true;
+      cur = cur.parentElement;
+    }
+    if (!this.parentElement && typeof this.closest === 'function') {
+      const closestEl = this.closest('[hide-actions]');
+      if (closestEl && closestEl !== this && hasHideAttr(closestEl)) return true;
+    }
+    const host = this._hostApp();
+    if (host && hasHideAttr(host)) return true;
+    return false;
+  }
+
+  _lookupOfferedWidgetActions() {
+    const key = this._resolveActionKey();
+    const actions = key && Object.hasOwn(_widgetActions, key) ? _widgetActions[key] : null;
+    return Array.isArray(actions) ? actions : [];
+  }
+
   /**
    * Returns the host-offered widget actions for this widget.
    *
    * @return {Array<{id: string, label: string, icon: string}>}
    */
   getOfferedWidgetActions() {
-    const key = this._resolveActionKey();
-    const actions = key && Object.hasOwn(_widgetActions, key) ? _widgetActions[key] : null;
-    return Array.isArray(actions) ? actions : [];
+    if (this._isWidgetActionsHidden()) return [];
+    return this._lookupOfferedWidgetActions();
   }
 
   _getWidgetActionQuery() {
@@ -2627,6 +2945,7 @@ export class AppWidget extends LitElement {
   triggerWidgetAction(actionId, event) {
     event?.preventDefault?.();
     event?.stopPropagation?.();
+    if (this._isWidgetActionsHidden()) return false;
     const widgetId = this._resolveActionKey();
     if (!actionId || !widgetId || typeof _extensionSDK?.send !== 'function') return false;
     const query = this._getWidgetActionQuery();
@@ -2645,7 +2964,9 @@ export class AppWidget extends LitElement {
   }
 
   renderWidgetActions() {
-    const actions = this.getOfferedWidgetActions();
+    this._renderedActionsHidden = this._isWidgetActionsHidden();
+    if (this._renderedActionsHidden) return nothing;
+    const actions = this._lookupOfferedWidgetActions();
     if (!actions.length) return nothing;
     return html`
       <div class="da-widget-actions">
@@ -2766,13 +3087,21 @@ export class AppWidget extends LitElement {
     }
   }
 
-  refresh() {
+  refresh(options) {
     this._forceRefresh = true;
+    this._forceNoCache = Boolean(options?.cache === false || _activeRefreshCache === false);
     this._lastFetchedQuery = null;
-    return this.fetchData();
+    return options !== undefined ? this.fetchData(options) : this.fetchData();
   }
 
-  async fetchData() {
+  async fetchData(options) {
+    const forceNoCache = Boolean(
+      this._forceNoCache || options?.cache === false || _activeRefreshCache === false
+    );
+    this._forceNoCache = false;
+    if (forceNoCache) {
+      this._forceRefresh = true;
+    }
     if (typeof this._skipFetch === 'function' && this._skipFetch()) {
       this.loading = false;
       this.classList.remove('loading');
@@ -2791,6 +3120,7 @@ export class AppWidget extends LitElement {
 
     let query = this._buildQuery();
     if (!query) {
+      this._forceRefresh = false;
       this.loading = false;
       this.classList.remove('loading');
       return;
@@ -2806,7 +3136,7 @@ export class AppWidget extends LitElement {
     // makes `filters: this.getEffectiveFilters()` — a fresh object on every
     // render — harmless, and it is why a *hardcoded* filter object never
     // refetches (see SKILL.md, gotcha 1).
-    if (this._lastFetchedQuery && areQueriesEqual(this._lastFetchedQuery, query) && !this._forceRefresh) {
+    if (this._lastFetchedQuery && areQueriesEqual(this._lastFetchedQuery, query) && !this._forceRefresh && !forceNoCache) {
       const displayRows = this.data || this._fetchedRows;
       if (!this.loading && displayRows && displayRows.length > 0) {
         if (typeof this._renderHighchart === 'function') {
@@ -2840,7 +3170,12 @@ export class AppWidget extends LitElement {
       if (typeof window.DataApps?.queryRunner !== 'function') {
         throw new Error('Data App: queryRunner is not available.');
       }
-      const rows = await window.DataApps.queryRunner(query, controller.signal);
+      const runnerOpts = forceNoCache
+        ? { ...(options || {}), cache: false }
+        : (options && typeof options === 'object' ? options : undefined);
+      const rows = runnerOpts !== undefined
+        ? await window.DataApps.queryRunner(query, controller.signal, runnerOpts)
+        : await window.DataApps.queryRunner(query, controller.signal);
       if (this._activeFetchId !== fetchId) return;
       if (controller.signal.aborted) {
         this.loading = false;

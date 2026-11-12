@@ -40,7 +40,7 @@ Defines the core dimensions and measures. These measures are the Single Source o
 
 ```lookml
 view: order_items {
-  sql_table_name: `analytics.order_items` ;;
+  sql_table_name: `thelook.order_items` ;;
 
   dimension: id {
     primary_key: yes
@@ -155,7 +155,7 @@ view: user_session_ranks {
         session_id,
         session_start_time,
         RANK() OVER (PARTITION BY user_id ORDER BY session_start_time) AS user_session_index
-      FROM `analytics.events`
+      FROM `thelook.events`
       WHERE event_type = 'session_start'
     ;;
   }

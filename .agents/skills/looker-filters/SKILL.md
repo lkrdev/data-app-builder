@@ -203,7 +203,7 @@ When executing or saving queries via `run_inline_query(result_format="json", bod
 import json
 
 body = {
-    "model": "<model_name>",
+    "model": "agentic_thelook",
     "view": "orders",
     "fields": ["users.country", "orders.count", "orders.total_revenue"],
     "filters": {

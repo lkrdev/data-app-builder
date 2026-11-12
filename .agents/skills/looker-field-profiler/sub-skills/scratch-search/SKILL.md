@@ -50,13 +50,13 @@ This sub-skill profiles LookML string dimensions per model, generates the exact 
 # Generate per-model _field_value_search_<model>.explore.lkml files for two models at once:
 uv run python skills/looker-field-profiler/scripts/scratch_search.py \
   --oauth-account dev-argolis \
-  --model agentic_ecommerce_analytics,streaming_platform_analytics \
+  --model agentic_thelook,streaming_platform_analytics \
   --write-lookml ./lookml_output_dir
 
 # Or invoke a specific dialect script directly:
 uv run python skills/looker-field-profiler/scripts/dialects/bigquery.py \
   --oauth-account dev-argolis \
-  --model agentic_ecommerce_analytics \
+  --model agentic_thelook \
   --explore order_items \
-  --write-lookml ./_field_value_search_agentic_ecommerce_analytics.explore.lkml
+  --write-lookml ./_field_value_search_agentic_thelook.explore.lkml
 ```

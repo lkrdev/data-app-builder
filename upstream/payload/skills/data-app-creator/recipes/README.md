@@ -34,6 +34,6 @@ Each recipe provides:
 | `grid-card-list.md` | `<app-grid>` | High-performance AG Grid table for detailed records. |
 | `grid-heatmap.md` | `<app-grid>` Category × Bucket Heatmap | Heatmap with paired values and row-max alpha opacity. |
 | `filter-dropdown.md` | Reactive Slicing Dropdown | Native select dropdown bound to Lit state properties. |
-| `metric-switcher.md` | Metric Switcher & Dual-Date KPI Card-Border Comparison | Switching metrics via PoP KPI cards + layered dual-date `Promise.all` `runQuery` comparison with shared-when-close (`linkedTo: 0`) dual Y-axes. |
+| `metric-switcher.md` | Reactive Metric Switcher (`<app-select>` + `<app-chart>`) | Swapping the queried measure on a single chart card dynamically via dropdown selection. |
 | `multi-metric-array-views.md` | Multi-Array Explore Best Practices | Preventing Cartesian SQL fan-outs across UNNEST views. |
 | `dark-theme.md` | Dark Theme & Theme Switching | Dark dashboards, theme tokens, and interactive light/dark mode toggles via `this.isDark` / `this.toggleDarkMode()`. |

@@ -24,6 +24,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import socket
 import ssl
 import sys
@@ -133,6 +134,23 @@ def check_port_open(host: str, port: int, timeout: float = 2.0) -> bool:
         return False
 
 
+def is_looker_login_rejection(raw_body: str) -> bool:
+    """True when a 404 from POST /login is Looker rejecting the credentials.
+
+    Looker answers a wrong client_id or client_secret with HTTP 404, the same status as a
+    wrong base_url, but its JSON body links the login error page
+    (".../err/4.0/404/post/login"). A wrong URL doesn't return that body, and a login POST
+    that a base_url redirect turned into a GET reports ".../404/get/login" instead.
+    """
+    try:
+        data = json.loads(raw_body)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    return bool(re.search(r"/err/[\d.]+/404/post/login\b", str(data.get("documentation_url") or "")))
+
+
 def verify_credentials(config: dict, config_path: str | None) -> dict:
     """Perform comprehensive connection & auth validation.
     Returns a result dict with status, error details, and available models."""
@@ -168,8 +186,8 @@ def verify_credentials(config: dict, config_path: str | None) -> dict:
             "ok": False,
             "error_type": "missing_credentials",
             "message": f"Looker configuration is incomplete (missing: {', '.join(missing)}).",
-            "hint": "No API credentials configured. Run scripts/bootstrap.sh or provide data-apps-config.json.",
-            "suggested_action": "Run `bash scripts/bootstrap.sh` to configure Looker credentials interactively, "
+            "hint": "No API credentials configured. Run python3 scripts/bootstrap.py (or scripts/bootstrap.sh) or provide data-apps-config.json.",
+            "suggested_action": "Run `python3 scripts/bootstrap.py` (or `bash scripts/bootstrap.sh`) to configure Looker credentials interactively, "
                                 "or create data-apps-config.json at workspace root.",
             "hitl": True,
         }
@@ -230,11 +248,24 @@ def verify_credentials(config: dict, config_path: str | None) -> dict:
                 "hitl": True,
             }
         elif e.code == 404:
+            # Looker returns 404 for an unknown client_id or a wrong client_secret; its error
+            # body says so. Any other 404 means base_url doesn't reach the Looker login API.
+            if is_looker_login_rejection(raw_body):
+                return {
+                    "ok": False,
+                    "error_type": "authentication_failed",
+                    "message": f"Looker rejected the API credentials (HTTP 404 from {login_url}). "
+                               f"Looker answers a wrong client_id or client_secret with 404.",
+                    "hint": "Invalid client_id or client_secret in data-apps-config.json.",
+                    "suggested_action": "Check data-apps-config.json and ensure client_id and client_secret are valid and unexpired.",
+                    "hitl": True,
+                }
             return {
                 "ok": False,
                 "error_type": "endpoint_not_found",
                 "message": f"Looker API login endpoint not found (HTTP 404) at {login_url}.",
-                "hint": "The base_url in data-apps-config.json may have an invalid path or port.",
+                "hint": "The base_url in data-apps-config.json does not reach the Looker login API; "
+                        "it may have an invalid path or port, or redirect elsewhere.",
                 "suggested_action": f"Verify the base_url ({clean_base}) matches your Looker instance URL (e.g. https://instance.looker.com).",
                 "hitl": True,
             }
@@ -277,46 +308,49 @@ def verify_credentials(config: dict, config_path: str | None) -> dict:
             "hitl": True,
         }
 
-    # 4. Fetch available models (GET /api/4.0/lookml_models)
+    # 4. Fetch available models. include_internal=true adds built-in models such as
+    # system__activity; instances that reject the parameter get the plain list.
     now_iso = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
-    models_url = f"{clean_base}/api/4.0/lookml_models"
     models_list = []
+    warning = None
     try:
-        req = urllib.request.Request(
-            models_url,
-            headers={"Authorization": f"token {token}", "Content-Type": "application/json"},
-            method="GET",
-        )
-        with urllib.request.urlopen(req, context=_LOOKER_SSL_CTX, timeout=20) as resp:
-            raw_models = json.loads(resp.read().decode("utf-8"))
-            for m in raw_models:
-                name = m.get("name")
-                if not name:
-                    continue
-                explores = [e.get("name") for e in m.get("explores", []) if e.get("name")]
-                models_list.append({
-                    "name": name,
-                    "label": m.get("label") or name,
-                    "explores": explores,
-                })
+        for suffix in ("?include_internal=true", ""):
+            req = urllib.request.Request(
+                f"{clean_base}/api/4.0/lookml_models{suffix}",
+                headers={"Authorization": f"token {token}", "Content-Type": "application/json"},
+                method="GET",
+            )
+            try:
+                with urllib.request.urlopen(req, context=_LOOKER_SSL_CTX, timeout=20) as resp:
+                    raw_models = json.loads(resp.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError:
+                if not suffix:
+                    raise
+        for m in raw_models:
+            name = m.get("name")
+            if not name:
+                continue
+            explores = [e.get("name") for e in m.get("explores", []) if e.get("name") and not e.get("hidden")]
+            models_list.append({"name": name, "label": m.get("label") or name, "explores": explores})
     except Exception as e:
         # If model listing fails due to permissions, return warning but auth succeeded
-        return {
-            "ok": True,
-            "base_url": clean_base,
-            "config_source": config_path,
-            "timestamp": now_iso,
-            "models": [],
-            "warning": f"Authenticated successfully, but listing models returned: {e}",
-        }
+        models_list = []
+        warning = f"Authenticated successfully, but listing models returned: {e}"
 
-    return {
+    res = {
         "ok": True,
         "base_url": clean_base,
         "config_source": config_path,
         "timestamp": now_iso,
         "models": models_list,
     }
+    if warning:
+        res["warning"] = warning
+    for key in ("default_model", "default_explores"):
+        if config.get(key):
+            res[key] = config[key]
+    return res
 
 
 def main(argv=None):
@@ -363,6 +397,12 @@ def main(argv=None):
         print(f"Timestamp: {res['timestamp']}")
     if res.get("config_source"):
         print(f"Config:    {res['config_source']}")
+    if res.get("default_model"):
+        target = f"model={res['default_model']}"
+        de = res.get("default_explores")
+        if de:
+            target += " explores=" + (",".join(map(str, de)) if isinstance(de, list) else str(de))
+        print(f"Default Target: {target}")
 
     models = res.get("models", [])
     if models:

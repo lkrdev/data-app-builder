@@ -11,7 +11,7 @@ description: |
 Convert legacy HTML Canvas Dashboards into Looker Data Apps in one step.
 `skills/data-app-creator/SKILL.md` is the source of truth for the target app (file template, layout classes, chart recipes).
 This skill lists only what differs from HTML.
-To upgrade existing Lit apps, see `skills/toolkit-updater/SKILL.md` Gate 3 and `CHANGELOG.md`.
+To upgrade an existing Lit app, see `skills/toolkit-updater/SKILL.md` ("Upgrade one app") and `CHANGELOG.md`.
 To upgrade the toolkit installation itself, use `toolkit-updater`.
 
 ## 1. Rules
@@ -40,7 +40,7 @@ To upgrade the toolkit installation itself, use `toolkit-updater`.
    Store reactive state in Lit properties.
 
 6. **Start with the JSDoc header:**
-   Begin `app.js` with the line-1 JSDoc header from `skills/data-app-creator/SKILL.md` (`@title`, `@description`).
+   Begin `app.js` with the line-1 JSDoc header from `skills/data-app-creator/SKILL.md` (`@title`, `@description`, `@toolkit-version`).
    Publishing adds the publish tags later.
 
 7. **Register element and default export:**

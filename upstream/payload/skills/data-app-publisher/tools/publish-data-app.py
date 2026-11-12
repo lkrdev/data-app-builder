@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import importlib.util
 import json
 import os
 import re
@@ -109,7 +110,7 @@ _LOOKER_SSL_CTX = _looker_ssl_context()
 def load_config(path: Path) -> dict:
     if not path.exists():
         sys.exit(f"error: config file not found at {path}. "
-                 "Run scripts/bootstrap.sh to create it.")
+                 "Run python3 scripts/bootstrap.py (or scripts/bootstrap.sh) to create it.")
     return json.loads(path.read_text(encoding="utf-8").lstrip("\ufeff"))
 
 
@@ -128,6 +129,18 @@ def _die_with_envelope(env: dict) -> None:
     sys.stderr.write("  suggested_action: " + env["suggested_action"] + "\n")
     sys.stderr.write("ERROR_ENVELOPE_JSON: " + json.dumps(env) + "\n")
     sys.exit(1)
+
+
+def _load_version_utils():
+    if "version_utils" in sys.modules:
+        return sys.modules["version_utils"]
+    skills_dir = Path(__file__).resolve().parent.parent.parent
+    path = skills_dir / "toolkit-updater" / "tools" / "version_utils.py"
+    spec = importlib.util.spec_from_file_location("version_utils", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["version_utils"] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def check_def_size(html: str, cfg: dict) -> None:
@@ -171,7 +184,7 @@ def _hint_for_publish_error(method, path, code, body_text, base_url):
     if code == 401:
         return ("Your Looker API key is invalid or expired. Regenerate "
                 "the key in the Looker admin UI and update data-apps-config.json.",
-                "Re-run scripts/bootstrap.sh to re-prompt for credentials.")
+                "Re-run python3 scripts/bootstrap.py (or scripts/bootstrap.sh) to re-prompt for credentials.")
     if code == 403:
         return (f"The API user is authenticated but lacks permission for "
                 f"{method} {path}. Dashboard publishing needs `access_data`, "
@@ -641,7 +654,7 @@ def resolve_version(install_root: Path) -> str:
     ]:
         if candidate.is_file():
             try:
-                v = candidate.read_text(encoding="utf-8").strip()
+                v = candidate.read_text(encoding="utf-8").strip().lstrip("v")
                 if v:
                     return v
             except Exception:
@@ -752,12 +765,14 @@ def upsert_metadata(content: str, updates: dict) -> str:
                     lines.append(f" * @{tag:<21} {val}")
         lines.append(" */\n\n")
         header = "\n".join(lines)
-        if content.startswith("#!"):
-            parts = content.split("\n", 1)
+        bom = "\ufeff" if content.startswith("\ufeff") else ""
+        body = content[len(bom):]
+        if body.startswith("#!"):
+            parts = body.split("\n", 1)
             shebang = parts[0] + "\n"
             rest = parts[1] if len(parts) > 1 else ""
-            return shebang + header + rest
-        return header + content
+            return bom + shebang + header + rest
+        return bom + header + body
 
     block = m.group(1)
     replaced = set()
@@ -953,7 +968,7 @@ def publish(args):
         sys.exit(
             f"error: Looker credentials missing. Looked at {cfg_path} and environment variables.\n"
             "Set LOOKERSDK_BASE_URL, LOOKERSDK_CLIENT_ID, LOOKERSDK_CLIENT_SECRET "
-            "or re-run scripts/bootstrap.sh."
+            "or re-run python3 scripts/bootstrap.py (or scripts/bootstrap.sh)."
         )
     folder_id = args.folder_id or os.environ.get("LOOKER_PUBLISH_FOLDER_ID") or cfg.get("publish_folder_id") or "1"
 
@@ -965,6 +980,82 @@ def publish(args):
 
     raw_content = Path(args.def_path).read_text(encoding="utf-8")
     check_def_size(raw_content, cfg)
+
+    current_version = resolve_version(install_root)
+    existing_meta = parse_metadata(raw_content)
+    vutils = _load_version_utils()
+    pin = vutils.read_pin(raw_content)
+    if not pin:
+        app_file = args.def_path
+        installed_version = current_version.strip().lstrip("v")
+        has_comment_tag, raw_val = vutils.find_comment_tag(raw_content)
+        if has_comment_tag:
+            hdr = vutils.find_header(raw_content)
+            in_hdr = bool(hdr and vutils.find_comment_tag(hdr.group(0))[0])
+            if in_hdr:
+                msg = f"{app_file} has an invalid @toolkit-version '{raw_val}' (expected X.Y.Z matching installed toolkit {installed_version})."
+            else:
+                msg = f"{app_file} has @toolkit-version outside its leading /** ... */ JSDoc header."
+            _die_with_envelope({
+                "error_type": "toolkit_version_mismatch",
+                "message": msg,
+                "hint": "The @toolkit-version tag must be a plain X.Y.Z version on its own line in the leading /** ... */ JSDoc header.",
+                "suggested_action": (
+                    f"Fix the leading /** ... */ JSDoc header to declare '@toolkit-version {installed_version}' "
+                    "after upgrading the app via skills/toolkit-updater/SKILL.md ('Upgrade One App')."
+                ),
+                "app_version": raw_val or None,
+                "installed_version": installed_version,
+            })
+        _die_with_envelope({
+            "error_type": "toolkit_version_mismatch",
+            "message": "App has no @toolkit-version tag.",
+            "hint": (
+                "An app without the tag may come from any toolkit version since 1.0.0, "
+                "so it must be upgraded to the installed toolkit before it is published."
+            ),
+            "suggested_action": (
+                "Upgrade the app first using the toolkit-updater skill ('Upgrade one app'), "
+                "which sets the tag, then publish again."
+            ),
+            "app_version": None,
+            "installed_version": current_version,
+        })
+    else:
+        installed_v = current_version.strip().lstrip("v")
+        cmp = vutils.compare(installed_v, pin)
+        if cmp != 0:
+            if cmp > 0:
+                hint = (
+                    "This app is pinned to a newer toolkit version than the one installed "
+                    "in this workspace. Update the toolkit before publishing."
+                )
+                suggested_action = (
+                    "Update the toolkit first using the toolkit-updater skill "
+                    "(run `check-for-update.py --force` for Gate 1 / Gate 2, because a cached check can say up to date) "
+                    "before publishing."
+                )
+            else:
+                hint = (
+                    "Publishing an app on an older or mismatched toolkit version is not supported. "
+                    "Published apps must match the installed toolkit version."
+                )
+                suggested_action = (
+                    "Upgrade the app first using the toolkit-updater skill ('Upgrade one app') "
+                    "before publishing."
+                )
+            _die_with_envelope({
+                "error_type": "toolkit_version_mismatch",
+                "message": (
+                    f"app is pinned to toolkit v{pin}, but the installed "
+                    f"toolkit version is v{current_version}."
+                ),
+                "hint": hint,
+                "suggested_action": suggested_action,
+                "app_version": pin,
+                "installed_version": current_version,
+            })
+
     runtime_url, vendor_url = resolve_shared_urls(cfg, install_root)
     print(f"def: {args.def_path} ({len(raw_content):,} bytes)")
     print(f"target: {base}")
@@ -978,8 +1069,6 @@ def publish(args):
 
     token = login(base, cid, sec)
     author = _known_user(fetch_authenticated_user(base, token))
-
-    existing_meta = parse_metadata(raw_content)
 
     # Resolve --dashboard-id before anything is written. A bad id costs
     # nothing this way; validated after the upsert below, it would already
@@ -1040,7 +1129,6 @@ def publish(args):
         _warn_header_stays_visible()
         print()
 
-    current_version = resolve_version(install_root)
     pub_time = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     resolved_def = Path(args.def_path).resolve()

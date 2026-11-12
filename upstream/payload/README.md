@@ -6,14 +6,20 @@ prompts into published Data Apps in your Looker instance.
 
 ## Install
 
-If you reached this directory by running `install.sh`, you're
-already on the install path -- `bash scripts/bootstrap.sh` continues
+If you reached this directory by running `install.sh` or `install.py`, you're
+already on the install path -- `python3 scripts/bootstrap.py` (or `python scripts\bootstrap.py` on Windows) continues
 from here.
 
 For a fresh install on a new machine:
 
+**macOS / Linux:**
 ```bash
 bash <(curl -fsSL https://dl.google.com/looker-data-apps/install.sh)
+```
+
+**Windows (`cmd.exe` / PowerShell) or cross-platform Python:**
+```cmd
+curl.exe -fsSL https://dl.google.com/looker-data-apps/install.py | python
 ```
 
 Step-by-step walkthrough: [docs/customer-quickstart.md](docs/customer-quickstart.md).
@@ -26,21 +32,27 @@ When asked to create, edit, or publish a Data App, you must read and follow the 
 ```
 ~/looker-data-apps/
 ├── apps/                       your Data Apps -- one folder per app, each with an app.js
+├── backups/                    app snapshots and temporary update rollback copies
+├── runtime/                    local runtime bundle (data-app.js, data-app.css)
 ├── skills/data-app-creator/    the AI agent skill instructions & scripts
-├── runtime/                    the Lit component library the apps import
 ├── preview-server/             local preview server + app gallery
 ├── scripts/                    bootstrap, install check
 └── data-apps-config.json       your Looker creds & settings (owner-only -- keep local)
 ```
 
+Third-party libraries (Lit 3.3.1, Highcharts 11.4.8, AG Grid Community 31.3.4, and Looker Extension SDK 24.20.0) load automatically from `https://www.gstatic.com/looker-data-apps/vendor/` in both local preview and published Looker tiles. Local preview therefore requires internet access (or a reachable `browser_assets_url`).
+
 Re-installing replaces everything except `apps/` and your `*.json` config,
 so obsolete files from an older release are removed rather than left behind.
+The installer never changes your apps.
 
 ## Previewing locally
 
 Everything is a stdlib Python script -- **`make` is not required** and is not
-a dependency of this project. (On Windows, run `.sh` scripts in Git Bash or WSL,
-and use `python` or `py -3` wherever `python3` is shown if `python3` is not on `PATH`.)
+a dependency of this project. On Windows, the Python entry points (`python scripts\bootstrap.py`,
+`python skills\toolkit-updater\tools\self-update.py`) work directly in cmd.exe and PowerShell,
+and `.sh` wrappers need Git Bash or WSL. (Use `python` or `py -3` wherever `python3`
+is shown if `python3` is not on `PATH`.)
 
 **Browse everything you have built.** Start the server with no arguments and
 it opens the gallery: every app in `apps/`, searchable, newest
