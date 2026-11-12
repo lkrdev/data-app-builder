@@ -170,7 +170,7 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 .dab-use-case-guide-tabs {display:flex;flex-wrap:wrap;gap:6px;padding-bottom:8px;border-bottom:1px solid var(--dab-border,#e2e8f0)}
 .dab-use-case-guide-body {overflow-y:auto;max-height:64vh;padding-right:4px}
 .dab-use-case-badge-investigator {background:var(--dab-accent-subtle,#eff6ff);color:var(--dab-accent,#2563eb);border:1px solid var(--dab-accent-border,#bfdbfe)}
-.dab-doc-ui-preview {display:inline-flex;align-items:center;gap:8px;padding:6px 10px;margin:4px 6px 8px 0;border-radius:8px;background:var(--dab-surface-muted,#f8fafc);border:1px dashed var(--dab-border-strong,#cbd5e1);pointer-events:none;user-select:none}
+.dab-doc-ui-preview {display:inline-flex;align-items:center;gap:8px;max-width:100%;min-width:0;padding:6px 10px;margin:4px 6px 8px 0;border-radius:8px;background:var(--dab-surface-muted,#f8fafc);border:1px dashed var(--dab-border-strong,#cbd5e1);pointer-events:none;user-select:none}
 .dab-folder-trigger-fixed {min-width:180px;max-width:240px;height:28px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dab-skeleton {display:inline-block;border-radius:6px;border:1px solid var(--dab-border,#e2e8f0);background:linear-gradient(90deg,var(--dab-surface-subtle,#f1f5f9) 25%,var(--dab-border,#e2e8f0) 50%,var(--dab-surface-subtle,#f1f5f9) 75%);background-size:200% 100%;animation:dab-skeleton-shimmer 1.2s ease-in-out infinite}
 @keyframes dab-skeleton-shimmer {0% {background-position:200% 0} 100% {background-position:-200% 0}}
@@ -385,6 +385,12 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 .dab-user-msg-copy-btn:hover {border-color:var(--dab-accent-border,#93c5fd);color:var(--dab-accent-text,#1d4ed8)}
 @media (hover: none) and (pointer: coarse) {.dab-user-msg-copy-btn {display:none}}
 .dab-user-msg-longpress-menu {position:absolute;top:8px;right:8px;min-width:140px;z-index:660;background:var(--dab-surface-elevated,#ffffff);border:1px solid var(--dab-border-strong,#cbd5e1);border-radius:8px;box-shadow:0 10px 25px rgba(15,23,42,0.18);padding:4px;display:flex;flex-direction:column}
+.dab-msg-body-collapsed {max-height:7.25em;overflow:hidden;position:relative;cursor:pointer;-webkit-mask-image:linear-gradient(to bottom,#000 5.05em,transparent 7.25em);mask-image:linear-gradient(to bottom,#000 5.05em,transparent 7.25em)}
+.dab-msg-body-collapsed .dab-md-inline-code {cursor:auto}
+.dab-msg-body-collapsed::after {content:"";position:absolute;left:0;right:0;top:5.05em;height:2.2em;pointer-events:none;background:linear-gradient(to bottom,transparent,var(--dab-accent-subtle,#eff6ff))}
+.dab-user-msg-expand-btn {display:inline-flex;align-items:center;gap:4px;min-height:22px;margin-top:4px;padding:1px 4px;margin-left:-4px;border:none;border-radius:4px;background:transparent;color:var(--dab-text-secondary,#334155);font-family:inherit;font-size:11.5px;font-weight:600;line-height:1.3;cursor:pointer;white-space:nowrap}
+.dab-user-msg-expand-btn:hover,.dab-user-msg-expand-btn:focus-visible {color:var(--dab-accent-text,#1d4ed8)}
+.dab-user-msg-expand-btn:focus-visible {outline:2px solid var(--dab-accent,#2563eb);outline-offset:1px}
 .dab-viewer-document-pane {display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;background:var(--dab-surface,#ffffff);color:var(--dab-text,#0f172a)}
 .dab-viewer-document-body {flex:1;min-height:0;overflow:auto;padding:8px 12px}
 .dab-viewer-document-markdown {font-size:12px;line-height:1.45;color:var(--dab-text,#0f172a);max-width:980px}

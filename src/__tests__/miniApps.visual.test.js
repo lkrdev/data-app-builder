@@ -7068,4 +7068,239 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       returnedToOverview: true,
     })
   }, 30000)
+
+  test('Issue #185: clamps >5-line and >360-char user messages with click-to-expand + Show more/Show less toggle and renders single-line /<skill-id> + description without redundant labels', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=data_app` })
+    const readyDeadline = Date.now() + 8000
+    while (Date.now() < readyDeadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="studio-prompt-input"]'))`,
+        returnByValue: true,
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 80))
+    }
+
+    const res185 = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const s = window.__DAB_STUDIO__;
+        const longMultilinePrompt = [
+          'Refactor \`order_items\` SQL into Bronze + Silver LookML:',
+          '\`\`\`sql',
+          'SELECT order_id, user_id, inventory_item_id, status,',
+          '  created_at, shipped_at, delivered_at, returned_at,',
+          '  sale_price, gross_margin',
+          'FROM \`thelook.order_items\`',
+          'WHERE status NOT IN (\\'Cancelled\\', \\'Returned\\')',
+          '  AND created_at >= TIMESTAMP(\\'2025-01-01\\')',
+          'GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10',
+          'ORDER BY sale_price DESC',
+          'LIMIT 500;',
+          '\`\`\`',
+          'Reference [Orders Dashboard](/dashboards/42) for KPI parity.',
+        ].join('\\n');
+        const longSingleLinePrompt = 'Analyze revenue retention across cohorts: ' + 'segment_breakdown_metric '.repeat(18);
+        s.setMessages([
+          { role: 'user', text: longMultilinePrompt },
+          { role: 'assistant', text: 'Modeled order_items in Bronze and Silver.' },
+          { role: 'user', text: 'Short 2-line follow-up\\nwith second line.' },
+          { role: 'user', text: longSingleLinePrompt },
+        ]);
+        await new Promise((r) => setTimeout(r, 80));
+
+        const userBodies = Array.from(document.querySelectorAll('.dab-msg-user .dab-msg-body'));
+        const body0 = userBodies[0];
+        const bodyShort = userBodies[1];
+        const bodyLongChars = userBodies[2];
+        const toggle0 = document.querySelector('[data-testid="toggle-user-msg-expand-0"]');
+        const copyBtn0 = document.querySelector('[data-testid="copy-user-msg-btn-0"]');
+
+        const initialCollapsedAttr = body0?.getAttribute('data-collapsed');
+        const hasCollapsedClass = Boolean(body0?.classList.contains('dab-msg-body-collapsed'));
+        const collapsedHeight = Math.round(body0.getBoundingClientRect().height);
+        const bodyScrollHeight = body0.scrollHeight;
+        const shortHasCollapsedAttr = bodyShort?.hasAttribute('data-collapsed');
+        const shortHasToggle = Boolean(document.querySelector('[data-testid="toggle-user-msg-expand-2"]'));
+        const longCharsCollapsed = bodyLongChars?.getAttribute('data-collapsed') === 'true' && Boolean(document.querySelector('[data-testid="toggle-user-msg-expand-3"]'));
+        const toggleInitialLabel = (toggle0?.textContent || '').trim();
+        const toggleInitialAria = toggle0?.getAttribute('aria-expanded');
+        const toggleAriaControls = toggle0?.getAttribute('aria-controls') === 'user-msg-body-0' && body0?.id === 'user-msg-body-0';
+        const toggleCs = window.getComputedStyle(toggle0);
+        const toggleTypography = { fontSize: toggleCs.fontSize, fontWeight: toggleCs.fontWeight };
+        const toggleUnclipped = Boolean(toggle0 && toggle0.scrollHeight <= toggle0.clientHeight + 2);
+        const hasCopyBtn0 = Boolean(copyBtn0);
+
+        // Copying while collapsed copies full unclamped m.text without expanding
+        window.__CLIPBOARD_WRITES__ = [];
+        copyBtn0?.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const copiedFullWhileCollapsed =
+          (window.__CLIPBOARD_WRITES__ || [])[0] === longMultilinePrompt &&
+          body0.getAttribute('data-collapsed') === 'true';
+
+        // Light vs Dark computed styles on fade & expand toggle
+        const lightAfterBg = window.getComputedStyle(body0, '::after').backgroundImage;
+        const lightToggleColor = window.getComputedStyle(toggle0).color;
+        s.setThemeMode('dark');
+        await new Promise((r) => setTimeout(r, 60));
+        const darkAfterBg = window.getComputedStyle(body0, '::after').backgroundImage;
+        const darkToggleColor = window.getComputedStyle(toggle0).color;
+        const darkToggleUnclipped = toggle0.scrollHeight <= toggle0.clientHeight + 2;
+        s.setThemeMode('light');
+        await new Promise((r) => setTimeout(r, 50));
+
+        // Guard 1: clicking inline <code> (:not(pre) > code) inside collapsed body does NOT expand
+        const inlineCode = body0.querySelector(':not(pre) > code');
+        inlineCode?.click();
+        await new Promise((r) => setTimeout(r, 30));
+        const stayedCollapsedAfterCodeClick = body0.getAttribute('data-collapsed') === 'true';
+
+        // Guard 2: non-empty text selection suppresses click-to-expand
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(body0.querySelector('p') || body0);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        body0.click();
+        await new Promise((r) => setTimeout(r, 30));
+        const stayedCollapsedWithSelection = body0.getAttribute('data-collapsed') === 'true';
+        sel.removeAllRanges();
+
+        // Clicking inside fenced <pre><code> SQL paste expands
+        const fencedSqlCode = body0.querySelector('pre > code');
+        fencedSqlCode?.click();
+        await new Promise((r) => setTimeout(r, 50));
+        const expandedAfterBodyClick = body0.getAttribute('data-collapsed') === 'false' && !body0.classList.contains('dab-msg-body-collapsed');
+        const expandedHeight = Math.round(body0.getBoundingClientRect().height);
+        const toggleExpandedLabel = (toggle0.textContent || '').trim();
+        const toggleExpandedAria = toggle0.getAttribute('aria-expanded');
+
+        // Clicking Show less collapses back, clipped scroll (Tab/scrollIntoView into clipped link) auto-expands, Show less + Show more toggle cleanly
+        toggle0.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const collapsedAfterShowLess = body0.getAttribute('data-collapsed') === 'true' && toggle0.getAttribute('aria-expanded') === 'false';
+        body0.querySelector('a')?.scrollIntoView();
+        await new Promise((r) => setTimeout(r, 50));
+        const expandedOnClippedScroll = body0.getAttribute('data-collapsed') === 'false' && body0.scrollTop === 0;
+        toggle0.click();
+        await new Promise((r) => setTimeout(r, 40));
+        toggle0.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const reExpandedAfterShowMore = body0.getAttribute('data-collapsed') === 'false' && toggle0.getAttribute('aria-expanded') === 'true';
+
+        // Switching activeConversationId resets expansion state
+        s.setActiveConversationId('conv_reset_185');
+        await new Promise((r) => setTimeout(r, 50));
+        const resetOnConvChange = body0.getAttribute('data-collapsed') === 'true';
+
+        // Slash skills menu: non-wrapping /<skill-id> + description, zero redundant sk.label
+        const ta = document.querySelector('[data-testid="studio-prompt-input"]');
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        ta.focus();
+        nativeSetter.call(ta, '/');
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 60));
+
+        const slashMenu = document.querySelector('[data-testid="composer-slash-skill-menu"]');
+        const slashOpts = Array.from(slashMenu?.querySelectorAll('[data-testid^="composer-slash-skill-option-"]') || []);
+        const allCodesSingleLine = slashOpts.length >= 10 && slashOpts.every((opt) => {
+          const c = opt.querySelector('code');
+          return c && window.getComputedStyle(c).whiteSpace === 'nowrap' && c.getClientRects().length === 1;
+        });
+        const slashText = slashMenu?.textContent || '';
+        const removedLabels = ['Project Onboarding', 'Descriptions & Curation', 'Data Tests (.test.lkml)', 'Field Value Profiler', 'Lit Data Apps'];
+        const hasAnyRedundantLabel = removedLabels.some((lbl) => slashText.includes(lbl));
+        const onboardingOpt = document.querySelector('[data-testid="composer-slash-skill-option-looker-project-onboarding"]');
+        const onboardingTitle = onboardingOpt?.getAttribute('title') || '';
+        const hasExpectedDescAndTitle =
+          slashText.includes('Onboard a new LookML project') &&
+          onboardingTitle.startsWith('Onboard a new LookML project') &&
+          onboardingTitle.endsWith('(skills/looker-project-onboarding/SKILL.md)') &&
+          !onboardingTitle.includes('—');
+
+        // Also check DOC_UI_COMPONENTS.LookmlTurnSkills inside UseCaseInfoModal
+        document.querySelector('.dab-composer-actions [data-testid="use-case-info-btn"]')?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        document.querySelector('[data-testid="use-case-guide-tab-lookml"]')?.click();
+        await new Promise((r) => setTimeout(r, 60));
+        const docPreview = document.querySelector('[data-testid="doc-slash-skill-menu-preview"]');
+        const docPreviewText = docPreview?.textContent || '';
+        const docCodesSingleLine = Boolean(docPreview) && Array.from(docPreview.querySelectorAll('code')).every((c) => c.getClientRects().length === 1);
+        const docHasDescWithoutLabel =
+          docPreviewText.includes('Onboard a new LookML project') &&
+          !removedLabels.some((lbl) => docPreviewText.includes(lbl));
+
+        return {
+          initialCollapsedAttr,
+          hasCollapsedClass,
+          clampedHeightBounded: collapsedHeight > 40 && collapsedHeight <= 130 && bodyScrollHeight > collapsedHeight + 40,
+          shortHasCollapsedAttr,
+          shortHasToggle,
+          longCharsCollapsed,
+          toggleInitialLabel,
+          toggleInitialAria,
+          toggleAriaControls,
+          toggleTypography,
+          toggleUnclipped,
+          hasCopyBtn0,
+          copiedFullWhileCollapsed,
+          themeStylesAdapt: Boolean(lightAfterBg && darkAfterBg && lightAfterBg !== darkAfterBg && lightToggleColor !== darkToggleColor),
+          darkToggleUnclipped,
+          stayedCollapsedAfterCodeClick,
+          stayedCollapsedWithSelection,
+          expandedAfterBodyClick,
+          grewOnExpand: expandedHeight > collapsedHeight + 40,
+          toggleExpandedLabel,
+          toggleExpandedAria,
+          collapsedAfterShowLess,
+          expandedOnClippedScroll,
+          reExpandedAfterShowMore,
+          resetOnConvChange,
+          allCodesSingleLine,
+          hasAnyRedundantLabel,
+          hasExpectedDescAndTitle,
+          docCodesSingleLine,
+          docHasDescWithoutLabel,
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+    if (res185.exceptionDetails) throw new Error(JSON.stringify(res185.exceptionDetails))
+
+    expect(res185.result.value).toEqual({
+      initialCollapsedAttr: 'true',
+      hasCollapsedClass: true,
+      clampedHeightBounded: true,
+      shortHasCollapsedAttr: false,
+      shortHasToggle: false,
+      longCharsCollapsed: true,
+      toggleInitialLabel: 'Show more',
+      toggleInitialAria: 'false',
+      toggleAriaControls: true,
+      toggleTypography: { fontSize: '11.5px', fontWeight: '600' },
+      toggleUnclipped: true,
+      hasCopyBtn0: true,
+      copiedFullWhileCollapsed: true,
+      themeStylesAdapt: true,
+      darkToggleUnclipped: true,
+      stayedCollapsedAfterCodeClick: true,
+      stayedCollapsedWithSelection: true,
+      expandedAfterBodyClick: true,
+      grewOnExpand: true,
+      toggleExpandedLabel: 'Show less',
+      toggleExpandedAria: 'true',
+      collapsedAfterShowLess: true,
+      expandedOnClippedScroll: true,
+      reExpandedAfterShowMore: true,
+      resetOnConvChange: true,
+      allCodesSingleLine: true,
+      hasAnyRedundantLabel: false,
+      hasExpectedDescAndTitle: true,
+      docCodesSingleLine: true,
+      docHasDescWithoutLabel: true,
+    })
+  }, 25000)
 })
