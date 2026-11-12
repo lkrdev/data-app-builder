@@ -119,6 +119,7 @@ export interface AgentSession {
   explores?: string[]
   toolType?: AntigravityToolType
   objectId?: string
+  usedBridgeTool?: boolean
 }
 
 export type AntigravityExtensionHostLike =

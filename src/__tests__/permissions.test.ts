@@ -8262,8 +8262,8 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     )
     expect((okDashOut.result || okDashOut).lookml_dashboard_id).toBe('ecom::pulse')
     expect((okDashOut.result || okDashOut).dashboard_id).toBe('99')
-    expect(jsonDetailCalls).toHaveLength(2)
-    expect(jsonDetailCalls[1]?.filters).toEqual({ 'orders.created_date': '90 days' })
+    expect(jsonDetailCalls).toHaveLength(1)
+    expect(jsonDetailCalls[0]?.filters).toEqual({ 'orders.created_date': '90 days' })
     expect(uddFiltersCreated).toEqual([
       expect.objectContaining({ name: 'order_date', type: 'field_filter', model: 'ecom', explore: 'orders', dimension: 'orders.created_date', allow_multiple_values: true }),
       expect.objectContaining({ name: 'window_override', type: 'date_filter', default_value: '30 days' }),
@@ -8998,5 +8998,246 @@ customElements.define('good-compare-app', GoodCompareApp);`
     expect(deepHydrated.some((s) => s.title === 'Root step 0')).toBe(true)
 
     spyCodeMode.mockRestore()
+  })
+
+  test('76. routes /agentic-lookml-workflow slash skill, omits onboarding guide when explicit skill is active, and hydrates file_ref bridge requests + __bundle_ref__ LookML bundles via fetchEnvironmentFile', async () => {
+    expect(
+      matchExplicitUseCaseRule(
+        '/agentic-lookml-workflow Here are SQL queries: -- how many questions sit unanswered?\nSELECT COUNT(*) FROM posts_questions;'
+      )
+    ).toBe('lookml')
+    expect(
+      isNewProjectOnboardingIntakePrompt(
+        '/agentic-lookml-workflow get to work on a new project called stackoverflow and use bigquery default connection'
+      )
+    ).toBe(false)
+
+    const workflowGuide = buildLookmlSystemGuide({
+      selectedExplores: [],
+      userPrompt: '/agentic-lookml-workflow build stackoverflow',
+    })
+    expect(workflowGuide).toContain('Activated Turn Skills: `agentic-lookml-workflow`.')
+    expect(workflowGuide).not.toContain(LOOKER_PROJECT_ONBOARDING_SKILL_MD)
+
+    const envId = 'env_fileref_65'
+    const innerReq = {
+      kind: 'sdk_request' as const,
+      method: 'GET',
+      path: '/projects/so_65',
+      dev_mode: true,
+    }
+    const cacheKey = computeLkrExtensionCacheKey(innerReq)
+    const reqPath = `/workspace/.lkr_extension_cache/_req_${cacheKey}.json`
+    const fullBundle = {
+      id: 'run_65',
+      title: 'LookML: stackoverflow',
+      project_id: 'stackoverflow',
+      model_name: 'stackoverflow',
+      branch_name: 'main',
+      files: [{ path: 'stackoverflow.model.lkml', action: 'created', content: 'connection: "default"\n' }],
+      validation: { passed: true, error_count: 0, errors: [] },
+      tests: [],
+      queries: [],
+      summary_markdown: '# Summary',
+    }
+
+    let postCount = 0
+    const fetchedUrls: string[] = []
+    const mockSdk = {
+      ok: async <T>(p: Promise<T>) => p,
+      authSession: {
+        transport: {
+          rawRequest: async () => ({
+            ok: true,
+            statusCode: 200,
+            body: JSON.stringify({
+              passed: true,
+              queries: [{ query_index: 0, parity_status: 'matched', sql: 'S'.repeat(7000), inline_query: { fields: ['a.b'] } }],
+            }),
+          }),
+        },
+      },
+      search_artifacts: async () => [],
+      update_artifacts: async () => [],
+    } as unknown as Looker40SDK
+
+    const mockExtSDK = {
+      serverProxy: async (url: string, init?: FetchCustomParameters) => {
+        if (init?.method === 'GET' && url.includes('/files/')) {
+          fetchedUrls.push(url)
+          if (url.includes('_req_')) {
+            return { ok: true, status: 200, headers: {}, body: JSON.stringify({ ...innerReq, cache_key: cacheKey }) }
+          }
+          if (url.includes('lookml_bundle_run_65.json')) {
+            return { ok: true, status: 200, headers: {}, body: JSON.stringify(fullBundle) }
+          }
+        }
+        if (init?.method === 'POST') {
+          postCount += 1
+          if (postCount === 1) {
+            const firstPost = JSON.parse(String(init?.body || '{}')) as { tools?: Array<{ name?: string }> }
+            expect((firstPost.tools || []).some((t) => t.name === 'lkr_cli_extension_bridge')).toBe(true)
+            return {
+              ok: true,
+              status: 200,
+              headers: {},
+              body: JSON.stringify({
+                id: 'int_ref_1',
+                environment_id: envId,
+                status: 'requires_action',
+                steps: [
+                  {
+                    type: 'function_call',
+                    id: 'call_bridge_65',
+                    name: 'lkr_cli_extension_bridge',
+                    arguments: JSON.stringify({
+                      kind: 'file_ref',
+                      cache_key: cacheKey,
+                      req_path: reqPath,
+                      dev_mode: true,
+                    }),
+                  },
+                ],
+              }),
+            }
+          }
+          const contBody = JSON.parse(String(init?.body || '{}')) as {
+            input?: Array<{ type?: string; result?: { replay_needed?: boolean; result?: unknown } }>
+          }
+          expect(contBody.input?.[0]?.type).toBe('function_result')
+          expect(contBody.input?.[0]?.result?.replay_needed).toBe(false)
+          const resStr = JSON.stringify(contBody.input?.[0]?.result?.result || {})
+          expect(resStr).toContain('"parity_status":"matched"')
+          expect(resStr).not.toContain('SSSSSS')
+          return {
+            ok: true,
+            status: 200,
+            headers: {},
+            body: JSON.stringify({
+              id: 'int_ref_2',
+              environment_id: envId,
+              status: 'completed',
+              steps: [
+                {
+                  type: 'code_execution',
+                  output: `<LOOKML_BUNDLE>${JSON.stringify({
+                    id: 'old_run',
+                    title: 'Old',
+                    project_id: 'old_proj',
+                    files: [{ path: 'old.view.lkml', content: 'view: old {}' }],
+                  })}</LOOKML_BUNDLE>`,
+                },
+                {
+                  type: 'code_execution',
+                  output: `<LOOKML_BUNDLE>${JSON.stringify({
+                    id: 'run_65',
+                    project_id: 'stackoverflow',
+                    __bundle_ref__: '/workspace/lookml_bundle_run_65.json',
+                  })}</LOOKML_BUNDLE>`,
+                },
+              ],
+              output_text: 'Done [Open stackoverflow in Looker IDE](/projects/stackoverflow)',
+            }),
+          }
+        }
+        return { ok: true, status: 200, headers: {}, body: '{}' }
+      },
+    }
+
+    const turnRes = await runAntigravityTurn({
+      sdk: mockSdk,
+      extensionSDK: mockExtSDK,
+      auth: { mode: 'apikey', apiKey: 'test-key' },
+      userId: 'user_65',
+      conversationId: 'conv_65',
+      session: { toolType: 'lookml', environmentId: envId, conversationId: 'conv_65' },
+      mode: 'data_app',
+      toolMode: 'lookml',
+      useCase: 'auto',
+      selectedExplores: [],
+      schemaMarkdown: '# Empty',
+      userPrompt: '/agentic-lookml-workflow Here are sql queries for stackoverflow',
+      onStatus: () => {},
+    })
+
+    expect(fetchedUrls.some((u) => u.includes(`_req_${cacheKey}.json`))).toBe(true)
+    expect(fetchedUrls.some((u) => u.includes('lookml_bundle_run_65.json'))).toBe(true)
+    expect(turnRes.lookmlBundle?.files).toHaveLength(1)
+    expect(turnRes.lookmlBundle?.files[0]?.path).toBe('stackoverflow.model.lkml')
+    expect(turnRes.lookmlBundle?.files[0]?.diff).toContain('+connection: "default"')
+    expect(turnRes.session.usedBridgeTool).toBe(true)
+
+    // Latest __bundle_ref__ wins over earlier inline <LOOKML_BUNDLE>
+    const latestBundle = extractLookmlBundleFromInteraction({
+      steps: [
+        { output: '<LOOKML_BUNDLE>{"id":"old","title":"Old","project_id":"old","files":[{"path":"a.lkml","content":"view: a {}"}]}</LOOKML_BUNDLE>' },
+        { output: '<LOOKML_BUNDLE>{"id":"new","title":"New","project_id":"new","__bundle_ref__":"/workspace/lookml_bundle_new.json"}</LOOKML_BUNDLE>' },
+      ],
+    })
+    expect(latestBundle?.id).toBe('new')
+
+    // "Create a LookML dashboard" routes to 'dashboard', not 'lookml'
+    expect(matchExplicitUseCaseRule('Create a LookML dashboard for sales')).toBe('dashboard')
+    expect(matchExplicitUseCaseRule('Build a quick Stack Overflow dashboard')).toBe('dashboard')
+
+    // _check_dashboard_fields propagates filter default_value across listen: to secondary explores
+    const probeFiltersSeen: Array<Record<string, unknown>> = []
+    await LkrCodeMode.runPythonCode({
+      code: wrapDashboardCodeMode(
+        '_check_dashboard_fields("so_m", "posts", filters=[{"name": "date_range", "type": "date_filter", "default_value": "2022/01/01 to 2022/12/31"}], tiles=[{"title": "Votes", "explore": "votes", "fields": ["votes.count"], "listen": {"date_range": "votes.created_date"}}])\nreturn "ok"'
+      ),
+      requestHandler: async (method: string, urlPath: string, _qp?: unknown, body?: unknown) => {
+        if (method === 'GET' && urlPath.includes('/explores/')) {
+          return { fields: { dimensions: [{ name: 'votes.created_date' }], measures: [{ name: 'votes.count' }] } }
+        }
+        if (method === 'POST' && urlPath.includes('/queries/run/json_detail')) {
+          probeFiltersSeen.push(((body as { filters?: Record<string, unknown> })?.filters) || {})
+          return { data: [{ 'votes.count': { value: 1 } }] }
+        }
+        return {}
+      },
+      vars: { target_model: 'so_m', target_explore: 'posts' },
+    })
+    expect(probeFiltersSeen).toEqual([{ 'votes.created_date': '2022/01/01 to 2022/12/31' }])
+
+    // Warm Turn 2 dashboard mode retains lkr_cli_extension_bridge so previous_interaction_id history stays valid
+    let turn2Tools: Array<{ name?: string; type?: string }> = []
+    const mockDashExt = {
+      serverProxy: async (_url: string, init?: { method?: string; body?: string }) => {
+        if (init?.method === 'POST') {
+          const parsed = JSON.parse(String(init.body || '{}')) as { tools?: Array<{ name?: string; type?: string }> }
+          turn2Tools = parsed.tools || []
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: {},
+          body: JSON.stringify({
+            id: 'int_dash_2',
+            environment_id: envId,
+            status: 'completed',
+            output_text: '<USE_CASE>dashboard</USE_CASE>\nBuilt [Dashboard](/dashboards/42)',
+          }),
+        }
+      },
+    }
+    await runAntigravityTurn({
+      sdk: mockSdk,
+      extensionSDK: mockDashExt,
+      auth: { mode: 'apikey', apiKey: 'test-key' },
+      userId: 'user_65',
+      conversationId: 'conv_65',
+      session: turnRes.session,
+      mode: 'dashboard',
+      useCase: 'auto',
+      lookmlProjectId: 'stackoverflow',
+      selectedExplores: [],
+      schemaMarkdown: '',
+      userPrompt: 'Generate a quick dashboard with some of the metrics!',
+      onStatus: () => {},
+    })
+    expect(turn2Tools.some((t) => t.name === 'run_looker_codemode')).toBe(true)
+    expect(turn2Tools.some((t) => t.name === 'lkr_cli_extension_bridge')).toBe(true)
+    expect(turn2Tools.some((t) => t.type === 'code_execution')).toBe(false)
   })
 })

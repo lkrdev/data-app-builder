@@ -2,6 +2,7 @@ import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { IFolder, ILookmlModel, IRole, IUser } from '@looker/sdk'
 
 import { cleanLookmlProjectId } from './antigravityTypes'
+import { STUDIO_SLASH_SKILLS } from './lookmlSkills'
 
 export const STUDIO_FOLDER_STORAGE_KEY = 'dab_selected_folder_id'
 
@@ -370,7 +371,7 @@ export function isLookerInstanceMetadataQuery(text?: string): boolean {
 
 const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
   ['health-check', /\b(3-pillar|three-pillar|health\s*check|transcriber\s*rubric|technical_design_document)\b/i],
-  ['lookml', /\b(lookml|\.lkml|dimension\s*:|measure\s*:|explore\s*:|refinement|data\s*test|model\.lkml|view\.lkml|(?:create|onboard|build|set\s*up|start)\s+(?:a\s+)?(?:new\s+)?(?:looker\s+)?project\b|new_project_)\b/i],
+  ['lookml', /\b(lookml(?!\s+dashboards?\b)|\.lkml|dimension\s*:|measure\s*:|explore\s*:|refinement|data\s*test|model\.lkml|view\.lkml|(?:create|onboard|build|set\s*up|start)\s+(?:a\s+)?(?:new\s+)?(?:looker\s+)?project\b|new_project_)\b/i],
   ['tile', new RegExp(`${EXPLICIT_SCRIPT_CREATION_RE.source}|${LOOKER_INSTANCE_API_QUERY_RE.source}`, 'i')],
   ['dashboard', /\b(udd|user[- ]defined\s*dashboard|native\s*dashboard|saved\s*look|lookml\s*dashboard|pin\s*to\s*board|schedule\s*dashboard|content\s*studio)\b/i],
   [
@@ -380,8 +381,21 @@ const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
   ['app', /\b(data\s*app|lit\s*app|web\s*component|app-kpi|app-chart|app-grid|custom\s*app|interactive\s*app)\b/i],
   ['conversational-analytics', /\b(conversational\s*analytics|ca\s*agent|looker\s+ca|how\s+many|which\s+\w+|why\s+did|answer\s+this\s+question|show\s+(?:me\s+)?the\s+monthly\s+breakdown)\b/i],
   ['lookml', /\b(add\s+a\s+measure|add\s+a\s+dimension|create\s+a\s+view|edit\s+view|sql_table_name|derived_table)\b/i],
-  ['dashboard', /\b(build\s+a\s+dashboard|create\s+a\s+dashboard|create\s+a\s+look|create\s+a\s+board)\b/i],
+  ['dashboard', /\b(?:build|create|generate|make|design)\s+(?:a\s+|an\s+)?(?:[a-z0-9_-]+\s+){0,4}(?:dashboard|look|board)\b/i],
 ]
+
+const SLASH_SKILL_USE_CASES: Record<string, ResolvedStudioUseCase> = Object.assign(
+  Object.fromEntries(STUDIO_SLASH_SKILLS.map((s) => [s.id, 'lookml' as ResolvedStudioUseCase])),
+  {
+    'agentic-lookml': 'lookml',
+    'lkr-project-helper': 'lookml',
+    'looker-dashboard': 'dashboard',
+    'creating-looker-dashboard': 'dashboard',
+    'data-investigator': 'data-investigator',
+    'key-driver-analysis': 'data-investigator',
+    'data-apps': 'app',
+  } as Record<string, ResolvedStudioUseCase>
+)
 
 const ALL_RESOLVED_USE_CASES: ResolvedStudioUseCase[] = [
   'app', 'data-investigator', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics',
@@ -439,6 +453,9 @@ export function matchExplicitUseCaseRule(
     if (tagged && allowedSet.has(tagged)) return tagged
   }
   if (isConversationalNoOpPrompt(rawText)) return null
+  const slashToken = rawText.match(/(?:^|\s)\/([a-z0-9_-]+)(?=\s|$|[.,;!?])/i)?.[1]?.toLowerCase()
+  const slashTarget = slashToken ? (SLASH_SKILL_USE_CASES[slashToken] || (slashToken.startsWith('lookml-') ? 'lookml' : undefined)) : undefined
+  if (slashTarget && allowedSet.has(slashTarget)) return slashTarget
   for (const [candidate, re] of USE_CASE_RULES) {
     if (candidate === 'tile' && CONTENT_CREATION_VERB_RE.test(rawText) && !EXPLICIT_SCRIPT_CREATION_RE.test(rawText)) continue
     if (allowedSet.has(candidate) && re.test(rawText)) return candidate
@@ -453,7 +470,13 @@ export function extractResolvedUseCase(
 ): ResolvedStudioUseCase {
   const allowedSet = resolveAllowedUseCases(allowedModes)
   const rawText = String(text || '')
-  const combined = `${String(promptFallback || '')}\n${rawText}`
+  const promptStr = String(promptFallback || '')
+  const hasExplicitTag = /<USE_CASE>\s*[^<]+?\s*<\/USE_CASE>/i.test(rawText)
+  if (!hasExplicitTag && /(?:^|\s)\/[a-z0-9_-]+/i.test(promptStr)) {
+    const fromSlash = matchExplicitUseCaseRule(promptStr, allowedModes)
+    if (fromSlash) return fromSlash
+  }
+  const combined = `${promptStr}\n${rawText}`
   return (
     matchExplicitUseCaseRule(rawText, allowedModes) ||
     matchExplicitUseCaseRule(combined, allowedModes) ||
