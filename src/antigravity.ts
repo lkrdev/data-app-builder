@@ -90,6 +90,7 @@ import {
   BOOTSTRAP_LOOKML_PY,
   BOOTSTRAP_SANDBOX_SH,
   buildLookmlSystemGuide,
+  classifyLookerOperation,
   computeLkrExtensionCacheKey,
   executeLkrExtensionToolRequest,
   extractLkrExtensionToolRequests,
@@ -295,6 +296,7 @@ export interface AntigravityTurnResult {
   telemetry: AntigravityTurnTelemetry
   activitySteps?: AntigravityActivityStep[]
   thinkingDurationSec?: number
+  permissionError?: string
 }
 
 export function isNewProjectOnboardingIntakePrompt(
@@ -727,11 +729,13 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     if (steps.length > 0) onProgressSteps?.(steps)
     return steps
   }
+  let mutSuccessSeq = 0
   const turnSdk = createDeduplicatedLookerSdkProxy(sdk, (res, elapsedMs, err, reqMeta) => {
     lookerHttpCalls += 1
     lookerHttpMs += elapsedMs
     const failed = Boolean(err || (res && (res.ok === false || Number(res.statusCode) >= 400)))
     if (failed) apiRetries += 1
+    else if (reqMeta?.path && classifyLookerOperation(reqMeta.method, reqMeta.path).requiresPermission) mutSuccessSeq += 1
     if (reqMeta?.path) {
       const epLine = `${reqMeta.method} ${reqMeta.path}${failed ? ' [ERR]' : ''} (${elapsedMs}ms)`
       if (activeLookerCallId) {
@@ -761,6 +765,27 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     pollIdx = 0; prevStepCount = (interaction.steps || []).length; prevStatus = interaction.status
   }
 
+  let bridgePermissionError = ''
+  const trackedPermissionHandler = effectivePermissionHandler
+    ? async (r: CodeModePermissionRequest) => {
+        const d = await effectivePermissionHandler(r)
+        if (d === 'allow_once' || d === 'allow_op' || d === 'allow_all' || (d as unknown) === true) mutSuccessSeq += 1
+        return d
+      }
+    : undefined
+  const recordPermOutcome = (val: unknown, prevSeq: number, req?: LkrExtensionToolRequest): string => {
+    const s = typeof val === 'string' ? val : val instanceof Error ? val.message : JSON.stringify(val || '')
+    const pErr = s.match(/PermissionError:[^\n"\\]+/)?.[0] || ''
+    if (pErr) bridgePermissionError = bridgePermissionError || pErr
+    else if (
+      mutSuccessSeq > prevSeq ||
+      (req?.kind === 'sdk_request' && classifyLookerOperation(req.method, req.path).requiresPermission)
+    ) {
+      bridgePermissionError = ''
+    }
+    return pErr
+  }
+
   try {
     for (;;) {
       while (interaction.status === 'in_progress' || interaction.status === 'requires_action' || interaction.status === 'queued') {
@@ -784,6 +809,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           if (pendingLookerCalls.length > 0 && actionRound + bridgeRound < resolvedMaxToolRounds) {
             actionRound += 1
             await throwIfAborted(interaction.id)
+            let preBridgeDenied = ''
             const explicitBridgeKeys = new Set(
               pendingLookerCalls
                 .filter((c: AntigravityInteractionStep) => c.name === 'lkr_cli_extension_bridge')
@@ -796,16 +822,25 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
             const preBridgePayloads: Record<string, string> = {}
             for (const req of preBridgeReqs) {
               await throwIfAborted(interaction.id)
+              const prevSeq = mutSuccessSeq
               try {
                 const { cacheKey, result } = await executeLkrExtensionToolRequest({
                   sdk: turnSdk, req, defaultVars: defaultCodeModeVars, extensionSDK,
-                  requirePermission, approvedOperations, onPermissionRequest: effectivePermissionHandler,
+                  requirePermission, approvedOperations, onPermissionRequest: trackedPermissionHandler,
                 })
                 resolvedBridgeCacheKeys.add(cacheKey)
-                if (!isNoReplayBridgeResult(result)) {
+                const pErr = recordPermOutcome(result, prevSeq, req)
+                if (pErr) preBridgeDenied = preBridgeDenied || pErr
+                else if (!isNoReplayBridgeResult(result)) {
                   preBridgePayloads[`/workspace/.lkr_extension_cache/${cacheKey}.json`] = JSON.stringify(compactBridgeValue(result))
                 }
-              } catch { /* retry on next pass */ }
+              } catch (err: unknown) {
+                const pErr = recordPermOutcome(err, prevSeq)
+                if (pErr) {
+                  resolvedBridgeCacheKeys.add(req.cache_key || computeLkrExtensionCacheKey(req))
+                  preBridgeDenied = preBridgeDenied || pErr
+                }
+              }
             }
             const firstCallArgs = parseStepArguments(
               pendingLookerCalls[0]?.arguments ?? pendingLookerCalls[0]?.args
@@ -831,14 +866,15 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                 (call.name === 'lkr_cli_extension_bridge' && (args.method || args.path)
                   ? `${String(args.method || 'GET').toUpperCase()} ${String(args.path || '/')}`
                   : undefined)
-              const wrappedPermissionRequest = effectivePermissionHandler
+              const wrappedPermissionRequest = trackedPermissionHandler
                 ? (permReq: CodeModePermissionRequest) =>
-                    effectivePermissionHandler({
+                    trackedPermissionHandler({
                       ...permReq,
                       ...(permReq.thought || callThought ? { thought: permReq.thought || callThought } : {}),
                     })
                 : undefined
               let codeModeOutput: string
+              const prevSeq = mutSuccessSeq
               try {
                 if (call.name === 'lkr_cli_extension_bridge') {
                   const resolvedToolReq = await resolveBridgeReq(args as unknown as LkrExtensionToolRequest)
@@ -852,20 +888,25 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                     onPermissionRequest: wrappedPermissionRequest,
                   })
                   resolvedBridgeCacheKeys.add(bridged.cacheKey)
-                  const compactRes = compactBridgeValue(bridged.result)
-                  const noReplay = isNoReplayBridgeResult(compactRes)
-                  codeModeOutput = JSON.stringify({
-                    ok: true,
-                    cache_key: bridged.cacheKey,
-                    cache_path: `/workspace/.lkr_extension_cache/${bridged.cacheKey}.json`,
-                    replay_needed: !noReplay,
-                    ...(noReplay
-                      ? {
-                          note: 'Already executed on Looker host — skip cache_path write and CLI replay (for pre_gate.py, merge passed/queries/test_query_results into data.json without deleting sql).',
-                        }
-                      : {}),
-                    result: compactRes,
-                  })
+                  const pErr = recordPermOutcome(bridged.result, prevSeq, resolvedToolReq)
+                  if (pErr) {
+                    codeModeOutput = JSON.stringify({ ok: false, error: pErr })
+                  } else {
+                    const compactRes = compactBridgeValue(bridged.result)
+                    const noReplay = isNoReplayBridgeResult(compactRes)
+                    codeModeOutput = JSON.stringify({
+                      ok: true,
+                      cache_key: bridged.cacheKey,
+                      cache_path: `/workspace/.lkr_extension_cache/${bridged.cacheKey}.json`,
+                      replay_needed: !noReplay,
+                      ...(noReplay
+                        ? {
+                            note: 'Already executed on Looker host — skip cache_path write and CLI replay (for pre_gate.py, merge passed/queries/test_query_results into data.json without deleting sql).',
+                          }
+                        : {}),
+                      result: compactRes,
+                    })
+                  }
                 } else {
                   const customVars =
                     args.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
@@ -885,10 +926,12 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                     onPermissionRequest: wrappedPermissionRequest,
                     vars: { ...defaultCodeModeVars, ...customVars },
                   })
+                  recordPermOutcome(codeModeOutput, prevSeq)
                 }
               } catch (err: unknown) {
-                apiRetries += 1
-                codeModeOutput = JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) })
+                const errMsg = err instanceof Error ? err.message : String(err)
+                if (!recordPermOutcome(errMsg, prevSeq)) apiRetries += 1
+                codeModeOutput = JSON.stringify({ ok: false, error: errMsg })
               }
               // ponytail: /v1beta/interactions requires function_result.result to be a plain JS Struct object (never a JSON string)
               let structResult: Record<string, unknown>
@@ -900,6 +943,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
               } catch {
                 structResult = { result: codeModeOutput }
               }
+              if (preBridgeDenied && !('warning' in structResult)) structResult.warning = preBridgeDenied
               if (Object.keys(preBridgePayloads).length > 0 && pendingLookerCalls[0]?.id === call.id) {
                 structResult = { ...structResult, _bridged_cache_files: preBridgePayloads }
               }
@@ -1048,25 +1092,36 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         onStatus(firstBridgeThought || friendlyBridge.statusText)
         const bridgeStart = Date.now()
         const bridgedLines: string[] = []
+        const deniedLines: string[] = []
         for (const req of pendingBridgeReqs) {
           await throwIfAborted(interaction.id)
           if (req.kind !== 'sdk_request') codemodeCalls += 1
+          const prevSeq = mutSuccessSeq
           try {
             const { cacheKey, result } = await executeLkrExtensionToolRequest({
               sdk: turnSdk, req, defaultVars: defaultCodeModeVars, extensionSDK,
-              requirePermission, approvedOperations, onPermissionRequest: effectivePermissionHandler,
+              requirePermission, approvedOperations, onPermissionRequest: trackedPermissionHandler,
             })
             resolvedBridgeCacheKeys.add(cacheKey)
-            bridgedLines.push(
-              isNoReplayBridgeResult(result)
-                ? `[NO_REPLAY: ${cacheKey} already executed on Looker host — skip cache write and CLI replay]\n${encodeBridgePayload(result)}`
-                : `/workspace/.lkr_extension_cache/${cacheKey}.json\n${encodeBridgePayload(result)}`
-            )
+            const pErr = recordPermOutcome(result, prevSeq, req)
+            if (pErr) deniedLines.push(pErr)
+            else {
+              bridgedLines.push(
+                isNoReplayBridgeResult(result)
+                  ? `[NO_REPLAY: ${cacheKey} already executed on Looker host — skip cache write and CLI replay]\n${encodeBridgePayload(result)}`
+                  : `/workspace/.lkr_extension_cache/${cacheKey}.json\n${encodeBridgePayload(result)}`
+              )
+            }
           } catch (err: unknown) {
-            apiRetries += 1
             const cacheKey = req.cache_key || computeLkrExtensionCacheKey(req)
             resolvedBridgeCacheKeys.add(cacheKey)
-            bridgedLines.push(`/workspace/.lkr_extension_cache/${cacheKey}.json\n\`\`\`json\n${JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) })}\n\`\`\``)
+            const errMsg = err instanceof Error ? err.message : String(err)
+            const pErr = recordPermOutcome(errMsg, prevSeq)
+            if (pErr) deniedLines.push(pErr)
+            else {
+              apiRetries += 1
+              bridgedLines.push(`/workspace/.lkr_extension_cache/${cacheKey}.json\n\`\`\`json\n${JSON.stringify({ ok: false, error: errMsg })}\n\`\`\``)
+            }
           }
         }
         codemodeExecMs += Date.now() - bridgeStart
@@ -1074,12 +1129,19 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
         if (!hasFinalBundle) {
           bridgeRound += 1
-          const seedText = [
-            '[LKR_EXTENSION_BRIDGE_RESULT] Executed online lkr-dev-cli request(s) in the host Looker Extension.',
-            'Write the resolved JSON payload(s) below to /workspace/.lkr_extension_cache/ and re-run your sandbox command so it hits the local cache and completes:',
-            ...bridgedLines,
-          ].join('\n\n')
-          await postContinuation([{ type: 'text', text: seedText }], 'remote')
+          const seedParts = ['[LKR_EXTENSION_BRIDGE_RESULT] Executed online lkr-dev-cli request(s) in the host Looker Extension.']
+          if (bridgedLines.length > 0) {
+            seedParts.push(
+              'Write the resolved JSON payload(s) below to /workspace/.lkr_extension_cache/ and re-run your sandbox command so it hits the local cache and completes:',
+              ...bridgedLines
+            )
+          }
+          if (deniedLines.length > 0) {
+            seedParts.push(
+              `Safe Mode denied Looker mutation(s) (do NOT write to /workspace/.lkr_extension_cache/ and stop without retrying):\n${deniedLines.join('\n')}`
+            )
+          }
+          await postContinuation([{ type: 'text', text: seedParts.join('\n\n') }], 'remote')
           continue
         }
       } else if (pendingBridgeReqs.length > 0 && !hasFinalBundle && !wrapUpSent) {
@@ -1252,6 +1314,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     resolvedUseCase,
     rawOutputText: rawText,
     assistantText: finalAssistantText,
+    ...(bridgePermissionError && (bundle || nativeBundle || lookmlBundle) ? { permissionError: bridgePermissionError } : {}),
     session: {
       environmentId: finalEnvId,
       lastInteractionId:

@@ -192,7 +192,7 @@ export interface CodeModePermissionRequest {
   operation: string
   httpMethod: string
   path: string
-  args: { params?: unknown; body?: unknown }
+  args: { params?: unknown; body?: unknown; [key: string]: unknown }
   thought?: string
 }
 

@@ -70,7 +70,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     activeConversationId, activeConversationIdRef, setActiveConversationId,
     hydratedConvRouteRef, activityStepsByInteractionIdRef,
     persistConversationAndLabel,
-    handleRunPython, handleSaveScript,
+    codeModePermOptsRef, handleRunPython, handleSaveScript,
     handleRunHealthCheck, handleRunConversationalAnalytics,
   } = loaders
 
@@ -288,53 +288,142 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     void handleWakeModeEnv(activeMode)
   }, [activeMode, disabledModes, environmentStatus, handleWakeModeEnv, sharedEnvIdRef])
 
-  const [requirePermission, setRequirePermission] = useState(true)
+  const [requirePermission, setRequirePermissionState] = useState(true)
+  const requirePermissionRef = useRef(requirePermission)
+  requirePermissionRef.current = requirePermission
   const approvedOpsRef = useRef<Set<string>>(new Set())
   const [pendingPerm, setPendingPerm] = useState<{
     req: CodeModePermissionRequest
     resolve: (decision: CodeModePermissionDecision) => void
+    approvedSet?: Set<string>
+    convId?: string
+    signal?: AbortSignal
   } | null>(() =>
     mockExt?.initialPendingPerm
       ? { req: mockExt.initialPendingPerm as CodeModePermissionRequest, resolve: () => {} }
       : null
   )
   const pendingPermRef = useRef<typeof pendingPerm>(pendingPerm)
-  pendingPermRef.current = pendingPerm
+  const permQueueRef = useRef<Promise<unknown>>(Promise.resolve())
+  const permEpochRef = useRef(0)
+  const activeTurnConvIdRef = useRef('')
 
-  const requestCodeModePermission = useCallback(
-    (req: CodeModePermissionRequest): Promise<CodeModePermissionDecision> =>
-      new Promise<CodeModePermissionDecision>((resolve) => {
-        setPendingPerm({ req, resolve })
-      }),
-    []
+  const syncPendingPerm = useCallback((next: typeof pendingPerm) => {
+    pendingPermRef.current = next
+    setPendingPerm(next)
+  }, [])
+
+  const dismissPendingPerm = useCallback(
+    (decision: CodeModePermissionDecision = 'deny') => {
+      const cur = pendingPermRef.current
+      if (!cur) return
+      syncPendingPerm(null)
+      cur.resolve(decision)
+    },
+    [syncPendingPerm]
   )
 
+  const setRequirePermission = useCallback(
+    (next: React.SetStateAction<boolean>) => {
+      const val = typeof next === 'function' ? next(requirePermissionRef.current) : next
+      requirePermissionRef.current = val
+      setRequirePermissionState(val)
+      if (!val && pendingPermRef.current) dismissPendingPerm('allow_once')
+    },
+    [dismissPendingPerm]
+  )
+
+  const requestCodeModePermission = useCallback(
+    (
+      req: CodeModePermissionRequest,
+      signal?: AbortSignal,
+      approvedSet?: Set<string>,
+      epoch?: number,
+      convId?: string
+    ): Promise<CodeModePermissionDecision> => {
+      const activeSignal = signal || turnAbortControllerRef.current?.signal
+      const callEpoch = epoch !== undefined ? epoch : permEpochRef.current
+      const targetApproved = approvedSet || approvedOpsRef.current
+      const next = permQueueRef.current.then(() => {
+        if (
+          permEpochRef.current !== callEpoch ||
+          activeSignal?.aborted ||
+          (convId !== undefined && activeConversationIdRef.current !== convId)
+        ) {
+          return 'deny' as CodeModePermissionDecision
+        }
+        if (!requirePermissionRef.current) return 'allow_once' as CodeModePermissionDecision
+        if (targetApproved.has('*')) return 'allow_all' as CodeModePermissionDecision
+        if (targetApproved.has(req.operation)) return 'allow_op' as CodeModePermissionDecision
+        return new Promise<CodeModePermissionDecision>((resolve) => {
+          syncPendingPerm({ req, resolve, approvedSet: targetApproved, convId, signal: activeSignal })
+        })
+      })
+      permQueueRef.current = next.then(
+        () => {},
+        () => {}
+      )
+      return next
+    },
+    [activeConversationIdRef, syncPendingPerm]
+  )
+
+  codeModePermOptsRef.current = () => {
+    const standaloneApproved = new Set<string>()
+    const standaloneEpoch = permEpochRef.current
+    const standaloneConvId = activeConversationIdRef.current
+    return {
+      requirePermission: true,
+      approvedOperations: standaloneApproved,
+      onPermissionRequest: (req) =>
+        requestCodeModePermission(req, undefined, standaloneApproved, standaloneEpoch, standaloneConvId),
+      isCanceled: () => permEpochRef.current !== standaloneEpoch,
+      thought: 'Execute Looker Python script',
+    }
+  }
+
   const resolvePermDecision = (decision: CodeModePermissionDecision) => {
-    if (!pendingPerm) return
-    const { resolve } = pendingPerm
-    setPendingPerm(null)
-    resolve(decision)
+    const cur = pendingPermRef.current || pendingPerm
+    if (!cur) return
+    const targetApproved = cur.approvedSet || approvedOpsRef.current
+    if (decision === 'allow_op') targetApproved.add(cur.req.operation)
+    else if (decision === 'allow_all') targetApproved.add('*')
+    syncPendingPerm(null)
+    cur.resolve(decision)
   }
 
   const abortActiveTurn = useCallback(
-    (reasonText: string) => {
+    (reasonText?: string) => {
+      permEpochRef.current += 1
+      activeTurnConvIdRef.current = ''
       turnAbortControllerRef.current?.abort()
       turnAbortControllerRef.current = null
-      if (pendingPermRef.current) {
-        const { resolve } = pendingPermRef.current
-        pendingPermRef.current = null
-        setPendingPerm(null)
-        resolve('deny')
-      }
+      dismissPendingPerm('deny')
       const partialSteps = liveActivityStepsRef.current
-      if (partialSteps.length > 0) {
+      if (reasonText && partialSteps.length > 0) {
         setMessages((prev) => [...prev, { role: 'assistant', text: reasonText, activitySteps: partialSteps }])
       }
       liveActivityStepsRef.current = []
       setLiveActivitySteps([])
     },
-    [setMessages]
+    [dismissPendingPerm, setMessages]
   )
+
+  const lastSeenConvIdRef = useRef(activeConversationId)
+  useEffect(() => {
+    const prevConvId = lastSeenConvIdRef.current
+    lastSeenConvIdRef.current = activeConversationId
+    if (activeTurnConvIdRef.current && activeConversationId !== activeTurnConvIdRef.current && turnAbortControllerRef.current) {
+      abortActiveTurn()
+      setBusyStatus((prev) => (prev && /^Loading\b/.test(prev) ? prev : mockExt?.initialBusyStatus || null))
+    } else if (prevConvId !== activeConversationId) {
+      if (pendingPermRef.current && pendingPermRef.current.convId !== activeConversationId) {
+        permEpochRef.current += 1
+        dismissPendingPerm('deny')
+      }
+      setBusyStatus((prev) => (prev === 'Executing Looker queries...' ? mockExt?.initialBusyStatus || null : prev))
+    }
+  }, [abortActiveTurn, activeConversationId, dismissPendingPerm, mockExt?.initialBusyStatus, setBusyStatus])
 
   const handleStopTurn = useCallback(() => {
     abortActiveTurn('Stopped by user.')
@@ -421,6 +510,12 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     const attachedImages = typedOverride ? typedOverride.images || [] : pastedImages
     const activeMentions = typedOverride ? typedOverride.mentions || [] : mentionedItems
     if (!isAuthenticated || (!text && attachedImages.length === 0) || (busyStatus && !typedOverride?.bypassBusy)) return
+    const turnApprovedOps = new Set<string>()
+    approvedOpsRef.current = turnApprovedOps
+    if (!turnAbortControllerRef.current) {
+      permEpochRef.current += 1
+      if (pendingPermRef.current) dismissPendingPerm('deny')
+    }
     if (environmentStatusRef.current === 'stopped') {
       environmentStatusRef.current = 'active'
       setEnvironmentStatus('active')
@@ -490,6 +585,10 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
 
     const abortController = new AbortController()
     turnAbortControllerRef.current = abortController
+    const turnEpoch = permEpochRef.current
+    activeTurnConvIdRef.current = convId
+    const turnPermRequest = (req: CodeModePermissionRequest) =>
+      requestCodeModePermission(req, abortController.signal, turnApprovedOps, turnEpoch, convId)
     setBusyStatus('Connecting to Antigravity...')
     liveActivityStepsRef.current = []
     setLiveActivitySteps([])
@@ -538,6 +637,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         }
         if (hydrated.extraSources.length > 0) turnExtraSources = hydrated.extraSources
         if (hydrated.promptSummary) turnPromptWithContext = `${effectivePrompt}\n\n${hydrated.promptSummary}`
+        if (abortController.signal.aborted) return
       }
 
       const promptSlashSkills = extractSlashSkillIds(effectivePrompt)
@@ -568,8 +668,8 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             : turnPromptWithContext,
         images: attachedImages, existingAppCode: currentAppCode || undefined,
         existingNativeContent: nativeContent, extraSources: turnExtraSources,
-        priorMessages: currentMessages, requirePermission,
-        approvedOperations: approvedOpsRef.current, onPermissionRequest: requestCodeModePermission,
+        priorMessages: currentMessages, requirePermission: true,
+        approvedOperations: turnApprovedOps, onPermissionRequest: turnPermRequest,
         onProgressSteps: (steps) => {
           liveActivityStepsRef.current = steps
           setLiveActivitySteps(steps)
@@ -579,6 +679,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         },
         signal: abortController.signal, onStatus: setBusyStatus,
       })
+      if (abortController.signal.aborted) return
 
       const resolvedUseCase: ResolvedStudioUseCase =
         explicitUseCase !== 'auto'
@@ -597,6 +698,27 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       let convExplores = turnExplores
       let convContent: Record<string, unknown> | undefined
       let finalMsgs: ChatMessage[] = []
+      let effectivePublishedApp = publishedApp
+      let effectiveNativeContent = nativeContent
+      const recordTurnDenial = (
+        denyText: string,
+        modeArg: StudioMode,
+        typeArg: string,
+        exploresArg: string[],
+        contentArg?: Record<string, unknown>
+      ) => {
+        setAgentSession({ ...result.session, conversationId: convId, explores: exploresArg }, modeArg)
+        const errMsgs: ChatMessage[] = [...messagesWithUser, { role: 'error', text: denyText }]
+        setMessages(errMsgs)
+        hydratedConvRouteRef.current = `/c/${encodeURIComponent(convId)}:${convId}`
+        void persistConversationAndLabel({
+          id: convId, type: typeArg, interactionId: result.session.lastInteractionId,
+          environmentId: result.session.environmentId,
+          label: isFirstTurn ? sanitizeConversationLabel('', effectivePrompt) : undefined,
+          explores: exploresArg, content: contentArg, messages: errMsgs,
+          isFirstTurn, userPrompt: effectivePrompt, assistantText: denyText, updateArtifactIndex: false,
+        })
+      }
       const turnCrudItems: TurnCrudItem[] = []
       const deletedIds = new Set<string>()
       const recordCrudItem = (item: TurnCrudItem) => {
@@ -620,8 +742,8 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             setContentItems((prev) => prev.filter((it) => it.key !== hit.key))
             if (activeContentTabKeyRef.current === hit.key) setActiveContentTabKey(contentItemsRef.current.filter((it) => !it.hidden).slice(-1)[0]?.key || '')
           }
-          if (nativeContent?.id === delId) setNativeContent(null)
-          if (publishedApp?.dashboardId === delId) { setPublishedApp(null); setCurrentAppCode('') }
+          if (effectiveNativeContent?.id === delId) { effectiveNativeContent = null; setNativeContent(null) }
+          if (effectivePublishedApp?.dashboardId === delId) { effectivePublishedApp = null; setPublishedApp(null); setCurrentAppCode('') }
           const ct = hit ? hit.contentType : fbType
           recordCrudItem(toTurnCrudItem(hit || { key: `${ct}:${delId}`, id: delId, title: formatStudioContentItemTitle(ct, delId), contentType: ct }, 'deleted'))
           return ''
@@ -638,14 +760,28 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           !isExplicitScriptRequest && !/\b(?:save|reusable|turn\s+(?:this|it)\s+into)\b[\s\S]{0,60}\b(?:script|tile)\b/i.test(baseReply)
             ? `${baseReply}\n\nWould you like me to save this Looker API lookup as a reusable **Script**?`
             : baseReply
-        setAgentSession({ ...result.session, conversationId: convId, explores: turnExplores }, 'tile')
         if (isExplicitScriptRequest && (extractedPy || explicitUseCase === 'tile' || loadedScript)) {
           const nextCode = extractedPy || scriptCode
           const prevKeys = new Set(contentItemsRef.current.map((it) => it.key))
+          const pyOut = await handleRunPython(nextCode, filtersJson, {
+            requirePermission: true,
+            approvedOperations: turnApprovedOps,
+            onPermissionRequest: turnPermRequest,
+            isCanceled: () => abortController.signal.aborted || permEpochRef.current !== turnEpoch,
+            thought: 'Execute generated Looker Python script',
+          })
+          if (abortController.signal.aborted) return
+          if (pyOut.includes('PermissionError:')) {
+            const denyErr =
+              pyOut.match(/PermissionError:[^\n"]+/)?.[0] ||
+              'PermissionError: Script execution mutates Looker state and was not approved.'
+            recordTurnDenial(denyErr, 'tile', 'tile', turnExplores)
+            return
+          }
           if (extractedPy) setScriptCode(extractedPy)
-          await handleRunPython(nextCode, filtersJson)
           try {
             const saved = await handleSaveScript(nextCode, messagesWithUser, publishedTileDash)
+            if (abortController.signal.aborted) return
             const existedScript = prevKeys.has(`script:${saved.id}`)
             convType = 'tile'
             convTitle = saved.title
@@ -655,6 +791,8 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             if (sItem) recordCrudItem(toTurnCrudItem(sItem, existedScript ? 'updated' : 'created'))
           } catch { /* ignore */ }
         }
+        if (abortController.signal.aborted) return
+        setAgentSession({ ...result.session, conversationId: convId, explores: turnExplores }, 'tile')
         finalMsgs = [
           ...messagesWithUser,
           {
@@ -689,6 +827,40 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         let finalDashId: string | undefined
         let finalWidgetCount: number | undefined
 
+        if (result.permissionError) {
+          recordTurnDenial(result.permissionError, resolvedMode, convType, effectiveExplores, convContent)
+          return
+        }
+
+        if (result.bundle && requirePermissionRef.current && !turnApprovedOps.has('*')) {
+          const pubOp = effectivePublishedApp?.dashboardId ? 'update_dashboard' : 'create_dashboard'
+          const pubPath = effectivePublishedApp?.dashboardId
+            ? `/api/4.0/dashboards/${effectivePublishedApp.dashboardId}`
+            : '/api/4.0/dashboards'
+          if (!turnApprovedOps.has(pubOp)) {
+            const decision = await turnPermRequest({
+              operation: pubOp,
+              httpMethod: effectivePublishedApp?.dashboardId ? 'PATCH' : 'POST',
+              path: pubPath,
+              args: { title: result.bundle.title, folder_id: selectedFolderId },
+              thought: `Publish Data App "${result.bundle.title}" to Looker dashboard`,
+            })
+            if (abortController.signal.aborted) return
+            if (decision === 'allow_op') turnApprovedOps.add(pubOp)
+            else if (decision === 'allow_all') turnApprovedOps.add('*')
+            else if (decision !== 'allow_once' && (decision as unknown) !== true) {
+              recordTurnDenial(
+                `PermissionError: Operation '${pubOp}' mutates Looker state and was not approved.`,
+                resolvedMode,
+                convType,
+                effectiveExplores,
+                convContent
+              )
+              return
+            }
+          }
+        }
+
         if (result.lookmlBundle) {
           const canonProj = resolveLookmlCanonicalProjectId(result.lookmlBundle) || cleanLookmlProjectId(lookmlProjectId)
           if (canonProj) {
@@ -706,6 +878,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
               const saved = await saveLookmlSessionArtifact({ sdk: core40SDK, extensionSDK, userId, bundle: mergedBundle, studio: studioMeta })
               mergedBundle = saved.payload.bundle
             } catch { /* ignore */ }
+            if (abortController.signal.aborted) return
             const lookmlId = cleanLookmlProjectId(mergedBundle.project_id) || canonProj
             setLookmlBundle(mergedBundle)
             setLookmlProjectId(lookmlId)
@@ -753,7 +926,8 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           const isExistingNative = contentItemsRef.current.some(
             (it) => it.id === String(result.nativeBundle!.id) && (it.contentType === reqCt || (['dashboard', 'lookml_dashboard'].includes(it.contentType) && ['dashboard', 'lookml_dashboard'].includes(reqCt)))
           )
-          const savedNative = await saveNativeContentArtifact(core40SDK, extensionSDK, userId, result.nativeBundle, selectedFolderId, nativeContent, studioMeta)
+          const savedNative = await saveNativeContentArtifact(core40SDK, extensionSDK, userId, result.nativeBundle, selectedFolderId, effectiveNativeContent, studioMeta)
+          if (abortController.signal.aborted) return
           lastNativeIdRef.current = savedNative.id
           resolvedUseCaseByIdRef.current[savedNative.id] = 'dashboard'
           setNativeContent(savedNative, { source: isExistingNative ? 'modified' : 'created', createdInConversation: true, hidden: false })
@@ -774,7 +948,8 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         if (result.bundle) {
           handledArtifact = true
           setBusyStatus('Publishing inline extension & updating Looker dashboard...')
-          const upserted = await upsertPublishedDataApp(core40SDK, result.bundle, selectedFolderId, publishedApp, studioMeta)
+          const upserted = await upsertPublishedDataApp(core40SDK, result.bundle, selectedFolderId, effectivePublishedApp, studioMeta)
+          if (abortController.signal.aborted) return
           const appUseCaseType: ResolvedStudioUseCase = resolvedUseCase === 'data-investigator' ? 'data-investigator' : 'app'
           const appCt: StudioContentItemType = appUseCaseType === 'data-investigator' ? 'data-investigator' : 'data_app'
           const isExistingApp = contentItemsRef.current.some(
@@ -801,6 +976,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
               getArtifactNamespace(extensionSDK)
             )
           } catch { /* ignore */ }
+          if (abortController.signal.aborted) return
           convType = appUseCaseType
           convTitle = upserted.title
           convContent = Object.assign({}, convContent, {
@@ -813,19 +989,29 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages, convId)
             return
           }
-          if (effectiveBuilderMode === 'dashboard' && nativeContent) {
+          if (effectiveBuilderMode === 'dashboard' && effectiveNativeContent) {
             const updatedNative = await saveNativeContentArtifact(
               core40SDK, extensionSDK, userId,
-              { id: nativeContent.id, title: nativeContent.title, explores: effectiveExplores },
-              selectedFolderId, nativeContent, studioMeta
+              { id: effectiveNativeContent.id, title: effectiveNativeContent.title, explores: effectiveExplores },
+              selectedFolderId, effectiveNativeContent, studioMeta
             )
+            if (abortController.signal.aborted) return
             setNativeContent(updatedNative, { source: 'modified', hidden: false })
             convType = 'dashboard'
             convContent = { dashboardId: updatedNative.id, contentType: updatedNative.contentType, embedPath: updatedNative.embedPath }
-          } else if (publishedApp) {
-            setPublishedApp(await saveDashboardStudioMetadata(core40SDK, publishedApp, studioMeta), { source: 'modified', hidden: false })
+          } else if (effectivePublishedApp) {
+            if (
+              !requirePermissionRef.current ||
+              turnApprovedOps.has('*') ||
+              turnApprovedOps.has('update_dashboard') ||
+              turnApprovedOps.has('update_dashboard_element')
+            ) {
+              const updatedApp = await saveDashboardStudioMetadata(core40SDK, effectivePublishedApp, studioMeta)
+              if (abortController.signal.aborted) return
+              setPublishedApp(updatedApp, { source: 'modified', hidden: false })
+            }
             convType = 'app'
-            convContent = { dashboardId: publishedApp.dashboardId, appArtifactId: `obj_app_${publishedApp.dashboardId}` }
+            convContent = { dashboardId: effectivePublishedApp.dashboardId, appArtifactId: `obj_app_${effectivePublishedApp.dashboardId}` }
           }
         }
 
@@ -871,8 +1057,13 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       setMessages((prev) => [...prev, { role: 'error', text: msg }])
     } finally {
       if (!abortController.signal.aborted) {
-        if (turnAbortControllerRef.current === abortController) turnAbortControllerRef.current = null
-        setPendingPerm(null)
+        if (turnAbortControllerRef.current === abortController) {
+          turnAbortControllerRef.current = null
+          activeTurnConvIdRef.current = ''
+        }
+        if (pendingPermRef.current?.signal === abortController.signal) {
+          dismissPendingPerm('deny')
+        }
         setBusyStatus(null)
         const nextSteps = Array.isArray(mockExt?.initialLiveActivitySteps)
           ? (mockExt.initialLiveActivitySteps as AntigravityActivityStep[])

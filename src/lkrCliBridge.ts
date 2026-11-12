@@ -1,8 +1,15 @@
 import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
 
+import type { CodeModePermissionDecision, CodeModePermissionRequest } from './antigravityTypes'
 import { fetchLookerCaAgentsCatalog, LookerCaAgentSummary, normalizeCaAgent } from './conversationalAnalytics'
-import { rawLookerRequest } from './lookerApi'
+import {
+  invokeLookerExtensionSdk,
+  isLookerExtensionSdk,
+  normalizeLookerApiPath,
+  rawLookerRequest,
+  resolveLookerExtensionSdk,
+} from './lookerApi'
 
 export const CODEMODE_CDN_URL = 'https://cdn.lkr.dev/cli/codemode/0.0.66/codemode.js'
 
@@ -23,18 +30,14 @@ export interface LkrCodeModeRunOptions {
   core40SDK?: unknown
   extensionSDK?: unknown
   vars?: Record<string, unknown>
+  thought?: string
   allowUpdateSession?: boolean
   allow_update_session?: boolean
   requirePermission?: boolean
   approvedOperations?: Set<string>
-  onPermissionRequest?: (req: {
-    operation: string
-    httpMethod: string
-    path: string
-    args: { params?: unknown; body?: unknown }
-    thought?: string
-    [key: string]: unknown
-  }) => Promise<string> | string
+  onPermissionRequest?: (
+    req: CodeModePermissionRequest & Record<string, unknown>
+  ) => Promise<CodeModePermissionDecision | string> | CodeModePermissionDecision | string
   requestHandler?: (
     method: string,
     path: string,
@@ -218,31 +221,127 @@ export async function ensureCodeModeLoaded(): Promise<LkrCodeModeRuntime> {
   return codeModeLoadPromise
 }
 
+// ponytail: Monty WASM serializes rejected JS Promises via JSON.stringify, which turns bare Error instances into "{}";
+// attaching toJSON preserves exact error text in both Monty WASM tracebacks and JS/Jest Error assertions.
+const toHandlerError = (err: unknown): Error => {
+  const m = err instanceof Error ? err.message : String(err)
+  return Object.assign(new Error(m), { toJSON: () => m })
+}
+
+function resolveLookerBaseHandler(
+  opts: LkrCodeModeRunOptions,
+  rawArg?: unknown
+): LkrCodeModeRunOptions['requestHandler'] {
+  if (typeof opts.requestHandler === 'function') return opts.requestHandler
+  const rawSdk = (opts.sdk || opts.core40SDK) as Looker40SDK | undefined
+  const rawReq = (rawSdk as { authSession?: { transport?: { rawRequest?: unknown } } } | undefined)?.authSession
+    ?.transport?.rawRequest
+  if (typeof rawReq === 'function' && rawSdk) {
+    return (m: string, p: string, q?: unknown, b?: unknown) =>
+      rawLookerRequest(
+        rawSdk,
+        String(m || 'GET').toUpperCase() as 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
+        p,
+        (q as Record<string, unknown> | undefined) || undefined,
+        b
+      )
+  }
+  const extSdk = resolveLookerExtensionSdk(
+    rawSdk,
+    opts.extensionSDK,
+    (opts as { extensionSdk?: unknown }).extensionSdk,
+    rawArg
+  )
+  return extSdk
+    ? (m: string, p: string, q?: unknown, b?: unknown, o?: unknown) => invokeLookerExtensionSdk(extSdk, m, p, q, b, o)
+    : undefined
+}
+
+function createGatedLookerHandler(
+  baseHandler: LkrCodeModeRunOptions['requestHandler'],
+  opts: Pick<LkrCodeModeRunOptions, 'requirePermission' | 'approvedOperations' | 'onPermissionRequest' | 'thought'>,
+  codeFallback?: string
+): LkrCodeModeRunOptions['requestHandler'] {
+  const shouldRequirePermission =
+    opts.requirePermission !== undefined
+      ? Boolean(opts.requirePermission)
+      : typeof opts.onPermissionRequest === 'function'
+  if (!baseHandler && !shouldRequirePermission) return undefined
+  const approvedOps =
+    opts.approvedOperations instanceof Set
+      ? opts.approvedOperations
+      : new Set<string>(opts.approvedOperations || [])
+  let permChain: Promise<void> = Promise.resolve()
+  const execBase = (m: string, p: string, q?: unknown, b?: unknown, o?: unknown) =>
+    baseHandler
+      ? Promise.resolve()
+          .then(() => baseHandler(m, p, q, b, o))
+          .then(undefined, (err: unknown) => Promise.reject(toHandlerError(err)))
+      : Promise.reject(toHandlerError(`Looker SDK transport is not configured for ${m} ${p}`))
+  return (m: string, p: string, q?: unknown, b?: unknown, o?: unknown) => {
+    const verb = String(m || 'GET').toUpperCase()
+    const rawTrim = String(p || '').trim()
+    const canon = canonicalizeLookerRoute(rawTrim)
+    const needsRewrite =
+      canon.hasTraversal || /^(?:https?:)?\/\//i.test(rawTrim) || rawTrim.includes('#')
+    const noHash = rawTrim.split('#')[0]
+    const qIdx = noHash.indexOf('?')
+    const forwardPath = needsRewrite ? canon.path + (qIdx >= 0 ? noHash.slice(qIdx) : '') : p
+    const info = classifyLookerOperation(verb, p, codeFallback)
+    const isApproved = () => approvedOps.has('*') || approvedOps.has(info.operation)
+    if (!shouldRequirePermission || !info.requiresPermission || isApproved()) {
+      return execBase(m, forwardPath, q, b, o)
+    }
+    const denyMsg = `PermissionError: Operation '${info.operation}' (${verb} ${p}) mutates Looker state and was not approved.`
+    const gated = permChain.then(() => {
+      if (isApproved()) return
+      if (typeof opts.onPermissionRequest !== 'function') return Promise.reject(toHandlerError(denyMsg))
+      const thought = typeof opts.thought === 'string' && opts.thought.trim() ? opts.thought.trim() : undefined
+      return Promise.resolve(
+        opts.onPermissionRequest(
+          Object.assign(
+            { operation: info.operation, httpMethod: verb, path: p, args: { params: q, body: b } },
+            thought ? { thought } : null
+          )
+        )
+      ).then((decision) => {
+        if (decision === 'allow_op') approvedOps.add(info.operation)
+        else if (decision === 'allow_all') approvedOps.add('*')
+        else if (decision !== 'allow_once' && (decision as unknown) !== true) {
+          return Promise.reject(toHandlerError(denyMsg))
+        }
+      })
+    })
+    permChain = gated.then(
+      () => {},
+      () => {}
+    )
+    return gated.then(() => execBase(m, forwardPath, q, b, o))
+  }
+}
+
 const runCodeMode: LkrCodeModeRunFn = async (
   codeOrParams: LkrCodeModeRunOptions | string,
   options?: LkrCodeModeRunOptions
 ): Promise<string> => {
   const runtime = await ensureCodeModeLoaded()
   const isObj = Boolean(codeOrParams && typeof codeOrParams === 'object')
-  const baseOpts: LkrCodeModeRunOptions = isObj ? { ...(codeOrParams as LkrCodeModeRunOptions) } : { ...(options || {}) }
+  const baseOpts: LkrCodeModeRunOptions = isObj
+    ? Object.assign({}, codeOrParams as LkrCodeModeRunOptions)
+    : isLookerExtensionSdk(options) && !('code' in (options as object)) && !('requirePermission' in (options as object))
+    ? { extensionSDK: options }
+    : Object.assign(
+        {},
+        options || null,
+        isLookerExtensionSdk(options) && !(options as LkrCodeModeRunOptions)?.extensionSDK ? { extensionSDK: options } : null
+      )
   const rawInputCode = String(isObj ? baseOpts.code || '' : codeOrParams || '')
   const rawCode = /\bsdk\s*=/.test(rawInputCode)
     ? rawInputCode
     : rawInputCode.replace(/\bsdk\.([a-z_][a-z0-9_]*)\s*\(/g, '$1(')
   const rawSdk = (baseOpts.sdk || baseOpts.core40SDK) as Looker40SDK | undefined
-  const hasRaw = typeof (rawSdk as { authSession?: { transport?: { rawRequest?: unknown } } } | undefined)?.authSession?.transport?.rawRequest === 'function'
-  const requestHandler = typeof baseOpts.requestHandler === 'function'
-    ? baseOpts.requestHandler
-    : hasRaw && rawSdk
-    ? (m: string, p: string, q?: unknown, b?: unknown) =>
-        rawLookerRequest(
-          rawSdk,
-          String(m || 'GET').toUpperCase() as 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
-          p,
-          (q as Record<string, unknown> | undefined) || undefined,
-          b
-        ).catch((err: unknown) => Promise.reject(err instanceof Error ? err.message : String(err)))
-    : undefined
+  const baseHandler = resolveLookerBaseHandler(baseOpts, isObj ? codeOrParams : options)
+  const gatedRequestHandler = createGatedLookerHandler(baseHandler, baseOpts, rawCode)
 
   let caAgentsCatalog: LookerCaAgentSummary[] | undefined
   const usesSearchAgents = /\b(search_agents|agents_search)\b/.test(rawCode) && !/\bdef\s+search_agents\b/.test(rawCode)
@@ -251,9 +350,9 @@ const runCodeMode: LkrCodeModeRunFn = async (
       caAgentsCatalog = baseOpts.vars.__ca_agents_catalog__ as LookerCaAgentSummary[]
     } else if (rawSdk) {
       caAgentsCatalog = await fetchLookerCaAgentsCatalog(rawSdk, [], { allowEmpty: true })
-    } else if (typeof requestHandler === 'function') {
+    } else if (typeof gatedRequestHandler === 'function') {
       try {
-        const res = await requestHandler('GET', '/api/4.0/agents/search', undefined, undefined, undefined)
+        const res = await gatedRequestHandler('GET', '/agents/search', undefined, undefined, undefined)
         caAgentsCatalog = Array.isArray(res) ? res.map(normalizeCaAgent).filter((a): a is LookerCaAgentSummary => Boolean(a)) : []
       } catch {
         caAgentsCatalog = []
@@ -329,19 +428,20 @@ const runCodeMode: LkrCodeModeRunFn = async (
     ].join('\n')
   }
 
-  const nextOpts: LkrCodeModeRunOptions = {
-    ...baseOpts,
-    ...(requestHandler ? { requestHandler } : {}),
-    code,
-    vars: {
-      INVESTIGATION_ANCHOR_DATE: new Date().toISOString().slice(0, 10),
-      ...(usesSearchAgents ? { __ca_agents_catalog__: caAgentsCatalog } : {}),
-      ...(baseOpts.vars || {}),
-    },
-    ...(!baseOpts.approvedOperations && /\b(run_key_driver_analysis|kda\/analyze)\b/.test(rawCode)
-      ? { approvedOperations: new Set(['read_internal_kda_analyze', 'create_internal']) }
-      : {}),
-  }
+  const nextOpts: LkrCodeModeRunOptions = Object.assign(
+    {},
+    baseOpts,
+    gatedRequestHandler ? { requestHandler: gatedRequestHandler } : null,
+    {
+      requirePermission: false,
+      code,
+      vars: Object.assign(
+        { INVESTIGATION_ANCHOR_DATE: new Date().toISOString().slice(0, 10) },
+        usesSearchAgents ? { __ca_agents_catalog__: caAgentsCatalog } : null,
+        baseOpts.vars || null
+      ),
+    }
+  )
   return isObj ? runtime.runPythonCode(nextOpts) : runtime.runPythonCode(code, nextOpts)
 }
 
@@ -352,11 +452,16 @@ export const LkrCodeMode: LkrCodeModeRuntime = {
   classifyOperation: classifyLookerOperation,
   init: async () => ensureCodeModeLoaded(),
   connect: async (options?: Record<string, unknown>) => (await ensureCodeModeLoaded()).connect(options),
-  setExtensionSDK: async (sdk: unknown) => (await ensureCodeModeLoaded()).setExtensionSDK(sdk),
+  setExtensionSDK: async (sdk: unknown) => {
+    ;(globalThis as Record<string, unknown>).__LKR_EXTENSION_SDK__ = sdk
+    return (await ensureCodeModeLoaded()).setExtensionSDK(sdk)
+  },
   getHostData: async () => (await ensureCodeModeLoaded()).getHostData(),
   runPythonCode: runCodeMode,
-  run_python_code: (a: LkrCodeModeRunOptions & string, b?: LkrCodeModeRunOptions) => LkrCodeMode.runPythonCode(a, b),
-  executeLookerCodeMode: (a: LkrCodeModeRunOptions & string, b?: LkrCodeModeRunOptions) => LkrCodeMode.runPythonCode(a, b),
+  run_python_code: ((a: LkrCodeModeRunOptions | string, b?: LkrCodeModeRunOptions) =>
+    LkrCodeMode.runPythonCode(a as string, b)) as LkrCodeModeRunFn,
+  executeLookerCodeMode: ((a: LkrCodeModeRunOptions | string, b?: LkrCodeModeRunOptions) =>
+    LkrCodeMode.runPythonCode(a as string, b)) as LkrCodeModeRunFn,
 }
 
 export const LKR_DEV_CLI_VERSION = '0.0.66'
@@ -462,7 +567,10 @@ def _read_cache(cache_key: str):
     for d in _cache_dirs():
         f = d / f"{cache_key}.json"
         if f.is_file():
-            raw = json.loads(f.read_text(encoding="utf-8"))
+            txt = f.read_text(encoding="utf-8")
+            if "PermissionError:" in txt:
+                continue
+            raw = json.loads(txt)
             val = raw["result"] if isinstance(raw, dict) and "result" in raw and (raw.get("__lkr_bridge_envelope__") or set(raw.keys()) <= {"cacheKey", "cache_key", "result", "ok"}) else raw
             if isinstance(val, dict) and val.get("__lookml_pull__") and not (val.get("files") or {}):
                 try: f.unlink()
@@ -640,6 +748,10 @@ def _patch_codemode(mod):
             cmd.callback = _patched_sandbox
 
 _PUSH_CODEMODE_PY = """
+def _re_perm(e):
+    if "PermissionError" in str(e): raise e
+try: update_session({"workspace_id": "dev"})
+except Exception: pass
 try: _cp = bool(create_project)
 except Exception: _cp = False
 existing_remote = []
@@ -660,16 +772,17 @@ if reset or _cp or new_project:
     if not p.get("uses_git") and p.get("git_service_name") != "bare":
         try:
             update_project(project_id, {"git_service_name": "bare"})
-        except Exception:
-            pass
+        except Exception as _e:
+            _re_perm(_e)
     if reset and not new_project:
         try:
             reset_project_to_production(project_id)
-        except Exception:
+        except Exception as _e:
+            _re_perm(_e)
             try:
                 create_developer_copy(project_id)
-            except Exception:
-                pass
+            except Exception as _e2:
+                _re_perm(_e2)
     if not new_project:
         try:
             existing_remote = all_project_files(project_id) or []
@@ -694,8 +807,8 @@ for f in files_to_push:
             update_file(project_id, {"path": fpath, "content": content})
             pushed_paths.add(fpath)
             continue
-        except Exception:
-            pass
+        except Exception as _e:
+            _re_perm(_e)
     dpath = "/".join(fpath.split("/")[:-1])
     if dpath and dpath not in created_dirs:
         cur = ""
@@ -704,12 +817,13 @@ for f in files_to_push:
             if cur not in created_dirs:
                 try:
                     create_project_directory(project_id, cur)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    _re_perm(_e)
                 created_dirs.add(cur)
     try:
         create_file(project_id, {"path": fpath, "content": content})
-    except Exception:
+    except Exception as _e:
+        _re_perm(_e)
         update_file(project_id, {"path": fpath, "content": content})
     pushed_paths.add(fpath)
 if reset and not single_file:
@@ -717,8 +831,8 @@ if reset and not single_file:
         if rpath and rpath not in pushed_paths and not rpath.endswith(".gitkeep") and rpath != "manifest.lkml":
             try:
                 delete_file(project_id, rpath)
-            except Exception:
-                pass
+            except Exception as _e:
+                _re_perm(_e)
 model_files = [f for f in files_to_push if f["root_name"].endswith(".model.lkml") and (reset or f["path"] not in remote_paths)]
 if model_files:
     existing_models = {m.get("name"): m for m in (all_lookml_models(fields="name,project_name,allowed_db_connection_names") or []) if isinstance(m, dict) and m.get("name")}
@@ -729,25 +843,25 @@ if model_files:
         if mname not in existing_models:
             try:
                 create_lookml_model({"name": mname, "project_name": project_id, "allowed_db_connection_names": allowed})
-            except Exception:
-                pass
+            except Exception as _e:
+                _re_perm(_e)
         else:
             cur_allowed = list(existing_models[mname].get("allowed_db_connection_names") or [])
             if conn_name and conn_name not in cur_allowed:
                 cur_allowed.append(conn_name)
             try:
                 update_lookml_model(mname, {"name": mname, "project_name": project_id, "allowed_db_connection_names": cur_allowed})
-            except Exception:
-                pass
+            except Exception as _e:
+                _re_perm(_e)
 if deploy:
     try:
         commit(project_id, {"message": message})
-    except Exception:
-        pass
+    except Exception as _e:
+        _re_perm(_e)
     try:
         deploy_to_production(project_id)
-    except Exception:
-        pass
+    except Exception as _e:
+        _re_perm(_e)
 return {"ok": True, "project_id": project_id, "pushed": sorted(pushed_paths)}
 """.strip()
 
@@ -1323,13 +1437,7 @@ function canonicalJson(val: unknown): string {
   return JSON.stringify(String(val))
 }
 
-function normalizeLookerBridgePath(rawPath?: string): string {
-  const p = String(rawPath || '/')
-    .trim()
-    .replace(/^https?:\/\/[^/]+/, '')
-    .replace(/^\/api\/4\.0(?=\/|$)/, '')
-  return p.startsWith('/') ? p : `/${p}`
-}
+const normalizeLookerBridgePath = normalizeLookerApiPath
 
 function cleanQueryParams(qp?: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!qp || typeof qp !== 'object') return null
@@ -1462,21 +1570,112 @@ export function extractLkrExtensionToolRequests(
   return out
 }
 
+const ROUTE_TRAVERSAL_RE = /(?:^|[\\/]|%(?:25)*(?:2f|5c))(?:\.|%(?:25)*2e){1,2}(?:$|[\\/]|%(?:25)*(?:2f|5c))|\\|%(?:25)*5c|%25(?:25)*(?:2e|2f|5c)/i
+
+function canonicalizeLookerRoute(rawPath?: string): { path: string; hasTraversal: boolean } {
+  const stripped = String(rawPath || '')
+    .trim()
+    .replace(/^https?:\/\/[^/?#]+/i, '')
+    .split(/[?#]/)[0]
+  if (!stripped) return { path: '/', hasTraversal: false }
+  const hasTraversal = ROUTE_TRAVERSAL_RE.test(stripped)
+  if (!hasTraversal) {
+    const clean = `/${stripped.replace(/^\/+/, '')}`.replace(/\/{2,}/g, '/').replace(/^\/api\/[0-9.]+(?=\/|$)/i, '')
+    return { path: clean.startsWith('/') ? clean : clean ? `/${clean}` : '/', hasTraversal: false }
+  }
+  const resolveUrlPath = (s: string): string => {
+    const withLead = `/${s.replace(/^\/+/, '')}`
+    try {
+      return new URL(withLead, 'https://looker.local').pathname
+    } catch {
+      return withLead
+    }
+  }
+  let unescaped = stripped.replace(/\\/g, '/')
+  while (/%25(2e|2f|5c|25)/i.test(unescaped)) {
+    unescaped = unescaped.replace(/%25(2e|2f|5c|25)/gi, '%$1')
+  }
+  // Pass 1 matches WHATWG fetch() (keeping %2f inside segments so /deploy_to_production/a%2f..%2ffiles/.. pops to /deploy_to_production);
+  // Pass 2 decodes any remaining %2f so /dashboards%2f..%2fqueries resolves to /queries (still marked hasTraversal: true).
+  const pass1 = resolveUrlPath(unescaped.replace(/%(?:2e|5c)/gi, (m) => (m.toLowerCase() === '%2e' ? '.' : '/')))
+  const pass2 = resolveUrlPath(pass1.replace(/%2f/gi, '/'))
+  const collapsed = pass2.replace(/\/+/g, '/').replace(/^\/api\/[0-9.]+(?=\/|$)/i, '').replace(/\/+$/, '')
+  return { path: collapsed ? (collapsed.startsWith('/') ? collapsed : `/${collapsed}`) : '/', hasTraversal: true }
+}
+
 export function classifyLookerOperation(
   httpMethod?: string,
   rawPath?: string,
   code?: string
 ): { operation: string; requiresPermission: boolean } {
   const verb = String(httpMethod || 'GET').toUpperCase()
-  const p = normalizeLookerBridgePath(rawPath)
+  const { path: p, hasTraversal } = canonicalizeLookerRoute(rawPath)
   const readOnlyPost =
     verb === 'POST' &&
-    (/^\/(queries|sql_queries|merge_queries|content_validation)(\/|$)/.test(p) ||
-      /\/(validate|lookml_tests\/run|git_connection_tests|kda\/analyze)(\/|$)/.test(p))
-  if (verb === 'GET' || verb === 'HEAD' || verb === 'OPTIONS' || readOnlyPost) {
+    !hasTraversal &&
+    (/^\/(queries|sql_queries|merge_queries)(\/|$)/.test(p) ||
+      /^\/content_validation\/?$/.test(p) ||
+      /^\/projects\/[^/]+\/(validate|lookml_tests\/run|git_connection_tests)\/?$/.test(p) ||
+      /^\/(?:internal\/)?kda\/analyze\/?$/.test(p))
+  if (
+    verb === 'GET' ||
+    verb === 'HEAD' ||
+    verb === 'OPTIONS' ||
+    readOnlyPost ||
+    (verb === 'PATCH' && !hasTraversal && /^\/session\/?$/.test(p))
+  ) {
     return {
       operation: `read_${p.replace(/^\/+|\/+$/g, '').replace(/[^a-zA-Z0-9]+/g, '_')}`,
       requiresPermission: false,
+    }
+  }
+  const prefix = verb === 'POST' ? 'create' : verb === 'DELETE' ? 'delete' : 'update'
+  if (rawPath && p !== '/') {
+    if (/^\/projects\/[^/]+\/deploy_ref_to_production(\/|$)/.test(p)) {
+      return { operation: 'deploy_ref_to_production', requiresPermission: true }
+    }
+    if (/^\/projects\/[^/]+\/deploy_to_production(\/|$)/.test(p)) {
+      return { operation: 'deploy_to_production', requiresPermission: true }
+    }
+    const resetMatch = p.match(/^\/projects\/[^/]+\/reset_to_(production|remote)(\/|$)/)
+    if (resetMatch) {
+      return { operation: `reset_project_to_${resetMatch[1]}`, requiresPermission: true }
+    }
+    if (/^\/projects\/[^/]+\/developer_copy(\/|$)/.test(p)) {
+      return { operation: 'create_developer_copy', requiresPermission: true }
+    }
+    if (/^\/projects\/[^/]+\/git\/deploy_key(\/|$)/.test(p)) {
+      return { operation: 'create_git_deploy_key', requiresPermission: true }
+    }
+    if (/^\/projects\/[^/]+\/(?:git\/)?commit(\/|$)/.test(p)) {
+      return { operation: 'commit', requiresPermission: true }
+    }
+    if (/^\/projects\/[^/]+\/generate_lookml/.test(p)) {
+      return { operation: 'generate_lookml_with_new_files', requiresPermission: true }
+    }
+    if (/^\/projects\/[^/]+\/git_branch(\/|$)/.test(p)) {
+      return { operation: `${prefix}_git_branch`, requiresPermission: true }
+    }
+    if (/^\/projects\/[^/]+\/files(\/|$)/.test(p)) {
+      return { operation: `${prefix}_file`, requiresPermission: true }
+    }
+    if (/^\/projects\/[^/]+\/directories(\/|$)/.test(p)) {
+      return { operation: `${prefix}_project_directory`, requiresPermission: true }
+    }
+    if (/^\/dashboards\/[^/]+\/import(\/|$)/.test(p)) {
+      return { operation: 'import_lookml_dashboard', requiresPermission: true }
+    }
+    if (/^\/dashboards\/[^/]+\/sync(\/|$)/.test(p)) {
+      return { operation: 'sync_lookml_dashboard', requiresPermission: true }
+    }
+    if (/^\/data_app_extension(\/|$)/.test(p)) {
+      return { operation: 'publish_data_app_extension', requiresPermission: true }
+    }
+    const seg = p.split('/').filter(Boolean)[0] || 'resource'
+    const singular = seg.replace(/ies$/, 'y').replace(/([^s])s$/, '$1')
+    return {
+      operation: `${prefix}_${singular}`,
+      requiresPermission: true,
     }
   }
   const callMatches = String(code || '').match(/\b([a-z_][a-z0-9_]*)\s*\(/g) || []
@@ -1486,10 +1685,8 @@ export function classifyLookerOperation(
       return { operation: fn, requiresPermission: true }
     }
   }
-  const prefix = verb === 'POST' ? 'create' : verb === 'DELETE' ? 'delete' : 'update'
-  const seg = p.split('/').filter(Boolean)[0] || 'resource'
   return {
-    operation: `${prefix}_${seg.replace(/s$/, '')}`,
+    operation: `${prefix}_resource`,
     requiresPermission: true,
   }
 }
@@ -1501,14 +1698,7 @@ export async function executeLkrExtensionToolRequest(params: {
   extensionSDK?: Partial<ExtensionSDK>
   requirePermission?: boolean
   approvedOperations?: Set<string>
-  onPermissionRequest?: (req: {
-    operation: string
-    httpMethod: string
-    path: string
-    args: { params?: unknown; body?: unknown }
-    thought?: string
-    [key: string]: unknown
-  }) => Promise<string>
+  onPermissionRequest?: LkrCodeModeRunOptions['onPermissionRequest']
 }): Promise<{ cacheKey: string; result: unknown }> {
   const { sdk, req, defaultVars, extensionSDK, requirePermission, approvedOperations, onPermissionRequest } = params
   if (req.kind === 'file_ref') {
@@ -1517,93 +1707,64 @@ export async function executeLkrExtensionToolRequest(params: {
   const cacheKey = req.cache_key || computeLkrExtensionCacheKey(req)
   const cleanPath = req.kind === 'sdk_request' ? normalizeLookerBridgePath(req.path) : ''
   const effectiveThought = typeof req.thought === 'string' && req.thought.trim() ? req.thought.trim() : undefined
+  const baseHandler = resolveLookerBaseHandler({ sdk, extensionSDK })
+  // ponytail: wasm.runPythonCodeRaw already issues PATCH /session via requestHandler when allowUpdateSession is true,
+  // so useHandlerFallback is true only for sdk_request to avoid sending PATCH /session twice on codemode calls.
+  const ensureDevSession = async (useHandlerFallback: boolean) => {
+    if (!req.dev_mode || cleanPath === '/session') return
+    try {
+      const sdkExt = sdk as unknown as {
+        update_session?: (b: { workspace_id: string }) => Promise<unknown>
+        ok?: (p: Promise<unknown>) => Promise<unknown>
+      }
+      if (typeof sdkExt?.update_session === 'function') {
+        const p = sdkExt.update_session({ workspace_id: 'dev' })
+        await (typeof sdkExt.ok === 'function' ? sdkExt.ok(p) : p)
+      } else if (useHandlerFallback && baseHandler) {
+        await baseHandler('PATCH', '/session', undefined, { workspace_id: 'dev' })
+      }
+    } catch {
+      /* ignore dev session switch failure */
+    }
+  }
 
   if (req.kind === 'sdk_request') {
     const method = String(req.method || 'GET').toUpperCase() as 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
     const queryParams = cleanQueryParams(req.query_params) || undefined
     const body = req.body !== null && req.body !== undefined ? req.body : undefined
-    const shouldRequirePermission =
-      requirePermission !== undefined ? Boolean(requirePermission) : typeof onPermissionRequest === 'function'
-    const info = classifyLookerOperation(method, cleanPath)
-    if (
-      shouldRequirePermission &&
-      info.requiresPermission &&
-      !approvedOperations?.has('*') &&
-      !approvedOperations?.has(info.operation)
-    ) {
-      const denyMsg = `PermissionError: Operation '${info.operation}' (${method} ${cleanPath}) mutates Looker state and was not approved.`
-      if (typeof onPermissionRequest !== 'function') throw new Error(denyMsg)
-      const decision = await onPermissionRequest({
-        operation: info.operation,
-        httpMethod: method,
-        path: cleanPath,
-        args: { params: queryParams, body },
-        thought: effectiveThought || `${method} ${cleanPath}`,
-      })
-      if (decision === 'allow_op') approvedOperations?.add(info.operation)
-      else if (decision === 'allow_all') approvedOperations?.add('*')
-      else if (decision !== 'allow_once' && (decision as unknown) !== true) throw new Error(denyMsg)
-    }
-  }
-
-  if (req.dev_mode && cleanPath !== '/session') {
-    try {
-      const sdkExt = sdk as unknown as {
-        update_session?: (b: { workspace_id: string }) => Promise<unknown>
-        ok?: (p: Promise<unknown>) => Promise<unknown>
-        authSession?: { transport?: { rawRequest?: unknown } }
-      }
-      if (typeof sdkExt?.update_session === 'function') {
-        const p = sdkExt.update_session({ workspace_id: 'dev' })
-        await (typeof sdkExt.ok === 'function' ? sdkExt.ok(p) : p)
-      } else if (req.kind === 'sdk_request' && sdkExt?.authSession?.transport?.rawRequest) {
-        await rawLookerRequest(sdk, 'PATCH', '/session', undefined, { workspace_id: 'dev' })
-      }
-    } catch {
-      // ignore dev session switch failure
-    }
-  }
-
-  if (req.kind === 'sdk_request') {
-    const method = String(req.method || 'GET').toUpperCase() as 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
-    const result = await rawLookerRequest(
-      sdk,
-      method,
-      cleanPath,
-      cleanQueryParams(req.query_params) || undefined,
-      req.body !== null && req.body !== undefined ? req.body : undefined
-    )
+    const sdkHandler = baseHandler
+      ? async (m: string, p: string, q?: unknown, b?: unknown) => {
+          await ensureDevSession(true)
+          return baseHandler(m, p, q, b)
+        }
+      : undefined
+    const gated = createGatedLookerHandler(sdkHandler, {
+      requirePermission,
+      approvedOperations,
+      onPermissionRequest,
+      thought: effectiveThought || `${method} ${cleanPath}`,
+    })
+    if (!gated) throw new Error(`Looker SDK transport is not configured for ${method} ${cleanPath}`)
+    const result = await gated(method, cleanPath, queryParams, body)
     return { cacheKey, result }
   }
 
-  const rawOut = await LkrCodeMode.runPythonCode({
-    code: String(req.code || ''),
-    sdk,
-    vars: { ...(defaultVars || {}), ...(req.vars || {}) },
-    allowUpdateSession: Boolean(req.dev_mode),
-    extensionSDK,
-    requirePermission: approvedOperations?.has('*') ? false : requirePermission,
-    approvedOperations,
-    onPermissionRequest: onPermissionRequest
-      ? async (permReq: Record<string, unknown>) => {
-          const decision = await onPermissionRequest({
-            operation: String(permReq?.operation || 'mutate'),
-            httpMethod: String(permReq?.httpMethod || 'POST'),
-            path: String(permReq?.path || '/'),
-            args: (permReq?.args as { params?: unknown; body?: unknown }) || {},
-            ...permReq,
-            ...(permReq?.thought || effectiveThought
-              ? { thought: String(permReq?.thought || effectiveThought) }
-              : {}),
-          })
-          if (decision === 'allow_all') approvedOperations?.add('*')
-          else if (decision === 'allow_op' && typeof permReq?.operation === 'string') {
-            approvedOperations?.add(permReq.operation)
-          }
-          return decision
-        }
-      : undefined,
-  })
+  await ensureDevSession(false)
+  const rawOut = await LkrCodeMode.runPythonCode(
+    Object.assign(
+      {
+        code: String(req.code || ''),
+        sdk,
+        vars: Object.assign({}, defaultVars || null, req.vars || null),
+        allowUpdateSession: Boolean(req.dev_mode),
+        extensionSDK,
+        requirePermission,
+        approvedOperations,
+        onPermissionRequest,
+      },
+      effectiveThought ? { thought: effectiveThought } : null
+    )
+  )
   let result: unknown = rawOut
   if (typeof rawOut === 'string') {
     const trimmed = rawOut.trim()
