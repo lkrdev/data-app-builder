@@ -193,10 +193,8 @@ let codeModeLoadPromise: Promise<LkrCodeModeRuntime> | null = null
 
 export async function ensureCodeModeLoaded(): Promise<LkrCodeModeRuntime> {
   const g = globalThis as unknown as { LkrCodeMode?: LkrCodeModeRuntime; window?: Record<string, unknown> }
-  if (g.window) {
-    if (typeof performance !== 'undefined' && !g.window.performance) g.window.performance = performance
-    if (typeof queueMicrotask === 'function' && !g.window.queueMicrotask) g.window.queueMicrotask = queueMicrotask
-  }
+  if (g.window && typeof performance !== 'undefined' && !g.window.performance) g.window.performance = performance
+  if (g.window && typeof queueMicrotask === 'function' && !g.window.queueMicrotask) g.window.queueMicrotask = queueMicrotask
   const attach = (rt: LkrCodeModeRuntime) => ((rt.classifyOperation = classifyLookerOperation), (g.LkrCodeMode = rt))
   if (g.LkrCodeMode && g.LkrCodeMode !== LkrCodeMode) return attach(g.LkrCodeMode)
   if (

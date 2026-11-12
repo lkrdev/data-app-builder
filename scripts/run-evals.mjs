@@ -17,7 +17,7 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
+import Module, { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { performance } from 'node:perf_hooks'
@@ -28,20 +28,8 @@ const repoRoot = path.resolve(__dirname, '..')
 const require = createRequire(import.meta.url)
 
 const babel = require('@babel/core')
-const Module = require('node:module')
 for (const ext of ['.ts', '.tsx']) {
-  Module._extensions[ext] = (mod, filename) => {
-    const src = readFileSync(filename, 'utf8')
-    const out = babel.transformSync(src, {
-      filename,
-      presets: [
-        ['@babel/preset-env', { targets: { node: 'current' }, modules: 'commonjs' }],
-        ['@babel/preset-react', { runtime: 'automatic' }],
-        ['@babel/preset-typescript', { isTSX: true, allExtensions: true }],
-      ],
-    })
-    mod._compile(out.code, filename)
-  }
+  Module._extensions[ext] = (m, f) => m._compile(babel.transformSync(readFileSync(f, 'utf8'), { filename: f, envName: 'test' }).code, f)
 }
 const { LkrCodeMode } = require(path.join(repoRoot, 'src/lkrCliBridge.ts'))
 const { fetchConversationSandboxDebugMarkdown } = require(path.join(repoRoot, 'src/antigravity.ts'))

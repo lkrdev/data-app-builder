@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
+import Module, { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -17,19 +17,8 @@ assert.equal(
 )
 
 const babel = require('@babel/core')
-const Module = require('node:module')
 for (const ext of ['.ts', '.tsx']) {
-  Module._extensions[ext] = (mod, filename) => {
-    const out = babel.transformSync(readFileSync(filename, 'utf8'), {
-      filename,
-      presets: [
-        ['@babel/preset-env', { targets: { node: 'current' }, modules: 'commonjs' }],
-        ['@babel/preset-react', { runtime: 'automatic' }],
-        ['@babel/preset-typescript', { isTSX: true, allExtensions: true }],
-      ],
-    })
-    mod._compile(out.code, filename)
-  }
+  Module._extensions[ext] = (m, f) => m._compile(babel.transformSync(readFileSync(f, 'utf8'), { filename: f, envName: 'test' }).code, f)
 }
 const { LkrCodeMode } = require(path.join(repoRoot, 'src/lkrCliBridge.ts'))
 
