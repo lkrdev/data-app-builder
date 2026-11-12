@@ -11,7 +11,7 @@ import {
   resolveLookerExtensionSdk,
 } from './lookerApi'
 
-export const CODEMODE_CDN_URL = 'https://cdn.lkr.dev/cli/codemode/0.0.66/codemode.js'
+export const CODEMODE_CDN_URL = 'https://cdn.lkr.dev/cli/codemode/0.0.67/codemode.js'
 
 export interface LkrCodeModeToolDefinition {
   type: string
@@ -192,7 +192,9 @@ function getCodeModeToolDefinition(name = 'run_looker_codemode'): LkrCodeModeToo
 let codeModeLoadPromise: Promise<LkrCodeModeRuntime> | null = null
 
 export async function ensureCodeModeLoaded(): Promise<LkrCodeModeRuntime> {
-  const g = globalThis as unknown as { LkrCodeMode?: LkrCodeModeRuntime }
+  const g = globalThis as unknown as { LkrCodeMode?: LkrCodeModeRuntime; window?: Record<string, unknown> }
+  if (g.window && typeof performance !== 'undefined' && !g.window.performance) g.window.performance = performance
+  if (g.window && typeof queueMicrotask === 'function' && !g.window.queueMicrotask) g.window.queueMicrotask = queueMicrotask
   const attach = (rt: LkrCodeModeRuntime) => ((rt.classifyOperation = classifyLookerOperation), (g.LkrCodeMode = rt))
   if (g.LkrCodeMode && g.LkrCodeMode !== LkrCodeMode) return attach(g.LkrCodeMode)
   if (
@@ -428,7 +430,7 @@ export const LkrCodeMode: LkrCodeModeRuntime = {
     LkrCodeMode.runPythonCode(a as string, b)) as LkrCodeModeRunFn,
 }
 
-export const LKR_DEV_CLI_VERSION = '0.0.66'
+export const LKR_DEV_CLI_VERSION = '0.0.67'
 export const LKR_DEV_CLI_SPEC = `lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}`
 export const BOOTSTRAP_SANDBOX_SH = `[ -x /workspace/.uv_tools/lkr-dev-cli/bin/lkr ] && [ ! -x /usr/local/bin/lkr ] && ln -sf /workspace/.uv_tools/lkr-dev-cli/bin/lkr /usr/local/bin/lkr; lkr --version 2>/dev/null | grep -q "${LKR_DEV_CLI_VERSION}" || { (command -v uv >/dev/null 2>&1 || pip install --break-system-packages --quiet uv || python3 -m pip install --break-system-packages --quiet uv); UV_PYTHON_INSTALL_DIR=/workspace/.uv_python UV_TOOL_DIR=/workspace/.uv_tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"; }; for sp in /workspace/.uv_tools/lkr-dev-cli/lib/python3.*/site-packages ~/.local/share/uv/tools/lkr-dev-cli/lib/python3.*/site-packages /usr/local/lib/python3.*/dist-packages /usr/lib/python3/dist-packages; do [ -d "$sp" ] && [ -w "$sp" ] && [ -f /workspace/sitecustomize.py ] && cp -f /workspace/sitecustomize.py "$sp/sitecustomize.py"; done; true`
 
@@ -997,7 +999,7 @@ CACHE_DIR = WORKSPACE_DIR / ".lkr_extension_cache"
 _PINNED_CLI_VERSION = "${LKR_DEV_CLI_VERSION}"
 LKR_DEV_CLI_VERSION = os.environ.get(
     "LKR_DEV_CLI_VERSION",
-    "0.0.66" if _PINNED_CLI_VERSION.startswith("$") else _PINNED_CLI_VERSION,
+    "0.0.67" if _PINNED_CLI_VERSION.startswith("$") else _PINNED_CLI_VERSION,
 )
 REQUIRED_SKILLS = (
     "agentic-lookml-workflow",

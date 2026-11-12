@@ -71,7 +71,7 @@ Opening a route with `:dashboardId` (or entering a Dashboard ID in the top bar a
 
 ## Execution Approval Policy (`Safe Mode (Ask)` vs. `Auto-Approve (YOLO)`)
 
-The top bar includes an execution approval toggle (`🛡️ Safe Mode (Ask)` vs. `⚡ Auto-Approve (YOLO)`). Both `LkrCodeMode` (`classifyOperation` in `src/vendor/codemode.js`) and the `lkr-dev-cli` Extension Bridge (`classifyLookerOperation` / `executeLkrExtensionToolRequest` in `src/lkrCliBridge.ts` for both `codemode` and `sdk_request` calls) enforce the following permission matrix:
+The top bar includes an execution approval toggle (`🛡️ Safe Mode (Ask)` vs. `⚡ Auto-Approve (YOLO)`). `src/lkrCliBridge.ts` (`classifyLookerOperation`, `LkrCodeMode.runPythonCode`, and `executeLkrExtensionToolRequest` for both `codemode` and `sdk_request` calls) enforces the following permission matrix:
 
 | Category | HTTP Methods & Looker API 4.0 Endpoints / SDK Calls | `🛡️ Safe Mode (Ask)` (`requirePermission: true`) | `⚡ Auto-Approve (YOLO)` (`requirePermission: false`) |
 | --- | --- | --- | --- |
@@ -118,11 +118,11 @@ npm run build
   ```
   Redownloads `install.sh`, `latest-version.txt`, `versions/<ver>/install.sh`, and extracts `looker-data-apps.tar.gz` into [`upstream/`](./upstream) so `git diff upstream/` shows any upstream toolkit or skill changes.
 
-- **Sync Looker Code Mode WASM (`~/lkrdev/cli/dist/codemode.js`)**:
+- **Sync Looker Code Mode WASM (`cdn.lkr.dev`)**:
   ```bash
   npm run sync-codemode
   ```
-  Copies (or builds via `build_codemode_wasm.py`) the single-file Monty Python WASM runtime into [`src/vendor/codemode.js`](./src/vendor/codemode.js).
+  Downloads `https://cdn.lkr.dev/cli/codemode/<version>/codemode.js` (matching [`lkr-dev-cli-version.txt`](./lkr-dev-cli-version.txt)) into [`src/vendor/codemode.js`](./src/vendor/codemode.js) for byte-for-byte CDN parity.
 
 ---
 

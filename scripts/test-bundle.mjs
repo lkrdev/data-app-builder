@@ -1,14 +1,26 @@
 // Assert-based self-check for the embedded Antigravity sandbox bundler (BUNDLE_APP_PY) and WASM CodeMode bridge.
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
+import Module, { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 const require = createRequire(import.meta.url)
 const repoRoot = path.resolve(import.meta.dirname, '..')
-const LkrCodeMode = require(path.join(repoRoot, 'src/vendor/codemode.js'))
+const vendorCodeModePath = path.join(repoRoot, 'src/vendor/codemode.js')
+assert.equal(
+  createHash('sha256').update(readFileSync(vendorCodeModePath)).digest('hex'),
+  '3a782aa6ab08002c8d8f25cd0dfa313f4e8754fc655e30598b87cb0875fe95e5',
+  'src/vendor/codemode.js must match CDN 0.0.67/codemode.js SHA-256 byte-for-byte'
+)
+
+const babel = require('@babel/core')
+for (const ext of ['.ts', '.tsx']) {
+  Module._extensions[ext] = (m, f) => m._compile(babel.transformSync(readFileSync(f, 'utf8'), { filename: f, envName: 'test' }).code, f)
+}
+const { LkrCodeMode } = require(path.join(repoRoot, 'src/lkrCliBridge.ts'))
 
 assert.equal(LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.name, 'run_looker_codemode')
 const mockSdk = {
@@ -45,9 +57,9 @@ const antigravityTs = [
   .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
   .join('\n')
 assert(
-  antigravityTs.includes('https://cdn.lkr.dev/cli/codemode/0.0.66/codemode.js') &&
+  antigravityTs.includes('https://cdn.lkr.dev/cli/codemode/0.0.67/codemode.js') &&
     antigravityTs.includes('export async function ensureCodeModeLoaded()'),
-  'src/lkrCliBridge.ts must define CODEMODE_CDN_URL (https://cdn.lkr.dev/cli/codemode/0.0.66/codemode.js) and ensureCodeModeLoaded()'
+  'src/lkrCliBridge.ts must define CODEMODE_CDN_URL (https://cdn.lkr.dev/cli/codemode/0.0.67/codemode.js) and ensureCodeModeLoaded()'
 )
 const distBundlePath = path.join(repoRoot, 'dist/bundle.js')
 if (statSync(distBundlePath, { throwIfNoEntry: false })) {
@@ -58,8 +70,8 @@ if (statSync(distBundlePath, { throwIfNoEntry: false })) {
   )
   const distBundleText = readFileSync(distBundlePath, 'utf8')
   assert(
-    distBundleText.includes('https://cdn.lkr.dev/cli/codemode/0.0.66/codemode.js'),
-    'Expected dist/bundle.js to reference https://cdn.lkr.dev/cli/codemode/0.0.66/codemode.js'
+    distBundleText.includes('https://cdn.lkr.dev/cli/codemode/0.0.67/codemode.js'),
+    'Expected dist/bundle.js to reference https://cdn.lkr.dev/cli/codemode/0.0.67/codemode.js'
   )
 }
 assert(
@@ -500,16 +512,21 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
   const upstreamAgentsMd = readFileSync(path.join(repoRoot, 'upstream/payload/AGENTS.md'), 'utf8')
   const pinnedVersionTxt = readFileSync(path.join(repoRoot, 'lkr-dev-cli-version.txt'), 'utf8').trim()
   const updateSkillsYml = readFileSync(path.join(repoRoot, '.github/workflows/update-skills.yml'), 'utf8')
-  assert.equal(pinnedVersionTxt, '0.0.66', 'lkr-dev-cli-version.txt must pin 0.0.66')
+  assert.equal(pinnedVersionTxt, '0.0.67', 'lkr-dev-cli-version.txt must pin 0.0.67')
   assert(
-    lookmlToolTsx.includes("export const LKR_DEV_CLI_VERSION = '0.0.66'") &&
+    rootAgentsMd.includes(`lkr-dev-cli[tools,code-mode,parse]==${pinnedVersionTxt}`) &&
+      upstreamAgentsMd.includes(`lkr-dev-cli[tools,code-mode,parse]==${pinnedVersionTxt}`),
+    `AGENTS.md and upstream/payload/AGENTS.md must pin lkr-dev-cli==${pinnedVersionTxt}`
+  )
+  assert(
+    lookmlToolTsx.includes("export const LKR_DEV_CLI_VERSION = '0.0.67'") &&
       lookmlToolTsx.includes('"install", "--break-system-packages", "--quiet", "uv"') &&
       lookmlToolTsx.includes('"UV_TOOL_BIN_DIR": "/usr/local/bin"') &&
       lookmlToolTsx.includes('"uv", "tool", "install", "--force", "--quiet", pkg_spec') &&
       updateSkillsYml.includes('cron: "0 9 * * 1,4"') &&
       updateSkillsYml.includes('https://pypi.org/pypi/lkr-dev-cli/json') &&
       updateSkillsYml.includes('chore/update-skills'),
-    'Issue #32: lookmlTool.tsx and .github/workflows/update-skills.yml must pin lkr-dev-cli==0.0.66, bootstrap uv via pip --break-system-packages + uv tool install, and auto-PR new PyPI releases'
+    'Issue #32: lookmlTool.tsx and .github/workflows/update-skills.yml must pin lkr-dev-cli==0.0.67, bootstrap uv via pip --break-system-packages + uv tool install, and auto-PR new PyPI releases'
   )
 
   // Live prototype check of bootstrap_lookml.py cli with mock pip & uv shims
@@ -526,7 +543,7 @@ echo "UV_TOOL_BIN_DIR=\${UV_TOOL_BIN_DIR:-} uv $@" >> "${cmdLogPath}"
 echo "UV_TOOL_DIR=\${UV_TOOL_DIR:-}" >> "${cmdLogPath}"
 cat << 'INNER' > "${fakeBinDir}/lkr"
 #!/bin/sh
-echo "lkr, version 0.0.66"
+echo "lkr, version 0.0.67"
 INNER
 chmod +x "${fakeBinDir}/lkr"
 EOF
@@ -543,11 +560,11 @@ chmod +x "${fakeBinDir}/uv"
   })
   const cliBootstrapJson = JSON.parse(cliBootstrapOut.trim())
   assert.equal(cliBootstrapJson.ok, true)
-  assert.equal(cliBootstrapJson.version, '0.0.66')
+  assert.equal(cliBootstrapJson.version, '0.0.67')
   const loggedCmds = readFileSync(cmdLogPath, 'utf8')
   assert(
     loggedCmds.includes('pip install --break-system-packages --quiet uv') &&
-      loggedCmds.includes('UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet lkr-dev-cli[tools,code-mode,parse]==0.0.66') &&
+      loggedCmds.includes('UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet lkr-dev-cli[tools,code-mode,parse]==0.0.67') &&
       loggedCmds.includes(`UV_TOOL_DIR=${workDir}/.uv_tools`),
     'bootstrap_lookml.py cli must execute pip install --break-system-packages --quiet uv followed by UV_TOOL_DIR=<workspace>/.uv_tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool install'
   )
@@ -556,7 +573,7 @@ chmod +x "${fakeBinDir}/uv"
   const persistedUvBin = path.join(workDir, '.uv_tools/lkr-dev-cli/bin')
   const persistedUvSp = path.join(workDir, '.uv_tools/lkr-dev-cli/lib/python3.12/site-packages')
   execFileSync('mkdir', ['-p', hibernatedBinDir, persistedUvBin, persistedUvSp])
-  writeFileSync(path.join(persistedUvBin, 'lkr'), '#!/bin/sh\necho "lkr, version 0.0.66"\n', { mode: 0o755 })
+  writeFileSync(path.join(persistedUvBin, 'lkr'), '#!/bin/sh\necho "lkr, version 0.0.67"\n', { mode: 0o755 })
   writeFileSync(path.join(hibernatedBinDir, 'uv'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
   writeFileSync(path.join(workDir, 'sitecustomize.py'), '# bridge shim\n', 'utf8')
   const hibernateOut = JSON.parse(
@@ -740,6 +757,8 @@ chmod +x "${fakeBinDir}/uv"
       !antigravityTs.includes('Looker Artifacts Lightweight-Only Rule') &&
       !antigravityTs.includes('studio-conversation-debugger') &&
       !sandboxSkillsBundleTs.includes('studio-conversation-debugger') &&
+      !sandboxSkillsBundleTs.includes('"issue-authoring/') &&
+      !sandboxSkillsBundleTs.includes('"studio-design-system/') &&
       convDebuggerSkillMd.includes('name: studio-conversation-debugger') &&
       convDebuggerSkillMd.includes('--oauth-account') &&
       convDebuggerScriptPy.includes('user_conversations:') &&
@@ -752,8 +771,10 @@ chmod +x "${fakeBinDir}/uv"
     const distBundleContent = readFileSync(distBundlePath, 'utf8')
     assert(
       !distBundleContent.includes('studio-conversation-debugger') &&
+        !distBundleContent.includes('name: issue-authoring') &&
+        !distBundleContent.includes('name: studio-design-system') &&
         !distBundleContent.includes('Looker Artifacts Lightweight-Only Rule'),
-      'Issue #155: dist/bundle.js must exclude studio-conversation-debugger and root-only Looker Artifacts Lightweight-Only Rule'
+      'Issue #155: dist/bundle.js must exclude repo-internal skills (studio-conversation-debugger, issue-authoring, studio-design-system) and root-only Looker Artifacts Lightweight-Only Rule'
     )
   }
 

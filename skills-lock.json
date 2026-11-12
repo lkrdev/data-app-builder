@@ -5,13 +5,13 @@
       "source": "lkrdev/cli",
       "sourceType": "github",
       "skillPath": "skills/agentic-lookml/SKILL.md",
-      "computedHash": "08e90b84789fd789a17e788e7e8b6b7fd55f45346ad37966745f4da62381f4f0"
+      "computedHash": "8640539959183c1b5e8587eddfbb9615eccbb4e34c69bfca1b4d573d887a5527"
     },
     "agentic-lookml-workflow": {
       "source": "lkrdev/cli",
       "sourceType": "github",
       "skillPath": "skills/agentic-lookml-workflow/SKILL.md",
-      "computedHash": "629ebe19a15910bcee0ecdf39aabd47a189785a7ce939e9eb98c1ab39cd0644c"
+      "computedHash": "e1a4c17f4b8fda167febf14675378fcc784b44943076f47e23ef63ba5fb2642d"
     },
     "creating-looker-dashboard": {
       "source": "looker-open-source/looker-skills",
@@ -29,7 +29,7 @@
       "source": "lkrdev/cli",
       "sourceType": "github",
       "skillPath": "skills/lkr-code-mode/SKILL.md",
-      "computedHash": "4aef3342cfb50504cb5c8b2a1e355c474ee249be21d4a6025c4a86069c5eb168"
+      "computedHash": "94c215f4ceeff368aff249d72ed539b8b8ec716914d8c0f61540edfdce99c381"
     },
     "lkr-project-helper": {
       "source": "lkrdev/cli",
@@ -59,13 +59,13 @@
       "source": "lkrdev/cli",
       "sourceType": "github",
       "skillPath": "skills/looker-field-profiler/SKILL.md",
-      "computedHash": "b8d20ae24961878ce603a887f57135b0ddf4d56d1974c5e73e3ac16c800bafaf"
+      "computedHash": "7ce2da51d417f875befbc873eafa03a60322df3046a74d439c8fb3d3236a1b72"
     },
     "looker-filters": {
       "source": "lkrdev/cli",
       "sourceType": "github",
       "skillPath": "skills/looker-filters/SKILL.md",
-      "computedHash": "90c9a729615dcb97118ad50fa8072e018df9e04a167c048c0b5c2e14d641375b"
+      "computedHash": "77dac754518359e622d3d0f37e0b844ef5b079295409f9768e7a9a485f3f3aa2"
     },
     "looker-performance-optimizer": {
       "source": "looker-open-source/looker-skills",
