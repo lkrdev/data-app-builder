@@ -499,20 +499,18 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       let parsedFilters: Record<string, string> = {}
       try { parsedFilters = JSON.parse(rawFilters || '{}') } catch { parsedFilters = {} }
       const effectivePermOpts = permOpts || codeModePermOptsRef.current?.()
-      const isStale = () => activeConversationIdRef.current !== runConvId || Boolean(effectivePermOpts?.isCanceled?.())
-      const clearExecBusy = () =>
+      const finish = (v: string) => {
+        if (activeConversationIdRef.current === runConvId && !effectivePermOpts?.isCanceled?.()) setScriptOutput(v)
         setBusyStatus((prev) => (prev === execBusyText ? mockExt?.initialBusyStatus || null : prev))
+        return v
+      }
       return LkrCodeMode.runPythonCode(
         Object.assign(
           {
-            code: codeToRun,
-            sdk: core40SDK,
-            extensionSDK,
+            code: codeToRun, sdk: core40SDK, extensionSDK,
             vars: {
-              mode: scriptMode,
-              dashboard_filters: Object.assign({ script_mode: scriptMode }, parsedFilters),
-              target_explores: selectedExplores,
-              target_folder_id: selectedFolderId,
+              mode: scriptMode, dashboard_filters: Object.assign({ script_mode: scriptMode }, parsedFilters),
+              target_explores: selectedExplores, target_folder_id: selectedFolderId,
             },
           },
           effectivePermOpts
@@ -524,19 +522,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
               }
             : null
         )
-      ).then(
-        (out) => {
-          if (!isStale()) setScriptOutput(out)
-          clearExecBusy()
-          return out
-        },
-        (err: unknown) => {
-          const errOut = JSON.stringify({ error: getErrorMessage(err) })
-          if (!isStale()) setScriptOutput(errOut)
-          clearExecBusy()
-          return errOut
-        }
-      )
+      ).then(finish, (err: unknown) => finish(JSON.stringify({ error: getErrorMessage(err) })))
     },
     [core40SDK, extensionSDK, filtersJson, mockExt?.initialBusyStatus, scriptCode, scriptMode, selectedExplores, selectedFolderId, setBusyStatus]
   )

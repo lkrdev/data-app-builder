@@ -334,22 +334,12 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   )
 
   const requestCodeModePermission = useCallback(
-    (
-      req: CodeModePermissionRequest,
-      signal?: AbortSignal,
-      approvedSet?: Set<string>,
-      epoch?: number,
-      convId?: string
-    ): Promise<CodeModePermissionDecision> => {
+    (req: CodeModePermissionRequest, signal?: AbortSignal, approvedSet?: Set<string>, epoch?: number, convId?: string): Promise<CodeModePermissionDecision> => {
       const activeSignal = signal || turnAbortControllerRef.current?.signal
       const callEpoch = epoch !== undefined ? epoch : permEpochRef.current
       const targetApproved = approvedSet || approvedOpsRef.current
       const next = permQueueRef.current.then(() => {
-        if (
-          permEpochRef.current !== callEpoch ||
-          activeSignal?.aborted ||
-          (convId !== undefined && activeConversationIdRef.current !== convId)
-        ) {
+        if (permEpochRef.current !== callEpoch || activeSignal?.aborted || (convId !== undefined && activeConversationIdRef.current !== convId)) {
           return 'deny' as CodeModePermissionDecision
         }
         if (!requirePermissionRef.current) return 'allow_once' as CodeModePermissionDecision
@@ -359,10 +349,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           syncPendingPerm({ req, resolve, approvedSet: targetApproved, convId, signal: activeSignal })
         })
       })
-      permQueueRef.current = next.then(
-        () => {},
-        () => {}
-      )
+      permQueueRef.current = next.then(() => {}, () => {})
       return next
     },
     [activeConversationIdRef, syncPendingPerm]
@@ -700,23 +687,15 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       let finalMsgs: ChatMessage[] = []
       let effectivePublishedApp = publishedApp
       let effectiveNativeContent = nativeContent
-      const recordTurnDenial = (
-        denyText: string,
-        modeArg: StudioMode,
-        typeArg: string,
-        exploresArg: string[],
-        contentArg?: Record<string, unknown>
-      ) => {
-        setAgentSession({ ...result.session, conversationId: convId, explores: exploresArg }, modeArg)
+      const recordTurnDenial = (denyText: string, modeArg: StudioMode, typeArg: string, exploresArg: string[], contentArg?: Record<string, unknown>) => {
+        setAgentSession(Object.assign({}, result.session, { conversationId: convId, explores: exploresArg }), modeArg)
         const errMsgs: ChatMessage[] = [...messagesWithUser, { role: 'error', text: denyText }]
         setMessages(errMsgs)
         hydratedConvRouteRef.current = `/c/${encodeURIComponent(convId)}:${convId}`
         void persistConversationAndLabel({
-          id: convId, type: typeArg, interactionId: result.session.lastInteractionId,
-          environmentId: result.session.environmentId,
-          label: isFirstTurn ? sanitizeConversationLabel('', effectivePrompt) : undefined,
-          explores: exploresArg, content: contentArg, messages: errMsgs,
-          isFirstTurn, userPrompt: effectivePrompt, assistantText: denyText, updateArtifactIndex: false,
+          id: convId, type: typeArg, interactionId: result.session.lastInteractionId, environmentId: result.session.environmentId,
+          label: isFirstTurn ? sanitizeConversationLabel('', effectivePrompt) : undefined, explores: exploresArg, content: contentArg,
+          messages: errMsgs, isFirstTurn, userPrompt: effectivePrompt, assistantText: denyText, updateArtifactIndex: false,
         })
       }
       const turnCrudItems: TurnCrudItem[] = []
@@ -834,14 +813,10 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
 
         if (result.bundle && requirePermissionRef.current && !turnApprovedOps.has('*')) {
           const pubOp = effectivePublishedApp?.dashboardId ? 'update_dashboard' : 'create_dashboard'
-          const pubPath = effectivePublishedApp?.dashboardId
-            ? `/api/4.0/dashboards/${effectivePublishedApp.dashboardId}`
-            : '/api/4.0/dashboards'
+          const pubPath = effectivePublishedApp?.dashboardId ? `/api/4.0/dashboards/${effectivePublishedApp.dashboardId}` : '/api/4.0/dashboards'
           if (!turnApprovedOps.has(pubOp)) {
             const decision = await turnPermRequest({
-              operation: pubOp,
-              httpMethod: effectivePublishedApp?.dashboardId ? 'PATCH' : 'POST',
-              path: pubPath,
+              operation: pubOp, httpMethod: effectivePublishedApp?.dashboardId ? 'PATCH' : 'POST', path: pubPath,
               args: { title: result.bundle.title, folder_id: selectedFolderId },
               thought: `Publish Data App "${result.bundle.title}" to Looker dashboard`,
             })
@@ -849,13 +824,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             if (decision === 'allow_op') turnApprovedOps.add(pubOp)
             else if (decision === 'allow_all') turnApprovedOps.add('*')
             else if (decision !== 'allow_once' && (decision as unknown) !== true) {
-              recordTurnDenial(
-                `PermissionError: Operation '${pubOp}' mutates Looker state and was not approved.`,
-                resolvedMode,
-                convType,
-                effectiveExplores,
-                convContent
-              )
+              recordTurnDenial(`PermissionError: Operation '${pubOp}' mutates Looker state and was not approved.`, resolvedMode, convType, effectiveExplores, convContent)
               return
             }
           }

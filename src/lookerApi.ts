@@ -435,23 +435,14 @@ export function createDeduplicatedLookerSdkProxy(
 
 export interface LookerExtensionSdkLike {
   invokeCoreSdkRaw?: (m: string, p: string, q?: unknown, b?: unknown, apiVersion?: string) => Promise<unknown>
-  invokeCoreSdk?: (
-    m: string,
-    p: string,
-    q?: unknown,
-    b?: unknown,
-    authenticator?: unknown,
-    o?: unknown,
-    apiVersion?: string
-  ) => Promise<unknown>
+  invokeCoreSdk?: (m: string, p: string, q?: unknown, b?: unknown, authenticator?: unknown, o?: unknown, apiVersion?: string) => Promise<unknown>
 }
 
 export const isLookerExtensionSdk = (v: unknown): v is LookerExtensionSdkLike =>
   Boolean(
     v &&
       typeof v === 'object' &&
-      (typeof (v as LookerExtensionSdkLike).invokeCoreSdkRaw === 'function' ||
-        typeof (v as LookerExtensionSdkLike).invokeCoreSdk === 'function')
+      (typeof (v as LookerExtensionSdkLike).invokeCoreSdkRaw === 'function' || typeof (v as LookerExtensionSdkLike).invokeCoreSdk === 'function')
   )
 
 export function normalizeLookerApiPath(rawPath?: string): string {
@@ -508,19 +499,17 @@ export function invokeLookerExtensionSdk<T = unknown>(
       unwrapLookerRawResponse<T>(raw, verb, path)
     )
   }
-  return Promise.resolve(extSdk.invokeCoreSdk!(verb, cleanP, queryParams || undefined, body, undefined, options, '4.0')).then(
-    (res) => {
-      if (res && typeof res === 'object' && 'ok' in res && ('value' in res || 'error' in res)) {
-        const env = res as { ok?: boolean; value?: unknown; error?: unknown }
-        if (env.ok === false) {
-          const e = env.error as { message?: unknown } | undefined
-          throw new Error(typeof e?.message === 'string' ? e.message : JSON.stringify(env.error))
-        }
-        return env.value as T
+  return Promise.resolve(extSdk.invokeCoreSdk!(verb, cleanP, queryParams || undefined, body, undefined, options, '4.0')).then((res) => {
+    if (res && typeof res === 'object' && 'ok' in res && ('value' in res || 'error' in res)) {
+      const env = res as { ok?: boolean; value?: unknown; error?: unknown }
+      if (env.ok === false) {
+        const e = env.error as { message?: unknown } | undefined
+        throw new Error(typeof e?.message === 'string' ? e.message : JSON.stringify(env.error))
       }
-      return res as T
+      return env.value as T
     }
-  )
+    return res as T
+  })
 }
 
 // ponytail: use SDK's underlying transport.rawRequest (requires raw_api_request: yes in manifest.lkml)
@@ -533,19 +522,15 @@ export function rawLookerRequest<T = unknown>(
   body?: unknown
 ): Promise<T> {
   return Promise.resolve().then(() => {
-    const transport = (sdk?.authSession as unknown as { transport?: { rawRequest?: LookerRawRequestFn } } | undefined)
-      ?.transport
+    const transport = (sdk?.authSession as unknown as { transport?: { rawRequest?: LookerRawRequestFn } } | undefined)?.transport
     const safePath =
       /^(?:https?:)?\/\//i.test(path) || path.includes('#')
         ? path.trim().split('#')[0].replace(/^https?:\/\/[^/?#]+/i, '').replace(/^\/{2,}/, '/') || '/'
         : path
     if (typeof transport?.rawRequest === 'function') {
-      return invokeAndLogRawTransport(transport, transport.rawRequest, [
-        method,
-        safePath,
-        queryParams,
-        serializeLookerBody(body),
-      ]).then((rawResp) => unwrapLookerRawResponse<T>(rawResp, method, safePath))
+      return invokeAndLogRawTransport(transport, transport.rawRequest, [method, safePath, queryParams, serializeLookerBody(body)]).then((rawResp) =>
+        unwrapLookerRawResponse<T>(rawResp, method, safePath)
+      )
     }
     const extSdk = resolveLookerExtensionSdk(sdk)
     if (extSdk) return invokeLookerExtensionSdk<T>(extSdk, method, path, queryParams, body)

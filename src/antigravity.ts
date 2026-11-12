@@ -777,10 +777,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     const s = typeof val === 'string' ? val : val instanceof Error ? val.message : JSON.stringify(val || '')
     const pErr = s.match(/PermissionError:[^\n"\\]+/)?.[0] || ''
     if (pErr) bridgePermissionError = bridgePermissionError || pErr
-    else if (
-      mutSuccessSeq > prevSeq ||
-      (req?.kind === 'sdk_request' && classifyLookerOperation(req.method, req.path).requiresPermission)
-    ) {
+    else if (mutSuccessSeq > prevSeq || (req?.kind === 'sdk_request' && classifyLookerOperation(req.method, req.path).requiresPermission)) {
       bridgePermissionError = ''
     }
     return pErr
@@ -868,10 +865,9 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                   : undefined)
               const wrappedPermissionRequest = trackedPermissionHandler
                 ? (permReq: CodeModePermissionRequest) =>
-                    trackedPermissionHandler({
-                      ...permReq,
-                      ...(permReq.thought || callThought ? { thought: permReq.thought || callThought } : {}),
-                    })
+                    trackedPermissionHandler(
+                      Object.assign({}, permReq, permReq.thought || callThought ? { thought: permReq.thought || callThought } : null)
+                    )
                 : undefined
               let codeModeOutput: string
               const prevSeq = mutSuccessSeq
