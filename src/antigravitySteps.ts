@@ -79,20 +79,21 @@ function normalizeNativeBundleCandidate(raw: unknown, allowUnwrapped = false): N
   const hasExplicitContentId = Boolean(
     r.dashboard_id || r.lookml_dashboard_id || r.look_id || r.board_id || (typeof r.embed_path === 'string' && r.embed_path.startsWith('/embed/'))
   )
-  if (!allowUnwrapped && !hasBundleEnvelope && !(VALID_NATIVE_CONTENT_TYPES.has(explicitType) && hasExplicitContentId)) return null
+  const hasDashboardDictShape = Boolean(r.dashboard_id && (r.dashboard_title || r.dashboard_url || r.tiles_created !== undefined))
+  if (!allowUnwrapped && !hasBundleEnvelope && !hasDashboardDictShape && !(VALID_NATIVE_CONTENT_TYPES.has(explicitType) && hasExplicitContentId)) return null
   const id = r.id || r.lookml_dashboard_id || r.dashboard_id || r.look_id || r.board_id
   if (!id) return null
   const strId = String(id).trim()
   const cType = (r.content_type || r.contentType ||
     (r.board_id ? 'board' : r.look_id && !r.dashboard_id ? 'look' : strId.includes('::') ? 'lookml_dashboard' : 'dashboard')
   ) as NativeContentBundle['contentType'] & string
-  const folderId = r.folder_id || r.folderId ? String(r.folder_id || r.folderId) : undefined
-  const embedPath = resolveNativeEmbedPath(cType, strId, typeof (r.embed_path || r.url) === 'string' ? String(r.embed_path || r.url) : undefined)
+  const folderId = r.folder_id || r.folderId || r.space_id ? String(r.folder_id || r.folderId || r.space_id) : undefined
+  const embedPath = resolveNativeEmbedPath(cType, strId, typeof (r.embed_path || r.url || r.dashboard_url) === 'string' ? String(r.embed_path || r.url || r.dashboard_url) : undefined)
   const asRecord = (v: unknown): Record<string, string> | undefined => (v && typeof v === 'object' ? (v as Record<string, string>) : undefined)
   return {
-    id: strId, content_type: cType, contentType: cType, title: String(r.title || `Native ${cType} #${strId}`),
+    id: strId, content_type: cType, contentType: cType, title: String(r.title || r.dashboard_title || `Native ${cType} #${strId}`),
     folder_id: folderId, folderId, embed_path: embedPath, url: embedPath,
-    tile_count: typeof r.tile_count === 'number' ? r.tile_count : Array.isArray(r.elements) ? r.elements.length : undefined,
+    tile_count: typeof r.tile_count === 'number' ? r.tile_count : typeof r.tiles_created === 'number' ? r.tiles_created : Array.isArray(r.elements) ? r.elements.length : undefined,
     filter_count: typeof r.filter_count === 'number' ? r.filter_count : Array.isArray(r.filter_names) ? r.filter_names.length : undefined,
     schedule_id: r.schedule_id ? String(r.schedule_id) : undefined,
     look_id: r.look_id ? String(r.look_id) : undefined,
@@ -118,7 +119,7 @@ export function extractNativeContentFromInteraction(
   const steps = interaction?.steps || []
   for (let i = steps.length - 1; i >= 0; i--) {
     const step = steps[i]
-    if (step?.type === 'function_result' && step?.name === 'run_looker_codemode') {
+    if (step?.type === 'function_result' && (step?.name === 'run_looker_codemode' || step?.name === 'lkr_cli_extension_bridge')) {
       const rObj = step.result && typeof step.result === 'object' ? (step.result as Record<string, unknown>) : null
       const rawStr = typeof step.result === 'string' ? step.result : typeof rObj?.result === 'string' ? rObj.result : JSON.stringify(step.result || '')
       const fastHit = parseTaggedJsonObjects(rawStr, /<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g).map((p) => normalizeNativeBundleCandidate(p, true)).find(Boolean)
@@ -759,7 +760,7 @@ export function extractInteractionTelemetry(
   stats: { agentWallMs: number; pollWaitMs: number; pollCount: number; codemodeExecMs: number; lookerHttpMs: number; codemodeCalls: number; lookerHttpCalls: number; apiRetries: number }
 ): AntigravityTurnTelemetry {
   const steps: AntigravityInteractionStep[] = interaction?.steps || []
-  const bashCalls = steps.filter((s) => s?.type === 'code_execution' || s?.type === 'code_execution_call' || s?.type === 'executable_code' || (s?.type === 'function_call' && s?.name !== 'run_looker_codemode')).length
+  const bashCalls = steps.filter((s) => s?.type === 'code_execution' || s?.type === 'code_execution_call' || s?.type === 'executable_code' || (s?.type === 'function_call' && s?.name !== 'run_looker_codemode' && s?.name !== 'lkr_cli_extension_bridge')).length
   const verifyRetries = steps.filter((s) => /"stage":\s*"(?:syntax|safety|widget_extraction)"/.test(String(s?.output || s?.stderr || s?.result || ''))).length
   const usage = interaction?.usage || interaction?.usage_metadata || {}
   return {

@@ -69,11 +69,13 @@ def _valid_explore_fields(tm, te):
     return res
 
 def _check_dashboard_fields(default_model, default_explore, filters=None, tiles=None):
-    missing, probe_by_exp, probe_flts = {}, {}, {}
+    missing, probe_by_exp, probe_flts, f_dv_by_name = {}, {}, {}, {}
     for f in (filters or []):
         if not isinstance(f, dict): continue
         fm, fe = str(f.get("model") or default_model or ""), str(f.get("explore") or default_explore or "")
         fd, dv = str(f.get("dimension") or f.get("field") or "").strip(), str(f.get("default_value") or "").strip()
+        fname = str(f.get("name") or f.get("title") or "").replace(".", "_").strip()
+        if dv and fname: f_dv_by_name[fname] = dv
         if not fd: continue
         if fm and fe and dv: probe_flts.setdefault((fm, fe), {}).setdefault(fd, dv)
         vf = _valid_explore_fields(fm, fe)
@@ -95,18 +97,22 @@ def _check_dashboard_fields(default_model, default_explore, filters=None, tiles=
             except Exception: raw_dyn = []
         dyn = set([str(df.get("measure") or df.get("dimension") or df.get("table_calculation") or "") for df in (raw_dyn if isinstance(raw_dyn, list) else []) if isinstance(df, dict)])
         tflts = dict(q.get("filters") or t.get("filters") or {})
+        lsn = t.get("listen") or q.get("listen")
+        lpairs = [(str(k).replace(".", "_").strip(), str(v).strip()) for k, v in lsn.items()] if isinstance(lsn, dict) else [(str(li.get("dashboard_filter_name") or "").replace(".", "_").strip(), str(li.get("field") or "").strip()) for li in (lsn or []) if isinstance(li, dict)]
+        lvals = [lv for _, lv in lpairs if lv]
         if tm and te:
             for fk, fv in tflts.items():
                 if fk and fv is not None and str(fv).strip() and fk not in dyn:
                     probe_flts.setdefault((tm, te), {}).setdefault(str(fk).strip(), str(fv).strip())
+            for lk, lv in lpairs:
+                if lk in f_dv_by_name and lv and lv not in dyn:
+                    probe_flts.setdefault((tm, te), {}).setdefault(lv, f_dv_by_name[lk])
             if flds:
                 pf = probe_by_exp.setdefault((tm, te), [])
                 for xf in flds:
                     if xf not in dyn and xf not in pf: pf.append(xf)
         vf = _valid_explore_fields(tm, te)
         if not vf["all"]: continue
-        lsn = t.get("listen")
-        lvals = list(lsn.values()) if isinstance(lsn, dict) else [li.get("field") for li in (lsn or []) if isinstance(li, dict)]
         refs = flds + [str(x).strip() for x in list(q.get("pivots") or t.get("pivots") or []) + list(tflts.keys()) + lvals if x and str(x).strip()] + [str(s).split()[0] for s in (q.get("sorts") or t.get("sorts") or []) if str(s).strip()]
         for rf in refs:
             if rf not in vf["all"] and rf not in dyn:
@@ -127,17 +133,18 @@ def _check_dashboard_fields(default_model, default_explore, filters=None, tiles=
             if not probe_fields: continue
             pbody, fmap = {"model": tm, "view": te, "fields": probe_fields, "limit": "1"}, probe_flts.get((tm, te))
             qerrs, qexc = [], None
-            for flts in ([None, fmap] if fmap else [None]):
+            for flts in ([fmap, None] if fmap else [None]):
                 qerrs, qexc = [], None
                 try: qres = _riq("json_detail", dict(pbody, filters=flts) if flts else pbody)
                 except Exception as exc:
                     qexc = exc
-                    continue
+                    if flts and "filter" in str(exc).lower(): continue
+                    break
                 if isinstance(qres, str) and qres.strip().startswith(("{", "[")):
                     try: qres = json.loads(qres)
                     except Exception: pass
                 qerrs = (qres.get("errors") or ([qres["error"]] if qres.get("error") else [])) if isinstance(qres, dict) else ([qres[0]["looker_error"]] if isinstance(qres, list) and qres and isinstance(qres[0], dict) and qres[0].get("looker_error") else [])
-                if not qerrs: break
+                if not qerrs or not (flts and "filter" in str(qerrs).lower()): break
             if qexc is not None: raise ValueError(f"Live 1-row SQL check failed on {tm}::{te}: {qexc}")
             if qerrs:
                 emsgs = [" — ".join([str(x).strip() for x in (e.get("message"), e.get("message_details")) if x and str(x).strip()]) if isinstance(e, dict) else str(e) for e in qerrs]
@@ -197,15 +204,20 @@ def upsert_udd(title, folder_id=None, filters=None, tiles=None, dashboard_id=Non
     return {"dashboard_id": did, "title": title, "folder_id": fid, "layout_id": lay_res["layout_id"], "element_ids": el_ids, "filter_names": f_names, "layout_component_ids": lay_res["layout_component_ids"], "query_cache": _qcache, "filter_cache": _fcache, "tile_count": len(el_ids), "filter_count": len(f_names), "elements": elements_meta}
 
 def upsert_lookml_dashboard(project_id="", model="", dashboard_name="executive_pulse", title="Executive Pulse", tiles=None, filters=None, yaml_content=None, folder_id=None, sync_udd_id=None, model_file_path=None):
-    m = str(model or _t_model or _active.get("model") or "thelook")
     proj = str(project_id or _t_project_id or _active.get("projectId") or _active.get("project_id") or "")
+    m = str(model or _t_model or _active.get("model") or (proj.replace("-", "_") if proj else ""))
     if not proj and m:
         try: proj = str(lookml_model(m).get("project_name") or "")
         except Exception: proj = ""
     raw_slug = str(dashboard_name or "executive_pulse").replace(".dashboard.lookml", "").strip()
     if "::" in raw_slug: m, raw_slug = raw_slug.split("::", 1)
     slug = raw_slug.replace(".", "_").replace(" ", "_").lower()
-    lookml_id, default_exp = f"{m}::{slug}", str(_t_explore or "order_items")
+    inferred_exp = ""
+    for _t0 in (tiles or []):
+        _q0 = _t0.get("query") or _t0
+        inferred_exp = str(_q0.get("view") or _q0.get("explore") or _t0.get("explore") or ((_q0.get("fields") or _t0.get("fields") or [""])[0].split(".", 1)[0] if (_q0.get("fields") or _t0.get("fields")) else "")).strip()
+        if inferred_exp: break
+    lookml_id, default_exp = f"{m}::{slug}", str(_t_explore or inferred_exp or "")
     if yaml_content:
         ytxt = str(yaml_content).strip()
         if not ytxt.startswith("- dashboard:"):
@@ -363,8 +375,8 @@ export const NATIVE_CONTENT_GUIDE_MD = `# Native Looker Content Studio (/dashboa
 See \`/workspace/skills/looker-dashboard/SKILL.md\` and \`/workspace/skills/looker-field-profiler/SKILL.md\`.
 
 ## 1. Pre-Injected Monty Python Helpers in \`run_looker_codemode\`
-- \`upsert_udd(title, folder_id, filters=[...], tiles=[...], dashboard_id=None)\`: Validates \`lookml_model_explore\` + 1-row \`json_detail\` SQL per Explore, creates/updates a UDD, deduplicates \`create_query\`, wires \`listen\`, and lays out the 24-column grid.
-- \`upsert_lookml_dashboard(project_id, model, dashboard_name, title, tiles=[...], filters=[...], yaml_content=None, folder_id=None, sync_udd_id=None)\`: When \`tiles\` are passed (omitting \`yaml_content\`), validates \`lookml_model_explore\` + 1-row \`json_detail\` SQL and normalizes \`field_filter\`; writes \`dashboards/<name>.dashboard.lookml\` (\`layout: newspaper\`), wires \`include:\`, gates \`validate_project\` (\`fatal\` & \`warning\` \`Unknown field\`), and imports/syncs into \`folder_id\`. Never call \`update_session\` in \`run_looker_codemode\`.
+- \`upsert_udd(title, folder_id, filters=[...], tiles=[...], dashboard_id=None)\`: Validates \`lookml_model_explore\` + partition-pruned 1-row \`json_detail\` SQL per Explore (propagating \`default_value\` across \`listen:\` + tile \`filters\` — always set a concrete \`default_value\` on date filters for large tables), creates/updates a UDD, deduplicates \`create_query\`, wires \`listen\`, and lays out the 24-column grid.
+- \`upsert_lookml_dashboard(project_id, model, dashboard_name, title, tiles=[...], filters=[...], yaml_content=None, folder_id=None, sync_udd_id=None)\`: When \`tiles\` are passed (omitting \`yaml_content\`), validates \`lookml_model_explore\` + partition-pruned 1-row \`json_detail\` SQL and normalizes \`field_filter\`; writes \`dashboards/<name>.dashboard.lookml\` (\`layout: newspaper\`), wires \`include:\`, gates \`validate_project\` (\`fatal\` & \`warning\` \`Unknown field\`), and imports/syncs into \`folder_id\`. Never call \`update_session\` in \`run_looker_codemode\`.
 - \`reflow_24col(dashboard_id, boxes)\`, \`pin_to_board(...)\`, \`schedule_dashboard(...)\`, \`emit_native_bundle(res, content_type=..., **extra)\`.
 - \`profile_fields(model=m, view=e, fields=[...])\`: Profiles distributions (\`/workspace/skills/looker-field-profiler/SKILL.md\`) — \`profile:low_cardinality_enum\` for \`pivots:\`, \`looker_pie\` (\`limit: 6\`), and \`stats.top_values\` filters; \`profile:medium_cardinality_categorical\` for unpivoted \`looker_bar\`; \`profile:nullable\` for \`-NULL\`; \`profile:spiky_*\` for complete-period filters. Query \`_field_value_search_<model>\` (\`/workspace/skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`) first when resolving unknown entity literals.
 
@@ -386,13 +398,14 @@ export function buildNativeContentGuide(params: {
     selectedExplores.length > 0
       ? `for explore(s): ${selectedExplores.map((id) => `"${id}"`).join(', ')}.`
       : lookmlProjectId
-      ? `for project/model "${lookmlProjectId}" (explore "${primaryExplore || 'order_items'}").`
+      ? `for project/model "${lookmlProjectId}"${primaryExplore ? ` (explore "${primaryExplore}")` : ' (reuse the verified LookML explore(s) and fields from conversation history)'}.`
       : `— pick the best \`model_id::explore_id\` from /workspace/schema.md or \`search_content(terms="...", types="lookml_explore")\`.`
   const existingNativeDirective = existingNativeContent
     ? `Active native Looker ${existingNativeContent.contentType}: id="${existingNativeContent.id}", title="${existingNativeContent.title}", folder_id="${existingNativeContent.folderId}" (\`active_content\`). Update it in place.`
     : `Create the requested native Looker content in folder_id=\`target_folder_id\` ("${folderId}").`
+  const modelSlug = (primaryModel || lookmlProjectId || 'project').replace(/-/g, '_')
   const lookmlOnboardingDirective = lookmlProjectId
-    ? `4. LookML Project Onboarding Dashboard Rule: Reuse the verified LookML fields from conversation history, call \`res = upsert_lookml_dashboard(project_id="${lookmlProjectId}", model="${primaryModel || lookmlProjectId}", dashboard_name="ecommerce_overview", title="E-Commerce Performance Overview", folder_id="${folderId}", filters=[...], tiles=[...])\` and \`return emit_native_bundle(res, folder_id="${folderId}", title="E-Commerce Performance Overview")\` in ONE \`run_looker_codemode\` call. In your reply (zero grid coordinates or internal \`looker_*\`/\`single_value\` strings), summarize the tiles and filters, **ask if the user wants a responsive metric selector Data App** switching between **day (date), week, month, and year** and chart types, and end with \`[Open <Dashboard Title>](/dashboards/<id>)\`.`
+    ? `4. LookML Project Dashboard Rule: Reuse the verified LookML explore(s) and fields from conversation history (or inspect \`lookml_model("${modelSlug}")["explores"]\` + \`lookml_model_explore("${modelSlug}", exp_name)\`), call \`res = upsert_lookml_dashboard(project_id="${lookmlProjectId}", model="${modelSlug}", dashboard_name="${modelSlug}_overview", title="<Project Overview Title>", folder_id="${folderId}", filters=[...], tiles=[...])\` (passing an explicit \`"explore"\` on every tile and filter) and \`return emit_native_bundle(res, folder_id="${folderId}", title="<Project Overview Title>")\` in ONE \`run_looker_codemode\` call. In your reply (zero grid coordinates or internal \`looker_*\`/\`single_value\` strings), summarize the tiles and filters, **ask if the user wants a responsive metric selector Data App** switching between **day (date), week, month, and year** and chart types, and end with \`[Open <Dashboard Title>](/dashboards/<id>)\`.`
     : ''
 
   return [
@@ -401,7 +414,7 @@ export function buildNativeContentGuide(params: {
     NATIVE_CONTENT_GUIDE_MD,
     `Execute in ONE \`run_looker_codemode\` call per turn (\`code_execution\` disabled; pass a 1-sentence \`thought\`; NEVER call \`update_session\`; SDK returns Python \`dict\`s):`,
     `1. On cold start (when fields are not in conversation history), discover fields via \`lookml_model_explore(m, e, fields="name,label,fields(dimensions(name,label,type),measures(name,label,type))")\`, then run \`upsert_udd\`, \`upsert_lookml_dashboard\`, \`create_look\`, \`pin_to_board\`, or \`schedule_dashboard\` in the SAME script.`,
-    `2. End with \`return emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", summary="...")\` (\`target_folder_id\`="${folderId}", \`target_explores\`=${JSON.stringify(selectedExplores)}, \`target_model\`="${primaryModel || lookmlProjectId}", \`target_explore\`="${primaryExplore || 'order_items'}", \`target_project_id\`="${lookmlProjectId}").`,
+    `2. End with \`return emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", summary="...")\` (\`target_folder_id\`="${folderId}", \`target_explores\`=${JSON.stringify(selectedExplores)}, \`target_model\`="${primaryModel || modelSlug}", \`target_explore\`="${primaryExplore}", \`target_project_id\`="${lookmlProjectId}").`,
     `3. CRITICAL: Never echo \`<NATIVE_CONTENT_BUNDLE>\`, layout coordinates, or internal vis strings in your chat reply — summarize only tiles, filters, what each tile measures, and end with \`[Open <Dashboard Title>](/dashboards/<id>)\`.`,
     ...(lookmlOnboardingDirective ? [lookmlOnboardingDirective] : []),
   ].join('\n')
@@ -1453,8 +1466,8 @@ Profile fields via \`profile_fields(model=m, view=e, fields=[...])\` (\`skills/l
 
 ## Step 2 — Execution Workflows, Compile Gate & Clean Chat Summary Rule
 1. **Studio Code Mode (\`run_looker_codemode\`, 1 call, never \`update_session\`)**:
-   - \`upsert_udd(title, folder_id, filters=[...], tiles=[...], dashboard_id=None)\`: Gates \`lookml_model_explore\` + 1-row \`run_inline_query("json_detail", ..., limit="1")\` SQL per Explore, creates/updates UDD, deduplicates \`create_query\`, wires \`listen\`, and lays out 24-col grid.
-   - \`upsert_lookml_dashboard(project_id, model, dashboard_name, title, tiles=[...], filters=[...], yaml_content=None, folder_id=None, sync_udd_id=None)\`: When \`tiles\` are passed (omitting \`yaml_content\`), gates \`lookml_model_explore\` + 1-row \`json_detail\` SQL and normalizes field filters to \`type: field_filter\`; writes \`dashboards/<slug>.dashboard.lookml\`, wires \`include:\`, gates \`validate_project(project_id)\` (\`ValueError\` on \`"fatal"\` & \`"warning"\` \`Unknown field\`), and imports/syncs into \`folder_id\`.
+   - \`upsert_udd(title, folder_id, filters=[...], tiles=[...], dashboard_id=None)\`: Gates \`lookml_model_explore\` + 1-row \`run_inline_query("json_detail", ..., limit="1")\` SQL per Explore (propagating \`default_value\` across \`listen:\` + tile \`filters\` for partition pruning, with filter-error-only fallback), creates/updates UDD, deduplicates \`create_query\`, wires \`listen\`, and lays out 24-col grid.
+   - \`upsert_lookml_dashboard(project_id, model, dashboard_name, title, tiles=[...], filters=[...], yaml_content=None, folder_id=None, sync_udd_id=None)\`: When \`tiles\` are passed (omitting \`yaml_content\`), gates \`lookml_model_explore\` + partition-pruned 1-row \`json_detail\` SQL and normalizes field filters to \`type: field_filter\` (always set a concrete \`default_value\` on date filters for large tables); writes \`dashboards/<slug>.dashboard.lookml\`, wires \`include:\`, gates \`validate_project(project_id)\` (\`ValueError\` on \`"fatal"\` & \`"warning"\` \`Unknown field\`), and imports/syncs into \`folder_id\`.
    - \`reflow_24col(dashboard_id, boxes)\`, \`pin_to_board(...)\`, \`schedule_dashboard(...)\`, \`emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", ...)\`.
 2. **Clean Summary Rule**: **NEVER** include coordinates (\`Row 0\`, \`col\`, \`width\`, \`height\`, \`24-Column Grid\`) or vis identifiers (\`single_value\`, \`looker_area\`, \`looker_pie\`, \`looker_column\`, \`looker_bar\`, \`looker_grid\`) in chat replies; summarize tiles/filters and end with \`[Open <Dashboard Title>](/dashboards/<id>)\`.
 3. **MCP & CLI**: MCP \`make_dashboard\`/\`create_lookml_dashboard\`; CLI \`lkr parse lookml-to-api --path /workspace/lookml --validate\` && \`lkr --dev tools lookml push /workspace/lookml --project-id <project_id> --file dashboards/<name>.dashboard.lookml --no-reset\`.

@@ -10,13 +10,13 @@ Core execution flow across subsystem boundaries:
 2. **WASM Sandbox & CLI Bridge (`src/lkrCliBridge.ts`, `src/vendor/codemode.js`)**: Executes Python in Monty WASM (loaded from `https://cdn.lkr.dev/cli/codemode/0.0.66/codemode.js` in browser or `src/vendor/codemode.js` in Node/Jest) and intercepts remote sandbox `lkr-dev-cli` calls back to Looker API 4.0 via `transport.rawRequest` under `Safe Mode (Ask)` / `Auto-Approve (YOLO)` gating.
 3. **Skills & Playbooks (`skills/`, `src/sandboxSkillsBundle.ts`)**: Bundles canonical Looker workflows (`key-driver-analysis`, `looker-dashboard`, `looker-field-profiler`, `scratch-search`, `looker-project-onboarding`) mounted into the Antigravity remote sandbox at `/workspace/skills/<name>/SKILL.md` and exposed in the Studio UI.
 4. **Upstream Toolkit Payload (`upstream/`)**: Mirrors the distributable Looker Data Apps Lit runtime (`data-app.js`, `lit.mjs`, `highcharts`, `ag-grid`, `extension-sdk`), local preview server, and CLI authoring/publishing/update tools.
-5. **Verification & Benchmarks (`scripts/`)**: Provides offline bundle/bridge checks (`test-bundle.mjs`), 10-case studio evals (`run-evals.mjs`), live Looker onboarding evals (`eval-new-project.mjs`), and 10-iteration single/concurrent benchmarks.
+5. **Verification & Benchmarks (`scripts/`)**: Provides offline bundle/bridge checks (`test-bundle.mjs`), 10-case studio evals (`run-evals.mjs`), live Looker onboarding & SQL-workflow evals (`eval-new-project.mjs`, `eval-stackoverflow-workflow.mjs`), and 10-iteration single/concurrent benchmarks.
 
 ## Local Interface & Invariants
 
 ### Root Build, Extension & Tooling Interface
 - `[package.json:main]`, `[package.json:dependencies]`: Package `data-app-builder` v0.1.0 (`dist/bundle.js`) depending on `@looker/embed-sdk`, `@looker/extension-sdk`, `@looker/extension-sdk-react`, `lucide-react`, `react`, `react-dom`, `react-router-dom`, and `swr`.
-- `[package.json:scripts]`: Exposes `dev`, `dev:https`, `build`, `lint`, `lint:check`, `format`, `prepare`, `sync-upstream`, `sync-codemode`, `eval`, and `test`.
+- `[package.json:scripts]`: Exposes `dev`, `dev:https`, `build`, `lint`, `lint:check`, `format`, `prepare`, `sync-upstream`, `sync-codemode`, `clean:artifacts`, `eval`, and `test`.
 - `[package.json:jest]`: Configures Jest with `testEnvironment: "node"` and `testMatch: ["**/src/__tests__/**/*.test.{js,ts}"]`.
 - `[webpack.config.js:module.exports]`: Compiles `src/index.tsx` -> `dist/bundle.js` (`publicPath: "https://localhost:8080/"`) using `babel-loader` (`/\\.(ts|tsx)$/`) and `style-loader` + `css-loader` (`/\\.css$/`).
 - `[webpack.develop.js:module.exports]`, `[webpack.prod.js:module.exports]`: Extend base Webpack config for `development` (HMR on `localhost`, permissive dev CORS, filtered runtime error overlay) and `production`.
@@ -42,7 +42,7 @@ Core execution flow across subsystem boundaries:
 
 - **src**: [./src/EGM.md](./src/EGM.md) — Core Looker Extension React/TS application, studio controller hooks, Looker RBAC/API/Artifacts services, Antigravity Interactions client, CA sub-agent router, Health Check, LookML viewer, and Monty `lkr-dev-cli` bridge.
 - **skills**: [./skills/EGM.md](./skills/EGM.md) & `.agents/skills/` ([skills-lock.json](./skills-lock.json)) — Studio Looker skills (`key-driver-analysis`, `looker-dashboard`, `looker-field-profiler`, `scratch-search`, `looker-project-onboarding`, `studio-conversation-debugger`) bundled for sandbox execution (`src/sandboxSkillsBundle.ts`) and synced via [.github/workflows/update-skills.yml](./.github/workflows/update-skills.yml).
-- **scripts**: [./scripts/EGM.md](./scripts/EGM.md) — Offline verification harness (`test-bundle.mjs`), 10-case studio eval suite (`run-evals.mjs`), live onboarding eval (`eval-new-project.mjs`), 10-iteration benchmarks, and upstream/codemode sync scripts.
+- **scripts**: [./scripts/EGM.md](./scripts/EGM.md) — Offline verification harness (`test-bundle.mjs`), 10-case studio eval suite (`run-evals.mjs`), live onboarding & SQL-workflow evals (`eval-new-project.mjs`, `eval-stackoverflow-workflow.mjs`), 10-iteration benchmarks, artifact cleaner (`clean-artifacts.sh`), and upstream/codemode sync scripts.
 - **upstream**: [./upstream/EGM.md](./upstream/EGM.md) — Synced Looker Data Apps distribution (`install.sh`, `version-install.sh`) and packaged `payload/` (`runtime/data-app.js`, `preview-server/`, `scripts/`, `skills/`, and `vendor/` assets for `ag-grid`, `highcharts`, `lit`, and `@looker/extension-sdk`).
 - **looker**: [./looker/manifest.lkml](./looker/manifest.lkml) — Looker deployment manifest mirror (`data_app_builder`) tracked outside the build pipeline.
 

@@ -94,6 +94,7 @@ import {
   executeLkrExtensionToolRequest,
   extractLkrExtensionToolRequests,
   extractLookmlBundleFromInteraction,
+  LKR_CLI_BRIDGE_TOOL,
   LKR_CLI_SITECUSTOMIZE_PY,
   LKR_DEV_CLI_SPEC,
   LkrCodeMode,
@@ -301,9 +302,10 @@ export function isNewProjectOnboardingIntakePrompt(
   priorMessages?: ReadonlyArray<{ role: string; text: string }>
 ): boolean {
   const clean = String(userPrompt || '').trim()
+  if (/(?:^|\s)\/(?!looker-project-onboarding\b)[a-z0-9_-]+/i.test(clean)) return false
   if (!/(?:\b(?:create|onboard|scaffold|set\s*up|start|initialize|init)\b[\s\S]{0,30}\b(?:new\s+)?(?:looker\s+|lookml\s+)?project\b|\bnew\s+(?:looker\s+|lookml\s+)project\b|\/looker-project-onboarding\b)/i.test(clean)) return false
   const combined = [...(priorMessages || []).map((m) => String(m.text || '')), clean].join('\n')
-  const hasConn = /\bconnection(?:\s+name)?\s*(?:is|=|:|\s)\s*[`"']?(?!(?:name|and|or|to|for|from|in|on|with|access|a|the)\b)[a-z][a-z0-9_-]{2,}/i.test(combined)
+  const hasConn = /\bconnection(?:\s+name)?\s*(?:is|=|:|\s)\s*[`"']?(?!(?:name|and|or|to|for|from|in|on|with|access|a|the)\b)[a-z][a-z0-9_-]{2,}|\b[a-z][a-z0-9_-]*(?:\s+default)?\s+connection\b/i.test(combined)
   const hasProj = /\b(?:called|call\s+it|named?|project(?:_id|_name|\s+name)?)\s*(?:is|=|:|\s)\s*[`"']?(?!(?:name|called|named|and|or|to|for|from|in|on|with|a|the)\b)[a-z][a-z0-9_]{2,}/i.test(combined)
   const hasTarget = /\b(?:schema|dataset|tables?)\s*(?:is|=|:|\s)\s*[`"']?(?!(?:name|or|and|to|for|from|in|on|with|access|do|you|a|the)\b)[a-z][a-z0-9_.-]{2,}|\bselect\b[\s\S]+\bfrom\b/i.test(combined)
   return !(hasConn && hasProj && hasTarget)
@@ -344,8 +346,11 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
   const primaryModel = firstParsed?.modelName || ''
   const primaryExplore = firstParsed?.exploreName || ''
 
+  const isNoOpTurn = isConversationalNoOpPrompt(userPrompt)
+  const effectiveLookmlIntent =
+    toolMode === 'lookml' || useCase === 'lookml' || (useCase === 'auto' && matchExplicitUseCaseRule(userPrompt, allowedModes) === 'lookml')
   const effectiveToolType: AntigravityToolType =
-    toolMode === 'lookml' ? 'lookml'
+    toolMode === 'lookml' || effectiveLookmlIntent ? 'lookml'
       : customSystemGuide?.includes('3-Pillar') ? 'health'
       : customSystemGuide?.includes('codemode-script-tile') ? 'tile'
       : mode === 'dashboard' ? 'dashboard' : 'app'
@@ -421,9 +426,6 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           `5. CRITICAL: bundle_app.py prints \`<DATA_APP_BUNDLE>...</DATA_APP_BUNDLE>\` directly to stdout, which the host captures automatically from tool output. NEVER echo or repeat \`<DATA_APP_BUNDLE>\` or raw JavaScript code in your final text reply—respond with a concise 1–2 sentence summary only.`,
         ].join('\n')
 
-  const isNoOpTurn = isConversationalNoOpPrompt(userPrompt)
-  const effectiveLookmlIntent =
-    toolMode === 'lookml' || useCase === 'lookml' || (useCase === 'auto' && matchExplicitUseCaseRule(userPrompt, allowedModes) === 'lookml')
   const isLookmlOnboardingIntake =
     !isNoOpTurn && effectiveLookmlIntent && !lookmlProjectId?.trim() && isNewProjectOnboardingIntakePrompt(userPrompt, priorMessages)
   const isLookmlSchemaDiscovery =
@@ -432,7 +434,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const requiresBashSandbox = !isToollessTurn && !isLookmlSchemaDiscovery && !isDashboardMode && effectiveToolType !== 'tile'
 
   let resolvedAvailableConnections = providedConnections
-  if (isLookmlOnboardingIntake && resolvedAvailableConnections === undefined && sdk) {
+  if ((isLookmlOnboardingIntake || (effectiveLookmlIntent && !lookmlProjectId?.trim())) && resolvedAvailableConnections === undefined && sdk) {
     const connStart = Date.now()
     const fetchedConns = await discoverAccessibleConnections(sdk)
     lookerHttpMs += Date.now() - connStart
@@ -442,7 +444,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
   const systemGuide =
     customSystemGuide ||
-    (toolMode === 'lookml' || isLookmlOnboardingIntake
+    (effectiveLookmlIntent || isLookmlOnboardingIntake
       ? buildLookmlSystemGuide({
           selectedExplores, primaryModel, primaryExplore, projectId: lookmlProjectId,
           activatedSkills: activatedLookmlSkills, userPrompt, developableProjects, canDeploy,
@@ -463,24 +465,30 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
   // ponytail: omit { type: 'code_execution' } and blocking container boot on toolless intake / no-op turns
   // and CodeMode-only turns (/dashboard, Turn-2 connection_schemas discovery, /tile).
-  const activeTools = isToollessTurn
+  // Retain LKR_CLI_BRIDGE_TOOL on warm turns after LookML turns so previous_interaction_id history replays stay valid.
+  const keepLookmlBridgeTool =
+    !isFreshConversation && Boolean(session.usedBridgeTool || session.toolType === 'lookml' || lookmlProjectId?.trim())
+  const activeTools = isLookmlOnboardingIntake || (isNoOpTurn && isFreshConversation)
     ? []
+    : isNoOpTurn || (keepLookmlBridgeTool && (isDashboardMode || !requiresBashSandbox))
+    ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL, ...(keepLookmlBridgeTool ? [LKR_CLI_BRIDGE_TOOL] : [])]
     : isDashboardMode
     ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
     : !requiresBashSandbox
     ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
-    : [{ type: 'code_execution' }, LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
-
-  const historyDigest =
-    priorMessages && priorMessages.length > 0
-      ? `\n\nPrior conversation context:\n${priorMessages.filter((m) => m.role === 'user' || m.role === 'assistant').slice(-40).map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`).join('\n')}`
-      : ''
+    : [
+        { type: 'code_execution' },
+        LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL,
+        ...(effectiveToolType === 'lookml' || keepLookmlBridgeTool ? [LKR_CLI_BRIDGE_TOOL] : []),
+      ]
 
   const warmTurnDirective =
-    !isNoOpTurn && !effectiveLookmlIntent && mode === 'data_app' && toolMode !== 'lookml' && Boolean(existingAppCode?.trim())
+    !isNoOpTurn && !effectiveLookmlIntent && mode === 'data_app' && Boolean(existingAppCode?.trim())
       ? `[WARM SANDBOX FAST PATH: ${appFilePath} and the discovered Looker schema are already in /workspace. Do NOT re-run run_looker_codemode discovery or re-read guides unless a brand-new explore is requested. Update ${appFilePath} and bundle in ONE code_execution call via: python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\n...\nEOF\nNEVER echo <DATA_APP_BUNDLE> in your text reply.]\n\n`
       : !isNoOpTurn && isDashboardMode && normalizedExistingNative
       ? `[WARM CONTENT STUDIO FAST PATH: Active Looker ${normalizedExistingNative.contentType} id="${normalizedExistingNative.id}" ("${normalizedExistingNative.title}") and pre-hydrated active_content (element_ids=${JSON.stringify(normalizedExistingNative.elementIds || [])}, filter_names=${JSON.stringify(normalizedExistingNative.filterNames || [])}, lookml_dashboard_id="${normalizedExistingNative.lookmlDashboardId || ''}", project_id="${normalizedExistingNative.projectId || lookmlProjectId || ''}") are pre-injected in run_looker_codemode vars. Execute the update in ONE run_looker_codemode call using upsert_udd / upsert_lookml_dashboard / reflow_24col / pin_to_board / schedule_dashboard + return emit_native_bundle(...). NEVER echo <NATIVE_CONTENT_BUNDLE> in your text reply.]\n\n`
+      : !isNoOpTurn && isDashboardMode && !normalizedExistingNative
+      ? `${systemGuide}\n\n`
       : !isNoOpTurn && requiresBashSandbox && effectiveLookmlIntent
       ? `[WARM LOOKML SANDBOX: Before running \`lkr\`, ensure \`command -v lkr >/dev/null 2>&1 || python3 /workspace/bootstrap_lookml.py cli\` so \`/usr/local/bin/lkr\` is linked from \`/workspace/.uv_tools\`.]\n\n`
       : ''
@@ -497,17 +505,23 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     effectiveThinkingLevel === 'low' ? '[THINKING LEVEL: LOW — Be concise and minimize exploratory steps]\n\n'
       : effectiveThinkingLevel === 'high' ? '[THINKING LEVEL: HIGH — Reason deeply and verify edge cases thoroughly]\n\n' : ''
 
-  const buildInputItems = (fresh: boolean): Array<Record<string, unknown>> => [
-    {
-      type: 'text',
-      text: fresh
-        ? `${thinkingDirective}${systemGuide}${autoRoutingDirective}${historyDigest}\n\nUser request:\n${userPrompt}${uploadsSection}`
-        : `${thinkingDirective}${warmTurnDirective}${autoRoutingDirective ? `${autoRoutingDirective.trim()}\n\n` : ''}User request:\n${userPrompt}${uploadsSection}`,
-    },
-    ...(images || [])
-      .filter((img) => img.mimeType.startsWith('image/') || img.mimeType === 'application/pdf')
-      .map((img) => ({ type: img.mimeType === 'application/pdf' ? 'document' : 'image', mime_type: img.mimeType, data: img.data })),
-  ]
+  const buildInputItems = (fresh: boolean): Array<Record<string, unknown>> => {
+    const historyDigest =
+      fresh && priorMessages && priorMessages.length > 0
+        ? `\n\nPrior conversation context:\n${priorMessages.filter((m) => m.role === 'user' || m.role === 'assistant').slice(-40).map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`).join('\n')}`
+        : ''
+    return [
+      {
+        type: 'text',
+        text: fresh
+          ? `${thinkingDirective}${systemGuide}${autoRoutingDirective}${historyDigest}\n\nUser request:\n${userPrompt}${uploadsSection}`
+          : `${thinkingDirective}${warmTurnDirective}${autoRoutingDirective ? `${autoRoutingDirective.trim()}\n\n` : ''}User request:\n${userPrompt}${uploadsSection}`,
+      },
+      ...(images || [])
+        .filter((img) => img.mimeType.startsWith('image/') || img.mimeType === 'application/pdf')
+        .map((img) => ({ type: img.mimeType === 'application/pdf' ? 'document' : 'image', mime_type: img.mimeType, data: img.data })),
+    ]
+  }
 
   const activeModel = model || DEFAULT_ANTIGRAVITY_MODEL
   const resolvedMaxTokens = Number(maxTotalTokens) > 0 ? Number(maxTotalTokens) : DEFAULT_MAX_TOTAL_TOKENS
@@ -569,7 +583,11 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       apiRetries += 1
       if (!requiresBashSandbox) {
         activeEnvId = undefined
-        interaction = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', { ...baseAgentBody, input: buildInputItems(true) })
+        interaction = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
+          ...baseAgentBody,
+          input: buildInputItems(true),
+          environment: { type: 'remote', sources: [] },
+        })
       } else {
         onStatus('Resumed sandbox expired; provisioning fresh sandbox with app state...')
         interaction = await provisionFreshEnvironmentInteraction()
@@ -588,7 +606,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
   const resolvedMaxToolRounds = normalizeMaxToolRounds(maxToolRounds)
   const wrapUpErrorText = `Max Tool Rounds (${resolvedMaxToolRounds}) reached for this turn — summarize all progress completed so far and ask the user to reply 'continue' for remaining steps.`
-  let pollIdx = 0, prevStepCount = (interaction.steps || []).length, prevStatus = interaction.status, bridgeRound = 0, actionRound = 0, incompleteRound = 0, wrapUpSent = false
+  let pollIdx = 0, prevStepCount = (interaction.steps || []).length, prevStatus = interaction.status, bridgeRound = 0, actionRound = 0, incompleteRound = 0, wrapUpSent = false, transientPollErrors = 0
   let accInputTokens = 0, accOutputTokens = 0, accThoughtTokens = 0
   const accumulateInteractionUsage = (snap: AntigravityInteractionPayload | null | undefined) => {
     const u = snap?.usage || snap?.usage_metadata
@@ -598,9 +616,69 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     accThoughtTokens += Number(u.thought_tokens ?? u.total_thought_tokens ?? u.thoughts_token_count ?? 0)
   }
   const resolvedBridgeCacheKeys = new Set<string>()
-  const getPendingBridgeReqs = (snap: AntigravityInteractionPayload) => {
-    const raw = extractLkrExtensionToolRequests(snap).filter(
+  const hydratedFileRefs = new Map<string, LkrExtensionToolRequest>()
+  const resolveBridgeReq = async (r: LkrExtensionToolRequest): Promise<LkrExtensionToolRequest> => {
+    if (r.kind !== 'file_ref') return r
+    const reqPath = r.req_path || (r.cache_key ? `/workspace/.lkr_extension_cache/_req_${r.cache_key}.json` : '')
+    if (!reqPath) throw new Error('file_ref bridge request missing req_path and cache_key')
+    const cached = hydratedFileRefs.get(reqPath)
+    if (cached) return cached
+    const envIdForFile = normalizeEnvironmentId(interaction.environment_id) || trackedEnvId
+    if (!envIdForFile) throw new Error(`Cannot hydrate ${reqPath}: missing environmentId`)
+    const rawJson = await fetchEnvironmentFile({ extensionSDK, auth, environmentId: envIdForFile, path: reqPath })
+    const parsed = JSON.parse(rawJson) as LkrExtensionToolRequest
+    const hydrated: LkrExtensionToolRequest = {
+      ...parsed,
+      cache_key: r.cache_key || parsed.cache_key || computeLkrExtensionCacheKey(parsed),
+    }
+    hydratedFileRefs.set(reqPath, hydrated)
+    return hydrated
+  }
+  const compactBridgeValue = (val: unknown): unknown => {
+    const rawStr = JSON.stringify(val)
+    if (!rawStr || rawStr.length <= 6000 || !val || typeof val !== 'object' || Array.isArray(val)) return val
+    const rec = val as Record<string, unknown>
+    if (!Array.isArray(rec.queries)) return val
+    const compactQueries = rec.queries.map((q) => {
+      if (!q || typeof q !== 'object' || Array.isArray(q)) return q
+      const qRec = { ...(q as Record<string, unknown>) }
+      if (rec.passed === true) delete qRec.sql
+      delete qRec.inline_query
+      return qRec
+    })
+    const tqr = rec.test_query_results
+    const compactTqr =
+      tqr && typeof tqr === 'object' && !Array.isArray(tqr)
+        ? Object.fromEntries(
+            Object.entries(tqr as Record<string, unknown>).map(([k, v]) => [k, Array.isArray(v) ? v.slice(0, 10) : v])
+          )
+        : tqr
+    return {
+      ...rec,
+      queries: compactQueries,
+      ...(tqr !== undefined ? { test_query_results: compactTqr } : {}),
+    }
+  }
+  const isNoReplayBridgeResult = (val: unknown): boolean => {
+    if (!val || typeof val !== 'object' || Array.isArray(val)) return false
+    const rec = val as Record<string, unknown>
+    const isEmptyPull = Boolean(
+      rec.__lookml_pull__ && (!rec.files || typeof rec.files !== 'object' || Object.keys(rec.files as object).length === 0)
+    )
+    return (
+      'pushed' in rec ||
+      'committed' in rec ||
+      isEmptyPull ||
+      Boolean('passed' in rec && (rec.all_queries_matched !== undefined || Array.isArray(rec.queries)))
+    )
+  }
+  const encodeBridgePayload = (val: unknown): string => `\`\`\`json\n${JSON.stringify(compactBridgeValue(val))}\n\`\`\``
+  const getPendingBridgeReqs = async (snap: AntigravityInteractionPayload): Promise<LkrExtensionToolRequest[]> => {
+    const rawUnresolved = extractLkrExtensionToolRequests(snap).filter(
       (r) => !resolvedBridgeCacheKeys.has(r.cache_key || computeLkrExtensionCacheKey(r))
+    )
+    const raw = (await Promise.all(rawUnresolved.map((r) => resolveBridgeReq(r).catch(() => null)))).filter(
+      (r): r is LkrExtensionToolRequest => Boolean(r)
     )
     return raw.filter((r, idx) => {
       const pid = !r.vars?.single_file && Array.isArray(r.vars?.files_to_push) ? r.vars?.project_id : null
@@ -706,24 +784,28 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           if (pendingLookerCalls.length > 0 && actionRound + bridgeRound < resolvedMaxToolRounds) {
             actionRound += 1
             await throwIfAborted(interaction.id)
-            const preBridgeReqs = getPendingBridgeReqs(interaction)
-            for (let bIdx = 0; bIdx < preBridgeReqs.length; bIdx += 1) {
-              const req = preBridgeReqs[bIdx]
+            const explicitBridgeKeys = new Set(
+              pendingLookerCalls
+                .filter((c: AntigravityInteractionStep) => c.name === 'lkr_cli_extension_bridge')
+                .map((c: AntigravityInteractionStep) => String(parseStepArguments(c.arguments ?? c.args).cache_key || ''))
+                .filter(Boolean)
+            )
+            const preBridgeReqs = (await getPendingBridgeReqs(interaction)).filter(
+              (r) => !explicitBridgeKeys.has(r.cache_key || '')
+            )
+            const preBridgePayloads: Record<string, string> = {}
+            for (const req of preBridgeReqs) {
               await throwIfAborted(interaction.id)
               try {
-                const { cacheKey } = await executeLkrExtensionToolRequest({
-                  sdk: turnSdk,
-                  req,
-                  defaultVars: defaultCodeModeVars,
-                  extensionSDK,
-                  requirePermission,
-                  approvedOperations,
-                  onPermissionRequest: effectivePermissionHandler,
+                const { cacheKey, result } = await executeLkrExtensionToolRequest({
+                  sdk: turnSdk, req, defaultVars: defaultCodeModeVars, extensionSDK,
+                  requirePermission, approvedOperations, onPermissionRequest: effectivePermissionHandler,
                 })
                 resolvedBridgeCacheKeys.add(cacheKey)
-              } catch {
-                resolvedBridgeCacheKeys.add(req.cache_key || computeLkrExtensionCacheKey(req))
-              }
+                if (!isNoReplayBridgeResult(result)) {
+                  preBridgePayloads[`/workspace/.lkr_extension_cache/${cacheKey}.json`] = JSON.stringify(compactBridgeValue(result))
+                }
+              } catch { /* retry on next pass */ }
             }
             const firstCallArgs = parseStepArguments(
               pendingLookerCalls[0]?.arguments ?? pendingLookerCalls[0]?.args
@@ -740,83 +822,94 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
             onStatus(firstThought || friendlyCall.statusText)
             const cmStart = Date.now()
             codemodeCalls += pendingLookerCalls.length
-            const resultsInput = await Promise.all(
-              pendingLookerCalls.map(async (call: AntigravityInteractionStep) => {
-                activeLookerCallId = String(call.id || '')
-                const args = parseStepArguments(call.arguments ?? call.args)
-                const callThought =
-                  sanitizeActivityThought(args.thought) ||
-                  (call.name === 'lkr_cli_extension_bridge' && (args.method || args.path)
-                    ? `${String(args.method || 'GET').toUpperCase()} ${String(args.path || '/')}`
-                    : undefined)
-                const wrappedPermissionRequest = effectivePermissionHandler
-                  ? (permReq: CodeModePermissionRequest) =>
-                      effectivePermissionHandler({
-                        ...permReq,
-                        ...(permReq.thought || callThought ? { thought: permReq.thought || callThought } : {}),
-                      })
-                  : undefined
-                let codeModeOutput: string
-                try {
-                  if (call.name === 'lkr_cli_extension_bridge') {
-                    const bridged = await executeLkrExtensionToolRequest({
-                      sdk: turnSdk,
-                      req: args as unknown as LkrExtensionToolRequest,
-                      defaultVars: defaultCodeModeVars,
-                      extensionSDK,
-                      requirePermission,
-                      approvedOperations,
-                      onPermissionRequest: wrappedPermissionRequest,
+            const resultsInput: AntigravityInteractionStep[] = []
+            for (const call of pendingLookerCalls) {
+              activeLookerCallId = String(call.id || '')
+              const args = parseStepArguments(call.arguments ?? call.args)
+              const callThought =
+                sanitizeActivityThought(args.thought) ||
+                (call.name === 'lkr_cli_extension_bridge' && (args.method || args.path)
+                  ? `${String(args.method || 'GET').toUpperCase()} ${String(args.path || '/')}`
+                  : undefined)
+              const wrappedPermissionRequest = effectivePermissionHandler
+                ? (permReq: CodeModePermissionRequest) =>
+                    effectivePermissionHandler({
+                      ...permReq,
+                      ...(permReq.thought || callThought ? { thought: permReq.thought || callThought } : {}),
                     })
-                    resolvedBridgeCacheKeys.add(bridged.cacheKey)
-                    codeModeOutput = JSON.stringify({
-                      ok: true,
-                      cache_key: bridged.cacheKey,
-                      cache_path: `/workspace/.lkr_extension_cache/${bridged.cacheKey}.json`,
-                      result: bridged.result,
-                    })
-                  } else {
-                    const customVars =
-                      args.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
-                        ? (args.vars as Record<string, unknown>)
-                        : {}
-                    const rawCode = String(args.code || '')
-                    const needsDashboardMacros =
-                      isDashboardMode ||
-                      /\b(?:upsert_udd|upsert_lookml_dashboard|reflow_24col|pin_to_board|schedule_dashboard|emit_native_bundle)\s*\(/.test(rawCode)
-                    codeModeOutput = await LkrCodeMode.runPythonCode({
-                      code: needsDashboardMacros ? wrapDashboardCodeMode(rawCode) : rawCode,
-                      sdk: turnSdk,
-                      extensionSDK,
-                      allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard',
-                      requirePermission,
-                      approvedOperations,
-                      onPermissionRequest: wrappedPermissionRequest,
-                      vars: { ...defaultCodeModeVars, ...customVars },
-                    })
-                  }
-                } catch (err: unknown) {
-                  apiRetries += 1
-                  codeModeOutput = JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) })
+                : undefined
+              let codeModeOutput: string
+              try {
+                if (call.name === 'lkr_cli_extension_bridge') {
+                  const resolvedToolReq = await resolveBridgeReq(args as unknown as LkrExtensionToolRequest)
+                  const bridged = await executeLkrExtensionToolRequest({
+                    sdk: turnSdk,
+                    req: resolvedToolReq,
+                    defaultVars: defaultCodeModeVars,
+                    extensionSDK,
+                    requirePermission,
+                    approvedOperations,
+                    onPermissionRequest: wrappedPermissionRequest,
+                  })
+                  resolvedBridgeCacheKeys.add(bridged.cacheKey)
+                  const compactRes = compactBridgeValue(bridged.result)
+                  const noReplay = isNoReplayBridgeResult(compactRes)
+                  codeModeOutput = JSON.stringify({
+                    ok: true,
+                    cache_key: bridged.cacheKey,
+                    cache_path: `/workspace/.lkr_extension_cache/${bridged.cacheKey}.json`,
+                    replay_needed: !noReplay,
+                    ...(noReplay
+                      ? {
+                          note: 'Already executed on Looker host — skip cache_path write and CLI replay (for pre_gate.py, merge passed/queries/test_query_results into data.json without deleting sql).',
+                        }
+                      : {}),
+                    result: compactRes,
+                  })
+                } else {
+                  const customVars =
+                    args.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
+                      ? (args.vars as Record<string, unknown>)
+                      : {}
+                  const rawCode = String(args.code || '')
+                  const needsDashboardMacros =
+                    isDashboardMode ||
+                    /\b(?:upsert_udd|upsert_lookml_dashboard|reflow_24col|pin_to_board|schedule_dashboard|emit_native_bundle)\b/.test(rawCode)
+                  codeModeOutput = await LkrCodeMode.runPythonCode({
+                    code: needsDashboardMacros ? wrapDashboardCodeMode(rawCode) : rawCode,
+                    sdk: turnSdk,
+                    extensionSDK,
+                    allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard' || effectiveLookmlIntent,
+                    requirePermission,
+                    approvedOperations,
+                    onPermissionRequest: wrappedPermissionRequest,
+                    vars: { ...defaultCodeModeVars, ...customVars },
+                  })
                 }
-                // ponytail: /v1beta/interactions requires function_result.result to be a plain JS Struct object (never a JSON string)
-                let structResult: Record<string, unknown>
-                try {
-                  const parsed: unknown = JSON.parse(codeModeOutput)
-                  structResult = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-                    ? (parsed as Record<string, unknown>)
-                    : { result: parsed }
-                } catch {
-                  structResult = { result: codeModeOutput }
-                }
-                return {
-                  type: 'function_result' as const,
-                  name: call.name || 'run_looker_codemode',
-                  call_id: call.id,
-                  result: structResult,
-                }
+              } catch (err: unknown) {
+                apiRetries += 1
+                codeModeOutput = JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) })
+              }
+              // ponytail: /v1beta/interactions requires function_result.result to be a plain JS Struct object (never a JSON string)
+              let structResult: Record<string, unknown>
+              try {
+                const parsed: unknown = JSON.parse(codeModeOutput)
+                structResult = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+                  ? (parsed as Record<string, unknown>)
+                  : { result: parsed }
+              } catch {
+                structResult = { result: codeModeOutput }
+              }
+              if (Object.keys(preBridgePayloads).length > 0 && pendingLookerCalls[0]?.id === call.id) {
+                structResult = { ...structResult, _bridged_cache_files: preBridgePayloads }
+              }
+              resultsInput.push({
+                type: 'function_result' as const,
+                name: call.name || 'run_looker_codemode',
+                call_id: call.id,
+                result: structResult,
               })
-            )
+            }
             activeLookerCallId = ''
             codemodeExecMs += Date.now() - cmStart
             await throwIfAborted(interaction.id)
@@ -884,12 +977,23 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           })
         }
         await throwIfAborted(interaction.id)
-        interaction = await callInteractionsApi(
-          extensionSDK,
-          auth,
-          `interactions/${encodeURIComponent(interaction.id)}`,
-          'GET'
-        )
+        try {
+          interaction = await callInteractionsApi(
+            extensionSDK,
+            auth,
+            `interactions/${encodeURIComponent(interaction.id)}`,
+            'GET'
+          )
+          transientPollErrors = 0
+        } catch (pollErr: unknown) {
+          const msg = pollErr instanceof Error ? pollErr.message : String(pollErr)
+          if (transientPollErrors < 6 && /\b(?:500|502|503|504|429)\b|deadline_exceeded|fetch failed|network/i.test(msg)) {
+            transientPollErrors += 1
+            apiRetries += 1
+            continue
+          }
+          throw pollErr
+        }
         await throwIfAborted(interaction.id)
         if (interaction.environment_id) {
           trackedEnvId = interaction.environment_id
@@ -902,21 +1006,34 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         }
       }
 
-      if (interaction.status === 'failed' || interaction.status === 'cancelled') {
+      const mergedSnap: AntigravityInteractionPayload =
+        accumulatedSteps.length > 0
+          ? { ...interaction, steps: [...accumulatedSteps, ...(interaction.steps || [])] }
+          : interaction
+      const hasFinalBundle = Boolean(
+        extractBundleFromInteraction(mergedSnap) ||
+          extractNativeContentFromInteraction(mergedSnap) ||
+          extractLookmlBundleFromInteraction(mergedSnap) ||
+          extractTddFromInteraction(mergedSnap)
+      )
+      const hasDirectModelOutput =
+        extractInteractionOutputText({ output_text: interaction.output_text, outputs: interaction.outputs }) !== 'Completed.'
+      const curSteps = interaction.steps || []
+      const doneCallIds = new Set(curSteps.filter((s) => s.type === 'function_result').map((s) => s.call_id))
+      const hasUnfinishedCall = curSteps.some((s) => s.type === 'function_call' && !doneCallIds.has(s.id))
+
+      if (
+        interaction.status === 'failed' ||
+        (interaction.status === 'cancelled' &&
+          (Boolean(signal?.aborted) || Boolean(interaction.error) || (!hasFinalBundle && (!hasDirectModelOutput || hasUnfinishedCall))))
+      ) {
         throw new Error(
           `Antigravity interaction ${interaction.status}: ${
             interaction.error?.message || JSON.stringify(interaction.error || interaction)
           }`
         )
       }
-
-      const hasFinalBundle = Boolean(
-        extractBundleFromInteraction(interaction) ||
-          extractNativeContentFromInteraction(interaction) ||
-          extractLookmlBundleFromInteraction(interaction) ||
-          extractTddFromInteraction(interaction)
-      )
-      const pendingBridgeReqs = getPendingBridgeReqs(interaction)
+      const pendingBridgeReqs = await getPendingBridgeReqs(interaction)
 
       if (pendingBridgeReqs.length > 0 && actionRound + bridgeRound < resolvedMaxToolRounds) {
         await throwIfAborted(interaction.id)
@@ -931,28 +1048,25 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         onStatus(firstBridgeThought || friendlyBridge.statusText)
         const bridgeStart = Date.now()
         const bridgedLines: string[] = []
-        for (let bIdx = 0; bIdx < pendingBridgeReqs.length; bIdx += 1) {
-          const req = pendingBridgeReqs[bIdx]
+        for (const req of pendingBridgeReqs) {
           await throwIfAborted(interaction.id)
           if (req.kind !== 'sdk_request') codemodeCalls += 1
           try {
             const { cacheKey, result } = await executeLkrExtensionToolRequest({
-              sdk: turnSdk,
-              req,
-              defaultVars: defaultCodeModeVars,
-              extensionSDK,
-              requirePermission,
-              approvedOperations,
-              onPermissionRequest: effectivePermissionHandler,
+              sdk: turnSdk, req, defaultVars: defaultCodeModeVars, extensionSDK,
+              requirePermission, approvedOperations, onPermissionRequest: effectivePermissionHandler,
             })
             resolvedBridgeCacheKeys.add(cacheKey)
-            bridgedLines.push(`/workspace/.lkr_extension_cache/${cacheKey}.json\n\`\`\`json\n${JSON.stringify(result)}\n\`\`\``)
+            bridgedLines.push(
+              isNoReplayBridgeResult(result)
+                ? `[NO_REPLAY: ${cacheKey} already executed on Looker host — skip cache write and CLI replay]\n${encodeBridgePayload(result)}`
+                : `/workspace/.lkr_extension_cache/${cacheKey}.json\n${encodeBridgePayload(result)}`
+            )
           } catch (err: unknown) {
             apiRetries += 1
             const cacheKey = req.cache_key || computeLkrExtensionCacheKey(req)
             resolvedBridgeCacheKeys.add(cacheKey)
-            const errMsg = err instanceof Error ? err.message : String(err)
-            bridgedLines.push(`/workspace/.lkr_extension_cache/${cacheKey}.json\n\`\`\`json\n${JSON.stringify({ ok: false, error: errMsg })}\n\`\`\``)
+            bridgedLines.push(`/workspace/.lkr_extension_cache/${cacheKey}.json\n\`\`\`json\n${JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) })}\n\`\`\``)
           }
         }
         codemodeExecMs += Date.now() - bridgeStart
@@ -977,13 +1091,19 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         continue
       }
 
+      const maxIncompleteRounds =
+        /(?:^|\s)\/agentic-lookml-workflow(?=\s|$)/i.test(userPrompt) ||
+        (activatedLookmlSkills || []).includes('agentic-lookml-workflow')
+          ? 8
+          : 2
+
       if (
         interaction.status === 'incomplete' &&
         !usedDirectStatelessModel &&
         Boolean(interaction.id) &&
         !hasFinalBundle &&
-        incompleteRound < 2 &&
-        extractInteractionOutputText(interaction) === 'Completed.'
+        incompleteRound < maxIncompleteRounds &&
+        !hasDirectModelOutput
       ) {
         incompleteRound += 1
         await throwIfAborted(interaction.id)
@@ -1032,7 +1152,23 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     mode === 'dashboard' || useCase === 'auto'
       ? extractNativeContentFromInteraction(interaction)
       : null
-  const lookmlBundle = extractLookmlBundleFromInteraction(interaction)
+  let lookmlBundle = extractLookmlBundleFromInteraction(interaction)
+  const bundleRefPath = (lookmlBundle as unknown as { __bundle_ref__?: string } | null)?.__bundle_ref__
+  if (bundleRefPath && trackedEnvId) {
+    try {
+      const fullBundleJson = await fetchEnvironmentFile({
+        extensionSDK,
+        auth,
+        environmentId: trackedEnvId,
+        path: bundleRefPath,
+      })
+      lookmlBundle =
+        extractLookmlBundleFromInteraction({ output_text: `<LOOKML_BUNDLE>${fullBundleJson}</LOOKML_BUNDLE>` }) ||
+        lookmlBundle
+    } catch {
+      /* keep compact bundle fallback */
+    }
+  }
   const tddMarkdown = extractTddFromInteraction(interaction)
   const rawText = extractInteractionOutputText(interaction)
   const combinedOutput = `${rawText}\n${collectInteractionTextCandidates(interaction)}`
@@ -1118,8 +1254,13 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     assistantText: finalAssistantText,
     session: {
       environmentId: finalEnvId,
-      lastInteractionId: interaction.id,
+      lastInteractionId:
+        interaction.status === 'cancelled' && session.lastInteractionId ? session.lastInteractionId : interaction.id,
       ...(usedDirectStatelessModel ? { statelessTurn: true } : {}),
+      ...(session.usedBridgeTool ||
+      activeTools.some((t) => (t as { name?: string }).name === 'lkr_cli_extension_bridge')
+        ? { usedBridgeTool: true }
+        : {}),
       conversationId,
       explores: selectedExplores,
       toolType: effectiveToolType,

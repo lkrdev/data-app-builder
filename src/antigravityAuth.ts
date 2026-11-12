@@ -322,6 +322,12 @@ export function refreshOAuthSessionIfNeeded(opts: {
   })
 }
 
+function transientRetryDelayMs(status: number, method: string, attempt: number): number {
+  if (status === 429 && attempt < 3) return (attempt + 1) * 10000
+  if (method === 'GET' && (status === 502 || status === 503 || status === 504) && attempt < 2) return (attempt + 1) * 1500
+  return 0
+}
+
 export function callInteractionsApi(
   extensionSDK: AntigravityExtensionHostLike,
   auth: AntigravityAuth,
@@ -440,32 +446,36 @@ export function callInteractionsApi(
     headers['x-goog-api-key'] = auth.apiKey.trim()
   }
 
-  return fetch(url, { method, headers, body: serializedBody }).then((resp) =>
-    resp.text().then((text) => {
-      let parsed: AntigravityInteractionPayload
-      try { parsed = text ? (JSON.parse(text) as AntigravityInteractionPayload) : {} } catch { parsed = { raw: text } }
-      if (!resp.ok) {
-        const fail = (): never => {
-          throw new Error(`Antigravity API error (${resp.status}): ${parsed?.error?.message || text || `HTTP ${resp.status}`}`)
-        }
-        if (resp.status === 401) {
-          clearStoredOAuthSession(extensionSDK)
-          if (auth.mode === 'oauth' && typeof auth.onUnauthorizedRefresh === 'function') {
-            return auth.onUnauthorizedRefresh().catch(() => null).then((rt) => {
-              const refreshedToken = rt?.trim()
-              if (refreshedToken) {
-                return callInteractionsApi(extensionSDK, Object.assign({}, auth, { oauthToken: refreshedToken, onUnauthorizedRefresh: undefined }), path, method, body)
-              }
-              clearStoredOAuthSession(extensionSDK)
-              return fail()
-            })
+  const doFetchWithRetry = (attempt: number): Promise<AntigravityInteractionPayload> =>
+    fetch(url, { method, headers, body: serializedBody }).then((resp) =>
+      resp.text().then((text) => {
+        let parsed: AntigravityInteractionPayload
+        try { parsed = text ? (JSON.parse(text) as AntigravityInteractionPayload) : {} } catch { parsed = { raw: text } }
+        if (!resp.ok) {
+          const fail = (): never => {
+            throw new Error(`Antigravity API error (${resp.status}): ${parsed?.error?.message || text || `HTTP ${resp.status}`}`)
           }
+          if (resp.status === 401) {
+            clearStoredOAuthSession(extensionSDK)
+            if (auth.mode === 'oauth' && typeof auth.onUnauthorizedRefresh === 'function') {
+              return auth.onUnauthorizedRefresh().catch(() => null).then((rt) => {
+                const refreshedToken = rt?.trim()
+                if (refreshedToken) {
+                  return callInteractionsApi(extensionSDK, Object.assign({}, auth, { oauthToken: refreshedToken, onUnauthorizedRefresh: undefined }), path, method, body)
+                }
+                clearStoredOAuthSession(extensionSDK)
+                return fail()
+              })
+            }
+          }
+          const delay = transientRetryDelayMs(resp.status, method, attempt)
+          if (delay > 0) return new Promise<void>((r) => setTimeout(r, delay)).then(() => doFetchWithRetry(attempt + 1))
+          return fail()
         }
-        return fail()
-      }
-      return parsed
-    })
-  )
+        return parsed
+      })
+    )
+  return doFetchWithRetry(0)
 }
 
 export function listAvailableAntigravityModels(
@@ -562,40 +572,44 @@ export function fetchEnvironmentFile(params: {
     headers['x-goog-api-key'] = auth.apiKey.trim()
   }
 
-  return fetch(url, { method: 'GET', headers }).then((resp) =>
-    resp.text().then((text) => {
-      if (!resp.ok) {
-        const fail = (): never => {
-          let errMsg = text || `HTTP ${resp.status}`
-          try {
-            const parsed = text ? (JSON.parse(text) as { error?: { message?: string } }) : undefined
-            if (parsed?.error?.message) errMsg = parsed.error.message
-          } catch { /* ignore */ }
-          throw new Error(`Antigravity file fetch error (${resp.status}): ${errMsg}`)
-        }
-        if (resp.status === 401) {
-          clearStoredOAuthSession(extensionSDK)
-          if (auth.mode === 'oauth' && typeof auth.onUnauthorizedRefresh === 'function') {
-            return auth.onUnauthorizedRefresh().catch(() => null).then((rt) => {
-              const refreshedToken = rt?.trim()
-              if (refreshedToken) {
-                return fetchEnvironmentFile({
-                  extensionSDK,
-                  auth: Object.assign({}, auth, { oauthToken: refreshedToken, onUnauthorizedRefresh: undefined }),
-                  environmentId: envId,
-                  path: normalizedPath,
-                })
-              }
-              clearStoredOAuthSession(extensionSDK)
-              return fail()
-            })
+  const doFileFetch = (attempt: number): Promise<string> =>
+    fetch(url, { method: 'GET', headers }).then((resp) =>
+      resp.text().then((text) => {
+        if (!resp.ok) {
+          const fail = (): never => {
+            let errMsg = text || `HTTP ${resp.status}`
+            try {
+              const parsed = text ? (JSON.parse(text) as { error?: { message?: string } }) : undefined
+              if (parsed?.error?.message) errMsg = parsed.error.message
+            } catch { /* ignore */ }
+            throw new Error(`Antigravity file fetch error (${resp.status}): ${errMsg}`)
           }
+          if (resp.status === 401) {
+            clearStoredOAuthSession(extensionSDK)
+            if (auth.mode === 'oauth' && typeof auth.onUnauthorizedRefresh === 'function') {
+              return auth.onUnauthorizedRefresh().catch(() => null).then((rt) => {
+                const refreshedToken = rt?.trim()
+                if (refreshedToken) {
+                  return fetchEnvironmentFile({
+                    extensionSDK,
+                    auth: Object.assign({}, auth, { oauthToken: refreshedToken, onUnauthorizedRefresh: undefined }),
+                    environmentId: envId,
+                    path: normalizedPath,
+                  })
+                }
+                clearStoredOAuthSession(extensionSDK)
+                return fail()
+              })
+            }
+          }
+          const delay = transientRetryDelayMs(resp.status, 'GET', attempt)
+          if (delay > 0) return new Promise<void>((r) => setTimeout(r, delay)).then(() => doFileFetch(attempt + 1))
+          return fail()
         }
-        return fail()
-      }
-      return text
-    })
-  )
+        return text
+      })
+    )
+  return doFileFetch(0)
 }
 
 export interface StreamInteractionOptions {

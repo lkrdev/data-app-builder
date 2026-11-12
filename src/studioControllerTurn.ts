@@ -5,14 +5,14 @@ import {
   cleanLookmlProjectId, CodeModePermissionDecision, CodeModePermissionRequest,
   extractSkillNameFromPath, fetchConversationSandboxDebugMarkdown, fetchEnvironmentFile,
   hydrateInteractionActivitySteps, inFlightEnvProvisionByUser,
-  isNewProjectOnboardingIntakePrompt, normalizeEnvironmentId, normalizeSandboxFilePath,
+  normalizeEnvironmentId, normalizeSandboxFilePath,
   PastedImage, prewarmOrWakeAntigravityEnvironment, resolveBuiltinWorkspaceFileContent,
   runAntigravityTurn, sanitizeConversationLabel, sharedEnvExploreSchemas,
 } from './antigravity'
 import { ChatMessage, StudioMode } from './components/App'
 import {
-  buildDenseExploreSchema, copyTextWithExtensionSdk, discoverAccessibleConnections, EXPLICIT_SCRIPT_CREATION_RE,
-  extractExploreIdsFromCode, extractResolvedUseCase, formatAccessibleConnectionsMarkdown,
+  buildDenseExploreSchema, copyTextWithExtensionSdk, EXPLICIT_SCRIPT_CREATION_RE,
+  extractExploreIdsFromCode, extractResolvedUseCase,
   formatExploreId, formatStudioContentItemTitle, getArtifactNamespace, hydrateMentionedContext,
   isConversationalNoOpPrompt, matchExplicitUseCaseRule, parseExploreId,
   ResolvedStudioUseCase, saveDashboardStudioMetadata, saveNativeContentArtifact,
@@ -544,10 +544,6 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       const turnActivatedSkills = Array.from(new Set([...activatedLookmlSkills, ...promptSlashSkills]))
       if (promptSlashSkills.length > 0) setActivatedLookmlSkills(turnActivatedSkills)
       const effectiveLookmlTurn = turnTargetUseCase === 'lookml' || (turnTargetUseCase === 'auto' && isLookmlMode)
-      const availableConnections =
-        effectiveLookmlTurn && !lookmlProjectId?.trim() && isNewProjectOnboardingIntakePrompt(effectivePrompt, currentMessages)
-          ? formatAccessibleConnectionsMarkdown(await discoverAccessibleConnections(core40SDK))
-          : undefined
       const effectiveBuilderMode: 'data_app' | 'dashboard' =
         turnTargetUseCase === 'dashboard'
           ? 'dashboard'
@@ -564,7 +560,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         selectedExplores: turnExplores, folderId: selectedFolderId,
         toolMode: effectiveLookmlTurn ? 'lookml' : 'data_app',
         lookmlProjectId, activatedLookmlSkills: turnActivatedSkills, developableProjects: availableLookmlProjects,
-        canDeploy: canDeployLookml, availableConnections, warmEnvironmentInBackground: true,
+        canDeploy: canDeployLookml, warmEnvironmentInBackground: true,
         schemaMarkdown: turnSchemaMarkdown,
         userPrompt:
           explicitUseCase === 'tile' || loadedScript || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)

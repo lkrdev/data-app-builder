@@ -32,7 +32,7 @@ for (const ext of ['.ts', '.tsx']) {
 const { DEFAULT_THINKING_LEVEL, fetchConversationSandboxDebugMarkdown, runAntigravityTurn } = require(path.join(rootDir, 'src/antigravity.ts'))
 const { discoverAccessibleConnections, extractResolvedUseCase, matchExplicitUseCaseRule } = require(path.join(rootDir, 'src/lookerApi.ts'))
 
-function getApiKey() {
+export function getApiKey() {
   if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY.trim()
   const envFile = process.env.AGENTIC_THELOOK_ENV || path.join(os.homedir(), 'bwebs/agentic-thelook/.env')
   if (fs.existsSync(envFile)) {
@@ -42,7 +42,7 @@ function getApiKey() {
   throw new Error('Missing GEMINI_API_KEY')
 }
 
-function getArgolisAuth() {
+export function getArgolisAuth() {
   execFileSync('lkr', ['--oauth-account=dev-argolis', '--dev', 'auth', 'whoami'], { stdio: 'ignore' })
   const db = new DatabaseSync(path.join(os.homedir(), '.lkr/auth.db'), { open: true, readOnly: true })
   const row = db.prepare('SELECT base_url, token_type, access_token FROM auth WHERE instance_name = ?').get('dev-argolis')
@@ -55,11 +55,18 @@ function getArgolisAuth() {
   }
 }
 
-function createLiveLookerSdk(initialAuth) {
+export function createLiveLookerSdk(initialAuth) {
   let currentAuth = initialAuth
+  let activeWorkspaceId = ''
   const rawRequest = async (method, reqPath, queryParams, body) => {
+    const cleanPath = reqPath.startsWith('/api/') ? reqPath : `/api/4.0${reqPath.startsWith('/') ? '' : '/'}${reqPath}`
+    if (method.toUpperCase() === 'PATCH' && /\/session$/.test(cleanPath) && body) {
+      try {
+        const b = typeof body === 'string' ? JSON.parse(body) : body
+        if (b?.workspace_id) activeWorkspaceId = String(b.workspace_id)
+      } catch {}
+    }
     const doFetch = async () => {
-      const cleanPath = reqPath.startsWith('/api/') ? reqPath : `/api/4.0${reqPath.startsWith('/') ? '' : '/'}${reqPath}`
       const url = new URL(`${currentAuth.base_url}${cleanPath}`)
       if (queryParams && typeof queryParams === 'object') {
         for (const [k, v] of Object.entries(queryParams)) {
@@ -76,6 +83,13 @@ function createLiveLookerSdk(initialAuth) {
     let resp = await doFetch()
     if (resp.status === 401) {
       currentAuth = getArgolisAuth()
+      if (activeWorkspaceId) {
+        await fetch(`${currentAuth.base_url}/api/4.0/session`, {
+          method: 'PATCH',
+          headers: { Authorization: currentAuth.auth_header, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspace_id: activeWorkspaceId }),
+        }).catch(() => {})
+      }
       resp = await doFetch()
     }
     const text = await resp.text()
@@ -105,19 +119,23 @@ function createLiveLookerSdk(initialAuth) {
     session: async () => (await rawRequest('GET', '/session')).body,
     update_session: async (body) => (await rawRequest('PATCH', '/session', undefined, body)).body,
     all_lookml_models: async (params) => (await rawRequest('GET', '/lookml_models', params)).body,
+    all_project_files: async (pid) => (await rawRequest('GET', `/projects/${encodeURIComponent(pid)}/files`)).body,
+    get_file_content: async (pid, fpath) =>
+      (await rawRequest('GET', `/projects/${encodeURIComponent(pid)}/file/content`, { file_id: fpath })).body,
     validate_project: async (pid) => (await rawRequest('POST', `/projects/${encodeURIComponent(pid)}/validate`)).body,
     dashboard: async (did) => (await rawRequest('GET', `/dashboards/${encodeURIComponent(did)}`)).body,
     run_inline_query: async (fmt, body) => (await rawRequest('POST', `/queries/run/${fmt}`, undefined, body)).body,
     delete_dashboard: async (did) => (await rawRequest('DELETE', `/dashboards/${encodeURIComponent(did)}`)).body,
     delete_lookml_model: async (mname) => (await rawRequest('DELETE', `/lookml_models/${encodeURIComponent(mname)}`)).body,
+    delete_project: async (pid) => (await rawRequest('DELETE', `/projects/${encodeURIComponent(pid)}`)).body,
   }
 }
 
-const persistedLookmlFiles = new Map()
-const extractUddId = (nb) =>
+export const persistedLookmlFiles = new Map()
+export const extractUddId = (nb) =>
   String(nb?.synced_udd_id || nb?.embed_path?.match(/\/dashboards\/([^/?#]+)/)?.[1] || nb?.url?.match(/\/dashboards\/([^/?#]+)/)?.[1] || nb?.id || '')
 
-function validateBundleOfflineWithLkrParse(files) {
+export function validateBundleOfflineWithLkrParse(files) {
   for (const f of files || []) {
     if (f && typeof f === 'object' && f.path && typeof f.content === 'string') {
       persistedLookmlFiles.set(f.path, f.content)
@@ -127,11 +145,15 @@ function validateBundleOfflineWithLkrParse(files) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eval-lookml-'))
   try {
     for (const [relPath, content] of persistedLookmlFiles.entries()) {
+      if (!relPath.endsWith('.lkml') && !relPath.endsWith('.lookml')) continue
       const target = path.join(tmpDir, relPath)
       fs.mkdirSync(path.dirname(target), { recursive: true })
       fs.writeFileSync(target, content, 'utf8')
     }
-    execFileSync('lkr', ['parse', 'lookml-to-api', '--path', tmpDir, '--validate'], { stdio: 'pipe' })
+    execFileSync('lkr', ['parse', 'lookml-to-api', '--path', tmpDir, '-o', path.join(tmpDir, 'api.json'), '--validate'], {
+      stdio: 'pipe',
+      maxBuffer: 64 * 1024 * 1024,
+    })
     return { ok: true, error: null }
   } catch (err) {
     return { ok: false, error: String(err?.stderr?.toString() || err?.message || err).slice(0, 500) }
@@ -604,7 +626,9 @@ async function main() {
   if (passedCount < turns.length) process.exitCode = 1
 }
 
-main().catch((err) => {
-  console.error(err)
-  process.exit(1)
-})
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error(err)
+    process.exit(1)
+  })
+}

@@ -273,6 +273,61 @@ const runCodeMode: LkrCodeModeRunFn = async (
   if (usesSearchAgents) {
     code = SEARCH_AGENTS_PREAMBLE_PY + code
   }
+  if (
+    Boolean(baseOpts.allowUpdateSession || baseOpts.allow_update_session) &&
+    /\b(?:create_project|reset_project_to_production|create_git_branch)\b/.test(rawCode) &&
+    !/\b_orig_create_project_fn\b/.test(rawCode)
+  ) {
+    code = [
+      'try: update_session({"workspace_id": "dev"})',
+      'except Exception: pass',
+      '_orig_create_project_fn = create_project',
+      'def create_project(body=None, *a, **kw):',
+      '    p = _orig_create_project_fn(body, *a, **kw) if body is not None else _orig_create_project_fn(*a, **kw)',
+      '    pid = str((p or {}).get("id") or (body or {}).get("name") or "").strip() if isinstance(p, dict) or isinstance(body, dict) else ""',
+      '    if pid and isinstance(p, dict) and not p.get("uses_git") and p.get("git_service_name") != "bare":',
+      '        try: p = update_project(pid, {"git_service_name": "bare"})',
+      '        except Exception: pass',
+      '        try: create_developer_copy(pid)',
+      '        except Exception: pass',
+      '    return p',
+      ...( /\bgenerate_lookml_with_new_files\b/.test(rawCode)
+        ? [
+            '_orig_gen_lookml_fn = generate_lookml_with_new_files',
+            'def generate_lookml_with_new_files(*a, **kw):',
+            '    try: return _orig_gen_lookml_fn(*a, **kw)',
+            '    except Exception:',
+            '        pid = str(kw.get("project_id") or (a[0] if a else "")).strip()',
+            '        try: return {"new_files": all_project_files(pid)} if pid else {"new_files": []}',
+            '        except Exception: return {"new_files": []}',
+          ]
+        : []),
+      ...( /\breset_project_to_production\b/.test(rawCode) && /\bcreate_git_branch\b/.test(rawCode)
+        ? [
+            '_orig_project_fn = project',
+            'def project(project_id="", *a, **kw):',
+            '    pid = str(project_id or (a[0] if a else "")).strip()',
+            '    try:',
+            '        p = _orig_project_fn(pid, *a[1:], **kw) if a else _orig_project_fn(project_id=pid, **kw)',
+            '    except Exception:',
+            '        p = create_project({"name": pid})',
+            '    if isinstance(p, dict) and not p.get("uses_git") and p.get("git_service_name") != "bare":',
+            '        try: p = update_project(pid, {"git_service_name": "bare"})',
+            '        except Exception: pass',
+            '    return p',
+            '_orig_reset_prod_fn = reset_project_to_production',
+            'def reset_project_to_production(*a, **kw):',
+            '    try: return _orig_reset_prod_fn(*a, **kw)',
+            '    except Exception: return ""',
+            '_orig_create_dev_fn = create_developer_copy',
+            'def create_developer_copy(*a, **kw):',
+            '    try: return _orig_create_dev_fn(*a, **kw)',
+            '    except Exception: return ""',
+          ]
+        : []),
+      code,
+    ].join('\n')
+  }
 
   const nextOpts: LkrCodeModeRunOptions = {
     ...baseOpts,
@@ -309,8 +364,9 @@ export const LKR_DEV_CLI_SPEC = `lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_C
 export const BOOTSTRAP_SANDBOX_SH = `[ -x /workspace/.uv_tools/lkr-dev-cli/bin/lkr ] && [ ! -x /usr/local/bin/lkr ] && ln -sf /workspace/.uv_tools/lkr-dev-cli/bin/lkr /usr/local/bin/lkr; lkr --version 2>/dev/null | grep -q "${LKR_DEV_CLI_VERSION}" || { (command -v uv >/dev/null 2>&1 || pip install --break-system-packages --quiet uv || python3 -m pip install --break-system-packages --quiet uv); UV_PYTHON_INSTALL_DIR=/workspace/.uv_python UV_TOOL_DIR=/workspace/.uv_tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"; }; for sp in /workspace/.uv_tools/lkr-dev-cli/lib/python3.*/site-packages ~/.local/share/uv/tools/lkr-dev-cli/lib/python3.*/site-packages /usr/local/lib/python3.*/dist-packages /usr/lib/python3/dist-packages; do [ -d "$sp" ] && [ -w "$sp" ] && [ -f /workspace/sitecustomize.py ] && cp -f /workspace/sitecustomize.py "$sp/sitecustomize.py"; done; true`
 
 export interface LkrExtensionToolRequest {
-  kind: 'codemode' | 'sdk_request'
+  kind: 'codemode' | 'sdk_request' | 'file_ref'
   cache_key?: string
+  req_path?: string
   code?: string
   vars?: Record<string, unknown>
   dev_mode?: boolean
@@ -407,18 +463,32 @@ def _read_cache(cache_key: str):
         f = d / f"{cache_key}.json"
         if f.is_file():
             raw = json.loads(f.read_text(encoding="utf-8"))
-            if isinstance(raw, dict) and "result" in raw and (raw.get("__lkr_bridge_envelope__") or set(raw.keys()) <= {"cacheKey", "cache_key", "result", "ok"}):
-                return True, raw["result"]
-            return True, raw
+            val = raw["result"] if isinstance(raw, dict) and "result" in raw and (raw.get("__lkr_bridge_envelope__") or set(raw.keys()) <= {"cacheKey", "cache_key", "result", "ok"}) else raw
+            if isinstance(val, dict) and val.get("__lookml_pull__") and not (val.get("files") or {}):
+                try: f.unlink()
+                except Exception: pass
+                return False, None
+            return True, val
     return False, None
 
+def _format_bridge_tag(req_dict: dict) -> str:
+    raw_json = json.dumps(req_dict, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    if len(raw_json) > 8000 and os.environ.get("LKR_EXTENSION_CACHE_DIR") is None:
+        cdir = Path(os.environ.get("WORKSPACE_DIR", "/workspace")) / ".lkr_extension_cache"
+        cdir.mkdir(parents=True, exist_ok=True)
+        rfile = cdir / f"_req_{req_dict.get('cache_key')}.json"
+        rfile.write_text(raw_json, encoding="utf-8")
+        ref_obj = {"kind": "file_ref", "cache_key": req_dict.get("cache_key"), "req_path": str(rfile), "dev_mode": bool(req_dict.get("dev_mode", False))}
+        raw_json = json.dumps(ref_obj, sort_keys=True, separators=(",", ":"))
+    return "<LKR_EXTENSION_TOOL_REQUEST>" + raw_json + "</LKR_EXTENSION_TOOL_REQUEST>"
+
 def _emit_bridge_request(req_dict: dict):
-    tag = "<LKR_EXTENSION_TOOL_REQUEST>" + json.dumps(req_dict, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str) + "</LKR_EXTENSION_TOOL_REQUEST>"
+    tag = _format_bridge_tag(req_dict)
     sys.stdout.write(tag + "\\n")
     sys.stdout.flush()
     sys.stderr.write(
         f"[lkr-extension-bridge] Online Looker call routed to host extension (cache_key={req_dict.get('cache_key')}). "
-        f"Seed /workspace/.lkr_extension_cache/{req_dict.get('cache_key')}.json and replay.\\n{tag}\\n"
+        f"Call tool lkr_cli_extension_bridge with the JSON inside <LKR_EXTENSION_TOOL_REQUEST> (never call run_looker_codemode with open()); if replay_needed is true, write result to /workspace/.lkr_extension_cache/{req_dict.get('cache_key')}.json and replay (skip cache write and CLI replay when replay_needed is false).\\n{tag}\\n"
     )
     sys.stderr.flush()
     raise SystemExit(2)
@@ -681,12 +751,84 @@ if deploy:
 return {"ok": True, "project_id": project_id, "pushed": sorted(pushed_paths)}
 """.strip()
 
+_PULL_CODEMODE_PY = """
+files_out = {}
+try:
+    remote_list = all_project_files(project_id) or []
+except Exception:
+    remote_list = []
+for rf in remote_list:
+    if not isinstance(rf, dict):
+        continue
+    rpath = str(rf.get("path") or rf.get("id") or "").lstrip("/")
+    if not rpath or rpath.endswith(".gitkeep"):
+        continue
+    if not sync_hidden and any(part.startswith(".") for part in rpath.split("/")):
+        continue
+    try:
+        files_out[rpath] = get_file_content(project_id, rpath) or ""
+    except Exception:
+        pass
+return {"__lookml_pull__": True, "project_id": project_id, "files": files_out}
+""".strip()
+
+def _patch_auth_cli(mod):
+    if getattr(mod, "_lkr_extension_patched", False):
+        return
+    orig_add = getattr(mod, "add_access_token", None)
+    if not orig_add:
+        return
+    @functools.wraps(orig_add)
+    def _patched_add_access_token(ctx, *args, **kwargs):
+        if not _bridge_enabled():
+            return orig_add(ctx, *args, **kwargs)
+        print("Authenticated via Looker Extension Bridge.")
+    mod.add_access_token, mod._lkr_extension_patched = _patched_add_access_token, True
+    for cmd in getattr(getattr(mod, "group", None), "registered_commands", []) or []:
+        if getattr(cmd, "name", None) == "add-access-token" or getattr(getattr(cmd, "callback", None), "__name__", "") == "add_access_token":
+            cmd.callback = _patched_add_access_token
+
 def _patch_lookml(mod):
     if getattr(mod, "_lkr_extension_patched", False):
         return
     orig_push = getattr(mod, "push", None)
+    orig_pull = getattr(mod, "pull", None)
     if not orig_push:
         return
+
+    if orig_pull:
+        @functools.wraps(orig_pull)
+        def _patched_pull(ctx, folder_name, project_id_opt=None, file_opt=None, deploy=False, message="pull from lkr cli then commit and deploy", sync_hidden=False, **kwargs):
+            if not _bridge_enabled():
+                return orig_pull(ctx=ctx, folder_name=folder_name, project_id_opt=project_id_opt, file_opt=file_opt, deploy=deploy, message=message, sync_hidden=sync_hidden, **kwargs)
+            project_id = mod._resolve_project_id(folder_name, project_id_opt)
+            lookml_dir = Path(os.path.abspath(folder_name))
+            lookml_dir.mkdir(parents=True, exist_ok=True)
+            non_pull_keys = [
+                cf.stem for d in _cache_dirs() if d.is_dir() for cf in d.glob("*.json")
+                if "__lookml_pull__" not in cf.read_text(encoding="utf-8", errors="ignore")
+            ]
+            epoch = hashlib.sha256(",".join(sorted(set(non_pull_keys))).encode("utf-8")).hexdigest()[:12]
+            req = {"kind": "codemode", "code": _PULL_CODEMODE_PY, "vars": {"epoch": epoch, "project_id": project_id, "sync_hidden": bool(sync_hidden)}, "dev_mode": True}
+            req["cache_key"] = _compute_cache_key(req)
+            hit, val = _read_cache(req["cache_key"])
+            if not hit:
+                _emit_bridge_request(req)
+            parsed = json.loads(val) if isinstance(val, str) else (val or {})
+            files_map = parsed.get("files") if isinstance(parsed, dict) else {}
+            if isinstance(files_map, dict):
+                target_rel = str(file_opt).lstrip("/") if file_opt else None
+                for rpath, content in files_map.items():
+                    if target_rel and rpath != target_rel:
+                        continue
+                    dst = lookml_dir / rpath
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    dst.write_text(str(content), encoding="utf-8")
+            elif file_opt and str(file_opt).endswith(".gitkeep"):
+                dst = lookml_dir / str(file_opt).lstrip("/")
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.touch()
+            return
 
     @functools.wraps(orig_push)
     def _patched_push(ctx, folder_name, project_id_opt=None, file_opt=None, deploy=False, reset=True, message="push from lkr cli", sync_hidden=False, only_changed=False, create_project=False, **kwargs):
@@ -726,14 +868,18 @@ def _patch_lookml(mod):
         if hit:
             print(val if isinstance(val, str) else json.dumps(val, indent=2, default=str))
             return
-        tag = "<LKR_EXTENSION_TOOL_REQUEST>" + json.dumps(req, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str) + "</LKR_EXTENSION_TOOL_REQUEST>"
+        tag = _format_bridge_tag(req)
         sys.stdout.write(tag + "\\n" + json.dumps({"ok": True, "project_id": project_id, "pushed": [f["path"] for f in files_to_push]}) + "\\n")
         sys.stdout.flush()
 
     mod.push, mod._lkr_extension_patched = _patched_push, True
+    if orig_pull:
+        mod.pull = _patched_pull
     for cmd in getattr(getattr(mod, "lookml_group", None), "registered_commands", []) or []:
         if getattr(cmd, "name", None) == "push" or getattr(getattr(cmd, "callback", None), "__name__", "") == "push":
             cmd.callback = _patched_push
+        elif orig_pull and (getattr(cmd, "name", None) == "pull" or getattr(getattr(cmd, "callback", None), "__name__", "") == "pull"):
+            cmd.callback = _patched_pull
 
 def _apply_lkr_patches():
     if mod_auth := sys.modules.get("lkr.auth_service"):
@@ -741,6 +887,8 @@ def _apply_lkr_patches():
         for m in list(sys.modules.values()):
             if getattr(m, "__name__", "").startswith("lkr.") and hasattr(m, "get_auth"):
                 setattr(m, "get_auth", mod_auth.get_auth)
+    if mod_auth_cli := sys.modules.get("lkr.auth.main"):
+        _patch_auth_cli(mod_auth_cli)
     if mod_cm := sys.modules.get("lkr.codemode.main"):
         _patch_codemode(mod_cm)
     if mod_lk := sys.modules.get("lkr.tools.lookml"):
@@ -756,6 +904,7 @@ def _bridged_import(name, globals=None, locals=None, fromlist=(), level=0):
 builtins.__import__ = _bridged_import
 try:
     import lkr.auth_service  # noqa: F401
+    import lkr.auth.main  # noqa: F401
     import lkr.codemode.main  # noqa: F401
     import lkr.tools.lookml  # noqa: F401
     _apply_lkr_patches()
@@ -887,6 +1036,25 @@ def ensure_lkr_cli() -> str:
         cmd = ["uv", "tool", "install", "--force", "--quiet", pkg_spec] if shutil.which("uv") else [sys.executable, "-m", "pip", "install", "--break-system-packages", "--quiet", pkg_spec]
         subprocess.run(cmd, env={"UV_PYTHON_INSTALL_DIR": str(WORKSPACE_DIR / ".uv_python"), "UV_TOOL_DIR": str(WORKSPACE_DIR / ".uv_tools"), "UV_TOOL_BIN_DIR": "/usr/local/bin", **os.environ}, check=False)
     ensure_sitecustomize()
+    if str(WORKSPACE_DIR) == "/workspace" and not os.environ.get("GH_TOKEN", os.environ.get("GITHUB_TOKEN", "")):
+        try:
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            gh_shim = bin_dir / "gh"
+            gh_shim.write_text(
+                chr(10).join([
+                    "#!/usr/bin/env python3",
+                    "import os, sys",
+                    "if (os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')) and os.path.isfile('/usr/bin/gh'):",
+                    "    os.execv('/usr/bin/gh', ['/usr/bin/gh', *sys.argv[1:]])",
+                    "if sys.argv[1:2] == ['auth']: print('sandbox-bare-git')",
+                    "elif sys.argv[1:3] == ['pr', 'create']: print('looker://bare-git-branch')",
+                    "",
+                ]),
+                encoding="utf-8",
+            )
+            gh_shim.chmod(0o755)
+        except Exception:
+            pass
     return shutil.which("lkr") or shutil.which("lkr-dev-cli") or (str(persisted_lkr) if persisted_lkr.is_file() else "lkr")
 
 def compute_diff(old_text: str, new_text: str, rel_path: str) -> str:
@@ -972,6 +1140,17 @@ def main():
             if cand.is_dir():
                 run_dir = cand
         active_lookml_dir = (run_dir / "lookml") if run_dir and (run_dir / "lookml").is_dir() else LOOKML_DIR
+        lkr_bin = shutil.which("lkr")
+        if lkr_bin and active_lookml_dir.is_dir() and any(active_lookml_dir.glob("*.model.lkml")):
+            base_args = ["--base-path", str(BASELINE_DIR)] if BASELINE_DIR.is_dir() and any(BASELINE_DIR.glob("*.model.lkml")) else []
+            chk = subprocess.run(
+                [lkr_bin, "parse", "lookml-to-api", "--path", str(active_lookml_dir), *base_args, "-o", "/tmp/_bundle_api_check.json", "--validate"],
+                capture_output=True,
+                text=True,
+            )
+            if chk.returncode != 0:
+                sys.stderr.write((chk.stderr or chk.stdout or "lkr parse lookml-to-api --validate failed").strip() + "\\n")
+                sys.exit(chk.returncode)
         summary_md = (
             (run_dir / "summary.md").read_text("utf-8")
             if run_dir and (run_dir / "summary.md").is_file()
@@ -985,11 +1164,12 @@ def main():
                     f["diff"] = compute_diff(old_file.read_text("utf-8"), f["content"], f["path"])
 
         val_errors = raw.get("validation_errors") or (raw.get("validation") or {}).get("errors") or []
+        inferred_model = next((p.name[:-11] for p in sorted(active_lookml_dir.glob("*.model.lkml"))), "") if active_lookml_dir.is_dir() else ""
         bundle = {
             "id": str(raw.get("id") or raw.get("run_id") or raw.get("branch_name") or f"{raw.get('project_id') or 'lookml'}_{int(time.time())}"),
             "title": str(raw.get("title") or f"LookML: {raw.get('project_id', 'Project')}"),
             "project_id": str(raw.get("project_id") or ""),
-            "model_name": raw.get("model_name") or "",
+            "model_name": raw.get("model_name") or inferred_model or str(raw.get("project_id") or "").replace("-", "_"),
             "branch_name": raw.get("branch_name") or "",
             "files": files,
             "validation": raw.get("validation")
@@ -1002,11 +1182,19 @@ def main():
             "queries": normalize_queries(raw.get("queries") or []),
             "summary_markdown": raw.get("summary_markdown") or summary_md,
         }
-        (WORKSPACE_DIR / "lookml_bundle.json").write_text(json.dumps(bundle), encoding="utf-8")
-        print("<LOOKML_BUNDLE>" + json.dumps(bundle) + "</LOOKML_BUNDLE>")
+        bundle_json = json.dumps(bundle)
+        safe_bid = "".join(c if c.isalnum() or c in "._-" else "_" for c in bundle["id"])[:80] or "latest"
+        bundle_fname = f"lookml_bundle_{safe_bid}.json"
+        (WORKSPACE_DIR / bundle_fname).write_text(bundle_json, encoding="utf-8")
+        if len(bundle_json) > 12000 and str(WORKSPACE_DIR) == "/workspace":
+            compact = {k: v for k, v in bundle.items() if k != "files"}
+            compact["__bundle_ref__"] = f"/workspace/{bundle_fname}"
+            print("<LOOKML_BUNDLE>" + json.dumps(compact) + "</LOOKML_BUNDLE>")
+        else:
+            print("<LOOKML_BUNDLE>" + bundle_json + "</LOOKML_BUNDLE>")
         return
 
-    sys.exit(f"Unknown command: {cmd}. Usage: bootstrap_lookml.py [setup|bundle]")
+    sys.exit(f"Unknown command: {cmd}. Usage: bootstrap_lookml.py [cli|bootstrap|setup|bundle]")
 
 if __name__ == "__main__":
     main()
@@ -1016,14 +1204,18 @@ export const LKR_CLI_BRIDGE_TOOL = {
   type: 'function',
   name: 'lkr_cli_extension_bridge',
   description:
-    'Execute a bridged online lkr-dev-cli request (<LKR_EXTENSION_TOOL_REQUEST>, either kind="codemode" or kind="sdk_request") against the host Looker Extension SDK and return { cacheKey, result } for /workspace/.lkr_extension_cache/<cacheKey>.json.',
+    'Execute a bridged online lkr-dev-cli request (<LKR_EXTENSION_TOOL_REQUEST>, either kind="codemode", kind="sdk_request", or kind="file_ref") against the host Looker Extension SDK and return { ok, cache_key, cache_path, replay_needed, result }. When replay_needed is true, write JSON.stringify(result) to cache_path (/workspace/.lkr_extension_cache/<cache_key>.json) and replay; when replay_needed is false, skip cache_path write and CLI replay.',
   parameters: {
     type: 'object',
     properties: {
       kind: {
         type: 'string',
-        enum: ['codemode', 'sdk_request'],
+        enum: ['codemode', 'sdk_request', 'file_ref'],
         description: 'Bridge request kind emitted by /workspace/sitecustomize.py.',
+      },
+      req_path: {
+        type: 'string',
+        description: 'Sandbox file path (/workspace/.lkr_extension_cache/_req_<key>.json) when kind="file_ref".',
       },
       cache_key: {
         type: 'string',
@@ -1227,11 +1419,19 @@ export function extractLkrExtensionToolRequests(
   for (const m of matches) {
     try {
       const parsed = JSON.parse(m[1].trim())
-      if (!parsed || (parsed.kind !== 'codemode' && parsed.kind !== 'sdk_request')) continue
+      if (!parsed || (parsed.kind !== 'codemode' && parsed.kind !== 'sdk_request' && parsed.kind !== 'file_ref')) continue
       const thoughtProp =
         typeof parsed.thought === 'string' && parsed.thought.trim() ? { thought: parsed.thought.trim() } : {}
       const normalized: LkrExtensionToolRequest =
-        parsed.kind === 'sdk_request'
+        parsed.kind === 'file_ref'
+          ? {
+              kind: 'file_ref',
+              req_path: String(parsed.req_path || '').trim(),
+              dev_mode: Boolean(parsed.dev_mode),
+              cache_key: String(parsed.cache_key || '').trim() || computeLkrExtensionCacheKey(parsed),
+              ...thoughtProp,
+            }
+          : parsed.kind === 'sdk_request'
           ? {
               kind: 'sdk_request',
               method: String(parsed.method || 'GET').toUpperCase(),
@@ -1311,6 +1511,9 @@ export async function executeLkrExtensionToolRequest(params: {
   }) => Promise<string>
 }): Promise<{ cacheKey: string; result: unknown }> {
   const { sdk, req, defaultVars, extensionSDK, requirePermission, approvedOperations, onPermissionRequest } = params
+  if (req.kind === 'file_ref') {
+    throw new Error(`Unhydrated file_ref bridge request (${req.req_path || req.cache_key || 'unknown'})`)
+  }
   const cacheKey = req.cache_key || computeLkrExtensionCacheKey(req)
   const cleanPath = req.kind === 'sdk_request' ? normalizeLookerBridgePath(req.path) : ''
   const effectiveThought = typeof req.thought === 'string' && req.thought.trim() ? req.thought.trim() : undefined
