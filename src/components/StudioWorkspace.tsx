@@ -4,7 +4,7 @@ import { ChattyHostBuilderFactory, getEmbedSDK, ILookerConnection, LookerEmbedEx
 import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
 import {
-  AlertTriangle, Archive, ArchiveRestore, AtSign, BookOpen, Brain, Bug, Check, ChevronDown, Code2, Columns2, Copy,
+  AlertTriangle, Archive, ArchiveRestore, AtSign, BookOpen, Brain, Bug, Check, ChevronDown, ChevronUp, Code2, Columns2, Copy,
   CornerDownRight, Database, ExternalLink, Eye, FileText, Folder, Kanban, LayoutDashboard, Loader2,
   MessageSquare, MoreVertical, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Paperclip, Pencil, Plus, RotateCw, Shield,
   Sparkles, Square, Terminal, Trash2, Wrench, X, Zap,
@@ -736,7 +736,7 @@ export const DOC_UI_COMPONENTS: Record<string, () => React.ReactElement> = {
     <div
       className="dab-ds-card"
       data-testid="doc-slash-skill-menu-preview"
-      style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}
+      style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 4, width: 360, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }}
     >
       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: 'var(--dab-text-secondary)' }}>
         <Wrench size={12} strokeWidth={1.75} aria-hidden="true" />
@@ -746,14 +746,14 @@ export const DOC_UI_COMPONENTS: Record<string, () => React.ReactElement> = {
         <div
           key={sk.id}
           style={{
-            display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px', borderRadius: 5, fontSize: 11.5,
+            display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', borderRadius: 5, fontSize: 12, minWidth: 0, overflow: 'hidden',
             background: idx === 0 ? 'var(--dab-accent-subtle, #eff6ff)' : 'transparent',
             color: idx === 0 ? 'var(--dab-accent-text, #1d4ed8)' : 'var(--dab-text)',
           }}
         >
-          <Wrench size={12} strokeWidth={1.75} aria-hidden="true" />
-          <code style={{ fontWeight: 600 }}>{`/${sk.id}`}</code>
-          <span className="dab-muted" style={{ fontSize: 11 }}>{sk.label}</span>
+          <BookOpen size={13} strokeWidth={1.75} style={{ flexShrink: 0 }} aria-hidden="true" />
+          <code style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, background: 'transparent', color: 'inherit', padding: 0 }}>{`/${sk.id}`}</code>
+          <span className="dab-muted dab-studio-menu-text" style={{ fontSize: 12 }}>{sk.desc}</span>
         </div>
       ))}
     </div>
@@ -1554,15 +1554,16 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                   <div
                     key={sk.id} role="option" aria-selected={isSelected || isHighlighted} data-testid={`composer-slash-skill-option-${sk.id}`}
                     className={`dab-option ${isSelected || isHighlighted ? 'dab-option-selected' : ''}`}
+                    style={{ gap: 8 }}
                     onMouseEnter={() => setActiveSlashIndex(idx)} onClick={(e) => { e.stopPropagation(); handleSelectSlashSkill(sk) }}
-                    title={`${sk.label} — ${sk.desc} (${sk.path})`}
+                    title={`${sk.desc} (${sk.path})`}
                   >
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
-                      <BookOpen size={13} strokeWidth={1.75} aria-hidden="true" /><code style={{ fontSize: 11.5, fontWeight: 600 }}>/{sk.id}</code>
-                      <span style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>{sk.label}</span>
-                      <span className="dab-muted" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>· {sk.desc}</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0, overflow: 'hidden' }}>
+                      <BookOpen size={13} strokeWidth={1.75} style={{ flexShrink: 0 }} aria-hidden="true" />
+                      <code style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>/{sk.id}</code>
+                      <span className="dab-muted dab-studio-menu-text" style={{ fontSize: 12 }}>{sk.desc}</span>
                     </span>
-                    {isSelected && <Check size={13} strokeWidth={2} aria-hidden="true" />}
+                    {isSelected && <Check size={13} strokeWidth={2} style={{ flexShrink: 0 }} aria-hidden="true" />}
                   </div>
                 )
               })
@@ -2212,12 +2213,14 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   const [isResizingSplit, setIsResizingSplit] = useState(false)
   const [copiedTraceKey, setCopiedTraceKey] = useState<string | null>(null)
   const [longPressUserMsgIdx, setLongPressUserMsgIdx] = useState<number | null>(null)
+  const [expandedUserMsgIndices, setExpandedUserMsgIndices] = useState<Record<number, boolean>>({})
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressFiredRef = useRef(false)
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null)
 
   useEffect(() => {
     setLongPressUserMsgIdx(null)
+    setExpandedUserMsgIndices({})
     longPressFiredRef.current = false
     return () => { if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current) }
   }, [activeConversationId])
@@ -2377,6 +2380,8 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               : undefined
           const isHydratingTurn = Boolean(!hasSteps && m.interactionId && hydratingInteractionIds?.[m.interactionId])
           const isUserCopied = copiedTraceKey === `user_${idx}`
+          const isLongUserMsg = m.role === 'user' && (m.text.split('\n').length > 5 || m.text.length > 360)
+          const isExpanded = Boolean(expandedUserMsgIndices[idx])
           return (
             <div
               key={idx}
@@ -2477,7 +2482,18 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                   )}
                 </details>
               )}
-              <div className="dab-msg-body">
+              <div
+                id={isLongUserMsg ? `user-msg-body-${idx}` : undefined}
+                className={isLongUserMsg && !isExpanded ? 'dab-msg-body dab-msg-body-collapsed' : 'dab-msg-body'}
+                data-collapsed={isLongUserMsg ? String(!isExpanded) : undefined}
+                onScroll={isLongUserMsg && !isExpanded ? (e) => {
+                  if (e.currentTarget.scrollTop > 0) { e.currentTarget.scrollTop = 0; setExpandedUserMsgIndices((prev) => Object.assign({}, prev, { [idx]: true })) }
+                } : undefined}
+                onClick={isLongUserMsg && !isExpanded ? (e) => {
+                  if (longPressFiredRef.current || (typeof window !== 'undefined' && window.getSelection?.()?.toString())) return
+                  if (!(e.target as HTMLElement | null)?.closest?.('a, button, :not(pre) > code, [role="menu"]')) setExpandedUserMsgIndices((prev) => Object.assign({}, prev, { [idx]: true }))
+                } : undefined}
+              >
                 <StudioMarkdown
                   text={m.text} hostUrl={hostUrl} extensionSDK={extensionSDK}
                   onOpenContentInViewer={handleOpenContentLinkInViewer}
@@ -2494,6 +2510,16 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                   }}
                 />
               </div>
+              {isLongUserMsg && (
+                <button
+                  type="button" data-testid={`toggle-user-msg-expand-${idx}`} className="dab-user-msg-expand-btn"
+                  aria-expanded={isExpanded} aria-controls={`user-msg-body-${idx}`}
+                  onClick={(e) => { e.stopPropagation(); setExpandedUserMsgIndices((prev) => Object.assign({}, prev, { [idx]: !isExpanded })) }}
+                >
+                  {isExpanded ? <ChevronUp size={12} strokeWidth={1.75} aria-hidden="true" /> : <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />}
+                  <span>{isExpanded ? 'Show less' : 'Show more'}</span>
+                </button>
+              )}
               {m.images && m.images.length > 0 && (
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
                   {m.images.map((src, i) => <img key={i} src={src} alt="Attached screenshot" style={{ maxHeight: 80, borderRadius: 4, border: '1px solid #cbd5e1' }} />)}
