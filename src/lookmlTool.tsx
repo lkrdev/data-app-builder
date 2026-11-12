@@ -103,16 +103,8 @@ export type LookmlInteractionLike = AntigravityInteractionPayload
 export function extractLookmlBundleFromInteraction(
   interaction?: LookmlInteractionLike | null
 ): LookmlBundle | null {
-  const hit = parseTaggedJsonObjects(
-    collectInteractionTextCandidates(interaction),
-    /<LOOKML_BUNDLE>([\s\S]*?)<\/LOOKML_BUNDLE>/g
-  ).find((p) =>
-    Boolean(
-      cleanLookmlProjectId(p.project_id) ||
-        cleanLookmlProjectId(p.model_name) ||
-        (Array.isArray(p.files) && p.files.length > 0) ||
-        (typeof p.summary_markdown === 'string' && p.summary_markdown.trim())
-    )
+  const hit = parseTaggedJsonObjects(collectInteractionTextCandidates(interaction), /<LOOKML_BUNDLE>([\s\S]*?)<\/LOOKML_BUNDLE>/g).find((p) =>
+    Boolean(cleanLookmlProjectId(p.project_id) || cleanLookmlProjectId(p.model_name) || (Array.isArray(p.files) && p.files.length > 0) || (typeof p.summary_markdown === 'string' && p.summary_markdown.trim()))
   )
   if (!hit) return null
   const bundle = Object.assign({}, hit) as unknown as LookmlBundle
@@ -305,18 +297,11 @@ export function loadLookmlSessionArtifact(
   candidates.forEach((cid) => {
     chain = chain.then((hit) => hit || svc.get<LookmlArtifactPayload>(`obj_lookml_${cid}`).catch((): null => null))
   })
-  const sanitizeLoaded = (p: LookmlArtifactPayload): LookmlArtifactPayload => {
-    const cleanBundle = p.bundle
-      ? Object.assign({}, p.bundle, {
-          project_id: cleanLookmlProjectId(p.bundle.project_id) || undefined,
-          id: cleanLookmlProjectId(p.bundle.id) || undefined,
-        })
-      : p.bundle
-    return Object.assign({}, p, {
+  const sanitizeLoaded = (p: LookmlArtifactPayload): LookmlArtifactPayload =>
+    Object.assign({}, p, {
       project_id: cleanLookmlProjectId(p.project_id) || undefined,
-      bundle: cleanBundle,
+      bundle: p.bundle ? Object.assign({}, p.bundle, { project_id: cleanLookmlProjectId(p.bundle.project_id) || undefined, id: cleanLookmlProjectId(p.bundle.id) || undefined }) : p.bundle,
     })
-  }
   return chain.then((hit) => {
     if (hit) return sanitizeLoaded(hit)
     return svc

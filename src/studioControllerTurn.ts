@@ -700,10 +700,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             setLookerWorkspaceId('dev')
             void syncLookerSessionWorkspace()
             setBusyStatus('Saving LookML project changes...')
-            const prevFiles =
-              lookmlBundle && resolveLookmlCanonicalProjectId(lookmlBundle) === canonProj
-                ? lookmlBundle.files
-                : []
+            const prevFiles = lookmlBundle && resolveLookmlCanonicalProjectId(lookmlBundle) === canonProj ? lookmlBundle.files : []
             let mergedBundle: LookmlBundle = Object.assign({}, result.lookmlBundle, {
               id: canonProj,
               project_id: cleanLookmlProjectId(result.lookmlBundle.project_id) || canonProj,
@@ -734,10 +731,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             setActiveObjectId(lookmlId)
 
             extractLookmlDashboardsFromBundle(
-              Object.assign({}, result.lookmlBundle, {
-                model_name: result.lookmlBundle.model_name || mergedBundle.model_name,
-                project_id: lookmlId,
-              })
+              Object.assign({}, result.lookmlBundle, { model_name: result.lookmlBundle.model_name || mergedBundle.model_name, project_id: lookmlId })
             ).forEach((d) => {
               if (result.nativeBundle && (result.nativeBundle.id === d.id || result.nativeBundle.lookml_dashboard_id === d.id)) return
               const isExistingDash = contentItemsRef.current.some((it) => it.key === `lookml_dashboard:${d.id}`)

@@ -267,9 +267,7 @@ export function useStudioAuthAndPrefs() {
     setMaxTotalTokensState(normalizeMaxTotalTokens(next))
   }, [])
 
-  const setMaxToolRounds = useCallback((next: number | string) => {
-    setMaxToolRoundsState(normalizeMaxToolRounds(next))
-  }, [])
+  const setMaxToolRounds = useCallback((next: number | string) => setMaxToolRoundsState(normalizeMaxToolRounds(next)), [])
 
   useEffect(() => {
     const mql = typeof window !== 'undefined' ? window.matchMedia?.('(prefers-color-scheme: dark)') : null

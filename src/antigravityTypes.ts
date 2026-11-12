@@ -391,13 +391,7 @@ const IGNORED_INSPECTION_STEP_RE =
 const ALLOWED_RESULT_TOOL_RE = /^(?:run_looker_codemode|lkr_cli_extension_bridge)$/i
 const EXEC_STEP_TYPE_RE = /^(?:code_execution|code_execution_call|executable_code)$/i
 const isIgnoredInspectionStep = (s: AntigravityInteractionStep, sType: string, fnName: string): boolean =>
-  Boolean(
-    IGNORED_INSPECTION_STEP_RE.test(sType) ||
-      IGNORED_INSPECTION_STEP_RE.test(fnName) ||
-      s.view_file_call ||
-      s.edit_file_call ||
-      s.skill_lookup_call
-  )
+  Boolean(IGNORED_INSPECTION_STEP_RE.test(sType) || IGNORED_INSPECTION_STEP_RE.test(fnName) || s.view_file_call || s.edit_file_call || s.skill_lookup_call)
 
 export function collectInteractionTextCandidates(interaction: AntigravityInteractionPayload | null | undefined): string {
   const out: unknown[] = [interaction?.output_text]
@@ -428,12 +422,7 @@ export function collectInteractionTextCandidates(interaction: AntigravityInterac
       const effName = fnName || (callId ? callNameById.get(callId) || '' : '')
       if (!ALLOWED_RESULT_TOOL_RE.test(effName)) return
       const rObj = s.result && typeof s.result === 'object' ? (s.result as Record<string, unknown>) : null
-      const resStr =
-        typeof s.result === 'string'
-          ? s.result
-          : rObj
-          ? [rObj.result, rObj.stdout, rObj.output].filter((v): v is string => typeof v === 'string').join('\n') || JSON.stringify(s.result)
-          : ''
+      const resStr = typeof s.result === 'string' ? s.result : rObj ? [rObj.result, rObj.stdout, rObj.output].filter((v): v is string => typeof v === 'string').join('\n') || JSON.stringify(s.result) : ''
       out.push(s.output, s.stdout, resStr)
       return
     }
@@ -442,15 +431,7 @@ export function collectInteractionTextCandidates(interaction: AntigravityInterac
       return
     }
     if (s.thought) return
-    out.push(
-      s.output,
-      s.stdout,
-      s.result,
-      s.text,
-      s.code_execution_result?.output,
-      s.code_execution_result?.stdout,
-      extractNonThoughtText((s as Record<string, unknown>).content ?? (s as Record<string, unknown>).parts)
-    )
+    out.push(s.output, s.stdout, s.result, s.text, s.code_execution_result?.output, s.code_execution_result?.stdout, extractNonThoughtText((s as Record<string, unknown>).content ?? (s as Record<string, unknown>).parts))
   })
   return out.filter((x): x is string => typeof x === 'string' && x.length > 0).join('\n')
 }

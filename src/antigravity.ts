@@ -669,12 +669,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const envSlotKey = normalizeEnvironmentId(trackedEnvId) || 'remote'
   const envConcurrencySlot = activeInteractionsByEnv.get(envSlotKey) || 0
   activeInteractionsByEnv.set(envSlotKey, envConcurrencySlot + 1)
-  const postContinuation = async (
-    input: Array<Record<string, unknown>>,
-    envFallback?: string,
-    extraSteps: AntigravityInteractionStep[] = [],
-    toolsOverride?: unknown[]
-  ) => {
+  const postContinuation = async (input: Array<Record<string, unknown>>, envFallback?: string, extraSteps: AntigravityInteractionStep[] = [], toolsOverride?: unknown[]) => {
     accumulateInteractionUsage(interaction)
     accumulatedSteps.push(...(interaction.steps || []), ...extraSteps)
     const resumeEnv = interaction.environment_id || trackedEnvId || envFallback
@@ -833,10 +828,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
             await throwIfAborted(interaction.id)
             onStatus(`Max Tool Rounds (${resolvedMaxToolRounds}) reached — summarizing progress...`)
             const wrapUpResults = pendingLookerCalls.map((call: AntigravityInteractionStep) => ({
-              type: 'function_result' as const,
-              name: call.name || 'run_looker_codemode',
-              call_id: call.id,
-              result: { ok: false, error: wrapUpErrorText },
+              type: 'function_result' as const, name: call.name || 'run_looker_codemode', call_id: call.id, result: { ok: false, error: wrapUpErrorText },
             }))
             await postContinuation(wrapUpResults, requiresBashSandbox ? 'remote' : undefined, wrapUpResults, [])
             continue
@@ -996,12 +988,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         incompleteRound += 1
         await throwIfAborted(interaction.id)
         onStatus('Resuming incomplete turn...')
-        await postContinuation(
-          [{ type: 'text', text: 'Continue and complete the current request.' }],
-          requiresBashSandbox ? 'remote' : undefined,
-          [],
-          wrapUpSent ? [] : undefined
-        )
+        await postContinuation([{ type: 'text', text: 'Continue and complete the current request.' }], requiresBashSandbox ? 'remote' : undefined, [], wrapUpSent ? [] : undefined)
         continue
       }
 

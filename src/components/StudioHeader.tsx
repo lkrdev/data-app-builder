@@ -241,32 +241,19 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               options={STUDIO_MAX_TOTAL_TOKENS_OPTIONS.map((o) => ({ value: String(o.value), label: o.label }))}
             />
             <span
-              className="dab-info-tooltip-wrap"
-              data-open={roundsInfoOpen ? 'true' : undefined}
-              onMouseEnter={() => setRoundsInfoOpen(true)}
-              onMouseLeave={() => setRoundsInfoOpen(false)}
+              className="dab-info-tooltip-wrap" data-open={roundsInfoOpen ? 'true' : undefined}
+              onMouseEnter={() => setRoundsInfoOpen(true)} onMouseLeave={() => setRoundsInfoOpen(false)}
             >
               <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Max Tool Rounds:</strong>
               <button
-                type="button"
-                tabIndex={0}
-                className="dab-info-tooltip-btn"
-                data-testid="config-max-tool-rounds-info"
-                aria-label="About Max Tool Rounds"
-                aria-describedby="config-max-tool-rounds-tooltip"
-                onFocus={() => setRoundsInfoOpen(true)}
-                onBlur={() => setRoundsInfoOpen(false)}
-                onClick={() => setRoundsInfoOpen((v) => !v)}
-                onKeyDown={(e) => { if (e.key === 'Escape') setRoundsInfoOpen(false) }}
+                type="button" tabIndex={0} className="dab-info-tooltip-btn" data-testid="config-max-tool-rounds-info"
+                aria-label="About Max Tool Rounds" aria-describedby="config-max-tool-rounds-tooltip"
+                onFocus={() => setRoundsInfoOpen(true)} onBlur={() => setRoundsInfoOpen(false)}
+                onClick={() => setRoundsInfoOpen((v) => !v)} onKeyDown={(e) => { if (e.key === 'Escape') setRoundsInfoOpen(false) }}
               >
                 <Info size={13} strokeWidth={1.75} aria-hidden="true" />
               </button>
-              <span
-                id="config-max-tool-rounds-tooltip"
-                role="tooltip"
-                data-testid="config-max-tool-rounds-tooltip"
-                className="dab-info-tooltip"
-              >
+              <span id="config-max-tool-rounds-tooltip" role="tooltip" data-testid="config-max-tool-rounds-tooltip" className="dab-info-tooltip">
                 <strong>Ceiling (50 default, 100 max):</strong> <code>/v1beta/interactions</code> has no round cap; practical limits are Gemini&apos;s ~1M-token context window and the 60-min browser OAuth token TTL.{' '}
                 <strong>Why lower (15–25):</strong> stops runaway LookML validation or SQL parity retry loops faster to protect token spend, BigQuery scan costs, and shared API key RPM/TPM quota.
               </span>

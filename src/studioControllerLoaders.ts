@@ -273,9 +273,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       const msgs = (matchedConv?.messages as ChatMessage[] | undefined) ?? opts.messages ?? (opts.studio?.messages as ChatMessage[] | undefined)
       if (matchedConv) {
         hydrateConversationContentItems(matchedConv).forEach((item) => upsertContentItem(item, false))
-        if (matchedConv.activeContentTabKey && matchedConv.activeContentTabKey !== 'lookml:default') {
-          setActiveContentTabKey(matchedConv.activeContentTabKey)
-        }
+        if (matchedConv.activeContentTabKey && matchedConv.activeContentTabKey !== 'lookml:default') setActiveContentTabKey(matchedConv.activeContentTabKey)
       }
       setActiveObjectId(opts.id)
       setActiveConversationId((prev) => {
@@ -1137,10 +1135,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       } else {
         setLoadedScript(false)
         setActiveObjectId('')
-        if (mode === 'lookml') {
-          setLookmlBundle(null)
-          setLookmlProjectId('')
-        }
+        if (mode === 'lookml') { setLookmlBundle(null); setLookmlProjectId('') }
       }
       if (initialTabKey && contentItemsRef.current.some((it) => it.key === initialTabKey && !it.hidden)) {
         setActiveContentTabKey(initialTabKey)

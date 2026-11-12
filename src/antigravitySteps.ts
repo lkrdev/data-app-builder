@@ -57,10 +57,7 @@ export function extractInteractionOutputText(interaction: AntigravityInteraction
 }
 
 export function extractBundleFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): DataAppBundle | null {
-  const hit = parseTaggedJsonObjects(
-    collectInteractionTextCandidates(interaction),
-    /<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g
-  ).find((p) => Boolean(p.raw_code || p.prod_code))
+  const hit = parseTaggedJsonObjects(collectInteractionTextCandidates(interaction), /<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g).find((p) => Boolean(p.raw_code || p.prod_code))
   return (hit as unknown as DataAppBundle) || null
 }
 
@@ -123,17 +120,9 @@ export function extractNativeContentFromInteraction(
     const step = steps[i]
     if (step?.type === 'function_result' && step?.name === 'run_looker_codemode') {
       const rObj = step.result && typeof step.result === 'object' ? (step.result as Record<string, unknown>) : null
-      const rawStr =
-        typeof step.result === 'string'
-          ? step.result
-          : rObj && typeof rObj.result === 'string'
-          ? rObj.result
-          : JSON.stringify(step.result || '')
-      const fastTagged = parseTaggedJsonObjects(rawStr, /<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g)
-      for (let t = 0; t < fastTagged.length; t += 1) {
-        const norm = normalizeNativeBundleCandidate(fastTagged[t], true)
-        if (norm) return norm
-      }
+      const rawStr = typeof step.result === 'string' ? step.result : typeof rObj?.result === 'string' ? rObj.result : JSON.stringify(step.result || '')
+      const fastHit = parseTaggedJsonObjects(rawStr, /<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g).map((p) => normalizeNativeBundleCandidate(p, true)).find(Boolean)
+      if (fastHit) return fastHit
       try {
         const parsed = typeof step.result === 'string' ? JSON.parse(step.result) : step.result
         const parsedObj = parsed && typeof parsed === 'object' ? (parsed as { result?: unknown }) : undefined
@@ -142,15 +131,9 @@ export function extractNativeContentFromInteraction(
       } catch { /* ignore */ }
     }
   }
-  const taggedObjs = parseTaggedJsonObjects(
-    collectInteractionTextCandidates(interaction),
-    /<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g
-  )
-  for (let i = 0; i < taggedObjs.length; i += 1) {
-    const norm = normalizeNativeBundleCandidate(taggedObjs[i], true)
-    if (norm) return norm
-  }
-  return null
+  return parseTaggedJsonObjects(collectInteractionTextCandidates(interaction), /<NATIVE_CONTENT_BUNDLE>([\s\S]*?)<\/NATIVE_CONTENT_BUNDLE>/g)
+    .map((p) => normalizeNativeBundleCandidate(p, true))
+    .find(Boolean) || null
 }
 
 const KNOWN_LOOKER_SDK_CALL_RE =

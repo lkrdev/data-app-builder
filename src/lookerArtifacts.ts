@@ -567,9 +567,7 @@ export function resolveConversationRelatedContent(
   }
 
   if (rawType === 'lookml') {
-    const objectId = cleanLookmlProjectId(
-      stripPrefix(String(conv.objectId || c.sessionId || c.id || c.projectId || (!hasExplicitContentItems ? conv.id : '') || ''))
-    )
+    const objectId = cleanLookmlProjectId(stripPrefix(String(conv.objectId || c.sessionId || c.id || c.projectId || (!hasExplicitContentItems ? conv.id : '') || '')))
     const projId = cleanLookmlProjectId(c.projectId)
     const items = uniq(objectId && `LookML session artifact (obj_lookml_${objectId})`, projId && projId !== objectId && `LookML session artifact (obj_lookml_${projId})`)
     return enrichWithContentItems({
