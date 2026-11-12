@@ -436,6 +436,8 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 .dab-lookml-subbar [data-testid="lookml-file-tabs"] .dab-btn-primary,.dab-lookml-subbar [data-testid="lookml-file-tabs"] .dab-btn-secondary {height:24px;min-height:24px;padding:0 5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px !important}
 :root[data-theme="dark"] .dab-lookml-subbar [data-testid="lookml-file-tabs"] .dab-btn-primary,.dab-shell[data-theme="dark"] .dab-lookml-subbar [data-testid="lookml-file-tabs"] .dab-btn-primary {background:#2563eb}
 .dab-lookml-subbar .dab-btn-icon {width:26px;min-width:26px;height:26px;min-height:26px;padding:0}
+.dab-lookml-subbar .dab-studio-menu {left:6px;min-width:min(220px,calc(100% - 12px));max-width:min(340px,calc(100% - 12px));max-height:max(112px,min(280px,calc(100vh - 270px)))}
+.dab-lookml-subbar .dab-studio-menu.align-right {left:auto;right:6px;min-width:min(176px,calc(100% - 12px));max-width:calc(100% - 12px)}
 .dab-lkml-kind-badge {display:inline-flex;align-items:center;justify-content:center;width:14px;min-width:14px;height:14px;border:1px solid currentColor;border-radius:3px;font:700 9.5px/1 ui-monospace,SFMono-Regular,Menlo,monospace;flex-shrink:0}
 .dab-studio-menu-item .dab-ov-meta {max-width:44%;overflow:hidden;text-overflow:ellipsis;color:var(--dab-text-secondary)}
 .dab-studio-menu-item.active .dab-ov-meta {color:inherit}
