@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 
 import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { Looker40SDK } from '@looker/sdk'
-import { ExternalLink, Lock, MoreVertical } from 'lucide-react'
+import { ExternalLink, FolderOpen, Lock, MoreVertical } from 'lucide-react'
 
 import { LOOKER_PROJECT_ONBOARDING_SKILL_MD } from './antigravityPrompts'
 import {
@@ -32,6 +32,33 @@ export interface LookmlFileChange {
   action?: 'created' | 'updated' | 'deleted'
   content?: string
   diff?: string
+}
+
+export type LookmlFileKindLetter = 'E' | 'V' | 'T' | 'D' | 'M' | 'R' | 'F'
+
+const LOOKML_KIND_BY_EXT: Record<string, LookmlFileKindLetter> = {
+  explore: 'E',
+  view: 'V',
+  test: 'T',
+  dashboard: 'D',
+  model: 'M',
+  refinement: 'R',
+}
+
+export function parseLookmlFileDisplay(rawPath: string): {
+  stem: string
+  dir: string
+  fullPath: string
+  letter: LookmlFileKindLetter | null
+} {
+  const fullPath = String(rawPath || '').trim()
+  const relPath = fullPath.replace(/^\/+/, '')
+  const slashIdx = relPath.lastIndexOf('/')
+  const dir = slashIdx >= 0 ? relPath.slice(0, slashIdx) : ''
+  const base = slashIdx >= 0 ? relPath.slice(slashIdx + 1) : relPath
+  const m = base.match(/^(.+?)(?:\.(explore|view|test|dashboard|model|refinement))?\.(?:lkml|lookml)$/i)
+  if (!m) return { stem: base, dir, fullPath, letter: null }
+  return { stem: m[1], dir, fullPath, letter: m[2] ? LOOKML_KIND_BY_EXT[m[2].toLowerCase()] : 'F' }
 }
 
 export interface LookmlTestResult {
@@ -370,32 +397,48 @@ export const LookmlPreviewPane: React.FC<{
 }) => {
   const [selectedFileIdx, setSelectedFileIdx] = useState(0)
   const [viewMode, setViewMode] = useState<'diff' | 'content'>('content')
-  const [codeMenuOpen, setCodeMenuOpen] = useState(false)
+  const [openMenu, setOpenMenu] = useState<'picker' | 'actions' | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(initialDetailsOpen)
   const [copiedFile, setCopiedFile] = useState(false)
+  const filePickerRef = useRef<HTMLDivElement | null>(null)
+  const fileTabsRef = useRef<HTMLDivElement | null>(null)
   const codeMenuRef = useRef<HTMLDivElement | null>(null)
+  const focusTrigger = (ref: React.RefObject<HTMLDivElement | null>) => ref.current?.querySelector('button')?.focus()
+  const scrollTabIntoView = (i: number) =>
+    (fileTabsRef.current?.querySelector(`[data-testid="lookml-file-tab-${i}"]`) as HTMLElement | null)?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
 
   useEffect(() => {
+    setOpenMenu((m) => (m === 'picker' ? null : m))
     if (!bundle?.files?.length) return
     if (!selectedFilePath) { setSelectedFileIdx(0); return }
     const clean = selectedFilePath.replace(/^\/+/, '')
     const idx = bundle.files.findIndex((f) => f.path === selectedFilePath || f.path.replace(/^\/+/, '') === clean)
-    if (idx >= 0) setSelectedFileIdx(idx)
+    setSelectedFileIdx(idx >= 0 ? idx : 0)
+    if (idx >= 0) scrollTabIntoView(idx)
   }, [bundle?.id, bundle?.project_id, bundle?.files, selectedFilePath])
 
   useEffect(() => {
-    if (!codeMenuOpen) return
-    const onMouseDown = (e: MouseEvent) => {
-      if (codeMenuRef.current && !codeMenuRef.current.contains(e.target as Node)) setCodeMenuOpen(false)
+    if (!openMenu) return
+    const activeRef = openMenu === 'picker' ? filePickerRef : codeMenuRef
+    const onOutside = (e: Event) => {
+      if (activeRef.current && !activeRef.current.contains(e.target as Node)) setOpenMenu(null)
     }
-    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') setCodeMenuOpen(false) }
-    document.addEventListener('mousedown', onMouseDown)
-    document.addEventListener('keydown', onKeyDown)
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.stopImmediatePropagation()
+      const restore = Boolean(activeRef.current?.contains(typeof document !== 'undefined' ? document.activeElement : null))
+      setOpenMenu(null)
+      if (restore) focusTrigger(activeRef)
+    }
+    document.addEventListener('mousedown', onOutside)
+    document.addEventListener('focusin', onOutside)
+    document.addEventListener('keydown', onKeyDown, true)
     return () => {
-      document.removeEventListener('mousedown', onMouseDown)
-      document.removeEventListener('keydown', onKeyDown)
+      document.removeEventListener('mousedown', onOutside)
+      document.removeEventListener('focusin', onOutside)
+      document.removeEventListener('keydown', onKeyDown, true)
     }
-  }, [codeMenuOpen])
+  }, [openMenu])
 
   if (!bundle) {
     return (
@@ -419,8 +462,49 @@ export const LookmlPreviewPane: React.FC<{
 
   const validProjectId = cleanLookmlProjectId(bundle.project_id)
   const projectIdePath = validProjectId ? `/projects/${encodeURIComponent(validProjectId)}` : ''
+  const cleanActiveFilePath =
+    activeFile && activeFile.action !== 'deleted'
+      ? String(activeFile.path || '').trim().replace(/^\/+/, '')
+      : ''
+  const encodedActiveFilePath =
+    cleanActiveFilePath && !cleanActiveFilePath.split('/').includes('..')
+      ? cleanActiveFilePath.split('/').filter(Boolean).map(encodeURIComponent).join('/')
+      : ''
   const activeFileIdePath =
-    activeFile && projectIdePath ? `${projectIdePath}/files/${activeFile.path.replace(/^\/+/, '')}` : ''
+    encodedActiveFilePath && projectIdePath ? `${projectIdePath}/files/${encodedActiveFilePath}` : ''
+  const targetIdePath = activeFileIdePath || projectIdePath
+  const parsedFiles = files.map((f) => ({ f, parsed: parseLookmlFileDisplay(f.path) }))
+  const focusMenuItem = (container: HTMLDivElement | null, targetIdx: number) => {
+    const items = container ? Array.from(container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')) : []
+    if (items.length) items[((targetIdx % items.length) + items.length) % items.length]?.focus()
+  }
+  const bindMenuTrigger = (which: 'picker' | 'actions', ref: React.RefObject<HTMLDivElement | null>, initialIdx: number) => ({
+    'aria-haspopup': 'menu' as const,
+    'aria-expanded': openMenu === which,
+    'aria-controls': openMenu === which ? (which === 'picker' ? 'lookml-file-picker-menu' : 'lookml-code-actions-menu') : undefined,
+    onClick: (e: React.MouseEvent<HTMLButtonElement>) =>
+      setOpenMenu((prev) => {
+        const next = prev === which ? null : which
+        if (next && e.detail === 0) setTimeout(() => focusMenuItem(ref.current, initialIdx), 0)
+        return next
+      }),
+    onKeyDown: (e: React.KeyboardEvent<HTMLButtonElement>) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        setOpenMenu(which)
+        setTimeout(() => focusMenuItem(ref.current, e.key === 'ArrowUp' ? -1 : initialIdx), 0)
+      }
+    },
+  })
+  const onMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>, container: HTMLDivElement | null) => {
+    const items = container ? Array.from(container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')) : []
+    if (!items.length) return
+    const cur = items.indexOf(document.activeElement as HTMLButtonElement)
+    if (e.key === 'ArrowDown') { e.preventDefault(); focusMenuItem(container, cur + 1) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); focusMenuItem(container, cur <= 0 ? items.length - 1 : cur - 1) }
+    else if (e.key === 'Home') { e.preventDefault(); focusMenuItem(container, 0) }
+    else if (e.key === 'End') { e.preventDefault(); focusMenuItem(container, items.length - 1) }
+  }
   const openLink = (pathOrUrl: string) => {
     const p = String(pathOrUrl || '').trim()
     if (!p) return
@@ -452,31 +536,90 @@ export const LookmlPreviewPane: React.FC<{
 
       <StudioCard className="dab-lookml-editor-shell">
         <div className="dab-inspector-bar dab-lookml-subbar">
+          {files.length > 0 && (
+            <div ref={filePickerRef} style={{ flexShrink: 0 }}>
+              <StudioButton
+                testId="lookml-file-picker-btn"
+                className="dab-btn-icon"
+                title={`Browse files (${files.length})`}
+                aria-label="Open LookML file menu"
+                {...bindMenuTrigger('picker', filePickerRef, safeFileIdx)}
+              >
+                <FolderOpen size={13} strokeWidth={1.75} aria-hidden="true" />
+              </StudioButton>
+              {openMenu === 'picker' && (
+                <div
+                  id="lookml-file-picker-menu"
+                  data-testid="lookml-file-picker-menu"
+                  role="menu"
+                  aria-label="LookML files"
+                  className="dab-studio-menu"
+                  onKeyDown={(e) => onMenuKeyDown(e, filePickerRef.current)}
+                >
+                  {parsedFiles.map(({ f, parsed }, idx) => {
+                    const kind = parsed.letter || 'F'
+                    const isActive = idx === safeFileIdx
+                    return (
+                      <button
+                        key={`${f.path}:${idx}`}
+                        type="button"
+                        role="menuitem"
+                        tabIndex={-1}
+                        data-testid={`lookml-file-picker-item-${idx}`}
+                        aria-current={isActive ? 'true' : undefined}
+                        aria-label={f.path}
+                        title={f.path}
+                        className={`dab-studio-menu-item${isActive ? ' active' : ''}`}
+                        onClick={() => {
+                          setSelectedFileIdx(idx)
+                          onSelectFilePath?.(f.path)
+                          setOpenMenu(null)
+                          focusTrigger(filePickerRef)
+                          scrollTabIntoView(idx)
+                        }}
+                      >
+                        <span className="dab-lkml-kind-badge" data-kind={kind} aria-hidden="true">{kind}</span>
+                        <span className="dab-ov-txt">{parsed.stem}</span>
+                        {parsed.dir && <span className="dab-ov-meta">{parsed.dir}</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
           <div
+            ref={fileTabsRef}
             className="dab-controls"
             data-testid="lookml-file-tabs"
-            style={{ flexWrap: 'nowrap', overflowX: 'auto', flex: 1, minWidth: 0 }}
+            style={{ flexWrap: 'nowrap', overflowX: 'auto', flex: '1 1 48px', minWidth: 0 }}
           >
             {files.length === 0 ? (
               <span className="dab-muted">No .lkml files recorded</span>
             ) : (
-              files.map((f, idx) => (
-                <button
-                  key={f.path}
-                  type="button"
-                  data-testid={`lookml-file-tab-${idx}`}
-                  aria-current={idx === safeFileIdx ? 'true' : undefined}
-                  onClick={() => {
-                    setSelectedFileIdx(idx)
-                    onSelectFilePath?.(f.path)
-                  }}
-                  className={idx === safeFileIdx ? 'dab-btn-primary' : 'dab-btn-secondary'}
-                  style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 11, flexShrink: 0 }}
-                >
-                  {viewMode === 'diff' ? (f.action === 'created' ? '+ ' : f.action === 'deleted' ? '- ' : 'Δ ') : ''}
-                  {f.path}
-                </button>
-              ))
+              parsedFiles.map(({ f, parsed }, idx) => {
+                const kind = parsed.letter || 'F'
+                return (
+                  <button
+                    key={`${f.path}:${idx}`}
+                    type="button"
+                    data-testid={`lookml-file-tab-${idx}`}
+                    aria-current={idx === safeFileIdx ? 'true' : undefined}
+                    aria-label={viewMode === 'diff' && f.action ? `${f.path} (${f.action})` : f.path}
+                    title={f.path}
+                    onClick={() => {
+                      setOpenMenu(null)
+                      setSelectedFileIdx(idx)
+                      onSelectFilePath?.(f.path)
+                    }}
+                    className={idx === safeFileIdx ? 'dab-btn-primary' : 'dab-btn-secondary'}
+                  >
+                    {viewMode === 'diff' ? (f.action === 'created' ? '+ ' : f.action === 'deleted' ? '- ' : 'Δ ') : ''}
+                    <span className="dab-lkml-kind-badge" data-kind={kind} aria-hidden="true">{kind}</span>
+                    <span>{parsed.stem}</span>
+                  </button>
+                )
+              })
             )}
           </div>
           {activeFile && (
@@ -486,7 +629,7 @@ export const LookmlPreviewPane: React.FC<{
                 data-testid="lookml-mode-file-btn"
                 aria-pressed={viewMode === 'content'}
                 className={`dab-seg-btn ${viewMode === 'content' ? 'active' : ''}`}
-                onClick={() => setViewMode('content')}
+                onClick={() => { setOpenMenu(null); setViewMode('content') }}
               >
                 File
               </button>
@@ -495,62 +638,64 @@ export const LookmlPreviewPane: React.FC<{
                 data-testid="lookml-mode-diff-btn"
                 aria-pressed={viewMode === 'diff'}
                 className={`dab-seg-btn ${viewMode === 'diff' ? 'active' : ''}`}
-                onClick={() => setViewMode('diff')}
+                onClick={() => { setOpenMenu(null); setViewMode('diff') }}
               >
                 Diff
               </button>
             </div>
           )}
-          {projectIdePath && (
+          {targetIdePath && (
             <StudioButton
               variant="secondary"
               testId="lookml-toolbar-open-ide-btn"
-              onClick={() => openLink(projectIdePath)}
+              title={targetIdePath}
+              onClick={() => { setOpenMenu(null); openLink(targetIdePath) }}
               style={{ padding: '0 6px', fontSize: 11 }}
             >
               <span>Open in IDE</span>
               <ExternalLink size={12} strokeWidth={1.75} aria-hidden="true" />
             </StudioButton>
           )}
-          <div ref={codeMenuRef} style={{ position: 'relative', flexShrink: 0 }}>
-            <button
-              type="button" data-testid="lookml-code-actions-btn" className="dab-btn dab-btn-secondary dab-btn-icon"
-              title="LookML file actions" aria-label="LookML file actions" aria-haspopup="menu" aria-expanded={codeMenuOpen}
-              onClick={() => setCodeMenuOpen((prev) => !prev)}
+          <div ref={codeMenuRef} style={{ flexShrink: 0, marginLeft: 'auto' }}>
+            <StudioButton
+              testId="lookml-code-actions-btn"
+              className="dab-btn-icon"
+              title="LookML file actions"
+              aria-label="LookML file actions"
+              {...bindMenuTrigger('actions', codeMenuRef, 0)}
             >
               <MoreVertical size={14} strokeWidth={1.75} aria-hidden="true" />
-            </button>
-            {codeMenuOpen && (
+            </StudioButton>
+            {openMenu === 'actions' && (
               <div
+                id="lookml-code-actions-menu"
                 data-testid="lookml-code-actions-menu" role="menu" aria-label="LookML file actions"
-                className="dab-studio-menu align-right" style={{ minWidth: 176 }}
+                className="dab-studio-menu align-right"
+                onKeyDown={(e) => onMenuKeyDown(e, codeMenuRef.current)}
               >
                 <button
-                  type="button" role="menuitem" data-testid="lookml-toggle-view-mode-btn" className="dab-studio-menu-item"
-                  onClick={() => { setViewMode((m) => (m === 'content' ? 'diff' : 'content')); setCodeMenuOpen(false) }}
+                  type="button" role="menuitem" tabIndex={-1} data-testid="lookml-toggle-view-mode-btn" className="dab-studio-menu-item"
+                  onClick={() => {
+                    setViewMode((m) => (m === 'content' ? 'diff' : 'content'))
+                    setOpenMenu(null)
+                    focusTrigger(codeMenuRef)
+                  }}
                 >
                   <span>{viewMode === 'content' ? 'View Changeset' : 'Back to Files'}</span>
                 </button>
                 <button
-                  type="button" role="menuitem" data-testid="lookml-view-details-btn" className="dab-studio-menu-item"
-                  onClick={() => { setDetailsOpen(true); setCodeMenuOpen(false) }}
+                  type="button" role="menuitem" tabIndex={-1} data-testid="lookml-view-details-btn" className="dab-studio-menu-item"
+                  onClick={() => { setDetailsOpen(true); setOpenMenu(null) }}
                 >
                   <span>View Details</span>
                 </button>
-                {activeFileIdePath && (
-                  <button
-                    type="button" role="menuitem" data-testid="lookml-open-file-ide-btn" className="dab-studio-menu-item"
-                    onClick={() => { openLink(activeFileIdePath); setCodeMenuOpen(false) }}
-                  >
-                    <span>Open File in IDE</span>
-                  </button>
-                )}
                 {activeFile && (
                   <button
-                    type="button" role="menuitem" data-testid="lookml-copy-file-btn" className="dab-studio-menu-item"
+                    type="button" role="menuitem" tabIndex={-1} data-testid="lookml-copy-file-btn" className="dab-studio-menu-item"
                     onClick={() => {
                       void copyTextWithExtensionSdk(activeFile.content || activeFile.diff || '', extensionSDK)
-                      setCopiedFile(true); setTimeout(() => setCopiedFile(false), 1800); setCodeMenuOpen(false)
+                      setCopiedFile(true); setTimeout(() => setCopiedFile(false), 1800); setOpenMenu(null)
+                      focusTrigger(codeMenuRef)
                     }}
                   >
                     <span>{copiedFile ? 'Copied .lkml' : 'Copy .lkml'}</span>
