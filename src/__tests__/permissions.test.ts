@@ -10168,4 +10168,286 @@ customElements.define('good-compare-app', GoodCompareApp);`
     expect(stylesCss).toContain('.dab-agent-name-brand:hover .dab-agent-name-edit-btn,.dab-brand:hover .dab-agent-name-edit-btn,.dab-agent-name-edit-btn:hover,.dab-agent-name-edit-btn:focus-visible {visibility:visible;opacity:1}')
     expect(workspaceTsx).toContain('data-testid="mobile-menu-edit-agent-name-btn" className="dab-composer-add-item dab-mobile-only-menu-item"')
   })
+
+  test('70. Issue #198: resolves Turn 2 function_call ID collision against steps[0] input function_result, deduplicates repeated run_looker_codemode calls with _duplicate_call_notice, verifies SSE requires_action fallback to REST GET, and auto-continues/recovers missing <DATA_APP_BUNDLE>', async () => {
+    const origRunPython = LkrCodeMode.runPythonCode
+    let pythonRunCount = 0
+    LkrCodeMode.runPythonCode = async () => {
+      pythonRunCount += 1
+      return JSON.stringify({
+        ok: true,
+        dimensions: ['order_items.created_month', 'products.category'],
+        measures: ['order_items.total_sale_price'],
+      })
+    }
+
+    try {
+      // 1. Turn 1 -> Turn 2 call_id collision + duplicate run_looker_codemode deduplication + Turn 3 <DATA_APP_BUNDLE>
+      const postedBodies: MockInteractionPostBody[] = []
+      const dupDiscoveryCode = 'exp = lookml_model_explore("thelook", "order_items")\nreturn {"ok": True}'
+      const collidingCallId = 'call_5950459370112177182'
+      const mockCollisionExt = {
+        serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+          const b = init?.body ? (JSON.parse(String(init.body)) as MockInteractionPostBody) : {}
+          postedBodies.push(b)
+          if (postedBodies.length === 1) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_198_t1',
+                environment_id: 'env_198',
+                status: 'requires_action',
+                steps: [
+                  { id: 'th_1', type: 'thought', thought: 'Inspecting order_items schema for race bar chart' },
+                  {
+                    id: collidingCallId,
+                    type: 'function_call',
+                    name: 'run_looker_codemode',
+                    arguments: { thought: 'Discovering order_items fields', code: dupDiscoveryCode },
+                  },
+                ],
+              }),
+            }
+          }
+          if (postedBodies.length === 2) {
+            // Turn 2 echoes Turn 1's function_result at steps[0] and emits a new function_call at steps[2] with the SAME deterministic id
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_198_t2',
+                previous_interaction_id: 'int_198_t1',
+                environment_id: 'env_198',
+                status: 'requires_action',
+                steps: [
+                  {
+                    type: 'function_result',
+                    name: 'run_looker_codemode',
+                    call_id: collidingCallId,
+                    result: b.input?.[0]?.result,
+                  },
+                  { id: 'th_2', type: 'thought', thought: 'Checking order_items dimensions again' },
+                  {
+                    id: collidingCallId,
+                    type: 'function_call',
+                    name: 'run_looker_codemode',
+                    arguments: { thought: 'Repeating order_items discovery', code: dupDiscoveryCode },
+                  },
+                ],
+              }),
+            }
+          }
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_198_t3',
+              previous_interaction_id: 'int_198_t2',
+              environment_id: 'env_198',
+              status: 'completed',
+              steps: [
+                {
+                  type: 'function_result',
+                  name: 'run_looker_codemode',
+                  call_id: collidingCallId,
+                  result: b.input?.[0]?.result,
+                },
+                {
+                  id: 'exec_bundle',
+                  type: 'code_execution_result',
+                  output:
+                    '<DATA_APP_BUNDLE>{"title":"Category Race Bar Chart","raw_code":"export class RaceApp extends DataApp {}","prod_code":"export class RaceApp extends DataApp {}","widgets":[]}</DATA_APP_BUNDLE>',
+                },
+              ],
+              output_text: '<USE_CASE>app</USE_CASE>\nBuilt the Category Race Bar Chart Data App.',
+            }),
+          }
+        },
+      }
+
+      const collisionTurn = await runAntigravityTurn({
+        sdk: asSdk({ ok: async <T>(p: T) => p }),
+        extensionSDK: mockCollisionExt,
+        auth: { mode: 'apikey', apiKey: 'test_key_198' },
+        session: { environmentId: 'env_198', toolType: 'app' },
+        mode: 'data_app',
+        useCase: 'app',
+        selectedExplores: ['thelook::order_items'],
+        schemaMarkdown: '# Schema',
+        userPrompt: '/data-apps build a data app race bar chart for order items total sale price',
+        onStatus: () => {},
+      })
+
+      expect(postedBodies).toHaveLength(3)
+      // LkrCodeMode.runPythonCode was only invoked ONCE; Turn 2 reused the cached result with _duplicate_call_notice
+      expect(pythonRunCount).toBe(1)
+      const turn2SentResult = postedBodies[2]?.input?.[0]?.result as Record<string, unknown> | undefined
+      expect(turn2SentResult?.ok).toBe(true)
+      expect(String(turn2SentResult?._duplicate_call_notice || '')).toContain(
+        'NOTE: You already executed this exact run_looker_codemode snippet'
+      )
+      expect(collisionTurn.bundle?.title).toBe('Category Race Bar Chart')
+      expect(collisionTurn.assistantText).toContain('Built the Category Race Bar Chart Data App.')
+
+      // Verify extractInteractionActivitySteps pairs positionally when steps[0] is an input function_result with the same call_id
+      const turn2InFlightSteps = extractInteractionActivitySteps({
+        id: 'int_198_t2',
+        status: 'requires_action',
+        steps: [
+          { type: 'function_result', name: 'run_looker_codemode', call_id: collidingCallId, result: { ok: true } },
+          { id: 'th_2', type: 'thought', thought: 'Planning next step' },
+          {
+            id: collidingCallId,
+            type: 'function_call',
+            name: 'run_looker_codemode',
+            arguments: { thought: 'Querying race bar series', code: 'return 1' },
+          },
+        ],
+      })
+      const runningCodemode = turn2InFlightSteps.find((s) => s.kind === 'codemode')
+      expect(runningCodemode?.status).toBe('running')
+
+      // 2. OAuth SSE stream returning status === 'requires_action' before function_call frame arrives falls through to REST GET
+      const prevFetch = globalThis.fetch
+      let restGetCalled = false
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = String(init?.method || 'GET').toUpperCase()
+        if (url.includes('alt=sse')) {
+          const sseBody = 'event: interaction.requires_action\ndata: {"id":"int_sse_198","status":"requires_action","steps":[{"type":"function_result","call_id":"call_5950459370112177182","result":{"ok":true}}]}\n\n'
+          return {
+            ok: true,
+            status: 200,
+            text: async () => sseBody,
+          } as unknown as Response
+        }
+        if (method === 'GET' && url.includes('/interactions/int_sse_198')) {
+          restGetCalled = true
+          return {
+            ok: true,
+            status: 200,
+            text: async () =>
+              JSON.stringify({
+                id: 'int_sse_198',
+                environment_id: 'env_198',
+                status: 'requires_action',
+                steps: [
+                  { type: 'function_result', call_id: collidingCallId, result: { ok: true } },
+                  {
+                    id: collidingCallId,
+                    type: 'function_call',
+                    name: 'run_looker_codemode',
+                    arguments: { thought: 'Fetched via authoritative REST GET', code: 'return {"from_rest": True}' },
+                  },
+                ],
+              }),
+          } as unknown as Response
+        }
+        const postBody = init?.body ? (JSON.parse(String(init.body)) as MockInteractionPostBody) : {}
+        if (!postBody.previous_interaction_id) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ id: 'int_sse_198', environment_id: 'env_198', status: 'in_progress', steps: [] }),
+          } as unknown as Response
+        }
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              id: 'int_sse_198_done',
+              environment_id: 'env_198',
+              status: 'completed',
+              output_text:
+                '<DATA_APP_BUNDLE>{"title":"SSE Recovered App","code":"export class SseApp extends DataApp {}"}</DATA_APP_BUNDLE>\nDone.',
+            }),
+        } as unknown as Response
+      }) as typeof fetch
+
+      try {
+        const sseTurn = await runAntigravityTurn({
+          sdk: asSdk({ ok: async <T>(p: T) => p }),
+          auth: { mode: 'oauth', oauthToken: 'tok_198' },
+          session: { environmentId: 'env_198', toolType: 'app' },
+          mode: 'data_app',
+          useCase: 'app',
+          selectedExplores: ['thelook::order_items'],
+          schemaMarkdown: '# Schema',
+          userPrompt: 'Build SSE app',
+          pollScheduleMs: [0],
+          onStatus: () => {},
+        })
+        expect(restGetCalled).toBe(true)
+        expect(sseTurn.bundle?.title).toBe('SSE Recovered App')
+        expect(sseTurn.bundle?.raw_code).toContain('export class SseApp extends DataApp')
+      } finally {
+        globalThis.fetch = prevFetch
+      }
+
+      // 3. Auto-continuation when useCase === 'app' finishes without <DATA_APP_BUNDLE>, plus fallback fetchEnvironmentFile recovery
+      const autoContPosts: MockInteractionPostBody[] = []
+      const fetchedFiles: string[] = []
+      const mockAutoRecoverExt = {
+        serverProxy: async (url: string, init?: FetchCustomParameters) => {
+          const method = String(init?.method || 'GET').toUpperCase()
+          if (method === 'GET' && url.includes('/environments/env_198_rec/files/')) {
+            fetchedFiles.push(url)
+            if (url.includes('workspace/apps/race-bar/app.js')) {
+              return {
+                ok: true,
+                status: 200,
+                body: "import { DataApp, html } from '/runtime/data-app.js';\nexport class RaceBarApp extends DataApp {}\ncustomElements.define('race-bar-app', RaceBarApp);",
+              }
+            }
+            return { ok: false, status: 404, body: 'Not found' }
+          }
+          const b = init?.body ? (JSON.parse(String(init.body)) as MockInteractionPostBody) : {}
+          autoContPosts.push(b)
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: `int_rec_${autoContPosts.length}`,
+              environment_id: 'env_198_rec',
+              status: 'completed',
+              steps: [
+                {
+                  id: `st_rec_${autoContPosts.length}`,
+                  type: 'code_execution',
+                  command: 'cat << "EOF" > /workspace/apps/race-bar/app.js',
+                },
+              ],
+              output_text: 'Wrote /workspace/apps/race-bar/app.js.',
+            }),
+          }
+        },
+      }
+
+      const recoveredTurn = await runAntigravityTurn({
+        sdk: asSdk({ ok: async <T>(p: T) => p }),
+        extensionSDK: mockAutoRecoverExt,
+        conversationId: 'conv_198_rec',
+        auth: { mode: 'apikey', apiKey: 'test_key_198' },
+        session: { environmentId: 'env_198_rec', toolType: 'app' },
+        mode: 'data_app',
+        useCase: 'app',
+        selectedExplores: ['thelook::order_items'],
+        schemaMarkdown: '# Schema',
+        userPrompt: 'Build Order Items Race Bar Chart',
+        onStatus: () => {},
+      })
+
+      // Initial POST + 2 auto-continuation rounds before falling back to fetchEnvironmentFile
+      expect(autoContPosts).toHaveLength(3)
+      expect(JSON.stringify(autoContPosts[1]?.input)).toContain('You have not emitted <DATA_APP_BUNDLE> yet.')
+      expect(fetchedFiles.some((u) => u.includes('workspace/apps/race-bar/app.js'))).toBe(true)
+      expect(recoveredTurn.bundle?.title).toBe('Build Order Items Race Bar Chart')
+      expect(recoveredTurn.bundle?.code).toContain('export class RaceBarApp extends DataApp')
+      expect(recoveredTurn.bundle?.prod_code).toContain('https://www.gstatic.com/looker-data-apps/versions/1.2.0/data-app.js')
+    } finally {
+      LkrCodeMode.runPythonCode = origRunPython
+    }
+  })
 })

@@ -19,6 +19,7 @@ export interface WidgetQueryEntry {
 
 export interface DataAppBundle {
   title: string
+  code?: string
   raw_code: string
   prod_code: string
   widgets: WidgetQueryEntry[]

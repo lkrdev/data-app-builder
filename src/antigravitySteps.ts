@@ -57,8 +57,10 @@ export function extractInteractionOutputText(interaction: AntigravityInteraction
 }
 
 export function extractBundleFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): DataAppBundle | null {
-  const hit = parseTaggedJsonObjects(collectInteractionTextCandidates(interaction), /<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g).find((p) => Boolean(p.raw_code || p.prod_code))
-  return (hit as unknown as DataAppBundle) || null
+  const hit = parseTaggedJsonObjects(collectInteractionTextCandidates(interaction), /<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g).find((p) => Boolean(p.raw_code || p.prod_code || p.code))
+  if (!hit) return null
+  const code = String(hit.raw_code || hit.code || hit.prod_code || '')
+  return { ...(hit as unknown as DataAppBundle), code, raw_code: String(hit.raw_code || code), prod_code: String(hit.prod_code || code), widgets: Array.isArray(hit.widgets) ? (hit.widgets as DataAppBundle['widgets']) : [] }
 }
 
 export function extractTddFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): string | null {
@@ -479,12 +481,11 @@ export function extractWrittenMarkdownPathFromCode(rawCode: string): string | un
 export function extractInteractionActivitySteps(interaction: AntigravityInteractionPayload | null | undefined): AntigravityActivityStep[] {
   const rawSteps: AntigravityInteractionStep[] = Array.isArray(interaction?.steps) ? interaction.steps : []
   const rawOutputs: AntigravityInteractionOutput[] = Array.isArray(interaction?.outputs) ? interaction.outputs : []
-  const completedCallIds = new Set<string>()
   const resultStepByCallId = new Map<string, AntigravityInteractionStep>()
-  rawSteps.forEach((s) => {
-    if (RESULT_STEP_TYPE_RE.test(String(s?.type || '').trim())) {
+  rawSteps.forEach((s, idx) => {
+    if (idx > 0 && RESULT_STEP_TYPE_RE.test(String(s?.type || '').trim())) {
       const cid = String(s?.call_id || s?.id || '').trim()
-      if (cid) { completedCallIds.add(cid); resultStepByCallId.set(cid, s) }
+      if (cid) resultStepByCallId.set(cid, s)
     }
   })
   const interactionDone = /^(?:completed|failed|cancelled)$/.test(String(interaction?.status || ''))
@@ -540,18 +541,26 @@ export function extractInteractionActivitySteps(interaction: AntigravityInteract
     const isLastStep = i === rawSteps.length - 1
     const fnName = String(step.name || step.function_call?.name || '').trim()
     const nextStep = rawSteps[i + 1]
-    const pairedResult = (explicitId ? resultStepByCallId.get(explicitId) : undefined) ||
-      (nextStep && RESULT_STEP_TYPE_RE.test(String(nextStep.type || '').trim()) && (!nextStep.call_id || !explicitId || String(nextStep.call_id).trim() === explicitId) ? nextStep : undefined)
+    const laterResult = explicitId
+      ? rawSteps.slice(i + 1).find((s) => RESULT_STEP_TYPE_RE.test(String(s?.type || '').trim()) && String(s?.call_id || s?.id || '').trim() === explicitId)
+      : undefined
+    const hasPriorSameCallId = Boolean(
+      explicitId && rawSteps.slice(0, i).some((p) => !RESULT_STEP_TYPE_RE.test(String(p?.type || '').trim()) && String(p?.id || '').trim() === explicitId)
+    )
+    const pairedResult =
+      laterResult ||
+      (nextStep && RESULT_STEP_TYPE_RE.test(String(nextStep.type || '').trim()) && (!nextStep.call_id || !explicitId || String(nextStep.call_id).trim() === explicitId)
+        ? nextStep
+        : explicitId && !hasPriorSameCallId
+        ? resultStepByCallId.get(explicitId)
+        : undefined)
     const pairedResultObj = pairedResult as unknown as Record<string, unknown> | undefined
     const pairedResultParsed = parseStepArguments(pairedResultObj?.result ?? pairedResultObj?.output ?? pairedResultObj?.content)
 
     const resolveStatus = (isFunctionCall = false): 'running' | 'done' => {
       if (step.status === 'running' || step.status === 'in_progress') return 'running'
       if (step.status === 'done' || step.status === 'completed' || interactionDone || pairedResult) return 'done'
-      if (isFunctionCall && explicitId) {
-        if (completedCallIds.has(explicitId)) return 'done'
-        if (interaction?.status === 'requires_action' || isLastStep) return 'running'
-      }
+      if (isFunctionCall && explicitId && (interaction?.status === 'requires_action' || isLastStep)) return 'running'
       return interaction?.status === 'in_progress' && isLastStep ? 'running' : 'done'
     }
 
