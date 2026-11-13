@@ -14,6 +14,7 @@ import {
   DATA_INVESTIGATOR_GUIDE_MD,
   KDA_SKILL_MD,
   KDA_TOOLKIT_PY,
+  LOOKER_ALERTS_SKILL_MD,
   LOOKER_DASHBOARD_SKILL_MD,
   LOOKER_FIELD_PROFILER_SKILL_MD,
   LOOKER_PROJECT_ONBOARDING_SKILL_MD,
@@ -22,10 +23,12 @@ import {
 } from './antigravityPrompts'
 import { sanitizeConversationLabel } from './antigravityStarters'
 import {
+  type AlertInspectorBundle,
   BUILTIN_SKILLS_FILES,
   BUILTIN_WORKSPACE_FILES,
   collectInteractionTextCandidates,
   type ConversationThreadTurnLike,
+  extractAlertBundleFromInteraction,
   extractBundleFromInteraction,
   extractInteractionActivitySteps,
   extractInteractionOutputText,
@@ -116,7 +119,7 @@ export {
   copyTextWithExtensionSdk, DEFAULT_BUSY_SEND_ACTION, DEFAULT_LEFT_PANE_WIDTH, discoverAccessibleConnections, EXPLICIT_SCRIPT_CREATION_RE,
   extractResolvedUseCase, formatAccessibleConnectionsMarkdown, formatContentInventoryMarkdown, getAllowedUseCases, getUseCaseLabel,
   isConversationalNoOpPrompt, isLookerInstanceMetadataQuery, loadStoredBusySendAction, loadStoredLeftPaneWidth, loadStoredRightPaneCollapsed,
-  matchExplicitUseCaseRule, MAX_LEFT_PANE_WIDTH, MIN_LEFT_PANE_WIDTH,
+  LOOKER_ALERT_QUERY_RE, matchExplicitUseCaseRule, MAX_LEFT_PANE_WIDTH, MIN_LEFT_PANE_WIDTH,
   normalizeBusySendAction, normalizeQueryFiltersToFixedDates, readInitialBusySendAction, readInitialLeftPaneWidth, readInitialRightPaneCollapsed,
   saveStoredBusySendAction, saveStoredLeftPaneWidth, saveStoredRightPaneCollapsed, shouldRouteToIsolatedCaSubagent,
   STUDIO_BUSY_SEND_ACTION_STORAGE_KEY, STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY, STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY,
@@ -185,6 +188,7 @@ export function buildWorkspaceSources(params: {
     { type: 'inline', content: KDA_TOOLKIT_PY, target: '/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py' },
     { type: 'inline', content: LOOKER_DASHBOARD_SKILL_MD, target: '/workspace/skills/looker-dashboard/SKILL.md' },
     { type: 'inline', content: LOOKER_FIELD_PROFILER_SKILL_MD, target: '/workspace/skills/looker-field-profiler/SKILL.md' },
+    { type: 'inline', content: LOOKER_ALERTS_SKILL_MD, target: '/workspace/skills/looker-alerts/SKILL.md' },
     {
       type: 'inline',
       content: LOOKER_PROJECT_ONBOARDING_SKILL_MD,
@@ -290,6 +294,7 @@ export interface AntigravityTurnResult {
   bundle: DataAppBundle | null
   nativeBundle: NativeContentBundle | null
   lookmlBundle?: LookmlBundle | null
+  alertBundle?: AlertInspectorBundle | null
   tddMarkdown: string | null
   assistantText: string
   rawOutputText?: string
@@ -1124,6 +1129,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         extractBundleFromInteraction(mergedSnap) ||
           extractNativeContentFromInteraction(mergedSnap) ||
           extractLookmlBundleFromInteraction(mergedSnap) ||
+          extractAlertBundleFromInteraction(mergedSnap) ||
           extractTddFromInteraction(mergedSnap)
       )
       const hasDirectModelOutput =
@@ -1335,6 +1341,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       /* keep compact bundle fallback */
     }
   }
+  const alertBundle = extractAlertBundleFromInteraction(interaction)
   const tddMarkdown = extractTddFromInteraction(interaction)
   const rawText = extractInteractionOutputText(interaction)
   const combinedOutput = `${rawText}\n${collectInteractionTextCandidates(interaction)}`
@@ -1353,6 +1360,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       ? 'lookml'
       : nativeBundle
       ? 'dashboard'
+      : alertBundle
+      ? 'tile'
       : tddMarkdown
       ? 'health-check'
       : bundle
@@ -1366,6 +1375,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     .replace(/<DATA_APP_BUNDLE>[\s\S]*?<\/DATA_APP_BUNDLE>/g, '')
     .replace(/<NATIVE_CONTENT_BUNDLE>[\s\S]*?<\/NATIVE_CONTENT_BUNDLE>/g, '')
     .replace(/<LOOKML_BUNDLE>[\s\S]*?<\/LOOKML_BUNDLE>/g, '')
+    .replace(/<ALERT_BUNDLE>[\s\S]*?<\/ALERT_BUNDLE>/g, '')
     .replace(/<HEALTH_CHECK_TDD>[\s\S]*?<\/HEALTH_CHECK_TDD>/g, '')
     .replace(/<LKR_EXTENSION_TOOL_REQUEST>[\s\S]*?<\/LKR_EXTENSION_TOOL_REQUEST>/g, '')
     .trim()
@@ -1396,6 +1406,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     (bundle ? `Built "${bundle.title}".`
       : nativeBundle ? `Built "${nativeBundle.title}".`
       : lookmlBundle ? `Updated LookML "${lookmlBundle.title}".`
+      : alertBundle ? `Configured Looker alert "${alertBundle.custom_title || alertBundle.title || alertBundle.alert_id}".`
       : tddMarkdown ? 'Synthesized 7-section Technical Design Document (TECHNICAL_DESIGN_DOCUMENT.md).'
       : 'Done.')
   const lookmlPid = cleanLookmlProjectId(lookmlBundle?.project_id)
@@ -1414,11 +1425,12 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     bundle,
     nativeBundle,
     lookmlBundle,
+    alertBundle,
     tddMarkdown,
     resolvedUseCase,
     rawOutputText: rawText,
     assistantText: finalAssistantText,
-    ...(bridgePermissionError && (bundle || nativeBundle || lookmlBundle) ? { permissionError: bridgePermissionError } : {}),
+    ...(bridgePermissionError && (bundle || nativeBundle || lookmlBundle || alertBundle) ? { permissionError: bridgePermissionError } : {}),
     session: {
       environmentId: finalEnvId,
       lastInteractionId:

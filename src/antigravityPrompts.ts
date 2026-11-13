@@ -447,6 +447,7 @@ Single-file Lit ES module Data Apps (\`apps/<name>/app.js\`) and agentic Looker 
 | **Bronze views from tables** | \`skills/generate-view-from-table/SKILL.md\` | 1:1 physical \`bronze/:table.view.lkml\` generation |
 | **Profile & Curate fields** | \`skills/looker-field-profiler/SKILL.md\` (\`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`) & \`skills/lookml-field-curation/SKILL.md\` | \`profile_fields\` quantiles/spikiness, \`description:\`/\`tags:\`/\`hidden:\`/\`suggestable:\`, \`_field_value_search_<model>\` (\`scripts/scratch_search.py\`) |
 | **LookML & Expressions** | \`skills/lookml/SKILL.md\`, \`skills/looker-filters/SKILL.md\`, \`skills/looker-expressions/SKILL.md\` | Models, views, explores, refinements, Liquid, sets, access grants, OJOF, filter expressions, Table Calculations |
+| **Looker Alerts** | \`skills/looker-alerts/SKILL.md\` | Triage running/failing alerts (\`search_alerts\`, \`alert_details\`), verify alert filters & data, tune noisy frequency, diagnose mobile notifications, move alerts across tiles, and emit \`<ALERT_BUNDLE>\` |
 | **Code Mode, Review & RBAC** | \`skills/lkr-code-mode/SKILL.md\`, \`skills/lkr-project-helper/SKILL.md\`, \`skills/looker-architect/SKILL.md\`, \`skills/lookml-reviewer/SKILL.md\`, \`skills/looker-audit/SKILL.md\`, \`skills/looker-performance-optimizer/SKILL.md\`, \`skills/creating-looker-dashboard/SKILL.md\`, \`skills/looker-permissions/SKILL.md\` | Monty SDK recipes, LAMS review, governance/performance audits, 4-layer RBAC & Safe Mode |
 
 ## Looker Code Mode Tool Contract (\`run_looker_codemode\`)
@@ -475,7 +476,7 @@ When \`useCase="auto"\`, emit \`<USE_CASE>...</USE_CASE>\` at the start of your 
 - \`dashboard\` (**Content Studio**): Native UDDs, LookML Dashboards (\`.dashboard.lookml\`), Saved Looks, Boards, Schedules (\`skills/looker-dashboard/SKILL.md\`, \`skills/looker-field-profiler/SKILL.md\`, \`skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md\`, \`_field_value_search_<model>\`).
 - \`lookml\` (**Agentic LookML**): LookML models/views/explores/refinements/tests (\`.lkml\`), project onboarding (\`skills/looker-project-onboarding/SKILL.md\`), SQL-to-LookML parity, field profiling/curation (\`_field_value_search_<model>\`).
 - \`health-check\` (**Health Check**): 3-Pillar Looker & BigQuery audit (\`TECHNICAL_DESIGN_DOCUMENT.md\`).
-- \`tile\` (**Python Tile**): \`LkrCodeMode\` Python script tiles (\`obj_script_<id>\`, \`vars.dashboard_filters\`, scheduler) and ad-hoc Looker SDK / folder / space / user / permission / content inventory lookups via \`run_looker_codemode\` (format folder lists via \`format_content_inventory(folders)\` with \`[Title](/dashboards/<id>)\`, \`[Title](/looks/<id>)\`, \`[Folder](/folders/<folder_id>)\`, saving full lists \`> 5\` items to \`/workspace/content_inventory.md\`, and offer to save as a Script).
+- \`tile\` (**Python Tile**): \`LkrCodeMode\` Python script tiles (\`obj_script_<id>\`, \`vars.dashboard_filters\`, scheduler), Looker Alerts triage & management (\`skills/looker-alerts/SKILL.md\`, \`search_alerts\`, \`alert_details\`, \`get_alert\`, \`create_alert\`, \`update_alert\`, \`update_alert_field\`, \`<ALERT_BUNDLE>\`), and ad-hoc Looker SDK / folder / space / user / permission / content inventory lookups via \`run_looker_codemode\` (format folder lists via \`format_content_inventory(folders)\` with \`[Title](/dashboards/<id>)\`, \`[Title](/looks/<id>)\`, \`[Folder](/folders/<folder_id>)\`, saving full lists \`> 5\` items to \`/workspace/content_inventory.md\`, and offer to save as a Script).
 - \`conversational-analytics\` (**Conversational Analytics**): Ad-hoc analytical Q&A; call \`search_agents()\` in \`run_looker_codemode\` and if a CA agent covers the domain/explores, emit \`<USE_CASE>conversational-analytics</USE_CASE>\` + \`<CA_AGENT_SELECTION>{"agent_id":"<matched_id>","rationale":"<1-sentence reason>"}</CA_AGENT_SELECTION>\` (include \`<model>::_field_value_search_<model>\` when configuring CA agents); otherwise answer via \`run_looker_codemode\`.
 - **Conversational No-Op**: Answer greetings, help, and diagnostic meta-questions directly in chat with zero tools and no right-pane artifact.
 - **Plain Unicode Only (No \`$...$\` LaTeX)**: Never emit \`$...$\` or \`$$...$$\` LaTeX operators (e.g. \`$\\rightarrow$\`, \`$\\times$\`, \`$\\ge$\`) in chat Markdown; use plain Unicode (\`→\`, \`×\`, \`>=\`, \`<=\`, \`≈\`).
@@ -1596,3 +1597,47 @@ profile_fields(
 - **Build (\`scripts/scratch_search.py\`)**: Profiles searchable string dims (excluding PII/JSON/UUID/empty), compiles SQL branches across BigQuery/Snowflake/Postgres/Databricks/DuckDB (\`scripts/dialects/*.py\`), and writes \`view: _field_value_search_<model>\` + \`explore: _field_value_search_<model> { hidden: yes }\`.
 - **Query (\`run_inline_query\`)**: Query \`_field_value_search_<model>\` with \`filters: {"_field_value_search_<model>.field_value": "%<term>%"}\` (\`limit: "20"\`) to resolve unknown or misspelled literals to exact \`(explore_name, field_name, field_value)\` tuples in one indexed lookup.
 `
+
+export const LOOKER_ALERTS_SKILL_MD = `---
+name: looker-alerts
+description: Triage, inspect, create, update, move, and manage Looker alerts using search_alerts, alert_details, get_alert, create_alert, update_alert, update_alert_field, delete_alert, enqueue_alert, follow_alert, unfollow_alert, alert_notifications, and read_alert_notification in lkr code-mode. Emit <ALERT_BUNDLE> when creating, editing, or inspecting a specific alert.
+---
+
+# Looker Alerts (\`skills/looker-alerts/SKILL.md\`)
+
+Use this skill whenever the user asks about Looker alerts — troubleshooting failing alerts, verifying alert data/filters, tuning noisy alert frequencies or thresholds, diagnosing missing mobile/Slack/email notifications, moving alerts to a new dashboard tile, or creating and editing alerts in **Ripper**.
+
+Always route alert prompts to \`<USE_CASE>tile</USE_CASE>\` and execute Looker SDK calls via \`run_looker_codemode\`.
+
+## 1. User-Goal Playbooks (What Users Need to Do First)
+
+1. **"My alerts are failing — how can I disable them?"**:
+   - Discover active/failing alerts via \`search_alerts(disabled=False)\` (or \`search_alerts()\` to include auto-disabled alerts).
+   - Batch-inspect execution history via \`alert_details(alert_ids=[...])\` (up to 50 IDs per batch; **never** pass \`alert_ids=[]\`). Inspect \`error\`, \`disabled_reason\`, and \`alert_history_items\` (\`outcome\`, \`message\`, \`Check_start_time\`).
+   - Disable quickly via \`update_alert_field(alert_id=id, body={"is_disabled": True, "disabled_reason": "Disabled by owner while fixing broken field"})\`, or repair fields/filters via \`get_alert\` -> merge -> \`update_alert\`. Emit \`<ALERT_BUNDLE>\`.
+2. **"I don't think my alert data is right"**:
+   - Inspect \`get_alert(alert_id=id)\` and \`alert_details(alert_ids=[id])\`.
+   - Audit \`field.name\`, \`field.filter\`, \`applied_dashboard_filters\` (\`filter_title\`, \`field_name\`, \`filter_value\`), \`comparison_type\`, and \`threshold\`.
+   - Update \`applied_dashboard_filters\` or \`threshold\` via \`get_alert\` -> merge -> \`update_alert\` and emit \`<ALERT_BUNDLE>\` so the user can click **Preview Dashboard with Filters** in the **Alert Inspector** tab.
+3. **"I have too many alerts"**:
+   - Inventory via \`search_alerts(disabled=False)\` + \`alert_details(alert_ids=[...])\` and rank by \`cron\` frequency and trigger count in \`alert_history_items\`.
+   - Pick the least-destructive action: \`unfollow_alert(alert_id=id)\` (if following another owner's alert), tune \`cron\` / \`threshold\` via \`get_alert\` -> merge -> \`update_alert\`, pause via \`update_alert_field(alert_id=id, body={"is_disabled": True})\`, or mark notifications read via \`alert_notifications()\` + \`read_alert_notification(notification_id=nid)\`. Only call \`delete_alert(alert_id=id)\` when the user explicitly confirms deletion.
+4. **"I'm not getting my alerts on mobile"**:
+   - Inspect \`get_alert(alert_id=id)\`, \`alert_details(alert_ids=[id])\`, and \`alert_notifications()\`.
+   - Verify \`is_disabled\` is \`False\`, \`destinations\` includes the expected \`destination_type\` (\`EMAIL\` or \`ACTION_HUB_INTEGRATION\`), and the user is following (\`follow_alert(alert_id=id)\`) or owns the alert.
+   - Trigger an immediate test evaluation via \`enqueue_alert(alert_id=id)\` and emit \`<ALERT_BUNDLE>\`.
+5. **Move an alert to a new dashboard tile (clone-and-retire)**:
+   - Read the source alert with \`get_alert(alert_id=old_id)\`, call \`create_alert(body={...})\` targeting the new \`dashboard_element_id\` **first**, verify the returned \`new_alert["id"]\` is non-empty, and **only then** disable (\`update_alert_field\`) or delete (\`delete_alert\`) the old alert. Emit \`<ALERT_BUNDLE>\` for the new alert.
+
+## 2. SDK Invariants & RBAC Boundaries (\`0.0.69+\`)
+
+- **\`alert_details(alert_ids=[...])\` requires non-empty \`alert_ids\`**: Never call \`alert_details(alert_ids=[])\` (HTTP 400). Chunk IDs from \`search_alerts()\` in batches of \`<= 50\`.
+- **Read-Modify-Write for \`update_alert\` (\`PUT /alerts/{id}\`)**: \`update_alert\` requires all 6 mandatory fields (\`comparison_type\`, \`cron\`, \`destinations\`, \`field\`, \`owner_id\`, \`threshold\`). Always call \`get_alert(alert_id=id)\` first, merge updates into the full payload, and pass to \`update_alert(alert_id=id, body=payload)\`. For \`owner_id\`, \`is_disabled\`, or \`disabled_reason\` only, use \`update_alert_field(alert_id=id, body={...})\` (\`PATCH /alerts/{id}\`).
+- **RBAC**: \`create_alerts\` (own alerts), \`follow_alerts\` (\`follow_alert\`/\`unfollow_alert\`), \`manage_alerts\` (\`all_owners=True\` or modifying another user's alert).
+
+## 3. \`<ALERT_BUNDLE>\` Right-Pane Contract
+
+- For list-only summary questions, reply in markdown chat without emitting \`<ALERT_BUNDLE>\`.
+- When creating, editing, or inspecting a specific alert, emit \`<ALERT_BUNDLE>{...}</ALERT_BUNDLE>\` with \`id\`, \`alert_id\`, \`title\`, \`custom_title\`, \`description\`, \`dashboard_id\`, \`dashboard_name\`, \`dashboard_element_id\`, \`owner_id\`, \`owner_display_name\`, \`cron\`, \`comparison_type\`, \`threshold\`, \`field\`, \`applied_dashboard_filters\`, \`destinations\`, \`is_disabled\`, \`disabled_reason\`, \`is_public\`, \`followed\`, \`followable\`, \`error\`, and \`alert_history_items\` (capped at \`<= 10\` items).
+`
+

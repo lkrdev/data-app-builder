@@ -12,8 +12,8 @@ const repoRoot = path.resolve(import.meta.dirname, '..')
 const vendorCodeModePath = path.join(repoRoot, 'src/vendor/codemode.js')
 assert.equal(
   createHash('sha256').update(readFileSync(vendorCodeModePath)).digest('hex'),
-  '3a782aa6ab08002c8d8f25cd0dfa313f4e8754fc655e30598b87cb0875fe95e5',
-  'src/vendor/codemode.js must match CDN 0.0.67/codemode.js SHA-256 byte-for-byte'
+  '7001b844407366c43ad8ad957997486409baab905c57c3c6146ac4c4cf5e3517',
+  'src/vendor/codemode.js must match CDN 0.0.69/codemode.js SHA-256 byte-for-byte'
 )
 
 const babel = require('@babel/core')
@@ -57,9 +57,9 @@ const antigravityTs = [
   .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
   .join('\n')
 assert(
-  antigravityTs.includes('https://cdn.lkr.dev/cli/codemode/0.0.67/codemode.js') &&
+  antigravityTs.includes('https://cdn.lkr.dev/cli/codemode/0.0.69/codemode.js') &&
     antigravityTs.includes('export async function ensureCodeModeLoaded()'),
-  'src/lkrCliBridge.ts must define CODEMODE_CDN_URL (https://cdn.lkr.dev/cli/codemode/0.0.67/codemode.js) and ensureCodeModeLoaded()'
+  'src/lkrCliBridge.ts must define CODEMODE_CDN_URL (https://cdn.lkr.dev/cli/codemode/0.0.69/codemode.js) and ensureCodeModeLoaded()'
 )
 const distBundlePath = path.join(repoRoot, 'dist/bundle.js')
 if (statSync(distBundlePath, { throwIfNoEntry: false })) {
@@ -70,8 +70,8 @@ if (statSync(distBundlePath, { throwIfNoEntry: false })) {
   )
   const distBundleText = readFileSync(distBundlePath, 'utf8')
   assert(
-    distBundleText.includes('https://cdn.lkr.dev/cli/codemode/0.0.67/codemode.js'),
-    'Expected dist/bundle.js to reference https://cdn.lkr.dev/cli/codemode/0.0.67/codemode.js'
+    distBundleText.includes('https://cdn.lkr.dev/cli/codemode/0.0.69/codemode.js'),
+    'Expected dist/bundle.js to reference https://cdn.lkr.dev/cli/codemode/0.0.69/codemode.js'
   )
 }
 assert(
@@ -84,6 +84,7 @@ assert(
 )
 const appTsx = [
   'src/components/App.tsx',
+  'src/components/AlertInspectorPane.tsx',
   'src/components/StudioDesignSystem.tsx',
   'src/components/StudioHeader.tsx',
   'src/components/StudioWorkspace.tsx',
@@ -512,21 +513,21 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
   const upstreamAgentsMd = readFileSync(path.join(repoRoot, 'upstream/payload/AGENTS.md'), 'utf8')
   const pinnedVersionTxt = readFileSync(path.join(repoRoot, 'lkr-dev-cli-version.txt'), 'utf8').trim()
   const updateSkillsYml = readFileSync(path.join(repoRoot, '.github/workflows/update-skills.yml'), 'utf8')
-  assert.equal(pinnedVersionTxt, '0.0.67', 'lkr-dev-cli-version.txt must pin 0.0.67')
+  assert.equal(pinnedVersionTxt, '0.0.69', 'lkr-dev-cli-version.txt must pin 0.0.69')
   assert(
     rootAgentsMd.includes(`lkr-dev-cli[tools,code-mode,parse]==${pinnedVersionTxt}`) &&
       upstreamAgentsMd.includes(`lkr-dev-cli[tools,code-mode,parse]==${pinnedVersionTxt}`),
     `AGENTS.md and upstream/payload/AGENTS.md must pin lkr-dev-cli==${pinnedVersionTxt}`
   )
   assert(
-    lookmlToolTsx.includes("export const LKR_DEV_CLI_VERSION = '0.0.67'") &&
+    lookmlToolTsx.includes("export const LKR_DEV_CLI_VERSION = '0.0.69'") &&
       lookmlToolTsx.includes('"install", "--break-system-packages", "--quiet", "uv"') &&
       lookmlToolTsx.includes('"UV_TOOL_BIN_DIR": "/usr/local/bin"') &&
       lookmlToolTsx.includes('"uv", "tool", "install", "--force", "--quiet", pkg_spec') &&
       updateSkillsYml.includes('cron: "0 9 * * 1,4"') &&
       updateSkillsYml.includes('https://pypi.org/pypi/lkr-dev-cli/json') &&
       updateSkillsYml.includes('chore/update-skills'),
-    'Issue #32: lookmlTool.tsx and .github/workflows/update-skills.yml must pin lkr-dev-cli==0.0.67, bootstrap uv via pip --break-system-packages + uv tool install, and auto-PR new PyPI releases'
+    'Issue #32: lookmlTool.tsx and .github/workflows/update-skills.yml must pin lkr-dev-cli==0.0.69, bootstrap uv via pip --break-system-packages + uv tool install, and auto-PR new PyPI releases'
   )
 
   // Live prototype check of bootstrap_lookml.py cli with mock pip & uv shims
@@ -543,7 +544,7 @@ echo "UV_TOOL_BIN_DIR=\${UV_TOOL_BIN_DIR:-} uv $@" >> "${cmdLogPath}"
 echo "UV_TOOL_DIR=\${UV_TOOL_DIR:-}" >> "${cmdLogPath}"
 cat << 'INNER' > "${fakeBinDir}/lkr"
 #!/bin/sh
-echo "lkr, version 0.0.67"
+echo "lkr, version 0.0.69"
 INNER
 chmod +x "${fakeBinDir}/lkr"
 EOF
@@ -560,11 +561,11 @@ chmod +x "${fakeBinDir}/uv"
   })
   const cliBootstrapJson = JSON.parse(cliBootstrapOut.trim())
   assert.equal(cliBootstrapJson.ok, true)
-  assert.equal(cliBootstrapJson.version, '0.0.67')
+  assert.equal(cliBootstrapJson.version, '0.0.69')
   const loggedCmds = readFileSync(cmdLogPath, 'utf8')
   assert(
     loggedCmds.includes('pip install --break-system-packages --quiet uv') &&
-      loggedCmds.includes('UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet lkr-dev-cli[tools,code-mode,parse]==0.0.67') &&
+      loggedCmds.includes('UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet lkr-dev-cli[tools,code-mode,parse]==0.0.69') &&
       loggedCmds.includes(`UV_TOOL_DIR=${workDir}/.uv_tools`),
     'bootstrap_lookml.py cli must execute pip install --break-system-packages --quiet uv followed by UV_TOOL_DIR=<workspace>/.uv_tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool install'
   )
@@ -573,7 +574,7 @@ chmod +x "${fakeBinDir}/uv"
   const persistedUvBin = path.join(workDir, '.uv_tools/lkr-dev-cli/bin')
   const persistedUvSp = path.join(workDir, '.uv_tools/lkr-dev-cli/lib/python3.12/site-packages')
   execFileSync('mkdir', ['-p', hibernatedBinDir, persistedUvBin, persistedUvSp])
-  writeFileSync(path.join(persistedUvBin, 'lkr'), '#!/bin/sh\necho "lkr, version 0.0.67"\n', { mode: 0o755 })
+  writeFileSync(path.join(persistedUvBin, 'lkr'), '#!/bin/sh\necho "lkr, version 0.0.69"\n', { mode: 0o755 })
   writeFileSync(path.join(hibernatedBinDir, 'uv'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
   writeFileSync(path.join(workDir, 'sitecustomize.py'), '# bridge shim\n', 'utf8')
   const hibernateOut = JSON.parse(
@@ -841,6 +842,23 @@ chmod +x "${fakeBinDir}/uv"
   assert(unknownFieldOut.includes('ValueError') && unknownFieldOut.includes('orders.missing_metric') && unknownFieldOut.includes('orders.count'), `Expected ValueError on unknown field in upsert_udd, got: ${unknownFieldOut}`)
   const warnGateOut = await LkrCodeMode.runPythonCode({ code: `${dashPreamblePy}\nreturn upsert_lookml_dashboard(project_id="ecom_proj", model="ecom", dashboard_name="pulse", title="Pulse", tiles=[{"title": "Orders", "explore": "orders", "fields": ["orders.count"], "vis_config": {"type": "single_value"}}])`, requestHandler: gateMockHandler, vars: { target_model: 'ecom', target_explore: 'orders', target_project_id: 'ecom_proj' } })
   assert(warnGateOut.includes('ValueError') && warnGateOut.includes('Unknown field'), `Expected ValueError on validate_project warning in upsert_lookml_dashboard, got: ${warnGateOut}`)
+
+  // Verify 0.0.69 alert_details in CodeMode, looker-alerts skill, and AlertInspectorPane helpers
+  const { extractAlertBundleFromInteraction, BUILTIN_SKILLS_FILES } = require(path.join(repoRoot, 'src/antigravitySteps.ts'))
+  const { buildAlertDashboardFilterUrl } = require(path.join(repoRoot, 'src/components/AlertInspectorPane.tsx'))
+  const alertSkillMd = readFileSync(path.join(repoRoot, 'skills/looker-alerts/SKILL.md'), 'utf8')
+  assert(alertSkillMd.includes('alert_details') && BUILTIN_SKILLS_FILES['looker-alerts']?.includes('alert_details'), 'looker-alerts skill must be present in skills/looker-alerts/SKILL.md and BUILTIN_SKILLS_FILES')
+  const alertDetailsOut = await LkrCodeMode.runPythonCode({
+    code: 'return alert_details(alert_ids=["104"])',
+    requestHandler: async (method, urlPath, queryParams) => [{ id: '104', method, urlPath, queryParams }],
+  })
+  assert(alertDetailsOut.includes('/alert_details') && alertDetailsOut.includes('104'), `Expected alert_details(alert_ids=["104"]) to call GET /alert_details, got: ${alertDetailsOut}`)
+  const parsedAlertBundle = extractAlertBundleFromInteraction({
+    output_text: 'Updated alert.\n<ALERT_BUNDLE>{"alert_id":"104","title":"Margin Alert","dashboard_id":"42","applied_dashboard_filters":[{"filter_title":"Region","field_name":"users.region","filter_value":"AMER"}],"alert_history_items":[1,2,3,4,5,6,7,8,9,10,11,12]}</ALERT_BUNDLE>',
+  })
+  assert.equal(parsedAlertBundle?.alert_id, '104')
+  assert.equal(parsedAlertBundle?.alert_history_items?.length, 10)
+  assert.equal(buildAlertDashboardFilterUrl(parsedAlertBundle), '/embed/dashboards/42?Region=AMER')
 
   console.log('✓ test-bundle.mjs: all assertions passed!')
 } finally {

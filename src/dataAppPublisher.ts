@@ -29,7 +29,7 @@ export interface DataAppBundle {
 export type StudioContentItemType =
   | 'board' | 'look' | 'dashboard' | 'lookml_dashboard' | 'explore'
   | 'data_app' | 'data-investigator' | 'lookml' | 'script' | 'report'
-  | 'conversational-analytics' | 'extension'
+  | 'conversational-analytics' | 'extension' | 'alert'
 
 export interface TurnCrudItem {
   key: string

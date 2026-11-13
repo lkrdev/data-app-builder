@@ -28,6 +28,7 @@ import {
 import { extractSlashSkillIds, LookmlBundle, LookmlPreviewPane, LookmlSkillCatalogEntry, parseLookmlFileDisplay, renderLineNumberedPre, STUDIO_SLASH_SKILLS } from '../lookmlTool'
 export { copyTextWithExtensionSdk, fetchConversationSandboxDebugMarkdown, formatConversationThreadMarkdown }
 import { StudioController } from '../useStudioController'
+import { AlertInspectorPane, buildAlertDashboardFilterUrl } from './AlertInspectorPane'
 import { ChatMessage } from './App'
 import { TilePreviewPane } from './ScriptStudioView'
 import {
@@ -447,7 +448,7 @@ export function resolveLookerEmbedTarget(opts: {
   builderMode?: 'data_app' | 'dashboard'; activeContentItem?: StudioContentItem | null
   caConversation?: { caConversationId: string; embedPath: string } | null
   nativeContent?: { id: string; contentType: string; embedPath: string; dashboardId?: string; lookId?: string; lookmlDashboardId?: string } | null
-  publishedApp?: { dashboardId: string } | null; hostUrl?: string; nonce?: number
+  publishedApp?: { dashboardId: string } | null; alertPreviewUrl?: string; hostUrl?: string; nonce?: number
 }): LookerEmbedTarget {
   const nonce = opts.nonce || 0
   const preload: LookerEmbedTarget = { kind: 'preload', target: '/preload', previewMode: 'preload', previewObjectId: '', nonce }
@@ -462,6 +463,17 @@ export function resolveLookerEmbedTarget(opts: {
   if (item) {
     const ct = item.contentType
     if (ct === 'lookml' || ct === 'script') return preload
+    if (ct === 'alert') {
+      return opts.alertPreviewUrl
+        ? {
+            kind: 'url',
+            target: normalizeLookerEmbedUrl(opts.alertPreviewUrl, opts.hostUrl),
+            previewMode: 'dashboard',
+            previewObjectId: String(item.dashboardId || item.id),
+            nonce,
+          }
+        : preload
+    }
     if (ct === 'dashboard' || ct === 'lookml_dashboard') {
       const id = String(item.lookmlDashboardId || item.dashboardId || item.id)
       return { kind: 'dashboard', target: id, previewMode: 'dashboard', previewObjectId: id, nonce }
@@ -2685,6 +2697,7 @@ export function renderContentTabIcon(contentType: StudioContentItemType): React.
     case 'lookml':
     case 'extension': return <Code2 size={13} strokeWidth={1.75} aria-hidden="true" />
     case 'script': return <Terminal size={13} strokeWidth={1.75} aria-hidden="true" />
+    case 'alert': return <AlertTriangle size={13} strokeWidth={1.75} aria-hidden="true" />
     case 'report': return <FileText size={13} strokeWidth={1.75} aria-hidden="true" />
     default: return <LayoutDashboard size={13} strokeWidth={1.75} aria-hidden="true" />
   }
@@ -2692,11 +2705,11 @@ export function renderContentTabIcon(contentType: StudioContentItemType): React.
 
 const CONTENT_TYPE_LABELS: Partial<Record<StudioContentItemType, string>> = {
   lookml_dashboard: 'LookML Dashboard', data_app: 'Data App', 'data-investigator': 'Data Investigator',
-  lookml: 'LookML Project', script: 'Python Script', report: 'Health Check Report', 'conversational-analytics': 'Conversational Analytics',
+  lookml: 'LookML Project', script: 'Python Script', alert: 'Looker Alert', report: 'Health Check Report', 'conversational-analytics': 'Conversational Analytics',
 }
 export const formatContentTypeLabel = (ct: StudioContentItemType): string => CONTENT_TYPE_LABELS[ct] || ct.charAt(0).toUpperCase() + ct.slice(1)
 const resolveContentLookerPath = (ct: StudioContentItemType, id?: string, embedPath?: string): string =>
-  ct === 'lookml' ? (cleanLookmlProjectId(id) ? `/projects/${encodeURIComponent(cleanLookmlProjectId(id))}` : '') : ct !== 'script' && ct !== 'report' && embedPath ? embedPath.replace(/^\/embed/, '') : ''
+  ct === 'lookml' ? (cleanLookmlProjectId(id) ? `/projects/${encodeURIComponent(cleanLookmlProjectId(id))}` : '') : ct !== 'script' && ct !== 'report' && ct !== 'alert' && embedPath ? embedPath.replace(/^\/embed/, '') : ''
 
 export type LkrCodeModeApiCallLike = Partial<LkrCodeModeApiCallEntry> & Pick<LkrCodeModeApiCallEntry, 'method' | 'route'>
 export type OverviewStageSelection =
@@ -3310,7 +3323,7 @@ export const StudioOverviewSidebar: React.FC<{
 export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
     activeMode, selectedUseCase, isEmptyConversation, isHealthCheckMode, isLookmlMode, isCaMode,
-    builderMode, healthReport, lookmlBundle, caConversation, canDeployLookml, nativeContent,
+    builderMode, healthReport, lookmlBundle, alertBundle = null, caConversation, canDeployLookml, nativeContent,
     publishedApp, contentItems = [], activeContentTabKey = '', activeContentItem = null,
     handleSelectOverview, handleSelectContentTab, handleHideContentTab, setActiveContentTabKey,
     currentAppCode, embedNonce, extensionSDK, setInfoModalUseCase,
@@ -3325,6 +3338,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const [tddViewMode, setTddViewMode] = useState<'rendered' | 'raw'>(() => mockExt?.initialTddViewMode || 'rendered')
   const [copiedTdd, setCopiedTdd] = useState(false)
   const [showAppCode, setShowAppCode] = useState(false)
+  const [previewingAlertDashboard, setPreviewingAlertDashboard] = useState(false)
   const [copiedAppCode, setCopiedAppCode] = useState(false)
   const [reloadingViewer, setReloadingViewer] = useState(false)
   const [iframeRev, setIframeRev] = useState(0)
@@ -3469,8 +3483,9 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
 
   useEffect(() => {
     setShowAppCode(false)
+    setPreviewingAlertDashboard(false)
     setCopiedAppCode(false)
-  }, [activeContentTabKey, activeConversationId, embedNonce])
+  }, [activeContentTabKey, activeConversationId, embedNonce, alertBundle?.alert_id])
 
   useEffect(() => {
     clearTabPopoverTimers()
@@ -3516,11 +3531,11 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   }, [moreMenuOpen])
 
   const ct = activeContentItem?.contentType
-  const activePaneKind: 'script' | 'report' | 'lookml' | 'ca' | 'embed' | 'empty_hidden' = allTabsHidden
+  const activePaneKind: 'script' | 'alert' | 'report' | 'lookml' | 'ca' | 'embed' | 'empty_hidden' = allTabsHidden
     ? 'empty_hidden'
     : ct
-    ? ct === 'script' || ct === 'lookml' || ct === 'report' ? ct : ct === 'conversational-analytics' ? 'ca' : 'embed'
-    : isTileMode ? 'script' : isHealthCheckMode ? 'report' : isLookmlMode ? 'lookml' : isCaMode || caConversation ? 'ca' : 'embed'
+    ? ct === 'script' || ct === 'alert' || ct === 'lookml' || ct === 'report' ? ct : ct === 'conversational-analytics' ? 'ca' : 'embed'
+    : isTileMode ? 'script' : activeMode === 'tile' && alertBundle ? 'alert' : isHealthCheckMode ? 'report' : isLookmlMode ? 'lookml' : isCaMode || caConversation ? 'ca' : 'embed'
 
   const activeApiCall = stageInspector?.kind === 'api'
     ? overviewData.apiCalls.find((c) => c.id === stageInspector.callId) || overviewData.apiCalls[0] || null
@@ -3528,6 +3543,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const resolvedStageInspector = stageInspector?.kind === 'api' && !activeApiCall ? null : stageInspector
   const explicitOverview = activeContentTabKey === STUDIO_OVERVIEW_TAB_KEY
   const isNonEmbedStageView = Boolean(resolvedStageInspector || activeViewerDocument || explicitOverview)
+  const alertPreviewUrl = activePaneKind === 'alert' && previewingAlertDashboard ? buildAlertDashboardFilterUrl(alertBundle) : ''
 
   const embedTarget = useMemo(
     () => resolveLookerEmbedTarget({
@@ -3537,9 +3553,10 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
       isTileMode: activePaneKind === 'script',
       isCaMode: activePaneKind === 'ca',
       builderMode, activeContentItem, caConversation, nativeContent, publishedApp,
+      alertPreviewUrl: alertPreviewUrl || undefined,
       hostUrl, nonce: (embedNonce || 0) + iframeRev,
     }),
-    [isEmptyConversation, allTabsHidden, isNonEmbedStageView, activePaneKind, builderMode, activeContentItem, caConversation, nativeContent, publishedApp, hostUrl, embedNonce, iframeRev]
+    [isEmptyConversation, allTabsHidden, isNonEmbedStageView, activePaneKind, builderMode, activeContentItem, caConversation, nativeContent, publishedApp, alertPreviewUrl, hostUrl, embedNonce, iframeRev]
   )
 
   useEffect(() => {
@@ -3711,6 +3728,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         (hasActiveEmbed ||
           (activePaneKind === 'report' && healthReport) ||
           (activePaneKind === 'lookml' && lookmlBundle) ||
+          (activePaneKind === 'alert' && alertBundle) ||
           (activePaneKind === 'ca' && caConversation) ||
           activePaneKind === 'script'))
     )
@@ -3747,7 +3765,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     : activeViewerDocument?.title || activeContentItem?.title || publishedApp?.title || nativeContent?.title || lookmlBundle?.title || healthReport?.title || caConversation?.title || 'Viewer'
 
   const hideIframeContainer =
-    activePaneKind === 'script' || rightPaneCollapsed || Boolean(activeViewerDocument) || Boolean(resolvedStageInspector) || isShowingAppCodeFullscreen || isOverviewMode
+    activePaneKind === 'script' || (activePaneKind === 'alert' && !previewingAlertDashboard) || rightPaneCollapsed || Boolean(activeViewerDocument) || Boolean(resolvedStageInspector) || isShowingAppCodeFullscreen || isOverviewMode
 
   return (
     <main
@@ -4199,6 +4217,13 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               <TilePreviewPane
                 ctl={ctl}
                 stageTrailActions={<>{toggleExplorerBtn}{collapseToggleBtn}</>}
+              />
+            ) : activePaneKind === 'alert' ? (
+              <AlertInspectorPane
+                bundle={alertBundle}
+                previewingDashboard={previewingAlertDashboard}
+                onTogglePreviewDashboard={() => setPreviewingAlertDashboard((p) => !p)}
+                onOpenInLooker={(p) => extensionSDK.openBrowserWindow(p, '_blank')}
               />
             ) : activePaneKind === 'report' ? (
               <StudioToolbar
