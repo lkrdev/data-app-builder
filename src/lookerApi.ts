@@ -17,7 +17,7 @@ export * from './lookerPermissions'
 export * from './dataAppPublisher'
 export * from './lookerArtifacts'
 export * from './conversationalAnalytics'
-export { LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD } from './antigravityPrompts'
+export { LOOKER_ALERTS_SKILL_MD, LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD } from './antigravityPrompts'
 export { DEFAULT_MAX_TOOL_ROUNDS, normalizeMaxToolRounds, STUDIO_MAX_TOOL_ROUNDS_OPTIONS } from './antigravityTypes'
 
 export const STUDIO_OVERVIEW_TAB_KEY = '__overview__'

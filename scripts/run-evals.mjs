@@ -812,6 +812,143 @@ async function eval10RbacSafemodeNoopGuardrails() {
   }
 }
 
+async function eval11AlertsTriageAndActions() {
+  const { matchExplicitUseCaseRule, isLookerInstanceMetadataQuery } = require(path.join(repoRoot, 'src/lookerPermissions.ts'))
+  const { extractAlertBundleFromInteraction, BUILTIN_SKILLS_FILES } = require(path.join(repoRoot, 'src/antigravitySteps.ts'))
+  const { buildAlertDashboardFilterUrl } = require(path.join(repoRoot, 'src/components/AlertInspectorPane.tsx'))
+  const { saveAlertArtifact, loadAlertArtifact } = require(path.join(repoRoot, 'src/lookerArtifacts.ts'))
+
+  const userPrompts = [
+    'My alerts are failing how can i disable them?',
+    'I dont think my alert data is right',
+    'I have too many alerts',
+    "I'm not getting my alerts on mobile",
+    'create an alert on dashboard 42 when margin drops below 40%',
+    '/looker-alerts inspect alert 104',
+  ]
+  const routingOk =
+    userPrompts.every((p) => matchExplicitUseCaseRule(p) === 'tile' && isLookerInstanceMetadataQuery(p)) &&
+    Boolean(BUILTIN_SKILLS_FILES['looker-alerts']?.includes('alert_details'))
+
+  const callOrder = []
+  let putBody = null
+  const alertMockHandler = async (method, urlPath, queryParams, body) => {
+    const m = String(method).toUpperCase()
+    const p = String(urlPath)
+    callOrder.push(`${m} ${p}`)
+    if (m === 'GET' && p.endsWith('/alerts/search')) {
+      return [
+        { id: '104', custom_title: 'Failing Margin Alert', is_disabled: false, dashboard_element_id: '318' },
+        { id: '105', custom_title: 'Noisy Revenue Alert', is_disabled: false, dashboard_element_id: '319' },
+      ]
+    }
+    if (m === 'GET' && p.endsWith('/alert_details')) {
+      assert(Array.isArray(queryParams?.alert_ids) ? queryParams.alert_ids.length > 0 : Boolean(queryParams?.alert_ids), 'alert_details must receive non-empty alert_ids')
+      return [
+        { id: '104', title: 'Failing Margin Alert', dashboard_id: '42', dashboard_name: 'Executive Pulse', error: 'Unknown field order_items.old_margin', alert_history_items: [{ outcome: 'failed', message: 'Unknown field' }] },
+        { id: '105', title: 'Noisy Revenue Alert', dashboard_id: '42', dashboard_name: 'Executive Pulse', error: null, alert_history_items: [{ outcome: 'succeeded', alert_condition_met: true }] },
+      ]
+    }
+    if (m === 'PATCH' && p.endsWith('/alerts/104')) return { id: '104', is_disabled: Boolean(body?.is_disabled), disabled_reason: body?.disabled_reason }
+    if (m === 'GET' && p.endsWith('/alerts/105')) {
+      return {
+        id: '105',
+        comparison_type: 'GREATER_THAN',
+        cron: '*/15 * * * *',
+        destinations: [{ destination_type: 'EMAIL', email_address: 'bryan@example.com' }],
+        field: { title: 'Revenue', name: 'order_items.total_revenue', filter: [] },
+        owner_id: '7',
+        threshold: 1000,
+        dashboard_element_id: '319',
+        applied_dashboard_filters: [{ filter_title: 'Region', field_name: 'users.region', filter_value: 'North America' }],
+      }
+    }
+    if (m === 'PUT' && p.endsWith('/alerts/105')) {
+      putBody = body
+      return { ...body, id: '105' }
+    }
+    if (m === 'POST' && p.endsWith('/alerts')) return { ...body, id: '206' }
+    if (m === 'DELETE' && p.endsWith('/alerts/105')) return ''
+    if (m === 'POST' && p.endsWith('/alerts/206/enqueue')) return { id: '206', enqueued: true }
+    return {}
+  }
+
+  const pyResRaw = await LkrCodeMode.runPythonCode({
+    code: [
+      'active = search_alerts(disabled=False)',
+      'ids = [a["id"] for a in active if a.get("id")]',
+      'details = alert_details(alert_ids=ids)',
+      'disabled = update_alert_field("104", {"is_disabled": True, "disabled_reason": "Disabled while fixing field"})',
+      'cur = get_alert("105")',
+      'payload = {k: cur.get(k) for k in ("comparison_type", "cron", "destinations", "field", "owner_id", "threshold", "applied_dashboard_filters", "dashboard_element_id")}',
+      'payload["cron"] = "0 9 * * *"',
+      'updated = update_alert("105", payload)',
+      'cloned = create_alert({**payload, "dashboard_element_id": "410"})',
+      'if cloned and cloned.get("id"):',
+      '    delete_alert("105")',
+      '    enqueue_alert(cloned["id"])',
+      'return {"details_count": len(details), "disabled": disabled["is_disabled"], "cloned_id": cloned["id"]}',
+    ].join('\n'),
+    requestHandler: alertMockHandler,
+  })
+  const pyRes = JSON.parse(pyResRaw)
+  const pyOut = pyRes?.result || pyRes
+  const mandatoryFields = ['comparison_type', 'cron', 'destinations', 'field', 'owner_id', 'threshold']
+  const hasAllMandatoryOnPut = Boolean(putBody && mandatoryFields.every((k) => putBody[k] !== undefined))
+  const createIdx = callOrder.indexOf('POST /alerts')
+  const deleteIdx = callOrder.indexOf('DELETE /alerts/105')
+  const cloneBeforeDelete = createIdx >= 0 && deleteIdx > createIdx
+
+  const toolBudgetOk = pyOut?.details_count === 2 && pyOut?.disabled === true && pyOut?.cloned_id === '206'
+
+  const store = new Map()
+  const mockArtifactSdk = {
+    ok: async (p) => p,
+    artifact: async ({ key }) =>
+      String(key).split(',').filter((k) => store.has(k)).map((k, idx) => ({ key: k, version: idx + 1, value: JSON.stringify(store.get(k)) })),
+    update_artifacts: async (_ns, body) => {
+      for (const row of body || []) store.set(row.key, JSON.parse(row.value))
+      return []
+    },
+  }
+  const extracted = extractAlertBundleFromInteraction({
+    output_text:
+      'Cloned alert #206.\n<ALERT_BUNDLE>{"alert_id":"206","title":"Executive Margin Alert","dashboard_id":"42","dashboard_name":"Executive Pulse","cron":"0 9 * * *","comparison_type":"LESS_THAN","threshold":0.42,"field":{"title":"Gross Margin %","name":"order_items.gross_margin_pct"},"applied_dashboard_filters":[{"filter_title":"Region","field_name":"users.region","filter_value":"North America"}],"destinations":[{"destination_type":"EMAIL","email_address":"bryan@example.com"}],"alert_history_items":[{"outcome":"succeeded","alert_condition_met":false}]}</ALERT_BUNDLE>',
+  })
+  await saveAlertArtifact(mockArtifactSdk, '7', extracted)
+  const loaded = await loadAlertArtifact(mockArtifactSdk, '206')
+  const filterUrl = buildAlertDashboardFilterUrl(loaded)
+  const outputRubricOk =
+    Boolean(loaded && loaded.alert_id === '206') &&
+    filterUrl === '/embed/dashboards/42?Region=North+America'
+
+  const safetyOk =
+    hasAllMandatoryOnPut &&
+    cloneBeforeDelete &&
+    LkrCodeMode.classifyOperation('GET', '/alert_details').requiresPermission === false &&
+    LkrCodeMode.classifyOperation('POST', '/alerts/206/enqueue').operation === 'enqueue_alert' &&
+    LkrCodeMode.classifyOperation('POST', '/alerts/206/enqueue').requiresPermission === true &&
+    LkrCodeMode.classifyOperation('PATCH', '/alerts/104').operation === 'update_alert_field' &&
+    LkrCodeMode.classifyOperation('POST', '/alerts/206/follow').operation === 'follow_alert' &&
+    LkrCodeMode.classifyOperation('DELETE', '/alerts/206/follow').operation === 'unfollow_alert'
+
+  return {
+    routing: routingOk,
+    toolBudget: toolBudgetOk,
+    outputRubric: outputRubricOk,
+    safety: safetyOk,
+    useCase: 'tile',
+    detail: `Alert prompts routed to tile; search_alerts -> alert_details -> update_alert_field -> get_alert/update_alert (6 mandatory fields) -> clone-before-delete verified; AlertInspectorPane URL=${filterUrl}`,
+    messages: [
+      { role: 'user', text: 'Triage failing/noisy Looker alerts, update filters & schedule, clone to new tile, and open Alert Inspector' },
+      {
+        role: 'assistant',
+        text: `Processed ${pyOut?.details_count} alerts via \`alert_details\`, disabled failing alert \`#104\`, updated \`#105\` cron, cloned to \`#206\` before retiring \`#105\`, and persisted \`obj_alert_206\` (\`${filterUrl}\`).`,
+      },
+    ],
+  }
+}
+
 const EVAL_SUITE = [
   { id: 'eval-01', num: 1, title: 'Looker Content & Folder Inventory Queries (`LkrCodeMode`)', fn: eval01ContentFolderInventory },
   { id: 'eval-02', num: 2, title: 'Open-Ended Analytical Routing (`search_agents()` vs. CodeMode)', fn: eval02CaVsCodemodeRouting },
@@ -823,6 +960,7 @@ const EVAL_SUITE = [
   { id: 'eval-08', num: 8, title: '3-Pillar Looker & BigQuery Health Check & 7-Section TDD', fn: eval08ThreePillarHealthCheck },
   { id: 'eval-09', num: 9, title: 'Stateless Isolated Conversational Analytics Sub-Agent Router', fn: eval09ConversationalAnalyticsRouter },
   { id: 'eval-10', num: 10, title: 'Looker 4-Layer RBAC, Safe Mode Gates, & Conversational No-Op', fn: eval10RbacSafemodeNoopGuardrails },
+  { id: 'eval-11', num: 11, title: 'Looker Alerts Triage, Actions & Inspector (`0.0.69` `alert_details`)', fn: eval11AlertsTriageAndActions },
 ]
 
 async function main() {

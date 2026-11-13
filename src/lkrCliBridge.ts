@@ -11,7 +11,7 @@ import {
   resolveLookerExtensionSdk,
 } from './lookerApi'
 
-export const CODEMODE_CDN_URL = 'https://cdn.lkr.dev/cli/codemode/0.0.67/codemode.js'
+export const CODEMODE_CDN_URL = 'https://cdn.lkr.dev/cli/codemode/0.0.69/codemode.js'
 
 export interface LkrCodeModeToolDefinition {
   type: string
@@ -430,7 +430,7 @@ export const LkrCodeMode: LkrCodeModeRuntime = {
     LkrCodeMode.runPythonCode(a as string, b)) as LkrCodeModeRunFn,
 }
 
-export const LKR_DEV_CLI_VERSION = '0.0.67'
+export const LKR_DEV_CLI_VERSION = '0.0.69'
 export const LKR_DEV_CLI_SPEC = `lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}`
 export const BOOTSTRAP_SANDBOX_SH = `[ -x /workspace/.uv_tools/lkr-dev-cli/bin/lkr ] && [ ! -x /usr/local/bin/lkr ] && ln -sf /workspace/.uv_tools/lkr-dev-cli/bin/lkr /usr/local/bin/lkr; lkr --version 2>/dev/null | grep -q "${LKR_DEV_CLI_VERSION}" || { (command -v uv >/dev/null 2>&1 || pip install --break-system-packages --quiet uv || python3 -m pip install --break-system-packages --quiet uv); UV_PYTHON_INSTALL_DIR=/workspace/.uv_python UV_TOOL_DIR=/workspace/.uv_tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "${LKR_DEV_CLI_SPEC}"; }; for sp in /workspace/.uv_tools/lkr-dev-cli/lib/python3.*/site-packages ~/.local/share/uv/tools/lkr-dev-cli/lib/python3.*/site-packages /usr/local/lib/python3.*/dist-packages /usr/lib/python3/dist-packages; do [ -d "$sp" ] && [ -w "$sp" ] && [ -f /workspace/sitecustomize.py ] && cp -f /workspace/sitecustomize.py "$sp/sitecustomize.py"; done; true`
 
@@ -999,7 +999,7 @@ CACHE_DIR = WORKSPACE_DIR / ".lkr_extension_cache"
 _PINNED_CLI_VERSION = "${LKR_DEV_CLI_VERSION}"
 LKR_DEV_CLI_VERSION = os.environ.get(
     "LKR_DEV_CLI_VERSION",
-    "0.0.67" if _PINNED_CLI_VERSION.startswith("$") else _PINNED_CLI_VERSION,
+    "0.0.69" if _PINNED_CLI_VERSION.startswith("$") else _PINNED_CLI_VERSION,
 )
 REQUIRED_SKILLS = (
     "agentic-lookml-workflow",
@@ -1597,13 +1597,18 @@ export function classifyLookerOperation(
     const dm = p.match(/^\/dashboards\/[^/]+\/(import|sync)(\/|$)/)
     if (dm) return { operation: `${dm[1]}_lookml_dashboard`, requiresPermission: true }
     if (/^\/data_app_extension(\/|$)/.test(p)) return { operation: 'publish_data_app_extension', requiresPermission: true }
+    if (verb === 'POST' && /^\/alerts\/[^/]+\/enqueue\/?$/.test(p)) return { operation: 'enqueue_alert', requiresPermission: true }
+    if (verb === 'POST' && /^\/alerts\/[^/]+\/follow\/?$/.test(p)) return { operation: 'follow_alert', requiresPermission: true }
+    if (verb === 'DELETE' && /^\/alerts\/[^/]+\/follow\/?$/.test(p)) return { operation: 'unfollow_alert', requiresPermission: true }
+    if (verb === 'PATCH' && /^\/alerts\/[^/]+\/?$/.test(p)) return { operation: 'update_alert_field', requiresPermission: true }
+    if (verb === 'POST' && /^\/alert_notifications\/[^/]+\/read\/?$/.test(p)) return { operation: 'read_alert_notification', requiresPermission: true }
     const seg = p.split('/').filter(Boolean)[0] || 'resource'
     return { operation: `${prefix}_${seg.replace(/ies$/, 'y').replace(/([^s])s$/, '$1')}`, requiresPermission: true }
   }
   const callMatches = String(code || '').match(/\b([a-z_][a-z0-9_]*)\s*\(/g) || []
   for (const match of callMatches) {
     const fn = match.replace(/\s*\($/, '')
-    if (/^(create|update|delete|deploy|commit|publish|unpublish|repair)_/.test(fn) || fn === 'commit') {
+    if (/^(create|update|delete|deploy|commit|publish|unpublish|repair|enqueue|follow|unfollow|read)_/.test(fn) || fn === 'commit') {
       return { operation: fn, requiresPermission: true }
     }
   }

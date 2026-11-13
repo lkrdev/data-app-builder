@@ -1,18 +1,18 @@
 import {
   AGENTS_MD, BUNDLE_APP_PY, DATA_APP_GUIDE_MD, DATA_INVESTIGATOR_GUIDE_MD,
-  KDA_SKILL_MD, KDA_TOOLKIT_PY, LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD,
+  KDA_SKILL_MD, KDA_TOOLKIT_PY, LOOKER_ALERTS_SKILL_MD, LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD,
   LOOKER_PROJECT_ONBOARDING_SKILL_MD,
 } from './antigravityPrompts'
 export {
-  APP_BUILDER_SYSTEM_PROMPT, LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD,
+  APP_BUILDER_SYSTEM_PROMPT, LOOKER_ALERTS_SKILL_MD, LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD,
   LOOKER_PROJECT_ONBOARDING_SKILL_MD,
 } from './antigravityPrompts'
 import {
-  type AntigravityActivityStep, type AntigravityInteractionOutput,
+  type AlertInspectorBundle, type AntigravityActivityStep, type AntigravityInteractionOutput,
   type AntigravityInteractionPayload, type AntigravityInteractionStep, type AntigravityTurnTelemetry,
   collectInteractionTextCandidates, extractNonThoughtText, parseTaggedJsonObjects,
 } from './antigravityTypes'
-export { collectInteractionTextCandidates, extractNonThoughtText, parseTaggedJsonObjects } from './antigravityTypes'
+export { type AlertInspectorBundle, collectInteractionTextCandidates, extractNonThoughtText, parseTaggedJsonObjects } from './antigravityTypes'
 import { type DataAppBundle, type NativeContentBundle, resolveNativeEmbedPath } from './lookerApi'
 import { BOOTSTRAP_LOOKML_PY, LKR_CLI_SITECUSTOMIZE_PY } from './lookmlTool'
 import { SANDBOX_AGENT_SKILL_FILES } from './sandboxSkillsBundle'
@@ -59,6 +59,14 @@ export function extractInteractionOutputText(interaction: AntigravityInteraction
 export function extractBundleFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): DataAppBundle | null {
   const hit = parseTaggedJsonObjects(collectInteractionTextCandidates(interaction), /<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g).find((p) => Boolean(p.raw_code || p.prod_code))
   return (hit as unknown as DataAppBundle) || null
+}
+
+export function extractAlertBundleFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): AlertInspectorBundle | null {
+  const hit = parseTaggedJsonObjects(collectInteractionTextCandidates(interaction), /<ALERT_BUNDLE>([\s\S]*?)<\/ALERT_BUNDLE>/g).find((p) => Boolean(p.alert_id || p.id))
+  if (!hit) return null
+  const id = String(hit.alert_id || hit.id || '').trim()
+  const history = Array.isArray(hit.alert_history_items) ? hit.alert_history_items.slice(0, 10) : undefined
+  return Object.assign({}, hit, { id, alert_id: id, ...(history ? { alert_history_items: history } : {}) }) as unknown as AlertInspectorBundle
 }
 
 export function extractTddFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): string | null {
@@ -210,6 +218,9 @@ export const BUILTIN_SKILLS_FILES: Record<string, string> = {
   '/workspace/skills/looker-project-onboarding/SKILL.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD, 'skills/looker-project-onboarding/SKILL.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
   '/workspace/skills/looker-project-onboarding/skill.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD, 'skills/looker-project-onboarding/skill.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
   'looker-project-onboarding': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
+  '/workspace/skills/looker-alerts/SKILL.md': LOOKER_ALERTS_SKILL_MD, 'skills/looker-alerts/SKILL.md': LOOKER_ALERTS_SKILL_MD,
+  '/workspace/skills/looker-alerts/skill.md': LOOKER_ALERTS_SKILL_MD, 'skills/looker-alerts/skill.md': LOOKER_ALERTS_SKILL_MD,
+  'looker-alerts': LOOKER_ALERTS_SKILL_MD,
   '/workspace/skills/lookml-snapshot/SKILL.md': LOOKML_SNAPSHOT_SKILL_MD, 'skills/lookml-snapshot/SKILL.md': LOOKML_SNAPSHOT_SKILL_MD,
   'lookml-snapshot': LOOKML_SNAPSHOT_SKILL_MD,
   'lookml-bronze-view': SANDBOX_AGENT_SKILL_FILES['generate-view-from-table/SKILL.md'],
@@ -355,6 +366,8 @@ export function formatFriendlyLookerActivityLabel(
     ? (targetLabel ? `Configuring LookML project ${targetLabel}...` : 'Configuring LookML project & model...')
     : /\b(?:connection_schemas|connection_tables|connection_columns|all_connections|test_connection)\b|\/connections(?:\b|\/)/i.test(combined)
     ? (targetLabel ? `Inspecting database connection ${targetLabel}...` : 'Inspecting database connections & schemas...')
+    : /\b(?:alert_details|search_alerts|get_alert|create_alert|update_alert|update_alert_field|delete_alert|enqueue_alert|follow_alert|unfollow_alert|alert_notifications|read_alert_notification)\b|\/(?:alerts|alert_details|alert_notifications)\b/i.test(combined)
+    ? 'Inspecting & managing Looker alerts...'
     : /\b(?:folder_children|folder_ancestors|all_folders|search_folders|format_content_inventory)\b|\/folders(?:\b|\/)/i.test(combined)
     ? (targetLabel ? `Inspecting Looker folder ${targetLabel}...` : 'Inspecting Looker folders & content...')
     : /\blookml_model_explore\b|\/lookml_models\/[^/]+\/explores\//i.test(combined)
@@ -373,7 +386,7 @@ const JARGON_PHRASE_STRIP_RE =
   /(?:[ \t]+(?:via|in|using|with|through|inside|from|on))?(?:[ \t]+the)?[ \t]*\b(?:WASM[ \t]+|Monty[ \t]+|Python[ \t]+)*(?:LkrCodeMode|Looker[ \t]+Code[ \t]*Mode|Looker[ \t]+CLI[ \t]+Bridge|bridged[ \t]+lkr-dev-cli|lkr-dev-cli|WASM[ \t]+Monty|Monty[ \t]+WASM|Monty|WASM)\b(?:[ \t]+(?:Python[ \t]+)?(?:sandbox|tool|bridge|runtime))*/gi
 const GENERIC_STEP_TITLE_RE = /^Executing Looker (?:API calls|queries)|^Running (?:sandbox|Python|tool)/i
 const BUNDLE_ENVELOPE_STRIP_RE =
-  /<(?:DATA_APP_BUNDLE|LOOKML_BUNDLE|NATIVE_CONTENT_BUNDLE)>[\s\S]*?<\/(?:DATA_APP_BUNDLE|LOOKML_BUNDLE|NATIVE_CONTENT_BUNDLE)>/g
+  /<(?:DATA_APP_BUNDLE|LOOKML_BUNDLE|NATIVE_CONTENT_BUNDLE|ALERT_BUNDLE)>[\s\S]*?<\/(?:DATA_APP_BUNDLE|LOOKML_BUNDLE|NATIVE_CONTENT_BUNDLE|ALERT_BUNDLE)>/g
 
 export function sanitizeActivityThought(raw: unknown): string {
   const cleaned = extractThoughtText(raw)

@@ -12,10 +12,11 @@ import {
 } from './healthCheck'
 import type { LkrCodeModeRunOptions } from './lkrCliBridge'
 import {
+  type AlertInspectorBundle,
   archiveUserConversation, CaConversationState, ConversationRecord,
   createLookerCaConversation, deleteUserConversation, extractExploreIdsFromCode,
   formatExploreId, getArtifactNamespace, getConvTargetId, hydrateConversationContentItems,
-  isLookmlTargetAlreadyLoaded, listSavedScripts, loadExistingDashboardApp, loadNativeContentById,
+  isLookmlTargetAlreadyLoaded, listSavedScripts, loadAlertArtifact, loadExistingDashboardApp, loadNativeContentById,
   loadObjectArtifact, loadScriptArtifact, NativeContentState, normalizeStudioContentItem, PublishedAppState,
   publishScriptDashboard, resolveCaEmbedPath, ResolvedStudioUseCase, SavedScript,
   saveScriptArtifact, saveUserArtifact, saveUserConversation,
@@ -527,6 +528,31 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     [core40SDK, extensionSDK, filtersJson, mockExt?.initialBusyStatus, scriptCode, scriptMode, selectedExplores, selectedFolderId, setBusyStatus]
   )
 
+  const [alertBundle, setAlertBundle] = useState<AlertInspectorBundle | null>(null)
+  const loadAlertById = useCallback(
+    (rawId: string, _pushRoute = true): Promise<void> => {
+      const id = String(rawId || '').trim().replace(/^obj_alert_/, '')
+      if (!id) return Promise.resolve()
+      const loadConvId = activeConversationIdRef.current
+      resolvedUseCaseByIdRef.current[id] = 'tile'
+      setSelectedUseCase('tile')
+      return loadAlertArtifact(core40SDK, id, getArtifactNamespace(extensionSDK)).then((loaded) => {
+        if (activeConversationIdRef.current !== loadConvId || !loaded) return
+        setAlertBundle(loaded)
+        const alertTitle = String(loaded.custom_title || loaded.title || `Alert #${id}`)
+        upsertContentItem({
+          id,
+          alertId: id,
+          dashboardId: loaded.dashboard_id ? String(loaded.dashboard_id) : undefined,
+          contentType: 'alert',
+          title: alertTitle,
+          embedPath: `/alerts/${encodeURIComponent(id)}`,
+          updatedAt: loaded.updated_at,
+        })
+      }).catch(() => {})
+    },
+    [core40SDK, extensionSDK, resolvedUseCaseByIdRef, setSelectedUseCase, upsertContentItem]
+  )
   const loadScriptById = useCallback(
     (rawId: string, pushRoute = true): Promise<void> => {
       const id = rawId.trim()
@@ -1006,6 +1032,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       setActiveContentTabKey('')
       setLookmlBundle(null)
       setLookmlProjectId('')
+      setAlertBundle(null)
       setHealthReport(null)
       setCaConversation(null)
       setCurrentAppCode('')
@@ -1060,6 +1087,8 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       } else if (ct === 'script' && (!loadedScript || scriptId !== item.id)) {
         setLoadedScript(true); setScriptId(item.id)
         void loadScriptArtifact(core40SDK, item.id).then((l) => { if (l) { setScriptTitle(l.title || l.id); setScriptCode(l.code || DEFAULT_PYTHON_SCRIPT); void handleRunPython(l.code || DEFAULT_PYTHON_SCRIPT, filtersJson) } }).catch(() => {})
+      } else if (ct === 'alert' && alertBundle?.alert_id !== (item.alertId || item.id)) {
+        void loadAlertArtifact(core40SDK, item.alertId || item.id, getArtifactNamespace(extensionSDK)).then((l) => { if (l) setAlertBundle(l) }).catch(() => {})
       } else if (ct === 'report' && healthReport?.id !== item.id) {
         void loadHealthCheckArtifact(core40SDK, extensionSDK, item.id).then(setHealthReport).catch(() => {})
       } else if (ct === 'conversational-analytics') {
@@ -1070,7 +1099,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         )
       }
     },
-    [core40SDK, currentAppCode, extensionSDK, filtersJson, handleRunPython, healthReport?.id, loadedScript, lookmlBundle?.id, lookmlBundle?.project_id, scriptId, selectedExplores, selectedFolderId]
+    [alertBundle?.alert_id, core40SDK, currentAppCode, extensionSDK, filtersJson, handleRunPython, healthReport?.id, loadedScript, lookmlBundle?.id, lookmlBundle?.project_id, scriptId, selectedExplores, selectedFolderId]
   )
 
   const persistTabStateToConversation = useCallback(
@@ -1263,6 +1292,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     lookmlBundle, setLookmlBundle, lastLookmlIdRef,
     publishedApp, setPublishedAppState, setPublishedApp, lastPublishedIdRef,
     nativeContent, setNativeContentState, setNativeContent, lastNativeIdRef,
+    alertBundle, setAlertBundle, loadAlertById,
     contentItems, contentItemsRef, setContentItems,
     activeContentTabKey, activeContentTabKeyRef, setActiveContentTabKey,
     activeContentItem, upsertContentItem,

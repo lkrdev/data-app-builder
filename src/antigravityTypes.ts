@@ -452,3 +452,58 @@ export function parseTaggedJsonObjects(text: string, tagRe: RegExp): Array<Recor
   }
   return out
 }
+
+export interface AlertAppliedFilterItem {
+  filter_title: string
+  field_name: string
+  filter_value: string
+  filter_description?: string | null
+}
+
+export interface AlertDestinationItem {
+  destination_type: string
+  email_address?: string | null
+  action_hub_integration_id?: string | null
+  action_hub_form_params_json?: string | null
+}
+
+export interface AlertHistoryItem {
+  Check_start_time?: string | null
+  alert_condition_met?: boolean | null
+  outcome?: string | null
+  message?: string | null
+}
+
+export interface AlertInspectorBundle {
+  id: string
+  alert_id: string
+  title?: string
+  custom_title?: string | null
+  description?: string | null
+  dashboard_id?: string | number | null
+  dashboard_name?: string | null
+  lookml_dashboard_id?: string | null
+  lookml_link_id?: string | null
+  dashboard_element_id?: string | number | null
+  owner_id?: string | number
+  owner_display_name?: string | null
+  cron?: string
+  comparison_type?: string
+  threshold?: number
+  field?: {
+    title?: string
+    name?: string
+    filter?: Array<{ field_name?: string; field_value?: string; filter_value?: string }> | null
+  }
+  applied_dashboard_filters?: AlertAppliedFilterItem[] | null
+  destinations?: AlertDestinationItem[] | null
+  is_disabled?: boolean | null
+  disabled_reason?: string | null
+  is_public?: boolean | null
+  followed?: boolean | null
+  followable?: boolean | null
+  error?: string | null
+  alert_history_items?: AlertHistoryItem[] | null
+  updated_at?: string
+}
+

@@ -14,8 +14,8 @@ import {
   buildDenseExploreSchema, copyTextWithExtensionSdk, EXPLICIT_SCRIPT_CREATION_RE,
   extractExploreIdsFromCode, extractResolvedUseCase,
   formatExploreId, formatStudioContentItemTitle, getArtifactNamespace, hydrateMentionedContext,
-  isConversationalNoOpPrompt, matchExplicitUseCaseRule, parseExploreId,
-  ResolvedStudioUseCase, saveDashboardStudioMetadata, saveNativeContentArtifact,
+  isConversationalNoOpPrompt, LOOKER_ALERT_QUERY_RE, matchExplicitUseCaseRule, parseExploreId,
+  ResolvedStudioUseCase, saveAlertArtifact, saveDashboardStudioMetadata, saveNativeContentArtifact,
   saveUserArtifact, saveUserEnvironmentId, shouldRouteToIsolatedCaSubagent,
   StudioContentItemType, StudioContextMention, StudioUseCase,
   studioUseCaseToMode, toTurnCrudItem, TurnCrudItem, upsertPublishedDataApp,
@@ -61,6 +61,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     lookmlBundle, setLookmlBundle, lastLookmlIdRef,
     publishedApp, setPublishedApp, lastPublishedIdRef,
     nativeContent, setNativeContent, lastNativeIdRef,
+    setAlertBundle,
     contentItems, contentItemsRef, setContentItems, activeContentTabKeyRef, setActiveContentTabKey, upsertContentItem, setEmbedNonce,
     healthReport, scriptCode, setScriptCode, filtersJson,
     publishedTileDash, loadedScript,
@@ -729,14 +730,15 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         })
       })
 
-      if (resolvedUseCase === 'tile' && !result.lookmlBundle && !result.nativeBundle && !result.bundle) {
+      if (resolvedUseCase === 'tile' && !result.lookmlBundle && !result.nativeBundle && !result.bundle && !result.alertBundle) {
         const isExplicitScriptRequest =
           explicitUseCase === 'tile' || loadedScript || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
         const pyMatch = (result.assistantText || '').match(/```(?:python|py)?\s*\n([\s\S]*?)```/i)
         const extractedPy = pyMatch ? pyMatch[1].trim() : ''
+        const isAlertQuery = LOOKER_ALERT_QUERY_RE.test(effectivePrompt) || turnActivatedSkills.includes('looker-alerts')
         const baseReply = result.assistantText || (isExplicitScriptRequest ? 'Updated script and executed Looker queries.' : 'Executed Looker API calls.')
         const replyText =
-          !isExplicitScriptRequest && !/\b(?:save|reusable|turn\s+(?:this|it)\s+into)\b[\s\S]{0,60}\b(?:script|tile)\b/i.test(baseReply)
+          !isExplicitScriptRequest && !isAlertQuery && !/\b(?:save|reusable|turn\s+(?:this|it)\s+into)\b[\s\S]{0,60}\b(?:script|tile)\b/i.test(baseReply)
             ? `${baseReply}\n\nWould you like me to save this Looker API lookup as a reusable **Script**?`
             : baseReply
         if (isExplicitScriptRequest && (extractedPy || explicitUseCase === 'tile' || loadedScript)) {
@@ -911,6 +913,39 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           convContent = Object.assign({}, convContent, {
             dashboardId: savedNative.id, contentType: savedNative.contentType,
             embedPath: savedNative.embedPath, lookId: savedNative.lookId, lookmlDashboardId: savedNative.lookmlDashboardId,
+          })
+        }
+
+        if (result.alertBundle) {
+          handledArtifact = true
+          setBusyStatus('Saving Looker Alert snapshot to Artifacts...')
+          const alertId = String(result.alertBundle.alert_id || result.alertBundle.id || '').trim()
+          const isExistingAlert = contentItemsRef.current.some((it) => it.contentType === 'alert' && it.id === alertId)
+          const savedAlert = await saveAlertArtifact(core40SDK, userId, result.alertBundle, getArtifactNamespace(extensionSDK))
+          if (abortController.signal.aborted) return
+          resolvedUseCaseByIdRef.current[alertId] = 'tile'
+          setAlertBundle(savedAlert)
+          const alertTitle = String(savedAlert.custom_title || savedAlert.title || `Alert #${alertId}`)
+          const upAlert = upsertContentItem({
+            id: alertId,
+            alertId,
+            dashboardId: savedAlert.dashboard_id ? String(savedAlert.dashboard_id) : undefined,
+            contentType: 'alert',
+            title: alertTitle,
+            embedPath: `/alerts/${encodeURIComponent(alertId)}`,
+            updatedAt: savedAlert.updated_at,
+            source: isExistingAlert ? 'modified' : 'created',
+            createdInConversation: true,
+            hidden: false,
+          })
+          recordCrudItem(toTurnCrudItem(upAlert, isExistingAlert ? 'updated' : 'created'))
+          setActiveObjectId(alertId)
+          convType = 'tile'
+          convTitle = alertTitle
+          convContent = Object.assign({}, convContent, {
+            alertId,
+            dashboardId: savedAlert.dashboard_id ? String(savedAlert.dashboard_id) : undefined,
+            contentType: 'alert',
           })
         }
 

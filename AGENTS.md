@@ -31,6 +31,7 @@ than guessing or hand-crafting commands:
 | **Looker filters & table calculations** | `skills/looker-filters/SKILL.md` & `skills/looker-expressions/SKILL.md` | Looker filter expressions, `matches_filter`, Custom Fields, Table Calculations (`references/excel-equivalents.md`), and `.test.lkml` `assert:` expressions |
 | **Looker Code Mode & project helpers** | `skills/lkr-code-mode/SKILL.md` & `skills/lkr-project-helper/SKILL.md` | Monty Python sandbox SDK recipes (`skills/lkr-code-mode/scripts/*.py`), bare Git setup, SQL-to-view generation, and UDD dashboard migration (`skills/lkr-project-helper/scripts/*.py`) |
 | **LookML architecture, review & audits** | `skills/looker-architect/SKILL.md`, `skills/lookml-reviewer/SKILL.md`, `skills/looker-audit/SKILL.md`, `skills/looker-performance-optimizer/SKILL.md` | Enterprise LookML scaffolding (`looker_scaffold.py`, `references/*.md`), LAMS style review, instance governance audits, and PDT/query performance optimization |
+| **Looker Alerts** | `skills/looker-alerts/SKILL.md` | Triage running/failing alerts (`search_alerts`, `alert_details`), verify alert filters & data, tune noisy frequency, diagnose mobile notifications, move alerts across tiles, and emit `<ALERT_BUNDLE>` |
 | **Create & sync LookML dashboards** | `skills/creating-looker-dashboard/SKILL.md` | Authoring `.dashboard.lookml` files, importing to UDDs, and syncing iterative layout/tile refinements |
 | **Studio UI, components, or theme** | `.agents/skills/studio-design-system/SKILL.md` | Design system tokens (`--dab-*`), React UI primitives (`StudioDesignSystem.tsx` & `StudioSelect.tsx`), layout/overflow invariants, Dark/Light theme rules, and cropped visual snapshot standards |
 | **Looker RBAC & Safe Mode permissions** | `.agents/skills/looker-permissions/SKILL.md` (`skills/looker-permissions/SKILL.md`) | 4-layer Looker RBAC mental model, model-to-project expansion, folder ACLs, role-denied 404 diagnostics, and `Safe Mode (Ask)` vs. `Auto-Approve (YOLO)` execution approval matrix |
@@ -47,9 +48,9 @@ Detailed component properties, methods, and styling variables live in
 
 ## Sandbox CLI Bootstrap (`uv` + `lkr-dev-cli`)
 
-New Antigravity sandbox environments (`user_env:${me.id}`) bootstrap `uv` and a pinned release of `lkr-dev-cli` (`0.0.67`) into `/usr/local/bin` via `/workspace/bootstrap_lookml.py` so both persist in the container's GCS overlay snapshot (`{env_id}/snapshot.tar`):
+New Antigravity sandbox environments (`user_env:${me.id}`) bootstrap `uv` and a pinned release of `lkr-dev-cli` (`0.0.69`) into `/usr/local/bin` via `/workspace/bootstrap_lookml.py` so both persist in the container's GCS overlay snapshot (`{env_id}/snapshot.tar`):
 1. `pip install --break-system-packages --quiet uv` (if `uv` is not on `PATH`).
-2. `UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.67"`.
+2. `UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.69"`.
 
 ## Conversation Labeling (Stateless Side-Request)
 

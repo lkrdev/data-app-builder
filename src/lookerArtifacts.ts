@@ -2,7 +2,8 @@ import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { IArtifact, IDashboard, IDashboardElement, Looker40SDK } from '@looker/sdk'
 import { mutate, SWRConfig, unstable_serialize } from 'swr'
 
-import { cleanLookmlProjectId } from './antigravityTypes'
+import { type AlertInspectorBundle, cleanLookmlProjectId } from './antigravityTypes'
+export type { AlertInspectorBundle }
 import {
   buildCaEmbedPath,
   normalizeCaEmbedPath,
@@ -63,13 +64,13 @@ function writeSwrCache(key: unknown, value: unknown): void {
 
 export type StudioToolMode =
   | 'app' | 'data_app' | 'data-investigator' | 'data_investigator' | 'lookml'
-  | 'tile' | 'script' | 'dashboard' | 'health' | 'health_check' | 'conversational-analytics'
+  | 'tile' | 'script' | 'alert' | 'dashboard' | 'health' | 'health_check' | 'conversational-analytics'
 
 export type StudioArtifactType = StudioToolMode
 
 const STUDIO_TOOL_MODES = new Set<string>([
   'app', 'data_app', 'data-investigator', 'data_investigator', 'lookml',
-  'tile', 'script', 'dashboard', 'health', 'health_check', 'conversational-analytics',
+  'tile', 'script', 'alert', 'dashboard', 'health', 'health_check', 'conversational-analytics',
 ])
 
 export interface UserArtifactIndexEntry {
@@ -137,6 +138,7 @@ export interface StudioContentItem {
   extensionId?: string
   sessionId?: string
   scriptId?: string
+  alertId?: string
   reportId?: string
   projectId?: string
   rawCode?: string
@@ -168,6 +170,7 @@ export function formatStudioContentItemTitle(
     'data-investigator': `Data Investigator #${cleanId}`,
     lookml: `LookML: ${cleanId}`,
     script: `Script (${cleanId})`,
+    alert: `Alert #${cleanId}`,
     'conversational-analytics': `CA Chat (${cleanId})`,
     extension: `Extension (${cleanId})`,
     report: `Report (${cleanId})`,
@@ -194,6 +197,7 @@ export function resolveStudioContentEmbedPath(
     board: `/embed/boards/${enc}`,
     lookml: `/lookml/${enc}`,
     script: `/tile/${enc}`,
+    alert: `/alerts/${enc}`,
     'conversational-analytics': buildCaEmbedPath(cleanId),
     extension: `/embed/extensions/${cleanId}`,
     report: `/embed/reporting/${cleanId}`,
@@ -288,6 +292,7 @@ export interface UserConversationContent {
   lookmlDashboardId?: string
   appArtifactId?: string
   scriptId?: string
+  alertId?: string
   scheduleId?: string
   reportId?: string
   sessionId?: string
@@ -344,6 +349,11 @@ export function hydrateConversationContentItems(conv: Partial<UserConversationEn
     const sid = cleanLookmlProjectId(c.sessionId || projId || c.id || conv.objectId)
     const canonId = projId || sid
     if (canonId) pushItem({ id: canonId, sessionId: sid || canonId, projectId: projId || undefined, contentType: 'lookml', title: projId ? `LookML: ${projId}` : fallbackTitle, updatedAt: conv.updatedAt })
+    return items
+  }
+  if (rawType === 'alert' || c.alertId || c.contentType === 'alert') {
+    const alId = String(c.alertId || c.id || conv.objectId || '').trim()
+    if (alId) pushItem({ id: alId, alertId: alId, dashboardId: c.dashboardId ? String(c.dashboardId) : undefined, contentType: 'alert', title: fallbackTitle, embedPath: c.embedPath || `/alerts/${encodeURIComponent(alId)}`, updatedAt: conv.updatedAt })
     return items
   }
   if (rawType === 'tile' || rawType === 'script' || c.scriptId) {
@@ -497,6 +507,10 @@ export function resolveConversationRelatedContent(
         extraUserKeys.push(`user_${uid}_script_${itemId}`, `user_${uid}_tile_${itemId}`)
         extraSharedKeys.push(`obj_script_${itemId}`, `obj_schedule_${itemId}`)
         extraItems.push(`Shared script artifact (obj_script_${itemId})`, `Script schedule (obj_schedule_${itemId})`)
+      } else if (item.contentType === 'alert') {
+        extraUserKeys.push(`user_${uid}_alert_${itemId}`, `user_${uid}_tile_${itemId}`)
+        extraSharedKeys.push(`obj_alert_${itemId}`)
+        extraItems.push(`Looker Alert #${itemId} (obj_alert_${itemId})`)
       } else if (item.contentType === 'report') {
         extraUserKeys.push(`user_${uid}_health_check_${itemId}`, `user_${uid}_health_${itemId}`)
         extraSharedKeys.push(`obj_health_${itemId}`, `obj_health_check_${itemId}`)
@@ -536,6 +550,18 @@ export function resolveConversationRelatedContent(
       userIndexKeys: uniq(objectId && `user_${uid}_dashboard_${objectId}`, conv.id && conv.id !== objectId && `user_${uid}_dashboard_${conv.id}`),
       sharedObjectKeys: uniq(objectId && `obj_dashboard_${objectId}`),
       dashboardId, lookId, summary: items.join(' + ') || 'Content Studio artifact', items,
+    })
+  }
+
+  if (rawType === 'alert' || c.alertId || c.contentType === 'alert') {
+    const objectId = stripPrefix(String(conv.objectId || c.alertId || c.id || conv.id || ''))
+    const dashboardId = c.dashboardId ? String(c.dashboardId).trim() : undefined
+    const items = uniq(objectId && `Looker Alert #${objectId} (obj_alert_${objectId})`)
+    return enrichWithContentItems({
+      mode: 'tile', objectId,
+      userIndexKeys: uniq(objectId && `user_${uid}_alert_${objectId}`, objectId && `user_${uid}_tile_${objectId}`),
+      sharedObjectKeys: uniq(objectId && `obj_alert_${objectId}`),
+      dashboardId, summary: items.join(' + ') || 'Looker alert artifact', items,
     })
   }
 
@@ -827,7 +853,7 @@ export class ArtifactService {
     }
 
     const userKeyMatch = key.match(
-      /^user_([^_]+)_(app|data_app|data-investigator|data_investigator|lookml|tile|script|health|health_check|dashboard|conversational-analytics)_(.+)$/
+      /^user_([^_]+)_(app|data_app|data-investigator|data_investigator|lookml|tile|script|alert|health|health_check|dashboard|conversational-analytics)_(.+)$/
     )
     if (userKeyMatch) {
       const uid = userKeyMatch[1]
@@ -920,7 +946,7 @@ export class ArtifactService {
     }
 
     const userKeyMatch = key.match(
-      /^user_([^_]+)_(app|data_app|data-investigator|data_investigator|lookml|tile|script|health|health_check|dashboard|conversational-analytics)_(.+)$/
+      /^user_([^_]+)_(app|data_app|data-investigator|data_investigator|lookml|tile|script|alert|health|health_check|dashboard|conversational-analytics)_(.+)$/
     )
     if (userKeyMatch) {
       const uid = userKeyMatch[1]
@@ -2060,3 +2086,48 @@ export async function deleteUserConversation(
 }
 
 export const deleteConversationArtifact = deleteUserConversation
+
+export async function saveAlertArtifact(
+  sdk: Looker40SDK,
+  userId: string,
+  bundle: AlertInspectorBundle,
+  namespace = ARTIFACT_NAMESPACE
+): Promise<AlertInspectorBundle> {
+  const alertId = String(bundle.alert_id || bundle.id || '').trim().replace(/^obj_alert_/, '')
+  const now = new Date().toISOString()
+  const compact: AlertInspectorBundle = {
+    ...bundle,
+    id: alertId,
+    alert_id: alertId,
+    alert_history_items: (bundle.alert_history_items || []).slice(0, 10),
+    updated_at: now,
+  }
+  await saveUserArtifact(
+    sdk,
+    userId,
+    {
+      id: alertId,
+      type: 'alert',
+      title: String(bundle.custom_title || bundle.title || `Alert #${alertId}`),
+      targetId: bundle.dashboard_id ? String(bundle.dashboard_id) : alertId,
+      updatedAt: now,
+      createdBy: String(userId || '1'),
+    },
+    compact as unknown as Record<string, unknown>,
+    namespace
+  )
+  return compact
+}
+
+export const loadAlertArtifact = (
+  sdk: Looker40SDK,
+  alertId: string,
+  namespace = ARTIFACT_NAMESPACE
+): Promise<AlertInspectorBundle | null> =>
+  loadObjectArtifact<AlertInspectorBundle>(
+    sdk,
+    'alert',
+    String(alertId || '').trim().replace(/^obj_alert_/, ''),
+    namespace
+  )
+
