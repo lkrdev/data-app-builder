@@ -335,7 +335,28 @@ const runCodeModeInner: LkrCodeModeRunFn = async (
     }
   }
 
+  const pyKeywords = new Set([
+    'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue',
+    'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from', 'global', 'if', 'import', 'in',
+    'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield',
+  ])
+  const safeBaseVars = baseOpts.vars
+    ? Object.fromEntries(Object.entries(baseOpts.vars).filter(([k]) => !pyKeywords.has(k)))
+    : null
+  const mergedVars: Record<string, unknown> = Object.assign(
+    { INVESTIGATION_ANCHOR_DATE: new Date().toISOString().slice(0, 10) },
+    usesSearchAgents ? { __ca_agents_catalog__: caAgentsCatalog } : null,
+    safeBaseVars
+  )
+
   let code = rawCode
+  if (/\b(?:globals|locals)\s*\(/.test(rawCode) && !/\bdef\s+(?:globals|locals)\b/.test(rawCode)) {
+    const pairs = Object.keys(mergedVars)
+      .filter((k) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) && !pyKeywords.has(k))
+      .map((k) => `${JSON.stringify(k)}: ${k}`)
+      .join(', ')
+    code = `def globals(): return {${pairs}}\nlocals = globals\n` + code
+  }
   if (/\bto_fixed_date_range\b/.test(rawCode) && !/\bdef\s+to_fixed_date_range\b/.test(rawCode)) {
     code = DATE_HELPER_PREAMBLE_PY + code
   }
@@ -404,11 +425,7 @@ const runCodeModeInner: LkrCodeModeRunFn = async (
   const nextOpts: LkrCodeModeRunOptions = Object.assign({}, baseOpts, gatedRequestHandler ? { requestHandler: gatedRequestHandler } : null, {
     requirePermission: false,
     code,
-    vars: Object.assign(
-      { INVESTIGATION_ANCHOR_DATE: new Date().toISOString().slice(0, 10) },
-      usesSearchAgents ? { __ca_agents_catalog__: caAgentsCatalog } : null,
-      baseOpts.vars || null
-    ),
+    vars: mergedVars,
   })
   return isObj ? runtime.runPythonCode(nextOpts) : runtime.runPythonCode(code, nextOpts)
 }

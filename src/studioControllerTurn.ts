@@ -48,7 +48,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   } = auth
   const {
     userId, userIdRef, setLookerWorkspaceId, syncLookerSessionWorkspace,
-    availableLookmlProjects, canDeployLookml,
+    availableLookmlProjects, canDeployLookml, loadingMetadata, models,
     selectedExplores, setSelectedExplores, mentionedItems, setMentionedItems,
     selectedFolderId, schemaMarkdown, setSchemaMarkdown,
     activeMode, isLookmlMode, isHealthCheckMode, builderMode,
@@ -285,8 +285,9 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     if (disabledModes.includes(activeMode)) return
     if (environmentStatus === 'stopped' || environmentStatus === 'resetting') return
     if (sharedEnvIdRef.current) return
+    if (loadingMetadata && models.length === 0 && selectedExplores.length === 0) return
     void handleWakeModeEnv(activeMode)
-  }, [activeMode, disabledModes, environmentStatus, handleWakeModeEnv, sharedEnvIdRef])
+  }, [activeMode, disabledModes, environmentStatus, handleWakeModeEnv, loadingMetadata, models.length, selectedExplores.length, sharedEnvIdRef])
 
   const [requirePermission, setRequirePermissionState] = useState(true)
   const requirePermissionRef = useRef(requirePermission)
@@ -585,8 +586,21 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       let turnExtraSources: Array<{ type: 'inline'; content: string; target: string }> | undefined
       let turnPromptWithContext = effectivePrompt
 
-      if (activeMentions.length > 0) {
-        activeMentions.forEach((m) => {
+      const mentionsToHydrate: StudioContextMention[] = [...activeMentions]
+      for (const urlMatch of effectivePrompt.matchAll(/(?:https?:\/\/[^\s/]+)?\/(dashboards|looks|explore)\/([^\s?#)]+)/gi)) {
+        const rawKind = (urlMatch[1] || '').toLowerCase()
+        let rawRef = String(urlMatch[2] || '').replace(/[.,;:'"]+$/, '').trim()
+        try { rawRef = decodeURIComponent(rawRef) } catch { /* ignore */ }
+        if (!rawRef) continue
+        const mType: StudioContextMention['type'] = rawKind === 'dashboards' ? 'dashboard' : rawKind === 'looks' ? 'look' : 'explore'
+        const mId = mType === 'explore' && rawRef.includes('/') && !rawRef.includes('::') ? rawRef.replace('/', '::') : rawRef
+        if (!mentionsToHydrate.some((m) => m.type === mType && m.id === mId)) {
+          mentionsToHydrate.push({ type: mType, id: mId, title: mId })
+        }
+      }
+
+      if (mentionsToHydrate.length > 0) {
+        mentionsToHydrate.forEach((m) => {
           if (m.type === 'explore' || m.type === 'dashboard' || m.type === 'look') {
             const ct: StudioContentItemType = m.type === 'explore' ? 'explore' : m.type === 'look' ? 'look' : m.id.includes('::') ? 'lookml_dashboard' : 'dashboard'
             upsertContentItem({
@@ -598,7 +612,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         })
         setBusyStatus('Hydrating referenced Looker @-mention context...')
         const hydrated = await hydrateMentionedContext({
-          sdk: core40SDK, mentions: activeMentions, conversations, selectedExplores, useCase: turnTargetUseCase,
+          sdk: core40SDK, mentions: mentionsToHydrate, conversations, selectedExplores, useCase: turnTargetUseCase,
         })
         if (hydrated.explores.length > 0) {
           turnExplores = hydrated.explores
@@ -805,6 +819,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         let handledArtifact = false
         let finalDashId: string | undefined
         let finalWidgetCount: number | undefined
+        let publishedDataAppDashboardLink: { title: string; path: string } | null = null
 
         if (result.permissionError) {
           recordTurnDenial(result.permissionError, resolvedMode, convType, effectiveExplores, convContent)
@@ -934,6 +949,12 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           setCurrentAppCode(result.bundle.raw_code)
           finalDashId = upserted.dashboardId
           finalWidgetCount = result.bundle?.widgets?.length || 0
+          if (upserted.dashboardId) {
+            publishedDataAppDashboardLink = {
+              title: upserted.title || result.bundle.title || 'Data App Dashboard',
+              path: `/dashboards/${encodeURIComponent(String(upserted.dashboardId))}`,
+            }
+          }
           const appEntryBase = {
             id: upserted.dashboardId, type: appUseCaseType, title: upserted.title,
             explores: effectiveExplores, updatedAt: new Date().toISOString(), createdBy: userId,
@@ -984,11 +1005,16 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           }
         }
 
+        const baseAssistantText = result.assistantText || ''
+        const finalAssistantText =
+          publishedDataAppDashboardLink && !baseAssistantText.includes(publishedDataAppDashboardLink.path)
+            ? `${baseAssistantText.trimEnd()}\n\n**Looker Dashboard:** [Open ${publishedDataAppDashboardLink.title}](${publishedDataAppDashboardLink.path})`
+            : baseAssistantText
         finalMsgs = [
           ...messagesWithUser,
           {
             role: 'assistant',
-            text: result.assistantText,
+            text: finalAssistantText,
             interactionId: result.session.lastInteractionId,
             ...(finalDashId ? { dashboardId: finalDashId } : {}),
             ...(finalWidgetCount !== undefined ? { widgetCount: finalWidgetCount } : {}),
@@ -1017,7 +1043,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         environmentId: result.session.environmentId,
         label: isFirstTurn ? convTitle || sanitizeConversationLabel('', effectivePrompt) : undefined,
         explores: convExplores, content: convContent, messages: finalMsgs,
-        isFirstTurn, userPrompt: effectivePrompt, assistantText: result.assistantText,
+        isFirstTurn, userPrompt: effectivePrompt, assistantText: finalMsgs[finalMsgs.length - 1]?.text || result.assistantText,
         updateArtifactIndex: Boolean(convContent),
       })
     } catch (err: unknown) {
