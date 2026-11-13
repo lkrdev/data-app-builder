@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   AlertTriangle, Check, ChevronDown, ExternalLink, Folder, FolderOpen, Info, Lock, LogOut,
-  Maximize2, Minimize2, Pencil, RotateCcw, Search, Server, Square, User,
+  Maximize2, Minimize2, PanelRightOpen, Pencil, RotateCcw, Search, Server, Square, User,
 } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 
@@ -621,6 +621,26 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
         <div className="dab-divider" />
 
         <div className="dab-auth-box">
+          {!ctl.isEmptyConversation && (
+            <button
+              type="button"
+              data-testid="topbar-mobile-overview-btn"
+              className="dab-btn dab-btn-secondary dab-btn-icon dab-mobile-only-btn"
+              onClick={() => {
+                if (!ctl.rightPaneCollapsed && ctl.activeContentTabKey === 'overview') {
+                  ctl.setActiveContentTabKey('')
+                  ctl.setRightPaneCollapsed(true)
+                } else {
+                  ctl.handleSelectOverview()
+                  ctl.setRightPaneCollapsed(false)
+                }
+              }}
+              title="Toggle Conversation Overview"
+              aria-label="Toggle Conversation Overview"
+            >
+              <PanelRightOpen size={14} strokeWidth={1.75} aria-hidden="true" />
+            </button>
+          )}
           {authMode === 'oauth' ? (
             <button
               type="button" data-testid="topbar-oauth-signin-btn"

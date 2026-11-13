@@ -109,6 +109,7 @@ html,body {margin:0;padding:0;height:100%;font-family:-apple-system,BlinkMacSyst
 .dab-conv-sidebar-actions {padding:8px 10px;border-bottom:1px solid var(--dab-border,#e2e8f0)}
 .dab-conv-sidebar.collapsed .dab-conv-sidebar-actions {padding:8px 6px}
 .dab-conv-new-btn {width:100%;min-width:0;height:30px;border:1px dashed var(--dab-accent-border,#93c5fd);border-radius:6px;background:var(--dab-accent-subtle,#eff6ff);color:var(--dab-accent-text,#1d4ed8);font-weight:600;font-size:12px;cursor:pointer;white-space:nowrap;padding:0 8px}
+.dab-conv-overview-btn {margin-top:6px;display:inline-flex;align-items:center;justify-content:center;padding:0}
 .dab-conv-new-btn:hover:not(:disabled) {background:var(--dab-badge-bg,#dbeafe)}
 .dab-conv-new-btn:disabled {opacity:0.55;cursor:not-allowed}
 .dab-conv-list {flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:6px}
@@ -529,6 +530,8 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 }
 .dab-mobile-viewer-card-handle {display:none}
 .dab-mobile-only-menu-item {display:none}
+.dab-mobile-only-btn {display:none !important}
+.dab-longpress-tooltip {position:fixed;transform:translateX(-50%);z-index:2000;padding:4px 8px;border-radius:6px;font-size:11px;font-weight:600;background:var(--dab-surface-elevated,#1e293b);color:var(--dab-text-strong,#f8fafc);border:1px solid var(--dab-border-strong,#475569);box-shadow:0 4px 12px rgba(0,0,0,0.35);pointer-events:none;white-space:nowrap}
 @media (max-width: 768px) {
   .dab-topbar {padding:6px 10px;gap:6px;flex-wrap:nowrap;justify-content:space-between}
   .dab-brand {gap:6px;flex-wrap:nowrap;min-width:0}
@@ -536,6 +539,7 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
   .dab-topbar .dab-agent-name-edit-btn,.dab-topbar [data-testid="studio-edit-agent-name-btn"],.dab-topbar [data-testid="permission-mode-toggle"],.dab-topbar .dab-folder-picker > span,.dab-topbar [data-testid="topbar-folder-trigger"],.dab-topbar .dab-folder-picker > [data-testid="folder-selector-skeleton"],.dab-topbar [data-testid="topbar-fullscreen-toggle"],.dab-topbar .dab-divider,.dab-left-pane-header {display:none !important}
   .dab-topbar .dab-folder-picker {gap:0;margin:0}
   .dab-mobile-only-menu-item {display:flex}
+  .dab-mobile-only-btn {display:inline-flex !important}
   .dab-folder-trigger-fixed,.dab-combobox {min-width:0;max-width:100%;width:auto;flex:1 1 130px}
   .dab-workspace,.dab-workspace.dab-workspace-with-sidebar,.dab-workspace.dab-workspace-with-sidebar.dab-workspace-sidebar-collapsed,.dab-workspace.dab-workspace-with-sidebar.dab-workspace-empty,.dab-workspace.dab-workspace-with-sidebar.dab-workspace-sidebar-collapsed.dab-workspace-empty,.dab-workspace.dab-workspace-with-sidebar.dab-workspace-right-collapsed,.dab-workspace.dab-workspace-with-sidebar.dab-workspace-sidebar-collapsed.dab-workspace-right-collapsed {position:relative;grid-template-columns:36px minmax(0,1fr) !important}
   .dab-conv-sidebar:not(.collapsed) {position:absolute;inset:0 auto 0 0;width:min(260px,82vw);z-index:400;box-shadow:4px 0 20px rgba(0,0,0,0.35)}

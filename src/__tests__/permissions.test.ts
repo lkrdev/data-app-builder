@@ -29,11 +29,11 @@ import {
   isNewProjectOnboardingIntakePrompt, isTextAttachmentFile, KDA_SKILL_MD, KDA_TOOLKIT_PY,
   listAvailableAntigravityModels, LKR_CLI_BRIDGE_TOOL, LKR_CLI_SITECUSTOMIZE_PY, LKR_DEV_CLI_SPEC,
   LKR_DEV_CLI_VERSION, LkrCodeMode, loadStoredLeftPaneWidth, loadStoredOAuthSession,
-  loadStoredRightPaneCollapsed, loadStoredThinkingLevel, loginWithGoogleOAuth,
+  loadStoredRightPaneCollapsed, loadStoredThinkingLevel, loadStoredThinkingLevelByModel, loginWithGoogleOAuth,
   LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD, LOOKER_PROJECT_ONBOARDING_SKILL_MD, LOOKML_SKILLS_CATALOG, MAX_LEFT_PANE_WIDTH,
   mergeInteractionSseEvent, MIN_LEFT_PANE_WIDTH, NATIVE_CONTENT_GUIDE_MD, normalizeMaxToolRounds, normalizeMaxTotalTokens, normalizeSandboxFilePath,
-  normalizeThinkingLevel, parseAttachmentDataUrl, parseStarterPromptsResponse, parseTaggedJsonObjects, persistOAuthSession, persistThinkingLevel,
-  prewarmOrWakeAntigravityEnvironment, readAttachedFile, readInitialRightPaneCollapsed, readInitialThinkingLevel, recordSharedEnvExploreSchema,
+  normalizeThinkingLevel, normalizeThinkingLevelByModel, parseAttachmentDataUrl, parseStarterPromptsResponse, parseTaggedJsonObjects, persistOAuthSession, persistThinkingLevel,
+  persistThinkingLevelByModel, prewarmOrWakeAntigravityEnvironment, readAttachedFile, readInitialRightPaneCollapsed, readInitialThinkingLevel, readInitialThinkingLevelByModel, recordSharedEnvExploreSchema,
   refreshOAuthSessionIfNeeded, resetHostOAuthWedged, resolveAdaptivePollScheduleMs, resolveBuiltinWorkspaceFileContent,
   resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, runAntigravityTurn,
   SANDBOX_AGENT_SKILL_FILES, SANDBOX_WORKSPACE_SKILL_FILES, sanitizeActivityThought, sanitizeConversationLabel, saveStoredLeftPaneWidth,
@@ -41,7 +41,7 @@ import {
   streamInteractionUntilActionOrDone, stripStarterPromptEmojis, STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY,
   STUDIO_MAX_TOOL_ROUNDS_OPTIONS, STUDIO_MAX_TOTAL_TOKENS_OPTIONS, STUDIO_OAUTH_REFRESH_INTERVAL_MS,
   STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY, STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY,
-  STUDIO_SLASH_SKILLS, STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY, StudioAttachedFile,
+  STUDIO_SLASH_SKILLS, STUDIO_THINKING_LEVEL_BY_MODEL_STORAGE_KEY, STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY, StudioAttachedFile,
   summarizeProgress, wrapDashboardCodeMode, wrapKdaCodeMode,
   copyTextWithExtensionSdk, fetchConversationSandboxDebugMarkdown, formatConversationThreadMarkdown,
 } from '../antigravity'
@@ -10946,5 +10946,80 @@ customElements.define('good-compare-app', GoodCompareApp);`
     expect(turnTs).toContain('if (loadingMetadata && models.length === 0 && selectedExplores.length === 0) return')
     expect(turnTs).toContain('/(?:https?:\\/\\/[^\\s/]+)?\\/(dashboards|looks|explore)\\/([^\\s?#)]+)/gi')
     expect(turnTs).toContain('**Looker Dashboard:** [Open ${publishedDataAppDashboardLink.title}](${publishedDataAppDashboardLink.path})')
+  })
+
+  test('Issue #206: persists per-model sticky thinking levels independently, surfaces mobile Overview buttons, and renders touch long-press tooltips', async () => {
+    expect(STUDIO_THINKING_LEVEL_BY_MODEL_STORAGE_KEY).toBe('dab_thinking_level_by_model')
+    expect(
+      normalizeThinkingLevelByModel(
+        JSON.stringify({
+          'gemini-4-argon': 'low',
+          'gemini-3.8-flash': 'high',
+          'gemini-3.7-flash': 'medium',
+          invalid_model: 'ultra',
+        })
+      )
+    ).toEqual({
+      'gemini-4-argon': 'low',
+      'gemini-3.8-flash': 'high',
+      'gemini-3.7-flash': 'medium',
+    })
+    expect(normalizeThinkingLevelByModel('not-json')).toEqual({})
+    expect(normalizeThinkingLevelByModel(['low'])).toEqual({})
+
+    const storedItems: Record<string, string> = {}
+    const mockExtHost = {
+      localStorageGetItem: async (k: string) => storedItems[k] ?? null,
+      localStorageSetItem: async (k: string, v: string) => {
+        storedItems[k] = v
+      },
+    }
+
+    persistThinkingLevelByModel(mockExtHost, {
+      'gemini-4-argon': 'low',
+      'gemini-3.8-flash': 'high',
+    })
+    expect(JSON.parse(storedItems[STUDIO_THINKING_LEVEL_BY_MODEL_STORAGE_KEY])).toEqual({
+      'gemini-4-argon': 'low',
+      'gemini-3.8-flash': 'high',
+    })
+
+    const loaded = await loadStoredThinkingLevelByModel(mockExtHost)
+    expect(loaded).toEqual({
+      'gemini-4-argon': 'low',
+      'gemini-3.8-flash': 'high',
+    })
+
+    // Updating gemini-4-argon to medium preserves gemini-3.8-flash at high
+    persistThinkingLevelByModel(mockExtHost, {
+      ...loaded,
+      'gemini-4-argon': 'medium',
+    })
+    expect(await loadStoredThinkingLevelByModel(mockExtHost)).toEqual({
+      'gemini-4-argon': 'medium',
+      'gemini-3.8-flash': 'high',
+    })
+
+    const seeded = readInitialThinkingLevelByModel('gemini-3.5-flash-lite', 'medium')
+    expect(seeded['gemini-3.5-flash-lite']).toBeDefined()
+
+    const repoRoot = path.resolve(__dirname, '../..')
+    const authSrc = readFileSync(path.join(repoRoot, 'src/studioControllerAuth.ts'), 'utf8')
+    expect(authSrc).toContain('thinkingLevelByModel')
+    expect(authSrc).toContain('setModelThinkingLevel')
+    expect(authSrc).toContain('loadStoredThinkingLevelByModel(extensionSDK)')
+    expect(authSrc).toContain('persistThinkingLevelByModel(extensionSDK, thinkingLevelByModelRef.current)')
+
+    const wsSrc = readFileSync(path.join(repoRoot, 'src/components/StudioWorkspace.tsx'), 'utf8')
+    expect(wsSrc).toContain('value: thinkingLevelByModel?.[m.id] || defaultThinkingLevel || thinkingLevel')
+    expect(wsSrc).toContain('onChange: (lvl) => setModelThinkingLevel(m.id, lvl as StudioThinkingLevel)')
+    expect(wsSrc).toContain('data-testid="sidebar-overview-btn"')
+
+    const headerSrc = readFileSync(path.join(repoRoot, 'src/components/StudioHeader.tsx'), 'utf8')
+    expect(headerSrc).toContain('data-testid="topbar-mobile-overview-btn"')
+
+    const appSrc = readFileSync(path.join(repoRoot, 'src/components/App.tsx'), 'utf8')
+    expect(appSrc).toContain('data-testid="studio-longpress-tooltip"')
+    expect(appSrc).toContain('suppressNextClickRef.current = true')
   })
 })

@@ -19,6 +19,7 @@ export const ANTIGRAVITY_ALLOWED_MODELS: AntigravityModelOption[] = [
 export type StudioThinkingLevel = 'low' | 'medium' | 'high'
 export const DEFAULT_THINKING_LEVEL: StudioThinkingLevel = 'high'
 export const STUDIO_THINKING_LEVEL_STORAGE_KEY = 'dab_thinking_level'
+export const STUDIO_THINKING_LEVEL_BY_MODEL_STORAGE_KEY = 'dab_thinking_level_by_model'
 export const STUDIO_THINKING_LEVEL_OPTIONS: Array<{ value: StudioThinkingLevel; label: string; testId: string }> = [
   { value: 'low', label: 'Low', testId: 'thinking-level-option-low' },
   { value: 'medium', label: 'Medium', testId: 'thinking-level-option-medium' },
@@ -87,6 +88,60 @@ export function persistThinkingLevel(extensionSDK: AntigravityExtensionHostLike,
   const normalized = normalizeThinkingLevel(level)
   try { if (typeof window !== 'undefined') window.localStorage?.setItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY, normalized) } catch { /* ignore */ }
   try { void extensionSDK?.localStorageSetItem?.(STUDIO_THINKING_LEVEL_STORAGE_KEY, normalized) } catch { /* ignore */ }
+}
+
+export function normalizeThinkingLevelByModel(raw: unknown): Record<string, StudioThinkingLevel> {
+  const out: Record<string, StudioThinkingLevel> = {}
+  let obj: unknown = raw
+  if (typeof raw === 'string' && raw.trim()) {
+    try { obj = JSON.parse(raw) } catch { return out }
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return out
+  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+    const key = k.trim()
+    if (key && (v === 'low' || v === 'medium' || v === 'high')) out[key] = v
+  }
+  return out
+}
+
+export function readInitialThinkingLevelByModel(
+  initialModel: string = DEFAULT_ANTIGRAVITY_MODEL,
+  fallbackLevel: StudioThinkingLevel = DEFAULT_THINKING_LEVEL
+): Record<string, StudioThinkingLevel> {
+  let map: Record<string, StudioThinkingLevel> = {}
+  try {
+    const w = typeof window !== 'undefined' ? window : undefined
+    const raw =
+      (w?.__MOCK_LOOKER_EXTENSION__ as { initialThinkingLevelByModel?: unknown } | undefined)?.initialThinkingLevelByModel ??
+      w?.localStorage?.getItem?.(STUDIO_THINKING_LEVEL_BY_MODEL_STORAGE_KEY)
+    map = normalizeThinkingLevelByModel(raw)
+  } catch { /* ignore */ }
+  const modelKey = String(initialModel || DEFAULT_ANTIGRAVITY_MODEL).trim() || DEFAULT_ANTIGRAVITY_MODEL
+  if (!map[modelKey]) map[modelKey] = readInitialThinkingLevel(fallbackLevel)
+  return map
+}
+
+export async function loadStoredThinkingLevelByModel(
+  extensionSDK?: AntigravityExtensionHostLike
+): Promise<Record<string, StudioThinkingLevel> | null> {
+  try {
+    const raw =
+      (await extensionSDK?.localStorageGetItem?.(STUDIO_THINKING_LEVEL_BY_MODEL_STORAGE_KEY)) ??
+      (typeof window !== 'undefined' ? window.localStorage?.getItem?.(STUDIO_THINKING_LEVEL_BY_MODEL_STORAGE_KEY) : null)
+    const map = normalizeThinkingLevelByModel(raw)
+    return Object.keys(map).length > 0 ? map : null
+  } catch {
+    return null
+  }
+}
+
+export function persistThinkingLevelByModel(
+  extensionSDK: AntigravityExtensionHostLike,
+  map: Record<string, StudioThinkingLevel>
+): void {
+  const serialized = JSON.stringify(normalizeThinkingLevelByModel(map))
+  try { if (typeof window !== 'undefined') window.localStorage?.setItem?.(STUDIO_THINKING_LEVEL_BY_MODEL_STORAGE_KEY, serialized) } catch { /* ignore */ }
+  try { void extensionSDK?.localStorageSetItem?.(STUDIO_THINKING_LEVEL_BY_MODEL_STORAGE_KEY, serialized) } catch { /* ignore */ }
 }
 
 export interface ExtensionAuthContextConfig {
