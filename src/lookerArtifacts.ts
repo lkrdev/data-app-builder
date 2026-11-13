@@ -846,7 +846,15 @@ export class ArtifactService {
     const convMatch = key.match(/^user_conversations:(.+)$/)
     if (convMatch) {
       const uid = convMatch[1]
-      const normalized = normalizeConversationsArray(parsedVal)
+      const prevList = this.conversationsCache.get(uid)
+      const normalized = normalizeConversationsArray(parsedVal).map((c) => {
+        const p = prevList?.find((x) => x.id === c.id)
+        return p?.messages &&
+          (!c.messages ||
+            (p.messages.length > c.messages.length && c.messages[c.messages.length - 1]?.role === 'user'))
+          ? { ...c, messages: p.messages, interactionId: c.interactionId || p.interactionId }
+          : c
+      })
       this.conversationsCache.set(uid, normalized)
       writeSwrCache(['artifact:conversations', this.namespace, uid], normalized)
       return
@@ -1203,15 +1211,21 @@ export class ArtifactService {
     const cleanId = String(entry.id || '').trim()
     if (!cleanId) return []
     const now = new Date().toISOString()
-    const existing = this.conversationsCache.has(uid)
-      ? this.conversationsCache.get(uid)!
-      : await this.listConversations(uid)
+    if (!this.conversationsCache.has(uid)) await this.listConversations(uid)
+    const existing = this.conversationsCache.get(uid) || []
     const prev = existing.find((c) => c.id === cleanId)
     let mergedContentItems = entry.contentItems
     if (mergedContentItems === undefined && prev?.contentItems?.length) {
       mergedContentItems = prev.contentItems
     }
-    const mergedMessages = prunePersistedMessages(entry.messages ?? prev?.messages)
+    const rawMessages =
+      entry.messages &&
+      prev?.messages &&
+      prev.messages.length > entry.messages.length &&
+      entry.messages[entry.messages.length - 1]?.role === 'user'
+        ? prev.messages
+        : (entry.messages ?? prev?.messages)
+    const mergedMessages = prunePersistedMessages(rawMessages)
     const merged: UserConversationEntry = {
       ...prev,
       ...entry,
@@ -1234,8 +1248,10 @@ export class ArtifactService {
     const nextList = [merged, ...existing.filter((c) => c.id !== cleanId)].sort((a, b) =>
       String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))
     )
+    this.conversationsCache.set(uid, nextList)
+    writeSwrCache(['artifact:conversations', this.namespace, uid], nextList)
     await this.put([{ key: formatUserConversationsKey(uid), value: nextList }])
-    return nextList
+    return this.conversationsCache.get(uid) || nextList
   }
 
   async archiveConversation(

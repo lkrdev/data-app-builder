@@ -11,14 +11,14 @@ import {
 } from './antigravity'
 import { ChatMessage, StudioMode } from './components/App'
 import {
-  buildDenseExploreSchema, copyTextWithExtensionSdk, EXPLICIT_SCRIPT_CREATION_RE,
+  buildDenseExploreSchema, clearInFlightConvId, compactPersistedChatTurn, copyTextWithExtensionSdk, EXPLICIT_SCRIPT_CREATION_RE,
   extractExploreIdsFromCode, extractResolvedUseCase,
   formatExploreId, formatStudioContentItemTitle, getArtifactNamespace, hydrateMentionedContext,
   isConversationalNoOpPrompt, LOOKER_ALERT_QUERY_RE, matchExplicitUseCaseRule, parseExploreId,
-  ResolvedStudioUseCase, saveAlertArtifact, saveDashboardStudioMetadata, saveNativeContentArtifact,
-  saveUserArtifact, saveUserEnvironmentId, shouldRouteToIsolatedCaSubagent,
-  StudioContentItemType, StudioContextMention, StudioUseCase,
-  studioUseCaseToMode, toTurnCrudItem, TurnCrudItem, upsertPublishedDataApp,
+  ResolvedStudioUseCase, saveAlertArtifact, saveDashboardStudioMetadata, saveInFlightConvId, saveNativeContentArtifact,
+  saveUserArtifact, saveUserConversation, saveUserEnvironmentId, shouldRouteToIsolatedCaSubagent,
+  STUDIO_INFLIGHT_CONV_SESSION_KEY, StudioContentItemType, StudioContextMention, StudioUseCase,
+  studioUseCaseToMode, toTurnCrudItem, TurnCrudItem, upsertPublishedDataApp, UserConversationEntry,
 } from './lookerApi'
 import {
   extractLookmlDashboardsFromBundle,
@@ -32,8 +32,11 @@ import { getErrorMessage, StudioAuthAndPrefs } from './studioControllerAuth'
 import { StudioLoaders } from './studioControllerLoaders'
 import { StudioMetadata } from './studioControllerMetadata'
 
+export { STUDIO_INFLIGHT_CONV_SESSION_KEY }
 export interface QueuedPromptItem { id: string; text: string; images: PastedImage[]; mentions: StudioContextMention[] }
 export type StudioEnvironmentStatus = 'active' | 'resetting' | 'stopped'
+
+const stripMessagesForStorage = (msgs: ChatMessage[]) => msgs.map((m) => compactPersistedChatTurn(m, true))
 
 export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, loaders: StudioLoaders) {
   const {
@@ -53,7 +56,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     selectedFolderId, schemaMarkdown, setSchemaMarkdown,
     activeMode, isLookmlMode, isHealthCheckMode, builderMode,
     setActiveObjectId,
-    conversations, setConversations,
+    conversations, conversationsRef, setConversations,
   } = meta
   const {
     caConversation, isCaMode,
@@ -417,6 +420,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   const handleStopTurn = useCallback(() => {
     abortActiveTurn('Stopped by user.')
     setBusyStatus(null)
+    clearInFlightConvId()
   }, [abortActiveTurn, setBusyStatus])
 
   const handleQueuePrompt = useCallback(() => {
@@ -540,33 +544,39 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     setActiveConversationId(convId)
     const targetConvRoute = `/c/${encodeURIComponent(convId)}`
     if (location.pathname !== targetConvRoute) history.replace(targetConvRoute)
-    if (isFirstTurn && !conversations.some((c) => c.id === convId)) {
-      const nowIso = new Date().toISOString()
-      const optimisticEntry = {
-        id: convId,
-        type: turnTargetUseCase !== 'auto' ? turnTargetUseCase : allowedUseCases[0] || 'app',
-        use_case: turnTargetUseCase,
-        label: sanitizeConversationLabel('', effectivePrompt),
-        explores: selectedExplores,
-        messages: [{ role: 'user' as const, text: effectivePrompt }],
-        createdAt: nowIso,
-        updatedAt: nowIso,
-      }
-      setConversations((prev) => [optimisticEntry, ...prev.filter((c) => c.id !== convId)], {
-        optimisticEntry,
-      })
+    const nowIso = new Date().toISOString()
+    const existingConv = conversationsRef.current.find((c) => c.id === convId)
+    const inFlightEntry: UserConversationEntry = {
+      ...existingConv,
+      id: convId,
+      type: existingConv?.type || (turnTargetUseCase !== 'auto' ? turnTargetUseCase : allowedUseCases[0] || 'app'),
+      use_case: existingConv?.use_case || turnTargetUseCase,
+      label: existingConv?.label || sanitizeConversationLabel('', effectivePrompt),
+      explores: selectedExplores.length ? selectedExplores : existingConv?.explores,
+      messages: stripMessagesForStorage(messagesWithUser),
+      createdAt: existingConv?.createdAt || nowIso,
+      updatedAt: nowIso,
+    }
+    setConversations((prev) => [inFlightEntry, ...prev.filter((c) => c.id !== convId)], {
+      optimisticEntry: inFlightEntry,
+    })
+    saveInFlightConvId(convId)
+    if (userId) {
+      void saveUserConversation(core40SDK, userId, inFlightEntry, getArtifactNamespace(extensionSDK)).catch(() => {})
     }
 
     const caRouteBase = { prompt: effectivePrompt, explicitUseCase, isCaMode, isFirstTurn, allowedModes: allowedUseCases }
     if (!isConversationalNoOpPrompt(effectivePrompt) && (turnTargetUseCase === 'health-check' || (explicitUseCase !== 'auto' && isHealthCheckMode))) {
       setSelectedUseCase('health-check')
       await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages, convId)
+      clearInFlightConvId()
       return
     }
 
     if (shouldRouteToIsolatedCaSubagent(caRouteBase)) {
       setSelectedUseCase('conversational-analytics')
       await handleRunConversationalAnalytics(effectivePrompt, messagesWithUser, undefined, convId)
+      clearInFlightConvId()
       return
     }
 
@@ -678,6 +688,19 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         },
         onInteractionCreated: (id) => {
           latestTurnInteractionRef.current = { convId, id }
+          const updatedInFlightEntry: UserConversationEntry = {
+            ...(conversationsRef.current.find((c) => c.id === convId) || inFlightEntry),
+            interactionId: id,
+            environmentId: sharedEnvIdRef.current || currentSession.environmentId,
+            messages: stripMessagesForStorage(messagesWithUser),
+            updatedAt: new Date().toISOString(),
+          }
+          setConversations((prev) => [updatedInFlightEntry, ...prev.filter((c) => c.id !== convId)], {
+            optimisticEntry: updatedInFlightEntry,
+          })
+          if (userId) {
+            void saveUserConversation(core40SDK, userId, updatedInFlightEntry, getArtifactNamespace(extensionSDK)).catch(() => {})
+          }
         },
         signal: abortController.signal, onStatus: setBusyStatus,
       })
@@ -1095,6 +1118,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           dismissPendingPerm('deny')
         }
         setBusyStatus(null)
+        clearInFlightConvId()
         const nextSteps = Array.isArray(mockExt?.initialLiveActivitySteps)
           ? (mockExt.initialLiveActivitySteps as AntigravityActivityStep[])
           : []

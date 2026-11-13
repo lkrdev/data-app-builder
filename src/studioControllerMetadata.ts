@@ -586,7 +586,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     isUseCaseLocked, handleChangeUseCase,
     agentSession, messages,
     catalogItems, activeObjectId, setActiveObjectId,
-    conversations, setConversations, conversationLabelsRef,
+    conversations, conversationsRef, setConversations, conversationLabelsRef,
     savedScripts, setSavedScripts,
     healthScope, setHealthScope,
   }

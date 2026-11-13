@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   AntigravityActivityStep, AntigravityAuth, cleanLookmlProjectId, generateConversationLabel, LkrCodeMode,
-  PastedImage, runAntigravityTurn,
+  PastedImage, recoverInFlightInteraction, runAntigravityTurn,
 } from './antigravity'
 import { ChatMessage, StudioMode } from './components/App'
 import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
@@ -13,16 +13,16 @@ import {
 import type { LkrCodeModeRunOptions } from './lkrCliBridge'
 import {
   type AlertInspectorBundle,
-  archiveUserConversation, CaConversationState, ConversationRecord,
+  archiveUserConversation, CaConversationState, clearInFlightConvId, compactPersistedChatTurn, ConversationRecord,
   createLookerCaConversation, deleteUserConversation, extractExploreIdsFromCode,
   formatExploreId, getArtifactNamespace, getConvTargetId, hydrateConversationContentItems,
   isLookmlTargetAlreadyLoaded, listSavedScripts, loadAlertArtifact, loadExistingDashboardApp, loadNativeContentById,
-  loadObjectArtifact, loadScriptArtifact, NativeContentState, normalizeStudioContentItem, PublishedAppState,
-  publishScriptDashboard, resolveCaEmbedPath, ResolvedStudioUseCase, SavedScript,
+  loadObjectArtifact, loadScriptArtifact, NativeContentState, normalizeNativeContent, normalizeStudioContentItem, PublishedAppState,
+  publishScriptDashboard, readInFlightConvId, resolveCaEmbedPath, ResolvedStudioUseCase, SavedScript,
   saveScriptArtifact, saveUserArtifact, saveUserConversation,
   selectCaAgentViaIsolatedSubagent, STUDIO_OVERVIEW_TAB_KEY, StudioContentItem, StudioContentItemType,
   studioModeToUseCase, StudioToolMode, StudioUseCase, studioUseCaseToMode,
-  toTurnCrudItem, upsertStudioContentItem,
+  toTurnCrudItem, upsertStudioContentItem, UserConversationEntry,
 } from './lookerApi'
 import { loadLookmlSessionArtifact, LookmlBundle } from './lookmlTool'
 import { getErrorMessage, normalizeCatalogMode, StudioAuthAndPrefs } from './studioControllerAuth'
@@ -46,8 +46,8 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     authMode, oauthToken, clientId, projectId, apiKey, selectedModel,
     thinkingLevel, maxTotalTokens, maxToolRounds, isConfigured, disabledModes,
     resolvedUseCaseByIdRef, parsedRoute, setSelectedUseCase, explicitUseCaseRef,
-    sharedEnvIdRef, syncSharedEnvironmentId, setAgentSession, setMessages, setBusyStatus,
-    resetOAuthOnUnauthorized, setSidebarCollapsed,
+    sharedEnvIdRef, syncSharedEnvironmentId, setAgentSession, setMessages, busyStatus, setBusyStatus,
+    triggerSilentOAuthRefresh, resetOAuthOnUnauthorized, setSidebarCollapsed,
   } = auth
   const {
     userId, userIdRef, availableLookmlProjects, selectedExplores, setSelectedExplores,
@@ -223,6 +223,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     setActiveConversationIdState(resolved)
   }, [])
   const hydratedConvRouteRef = useRef<string>('')
+  const recoveredInFlightIdsRef = useRef<Set<string>>(new Set())
   const activityStepsByInteractionIdRef = useRef<Record<string, AntigravityActivityStep[]>>({})
   const mergeCachedActivitySteps = useCallback((msgs: ChatMessage[]): ChatMessage[] =>
     msgs.map((m) =>
@@ -928,6 +929,16 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
 
   useEffect(() => {
     if (isTileMount || location.pathname === '/config' || parsedRoute.isLegacyRoute || disabledModes.includes(activeMode)) return
+    if (location.pathname === '/' && !parsedRoute.conversationId && !parsedRoute.objectId && !busyStatus && messages.length === 0) {
+      const interruptedConvId = readInFlightConvId()
+      if (interruptedConvId) {
+        const interruptedConv = conversations.find((c) => c.id === interruptedConvId)
+        if (interruptedConv && interruptedConv.messages?.[interruptedConv.messages.length - 1]?.role === 'user') {
+          history.replace(`/c/${encodeURIComponent(interruptedConv.id)}`)
+          return
+        }
+      }
+    }
     const routeConvId = parsedRoute.conversationId
     const id = parsedRoute.objectId
     const convMatch = conversations.find((c) => c.id === routeConvId || c.id === id)
@@ -937,7 +948,12 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     if (!id) return
     if (convMatch) {
       const hydrationKey = `${location.pathname}:${convMatch.id}`
-      const isOptimisticInFlight = !convMatch.interactionId && messages.length > 0
+      const isTurnInFlightInTab =
+        (Boolean(busyStatus) && !mockExt?.initialBusyStatus && messages.length > 0) ||
+        (activeConversationIdRef.current === convMatch.id &&
+          messages.length > 0 &&
+          messages[messages.length - 1]?.role === 'user')
+      const isOptimisticInFlight = (!convMatch.interactionId && messages.length > 0) || isTurnInFlightInTab
       if (hydratedConvRouteRef.current !== hydrationKey && !isOptimisticInFlight) {
         hydratedConvRouteRef.current = hydrationKey
         const initialItems = hydrateConversationContentItems(convMatch)
@@ -959,6 +975,51 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
             },
             mode
           )
+        }
+        if (
+          convMatch.messages?.length &&
+          convMatch.messages[convMatch.messages.length - 1]?.role === 'user' &&
+          convMatch.interactionId &&
+          !recoveredInFlightIdsRef.current.has(convMatch.interactionId)
+        ) {
+          recoveredInFlightIdsRef.current.add(convMatch.interactionId)
+          setBusyStatus('Resuming in-flight turn...')
+          void recoverInFlightInteraction({
+            extensionSDK,
+            auth: { mode: authMode, oauthToken, clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true) },
+            interactionId: convMatch.interactionId,
+          })
+            .then((recovered) => {
+              if (!recovered) return
+              if (recovered.activitySteps.length) {
+                activityStepsByInteractionIdRef.current[recovered.interactionId] = recovered.activitySteps
+              }
+              const assistantMsg: ChatMessage = {
+                role: 'assistant',
+                text: recovered.text || 'Completed.',
+                interactionId: recovered.interactionId,
+                ...(recovered.activitySteps.length ? { activitySteps: recovered.activitySteps } : {}),
+              }
+              const nextMsgs = [...(convMatch.messages as ChatMessage[]), assistantMsg]
+              setMessages(mergeCachedActivitySteps(nextMsgs))
+              if (recovered.nativeContent) setNativeContent(normalizeNativeContent(recovered.nativeContent), { source: 'created', createdInConversation: true })
+              if (recovered.lookmlBundle) setLookmlBundle(recovered.lookmlBundle)
+              const updatedConv: UserConversationEntry = {
+                ...convMatch,
+                interactionId: recovered.interactionId,
+                messages: nextMsgs.map((m) => compactPersistedChatTurn(m, true)),
+                updatedAt: new Date().toISOString(),
+              }
+              setConversations((prev) => [updatedConv, ...prev.filter((c) => c.id !== convMatch.id)], { optimisticEntry: null })
+              if (userIdRef.current || userId) {
+                void saveUserConversation(core40SDK, userIdRef.current || userId, updatedConv, getArtifactNamespace(extensionSDK)).catch(() => {})
+              }
+            })
+            .catch(() => {})
+            .finally(() => {
+              setBusyStatus(null)
+              clearInFlightConvId()
+            })
         }
       }
     }
@@ -1004,15 +1065,18 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     isTileMount, location.pathname, activeMode, disabledModes, parsedRoute.conversationId, parsedRoute.isLegacyRoute,
     parsedRoute.objectId, parsedRoute.useCase, inferredRouteUseCase, isCaMode, publishedApp?.dashboardId,
     nativeContent?.id, lookmlBundle?.id, lookmlBundle?.project_id, healthReport?.id, caConversation?.caConversationId, loadedScript, scriptId,
-    openArtifactByMode, conversations, catalogItems, messages.length, activeConversationId, activeObjectId,
-    agentSession.lastInteractionId, mergeCachedActivitySteps, setActiveContentTabKey,
-    setActiveConversationId, setAgentSession, setContentItems, setMessages, setSelectedExplores, sharedEnvIdRef,
+    openArtifactByMode, conversations, catalogItems, messages, busyStatus, mockExt?.initialBusyStatus, activeConversationId, activeObjectId,
+    agentSession.lastInteractionId, apiKey, authMode, clientId, core40SDK, extensionSDK, history, mergeCachedActivitySteps,
+    oauthToken, projectId, setActiveContentTabKey, setActiveConversationId, setAgentSession, setBusyStatus,
+    setContentItems, setConversations, setLookmlBundle, setMessages, setNativeContent, setSelectedExplores,
+    sharedEnvIdRef, triggerSilentOAuthRefresh, userId, userIdRef,
   ])
 
   const handleResetNewApp = useCallback(
     (_resetToDefaultRoute?: boolean | React.MouseEvent, presetUseCase?: StudioUseCase) => {
       const nextUseCase: StudioUseCase = typeof presetUseCase === 'string' && presetUseCase ? presetUseCase : 'auto'
       const freshConvId = `conv_${Date.now()}`
+      clearInFlightConvId()
       hydratedConvRouteRef.current = ''
       if (location.pathname !== '/') history.replace('/')
       lastPublishedIdRef.current = ''
