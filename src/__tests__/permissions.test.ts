@@ -42,7 +42,7 @@ import {
   STUDIO_MAX_TOOL_ROUNDS_OPTIONS, STUDIO_MAX_TOTAL_TOKENS_OPTIONS, STUDIO_OAUTH_REFRESH_INTERVAL_MS,
   STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY, STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY,
   STUDIO_SLASH_SKILLS, STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY, StudioAttachedFile,
-  summarizeProgress, wrapDashboardCodeMode,
+  summarizeProgress, wrapDashboardCodeMode, wrapKdaCodeMode,
   copyTextWithExtensionSdk, fetchConversationSandboxDebugMarkdown, formatConversationThreadMarkdown,
 } from '../antigravity'
 import {
@@ -10686,5 +10686,240 @@ customElements.define('good-compare-app', GoodCompareApp);`
     ).rejects.toThrow('boom')
     expect(isInsideCodeModeApiScope()).toBe(false)
     expect(getActiveCodeModeConversationId()).toBe('')
+  })
+
+  test('82. Issue #197: pre-injects INVESTIGATION_ANCHOR_DATE & globals()/locals() in LkrCodeMode, preloads kda_toolkit.py & uploaded_files in run_looker_codemode, auto-normalizes positional create*Col in BUNDLE_APP_PY, auto-continues failed bundle_app.py runs, and links published Data App dashboards', async () => {
+    // 1. LkrCodeMode.runPythonCode supports globals().get("INVESTIGATION_ANCHOR_DATE") and locals() without NameError
+    const anchorOut = JSON.parse(
+      await LkrCodeMode.runPythonCode({
+        code: 'return {"anchor": globals().get("INVESTIGATION_ANCHOR_DATE"), "local_custom": locals().get("custom_var")}',
+        vars: { custom_var: 'ok_197', 'from': 'ignored_keyword' },
+        requestHandler: async () => ({}),
+      })
+    )
+    expect(anchorOut.anchor).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(anchorOut.local_custom).toBe('ok_197')
+
+    // 2. wrapKdaCodeMode injects KDA_TOOLKIT_PY when forceInclude is true or resolve_source(...) is called, and resolve_source accepts {"dashboard_id": "..."}
+    const wrappedByForce = wrapKdaCodeMode('x = 1', true)
+    expect(wrappedByForce).toContain('def resolve_source(')
+    const wrappedByCall = wrapKdaCodeMode('res = resolve_source({"dashboard_id": "thelook::business_pulse"})', false)
+    expect(wrappedByCall).toContain('def resolve_source(')
+    expect(wrapKdaCodeMode('x = 1', false)).toBe('x = 1')
+
+    const kdaResolveOut = JSON.parse(
+      await LkrCodeMode.runPythonCode({
+        code: wrapKdaCodeMode('return resolve_source({"dashboard_id": "thelook::business_pulse"})', true),
+        requestHandler: async (_m, p) => {
+          if (p.includes('/dashboards/')) {
+            return {
+              id: 'thelook::business_pulse',
+              title: 'Business Pulse',
+              dashboard_elements: [
+                {
+                  id: 'el_1',
+                  title: 'Total Sales',
+                  query: {
+                    model: 'thelook',
+                    view: 'order_items',
+                    fields: ['order_items.created_date', 'order_items.total_sale_price'],
+                    filters: { 'order_items.created_date': '2026-10-01 to 2026-10-31' },
+                  },
+                },
+              ],
+            }
+          }
+          return {}
+        },
+      })
+    )
+    expect(kdaResolveOut).toMatchObject({
+      type: 'dashboard',
+      id: 'thelook::business_pulse',
+      targets: [
+        expect.objectContaining({
+          model: 'thelook',
+          explore: 'order_items',
+        }),
+      ],
+    })
+
+    // 3. DATA_APP_GUIDE_MD documents { field, headerName, width } for all create*Col helpers and BUNDLE_APP_PY auto-normalizes positional create*Col calls
+    expect(DATA_APP_GUIDE_MD).toContain('createCurrencyCol({ field, headerName, width })')
+    expect(DATA_APP_GUIDE_MD).toContain('never positional string arguments')
+
+    const repoRoot = path.resolve(__dirname, '../..')
+    const workDir = mkdtempSync(path.join(tmpdir(), 'dab-197-test-'))
+    try {
+      const bundlePyPath = path.join(workDir, 'bundle_app.py')
+      writeFileSync(
+        bundlePyPath,
+        BUNDLE_APP_PY.replace('Path("/workspace/bundle.json")', `Path(${JSON.stringify(path.join(workDir, 'bundle.json'))})`),
+        'utf8'
+      )
+      const env = { ...process.env, TOOLKIT_DIR: path.join(repoRoot, 'upstream/payload') }
+      const posAppPath = path.join(workDir, 'pos_app.js')
+      const posAppSrc = [
+        "import { DataApp, html, createTextCol, createCurrencyCol, createNumericCol } from '/runtime/data-app.js';",
+        'export class PosApp extends DataApp {',
+        "  constructor() { super(); this.lookerModel = 'thelook'; this.explore = 'order_items'; }",
+        '  render() {',
+        "    const cols = [createTextCol('order_items.created_date', 'Date', { width: 120 }), createCurrencyCol('order_items.total_sale_price', 'Total Sales'), createNumericCol('order_items.order_count', 'Orders')];",
+        "    return html`<app-grid .columns=${cols} .query=${{ model: 'thelook', view: 'order_items', fields: ['order_items.created_date', 'order_items.total_sale_price', 'order_items.order_count'] }}></app-grid>`;",
+        '  }',
+        '}',
+        "customElements.define('pos-app', PosApp);",
+      ].join('\n')
+      const stdout = execFileSync('python3', [bundlePyPath, '--stdin', 'Halloween Sales KDA', posAppPath], {
+        input: posAppSrc,
+        env,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      })
+      expect(stdout).toContain('<DATA_APP_BUNDLE>')
+      const healedDisk = readFileSync(posAppPath, 'utf8')
+      expect(healedDisk).toContain("createCurrencyCol({ field: 'order_items.total_sale_price', headerName: 'Total Sales' })")
+      expect(healedDisk).toContain("createTextCol({ field: 'order_items.created_date', headerName: 'Date', width: 120 })")
+    } finally {
+      rmSync(workDir, { recursive: true, force: true })
+    }
+
+    // 4. isNewProjectOnboardingIntakePrompt recognizes attached .sql files as satisfying hasTarget
+    expect(
+      isNewProjectOnboardingIntakePrompt(
+        'Create a new LookML project called orders_proj on connection bigquery_conn',
+        [],
+        [{ data: '', mimeType: 'text/plain', dataUrl: '', name: 'orders.sql', textContent: 'SELECT id FROM t' }]
+      )
+    ).toBe(false)
+
+    // 5. runAntigravityTurn: inline schemaMarkdown when selectedExplores=[], KDA_SKILL_MD + wrapKdaCodeMode + uploaded_files in run_looker_codemode, and auto-continue when bundle_app.py fails without <DATA_APP_BUNDLE>
+    const postedBodies: Array<Record<string, unknown>> = []
+    let turnStep = 0
+    const turnRes = await runAntigravityTurn({
+      sdk: {
+        authSession: {
+          transport: {
+            rawRequest: async () => ({
+              ok: true,
+              statusCode: 200,
+              body: JSON.stringify({
+                id: 'thelook::business_pulse',
+                title: 'Business Pulse',
+                dashboard_elements: [
+                  {
+                    id: '1',
+                    title: 'Sales',
+                    query: { model: 'thelook', view: 'order_items', fields: ['order_items.total_sale_price'] },
+                  },
+                ],
+              }),
+            }),
+          },
+        },
+      } as unknown as Looker40SDK,
+      userId: '1',
+      extensionSDK: {
+        serverProxy: async (_url: string, init?: FetchCustomParameters) => {
+          turnStep += 1
+          const parsedBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {}
+          postedBodies.push(parsedBody)
+          if (turnStep === 1) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_197_1',
+                environment_id: 'env_197',
+                status: 'requires_action',
+                steps: [
+                  {
+                    id: 'call_kda_197',
+                    type: 'function_call',
+                    name: 'run_looker_codemode',
+                    arguments: JSON.stringify({
+                      code: 'return {"src": resolve_source({"dashboard_id": "thelook::business_pulse"}), "sql": uploaded_files.get("halloween.sql")}',
+                    }),
+                  },
+                ],
+              }),
+            }
+          }
+          if (turnStep === 2) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_197_2',
+                environment_id: 'env_197',
+                status: 'completed',
+                steps: [
+                  {
+                    id: 'exec_fail_197',
+                    type: 'code_execution',
+                    code: 'python3 /workspace/bundle_app.py --app-dir /workspace/apps/conv_197 --stdin "Halloween KDA"',
+                    stderr: 'ERROR: [grid-column-field]',
+                  },
+                ],
+                output_text: 'Attempted to bundle Halloween KDA app.',
+              }),
+            }
+          }
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_197_3',
+              environment_id: 'env_197',
+              status: 'completed',
+              steps: [
+                {
+                  id: 'exec_ok_197',
+                  type: 'code_execution',
+                  code: 'python3 /workspace/bundle_app.py --app-dir /workspace/apps/conv_197 --stdin "Halloween KDA"',
+                  stdout:
+                    '<DATA_APP_BUNDLE>{"title":"Halloween KDA","bundle_js":"export default class {}","raw_code":"export default class {}","widgets":[]}</DATA_APP_BUNDLE>',
+                },
+              ],
+              output_text: 'Published Halloween KDA narrative app.',
+            }),
+          }
+        },
+      },
+      auth: { mode: 'apikey', apiKey: 'test-key', oauthToken: '', clientId: '', projectId: '' },
+      session: { conversationId: 'conv_197' },
+      selectedExplores: [],
+      schemaMarkdown: '# Available Looker Explores Catalog\n## Model: TheLook (`thelook`)\n- `thelook::order_items` (Order Items)',
+      userPrompt: '/key-driver-analysis explain halloween sales drop',
+      images: [{ data: '', mimeType: 'text/plain', dataUrl: '', name: 'halloween.sql', textContent: 'SELECT * FROM sales_oct31' }],
+      requirePermission: false,
+      onStatus: () => {},
+    })
+
+    const firstInputText = String(((postedBodies[0]?.input as Array<{ text?: string }>) || [])[0]?.text || '')
+    expect(firstInputText).toContain('## Model: TheLook (`thelook`)')
+    expect(firstInputText).toContain('IMPORTANT: All kda_toolkit.py helpers')
+    expect(firstInputText).toContain('SELECT * FROM sales_oct31')
+    expect(firstInputText).toContain('uploaded_files["halloween.sql"]')
+
+    const fnResultInput = ((postedBodies[1]?.input as Array<{ result?: Record<string, unknown> }>) || [])[0]?.result
+    expect(fnResultInput).toMatchObject({
+      src: expect.objectContaining({
+        type: 'dashboard',
+        id: 'thelook::business_pulse',
+        targets: [expect.objectContaining({ model: 'thelook', explore: 'order_items' })],
+      }),
+      sql: 'SELECT * FROM sales_oct31',
+    })
+
+    const recoveryText = String(((postedBodies[2]?.input as Array<{ text?: string }>) || [])[0]?.text || '')
+    expect(recoveryText).toContain('Your previous bundle_app.py run failed validation and did not emit <DATA_APP_BUNDLE>')
+    expect(turnRes.bundle?.title).toBe('Halloween KDA')
+
+    // 6. Verify studioControllerTurn.ts guards prewarm until metadata loads, hydrates raw Looker URLs, and appends Looker Dashboard link
+    const turnTs = readFileSync(path.join(repoRoot, 'src/studioControllerTurn.ts'), 'utf8')
+    expect(turnTs).toContain('if (loadingMetadata && models.length === 0 && selectedExplores.length === 0) return')
+    expect(turnTs).toContain('/(?:https?:\\/\\/[^\\s/]+)?\\/(dashboards|looks|explore)\\/([^\\s?#)]+)/gi')
+    expect(turnTs).toContain('**Looker Dashboard:** [Open ${publishedDataAppDashboardLink.title}](${publishedDataAppDashboardLink.path})')
   })
 })

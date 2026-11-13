@@ -18,6 +18,7 @@ import {
   LOOKER_FIELD_PROFILER_SKILL_MD,
   LOOKER_PROJECT_ONBOARDING_SKILL_MD,
   wrapDashboardCodeMode,
+  wrapKdaCodeMode,
 } from './antigravityPrompts'
 import { sanitizeConversationLabel } from './antigravityStarters'
 import {
@@ -302,15 +303,22 @@ export interface AntigravityTurnResult {
 
 export function isNewProjectOnboardingIntakePrompt(
   userPrompt?: string,
-  priorMessages?: ReadonlyArray<{ role: string; text: string }>
+  priorMessages?: ReadonlyArray<{ role: string; text: string }>,
+  attachedFiles?: ReadonlyArray<PastedImage>
 ): boolean {
   const clean = String(userPrompt || '').trim()
   if (/(?:^|\s)\/(?!looker-project-onboarding\b)[a-z0-9_-]+/i.test(clean)) return false
   if (!/(?:\b(?:create|onboard|scaffold|set\s*up|start|initialize|init)\b[\s\S]{0,30}\b(?:new\s+)?(?:looker\s+|lookml\s+)?project\b|\bnew\s+(?:looker\s+|lookml\s+)project\b|\/looker-project-onboarding\b)/i.test(clean)) return false
-  const combined = [...(priorMessages || []).map((m) => String(m.text || '')), clean].join('\n')
+  const combined = [
+    ...(priorMessages || []).map((m) => String(m.text || '')),
+    clean,
+    ...(attachedFiles || []).map((f) => `${f.name || ''}\n${f.textContent || ''}`),
+  ].join('\n')
   const hasConn = /\bconnection(?:\s+name)?\s*(?:is|=|:|\s)\s*[`"']?(?!(?:name|and|or|to|for|from|in|on|with|access|a|the)\b)[a-z][a-z0-9_-]{2,}|\b[a-z][a-z0-9_-]*(?:\s+default)?\s+connection\b/i.test(combined)
   const hasProj = /\b(?:called|call\s+it|named?|project(?:_id|_name|\s+name)?)\s*(?:is|=|:|\s)\s*[`"']?(?!(?:name|called|named|and|or|to|for|from|in|on|with|a|the)\b)[a-z][a-z0-9_]{2,}/i.test(combined)
-  const hasTarget = /\b(?:schema|dataset|tables?)\s*(?:is|=|:|\s)\s*[`"']?(?!(?:name|or|and|to|for|from|in|on|with|access|do|you|a|the)\b)[a-z][a-z0-9_.-]{2,}|\bselect\b[\s\S]+\bfrom\b/i.test(combined)
+  const hasTarget =
+    (attachedFiles || []).some((f) => /\.sql$/i.test(String(f.name || ''))) ||
+    /\b(?:schema|dataset|tables?)\s*(?:is|=|:|\s)\s*[`"']?(?!(?:name|or|and|to|for|from|in|on|with|access|do|you|a|the)\b)[a-z][a-z0-9_.-]{2,}|\bselect\b[\s\S]+\bfrom\b/i.test(combined)
   return !(hasConn && hasProj && hasTarget)
 }
 
@@ -394,7 +402,7 @@ dims = [d["name"] for d in (exp.get("fields", {}).get("dimensions") or [])]
 meas = [x["name"] for x in (exp.get("fields", {}).get("measures") or [])]
 sample = run_inline_query("json", {"model": m, "view": e, "fields": dims[:2] + meas[:2], "limit": "5"})
 return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample": sample}
-\`\`\``
+\`\`\`${schemaMarkdown.includes('## Model:') ? `\n\n${schemaMarkdown}` : ''}`
 
   const ctorHint =
     selectedExplores.length === 1
@@ -413,9 +421,16 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
   const isDataInvestigatorTurn =
     useCase === 'data-investigator' || (useCase === 'auto' && extractResolvedUseCase('', userPrompt, allowedModes) === 'data-investigator')
+  const isKdaSkillActive =
+    isDataInvestigatorTurn ||
+    /(?:^|\s)\/key-driver-analysis(?=\s|$)/i.test(userPrompt) ||
+    (activatedLookmlSkills || []).includes('key-driver-analysis')
+  const kdaGuideSuffix = isKdaSkillActive
+    ? `\n\n${KDA_SKILL_MD}\n\nIMPORTANT: All kda_toolkit.py helpers (resolve_source, inspect_explore_for_kda, analyze_target, run_kda, drill_top_driver, print_kda_summary) are pre-loaded directly inside run_looker_codemode! Call resolve_source({"dashboard_id": "..."}) + inspect_explore_for_kda(m, e) + analyze_target(...) in ONE run_looker_codemode call instead of manually looping over dashboard elements.`
+    : ''
 
   const dataAppOrNativeGuide =
-    mode === 'dashboard'
+    (mode === 'dashboard'
       ? buildNativeContentGuide({ selectedExplores, primaryModel, primaryExplore, folderId: folderId || '1', lookmlProjectId: lookmlProjectId || '', existingNativeContent: normalizedExistingNative })
       : [
           `You are building a Looker ${isDataInvestigatorTurn ? 'Data Investigator Narrative Data App' : 'Data App'} (Lit web component using Looker's data-app.js runtime) ${exploreDirective}`,
@@ -427,10 +442,10 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           step3Directive,
           `4. If bundle_app.py reports any syntax or tile safety violation, fix ${appFilePath} and re-run \`python3 /workspace/bundle_app.py ${appFilePath} "<App Title>"\` until it exits 0.`,
           `5. CRITICAL: bundle_app.py prints \`<DATA_APP_BUNDLE>...</DATA_APP_BUNDLE>\` directly to stdout, which the host captures automatically from tool output. NEVER echo or repeat \`<DATA_APP_BUNDLE>\` or raw JavaScript code in your final text reply—respond with a concise 1–2 sentence summary only.`,
-        ].join('\n')
+        ].join('\n')) + kdaGuideSuffix
 
   const isLookmlOnboardingIntake =
-    !isNoOpTurn && effectiveLookmlIntent && !lookmlProjectId?.trim() && isNewProjectOnboardingIntakePrompt(userPrompt, priorMessages)
+    !isNoOpTurn && effectiveLookmlIntent && !lookmlProjectId?.trim() && isNewProjectOnboardingIntakePrompt(userPrompt, priorMessages, images)
   const isLookmlSchemaDiscovery =
     !isNoOpTurn && !isLookmlOnboardingIntake && effectiveLookmlIntent && isConnectionSchemaDiscoveryPrompt(userPrompt)
   const isToollessTurn = isLookmlOnboardingIntake || isNoOpTurn
@@ -457,13 +472,22 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
   const uploadSources: Array<{ type: 'inline'; content: string; target: string }> = []
   const uploadedFileNotices: string[] = []
+  const uploadedFilesMap: Record<string, string> = {}
   for (let i = 0; i < (images || []).length; i += 1) {
     const file = images![i]
     const fallbackExt = file.mimeType.startsWith('image/') ? `.${file.mimeType.split('/')[1] || 'png'}` : file.mimeType === 'application/pdf' ? '.pdf' : '.txt'
     const safeName = (file.name || `attachment_${i + 1}${fallbackExt}`).replace(/[^a-zA-Z0-9._-]+/g, '_')
     const targetPath = `/workspace/uploads/${safeName}`
     uploadSources.push({ type: 'inline', target: targetPath, content: file.textContent !== undefined ? file.textContent : file.dataUrl || file.data })
-    uploadedFileNotices.push(`- \`${targetPath}\` (${file.mimeType}${file.size ? `, ${file.size} bytes` : ''})`)
+    if (file.textContent !== undefined) {
+      uploadedFilesMap[safeName] = file.textContent
+      uploadedFilesMap[targetPath] = file.textContent
+      uploadedFileNotices.push(
+        `- \`${targetPath}\` (${file.mimeType}${file.size ? `, ${file.size} bytes` : ''}; also pre-loaded in \`run_looker_codemode\` as \`uploaded_files[${JSON.stringify(safeName)}]\` and \`uploaded_files[${JSON.stringify(targetPath)}]\`):\n\`\`\`\n${file.textContent.slice(0, 64000)}\n\`\`\``
+      )
+    } else {
+      uploadedFileNotices.push(`- \`${targetPath}\` (${file.mimeType}${file.size ? `, ${file.size} bytes` : ''})`)
+    }
   }
 
   // ponytail: omit { type: 'code_execution' } and blocking container boot on toolless intake / no-op turns
@@ -714,6 +738,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     target_explores: selectedExplores, target_model: primaryModel, target_explore: primaryExplore,
     target_folder_id: folderId || '1', target_project_id: lookmlProjectId || normalizedExistingNative?.projectId || '',
     cached_explore_schemas: getSharedEnvExploreSchemas(trackedEnvId),
+    ...(Object.keys(uploadedFilesMap).length > 0 ? { uploaded_files: uploadedFilesMap } : {}),
     ...(activeContentVars ? { active_content: activeContentVars, active_dashboard_state: activeContentVars } : {}),
   }
 
@@ -944,7 +969,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                       args.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
                         ? (args.vars as Record<string, unknown>)
                         : {}
-                    const rawCode = String(args.code || '')
+                    const rawCode = wrapKdaCodeMode(String(args.code || ''), isKdaSkillActive)
                     const needsDashboardMacros =
                       isDashboardMode ||
                       /\b(?:upsert_udd|upsert_lookml_dashboard|reflow_24col|pin_to_board|schedule_dashboard|emit_native_bundle)\b/.test(rawCode)
@@ -1201,6 +1226,10 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           : 2
 
       const requiresDataAppBundle = isDataAppBundleTurn()
+      const attemptedBundleApp =
+        (mode === 'data_app' || isDataInvestigatorTurn) &&
+        !isNoOpTurn &&
+        [...accumulatedSteps, ...(interaction.steps || [])].some((s) => JSON.stringify(s).includes('bundle_app.py'))
 
       if (
         !usedDirectStatelessModel &&
@@ -1208,14 +1237,19 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         !hasFinalBundle &&
         !bridgePermissionError &&
         incompleteRound < maxIncompleteRounds &&
-        ((interaction.status === 'incomplete' && !hasDirectModelOutput) || (requiresDataAppBundle && !wrapUpSent))
+        ((interaction.status === 'incomplete' && !hasDirectModelOutput) ||
+          (interaction.status === 'completed' && attemptedBundleApp) ||
+          (requiresDataAppBundle && !wrapUpSent))
       ) {
         incompleteRound += 1
         await throwIfAborted(interaction.id)
         onStatus('Resuming incomplete turn...')
-        const resumeText = requiresDataAppBundle
-          ? 'You have not emitted <DATA_APP_BUNDLE> yet. Write the complete self-contained Lit Data App to /workspace/apps/<app-name>/app.js (remember createTextCol/createNumericCol/createCurrencyCol/createPercentageCol/createBadgeCol take a single options object { field, headerName }) and run python3 /workspace/bundle_app.py --app-dir /workspace/apps/<app-name> --stdin "<App Title>" in bash until it exits 0 and emits <DATA_APP_BUNDLE>.'
-          : 'Continue and complete the current request.'
+        const resumeText =
+          interaction.status === 'completed' && attemptedBundleApp
+            ? `Your previous bundle_app.py run failed validation and did not emit <DATA_APP_BUNDLE>. Fix the reported error in your app.js (remember createTextCol/createNumericCol/createCurrencyCol/createPercentageCol/createBadgeCol take a single options object { field, headerName }) and re-run python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" until it exits 0.`
+            : requiresDataAppBundle
+            ? 'You have not emitted <DATA_APP_BUNDLE> yet. Write the complete self-contained Lit Data App to /workspace/apps/<app-name>/app.js (remember createTextCol/createNumericCol/createCurrencyCol/createPercentageCol/createBadgeCol take a single options object { field, headerName }) and run python3 /workspace/bundle_app.py --app-dir /workspace/apps/<app-name> --stdin "<App Title>" in bash until it exits 0 and emits <DATA_APP_BUNDLE>.'
+            : 'Continue and complete the current request.'
         await postContinuation([{ type: 'text', text: resumeText }], requiresBashSandbox ? 'remote' : undefined, [], wrapUpSent ? [] : undefined)
         continue
       }
@@ -1575,6 +1609,7 @@ export function hydrateInteractionActivitySteps(opts: {
           !rawInput.includes('[LKR_EXTENSION_BRIDGE_RESULT]') &&
           !rawInput.includes('Continue and complete the current request.') &&
           !rawInput.includes('You have not emitted <DATA_APP_BUNDLE> yet.') &&
+          !rawInput.includes('Your previous bundle_app.py run failed') &&
           !rawInput.includes('Max Tool Rounds (') &&
           !fetched.input.some((it) => it && typeof it === 'object' && (it as { type?: string }).type === 'function_result')
         if (isFreshUserTurnRoot) return

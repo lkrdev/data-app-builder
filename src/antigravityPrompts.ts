@@ -607,7 +607,7 @@ Author a Lit Data App (\`apps/<name>/app.js\`) as a **Google Doc** (\`this.viewM
 export const DATA_APP_GUIDE_MD = `# Looker Lit Data Apps — Compact Sandbox Guide
 
 ## 1. ES Module Contract
-- \`import { DataApp, html, nothing, keyed, formatValue, formatAxisValue, escapeHtml, createNumericCol, createCurrencyCol, createPercentageCol, createBadgeCol } from '/runtime/data-app.js';\`
+- **Available exports from \`data-app.js\`**: \`LookerDataApp, DataApp, html, nothing, keyed, formatValue, formatAxisValue, escapeHtml, createTextCol({ field, headerName, width }), createNumericCol({ field, headerName, width }), createCurrencyCol({ field, headerName, width }), createPercentageCol({ field, headerName, width }), createBadgeCol({ field, headerName, width, badgeMap })\` from \`'/runtime/data-app.js'\` (Note: every \`create*Col({...})\` helper takes a single options object \`{ field: 'view.field', headerName: 'Label' }\` — never positional string arguments).
 - No TS decorators. Use \`static properties\`, \`customElements.define(tag, Cls)\`, \`this.lookerModel\` & \`this.explore\` in \`constructor()\`, and \`getEffectiveFilters(local = {}, { isTimeSeries = false } = {})\` spreading \`dashboardFilters\` & \`crossFilters\`.
 
 ## 2. Components (\`app-*\`) & Profiling
@@ -631,7 +631,7 @@ export const DATA_APP_GUIDE_MD = `# Looker Lit Data Apps — Compact Sandbox Gui
 
 export const BUNDLE_APP_PY = `#!/usr/bin/env python3
 """Self-contained sandbox verifier, widget query extractor, and bundler for Looker Data Apps."""
-import base64, json, os, sys, zlib
+import base64, json, os, re, sys, zlib
 from pathlib import Path
 
 TOOLKIT_DIR = Path(os.environ.get("TOOLKIT_DIR", "/workspace/toolkit"))
@@ -642,6 +642,15 @@ exec(zlib.decompress(base64.b64decode(_CORE_B64)).decode("utf-8"), globals())
 def ensure_toolkit() -> str:
     vf = TOOLKIT_DIR / "VERSION"
     return vf.read_text(encoding="utf-8").strip() if vf.is_file() and vf.read_text(encoding="utf-8").strip() else DEFAULT_VERSION
+
+def normalize_positional_grid_cols(code_str: str) -> str:
+    w = "[" + chr(9) + chr(10) + chr(13) + " ]*"
+    q = "['" + chr(34) + "]"
+    nq = "[^'" + chr(34) + "]+"
+    p3 = re.compile("create(Text|Numeric|Currency|Percentage|Badge)Col" + w + "[(]" + w + q + "(" + nq + ")" + q + w + "," + w + q + "(" + nq + ")" + q + w + "," + w + "[{" + w)
+    p2 = re.compile("create(Text|Numeric|Currency|Percentage|Badge)Col" + w + "[(]" + w + q + "(" + nq + ")" + q + w + "," + w + q + "(" + nq + ")" + q + w + "(?:," + w + ")?[)]")
+    out = p3.sub(lambda m: f"create{m.group(1)}Col({{ field: '{m.group(2)}', headerName: '{m.group(3)}', ", code_str)
+    return p2.sub(lambda m: f"create{m.group(1)}Col({{ field: '{m.group(2)}', headerName: '{m.group(3)}' }})", out)
 
 def main():
     raw_args = sys.argv[1:]
@@ -676,6 +685,8 @@ def main():
         if not app_path.is_file():
             sys.exit(f"error: {app_path} does not exist")
 
+    norm_src = normalize_positional_grid_cols(app_path.read_text(encoding="utf-8"))
+    app_path.write_text(norm_src, encoding="utf-8")
     version = ensure_toolkit()
     syn = check_syntax(app_path)
     if not syn.get("ok"):
@@ -960,6 +971,17 @@ def _is_time_field(field_name):
 
 def resolve_source(target):
     """Resolve an Explore URL/query_id/slug, Look URL/id, Dashboard URL/id, or Conversation URL/id into normalized KDA targets."""
+    if isinstance(target, dict):
+        if target.get("dashboard_id") or target.get("dashboard"):
+            target = f"/dashboards/{target.get('dashboard_id') or target.get('dashboard')}"
+        elif target.get("look_id") or target.get("look"):
+            target = f"/looks/{target.get('look_id') or target.get('look')}"
+        elif target.get("conversation_id") or target.get("conversation"):
+            target = f"/conversations/{target.get('conversation_id') or target.get('conversation')}"
+        elif target.get("model") and target.get("explore"):
+            target = f"/explore/{target['model']}/{target['explore']}"
+        else:
+            target = target.get("url") or target.get("id") or target.get("slug") or target.get("query_id") or ""
     s = str(target).strip()
     url_params = {}
     if "?" in s:
@@ -1450,6 +1472,18 @@ def print_kda_summary(out):
                         print(f"  Q{q_idx + 1}|{q_txt}")
 
 `
+
+export function wrapKdaCodeMode(code: string, forceInclude = false): string {
+  const raw = String(code || '')
+  if (
+    !/\bdef\s+resolve_source\b/.test(raw) &&
+    (forceInclude ||
+      /\b(?:resolve_source|inspect_explore_for_kda|analyze_target|run_kda|drill_top_driver|print_kda_summary|decompose_measure)\s*\(/.test(raw))
+  ) {
+    return `${KDA_TOOLKIT_PY}\n${raw}`
+  }
+  return raw
+}
 
 export const LOOKER_DASHBOARD_SKILL_MD = `---
 name: looker-dashboard

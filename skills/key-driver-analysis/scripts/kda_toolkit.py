@@ -10,6 +10,17 @@ def _is_time_field(field_name):
 
 def resolve_source(target):
     """Resolve an Explore URL/query_id/slug, Look URL/id, Dashboard URL/id, or Conversation URL/id into normalized KDA targets."""
+    if isinstance(target, dict):
+        if target.get("dashboard_id") or target.get("dashboard"):
+            target = f"/dashboards/{target.get('dashboard_id') or target.get('dashboard')}"
+        elif target.get("look_id") or target.get("look"):
+            target = f"/looks/{target.get('look_id') or target.get('look')}"
+        elif target.get("conversation_id") or target.get("conversation"):
+            target = f"/conversations/{target.get('conversation_id') or target.get('conversation')}"
+        elif target.get("model") and target.get("explore"):
+            target = f"/explore/{target['model']}/{target['explore']}"
+        else:
+            target = target.get("url") or target.get("id") or target.get("slug") or target.get("query_id") or ""
     s = str(target).strip()
     url_params = {}
     if "?" in s:
