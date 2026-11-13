@@ -1369,16 +1369,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         ? 'data-investigator'
         : 'app'
       : inferredFromOutput
-  const cleanAssistantText = rawText
-    .replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '')
-    .replace(/<CA_AGENT_SELECTION>[\s\S]*?<\/CA_AGENT_SELECTION>/gi, '')
-    .replace(/<DATA_APP_BUNDLE>[\s\S]*?<\/DATA_APP_BUNDLE>/g, '')
-    .replace(/<NATIVE_CONTENT_BUNDLE>[\s\S]*?<\/NATIVE_CONTENT_BUNDLE>/g, '')
-    .replace(/<LOOKML_BUNDLE>[\s\S]*?<\/LOOKML_BUNDLE>/g, '')
-    .replace(/<ALERT_BUNDLE>[\s\S]*?<\/ALERT_BUNDLE>/g, '')
-    .replace(/<HEALTH_CHECK_TDD>[\s\S]*?<\/HEALTH_CHECK_TDD>/g, '')
-    .replace(/<LKR_EXTENSION_TOOL_REQUEST>[\s\S]*?<\/LKR_EXTENSION_TOOL_REQUEST>/g, '')
-    .trim()
+  const cleanAssistantText = stripControlTags(rawText)
 
   const telemetry = extractInteractionTelemetry(interaction, {
     agentWallMs: Date.now() - turnStartMs,
@@ -1655,6 +1646,59 @@ export function hydrateInteractionActivitySteps(opts: {
       status: 'done' as const,
     }))
   })
+}
+
+export type StudioBundlePayload = DataAppBundle
+export type LookerNativeContentBundle = NativeContentBundle
+export type LookmlSessionBundle = LookmlBundle
+
+const stripControlTags = (rawText: string): string =>
+  String(rawText || '')
+    .replace(/<(USE_CASE|CA_AGENT_SELECTION|DATA_APP_BUNDLE|NATIVE_CONTENT_BUNDLE|LOOKML_BUNDLE|ALERT_BUNDLE|HEALTH_CHECK_TDD|LKR_EXTENSION_TOOL_REQUEST)>[\s\S]*?<\/\1>/gi, '')
+    .trim()
+
+export async function recoverInFlightInteraction(opts: {
+  extensionSDK?: AntigravityExtensionHostLike
+  auth: AntigravityAuth
+  interactionId: string
+  maxPollAttempts?: number
+  pollIntervalMs?: number
+}): Promise<{
+  text: string
+  interactionId: string
+  status: string
+  activitySteps: AntigravityActivityStep[]
+  bundle: StudioBundlePayload | null
+  nativeContent: LookerNativeContentBundle | null
+  lookmlBundle: LookmlSessionBundle | null
+  tddMarkdown: string | null
+} | null> {
+  const { extensionSDK, auth, maxPollAttempts = 60, pollIntervalMs = 2000 } = opts
+  const cleanId = String(opts.interactionId || '').trim()
+  const canFetch = Boolean(auth && (auth.mode === 'apikey' ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy) : Boolean(auth.oauthToken?.trim())))
+  if (!cleanId || !canFetch) return null
+  let fetched = await callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(cleanId)}`, 'GET')
+  for (
+    let attempt = 0;
+    (fetched.status === 'in_progress' || fetched.status === 'queued' || fetched.status === 'processing') && attempt < maxPollAttempts;
+    attempt += 1
+  ) {
+    if (pollIntervalMs > 0) await new Promise((r) => setTimeout(r, pollIntervalMs))
+    fetched = await callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(cleanId)}`, 'GET')
+  }
+  return {
+    text: stripControlTags(extractInteractionOutputText(fetched)),
+    interactionId: fetched.id || cleanId,
+    status: String(fetched.status || 'completed'),
+    activitySteps: extractInteractionActivitySteps({ ...fetched, id: fetched.id || cleanId, status: 'completed' }).map((s) => ({
+      ...s,
+      status: 'done' as const,
+    })),
+    bundle: extractBundleFromInteraction(fetched),
+    nativeContent: extractNativeContentFromInteraction(fetched),
+    lookmlBundle: extractLookmlBundleFromInteraction(fetched),
+    tddMarkdown: extractTddFromInteraction(fetched),
+  }
 }
 
 const STATIC_SANDBOX_PATH_RE =

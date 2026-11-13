@@ -12,7 +12,7 @@ export {
   authenticateGoogleOAuth, computeIsAuthenticated, DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_MAX_TOTAL_TOKENS,
   DEFAULT_THINKING_LEVEL, loadStoredThinkingLevel, loadStoredThinkingLevelByModel, normalizeMaxToolRounds, normalizeMaxTotalTokens,
   normalizeThinkingLevel, normalizeThinkingLevelByModel, persistThinkingLevel, persistThinkingLevelByModel, readInitialThinkingLevel,
-  readInitialThinkingLevelByModel, refreshOAuthSessionIfNeeded, resolveLookerOAuthRedirectUri,
+  readInitialThinkingLevelByModel, recoverInFlightInteraction, refreshOAuthSessionIfNeeded, resolveLookerOAuthRedirectUri,
   resolveLookerOAuthRedirectUris, STUDIO_MAX_TOOL_ROUNDS_OPTIONS, STUDIO_MAX_TOTAL_TOKENS_OPTIONS,
   STUDIO_OAUTH_REFRESH_LOCK_KEY, STUDIO_OAUTH_STORAGE_KEY,
   STUDIO_THINKING_LEVEL_BY_MODEL_STORAGE_KEY, STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY,
@@ -23,7 +23,7 @@ export {
   normalizeBusySendAction, normalizeStudioThemeMode, persistSelectedFolderId,
   readInitialBusySendAction, readInitialSelectedFolderId, resolveStudioTheme,
   resolveSystemTheme, saveStoredBusySendAction, STUDIO_BUSY_SEND_ACTION_STORAGE_KEY,
-  STUDIO_FOLDER_STORAGE_KEY, STUDIO_THEME_STORAGE_KEY,
+  STUDIO_FOLDER_STORAGE_KEY, STUDIO_INFLIGHT_CONV_SESSION_KEY, STUDIO_THEME_STORAGE_KEY,
 } from './lookerApi'
 export type {
   ResolvedStudioTheme, StudioBusySendAction, StudioContextCategory,

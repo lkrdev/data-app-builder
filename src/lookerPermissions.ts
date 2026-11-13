@@ -98,6 +98,17 @@ export async function saveStoredBusySendAction(action: StudioBusySendAction, ext
   await setDualStorage(STUDIO_BUSY_SEND_ACTION_STORAGE_KEY, normalizeBusySendAction(action), extensionSDK)
 }
 
+export const STUDIO_INFLIGHT_CONV_SESSION_KEY = 'dab_inflight_conv_id'
+export function readInFlightConvId(): string | null {
+  try { return typeof window !== 'undefined' ? (window.sessionStorage?.getItem?.(STUDIO_INFLIGHT_CONV_SESSION_KEY) ?? null) : null } catch { return null }
+}
+export function saveInFlightConvId(convId: string): void {
+  try { if (typeof window !== 'undefined') window.sessionStorage?.setItem?.(STUDIO_INFLIGHT_CONV_SESSION_KEY, convId) } catch { /* ignore */ }
+}
+export function clearInFlightConvId(): void {
+  try { if (typeof window !== 'undefined') window.sessionStorage?.removeItem?.(STUDIO_INFLIGHT_CONV_SESSION_KEY) } catch { /* ignore */ }
+}
+
 export interface Looker404Diagnostic {
   kind: 'role_denied' | 'feature_disabled' | 'not_found'
   status: number
