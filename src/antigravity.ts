@@ -19,6 +19,7 @@ import {
   LOOKER_PROJECT_ONBOARDING_SKILL_MD,
   wrapDashboardCodeMode,
 } from './antigravityPrompts'
+import { sanitizeConversationLabel } from './antigravityStarters'
 import {
   BUILTIN_SKILLS_FILES,
   BUILTIN_WORKSPACE_FILES,
@@ -723,8 +724,13 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       const logs = st?.id ? endpointLogsByCallId.get(String(st.id)) : undefined
       return logs?.length ? ({ ...st, endpoint_logs: [...logs] } as AntigravityInteractionStep) : st
     })
+  const mergeSteps = (currSteps?: AntigravityInteractionStep[]): AntigravityInteractionStep[] => {
+    const s = currSteps || []
+    const last = accumulatedSteps[accumulatedSteps.length - 1]
+    return last?.type === 'function_result' && s[0]?.type === 'function_result' && last.call_id === s[0].call_id ? s.slice(1) : s
+  }
   const emitProgressSteps = (currInteraction: AntigravityInteractionPayload): AntigravityActivityStep[] => {
-    const rawCombined = accumulatedSteps.length > 0 ? [...accumulatedSteps, ...(currInteraction?.steps || [])] : currInteraction?.steps
+    const rawCombined = accumulatedSteps.length > 0 ? [...accumulatedSteps, ...mergeSteps(currInteraction?.steps)] : currInteraction?.steps
     const steps = extractInteractionActivitySteps({ ...currInteraction, steps: attachEndpointLogs(rawCombined) })
     if (steps.length > 0) onProgressSteps?.(steps)
     return steps
@@ -753,12 +759,19 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   activeInteractionsByEnv.set(envSlotKey, envConcurrencySlot + 1)
   const postContinuation = async (input: Array<Record<string, unknown>>, envFallback?: string, extraSteps: AntigravityInteractionStep[] = [], toolsOverride?: unknown[]) => {
     accumulateInteractionUsage(interaction)
-    accumulatedSteps.push(...(interaction.steps || []), ...extraSteps)
+    accumulatedSteps.push(...mergeSteps(interaction.steps), ...extraSteps)
     const resumeEnv = interaction.environment_id || trackedEnvId || envFallback
     interaction = await callInteractionsApi(
       extensionSDK, auth, 'interactions', 'POST',
       Object.assign({ agent: 'antigravity-preview-09-2026', agent_config: agentConfig, background: true, previous_interaction_id: interaction.id, tools: toolsOverride ?? activeTools, input }, resumeEnv ? { environment: resumeEnv } : null)
     )
+    if (
+      extraSteps.length > 0 &&
+      interaction.steps?.[0]?.type === 'function_result' &&
+      interaction.steps[0].call_id === extraSteps[0]?.call_id
+    ) {
+      accumulatedSteps.splice(accumulatedSteps.length - extraSteps.length, extraSteps.length)
+    }
     if (interaction.id) onInteractionCreated?.(interaction.id)
     await throwIfAborted(interaction.id)
     if (interaction.environment_id) trackedEnvId = interaction.environment_id
@@ -782,6 +795,22 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     }
     return pErr
   }
+  const isResolvedFunctionCall = (
+    callStep: AntigravityInteractionStep,
+    idx: number,
+    allSteps: AntigravityInteractionStep[]
+  ): boolean =>
+    allSteps
+      .slice(idx + 1)
+      .some((later: AntigravityInteractionStep) => later.type === 'function_result' && (!callStep.id || later.call_id === callStep.id))
+  const executedCodeModeByCode = new Map<string, Record<string, unknown>>()
+  const isDataAppBundleTurn = (): boolean =>
+    !isNoOpTurn &&
+    !effectiveLookmlIntent &&
+    (useCase === 'app' ||
+      isDataInvestigatorTurn ||
+      /(?:^|\s)\/data-apps?(?=\s|$)/i.test(userPrompt) ||
+      [...accumulatedSteps, ...(interaction.steps || [])].some((s) => JSON.stringify(s).includes('bundle_app.py')))
 
   try {
     for (;;) {
@@ -791,16 +820,11 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         emitProgressSteps(interaction)
         if (interaction.status === 'requires_action') {
           const steps = interaction.steps || []
-          const executedIds = new Set(
-            steps
-              .filter((s: AntigravityInteractionStep) => s.type === 'function_result')
-              .map((s: AntigravityInteractionStep) => s.call_id)
-          )
           const pendingLookerCalls = steps.filter(
-            (s: AntigravityInteractionStep) =>
+            (s: AntigravityInteractionStep, idx: number) =>
               s.type === 'function_call' &&
               (s.name === 'run_looker_codemode' || s.name === 'lkr_cli_extension_bridge') &&
-              !executedIds.has(s.id)
+              !isResolvedFunctionCall(s, idx, steps)
           )
 
           if (pendingLookerCalls.length > 0 && actionRound + bridgeRound < resolvedMaxToolRounds) {
@@ -869,75 +893,88 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                       Object.assign({}, permReq, permReq.thought || callThought ? { thought: permReq.thought || callThought } : null)
                     )
                 : undefined
-              let codeModeOutput: string
-              const prevSeq = mutSuccessSeq
-              try {
-                if (call.name === 'lkr_cli_extension_bridge') {
-                  const resolvedToolReq = await resolveBridgeReq(args as unknown as LkrExtensionToolRequest)
-                  const bridged = await executeLkrExtensionToolRequest({
-                    sdk: turnSdk,
-                    req: resolvedToolReq,
-                    defaultVars: defaultCodeModeVars,
-                    extensionSDK,
-                    requirePermission,
-                    approvedOperations,
-                    onPermissionRequest: wrappedPermissionRequest,
-                  })
-                  resolvedBridgeCacheKeys.add(bridged.cacheKey)
-                  const pErr = recordPermOutcome(bridged.result, prevSeq, resolvedToolReq)
-                  if (pErr) {
-                    codeModeOutput = JSON.stringify({ ok: false, error: pErr })
-                  } else {
-                    const compactRes = compactBridgeValue(bridged.result)
-                    const noReplay = isNoReplayBridgeResult(compactRes)
-                    codeModeOutput = JSON.stringify({
-                      ok: true,
-                      cache_key: bridged.cacheKey,
-                      cache_path: `/workspace/.lkr_extension_cache/${bridged.cacheKey}.json`,
-                      replay_needed: !noReplay,
-                      ...(noReplay
-                        ? {
-                            note: 'Already executed on Looker host — skip cache_path write and CLI replay (for pre_gate.py, merge passed/queries/test_query_results into data.json without deleting sql).',
-                          }
-                        : {}),
-                      result: compactRes,
-                    })
-                  }
-                } else {
-                  const customVars =
-                    args.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
-                      ? (args.vars as Record<string, unknown>)
-                      : {}
-                  const rawCode = String(args.code || '')
-                  const needsDashboardMacros =
-                    isDashboardMode ||
-                    /\b(?:upsert_udd|upsert_lookml_dashboard|reflow_24col|pin_to_board|schedule_dashboard|emit_native_bundle)\b/.test(rawCode)
-                  codeModeOutput = await LkrCodeMode.runPythonCode({
-                    code: needsDashboardMacros ? wrapDashboardCodeMode(rawCode) : rawCode,
-                    sdk: turnSdk,
-                    extensionSDK,
-                    allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard' || effectiveLookmlIntent,
-                    requirePermission,
-                    approvedOperations,
-                    onPermissionRequest: wrappedPermissionRequest,
-                    vars: { ...defaultCodeModeVars, ...customVars },
-                  })
-                  recordPermOutcome(codeModeOutput, prevSeq)
-                }
-              } catch (err: unknown) {
-                const errMsg = err instanceof Error ? err.message : String(err)
-                if (!recordPermOutcome(errMsg, prevSeq)) apiRetries += 1
-                codeModeOutput = JSON.stringify({ ok: false, error: errMsg })
-              }
-              // ponytail: /v1beta/interactions requires function_result.result to be a plain JS Struct object (never a JSON string)
+              const codeKey = call.name === 'lkr_cli_extension_bridge' ? '' : String(args.code || '').trim()
+              const cachedCodeMode = codeKey ? executedCodeModeByCode.get(codeKey) : undefined
               let structResult: Record<string, unknown>
-              try {
-                const parsed: unknown = JSON.parse(codeModeOutput)
-                structResult = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-                  ? (parsed as Record<string, unknown>)
-                  : { result: parsed }
-              } catch {
-                structResult = { result: codeModeOutput }
+              if (cachedCodeMode) {
+                structResult = {
+                  ...cachedCodeMode,
+                  _duplicate_call_notice:
+                    'NOTE: You already executed this exact run_looker_codemode snippet in the previous step and received the result above. Do NOT repeat the same discovery call — proceed immediately to the next step (query the specific fields you need or write your Data App to /workspace/apps/<name>/app.js and run python3 /workspace/bundle_app.py).',
+                }
+              } else {
+                let codeModeOutput: string
+                const prevSeq = mutSuccessSeq
+                try {
+                  if (call.name === 'lkr_cli_extension_bridge') {
+                    const resolvedToolReq = await resolveBridgeReq(args as unknown as LkrExtensionToolRequest)
+                    const bridged = await executeLkrExtensionToolRequest({
+                      sdk: turnSdk,
+                      req: resolvedToolReq,
+                      defaultVars: defaultCodeModeVars,
+                      extensionSDK,
+                      requirePermission,
+                      approvedOperations,
+                      onPermissionRequest: wrappedPermissionRequest,
+                    })
+                    resolvedBridgeCacheKeys.add(bridged.cacheKey)
+                    const pErr = recordPermOutcome(bridged.result, prevSeq, resolvedToolReq)
+                    if (pErr) {
+                      codeModeOutput = JSON.stringify({ ok: false, error: pErr })
+                    } else {
+                      const compactRes = compactBridgeValue(bridged.result)
+                      const noReplay = isNoReplayBridgeResult(compactRes)
+                      codeModeOutput = JSON.stringify({
+                        ok: true,
+                        cache_key: bridged.cacheKey,
+                        cache_path: `/workspace/.lkr_extension_cache/${bridged.cacheKey}.json`,
+                        replay_needed: !noReplay,
+                        ...(noReplay
+                          ? {
+                              note: 'Already executed on Looker host — skip cache_path write and CLI replay (for pre_gate.py, merge passed/queries/test_query_results into data.json without deleting sql).',
+                            }
+                          : {}),
+                        result: compactRes,
+                      })
+                    }
+                  } else {
+                    const customVars =
+                      args.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
+                        ? (args.vars as Record<string, unknown>)
+                        : {}
+                    const rawCode = String(args.code || '')
+                    const needsDashboardMacros =
+                      isDashboardMode ||
+                      /\b(?:upsert_udd|upsert_lookml_dashboard|reflow_24col|pin_to_board|schedule_dashboard|emit_native_bundle)\b/.test(rawCode)
+                    codeModeOutput = await LkrCodeMode.runPythonCode({
+                      code: needsDashboardMacros ? wrapDashboardCodeMode(rawCode) : rawCode,
+                      sdk: turnSdk,
+                      extensionSDK,
+                      allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard' || effectiveLookmlIntent,
+                      requirePermission,
+                      approvedOperations,
+                      onPermissionRequest: wrappedPermissionRequest,
+                      vars: { ...defaultCodeModeVars, ...customVars },
+                    })
+                    recordPermOutcome(codeModeOutput, prevSeq)
+                  }
+                } catch (err: unknown) {
+                  const errMsg = err instanceof Error ? err.message : String(err)
+                  if (!recordPermOutcome(errMsg, prevSeq)) apiRetries += 1
+                  codeModeOutput = JSON.stringify({ ok: false, error: errMsg })
+                }
+                // ponytail: /v1beta/interactions requires function_result.result to be a plain JS Struct object (never a JSON string)
+                try {
+                  const parsed: unknown = JSON.parse(codeModeOutput)
+                  structResult = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+                    ? (parsed as Record<string, unknown>)
+                    : { result: parsed }
+                } catch {
+                  structResult = { result: codeModeOutput }
+                }
+                if (codeKey && structResult.ok !== false && !('error' in structResult) && !codeModeOutput.includes('PermissionError:')) {
+                  executedCodeModeByCode.set(codeKey, { ...structResult })
+                }
               }
               if (preBridgeDenied && !('warning' in structResult)) structResult.warning = preBridgeDenied
               if (Object.keys(preBridgePayloads).length > 0 && pendingLookerCalls[0]?.id === call.id) {
@@ -998,7 +1035,12 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
               prevStepCount = curStepCount
               prevStatus = interaction.status
             }
-            if (interaction.status !== 'in_progress' && interaction.status !== 'queued') {
+            if (
+              interaction.status !== 'in_progress' &&
+              interaction.status !== 'queued' &&
+              (interaction.status !== 'requires_action' ||
+                (interaction.steps || []).some((s, idx, arr) => s.type === 'function_call' && !isResolvedFunctionCall(s, idx, arr)))
+            ) {
               continue
             }
           }
@@ -1048,7 +1090,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
       const mergedSnap: AntigravityInteractionPayload =
         accumulatedSteps.length > 0
-          ? { ...interaction, steps: [...accumulatedSteps, ...(interaction.steps || [])] }
+          ? { ...interaction, steps: [...accumulatedSteps, ...mergeSteps(interaction.steps)] }
           : interaction
       const hasFinalBundle = Boolean(
         extractBundleFromInteraction(mergedSnap) ||
@@ -1059,8 +1101,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       const hasDirectModelOutput =
         extractInteractionOutputText({ output_text: interaction.output_text, outputs: interaction.outputs }) !== 'Completed.'
       const curSteps = interaction.steps || []
-      const doneCallIds = new Set(curSteps.filter((s) => s.type === 'function_result').map((s) => s.call_id))
-      const hasUnfinishedCall = curSteps.some((s) => s.type === 'function_call' && !doneCallIds.has(s.id))
+      const hasUnfinishedCall = curSteps.some((s, idx) => s.type === 'function_call' && !isResolvedFunctionCall(s, idx, curSteps))
 
       if (
         interaction.status === 'failed' ||
@@ -1155,18 +1196,23 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           ? 8
           : 2
 
+      const requiresDataAppBundle = isDataAppBundleTurn()
+
       if (
-        interaction.status === 'incomplete' &&
         !usedDirectStatelessModel &&
         Boolean(interaction.id) &&
         !hasFinalBundle &&
+        !bridgePermissionError &&
         incompleteRound < maxIncompleteRounds &&
-        !hasDirectModelOutput
+        ((interaction.status === 'incomplete' && !hasDirectModelOutput) || (requiresDataAppBundle && !wrapUpSent))
       ) {
         incompleteRound += 1
         await throwIfAborted(interaction.id)
         onStatus('Resuming incomplete turn...')
-        await postContinuation([{ type: 'text', text: 'Continue and complete the current request.' }], requiresBashSandbox ? 'remote' : undefined, [], wrapUpSent ? [] : undefined)
+        const resumeText = requiresDataAppBundle
+          ? 'You have not emitted <DATA_APP_BUNDLE> yet. Write the complete self-contained Lit Data App to /workspace/apps/<app-name>/app.js (remember createTextCol/createNumericCol/createCurrencyCol/createPercentageCol/createBadgeCol take a single options object { field, headerName }) and run python3 /workspace/bundle_app.py --app-dir /workspace/apps/<app-name> --stdin "<App Title>" in bash until it exits 0 and emits <DATA_APP_BUNDLE>.'
+          : 'Continue and complete the current request.'
+        await postContinuation([{ type: 'text', text: resumeText }], requiresBashSandbox ? 'remote' : undefined, [], wrapUpSent ? [] : undefined)
         continue
       }
 
@@ -1182,7 +1228,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     accumulateInteractionUsage(interaction)
     interaction = {
       ...interaction,
-      steps: [...accumulatedSteps, ...(interaction.steps || [])],
+      steps: [...accumulatedSteps, ...mergeSteps(interaction.steps)],
       usage: {
         ...(interaction.usage || {}),
         input_tokens: accInputTokens,
@@ -1202,10 +1248,34 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   }
   const thinkingDurationSec = Math.max(1, Math.round((Date.now() - turnStartMs) / 1000))
 
-  const bundle =
+  let bundle =
     mode === 'data_app' || useCase === 'auto'
       ? extractBundleFromInteraction(interaction)
       : null
+  if (!bundle && (mode === 'data_app' || useCase === 'auto') && isDataAppBundleTurn() && trackedEnvId) {
+    const matchedPaths = JSON.stringify(interaction.steps || []).match(/\/workspace\/apps\/[A-Za-z0-9_-]+\/app\.js/g)
+    const candidates = Array.from(new Set([...(matchedPaths || []).slice().reverse(), appFilePath]))
+    for (const candidatePath of candidates) {
+      try {
+        const fetchedJs = (await fetchEnvironmentFile({ extensionSDK, auth, environmentId: trackedEnvId, path: candidatePath })).trim()
+        if (fetchedJs && (fetchedJs.includes('LookerDataApp') || fetchedJs.includes('DataApp') || fetchedJs.includes('customElements.define'))) {
+          const prodCode = fetchedJs
+            .replace(/((?:from|import)\s*['"])(?:\.\/data-app\.js|\/runtime\/data-app\.js)(['"])/g, '$1https://www.gstatic.com/looker-data-apps/versions/1.2.0/data-app.js$2')
+            .replace(/((?:from|import)\s*['"])\/vendor\/([^'"]+)(['"])/g, '$1https://www.gstatic.com/looker-data-apps/versions/1.2.0/vendor/$2$3')
+          bundle = {
+            title: sanitizeConversationLabel(userPrompt) || 'Data App',
+            code: fetchedJs,
+            raw_code: fetchedJs,
+            prod_code: prodCode,
+            widgets: [],
+          }
+          break
+        }
+      } catch {
+        /* try next candidate */
+      }
+    }
+  }
   const nativeBundle =
     mode === 'dashboard' || useCase === 'auto'
       ? extractNativeContentFromInteraction(interaction)
@@ -1500,6 +1570,7 @@ export function hydrateInteractionActivitySteps(opts: {
           fetched.input.some((it) => it && typeof it === 'object' && (it as { type?: string }).type === 'text') &&
           !rawInput.includes('[LKR_EXTENSION_BRIDGE_RESULT]') &&
           !rawInput.includes('Continue and complete the current request.') &&
+          !rawInput.includes('You have not emitted <DATA_APP_BUNDLE> yet.') &&
           !rawInput.includes('Max Tool Rounds (') &&
           !fetched.input.some((it) => it && typeof it === 'object' && (it as { type?: string }).type === 'function_result')
         if (isFreshUserTurnRoot) return
@@ -1515,7 +1586,12 @@ export function hydrateInteractionActivitySteps(opts: {
     chronological.forEach((inter) => {
       if (Array.isArray(inter.input)) {
         inter.input.forEach((it) => {
-          if (it && typeof it === 'object' && (it as { type?: string }).type === 'function_result') {
+          if (
+            it &&
+            typeof it === 'object' &&
+            (it as { type?: string }).type === 'function_result' &&
+            !(inter.steps?.[0]?.type === 'function_result' && inter.steps[0].call_id === (it as { call_id?: string }).call_id)
+          ) {
             mergedSteps.push(it as AntigravityInteractionStep)
           }
         })
