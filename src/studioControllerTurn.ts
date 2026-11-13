@@ -2,16 +2,14 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   AgentSession, AntigravityActivityStep, AntigravityAuth,
-  cleanLookmlProjectId, CodeModePermissionDecision, CodeModePermissionRequest,
-  extractSkillNameFromPath, fetchConversationSandboxDebugMarkdown, fetchEnvironmentFile,
-  hydrateInteractionActivitySteps, inFlightEnvProvisionByUser,
-  normalizeEnvironmentId, normalizeSandboxFilePath,
-  PastedImage, prewarmOrWakeAntigravityEnvironment, resolveBuiltinWorkspaceFileContent,
+  cleanLookmlProjectId, CodeModePermissionRequest,
+  inFlightEnvProvisionByUser,
+  PastedImage, prewarmOrWakeAntigravityEnvironment,
   runAntigravityTurn, sanitizeConversationLabel, sharedEnvExploreSchemas,
 } from './antigravity'
 import { ChatMessage, StudioMode } from './components/App'
 import {
-  buildDenseExploreSchema, clearInFlightConvId, compactPersistedChatTurn, copyTextWithExtensionSdk, EXPLICIT_SCRIPT_CREATION_RE,
+  buildDenseExploreSchema, clearInFlightConvId, compactPersistedChatTurn, EXPLICIT_SCRIPT_CREATION_RE,
   extractExploreIdsFromCode, extractResolvedUseCase,
   formatExploreId, formatStudioContentItemTitle, getArtifactNamespace, hydrateMentionedContext,
   isConversationalNoOpPrompt, LOOKER_ALERT_QUERY_RE, matchExplicitUseCaseRule, parseExploreId,
@@ -28,217 +26,44 @@ import {
   resolveLookmlCanonicalProjectId,
   saveLookmlSessionArtifact,
 } from './lookmlTool'
-import { getErrorMessage, StudioAuthAndPrefs } from './studioControllerAuth'
+import { QueuedPromptItem, StudioAuthAndPrefs, StudioEnvironmentStatus } from './studioControllerAuth'
 import { StudioLoaders } from './studioControllerLoaders'
 import { StudioMetadata } from './studioControllerMetadata'
 
 export { STUDIO_INFLIGHT_CONV_SESSION_KEY }
-export interface QueuedPromptItem { id: string; text: string; images: PastedImage[]; mentions: StudioContextMention[] }
-export type StudioEnvironmentStatus = 'active' | 'resetting' | 'stopped'
+export type { QueuedPromptItem, StudioEnvironmentStatus }
 
 const stripMessagesForStorage = (msgs: ChatMessage[]) => msgs.map((m) => compactPersistedChatTurn(m, true))
 
 export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, loaders: StudioLoaders) {
   const {
-    extensionSDK, core40SDK, history, location, isTileMount, mockExt,
-    authMode, oauthToken, clientId, projectId, apiKey, selectedModel,
-    thinkingLevel, maxTotalTokens, maxToolRounds, isAuthenticated, disabledModes,
-    resolvedUseCaseByIdRef, parsedRoute, setSelectedUseCase, explicitUseCaseRef,
-    allowedUseCases, setRightPaneCollapsed, triggerSilentOAuthRefresh, resetOAuthOnUnauthorized,
-    sharedEnvIdRef, syncSharedEnvironmentId,
-    agentSession, agentSessionRef, messages, messagesRef, activeModeRef, setAgentSession, setMessages,
-    busyStatus, setBusyStatus,
+    extensionSDK, core40SDK, history, location, mockExt, authMode, oauthToken, clientId, projectId, apiKey, selectedModel,
+    thinkingLevel, maxTotalTokens, maxToolRounds, isAuthenticated, disabledModes, resolvedUseCaseByIdRef, parsedRoute,
+    setSelectedUseCase, explicitUseCaseRef, allowedUseCases, resetOAuthOnUnauthorized, sharedEnvIdRef, syncSharedEnvironmentId,
+    agentSession, agentSessionRef, messagesRef, activeModeRef, setAgentSession, setMessages, busyStatus, setBusyStatus,
+    activeConversationId, activeConversationIdRef, setActiveConversationId, requirePermissionRef, approvedOpsRef, pendingPermRef,
+    permEpochRef, activeTurnConvIdRef, turnAbortControllerRef, dismissPendingPerm, requestCodeModePermission,
+    abortActiveTurn, handleStopTurn, liveActivityStepsRef, setLiveActivitySteps, queuedPromptsRef, updateQueuedPrompts,
   } = auth
   const {
-    userId, userIdRef, setLookerWorkspaceId, syncLookerSessionWorkspace,
-    availableLookmlProjects, canDeployLookml, loadingMetadata, models,
-    selectedExplores, setSelectedExplores, mentionedItems, setMentionedItems,
-    selectedFolderId, schemaMarkdown, setSchemaMarkdown,
-    activeMode, isLookmlMode, isHealthCheckMode, builderMode,
-    setActiveObjectId,
-    conversations, conversationsRef, setConversations,
+    userId, userIdRef, setLookerWorkspaceId, syncLookerSessionWorkspace, availableLookmlProjects, canDeployLookml, loadingMetadata,
+    models, selectedExplores, setSelectedExplores, mentionedItems, setMentionedItems, selectedFolderId, schemaMarkdown,
+    setSchemaMarkdown, activeMode, isLookmlMode, isHealthCheckMode, builderMode, setActiveObjectId, conversations,
+    conversationsRef, setConversations, isCaMode, lookmlProjectId, setLookmlProjectId, activatedLookmlSkills,
+    setActivatedLookmlSkills, lookmlBundle, setLookmlBundle, lastLookmlIdRef, publishedApp, setPublishedApp, lastPublishedIdRef,
+    nativeContent, setNativeContent, lastNativeIdRef, setAlertBundle, contentItemsRef, setContentItems, activeContentTabKeyRef,
+    setActiveContentTabKey, upsertContentItem, setEmbedNonce, scriptCode, setScriptCode, filtersJson, publishedTileDash,
+    loadedScript, currentAppCode, setCurrentAppCode, prompt, setPrompt, pastedImages, setPastedImages, hydratedConvRouteRef,
+    activityStepsByInteractionIdRef, codeModePermOptsRef,
   } = meta
-  const {
-    caConversation, isCaMode,
-    lookmlProjectId, setLookmlProjectId, activatedLookmlSkills, setActivatedLookmlSkills,
-    lookmlBundle, setLookmlBundle, lastLookmlIdRef,
-    publishedApp, setPublishedApp, lastPublishedIdRef,
-    nativeContent, setNativeContent, lastNativeIdRef,
-    setAlertBundle,
-    contentItems, contentItemsRef, setContentItems, activeContentTabKeyRef, setActiveContentTabKey, upsertContentItem, setEmbedNonce,
-    healthReport, scriptCode, setScriptCode, filtersJson,
-    publishedTileDash, loadedScript,
-    currentAppCode, setCurrentAppCode,
-    activeViewerDocument, setActiveViewerDocument,
-    prompt, setPrompt, pastedImages, setPastedImages,
-    activeConversationId, activeConversationIdRef, setActiveConversationId,
-    hydratedConvRouteRef, activityStepsByInteractionIdRef,
-    persistConversationAndLabel,
-    codeModePermOptsRef, handleRunPython, handleSaveScript,
-    handleRunHealthCheck, handleRunConversationalAnalytics,
-  } = loaders
+  const { persistConversationAndLabel, handleRunPython, handleSaveScript, handleRunHealthCheck, handleRunConversationalAnalytics } = loaders
 
-  const [sandboxMarkdownCache, setSandboxMarkdownCache] = useState<Record<string, string>>({})
-  const sandboxMarkdownCacheRef = useRef<Record<string, string>>({})
-  sandboxMarkdownCacheRef.current = sandboxMarkdownCache
-  const inFlightSandboxFilesRef = useRef<Record<string, Promise<string> | undefined>>({})
-  const [sandboxMarkdownLoading, setSandboxMarkdownLoading] = useState<Record<string, boolean>>({})
-  const [activeSandboxMarkdownModalPath, setActiveSandboxMarkdownModalPath] = useState<string | null>(null)
   const [environmentStatus, setEnvironmentStatus] = useState<StudioEnvironmentStatus>('active')
   const environmentStatusRef = useRef<StudioEnvironmentStatus>('active')
   environmentStatusRef.current = environmentStatus
   const [envResetNotice, setEnvResetNotice] = useState<boolean>(false)
   const envResetNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const turnAbortControllerRef = useRef<AbortController | null>(null)
-  const [queuedPrompts, setQueuedPrompts] = useState<QueuedPromptItem[]>([])
-  const queuedPromptsRef = useRef<QueuedPromptItem[]>([])
-  queuedPromptsRef.current = queuedPrompts
-
-  const updateQueuedPrompts = useCallback(
-    (updater: QueuedPromptItem[] | ((prev: QueuedPromptItem[]) => QueuedPromptItem[])) => {
-      const next = typeof updater === 'function' ? updater(queuedPromptsRef.current) : updater
-      queuedPromptsRef.current = next
-      setQueuedPrompts(next)
-    },
-    []
-  )
-
-  const [liveActivitySteps, setLiveActivitySteps] = useState<AntigravityActivityStep[]>(() =>
-    Array.isArray(mockExt?.initialLiveActivitySteps) ? (mockExt.initialLiveActivitySteps as AntigravityActivityStep[]) : []
-  )
-  const liveActivityStepsRef = useRef<AntigravityActivityStep[]>(liveActivitySteps)
-  liveActivityStepsRef.current = liveActivitySteps
   const latestTurnInteractionRef = useRef<{ convId: string; id: string } | null>(null)
-  const [copyThreadState, setCopyThreadState] = useState<'idle' | 'loading' | 'copied'>('idle')
-  const [hydratingInteractionIds, setHydratingInteractionIds] = useState<Record<string, boolean>>({})
-  const inFlightHydrationsRef = useRef<Record<string, Promise<AntigravityActivityStep[]> | undefined>>({})
-
-  const localFileCtxRef = useRef({ lookmlBundle, currentAppCode, schemaMarkdown })
-  localFileCtxRef.current = { lookmlBundle, currentAppCode, schemaMarkdown }
-
-  const resolveLocalWorkspaceFile = useCallback((rawPath: string): string | undefined => {
-    const raw = String(rawPath || '').trim()
-    if (!raw) return undefined
-    const builtin = resolveBuiltinWorkspaceFileContent(raw)
-    if (typeof builtin === 'string') return builtin
-    const norm = normalizeSandboxFilePath(raw)
-    const base = norm.split('/').filter(Boolean).pop() || norm
-    const relLkml = norm.replace(/^workspace\/(?:lookml\/)?/i, '')
-    const ctx = localFileCtxRef.current
-    const lkml = ctx.lookmlBundle?.files?.find(
-      (f) => f.path === raw || normalizeSandboxFilePath(f.path) === norm || normalizeSandboxFilePath(f.path) === relLkml || f.path.endsWith(`/${base}`) || f.path === base
-    )?.content
-    if (lkml) return lkml
-    if ((base === 'app.js' || norm.endsWith('/app.js')) && ctx.currentAppCode?.trim()) return ctx.currentAppCode
-    if ((base === 'schema.md' || norm.endsWith('/schema.md')) && ctx.schemaMarkdown?.trim()) return ctx.schemaMarkdown
-    return undefined
-  }, [])
-
-  const hydrateMessageActivitySteps = useCallback(
-    (interactionId: string, stopAtInteractionId?: string): Promise<AntigravityActivityStep[]> => {
-      const cleanId = String(interactionId || '').trim()
-      if (!cleanId) return Promise.resolve([])
-      const mem = activityStepsByInteractionIdRef.current[cleanId]
-      if (Array.isArray(mem)) {
-        setMessages((prev) => prev.map((m) => (m.role === 'assistant' && m.interactionId === cleanId && !Array.isArray(m.activitySteps) ? { ...m, activitySteps: mem } : m)))
-        return Promise.resolve(mem)
-      }
-      const inFlight = inFlightHydrationsRef.current[cleanId]
-      if (inFlight) return inFlight
-      setHydratingInteractionIds((p) => ({ ...p, [cleanId]: true }))
-      const p = hydrateInteractionActivitySteps({
-        extensionSDK,
-        auth: { mode: authMode, oauthToken, clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true) },
-        interactionId: cleanId,
-        stopAtInteractionId,
-      })
-        .then((steps) => {
-          activityStepsByInteractionIdRef.current[cleanId] = steps
-          setMessages((prev) => prev.map((m) => (m.role === 'assistant' && m.interactionId === cleanId ? { ...m, activitySteps: steps } : m)))
-          return steps
-        })
-        .finally(() => {
-          delete inFlightHydrationsRef.current[cleanId]
-          setHydratingInteractionIds((prev) => ({ ...prev, [cleanId]: false }))
-        })
-      inFlightHydrationsRef.current[cleanId] = p
-      return p
-    },
-    [activityStepsByInteractionIdRef, apiKey, authMode, clientId, extensionSDK, oauthToken, projectId, setMessages, triggerSilentOAuthRefresh]
-  )
-
-  const loadSandboxMarkdownFile = useCallback(
-    (rawPath: string, opts?: { openModal?: boolean }): Promise<string> => {
-      const normalizedPath = normalizeSandboxFilePath(rawPath)
-      if (!normalizedPath) return Promise.resolve('')
-      const displayPath = `/${normalizedPath}`
-      if (opts?.openModal) setActiveSandboxMarkdownModalPath(displayPath)
-      const activeEnv = agentSessionRef.current.environmentId
-      const envId = normalizeEnvironmentId(sharedEnvIdRef.current) || normalizeEnvironmentId(activeEnv) || sharedEnvIdRef.current || activeEnv || 'mock_env_1'
-      const cacheKey = `${envId}:${normalizedPath}`
-      const storeCache = (val: string) => {
-        const next = { ...sandboxMarkdownCacheRef.current, [cacheKey]: val, [normalizedPath]: val, [displayPath]: val }
-        sandboxMarkdownCacheRef.current = next
-        setSandboxMarkdownCache(next)
-        return val
-      }
-      const localContent = resolveLocalWorkspaceFile(rawPath)
-      if (typeof localContent === 'string' && localContent.length > 0) return Promise.resolve(storeCache(localContent))
-      const cached = sandboxMarkdownCacheRef.current[cacheKey] ?? sandboxMarkdownCacheRef.current[normalizedPath] ?? sandboxMarkdownCacheRef.current[displayPath]
-      if (typeof cached === 'string' && cached.length > 0 && !cached.startsWith('# Error Loading File\n')) return Promise.resolve(cached)
-      const inFlight = inFlightSandboxFilesRef.current[cacheKey]
-      if (inFlight) return inFlight
-      const setLoading = (flag: boolean) => setSandboxMarkdownLoading((p) => ({ ...p, [cacheKey]: flag, [normalizedPath]: flag, [displayPath]: flag }))
-      setLoading(true)
-      const reqPromise = fetchEnvironmentFile({
-        extensionSDK,
-        auth: { mode: authMode, oauthToken, clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true) },
-        environmentId: envId, path: normalizedPath,
-      })
-        .then(storeCache, (err: unknown) =>
-          storeCache(`# Error Loading File\n\nUnable to load \`${displayPath}\` from sandbox environment \`${envId}\`: ${getErrorMessage(err)}`)
-        )
-        .finally(() => {
-          delete inFlightSandboxFilesRef.current[cacheKey]
-          setLoading(false)
-        })
-      inFlightSandboxFilesRef.current[cacheKey] = reqPromise
-      return reqPromise
-    },
-    [agentSessionRef, apiKey, authMode, clientId, extensionSDK, oauthToken, projectId, resolveLocalWorkspaceFile, sharedEnvIdRef, triggerSilentOAuthRefresh]
-  )
-
-  const openViewerDocument = useCallback(
-    (input: { path: string; title?: string; kind?: 'skill' | 'file'; content?: string; initialContent?: string }): Promise<string> => {
-      const raw = String(input.path || '').trim()
-      if (!raw) return Promise.resolve('')
-      const skillName = extractSkillNameFromPath(raw)
-      const resolvedRawPath = !raw.includes('/') && skillName ? `/workspace/skills/${skillName}/SKILL.md` : raw
-      const normalizedPath = normalizeSandboxFilePath(resolvedRawPath)
-      const displayPath = normalizedPath ? `/${normalizedPath}` : resolvedRawPath
-      const kind: 'skill' | 'file' = input.kind === 'skill' ? 'skill' : input.kind === 'file' ? 'file' : skillName ? 'skill' : 'file'
-      const isMarkdown = kind === 'skill' || /\.md$/i.test(displayPath)
-      const title = input.title || (skillName ? `Reading skill ${skillName}` : displayPath.split('/').filter(Boolean).pop() || displayPath)
-      const docBase = { path: normalizedPath || resolvedRawPath, displayPath, title, kind, isMarkdown }
-      setRightPaneCollapsed(false)
-      const cached = sandboxMarkdownCacheRef.current[normalizedPath] || sandboxMarkdownCacheRef.current[displayPath] || ''
-      const immediate =
-        resolveLocalWorkspaceFile(resolvedRawPath) ||
-        (input.content || input.initialContent || '').trim() ||
-        (!cached.startsWith('# Error Loading File\n') ? cached : '')
-      if (immediate) {
-        setActiveViewerDocument({ ...docBase, content: immediate, loading: false })
-        return Promise.resolve(immediate)
-      }
-      setActiveViewerDocument({ ...docBase, content: '', loading: true })
-      return loadSandboxMarkdownFile(resolvedRawPath).then((fetched) => {
-        setActiveViewerDocument({ ...docBase, content: fetched, loading: false })
-        return fetched
-      })
-    },
-    [loadSandboxMarkdownFile, resolveLocalWorkspaceFile, setActiveViewerDocument, setRightPaneCollapsed]
-  )
-
   const wakeContextRef = useRef({ agentSession, selectedExplores, schemaMarkdown, currentAppCode })
   wakeContextRef.current = { agentSession, selectedExplores, schemaMarkdown, currentAppCode }
 
@@ -248,37 +73,18 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         const ctx = wakeContextRef.current
         const existingSession: AgentSession = forceFresh ? { toolType: modeToWake } : ctx.agentSession
         const res = await prewarmOrWakeAntigravityEnvironment({
-          sdk: core40SDK,
-          userId: userIdRef.current || userId,
-          extensionSDK,
+          sdk: core40SDK, userId: userIdRef.current || userId, extensionSDK,
           auth: { mode: authMode, oauthToken, clientId, projectId, apiKey },
-          toolType: modeToWake,
-          model: selectedModel,
-          maxTotalTokens,
+          toolType: modeToWake, model: selectedModel, maxTotalTokens,
           environmentId: forceFresh ? undefined : sharedEnvIdRef.current || existingSession?.environmentId,
-          existingSession,
-          selectedExplores: ctx.selectedExplores,
-          schemaMarkdown: ctx.schemaMarkdown,
+          existingSession, selectedExplores: ctx.selectedExplores, schemaMarkdown: ctx.schemaMarkdown,
           existingAppCode: modeToWake === 'app' ? ctx.currentAppCode : undefined,
-          forceFresh,
-          onEnvironmentUpdated: syncSharedEnvironmentId,
+          forceFresh, onEnvironmentUpdated: syncSharedEnvironmentId,
         })
         const nextEnvId = sharedEnvIdRef.current || res.session.environmentId
         const cur = agentSessionRef.current
-        if (
-          forceFresh ||
-          cur.environmentId !== nextEnvId ||
-          (!cur.lastInteractionId && res.session.lastInteractionId)
-        ) {
-          setAgentSession(
-            {
-              ...cur,
-              ...res.session,
-              lastInteractionId: forceFresh ? res.session.lastInteractionId : cur.lastInteractionId || res.session.lastInteractionId,
-              environmentId: nextEnvId,
-            },
-            modeToWake
-          )
+        if (forceFresh || cur.environmentId !== nextEnvId || (!cur.lastInteractionId && res.session.lastInteractionId)) {
+          setAgentSession({ ...cur, ...res.session, lastInteractionId: forceFresh ? res.session.lastInteractionId : cur.lastInteractionId || res.session.lastInteractionId, environmentId: nextEnvId }, modeToWake)
         }
       } catch { /* ignore */ }
     },
@@ -286,120 +92,19 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   )
 
   useEffect(() => {
-    if (disabledModes.includes(activeMode)) return
-    if (environmentStatus === 'stopped' || environmentStatus === 'resetting') return
-    if (sharedEnvIdRef.current) return
+    if (disabledModes.includes(activeMode) || environmentStatus === 'stopped' || environmentStatus === 'resetting' || sharedEnvIdRef.current) return
     if (loadingMetadata && models.length === 0 && selectedExplores.length === 0) return
     void handleWakeModeEnv(activeMode)
   }, [activeMode, disabledModes, environmentStatus, handleWakeModeEnv, loadingMetadata, models.length, selectedExplores.length, sharedEnvIdRef])
 
-  const [requirePermission, setRequirePermissionState] = useState(true)
-  const requirePermissionRef = useRef(requirePermission)
-  requirePermissionRef.current = requirePermission
-  const approvedOpsRef = useRef<Set<string>>(new Set())
-  const [pendingPerm, setPendingPerm] = useState<{
-    req: CodeModePermissionRequest
-    resolve: (decision: CodeModePermissionDecision) => void
-    approvedSet?: Set<string>
-    convId?: string
-    signal?: AbortSignal
-  } | null>(() =>
-    mockExt?.initialPendingPerm
-      ? { req: mockExt.initialPendingPerm as CodeModePermissionRequest, resolve: () => {} }
-      : null
-  )
-  const pendingPermRef = useRef<typeof pendingPerm>(pendingPerm)
-  const permQueueRef = useRef<Promise<unknown>>(Promise.resolve())
-  const permEpochRef = useRef(0)
-  const activeTurnConvIdRef = useRef('')
-
-  const syncPendingPerm = useCallback((next: typeof pendingPerm) => {
-    pendingPermRef.current = next
-    setPendingPerm(next)
-  }, [])
-
-  const dismissPendingPerm = useCallback(
-    (decision: CodeModePermissionDecision = 'deny') => {
-      const cur = pendingPermRef.current
-      if (!cur) return
-      syncPendingPerm(null)
-      cur.resolve(decision)
-    },
-    [syncPendingPerm]
-  )
-
-  const setRequirePermission = useCallback(
-    (next: React.SetStateAction<boolean>) => {
-      const val = typeof next === 'function' ? next(requirePermissionRef.current) : next
-      requirePermissionRef.current = val
-      setRequirePermissionState(val)
-      if (!val && pendingPermRef.current) dismissPendingPerm('allow_once')
-    },
-    [dismissPendingPerm]
-  )
-
-  const requestCodeModePermission = useCallback(
-    (req: CodeModePermissionRequest, signal?: AbortSignal, approvedSet?: Set<string>, epoch?: number, convId?: string): Promise<CodeModePermissionDecision> => {
-      const activeSignal = signal || turnAbortControllerRef.current?.signal
-      const callEpoch = epoch !== undefined ? epoch : permEpochRef.current
-      const targetApproved = approvedSet || approvedOpsRef.current
-      const next = permQueueRef.current.then(() => {
-        if (permEpochRef.current !== callEpoch || activeSignal?.aborted || (convId !== undefined && activeConversationIdRef.current !== convId)) {
-          return 'deny' as CodeModePermissionDecision
-        }
-        if (!requirePermissionRef.current) return 'allow_once' as CodeModePermissionDecision
-        if (targetApproved.has('*')) return 'allow_all' as CodeModePermissionDecision
-        if (targetApproved.has(req.operation)) return 'allow_op' as CodeModePermissionDecision
-        return new Promise<CodeModePermissionDecision>((resolve) => {
-          syncPendingPerm({ req, resolve, approvedSet: targetApproved, convId, signal: activeSignal })
-        })
-      })
-      permQueueRef.current = next.then(() => {}, () => {})
-      return next
-    },
-    [activeConversationIdRef, syncPendingPerm]
-  )
-
   codeModePermOptsRef.current = () => {
-    const standaloneApproved = new Set<string>()
-    const standaloneEpoch = permEpochRef.current
-    const standaloneConvId = activeConversationIdRef.current
+    const standaloneApproved = new Set<string>(), standaloneEpoch = permEpochRef.current, standaloneConvId = activeConversationIdRef.current
     return {
-      requirePermission: true,
-      approvedOperations: standaloneApproved,
-      onPermissionRequest: (req) =>
-        requestCodeModePermission(req, undefined, standaloneApproved, standaloneEpoch, standaloneConvId),
-      isCanceled: () => permEpochRef.current !== standaloneEpoch,
-      thought: 'Execute Looker Python script',
+      requirePermission: true, approvedOperations: standaloneApproved,
+      onPermissionRequest: (req) => requestCodeModePermission(req, undefined, standaloneApproved, standaloneEpoch, standaloneConvId),
+      isCanceled: () => permEpochRef.current !== standaloneEpoch, thought: 'Execute Looker Python script',
     }
   }
-
-  const resolvePermDecision = (decision: CodeModePermissionDecision) => {
-    const cur = pendingPermRef.current || pendingPerm
-    if (!cur) return
-    const targetApproved = cur.approvedSet || approvedOpsRef.current
-    if (decision === 'allow_op') targetApproved.add(cur.req.operation)
-    else if (decision === 'allow_all') targetApproved.add('*')
-    syncPendingPerm(null)
-    cur.resolve(decision)
-  }
-
-  const abortActiveTurn = useCallback(
-    (reasonText?: string) => {
-      permEpochRef.current += 1
-      activeTurnConvIdRef.current = ''
-      turnAbortControllerRef.current?.abort()
-      turnAbortControllerRef.current = null
-      dismissPendingPerm('deny')
-      const partialSteps = liveActivityStepsRef.current
-      if (reasonText && partialSteps.length > 0) {
-        setMessages((prev) => [...prev, { role: 'assistant', text: reasonText, activitySteps: partialSteps }])
-      }
-      liveActivityStepsRef.current = []
-      setLiveActivitySteps([])
-    },
-    [dismissPendingPerm, setMessages]
-  )
 
   const lastSeenConvIdRef = useRef(activeConversationId)
   useEffect(() => {
@@ -415,76 +120,42 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       }
       setBusyStatus((prev) => (prev === 'Executing Looker queries...' ? mockExt?.initialBusyStatus || null : prev))
     }
-  }, [abortActiveTurn, activeConversationId, dismissPendingPerm, mockExt?.initialBusyStatus, setBusyStatus])
-
-  const handleStopTurn = useCallback(() => {
-    abortActiveTurn('Stopped by user.')
-    setBusyStatus(null)
-    clearInFlightConvId()
-  }, [abortActiveTurn, setBusyStatus])
+  }, [abortActiveTurn, activeConversationId, activeTurnConvIdRef, dismissPendingPerm, mockExt?.initialBusyStatus, pendingPermRef, permEpochRef, setBusyStatus, turnAbortControllerRef])
 
   const handleQueuePrompt = useCallback(() => {
     if (!busyStatus) return
     const text = prompt.trim()
     if (!text && pastedImages.length === 0) return
-    updateQueuedPrompts((prev) => [
-      ...prev,
-      {
-        id: `q_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        text, images: pastedImages, mentions: mentionedItems,
-      },
-    ])
-    setPrompt('')
-    setPastedImages([])
-    setMentionedItems([])
+    updateQueuedPrompts((prev) => [...prev, { id: `q_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, text, images: pastedImages, mentions: mentionedItems }])
+    setPrompt(''); setPastedImages([]); setMentionedItems([])
   }, [busyStatus, mentionedItems, pastedImages, prompt, setMentionedItems, setPastedImages, setPrompt, updateQueuedPrompts])
 
-  const handleRemoveQueuedPrompt = useCallback(
-    (id: string) => {
-      updateQueuedPrompts((prev) => prev.filter((q) => q.id !== id))
-    },
-    [updateQueuedPrompts]
-  )
+  const handleRemoveQueuedPrompt = useCallback((id: string) => updateQueuedPrompts((prev) => prev.filter((q) => q.id !== id)), [updateQueuedPrompts])
 
   const clearAllEnvSessions = useCallback(
     (nextStatus: StudioEnvironmentStatus) => {
-      handleStopTurn()
-      sharedEnvIdRef.current = ''
-      syncSharedEnvironmentId('')
+      handleStopTurn(); sharedEnvIdRef.current = ''; syncSharedEnvironmentId('')
       setAgentSession({ toolType: activeModeRef.current, environmentId: '' })
-      environmentStatusRef.current = nextStatus
-      setEnvironmentStatus(nextStatus)
+      environmentStatusRef.current = nextStatus; setEnvironmentStatus(nextStatus)
     },
     [activeModeRef, handleStopTurn, setAgentSession, sharedEnvIdRef, syncSharedEnvironmentId]
   )
 
   const handleResetEnvironment = useCallback((): Promise<void> => {
     if (envResetNoticeTimerRef.current) clearTimeout(envResetNoticeTimerRef.current)
-    envResetNoticeTimerRef.current = null
-    setEnvResetNotice(false)
-    clearAllEnvSessions('resetting')
-    sharedEnvExploreSchemas.clear()
-    inFlightEnvProvisionByUser.clear()
+    envResetNoticeTimerRef.current = null; setEnvResetNotice(false); clearAllEnvSessions('resetting')
+    sharedEnvExploreSchemas.clear(); inFlightEnvProvisionByUser.clear()
     const finish = () => {
-      environmentStatusRef.current = 'active'
-      setEnvironmentStatus('active')
-      setEnvResetNotice(true)
-      envResetNoticeTimerRef.current = setTimeout(() => {
-        setEnvResetNotice(false)
-        envResetNoticeTimerRef.current = null
-      }, 2500)
+      environmentStatusRef.current = 'active'; setEnvironmentStatus('active'); setEnvResetNotice(true)
+      envResetNoticeTimerRef.current = setTimeout(() => { setEnvResetNotice(false); envResetNoticeTimerRef.current = null }, 2500)
     }
     return saveUserEnvironmentId(core40SDK, userIdRef.current || userId, '', getArtifactNamespace(extensionSDK))
-      .catch(() => {})
-      .then(() => handleWakeModeEnv(activeModeRef.current, true))
-      .then(finish, (err) => { finish(); throw err })
+      .catch(() => {}).then(() => handleWakeModeEnv(activeModeRef.current, true)).then(finish, (err) => { finish(); throw err })
   }, [activeModeRef, clearAllEnvSessions, core40SDK, extensionSDK, handleWakeModeEnv, userId, userIdRef])
 
   const handleStopEnvironment = useCallback(() => {
     if (envResetNoticeTimerRef.current) clearTimeout(envResetNoticeTimerRef.current)
-    envResetNoticeTimerRef.current = null
-    setEnvResetNotice(false)
-    clearAllEnvSessions('stopped')
+    envResetNoticeTimerRef.current = null; setEnvResetNotice(false); clearAllEnvSessions('stopped')
   }, [clearAllEnvSessions])
 
   const handleSendPrompt = async (
@@ -517,9 +188,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     const effectivePrompt = text || 'See the attached screenshot.'
     const currentMessages = messagesRef.current
     const isFirstTurn = currentMessages.filter((m) => m.role === 'user').length === 0
-    const userMsg: ChatMessage = {
-      role: 'user', text: effectivePrompt, images: attachedImages.map((img) => img.dataUrl),
-    }
+    const userMsg: ChatMessage = { role: 'user', text: effectivePrompt, images: attachedImages.map((img) => img.dataUrl) }
     const messagesWithUser = [...currentMessages, userMsg]
     if (!typedOverride) {
       setPrompt('')
@@ -530,12 +199,9 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
 
     const explicitUseCase = explicitUseCaseRef.current
     const classifiedPromptUseCase = matchExplicitUseCaseRule(effectivePrompt, allowedUseCases)
-    const turnTargetUseCase: StudioUseCase =
-      explicitUseCase !== 'auto' ? explicitUseCase : (classifiedPromptUseCase || 'auto')
+    const turnTargetUseCase: StudioUseCase = explicitUseCase !== 'auto' ? explicitUseCase : (classifiedPromptUseCase || 'auto')
 
-    const hasSavedRouteConv = Boolean(
-      parsedRoute.conversationId && conversations.some((c) => c.id === parsedRoute.conversationId)
-    )
+    const hasSavedRouteConv = Boolean(parsedRoute.conversationId && conversations.some((c) => c.id === parsedRoute.conversationId))
     const convId =
       isFirstTurn && !hasSavedRouteConv && (!parsedRoute.conversationId || location.pathname === '/')
         ? `conv_${Date.now()}`
@@ -557,9 +223,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       createdAt: existingConv?.createdAt || nowIso,
       updatedAt: nowIso,
     }
-    setConversations((prev) => [inFlightEntry, ...prev.filter((c) => c.id !== convId)], {
-      optimisticEntry: inFlightEntry,
-    })
+    setConversations((prev) => [inFlightEntry, ...prev.filter((c) => c.id !== convId)], { optimisticEntry: inFlightEntry })
     saveInFlightConvId(convId)
     if (userId) {
       void saveUserConversation(core40SDK, userId, inFlightEntry, getArtifactNamespace(extensionSDK)).catch(() => {})
@@ -581,7 +245,6 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     }
 
     const currentSession = agentSessionRef.current
-
     const abortController = new AbortController()
     turnAbortControllerRef.current = abortController
     const turnEpoch = permEpochRef.current
@@ -633,18 +296,11 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
               turnExplores.map(async (id) => {
                 const parsed = parseExploreId(id)
                 if (!parsed) return ''
-                try {
-                  return await buildDenseExploreSchema(core40SDK, parsed.modelName, parsed.exploreName)
-                } catch {
-                  return ''
-                }
+                try { return await buildDenseExploreSchema(core40SDK, parsed.modelName, parsed.exploreName) } catch { return '' }
               })
             )
             const joined = sections.filter(Boolean).join('\n\n---\n\n')
-            if (joined) {
-              turnSchemaMarkdown = joined
-              setSchemaMarkdown(joined)
-            }
+            if (joined) { turnSchemaMarkdown = joined; setSchemaMarkdown(joined) }
           }
         }
         if (hydrated.extraSources.length > 0) turnExtraSources = hydrated.extraSources
@@ -657,11 +313,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       if (promptSlashSkills.length > 0) setActivatedLookmlSkills(turnActivatedSkills)
       const effectiveLookmlTurn = turnTargetUseCase === 'lookml' || (turnTargetUseCase === 'auto' && isLookmlMode)
       const effectiveBuilderMode: 'data_app' | 'dashboard' =
-        turnTargetUseCase === 'dashboard'
-          ? 'dashboard'
-          : turnTargetUseCase === 'app' || turnTargetUseCase === 'data-investigator'
-          ? 'data_app'
-          : builderMode
+        turnTargetUseCase === 'dashboard' ? 'dashboard' : turnTargetUseCase === 'app' || turnTargetUseCase === 'data-investigator' ? 'data_app' : builderMode
       const result = await runAntigravityTurn({
         sdk: core40SDK, extensionSDK, userId,
         environmentId: sharedEnvIdRef.current || currentSession.environmentId,
@@ -682,10 +334,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         existingNativeContent: nativeContent, extraSources: turnExtraSources,
         priorMessages: currentMessages, requirePermission: true,
         approvedOperations: turnApprovedOps, onPermissionRequest: turnPermRequest,
-        onProgressSteps: (steps) => {
-          liveActivityStepsRef.current = steps
-          setLiveActivitySteps(steps)
-        },
+        onProgressSteps: (steps) => { liveActivityStepsRef.current = steps; setLiveActivitySteps(steps) },
         onInteractionCreated: (id) => {
           latestTurnInteractionRef.current = { convId, id }
           const updatedInFlightEntry: UserConversationEntry = {
@@ -695,9 +344,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             messages: stripMessagesForStorage(messagesWithUser),
             updatedAt: new Date().toISOString(),
           }
-          setConversations((prev) => [updatedInFlightEntry, ...prev.filter((c) => c.id !== convId)], {
-            optimisticEntry: updatedInFlightEntry,
-          })
+          setConversations((prev) => [updatedInFlightEntry, ...prev.filter((c) => c.id !== convId)], { optimisticEntry: updatedInFlightEntry })
           if (userId) {
             void saveUserConversation(core40SDK, userId, updatedInFlightEntry, getArtifactNamespace(extensionSDK)).catch(() => {})
           }
@@ -768,8 +415,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       })
 
       if (resolvedUseCase === 'tile' && !result.lookmlBundle && !result.nativeBundle && !result.bundle && !result.alertBundle) {
-        const isExplicitScriptRequest =
-          explicitUseCase === 'tile' || loadedScript || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
+        const isExplicitScriptRequest = explicitUseCase === 'tile' || loadedScript || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
         const pyMatch = (result.assistantText || '').match(/```(?:python|py)?\s*\n([\s\S]*?)```/i)
         const extractedPy = pyMatch ? pyMatch[1].trim() : ''
         const isAlertQuery = LOOKER_ALERT_QUERY_RE.test(effectivePrompt) || turnActivatedSkills.includes('looker-alerts')
@@ -782,17 +428,13 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           const nextCode = extractedPy || scriptCode
           const prevKeys = new Set(contentItemsRef.current.map((it) => it.key))
           const pyOut = await handleRunPython(nextCode, filtersJson, {
-            requirePermission: true,
-            approvedOperations: turnApprovedOps,
-            onPermissionRequest: turnPermRequest,
+            requirePermission: true, approvedOperations: turnApprovedOps, onPermissionRequest: turnPermRequest,
             isCanceled: () => abortController.signal.aborted || permEpochRef.current !== turnEpoch,
             thought: 'Execute generated Looker Python script',
           })
           if (abortController.signal.aborted) return
           if (pyOut.includes('PermissionError:')) {
-            const denyErr =
-              pyOut.match(/PermissionError:[^\n"]+/)?.[0] ||
-              'PermissionError: Script execution mutates Looker state and was not approved.'
+            const denyErr = pyOut.match(/PermissionError:[^\n"]+/)?.[0] || 'PermissionError: Script execution mutates Looker state and was not approved.'
             recordTurnDenial(denyErr, 'tile', 'tile', turnExplores)
             return
           }
@@ -814,8 +456,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         finalMsgs = [
           ...messagesWithUser,
           {
-            role: 'assistant', text: replyText,
-            interactionId: result.session.lastInteractionId,
+            role: 'assistant', text: replyText, interactionId: result.session.lastInteractionId,
             activitySteps: result.activitySteps, thinkingDurationSec: result.thinkingDurationSec,
             ...(turnCrudItems.length > 0 ? { crudItems: turnCrudItems } : {}),
           },
@@ -825,9 +466,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         const bundleExplores = result.bundle
           ? Array.from(
               new Set([
-                ...(result.bundle.widgets || [])
-                  .filter((w) => w.query?.model && w.query?.view)
-                  .map((w) => formatExploreId(w.query.model, w.query.view)),
+                ...(result.bundle.widgets || []).filter((w) => w.query?.model && w.query?.view).map((w) => formatExploreId(w.query.model, w.query.view)),
                 ...extractExploreIdsFromCode(result.bundle.raw_code || ''),
               ])
             )
@@ -836,11 +475,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         convExplores = effectiveExplores
         if (turnExplores.length === 0 && bundleExplores.length > 0) setSelectedExplores(bundleExplores)
 
-        const studioMeta = {
-          explores: effectiveExplores,
-          lastInteractionId: result.session.lastInteractionId,
-          environmentId: result.session.environmentId,
-        }
+        const studioMeta = { explores: effectiveExplores, lastInteractionId: result.session.lastInteractionId, environmentId: result.session.environmentId }
         let handledArtifact = false
         let finalDashId: string | undefined
         let finalWidgetCount: number | undefined
@@ -879,8 +514,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             setBusyStatus('Saving LookML project changes...')
             const prevFiles = lookmlBundle && resolveLookmlCanonicalProjectId(lookmlBundle) === canonProj ? lookmlBundle.files : []
             let mergedBundle: LookmlBundle = Object.assign({}, result.lookmlBundle, {
-              id: canonProj,
-              project_id: cleanLookmlProjectId(result.lookmlBundle.project_id) || canonProj,
+              id: canonProj, project_id: cleanLookmlProjectId(result.lookmlBundle.project_id) || canonProj,
               files: mergeLookmlFiles(prevFiles, result.lookmlBundle.files),
             })
             try {
@@ -891,12 +525,9 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             const lookmlId = cleanLookmlProjectId(mergedBundle.project_id) || canonProj
             setLookmlBundle(mergedBundle)
             setLookmlProjectId(lookmlId)
-            const isExistingLookml = contentItemsRef.current.some(
-              (it) => it.contentType === 'lookml' && (it.projectId || it.id) === lookmlId
-            )
+            const isExistingLookml = contentItemsRef.current.some((it) => it.contentType === 'lookml' && (it.projectId || it.id) === lookmlId)
             const upLookml = upsertContentItem({
-              id: lookmlId, sessionId: lookmlId, projectId: lookmlId,
-              contentType: 'lookml', title: `LookML: ${lookmlId}`,
+              id: lookmlId, sessionId: lookmlId, projectId: lookmlId, contentType: 'lookml', title: `LookML: ${lookmlId}`,
               embedPath: `/lookml/${encodeURIComponent(lookmlId)}`, updatedAt: new Date().toISOString(),
               source: isExistingLookml ? 'modified' : 'created', createdInConversation: true, hidden: false,
             })
@@ -914,11 +545,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
               if (result.nativeBundle && (result.nativeBundle.id === d.id || result.nativeBundle.lookml_dashboard_id === d.id)) return
               const isExistingDash = contentItemsRef.current.some((it) => it.key === `lookml_dashboard:${d.id}`)
               setNativeContent(
-                {
-                  id: d.id, contentType: 'lookml_dashboard', title: d.title,
-                  folderId: selectedFolderId, embedPath: d.embedPath,
-                  lookmlDashboardId: d.id, projectId: lookmlId, model: d.model,
-                },
+                { id: d.id, contentType: 'lookml_dashboard', title: d.title, folderId: selectedFolderId, embedPath: d.embedPath, lookmlDashboardId: d.id, projectId: lookmlId, model: d.model },
                 { source: isExistingDash ? 'modified' : 'created', createdInConversation: true, hidden: false }
               )
               recordCrudItem(toTurnCrudItem({ key: `lookml_dashboard:${d.id}`, id: d.id, title: d.title, contentType: 'lookml_dashboard', embedPath: d.embedPath }, isExistingDash ? 'updated' : 'created'))
@@ -949,8 +576,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           convType = 'dashboard'
           convTitle = savedNative.title
           convContent = Object.assign({}, convContent, {
-            dashboardId: savedNative.id, contentType: savedNative.contentType,
-            embedPath: savedNative.embedPath, lookId: savedNative.lookId, lookmlDashboardId: savedNative.lookmlDashboardId,
+            dashboardId: savedNative.id, contentType: savedNative.contentType, embedPath: savedNative.embedPath, lookId: savedNative.lookId, lookmlDashboardId: savedNative.lookmlDashboardId,
           })
         }
 
@@ -965,26 +591,15 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           setAlertBundle(savedAlert)
           const alertTitle = String(savedAlert.custom_title || savedAlert.title || `Alert #${alertId}`)
           const upAlert = upsertContentItem({
-            id: alertId,
-            alertId,
-            dashboardId: savedAlert.dashboard_id ? String(savedAlert.dashboard_id) : undefined,
-            contentType: 'alert',
-            title: alertTitle,
-            embedPath: `/alerts/${encodeURIComponent(alertId)}`,
-            updatedAt: savedAlert.updated_at,
-            source: isExistingAlert ? 'modified' : 'created',
-            createdInConversation: true,
-            hidden: false,
+            id: alertId, alertId, dashboardId: savedAlert.dashboard_id ? String(savedAlert.dashboard_id) : undefined,
+            contentType: 'alert', title: alertTitle, embedPath: `/alerts/${encodeURIComponent(alertId)}`,
+            updatedAt: savedAlert.updated_at, source: isExistingAlert ? 'modified' : 'created', createdInConversation: true, hidden: false,
           })
           recordCrudItem(toTurnCrudItem(upAlert, isExistingAlert ? 'updated' : 'created'))
           setActiveObjectId(alertId)
           convType = 'tile'
           convTitle = alertTitle
-          convContent = Object.assign({}, convContent, {
-            alertId,
-            dashboardId: savedAlert.dashboard_id ? String(savedAlert.dashboard_id) : undefined,
-            contentType: 'alert',
-          })
+          convContent = Object.assign({}, convContent, { alertId, dashboardId: savedAlert.dashboard_id ? String(savedAlert.dashboard_id) : undefined, contentType: 'alert' })
         }
 
         if (result.bundle) {
@@ -1071,14 +686,11 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         finalMsgs = [
           ...messagesWithUser,
           {
-            role: 'assistant',
-            text: finalAssistantText,
-            interactionId: result.session.lastInteractionId,
+            role: 'assistant', text: finalAssistantText, interactionId: result.session.lastInteractionId,
             ...(finalDashId ? { dashboardId: finalDashId } : {}),
             ...(finalWidgetCount !== undefined ? { widgetCount: finalWidgetCount } : {}),
             ...(turnCrudItems.length > 0 ? { crudItems: turnCrudItems } : {}),
-            activitySteps: result.activitySteps,
-            thinkingDurationSec: result.thinkingDurationSec,
+            activitySteps: result.activitySteps, thinkingDurationSec: result.thinkingDurationSec,
           },
         ]
         setAgentSession(
@@ -1114,9 +726,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           turnAbortControllerRef.current = null
           activeTurnConvIdRef.current = ''
         }
-        if (pendingPermRef.current?.signal === abortController.signal) {
-          dismissPendingPerm('deny')
-        }
+        if (pendingPermRef.current?.signal === abortController.signal) dismissPendingPerm('deny')
         setBusyStatus(null)
         clearInFlightConvId()
         const nextSteps = Array.isArray(mockExt?.initialLiveActivitySteps)
@@ -1156,66 +766,17 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       }
 
       abortActiveTurn('Interjected by user.')
-
-      void sendPromptRef.current({
-        text: textToSend, images: imagesToSend, mentions: mentionsToSend, bypassBusy: true,
-      })
+      void sendPromptRef.current({ text: textToSend, images: imagesToSend, mentions: mentionsToSend, bypassBusy: true })
     },
-    [abortActiveTurn, isAuthenticated, mentionedItems, pastedImages, prompt, setMentionedItems, setPastedImages, setPrompt, updateQueuedPrompts]
+    [abortActiveTurn, isAuthenticated, mentionedItems, pastedImages, prompt, queuedPromptsRef, setMentionedItems, setPastedImages, setPrompt, updateQueuedPrompts]
   )
-
-  const handleCopyThreadDebugTrace = useCallback(() => {
-    setCopyThreadState('loading')
-    const activeConv = conversations.find((c) => c.id === activeConversationId)
-    const trackedTurn = latestTurnInteractionRef.current
-    const latestTurnId =
-      (trackedTurn && (!activeConversationId || trackedTurn.convId === activeConversationId) ? trackedTurn.id : '') ||
-      messages.slice().reverse().find((m) => m.interactionId)?.interactionId ||
-      activeConv?.interactionId || agentSession?.lastInteractionId || ''
-    const envId = normalizeEnvironmentId(sharedEnvIdRef.current) || normalizeEnvironmentId(activeConv?.environmentId) || normalizeEnvironmentId(agentSession?.environmentId) || ''
-    return fetchConversationSandboxDebugMarkdown({
-      extensionSDK, auth: { mode: authMode, oauthToken, clientId, projectId, apiKey, onUnauthorizedRefresh: triggerSilentOAuthRefresh },
-      conversationId: activeConversationId || activeConv?.id, label: activeConv?.label,
-      useCase: activeConv?.use_case || auth.selectedUseCase, model: selectedModel, thinkingLevel,
-      environmentId: envId, lastInteractionId: latestTurnId, messages,
-      liveActivitySteps: liveActivitySteps.length ? liveActivitySteps : liveActivityStepsRef.current, busyStatus, contentItems,
-    }).then(
-      (md) => {
-        if (typeof window !== 'undefined') window.__LAST_COPIED_THINKING_TRACE__ = md
-        return copyTextWithExtensionSdk(md, extensionSDK).then(() => {
-          setCopyThreadState('copied')
-          setTimeout(() => setCopyThreadState((curr) => (curr === 'copied' ? 'idle' : curr)), 1800)
-        })
-      },
-      () => setCopyThreadState('idle')
-    )
-  }, [
-    activeConversationId, agentSession, apiKey, auth.selectedUseCase, authMode, busyStatus, clientId,
-    contentItems, conversations, extensionSDK, liveActivitySteps, messages, oauthToken, projectId, selectedModel,
-    sharedEnvIdRef, thinkingLevel, triggerSilentOAuthRefresh,
-  ])
-
-  const isEmptyConversation =
-    !isTileMount && location.pathname !== '/config' &&
-    !parsedRoute.objectId && messages.length === 0 && !publishedApp && !nativeContent &&
-    contentItems.length === 0 &&
-    !lookmlBundle && !healthReport && !caConversation && !loadedScript && !busyStatus &&
-    liveActivitySteps.length === 0
 
   return {
     environmentStatus, setEnvironmentStatus, envResetNotice, setEnvResetNotice,
+    latestTurnInteractionRef,
     handleResetEnvironment, handleStopEnvironment, handleWakeModeEnv,
-    liveActivitySteps, setLiveActivitySteps,
-    hydratingInteractionIds, hydrateMessageActivitySteps,
-    copyThreadState, handleCopyThreadDebugTrace,
-    queuedPrompts, updateQueuedPrompts,
-    handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt,
-    requirePermission, setRequirePermission, pendingPerm, requestCodeModePermission, resolvePermDecision,
+    handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt,
     handleSendPrompt,
-    isEmptyConversation,
-    sandboxMarkdownCache, sandboxMarkdownLoading, activeSandboxMarkdownModalPath,
-    setActiveSandboxMarkdownModalPath, loadSandboxMarkdownFile,
-    activeViewerDocument, setActiveViewerDocument, openViewerDocument,
   }
 }
 

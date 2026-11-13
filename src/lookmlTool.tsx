@@ -22,44 +22,14 @@ import {
   PersistedChatTurn,
   saveUserArtifact,
 } from './lookerApi'
-import { extractSlashSkillIds } from './lookmlSkills'
+import {
+  extractSlashSkillIds,
+  type LookmlFileChange,
+  parseLookmlFileDisplay,
+} from './lookmlSkills'
 export { getArtifactNamespace } from './lookerApi'
 export * from './lkrCliBridge'
 export * from './lookmlSkills'
-
-export interface LookmlFileChange {
-  path: string
-  action?: 'created' | 'updated' | 'deleted'
-  content?: string
-  diff?: string
-}
-
-export type LookmlFileKindLetter = 'E' | 'V' | 'T' | 'D' | 'M' | 'R' | 'F'
-
-const LOOKML_KIND_BY_EXT: Record<string, LookmlFileKindLetter> = {
-  explore: 'E',
-  view: 'V',
-  test: 'T',
-  dashboard: 'D',
-  model: 'M',
-  refinement: 'R',
-}
-
-export function parseLookmlFileDisplay(rawPath: string): {
-  stem: string
-  dir: string
-  fullPath: string
-  letter: LookmlFileKindLetter | null
-} {
-  const fullPath = String(rawPath || '').trim()
-  const relPath = fullPath.replace(/^\/+/, '')
-  const slashIdx = relPath.lastIndexOf('/')
-  const dir = slashIdx >= 0 ? relPath.slice(0, slashIdx) : ''
-  const base = slashIdx >= 0 ? relPath.slice(slashIdx + 1) : relPath
-  const m = base.match(/^(.+?)(?:\.(explore|view|test|dashboard|model|refinement))?\.(?:lkml|lookml)$/i)
-  if (!m) return { stem: base, dir, fullPath, letter: null }
-  return { stem: m[1], dir, fullPath, letter: m[2] ? LOOKML_KIND_BY_EXT[m[2].toLowerCase()] : 'F' }
-}
 
 export interface LookmlTestResult {
   test_name: string

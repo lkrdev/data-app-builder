@@ -1,20 +1,23 @@
 import {
-  AGENTS_MD, BUNDLE_APP_PY, DATA_APP_GUIDE_MD, DATA_INVESTIGATOR_GUIDE_MD,
-  KDA_SKILL_MD, KDA_TOOLKIT_PY, LOOKER_ALERTS_SKILL_MD, LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD,
-  LOOKER_PROJECT_ONBOARDING_SKILL_MD,
+  AGENTS_MD, BUNDLE_APP_PY, DATA_APP_GUIDE_MD,
+  DATA_INVESTIGATOR_GUIDE_MD, LOOKER_PROJECT_ONBOARDING_SKILL_MD,
 } from './antigravityPrompts'
-export {
-  APP_BUILDER_SYSTEM_PROMPT, LOOKER_ALERTS_SKILL_MD, LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD,
-  LOOKER_PROJECT_ONBOARDING_SKILL_MD,
-} from './antigravityPrompts'
+import {
+  LOOKER_ALERTS_SKILL_MD, LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD,
+} from './antigravityStarters'
 import {
   type AlertInspectorBundle, type AntigravityActivityStep, type AntigravityInteractionOutput,
   type AntigravityInteractionPayload, type AntigravityInteractionStep, type AntigravityTurnTelemetry,
   collectInteractionTextCandidates, extractNonThoughtText, parseTaggedJsonObjects,
 } from './antigravityTypes'
-export { type AlertInspectorBundle, collectInteractionTextCandidates, extractNonThoughtText, parseTaggedJsonObjects } from './antigravityTypes'
-import { type DataAppBundle, type NativeContentBundle, resolveNativeEmbedPath } from './lookerApi'
-import { BOOTSTRAP_LOOKML_PY, LKR_CLI_SITECUSTOMIZE_PY } from './lookmlTool'
+export {
+  type AlertInspectorBundle, collectInteractionTextCandidates, extractNonThoughtText, parseTaggedJsonObjects,
+} from './antigravityTypes'
+import { type DataAppBundle } from './dataAppPublisher'
+import { BOOTSTRAP_LOOKML_PY } from './lkrCliBridge'
+import { LKR_CLI_SITECUSTOMIZE_PY } from './lkrCliSitecustomize'
+import { type NativeContentBundle, resolveNativeEmbedPath } from './lookerArtifacts'
+import { KDA_SKILL_MD, KDA_TOOLKIT_PY } from './lookmlSkills'
 import { SANDBOX_AGENT_SKILL_FILES } from './sandboxSkillsBundle'
 export { SANDBOX_AGENT_SKILL_FILES } from './sandboxSkillsBundle'
 
@@ -734,13 +737,7 @@ export interface ConversationThreadTurnLike {
 
 export function formatConversationThreadMarkdown(
   messages: ReadonlyArray<ConversationThreadTurnLike>,
-  opts?: {
-    title?: string
-    agentName?: string
-    conversationId?: string
-    liveActivitySteps?: AntigravityActivityStep[]
-    busyStatus?: string | null
-  }
+  opts?: { title?: string; agentName?: string; conversationId?: string; liveActivitySteps?: AntigravityActivityStep[]; busyStatus?: string | null }
 ): string {
   const safeMsgs = Array.isArray(messages) ? messages : []
   const liveSteps = Array.isArray(opts?.liveActivitySteps) ? opts.liveActivitySteps : []
@@ -750,14 +747,9 @@ export function formatConversationThreadMarkdown(
   lines.push(`- Messages: ${safeMsgs.length}${liveSteps.length > 0 ? ` (+ ${liveSteps.length} live steps)` : ''}`)
   safeMsgs.forEach((m, idx) => {
     const roleHeader = m.role === 'user' ? 'User' : m.role === 'error' ? 'Error' : authorLabel
-    const metaBits = [
-      m.interactionId ? `interaction: \`${m.interactionId}\`` : '',
-      m.dashboardId ? `dashboard: \`#${m.dashboardId}\`` : '',
-    ].filter(Boolean).join(' · ')
+    const metaBits = [m.interactionId ? `interaction: \`${m.interactionId}\`` : '', m.dashboardId ? `dashboard: \`#${m.dashboardId}\`` : ''].filter(Boolean).join(' · ')
     lines.push('', `#### Message ${idx + 1} — ${roleHeader}${metaBits ? ` (${metaBits})` : ''}`)
-    if (m.activitySteps && m.activitySteps.length > 0) {
-      lines.push('', formatThinkingTraceMarkdown(m.activitySteps, { thinkingDurationSec: m.thinkingDurationSec }))
-    }
+    if (m.activitySteps && m.activitySteps.length > 0) lines.push('', formatThinkingTraceMarkdown(m.activitySteps, { thinkingDurationSec: m.thinkingDurationSec }))
     if (m.text?.trim()) lines.push('', m.text.trim())
   })
   if (liveSteps.length > 0 || opts?.busyStatus) {
@@ -786,18 +778,13 @@ export function extractInteractionTelemetry(
   const verifyRetries = steps.filter((s) => /"stage":\s*"(?:syntax|safety|widget_extraction)"/.test(String(s?.output || s?.stderr || s?.result || ''))).length
   const usage = interaction?.usage || interaction?.usage_metadata || {}
   return {
-    agent_wall_ms: stats.agentWallMs,
-    poll_wait_ms: stats.pollWaitMs,
-    poll_count: stats.pollCount,
-    codemode_exec_ms: stats.codemodeExecMs,
-    looker_http_ms: stats.lookerHttpMs,
+    agent_wall_ms: stats.agentWallMs, poll_wait_ms: stats.pollWaitMs, poll_count: stats.pollCount, codemode_exec_ms: stats.codemodeExecMs, looker_http_ms: stats.lookerHttpMs,
     tool_calls: { bash: bashCalls || Number(interaction?.bash_calls || 0), codemode: stats.codemodeCalls, looker_http: stats.lookerHttpCalls },
     tokens: {
       input: Number(usage.input_tokens ?? usage.total_input_tokens ?? usage.prompt_token_count ?? 0),
       output: Number(usage.output_tokens ?? usage.total_output_tokens ?? usage.candidates_token_count ?? 0),
       thought: Number(usage.thought_tokens ?? usage.total_thought_tokens ?? usage.thoughts_token_count ?? 0),
     },
-    verify_retries: verifyRetries,
-    api_retries: stats.apiRetries + verifyRetries,
+    verify_retries: verifyRetries, api_retries: stats.apiRetries + verifyRetries,
   }
 }

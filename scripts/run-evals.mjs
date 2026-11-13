@@ -48,10 +48,26 @@ const args = process.argv.slice(2)
 const isLive = args.includes('--live')
 const evalFilter = args.find((a) => a.startsWith('--eval='))?.split('=')[1]?.trim()?.toLowerCase()
 
-const antigravityPromptsTs = readFileSync(path.join(repoRoot, 'src/antigravityPrompts.ts'), 'utf8')
+const antigravityPromptsTs = [
+  'src/antigravityPrompts.ts',
+  'src/lookmlSkills.ts',
+]
+  .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
+  .join('\n')
 const antigravityStepsTs = readFileSync(path.join(repoRoot, 'src/antigravitySteps.ts'), 'utf8')
-const antigravityTs = readFileSync(path.join(repoRoot, 'src/antigravity.ts'), 'utf8')
-const lkrCliBridgeTs = readFileSync(path.join(repoRoot, 'src/lkrCliBridge.ts'), 'utf8')
+const antigravityTs = [
+  'src/antigravity.ts',
+  'src/antigravityEnv.ts',
+  'src/antigravityLoop.ts',
+]
+  .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
+  .join('\n')
+const lkrCliBridgeTs = [
+  'src/lkrCliBridge.ts',
+  'src/lkrCliSitecustomize.ts',
+]
+  .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
+  .join('\n')
 const lookerPermissionsTs = readFileSync(path.join(repoRoot, 'src/lookerPermissions.ts'), 'utf8')
 const lookerApiTs = readFileSync(path.join(repoRoot, 'src/lookerApi.ts'), 'utf8')
 const conversationalAnalyticsTs = readFileSync(path.join(repoRoot, 'src/conversationalAnalytics.ts'), 'utf8')

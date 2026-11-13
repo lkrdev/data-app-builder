@@ -47,12 +47,16 @@ assert.equal(cmParsed.path, '/lookml_models/thelook/explores/order_items')
 
 const antigravityTs = [
   'src/antigravity.ts',
+  'src/antigravityEnv.ts',
+  'src/antigravityLoop.ts',
   'src/antigravityTypes.ts',
   'src/antigravityAuth.ts',
   'src/antigravitySteps.ts',
   'src/antigravityStarters.ts',
   'src/antigravityPrompts.ts',
+  'src/lookmlSkills.ts',
   'src/lkrCliBridge.ts',
+  'src/lkrCliSitecustomize.ts',
 ]
   .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
   .join('\n')
@@ -88,6 +92,12 @@ const appTsx = [
   'src/components/StudioDesignSystem.tsx',
   'src/components/StudioHeader.tsx',
   'src/components/StudioWorkspace.tsx',
+  'src/components/StudioMarkdown.tsx',
+  'src/components/StudioUseCaseGuides.tsx',
+  'src/components/StudioComposer.tsx',
+  'src/components/StudioLeftPane.tsx',
+  'src/components/StudioOverviewSidebar.tsx',
+  'src/components/StudioStagePanels.tsx',
   'src/useStudioController.ts',
   'src/studioControllerAuth.ts',
   'src/studioControllerMetadata.ts',
@@ -110,8 +120,12 @@ assert(
 )
 const lookerApiTs = [
   'src/lookerApi.ts',
+  'src/lookerTransport.ts',
+  'src/lookerFolders.ts',
   'src/lookerPermissions.ts',
   'src/lookerArtifacts.ts',
+  'src/lookerArtifactTypes.ts',
+  'src/lookerArtifactService.ts',
   'src/dataAppPublisher.ts',
   'src/conversationalAnalytics.ts',
 ]

@@ -583,3 +583,117 @@ export interface AlertInspectorBundle {
   updated_at?: string
 }
 
+const DELTA_STEP_TYPES = new Set([
+  'arguments_delta', 'thought_summary', 'text', 'code_delta', 'command_delta', 'output_delta',
+])
+const STATUS_BY_SSE_EVENT: Record<string, string> = {
+  'interaction.complete': 'completed', 'interaction.completed': 'completed', completed: 'completed', done: 'completed',
+  'interaction.requires_action': 'requires_action', requires_action: 'requires_action',
+  'interaction.incomplete': 'incomplete', incomplete: 'incomplete',
+  'interaction.failed': 'failed', failed: 'failed', 'interaction.error': 'failed', error: 'failed',
+  'interaction.cancelled': 'cancelled', 'interaction.canceled': 'cancelled', cancelled: 'cancelled', canceled: 'cancelled',
+}
+
+export function mergeInteractionSseEvent(
+  current: AntigravityInteractionPayload,
+  eventType: string,
+  rawData: Record<string, unknown>
+): AntigravityInteractionPayload {
+  const data = rawData.interaction && typeof rawData.interaction === 'object'
+    ? Object.assign({}, rawData, rawData.interaction as Record<string, unknown>)
+    : rawData
+  const evt = String((eventType && eventType !== 'message' ? eventType : '') || data.event_type || data.type || eventType || '').trim()
+  const nextStatus = typeof data.status === 'string' ? data.status : (STATUS_BY_SSE_EVENT[evt] || current.status)
+  const nextSteps = Array.isArray(data.steps) && (data.steps.length > 0 || !current.steps?.length)
+    ? (data.steps as AntigravityInteractionStep[]).slice()
+    : (current.steps || []).slice()
+  if (evt !== 'step.stop' && (evt === 'step.start' || evt === 'step.delta' || evt === 'step' || Boolean(data.step_delta || data.step))) {
+    const stepObj = (data.step_delta || data.step || data.delta || data) as AntigravityInteractionStep
+    if (stepObj && typeof stepObj === 'object') {
+      const stepId = stepObj.id || stepObj.call_id
+      const append = evt === 'step.delta' || Boolean(data.step_delta || data.delta)
+      const stepIdx = typeof data.index === 'number' ? data.index : stepObj.index
+      const cText = typeof (stepObj.content as { text?: unknown } | undefined)?.text === 'string' ? (stepObj.content as { text: string }).text : undefined
+      const compat = (a?: string, b?: string) =>
+        (a === 'function_call' && b === 'function_result') || (a === 'function_result' && b === 'function_call') ? false
+        : b === 'arguments_delta' ? !a || a === 'function_call'
+        : b === 'thought_summary' ? !a || a === 'thought' || a === 'thinking'
+        : b === 'text' ? !a || !/^(?:function_call|function_result|thought|thinking|code_execution)$/.test(a) : true
+      const last = nextSteps[nextSteps.length - 1]
+      let idx = typeof stepIdx === 'number' ? nextSteps.findIndex((s) => s.index === stepIdx && compat(s.type, stepObj.type)) : -1
+      if (idx < 0 && stepId) idx = nextSteps.findIndex((s) => compat(s.type, stepObj.type) && ((stepObj.id && s.id === stepObj.id) || (!stepObj.id && !s.id && s.call_id === stepId)))
+      if (idx < 0 && append && typeof stepIdx === 'number') idx = nextSteps.findIndex((s, i) => s.index === undefined && i === stepIdx && compat(s.type, stepObj.type))
+      if (idx < 0 && append && stepIdx === undefined && !stepId && last && (last.type === stepObj.type || !stepObj.type || !last.type)) idx = nextSteps.length - 1
+      const prev = idx >= 0 ? nextSteps[idx] : undefined
+      const m = Object.assign({}, prev, stepObj)
+      if (typeof stepIdx === 'number') m.index = stepIdx
+      const isObj = (v: unknown): v is Record<string, unknown> => Boolean(v) && typeof v === 'object' && !Array.isArray(v)
+      const isEmpty = (v: unknown) => isObj(v) && !Object.keys(v).length
+      const mergeArgs = (a: unknown, b: unknown): unknown =>
+        b === undefined ? a
+        : typeof a === 'string' && typeof b === 'string' ? (append || !b.trimStart().startsWith('{') ? a + b : b)
+        : isEmpty(a) && typeof b === 'string' ? b
+        : typeof a === 'string' && a && isEmpty(b) ? a
+        : isObj(a) && isObj(b) ? Object.assign({}, a, b) : b
+      if (prev) {
+        if (prev.type && (!stepObj.type || DELTA_STEP_TYPES.has(stepObj.type) || stepObj.type.endsWith('_delta'))) m.type = prev.type
+        if (prev.id && !stepObj.id) m.id = prev.id
+        if (prev.name && !stepObj.name) m.name = prev.name
+        const ma = mergeArgs(prev.arguments, stepObj.arguments)
+        if (ma !== undefined) m.arguments = ma
+        ;(['code', 'command', 'output', 'stdout', 'stderr', 'result', 'text', 'thought'] as const).forEach((k) => {
+          if (append && typeof prev[k] === 'string' && typeof stepObj[k] === 'string') {
+            ;(m as Record<string, unknown>)[k] = `${prev[k] as string}${stepObj[k] as string}`
+          }
+        })
+        if (append && typeof prev.code_execution_result?.output === 'string' && typeof stepObj.code_execution_result?.output === 'string') {
+          m.code_execution_result = Object.assign({}, prev.code_execution_result, stepObj.code_execution_result, {
+            output: `${prev.code_execution_result.output}${stepObj.code_execution_result.output}`,
+          })
+        }
+      }
+      if (prev?.function_call || stepObj.function_call) {
+        const fc = Object.assign({}, prev?.function_call, stepObj.function_call)
+        const fa = prev ? mergeArgs(prev.function_call?.arguments, stepObj.function_call?.arguments) : fc.arguments
+        if (fa !== undefined) fc.arguments = fa
+        m.name ||= fc.name
+        fc.name ||= m.name
+        const fcSent = stepObj.function_call?.arguments !== undefined && stepObj.arguments === undefined
+        const topSent = stepObj.arguments !== undefined && stepObj.function_call?.arguments === undefined
+        if (fcSent || (typeof fc.arguments === 'string' && (m.arguments === undefined || isEmpty(m.arguments)))) m.arguments = fc.arguments
+        else if (topSent || (typeof m.arguments === 'string' && (fc.arguments === undefined || isEmpty(fc.arguments)))) fc.arguments = m.arguments
+        m.function_call = fc
+      }
+      if (cText !== undefined && ((stepObj.type === 'thought_summary' && typeof stepObj.thought !== 'string') || (stepObj.type === 'text' && typeof stepObj.text !== 'string'))) {
+        const k = stepObj.type === 'thought_summary' ? 'thought' : 'text'
+        if (!prev && k === 'thought') m.type = 'thought'
+        m[k] = append && typeof prev?.[k] === 'string' ? `${prev[k] as string}${cText}` : cText
+        if (prev?.content !== undefined) m.content = prev.content
+        else delete m.content
+      }
+      if (idx >= 0) nextSteps[idx] = m
+      else nextSteps.push(m)
+    }
+  }
+  let nextOutputText = current.output_text
+  if (evt === 'content.delta' || Boolean(data.content_delta) || typeof data.text_delta === 'string') {
+    const d = (data.content_delta || data.delta || data) as { type?: string; text?: string; text_delta?: string; content?: { text?: string } }
+    if (d.type !== 'thought' && d.type !== 'thought_summary') {
+      nextOutputText = `${current.output_text || ''}${String(d.text_delta ?? d.text ?? d.content?.text ?? data.text_delta ?? '')}`
+    }
+  } else if (typeof data.output_text === 'string') {
+    nextOutputText = data.output_text
+  }
+  const out: AntigravityInteractionPayload = Object.assign({}, current)
+  if (typeof data.id === 'string' && data.id) out.id = data.id
+  if (nextStatus) out.status = nextStatus
+  if (typeof data.environment_id === 'string' && data.environment_id) out.environment_id = data.environment_id
+  if (nextOutputText !== undefined) out.output_text = nextOutputText
+  if (Array.isArray(data.outputs)) out.outputs = data.outputs as AntigravityInteractionOutput[]
+  if (nextSteps.length > 0) out.steps = nextSteps
+  ;(['error', 'usage', 'usage_metadata'] as const).forEach((k) => {
+    if (data[k] && typeof data[k] === 'object') (out as Record<string, unknown>)[k] = data[k]
+  })
+  return out
+}
+
