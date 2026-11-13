@@ -41,9 +41,13 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   )
   const isLookerDevMode = lookerWorkspaceId === 'dev'
 
-  const syncLookerSessionWorkspace = useCallback(async () => {
+  const lastSessionSyncAtRef = useRef<number>(0)
+  const syncLookerSessionWorkspace = useCallback(async (force = false) => {
     const s = core40SDK as unknown as { session?: () => Promise<{ workspace_id?: string | null }>; ok?: <T>(p: Promise<T> | T) => Promise<T> }
     if (typeof s?.session !== 'function') return
+    const now = Date.now()
+    if (!force && now - lastSessionSyncAtRef.current < 15_000) return
+    lastSessionSyncAtRef.current = now
     try {
       const sess = typeof s.ok === 'function' ? await s.ok(s.session()) : await s.session()
       if (sess?.workspace_id === 'dev' || sess?.workspace_id === 'production') setLookerWorkspaceId(sess.workspace_id)
@@ -69,7 +73,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.addEventListener) return
-    const onFocus = () => { void syncLookerSessionWorkspace() }
+    const onFocus = () => { void syncLookerSessionWorkspace(false) }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [syncLookerSessionWorkspace])
@@ -405,6 +409,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
         userIdRef.current = resolvedUserId
         setUserId(resolvedUserId)
         setUserDisplayName(String(meta.user?.display_name || ''))
+        lastSessionSyncAtRef.current = Date.now()
         if (meta.workspaceId === 'dev' || meta.workspaceId === 'production') {
           setLookerWorkspaceId(meta.workspaceId)
         }

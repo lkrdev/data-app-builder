@@ -24,7 +24,7 @@ import {
   extractNativeContentFromInteraction, extractNonThoughtText, extractSkillNameFromPath, extractThoughtText, extractWrittenMarkdownPathFromCode,
   fetchEnvironmentFile, formatAccessibleConnectionsMarkdown, formatContentInventoryMarkdown, formatFriendlyLookerActivityLabel,
   formatThinkingTraceMarkdown, generateConversationLabel, generateDynamicStarterPrompts,
-  getCachedStarterPrompts, getInitialStoredOAuthToken, getSharedEnvExploreSchemas, hydrateInteractionActivitySteps,
+  getCachedStarterPrompts, getInitialStoredOAuthToken, getSharedEnvExploreSchemas, handleImageClipboardPaste, hydrateInteractionActivitySteps,
   isConnectionSchemaDiscoveryPrompt, isEnvironmentNotFoundError, isHostOAuthWedged, isLookerInstanceMetadataQuery,
   isNewProjectOnboardingIntakePrompt, isTextAttachmentFile, KDA_SKILL_MD, KDA_TOOLKIT_PY,
   listAvailableAntigravityModels, LKR_CLI_BRIDGE_TOOL, LKR_CLI_SITECUSTOMIZE_PY, LKR_DEV_CLI_SPEC,
@@ -32,8 +32,8 @@ import {
   loadStoredRightPaneCollapsed, loadStoredThinkingLevel, loginWithGoogleOAuth,
   LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD, LOOKER_PROJECT_ONBOARDING_SKILL_MD, LOOKML_SKILLS_CATALOG, MAX_LEFT_PANE_WIDTH,
   mergeInteractionSseEvent, MIN_LEFT_PANE_WIDTH, NATIVE_CONTENT_GUIDE_MD, normalizeMaxToolRounds, normalizeMaxTotalTokens, normalizeSandboxFilePath,
-  normalizeThinkingLevel, parseStarterPromptsResponse, parseTaggedJsonObjects, persistOAuthSession, persistThinkingLevel,
-  prewarmOrWakeAntigravityEnvironment, readInitialRightPaneCollapsed, readInitialThinkingLevel, recordSharedEnvExploreSchema,
+  normalizeThinkingLevel, parseAttachmentDataUrl, parseStarterPromptsResponse, parseTaggedJsonObjects, persistOAuthSession, persistThinkingLevel,
+  prewarmOrWakeAntigravityEnvironment, readAttachedFile, readInitialRightPaneCollapsed, readInitialThinkingLevel, recordSharedEnvExploreSchema,
   refreshOAuthSessionIfNeeded, resetHostOAuthWedged, resolveAdaptivePollScheduleMs, resolveBuiltinWorkspaceFileContent,
   resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, runAntigravityTurn,
   SANDBOX_AGENT_SKILL_FILES, SANDBOX_WORKSPACE_SKILL_FILES, sanitizeActivityThought, sanitizeConversationLabel, saveStoredLeftPaneWidth,
@@ -54,7 +54,7 @@ import {
   createLookerEmbedPreloadController, deriveConversationOverviewData, DOC_UI_COMPONENTS, fetchAvailableLookerConnectionsMarkdown, getStarterPromptsForUseCase,
   isAllowedExternalWindowUrl, isSandboxMarkdownPath, normalizeLookerEmbedUrl, normalizeLookerProjectRootUrl, openOrCopyMarkdownLink,
   parseInViewerLookerLink, renderUseCaseGuideMarkdown, resolveLookerEmbedTarget,
-  STARTER_PROMPTS_BY_USE_CASE, StarterPromptButtons, StudioMarkdown, USE_CASE_BADGES,
+  STARTER_PROMPTS_BY_USE_CASE, StarterPromptButtons, StudioMarkdown, StudioOverviewSidebar, USE_CASE_BADGES,
   USE_CASE_GUIDE_ORDER, USE_CASE_GUIDES,
 } from '../components/StudioWorkspace'
 import {
@@ -66,15 +66,15 @@ import {
   deleteUserConversation, extractResolvedUseCase, fetchFolderChildren,
   fetchFolderWithAncestors, fetchInitialLookerMetadata, fetchLookerCaAgentsCatalog,
   fetchPreloadedContentSummary, formatStudioContentItemTitle, formatUserConversationsArtifactKey,
-  formatUserConversationsKey, formatUserEnvArtifactKey, getAllowedUseCases, getArtifactNamespace,
+  formatUserConversationsKey, formatUserEnvArtifactKey, getActiveCodeModeConversationId, getAllowedUseCases, getArtifactNamespace,
   getArtifactService, getConvTargetId, getUseCaseLabel, hookChattyHostApiLogger, hydrateConversationContentItems, hydrateMentionedContext,
-  installChattyApiLogger, isConversationalNoOpPrompt, isLookmlTargetAlreadyLoaded, isTransportChattyHooked,
+  installChattyApiLogger, isConversationalNoOpPrompt, isInsideCodeModeApiScope, isLookmlTargetAlreadyLoaded, isTransportChattyHooked,
   LkrCodeModeApiCallEntry, listUserArtifacts, loadStoredSelectedFolderId,
   loadUserConversations, loadUserEnvironmentId, matchExplicitUseCaseRule,
   normalizeArtifactNamespace, normalizeBusySendAction, normalizeCaEmbedPath, normalizeLookerApiPath, normalizeQueryFiltersToFixedDates,
   normalizeStudioAgentName, normalizeStudioContentItem,
   normalizeStudioThemeMode,
-  parseCaAgentSelectionResponse, parseStudioRoute, persistSelectedFolderId, rawLookerRequest,
+  parseAttachmentDataUrl as lookerApiParseAttachmentDataUrl, parseCaAgentSelectionResponse, parseStudioRoute, persistSelectedFolderId, rawLookerRequest,
   readInitialSelectedFolderId, readSwrCache, resolveConversationRelatedContent,
   resolveStudioContentEmbedPath, resolveStudioTheme, resolveSystemTheme, resolveUserCapabilities,
   saveNativeContentArtifact, saveStoredBusySendAction, saveUserArtifact, saveUserConversation, saveUserEnvironmentId, searchGlobalContentV2,
@@ -82,7 +82,7 @@ import {
   DEFAULT_BUSY_SEND_ACTION, DEFAULT_MAX_TOOL_ROUNDS as LOOKER_API_DEFAULT_MAX_TOOL_ROUNDS, loadStoredBusySendAction,
   normalizeMaxToolRounds as lookerApiNormalizeMaxToolRounds, STUDIO_BUSY_SEND_ACTION_STORAGE_KEY,
   STUDIO_FOLDER_STORAGE_KEY, STUDIO_MAX_TOOL_ROUNDS_OPTIONS as LOOKER_API_MAX_TOOL_ROUNDS_OPTIONS, STUDIO_MODES, STUDIO_OVERVIEW_TAB_KEY, STUDIO_THEME_STORAGE_KEY, STUDIO_USE_CASE_OPTIONS,
-  StudioContentItem, SWR_DEDUPED_METHODS, unwrapLookerRawResponse, upsertPublishedDataApp, upsertStudioContentItem, UserArtifactIndexItem, userStudioConfigArtifactKey,
+  StudioContentItem, SWR_DEDUPED_METHODS, unwrapLookerRawResponse, upsertPublishedDataApp, upsertStudioContentItem, UserArtifactIndexItem, userStudioConfigArtifactKey, withCodeModeApiScope,
 } from '../lookerApi'
 import {
   extractLookmlBundleFromInteraction,
@@ -8605,12 +8605,13 @@ customElements.define('good-compare-app', GoodCompareApp);`
       'looker-field-profiler',
     ])
 
-    // Links extracts assistant markdown links, bare URLs, and LookML SQL/Explore parity slugs while skipping javascript: and fenced code URLs
+    // Links extracts assistant markdown links, bare URLs, LookML SQL/Explore parity slugs, and /dashboards/ + /looks/ contentRows while skipping javascript: and fenced code URLs
     expect(overview.links.map((l) => l.href)).toEqual([
       '/dashboards/42',
       'https://cloud.google.com/looker/docs',
       '/sql/sql_1',
       '/x/exp_1',
+      '/looks/19',
     ])
     expect(overview.links[0].inViewerTarget?.contentType).toBe('dashboard')
 
@@ -10449,5 +10450,241 @@ customElements.define('good-compare-app', GoodCompareApp);`
     } finally {
       LkrCodeMode.runPythonCode = origRunPython
     }
+  })
+
+  test('81. Issue #196: scopes Overview API Calls to per-conversation Turn Code Mode calls, removes Overview Hidden badge, links dashboard/Look contentRows, and supports .sql/.json drag-drop, clipboard paste, and file chips', async () => {
+    // 1. parseAttachmentDataUrl, readAttachedFile, and handleImageClipboardPaste for .sql / .json / .pdf / image/*
+    expect(lookerApiParseAttachmentDataUrl).toBe(parseAttachmentDataUrl)
+    expect(parseAttachmentDataUrl('data:text/plain;name=query%201.sql;base64,U0VMRUNUIDE=')).toEqual({
+      isImage: false,
+      name: 'query 1.sql',
+      mimeType: 'text/plain',
+    })
+    expect(parseAttachmentDataUrl('data:application/json;name=manifest.json;base64,e30=')).toEqual({
+      isImage: false,
+      name: 'manifest.json',
+      mimeType: 'application/json',
+    })
+    expect(parseAttachmentDataUrl('data:image/png;base64,iVBORw0KGgo=')).toEqual({
+      isImage: true,
+      name: undefined,
+      mimeType: 'image/png',
+    })
+
+    const origFileReader = (globalThis as { FileReader?: unknown }).FileReader
+    ;(globalThis as { FileReader?: unknown }).FileReader = class {
+      result = ''
+      onload: (() => void) | null = null
+      readAsText(f: { __text?: string }) {
+        this.result = f.__text || ''
+        if (this.onload) this.onload()
+      }
+      readAsDataURL(f: { type?: string }) {
+        this.result = `data:${f.type || 'image/png'};base64,iVBORw0KGgo=`
+        if (this.onload) this.onload()
+      }
+    }
+    try {
+      const sqlFile = {
+        name: 'revenue_by_region.sql',
+        type: '',
+        size: 24,
+        __text: 'SELECT region FROM sales;',
+      } as unknown as File
+      const readSql = await readAttachedFile(sqlFile)
+      expect(readSql.name).toBe('revenue_by_region.sql')
+      expect(readSql.mimeType).toBe('text/plain')
+      expect(readSql.dataUrl).toMatch(/^data:text\/plain;name=revenue_by_region\.sql;base64,/)
+      expect(parseAttachmentDataUrl(readSql.dataUrl || '')).toEqual({
+        isImage: false,
+        name: 'revenue_by_region.sql',
+        mimeType: 'text/plain',
+      })
+
+      const jsonFile = {
+        name: 'config.json',
+        type: 'application/json',
+        size: 15,
+        __text: '{"theme":"dark"}',
+      } as unknown as File
+      const readJson = await readAttachedFile(jsonFile)
+      expect(readJson.dataUrl).toMatch(/^data:application\/json;name=config\.json;base64,/)
+      expect(parseAttachmentDataUrl(readJson.dataUrl || '')).toEqual({
+        isImage: false,
+        name: 'config.json',
+        mimeType: 'application/json',
+      })
+
+      const imgFile = {
+        name: 'chart.png',
+        type: 'image/png',
+        size: 4,
+      } as unknown as File
+      const readImg = await readAttachedFile(imgFile)
+      expect(readImg.dataUrl).toBe('data:image/png;base64,iVBORw0KGgo=')
+      expect(readImg.dataUrl).not.toContain(';name=')
+
+      let pastedFiles: StudioAttachedFile[] = []
+      let prevented = false
+      handleImageClipboardPaste(
+        {
+          clipboardData: {
+            items: [
+              { kind: 'file', type: '', getAsFile: () => sqlFile },
+              { kind: 'file', type: 'application/json', getAsFile: () => jsonFile },
+            ],
+          } as unknown as DataTransfer,
+          preventDefault: () => {
+            prevented = true
+          },
+        },
+        (updater) => {
+          pastedFiles = updater(pastedFiles)
+        }
+      )
+      await new Promise((r) => setTimeout(r, 20))
+      expect(prevented).toBe(true)
+      expect(pastedFiles.map((f) => f.name)).toEqual(['revenue_by_region.sql', 'config.json'])
+
+      // 2. Host SDK calls outside Code Mode (e.g. GET /session) get codemode: false and are excluded from Overview API Calls,
+      //    while calls inside LkrCodeMode.runPythonCode / executeLkrExtensionToolRequest get codemode: true and conversation_id
+      const gCalls = globalThis as { lkr_codemode_api_calls?: LkrCodeModeApiCallEntry[] }
+      gCalls.lkr_codemode_api_calls = []
+      expect(isInsideCodeModeApiScope()).toBe(false)
+      expect(getActiveCodeModeConversationId()).toBe('')
+
+      const rawTransport = {
+        rawRequest: jest.fn(async (_m: string, p: string) => ({
+          ok: true,
+          statusCode: 200,
+          body: JSON.stringify({ path: p, workspace_id: 'production' }),
+        })),
+      }
+      const rawSdk = {
+        authSession: { transport: rawTransport },
+      } as unknown as Looker40SDK
+      const proxiedSdk = createDeduplicatedLookerSdkProxy(rawSdk)
+
+      // Host UI call outside Code Mode (simulating syncLookerSessionWorkspace on focus/mount)
+      await rawLookerRequest(proxiedSdk, 'GET', '/session')
+      await rawLookerRequest(proxiedSdk, 'GET', '/folders/1')
+      expect(gCalls.lkr_codemode_api_calls).toHaveLength(2)
+      expect(gCalls.lkr_codemode_api_calls[0]).toEqual(
+        expect.objectContaining({ method: 'GET', route: '/session', codemode: false })
+      )
+      expect(gCalls.lkr_codemode_api_calls[1]).toEqual(
+        expect.objectContaining({ method: 'GET', route: '/folders/1', codemode: false })
+      )
+
+      // Turn Code Mode call on conv_a (even calling session() and folder("1") inside Python Code Mode!)
+      await LkrCodeMode.runPythonCode({
+        code: 's = session()\nf = folder("1")\nreturn {"ws": s.get("workspace_id")}',
+        sdk: proxiedSdk,
+        conversationId: 'conv_a',
+        requirePermission: false,
+      })
+      // Turn CLI Bridge call on conv_b
+      await executeLkrExtensionToolRequest({
+        sdk: proxiedSdk,
+        req: { kind: 'sdk_request', method: 'GET', path: '/api/4.0/projects/ecom' },
+        conversationId: 'conv_b',
+        requirePermission: false,
+      })
+      expect(isInsideCodeModeApiScope()).toBe(false)
+      expect(getActiveCodeModeConversationId()).toBe('')
+
+      const codeModeEntries = gCalls.lkr_codemode_api_calls.filter((c) => c.codemode === true)
+      expect(codeModeEntries.map((c) => ({ method: c.method, route: c.route, conversation_id: c.conversation_id }))).toEqual([
+        { method: 'GET', route: '/session', conversation_id: 'conv_a' },
+        { method: 'GET', route: '/folders/1', conversation_id: 'conv_a' },
+        { method: 'GET', route: '/projects/ecom', conversation_id: 'conv_b' },
+      ])
+
+      // Verify deriveConversationOverviewData excludes host (codemode: false) calls and isolates conv_a vs conv_b
+      const ovConvA = deriveConversationOverviewData({
+        conversationId: 'conv_a',
+        messages: [
+          {
+            role: 'user',
+            text: 'Analyze SQL and JSON',
+            images: [readSql.dataUrl!, readJson.dataUrl!, 'data:image/png;base64,iVBORw0KGgo='],
+          },
+        ],
+        contentItems: [
+          { key: 'dashboard:42', id: '42', contentType: 'dashboard', title: 'Exec KPIs', embedPath: '/embed/dashboards/42', hidden: true },
+          { key: 'look:19', id: '19', contentType: 'look', title: 'Margin Look', embedPath: '/embed/looks/19', hidden: true },
+        ],
+        windowApiCalls: gCalls.lkr_codemode_api_calls,
+      })
+      expect(ovConvA.apiCalls.map((c) => `${c.method} ${c.route}`)).toEqual(['GET /session', 'GET /folders/1'])
+      expect(ovConvA.links.map((l) => ({ href: l.href, label: l.label, meta: l.meta }))).toEqual([
+        { href: '/dashboards/42', label: 'Open Exec KPIs', meta: 'UDD' },
+        { href: '/looks/19', label: 'Open Margin Look', meta: 'Look' },
+      ])
+      expect(ovConvA.context.uploads.map((u) => u.label)).toEqual([
+        'revenue_by_region.sql',
+        'config.json',
+        'Screenshot #3',
+      ])
+
+      const ovConvB = deriveConversationOverviewData({
+        conversationId: 'conv_b',
+        messages: [],
+        windowApiCalls: gCalls.lkr_codemode_api_calls,
+      })
+      expect(ovConvB.apiCalls.map((c) => `${c.method} ${c.route}`)).toEqual(['GET /projects/ecom'])
+
+      // Host-only calls produce 0 API Calls in Overview
+      const ovHostOnly = deriveConversationOverviewData({
+        conversationId: 'conv_idle',
+        messages: [],
+        windowApiCalls: gCalls.lkr_codemode_api_calls.filter((c) => c.codemode === false),
+      })
+      expect(ovHostOnly.apiCalls).toEqual([])
+
+      // 3. Verify StudioOverviewSidebar renders row.shortTag ('UDD' / 'Look') and NEVER 'Hidden' when hidden: true
+      const sidebarHtml = renderToStaticMarkup(
+        React.createElement(StudioOverviewSidebar, {
+          ctl: {
+            messages: [],
+            busyStatus: null,
+            isAuthenticated: true,
+            openViewerDocument: async () => {},
+          } as unknown as React.ComponentProps<typeof StudioOverviewSidebar>['ctl'],
+          data: ovConvA,
+          openSecs: { content: true, links: true, uploads: true, api: true },
+          setOpenSecs: () => {},
+          showAll: {},
+          setShowAll: () => {},
+          hiddenSecs: {},
+          setHiddenSecs: () => {},
+          onOpenContentLinkInViewer: () => {},
+          onOpenReview: () => {},
+          onSelectContentRow: () => {},
+          onSelectLookmlFile: () => {},
+          onOpenApiCall: () => {},
+          onCloseDockedExplorer: () => {},
+        })
+      )
+      expect(sidebarHtml).toContain('data-testid="overview-content-item-dashboard:42"')
+      expect(sidebarHtml).toContain('>UDD</span>')
+      expect(sidebarHtml).toContain('>Look</span>')
+      expect(sidebarHtml).not.toContain('>Hidden</span>')
+      expect(sidebarHtml).toContain('revenue_by_region.sql')
+      expect(sidebarHtml).toContain('config.json')
+    } finally {
+      ;(globalThis as { FileReader?: unknown }).FileReader = origFileReader
+    }
+
+    // 4. Verify withCodeModeApiScope restores depth and conversationId on rejection
+    await expect(
+      withCodeModeApiScope(async () => {
+        expect(isInsideCodeModeApiScope()).toBe(true)
+        expect(getActiveCodeModeConversationId()).toBe('conv_err')
+        throw new Error('boom')
+      }, 'conv_err')
+    ).rejects.toThrow('boom')
+    expect(isInsideCodeModeApiScope()).toBe(false)
+    expect(getActiveCodeModeConversationId()).toBe('')
   })
 })

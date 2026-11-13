@@ -14,7 +14,7 @@ import {
   AntigravityActivityStep, buildDynamicStarterPrompts, cleanLookmlProjectId, fetchConversationSandboxDebugMarkdown,
   formatConversationThreadMarkdown, formatThinkingTraceMarkdown,
   handleFileInputSelection, handleImageClipboardPaste, MAX_LEFT_PANE_WIDTH,
-  MIN_LEFT_PANE_WIDTH, normalizeSandboxFilePath, resolveBuiltinWorkspaceFileContent,
+  MIN_LEFT_PANE_WIDTH, normalizeSandboxFilePath, parseAttachmentDataUrl, resolveBuiltinWorkspaceFileContent,
   StarterPromptItem, stripStarterPromptEmojis, STUDIO_THINKING_LEVEL_OPTIONS,
   StudioThinkingLevel, StudioUseCase,
 } from '../antigravity'
@@ -1464,7 +1464,19 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => handleImageClipboardPaste(e, setPastedImages)
 
   return (
-    <div className="dab-composer dab-chatbar">
+    <div
+      className="dab-composer dab-chatbar"
+      data-testid="chat-composer-dropzone"
+      onDragOver={(e) => {
+        if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault()
+      }}
+      onDrop={(e) => {
+        if (e.dataTransfer?.files?.length) {
+          e.preventDefault()
+          handleFileInputSelection(e.dataTransfer.files, setPastedImages)
+        }
+      }}
+    >
       <UseCaseInfoModal activeUseCase={infoModalUseCase} onSelectUseCase={setInfoModalUseCase} onClose={() => setInfoModalUseCase(null)} />
 
       {contextChips.length > 0 && (
@@ -1486,7 +1498,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
           {pastedImages.map((img, i) => {
             const isImage = img.mimeType.startsWith('image/')
             return (
-              <div key={img.id || i} className="dab-attached-file-pill" style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+              <div key={img.id || i} className="dab-attached-file-pill" data-testid={`attached-file-chip-${i}`} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
                 {isImage ? (
                   <img src={img.dataUrl} alt={img.name || 'Attached image'} style={{ height: 52, borderRadius: 4, border: '1px solid var(--dab-border)' }} />
                 ) : (
@@ -2524,7 +2536,17 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
               )}
               {m.images && m.images.length > 0 && (
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
-                  {m.images.map((src, i) => <img key={i} src={src} alt="Attached screenshot" style={{ maxHeight: 80, borderRadius: 4, border: '1px solid #cbd5e1' }} />)}
+                  {m.images.map((src, i) => {
+                    const parsed = parseAttachmentDataUrl(src)
+                    return parsed.isImage ? (
+                      <img key={i} src={src} alt="Attached screenshot" style={{ maxHeight: 80, borderRadius: 4, border: '1px solid var(--dab-border)' }} />
+                    ) : (
+                      <span key={i} className="dab-chip" data-testid={`chat-attached-file-${i}`} title={parsed.name || `Attachment #${i + 1}`}>
+                        <FileText size={12} strokeWidth={1.75} aria-hidden="true" />
+                        <span>{parsed.name || `Attachment #${i + 1}`}</span>
+                      </span>
+                    )
+                  })}
                 </div>
               )}
               {m.role === 'assistant' && m.crudItems && m.crudItems.length > 0 && (
@@ -2706,7 +2728,7 @@ export interface DeriveOverviewInput {
   scriptId?: string; scriptTitle?: string; scriptCode?: string; savedScheduleBadge?: string | null; currentAppCode?: string
   activatedLookmlSkills?: ReadonlyArray<string>; selectedExplores?: ReadonlyArray<string>; mentionedItems?: ReadonlyArray<StudioContextMention>
   selectedFolderId?: string; selectedFolderLabel?: string; pastedImages?: ReadonlyArray<{ name?: string; mimeType?: string }>
-  pendingPerm?: { req: { operation: string; httpMethod: string; path: string } } | null; windowApiCalls?: ReadonlyArray<LkrCodeModeApiCallLike>; hostUrl?: string
+  pendingPerm?: { req: { operation: string; httpMethod: string; path: string } } | null; windowApiCalls?: ReadonlyArray<LkrCodeModeApiCallLike>; hostUrl?: string; conversationId?: string
 }
 
 const INTERNAL_SANDBOX_FILE_RE = /^(?:\/?workspace\/)?(?:\.lkr_extension_cache\/|\.uv_tools\/|\.uv_python\/|(?:\.agents\/)?skills\/|AGENTS\.md$|DATA_APP_GUIDE\.md$|DATA_INVESTIGATOR_GUIDE\.md$|bootstrap_lookml\.py$|bundle_app\.py$|sitecustomize\.py$)/i
@@ -2808,8 +2830,10 @@ export function deriveConversationOverviewData(input: DeriveOverviewInput) {
   const apiCalls: OverviewApiCallRow[] = [], winCounts = new Map<string, number>(), stepCounts = new Map<string, number>()
   const normRoute = (r: string) => String(r || '').trim().replace(/^\/api\/4\.0(?=\/)/i, '').split('?')[0] || '/'
   ;(input.windowApiCalls || []).forEach((c, idx) => {
-    const route = normRoute(c.route); if (!route || HOUSEKEEPING_API_RE.test(route)) return
-    const method = String(c.method || 'GET').toUpperCase(), sig = `${method} ${route}`, resp = c.response
+    if (c.codemode === false || (c.conversation_id && input.conversationId && c.conversation_id !== input.conversationId)) return
+    const route = normRoute(c.route), method = String(c.method || 'GET').toUpperCase()
+    if (!route || HOUSEKEEPING_API_RE.test(route)) return
+    const sig = `${method} ${route}`, resp = c.response
     winCounts.set(sig, (winCounts.get(sig) || 0) + 1)
     apiCalls.push({
       id: `win_${idx}_${sig}`, method, route, status: resp ? resp.status : null, ok: resp ? Boolean(resp.ok) : true,
@@ -2857,10 +2881,15 @@ export function deriveConversationOverviewData(input: DeriveOverviewInput) {
     if (q.sql_runner_url || q.sql_slug) addLink(q.sql_runner_url || `/sql/${q.sql_slug}`, p, 'SQL')
     if (q.explore_url || q.explore_slug) addLink(q.explore_url || `/x/${q.explore_slug}`, p, 'Explore')
   })
+  for (const r of contentRows) {
+    if (r.openInLookerPath && /^\/(?:dashboards|looks)\//i.test(r.openInLookerPath)) {
+      addLink(r.openInLookerPath, `Open ${r.title}`, r.shortTag)
+    }
+  }
 
   const uploads: Array<{ key: string; label: string; sub: string }> = []
   let imgN = 0
-  msgs.forEach((m, mi) => m.images?.forEach((_, ii) => { imgN += 1; uploads.push({ key: `m_${mi}_${ii}`, label: `Screenshot #${imgN}`, sub: `Turn ${Math.floor(mi / 2) + 1}` }) }))
+  msgs.forEach((m, mi) => m.images?.forEach((src, ii) => { imgN += 1; uploads.push({ key: `m_${mi}_${ii}`, label: parseAttachmentDataUrl(src).name || `Screenshot #${imgN}`, sub: `Turn ${Math.floor(mi / 2) + 1}` }) }))
   ;(input.pastedImages || []).forEach((im, i) => uploads.push({ key: `d_${i}`, label: im.name || `Draft image #${i + 1}`, sub: 'Draft' }))
   const explores = (input.selectedExplores || []).slice(), mentions = (input.mentionedItems || []).slice()
   const caAgentLabel = ca ? `${ca.agentName || 'CA Agent'}${ca.agentId ? ` (${ca.agentId})` : ''}` : undefined
@@ -3088,7 +3117,7 @@ export const StudioOverviewSidebar: React.FC<{
                     >
                       <span className="dab-ov-ic">{renderContentTabIcon(row.contentType)}</span>
                       <span className="dab-ov-txt">{row.title}</span>
-                      <span className="dab-ov-meta">{row.hidden ? 'Hidden' : row.shortTag}</span>
+                      <span className="dab-ov-meta">{row.shortTag}</span>
                     </button>
                     {row.openInLookerPath && (
                       <button type="button" data-testid={`overview-content-external-${row.key}`} className="dab-ov-icon-btn" title="Open in Looker" aria-label={`Open ${row.title} in Looker`} onClick={(e) => { e.stopPropagation(); void openOrCopyMarkdownLink(row.openInLookerPath, hostUrl, extensionSDK) }}>
@@ -3312,7 +3341,20 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const initialWinCallsRef = useRef<unknown>(typeof window !== 'undefined' ? (window as Window & { lkr_codemode_api_calls?: unknown }).lkr_codemode_api_calls : undefined)
   const winCallsCursorRef = useRef(Array.isArray(initialWinCallsRef.current) ? initialWinCallsRef.current.length : 0)
   const wasBusyForCallsRef = useRef(false)
-  const [convWinCalls, setConvWinCalls] = useState<Record<string, LkrCodeModeApiCallLike[]>>({})
+  const lastConvIdForCallsRef = useRef(activeConversationId || '__default__')
+  const [convWinCalls, setConvWinCalls] = useState<Record<string, LkrCodeModeApiCallLike[]>>(() => {
+    const init: Record<string, LkrCodeModeApiCallLike[]> = {}
+    if (Array.isArray(initialWinCallsRef.current)) {
+      const defKey = activeConversationId || '__default__'
+      ;(initialWinCallsRef.current as LkrCodeModeApiCallLike[]).forEach((c) => {
+        if (c && c.codemode === true) {
+          const k = c.conversation_id || defKey
+          ;(init[k] || (init[k] = [])).push(c)
+        }
+      })
+    }
+    return init
+  })
   const [ovOpenSecs, setOvOpenSecs] = useState<Record<string, boolean>>({ api: false })
   const [ovShowAll, setOvShowAll] = useState<Record<string, boolean>>({})
   const [ovHiddenSecs, setOvHiddenSecs] = useState<Record<string, boolean | undefined>>({})
@@ -3379,14 +3421,26 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   useEffect(() => {
     const raw = typeof window !== 'undefined' ? (window as Window & { lkr_codemode_api_calls?: unknown }).lkr_codemode_api_calls : undefined
     if (!Array.isArray(raw) || raw !== initialWinCallsRef.current) return
-    const key = activeConversationId || '__default__'
-    if (raw.length > winCallsCursorRef.current && (busyStatus || wasBusyForCallsRef.current)) {
-      const slice = raw.slice(winCallsCursorRef.current) as LkrCodeModeApiCallLike[]
-      setConvWinCalls((prev) => ({ ...prev, [key]: (prev[key] || []).concat(slice) }))
+    const fallbackKey = lastConvIdForCallsRef.current || activeConversationId || '__default__'
+    if (raw.length > winCallsCursorRef.current) {
+      const slice = (raw.slice(winCallsCursorRef.current) as LkrCodeModeApiCallLike[]).filter(
+        (c) => c && (c.codemode === true || (c.codemode !== false && wasBusyForCallsRef.current))
+      )
+      if (slice.length > 0) {
+        setConvWinCalls((prev) => {
+          const next = { ...prev }
+          slice.forEach((c) => {
+            const k = c.conversation_id || fallbackKey
+            next[k] = (next[k] || []).concat(c)
+          })
+          return next
+        })
+      }
     }
     winCallsCursorRef.current = raw.length
     wasBusyForCallsRef.current = Boolean(busyStatus)
-  }, [busyStatus, activeConversationId, liveActivitySteps?.length])
+    lastConvIdForCallsRef.current = activeConversationId || '__default__'
+  }, [busyStatus, activeConversationId, liveActivitySteps, messages])
 
   const rawWinCalls = typeof window !== 'undefined' ? (window as Window & { lkr_codemode_api_calls?: unknown }).lkr_codemode_api_calls : undefined
   const overviewWinCalls: ReadonlyArray<LkrCodeModeApiCallLike> =
@@ -3401,11 +3455,11 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     messages, liveActivitySteps, contentItems, publishedApp, nativeContent, lookmlBundle, healthReport, caConversation,
     loadedScript, scriptId, scriptTitle, scriptCode, savedScheduleBadge, currentAppCode, activatedLookmlSkills,
     selectedExplores, mentionedItems, selectedFolderId, selectedFolderLabel, pastedImages, pendingPerm,
-    windowApiCalls: winCallsMemoKey ? overviewWinCalls : EMPTY_WIN_CALLS, hostUrl,
+    windowApiCalls: winCallsMemoKey ? overviewWinCalls : EMPTY_WIN_CALLS, hostUrl, conversationId: activeConversationId,
   }), [
     messages, liveActivitySteps, contentItems, publishedApp, nativeContent, lookmlBundle, healthReport, caConversation,
     loadedScript, scriptId, scriptTitle, scriptCode, savedScheduleBadge, currentAppCode, activatedLookmlSkills,
-    selectedExplores, mentionedItems, selectedFolderId, selectedFolderLabel, pastedImages, pendingPerm, overviewWinCalls, winCallsMemoKey, hostUrl,
+    selectedExplores, mentionedItems, selectedFolderId, selectedFolderLabel, pastedImages, pendingPerm, overviewWinCalls, winCallsMemoKey, hostUrl, activeConversationId,
   ])
 
   const clearTabPopoverTimers = () => {

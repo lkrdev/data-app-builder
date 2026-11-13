@@ -18,7 +18,7 @@ export * from './dataAppPublisher'
 export * from './lookerArtifacts'
 export * from './conversationalAnalytics'
 export { LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD } from './antigravityPrompts'
-export { DEFAULT_MAX_TOOL_ROUNDS, normalizeMaxToolRounds, STUDIO_MAX_TOOL_ROUNDS_OPTIONS } from './antigravityTypes'
+export { DEFAULT_MAX_TOOL_ROUNDS, normalizeMaxToolRounds, parseAttachmentDataUrl, STUDIO_MAX_TOOL_ROUNDS_OPTIONS } from './antigravityTypes'
 
 export const STUDIO_OVERVIEW_TAB_KEY = '__overview__'
 
@@ -204,6 +204,8 @@ export interface LkrCodeModeApiCallEntry {
   }
   timestamp: string
   duration_ms: number
+  codemode?: boolean
+  conversation_id?: string
 }
 
 export interface BuildCodeModeApiCallEntryInput {
@@ -217,6 +219,28 @@ export interface BuildCodeModeApiCallEntryInput {
   error?: unknown
   timestamp?: string
   durationMs?: number
+  codemode?: boolean
+  conversationId?: string
+}
+
+let codeModeScopeDepth = 0
+let activeCodeModeConversationId = ''
+
+export const isInsideCodeModeApiScope = (): boolean => codeModeScopeDepth > 0
+export const getActiveCodeModeConversationId = (): string => activeCodeModeConversationId
+
+export function withCodeModeApiScope<T>(fn: () => Promise<T> | T, conversationId?: string): Promise<T> {
+  codeModeScopeDepth += 1
+  const prevConvId = activeCodeModeConversationId
+  if (conversationId) activeCodeModeConversationId = conversationId
+  const done = () => {
+    codeModeScopeDepth = Math.max(0, codeModeScopeDepth - 1)
+    activeCodeModeConversationId = prevConvId
+  }
+  return Promise.resolve().then(fn).then(
+    (res) => (done(), res),
+    (err: unknown) => { done(); throw err }
+  )
 }
 
 function parseJsonIfPossible(val: unknown): unknown {
@@ -264,15 +288,19 @@ export function buildCodeModeApiCallEntry(input: BuildCodeModeApiCallEntryInput)
     const status = Number.isFinite(rs) ? rs : 200
     response = { ok: (!r || r.ok !== false) && status >= 200 && status < 400, status, body: parseJsonIfPossible(r && r.body !== undefined ? r.body : input.rawResp) }
   }
-  return {
-    method: String(input.httpMethod || input.method || 'GET').toUpperCase(),
-    route: qIdx >= 0 ? rawPath.slice(0, qIdx) : rawPath,
-    query_params: queryParams,
-    body: parseJsonIfPossible(input.body),
-    response,
-    timestamp: input.timestamp || new Date().toISOString(),
-    duration_ms: Math.max(0, Math.round(Number(input.durationMs || 0))),
-  }
+  return Object.assign(
+    {
+      method: String(input.httpMethod || input.method || 'GET').toUpperCase(),
+      route: qIdx >= 0 ? rawPath.slice(0, qIdx) : rawPath,
+      query_params: queryParams,
+      body: parseJsonIfPossible(input.body),
+      response,
+      timestamp: input.timestamp || new Date().toISOString(),
+      duration_ms: Math.max(0, Math.round(Number(input.durationMs || 0))),
+    },
+    typeof input.codemode === 'boolean' ? { codemode: input.codemode } : null,
+    input.conversationId ? { conversation_id: input.conversationId } : null
+  )
 }
 
 function getCodeModeApiCallsStore(): LkrCodeModeApiCallEntry[] {
@@ -288,8 +316,23 @@ function traceCodeModeCall<T>(
 ): Promise<T> {
   const startedAt = Date.now()
   const timestamp = new Date(startedAt).toISOString()
+  const codemode = isInsideCodeModeApiScope()
+  const conversationId = getActiveCodeModeConversationId() || undefined
   const push = (extra: BuildCodeModeApiCallEntryInput) =>
-    getCodeModeApiCallsStore().push(buildCodeModeApiCallEntry(Object.assign({ timestamp, durationMs: Date.now() - startedAt }, base, extra)))
+    getCodeModeApiCallsStore().push(
+      buildCodeModeApiCallEntry(
+        Object.assign(
+          {
+            timestamp,
+            durationMs: Date.now() - startedAt,
+            codemode: codemode || isInsideCodeModeApiScope(),
+            conversationId: conversationId || getActiveCodeModeConversationId() || undefined,
+          },
+          base,
+          extra
+        )
+      )
+    )
   return Promise.resolve().then(exec).then(
     (res) => (push({ rawResp: unwrap ? unwrap(res) : res }), res),
     (err: unknown) => { push({ error: err }); throw err }
@@ -388,6 +431,7 @@ export function createDeduplicatedLookerSdkProxy(
       wrappedsdk[method] = function () {
         // eslint-disable-next-line prefer-rest-params
         const args = Array.from(arguments)
+        if (isInsideCodeModeApiScope()) return Promise.resolve(origFn.apply(wrappedsdk, args))
         return coalesceLookerMetadataRequest(`sdk:${method}:${JSON.stringify(args)}`, () => Promise.resolve(origFn.apply(wrappedsdk, args)))
       }
     }
@@ -399,6 +443,7 @@ export function createDeduplicatedLookerSdkProxy(
       const reqStart = Date.now()
       const meta = { method: String(method || 'GET').toUpperCase(), path: String(path || '') }
       const isMetaGet =
+        !isInsideCodeModeApiScope() &&
         !loggedRawRequestFns.has(origRawReq) &&
         meta.method === 'GET' &&
         /\/(?:lookml_models|connections|content_search|content_summary|global_search_v2|user|folders|session)(?:\/|$|\?)/i.test(meta.path)
