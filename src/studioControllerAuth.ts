@@ -7,10 +7,10 @@ import {
   clearStoredOAuthSession, DEFAULT_ANTIGRAVITY_MODEL,
   DEFAULT_THINKING_LEVEL, ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig,
   getInitialStoredOAuthSession, getInitialStoredOAuthToken, isHostOAuthWedged, listAvailableAntigravityModels,
-  loadStoredOAuthSession, loadStoredThinkingLevel, loginWithGoogleOAuth, normalizeEnvironmentId,
+  loadStoredOAuthSession, loadStoredThinkingLevel, loadStoredThinkingLevelByModel, loginWithGoogleOAuth, normalizeEnvironmentId,
   normalizeMaxToolRounds, normalizeMaxTotalTokens, normalizeThinkingLevel, parseValidOAuthSession, persistThinkingLevel,
-  readInitialThinkingLevel, refreshOAuthSessionIfNeeded, resetHostOAuthWedged, resolveLookerOAuthRedirectUri,
-  STUDIO_OAUTH_REFRESH_INTERVAL_MS, STUDIO_OAUTH_STORAGE_KEY, StudioThinkingLevel,
+  persistThinkingLevelByModel, readInitialThinkingLevel, readInitialThinkingLevelByModel, refreshOAuthSessionIfNeeded,
+  resetHostOAuthWedged, resolveLookerOAuthRedirectUri, STUDIO_OAUTH_REFRESH_INTERVAL_MS, STUDIO_OAUTH_STORAGE_KEY, StudioThinkingLevel,
 } from './antigravity'
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
 import { useLookerExtension } from './contexts/LookerExtensionContext'
@@ -62,13 +62,26 @@ export function useStudioAuthAndPrefs() {
   const [disabledModes, setDisabledModes] = useState<StudioMode[]>(() =>
     Array.isArray(initialCtx?.disabledModes) ? (initialCtx.disabledModes as StudioMode[]) : []
   )
-  const [selectedModel, setSelectedModel] = useState<string>(initialCtx?.defaultModel || DEFAULT_ANTIGRAVITY_MODEL)
+  const [selectedModel, setSelectedModelState] = useState<string>(initialCtx?.defaultModel || DEFAULT_ANTIGRAVITY_MODEL)
+  const selectedModelRef = useRef<string>(selectedModel)
+  selectedModelRef.current = selectedModel
   const [defaultThinkingLevel, setDefaultThinkingLevelState] = useState<StudioThinkingLevel>(() =>
     normalizeThinkingLevel(initialCtx?.defaultThinkingLevel || DEFAULT_THINKING_LEVEL)
   )
+  const defaultThinkingLevelRef = useRef<StudioThinkingLevel>(defaultThinkingLevel)
+  defaultThinkingLevelRef.current = defaultThinkingLevel
   const [maxTotalTokens, setMaxTotalTokensState] = useState<number>(() => normalizeMaxTotalTokens(initialCtx?.maxTotalTokens))
   const [maxToolRounds, setMaxToolRoundsState] = useState<number>(() => normalizeMaxToolRounds(initialCtx?.maxToolRounds))
+  const [thinkingLevelByModel, setThinkingLevelByModelState] = useState<Record<string, StudioThinkingLevel>>(() =>
+    readInitialThinkingLevelByModel(
+      initialCtx?.defaultModel || DEFAULT_ANTIGRAVITY_MODEL,
+      initialCtx?.defaultThinkingLevel || DEFAULT_THINKING_LEVEL
+    )
+  )
+  const thinkingLevelByModelRef = useRef<Record<string, StudioThinkingLevel>>(thinkingLevelByModel)
+  thinkingLevelByModelRef.current = thinkingLevelByModel
   const [thinkingLevel, setThinkingLevelState] = useState<StudioThinkingLevel>(() =>
+    thinkingLevelByModel[initialCtx?.defaultModel || DEFAULT_ANTIGRAVITY_MODEL] ||
     readInitialThinkingLevel(initialCtx?.defaultThinkingLevel || DEFAULT_THINKING_LEVEL)
   )
   const [availableModels, setAvailableModels] = useState<AntigravityModelOption[]>(ANTIGRAVITY_ALLOWED_MODELS)
@@ -198,6 +211,14 @@ export function useStudioAuthAndPrefs() {
     let mounted = true
     void loadStoredStudioThemeMode(extensionSDK).then((s) => { if (mounted && s) setThemeModeState(s) })
     void loadStoredThinkingLevel(extensionSDK).then((s) => { if (mounted && s) setThinkingLevelState(s) })
+    void loadStoredThinkingLevelByModel(extensionSDK).then((m) => {
+      if (mounted && m && Object.keys(m).length > 0) {
+        thinkingLevelByModelRef.current = { ...thinkingLevelByModelRef.current, ...m }
+        setThinkingLevelByModelState(thinkingLevelByModelRef.current)
+        const activeLvl = thinkingLevelByModelRef.current[selectedModelRef.current]
+        if (activeLvl) setThinkingLevelState(activeLvl)
+      }
+    })
     void loadStoredLeftPaneWidth(extensionSDK).then((w) => { if (mounted && Number.isFinite(w)) setLeftPaneWidthState(clampLeftPaneWidth(w)) })
     void loadStoredRightPaneCollapsed(extensionSDK).then((c) => { if (mounted) setRightPaneCollapsedState(Boolean(c)) })
     void loadStoredBusySendAction(extensionSDK).then((a) => { if (mounted && a) setBusySendActionState(normalizeBusySendAction(a)) })
@@ -251,14 +272,36 @@ export function useStudioAuthAndPrefs() {
     })
   }, [extensionSDK])
 
-  const setThinkingLevel = useCallback((next: StudioThinkingLevel | string) => {
-    const level = normalizeThinkingLevel(next)
-    setThinkingLevelState(level)
-    persistThinkingLevel(extensionSDK, level)
+  const setSelectedModel = useCallback((next: string | ((prev: string) => string)) => {
+    const resolvedModel =
+      String(typeof next === 'function' ? next(selectedModelRef.current) : next || DEFAULT_ANTIGRAVITY_MODEL).trim() ||
+      DEFAULT_ANTIGRAVITY_MODEL
+    selectedModelRef.current = resolvedModel
+    setSelectedModelState(resolvedModel)
+    const nextLvl = thinkingLevelByModelRef.current[resolvedModel] || defaultThinkingLevelRef.current
+    setThinkingLevelState(nextLvl)
+    persistThinkingLevel(extensionSDK, nextLvl)
   }, [extensionSDK])
+
+  const setModelThinkingLevel = useCallback((modelId: string, next: StudioThinkingLevel | string) => {
+    const level = normalizeThinkingLevel(next)
+    const cleanModel = String(modelId || '').trim() || selectedModelRef.current
+    thinkingLevelByModelRef.current = { ...thinkingLevelByModelRef.current, [cleanModel]: level }
+    setThinkingLevelByModelState(thinkingLevelByModelRef.current)
+    persistThinkingLevelByModel(extensionSDK, thinkingLevelByModelRef.current)
+    if (cleanModel === selectedModelRef.current) {
+      setThinkingLevelState(level)
+      persistThinkingLevel(extensionSDK, level)
+    }
+  }, [extensionSDK])
+
+  const setThinkingLevel = useCallback((next: StudioThinkingLevel | string) => {
+    setModelThinkingLevel(selectedModelRef.current, next)
+  }, [setModelThinkingLevel])
 
   const setDefaultThinkingLevel = useCallback((next: StudioThinkingLevel | string) => {
     const level = normalizeThinkingLevel(next)
+    defaultThinkingLevelRef.current = level
     setDefaultThinkingLevelState(level)
     setThinkingLevelState(level)
   }, [])
@@ -504,7 +547,7 @@ export function useStudioAuthAndPrefs() {
     themeMode, resolvedTheme, setThemeMode,
     authMode, setAuthMode, clientId, setClientId, projectId, setProjectId,
     disabledModes, setDisabledModes, selectedModel, setSelectedModel,
-    thinkingLevel, setThinkingLevel, defaultThinkingLevel, setDefaultThinkingLevel,
+    thinkingLevel, setThinkingLevel, thinkingLevelByModel, setModelThinkingLevel, defaultThinkingLevel, setDefaultThinkingLevel,
     maxTotalTokens, setMaxTotalTokens, maxToolRounds, setMaxToolRounds, availableModels, enabledModes,
     oauthToken, oauthAccessToken, setOauthToken, oauthExpiresAt, setOauthExpiresAt,
     triggerSilentOAuthRefresh, resetOAuthOnUnauthorized, apiKey, setApiKey,

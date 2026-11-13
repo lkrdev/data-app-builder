@@ -1073,6 +1073,26 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
         >
           {sidebarCollapsed ? '+' : '+ New Conversation'}
         </button>
+        {sidebarCollapsed && !ctl.isEmptyConversation && (
+          <button
+            type="button"
+            className="dab-conv-new-btn dab-conv-overview-btn"
+            data-testid="sidebar-overview-btn"
+            onClick={() => {
+              if (!ctl.rightPaneCollapsed && ctl.activeContentTabKey === 'overview') {
+                ctl.setActiveContentTabKey('')
+                ctl.setRightPaneCollapsed(true)
+              } else {
+                ctl.handleSelectOverview()
+                ctl.setRightPaneCollapsed(false)
+              }
+            }}
+            title="Toggle Conversation Overview"
+            aria-label="Toggle Conversation Overview"
+          >
+            <PanelRightOpen size={14} strokeWidth={1.75} aria-hidden="true" />
+          </button>
+        )}
       </div>
 
       {!sidebarCollapsed && (
@@ -1212,7 +1232,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     preloadedContent, mentionedItems, setMentionedItems, searchGlobalContentV2,
     allConversations, conversations, activeMode, builderMode, isLookmlMode,
     isHealthCheckMode, isCaMode, caConversation, selectedUseCase, selectedModel,
-    setSelectedModel, thinkingLevel, setThinkingLevel, availableModels, busyStatus,
+    setSelectedModel, thinkingLevel, thinkingLevelByModel, setModelThinkingLevel, defaultThinkingLevel, availableModels, busyStatus,
     activatedLookmlSkills, setActivatedLookmlSkills, pastedImages, setPastedImages,
     prompt, setPrompt, handleSendPrompt, queuedPrompts, busySendAction, setBusySendAction,
     handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt,
@@ -1841,7 +1861,12 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
           ariaLabel="Select Antigravity model" title="Select Antigravity model for this turn (/v1beta/models)"
           options={availableModels.map((m) => ({
             value: m.id, label: m.label, title: m.description,
-            subMenu: { value: thinkingLevel, options: STUDIO_THINKING_LEVEL_OPTIONS, onChange: (lvl) => setThinkingLevel(lvl as StudioThinkingLevel), testId: 'composer-thinking-level-menu' },
+            subMenu: {
+              value: thinkingLevelByModel?.[m.id] || defaultThinkingLevel || thinkingLevel,
+              options: STUDIO_THINKING_LEVEL_OPTIONS,
+              onChange: (lvl) => setModelThinkingLevel(m.id, lvl as StudioThinkingLevel),
+              testId: 'composer-thinking-level-menu',
+            },
           }))}
         />
 
