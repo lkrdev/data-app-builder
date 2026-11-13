@@ -6,6 +6,7 @@
 
 ## Subdirectories & Boundaries
 
+- `data-apps`: [./data-apps/SKILL.md](./data-apps/SKILL.md) - Repackaged Looker Lit Data Apps Studio skill (`VERSION`, `reference/LIT_DATA_APPS.md`, `recipes/*.md`), synced from the upstream Looker Data Apps installer via `.agents/skills/data-apps-sync/scripts/sync_data_apps.py` (`npm run sync-upstream`).
 - `key-driver-analysis`: [./key-driver-analysis/EGM.md](./key-driver-analysis/EGM.md) - Looker Key Driver Analysis (`kda_toolkit.py`) blueprint and `lkr code-mode sandbox` root-cause analysis skill.
 - `looker-dashboard`: [./looker-dashboard/SKILL.md](./looker-dashboard/SKILL.md) - Unified Looker Dashboarding skill (`upsert_udd`, `upsert_lookml_dashboard`, `reflow_24col`, `pin_to_board`, `schedule_dashboard`, `emit_native_bundle`, 24-column layouts, and visualization specs).
 - `looker-field-profiler`: [./looker-field-profiler/SKILL.md](./looker-field-profiler/SKILL.md) - Explore field profiling skill using `profile_fields` to measure cardinality, quantiles, temporal spikiness, `profile:*` tags, and LookML refinement snippets (merged at runtime with `.agents/skills/looker-field-profiler/scripts/` via `SANDBOX_AGENT_SKILL_FILES`).

@@ -112,11 +112,11 @@ npm run build
 
 ### Sync Scripts
 
-- **Sync Upstream Looker Data Apps Toolkit (`dl.google.com`)**:
+- **Sync Upstream Looker Data Apps Skill (`dl.google.com`)**:
   ```bash
   npm run sync-upstream
   ```
-  Redownloads `install.sh`, `latest-version.txt`, `versions/<ver>/install.sh`, and extracts `looker-data-apps.tar.gz` into [`upstream/`](./upstream) so `git diff upstream/` shows any upstream toolkit or skill changes.
+  Invokes `.agents/skills/data-apps-sync/scripts/sync_data_apps.py` to unpack the upstream Looker Data Apps `.sh` installer and tarball in a temporary directory, strip local-preview/CLI bloat (`preview-server/`, `bootstrap.sh`, `data-app-previewer`, `toolkit-updater`), and repackage the runtime version, component reference, and recipes into [`skills/data-apps/`](./skills/data-apps).
 
 - **Sync Looker Code Mode WASM (`cdn.lkr.dev`)**:
   ```bash

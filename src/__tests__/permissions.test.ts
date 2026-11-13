@@ -5232,7 +5232,7 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
     expect(SANDBOX_WORKSPACE_SKILL_FILES['/workspace/skills/looker-project-onboarding/SKILL.md']).toBe(LOOKER_PROJECT_ONBOARDING_SKILL_MD)
     expect(resolveBuiltinWorkspaceFileContent('skills/looker-project-onboarding/SKILL.md')).toBe(LOOKER_PROJECT_ONBOARDING_SKILL_MD)
     expect(buildWorkspaceSources({ schemaMarkdown: '# Schema' }).find((s) => s.target === '/workspace/skills/looker-project-onboarding/SKILL.md')?.content).toBe(LOOKER_PROJECT_ONBOARDING_SKILL_MD)
-    for (const doc of [APP_BUILDER_SYSTEM_PROMPT, readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8'), readFileSync(path.join(repoRoot, 'upstream/payload/AGENTS.md'), 'utf8')]) {
+    for (const doc of [APP_BUILDER_SYSTEM_PROMPT, readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8')]) {
       expect(doc).toContain('skills/looker-project-onboarding/SKILL.md')
     }
     for (const token of ['Step 1:', 'Step 2:', 'Step 3:', 'Step 4:', '/admin/connections', "re.sub(r'_+', '_', re.sub(r'[^a-z0-9_]', '_', raw_name.strip().lower())).strip('_')", '/sql', '5 × 5', 'create_project', 'create_lookml_model', '1.0 * ${numerator_measure} / NULLIF(${denominator_measure}, 0)', 'grain_change_reagg']) {
@@ -5243,7 +5243,7 @@ return {"anchor": INVESTIGATION_ANCHOR_DATE, "fixed_window": fixed_window, "kda"
     const bundledEntries = Object.entries(SANDBOX_AGENT_SKILL_FILES)
     expect(bundledEntries.length).toBe(136)
     for (const [relPath, bundledContent] of bundledEntries) {
-      expect(relPath).not.toMatch(/^(issue-authoring|studio-conversation-debugger|studio-design-system)\//)
+      expect(relPath).not.toMatch(/^(data-apps-sync|issue-authoring|studio-conversation-debugger|studio-design-system)\//)
       const diskContent = readFileSync(path.join(repoRoot, '.agents/skills', relPath), 'utf8')
       expect(bundledContent).toBe(diskContent)
       expect(wsSources.find((s) => s.target === `/workspace/skills/${relPath}`)?.content).toBe(diskContent)
@@ -5762,7 +5762,7 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     for (const doc of [LOOKER_FIELD_PROFILER_SKILL_MD, LOOKER_PROJECT_ONBOARDING_SKILL_MD, NATIVE_CONTENT_GUIDE_MD, DATA_APP_GUIDE_MD, DATA_INVESTIGATOR_GUIDE_MD, AGENTS_MD]) {
       expect(doc).toContain('_field_value_search_')
     }
-    for (const doc of [AGENTS_MD, readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8'), readFileSync(path.join(repoRoot, 'upstream/payload/AGENTS.md'), 'utf8')]) {
+    for (const doc of [AGENTS_MD, readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8')]) {
       expect(doc).toContain('skills/looker-dashboard/SKILL.md')
       expect(doc).toContain('skills/looker-field-profiler/SKILL.md')
       expect(doc).toContain('sub-skills/scratch-search/SKILL.md')
@@ -5928,8 +5928,8 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
 
     const antigravityTsDisk = readFileSync(path.join(repoRoot, 'src/antigravity.ts'), 'utf8')
     const step3Line = antigravityTsDisk.split('\n').find((line) => line.includes('const step3Directive =')) || ''
-    const creatorSkillDisk = readFileSync(path.join(repoRoot, 'upstream/payload/skills/data-app-creator/SKILL.md'), 'utf8')
-    const litRefDisk = readFileSync(path.join(repoRoot, 'upstream/payload/skills/data-app-creator/reference/LIT_DATA_APPS.md'), 'utf8')
+    const creatorSkillDisk = readFileSync(path.join(repoRoot, 'skills/data-apps/SKILL.md'), 'utf8')
+    const litRefDisk = readFileSync(path.join(repoRoot, 'skills/data-apps/reference/LIT_DATA_APPS.md'), 'utf8')
     const evalNewProjectDisk = readFileSync(path.join(repoRoot, 'scripts/eval-new-project.mjs'), 'utf8')
 
     const requiredTokens = [
@@ -6663,23 +6663,22 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     )
     expect(rawArtifactStore.get('obj_dashboard_34')).not.toContain('Should not duplicate in obj_dashboard')
 
-    // 4. Root-only AGENTS.md rule & studio-conversation-debugger excluded from sandbox bundle
+    // 4. Root-only AGENTS.md rule & studio-conversation-debugger / data-apps-sync excluded from sandbox bundle
     const repoRoot = path.resolve(__dirname, '../..')
     const rootAgents = readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8')
-    const upstreamAgents = readFileSync(path.join(repoRoot, 'upstream/payload/AGENTS.md'), 'utf8')
     expect(rootAgents).toContain('## Looker Artifacts Lightweight-Only Rule')
-    expect(upstreamAgents).not.toContain('Looker Artifacts Lightweight-Only Rule')
+    expect(rootAgents).toContain('.agents/skills/data-apps-sync/SKILL.md')
     expect(AGENTS_MD).not.toContain('Looker Artifacts Lightweight-Only Rule')
     expect(BOOTSTRAP_LOOKML_PY).not.toContain('"lookml-session"')
     expect(
-      Object.keys(SANDBOX_AGENT_SKILL_FILES).some((k) => k.includes('studio-conversation-debugger'))
+      Object.keys(SANDBOX_AGENT_SKILL_FILES).some((k) => k.includes('studio-conversation-debugger') || k.includes('data-apps-sync'))
     ).toBe(false)
     expect(
-      Object.keys(BUILTIN_SKILLS_FILES).some((k) => k.includes('studio-conversation-debugger'))
+      Object.keys(BUILTIN_SKILLS_FILES).some((k) => k.includes('studio-conversation-debugger') || k.includes('data-apps-sync'))
     ).toBe(false)
     expect(
       buildWorkspaceSources({ schemaMarkdown: '# Schema' }).some((s) =>
-        s.target.includes('studio-conversation-debugger')
+        s.target.includes('studio-conversation-debugger') || s.target.includes('data-apps-sync')
       )
     ).toBe(false)
   })
@@ -6754,12 +6753,11 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
       }
     }
 
-    const repoRoot = path.resolve(__dirname, '../..')
     const workDir = mkdtempSync(path.join(tmpdir(), 'dab-167-test-'))
     try {
       const bundlePyPath = path.join(workDir, 'bundle_app.py')
       writeFileSync(bundlePyPath, BUNDLE_APP_PY.replace('Path("/workspace/bundle.json")', `Path(${JSON.stringify(path.join(workDir, 'bundle.json'))})`), 'utf8')
-      const env = { ...process.env, TOOLKIT_DIR: path.join(repoRoot, 'upstream/payload') }
+      const env = { ...process.env }
       for (const badBody of [
         "fields: ['orders.created_day', 'orders.count']",
         'fields: [`${m.dateBase}_day`, m.field]',
@@ -7285,7 +7283,7 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     try {
       const bundlePyPath = path.join(workDir, 'bundle_app.py')
       writeFileSync(bundlePyPath, BUNDLE_APP_PY.replace('Path("/workspace/bundle.json")', `Path(${JSON.stringify(path.join(workDir, 'bundle.json'))})`), 'utf8')
-      const env = { ...process.env, TOOLKIT_DIR: path.join(repoRoot, 'upstream/payload') }
+      const env = { ...process.env }
       for (const badMarkup of [
         '<style>.da-kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }</style><section class="da-kpi-grid"><app-kpi query-field="orders.count"></app-kpi></section>',
         '<style>.summary-cards, .da-kpi-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }</style><div class="da-kpi-grid"></div>',
@@ -8308,7 +8306,7 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     expect(BUNDLE_APP_PY).not.toContain('\\')
     expect(BUNDLE_APP_PY).not.toContain('${')
 
-    const recipeDisk = readFileSync(path.join(repoRoot, 'upstream/payload/skills/data-app-creator/recipes/metric-switcher.md'), 'utf8')
+    const recipeDisk = readFileSync(path.join(repoRoot, 'skills/data-apps/recipes/metric-switcher.md'), 'utf8')
     expect(recipeDisk).not.toMatch(/thelook|argolis_scratch|default_bigquery_connection|demowest|looker-private-demo/i)
     expect(DATA_APP_GUIDE_MD).toContain('formatAxisValue, escapeHtml')
     for (const tok of ['loadTrendData', 'Promise.all', 'this.runQuery', 'shareScale', 'linkedTo: 0', 'opposite: true', '--app-chart-1', '--app-chart-2']) {
@@ -8319,7 +8317,7 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
     try {
       const bundlePyPath = path.join(workDir, 'bundle_app.py')
       writeFileSync(bundlePyPath, BUNDLE_APP_PY.replace('Path("/workspace/bundle.json")', `Path(${JSON.stringify(path.join(workDir, 'bundle.json'))})`), 'utf8')
-      const env = { ...process.env, TOOLKIT_DIR: path.join(repoRoot, 'upstream/payload') }
+      const env = { ...process.env }
 
       // (a1) Reject <app-select label="Compare against"> (including arrow-fn with '>' BEFORE expression-bound label)
       for (const badSelect of [
@@ -10757,7 +10755,7 @@ customElements.define('good-compare-app', GoodCompareApp);`
         BUNDLE_APP_PY.replace('Path("/workspace/bundle.json")', `Path(${JSON.stringify(path.join(workDir, 'bundle.json'))})`),
         'utf8'
       )
-      const env = { ...process.env, TOOLKIT_DIR: path.join(repoRoot, 'upstream/payload') }
+      const env = { ...process.env }
       const posAppPath = path.join(workDir, 'pos_app.js')
       const posAppSrc = [
         "import { DataApp, html, createTextCol, createCurrencyCol, createNumericCol } from '/runtime/data-app.js';",
