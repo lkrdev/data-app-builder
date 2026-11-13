@@ -310,10 +310,6 @@ customElements.define('executive-app', ExecutiveApp);
     'python3',
     [bundlePyPath, sampleAppPath, 'Executive Revenue App'],
     {
-      env: {
-        ...process.env,
-        TOOLKIT_DIR: path.join(repoRoot, 'upstream/payload'),
-      },
       encoding: 'utf8',
     }
   )
@@ -510,15 +506,39 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
   )
 
   const rootAgentsMd = readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8')
-  const upstreamAgentsMd = readFileSync(path.join(repoRoot, 'upstream/payload/AGENTS.md'), 'utf8')
+  const dataAppsSkillMd = readFileSync(path.join(repoRoot, 'skills/data-apps/SKILL.md'), 'utf8')
+  const dataAppsVersionTxt = readFileSync(path.join(repoRoot, 'skills/data-apps/VERSION'), 'utf8').trim()
+  const dataAppsLitRefMd = readFileSync(path.join(repoRoot, 'skills/data-apps/reference/LIT_DATA_APPS.md'), 'utf8')
+  const dataAppsSyncSkillMd = readFileSync(path.join(repoRoot, '.agents/skills/data-apps-sync/SKILL.md'), 'utf8')
   const pinnedVersionTxt = readFileSync(path.join(repoRoot, 'lkr-dev-cli-version.txt'), 'utf8').trim()
   const updateSkillsYml = readFileSync(path.join(repoRoot, '.github/workflows/update-skills.yml'), 'utf8')
   assert.equal(pinnedVersionTxt, '0.0.69', 'lkr-dev-cli-version.txt must pin 0.0.69')
+  assert.equal(dataAppsVersionTxt, '1.3.0', 'skills/data-apps/VERSION must pin 1.3.0')
+  assert.equal(statSync(path.join(repoRoot, 'upstream'), { throwIfNoEntry: false }), undefined, 'upstream/ directory must not exist')
   assert(
     rootAgentsMd.includes(`lkr-dev-cli[tools,code-mode,parse]==${pinnedVersionTxt}`) &&
-      upstreamAgentsMd.includes(`lkr-dev-cli[tools,code-mode,parse]==${pinnedVersionTxt}`),
-    `AGENTS.md and upstream/payload/AGENTS.md must pin lkr-dev-cli==${pinnedVersionTxt}`
+      rootAgentsMd.includes('.agents/skills/data-apps-sync/SKILL.md') &&
+      !rootAgentsMd.includes('data-app-previewer') &&
+      !rootAgentsMd.includes('data-apps-config.json') &&
+      dataAppsSyncSkillMd.includes('name: data-apps-sync') &&
+      dataAppsSkillMd.includes('# Looker Lit Data Apps — Compact Sandbox Guide') &&
+      dataAppsLitRefMd.includes('15. **Metric Selector Data App Standards'),
+    `AGENTS.md must pin lkr-dev-cli==${pinnedVersionTxt}, reference .agents/skills/data-apps-sync/SKILL.md, and exclude legacy local previewer/config rules`
   )
+  const syncTestRoot = path.join(workDir, 'sync_test_root')
+  const syncSrcPayload = path.join(workDir, 'mock_payload')
+  execFileSync('mkdir', ['-p', `${syncTestRoot}/src`, `${syncSrcPayload}/skills/data-app-creator/reference`, `${syncSrcPayload}/skills/data-app-creator/recipes`, `${syncTestRoot}/upstream`])
+  writeFileSync(`${syncSrcPayload}/VERSION`, '1.3.0\n', 'utf8')
+  writeFileSync(`${syncSrcPayload}/skills/data-app-creator/reference/LIT_DATA_APPS.md`, '# Ref\nUse skills/data-app-creator/recipes/card.md on thelook.\n', 'utf8')
+  writeFileSync(`${syncSrcPayload}/skills/data-app-creator/recipes/card.md`, '# Card\nRun explore-model.py.\n', 'utf8')
+  writeFileSync(`${syncTestRoot}/src/antigravityPrompts.ts`, readFileSync(path.join(repoRoot, 'src/antigravityPrompts.ts'), 'utf8'), 'utf8')
+  execFileSync('python3', [path.join(repoRoot, '.agents/skills/data-apps-sync/scripts/sync_data_apps.py'), `--source-dir=${syncSrcPayload}`], {
+    env: { ...process.env, DAB_ROOT_DIR: syncTestRoot },
+    encoding: 'utf8',
+  })
+  assert.equal(statSync(`${syncTestRoot}/upstream`, { throwIfNoEntry: false }), undefined, 'sync_data_apps.py must delete legacy upstream/')
+  assert(readFileSync(`${syncTestRoot}/skills/data-apps/reference/LIT_DATA_APPS.md`, 'utf8').includes('15. **Metric Selector Data App Standards'))
+  assert(readFileSync(`${syncTestRoot}/skills/data-apps/recipes/card.md`, 'utf8').includes('run_looker_codemode'))
   assert(
     lookmlToolTsx.includes("export const LKR_DEV_CLI_VERSION = '0.0.69'") &&
       lookmlToolTsx.includes('"install", "--break-system-packages", "--quiet", "uv"') &&
@@ -601,9 +621,6 @@ chmod +x "${fakeBinDir}/uv"
       rootAgentsMd.includes('<USE_CASE>') &&
       rootAgentsMd.includes('pip install --break-system-packages --quiet uv') &&
       rootAgentsMd.includes('UV_TOOL_BIN_DIR=/usr/local/bin uv tool install') &&
-      upstreamAgentsMd.includes('## Conversation Labeling (Stateless Side-Request)') &&
-      upstreamAgentsMd.includes('## Use Case Auto-Classification (Turn 1 Routing)') &&
-      upstreamAgentsMd.includes('pip install --break-system-packages --quiet uv') &&
       antigravityTs.includes("target: '/workspace/AGENTS.md'") &&
       antigravityTs.includes('generateConversationLabel') &&
       antigravityTs.includes('sanitizeConversationLabel') &&
@@ -617,7 +634,6 @@ chmod +x "${fakeBinDir}/uv"
       !appTsx.includes('data-testid="use-case-selector"') &&
       !appTsx.includes('data-testid="locked-use-case-badge"') &&
       rootAgentsMd.includes('<CA_AGENT_SELECTION>') &&
-      upstreamAgentsMd.includes('<CA_AGENT_SELECTION>') &&
       lookerApiTs.includes('selectCaAgentViaIsolatedSubagent') &&
       lookerApiTs.includes('createLookerCaConversation') &&
       appTsx.includes('data-testid="ca-embed-preview"'),
@@ -676,8 +692,7 @@ chmod +x "${fakeBinDir}/uv"
       studioDsSkillMd.includes('name: studio-design-system') &&
       rootAgentsMd.includes('.agents/skills/studio-design-system/SKILL.md') &&
       readFileSync(path.join(repoRoot, '.agents/skills/issue-authoring/SKILL.md'), 'utf8').includes('name: issue-authoring') &&
-      rootAgentsMd.includes('.agents/skills/issue-authoring/SKILL.md') &&
-      !upstreamAgentsMd.includes('issue-authoring'),
+      rootAgentsMd.includes('.agents/skills/issue-authoring/SKILL.md'),
     'StudioDesignSystem primitives, semantic status CSS tokens, .agents/skills/studio-design-system/SKILL.md, and .agents/skills/issue-authoring/SKILL.md must be present'
   )
 
@@ -753,11 +768,11 @@ chmod +x "${fakeBinDir}/uv"
       appTsx.includes('studio-content-tab-restore-') &&
       rootAgentsMd.includes('## Looker Artifacts Lightweight-Only Rule') &&
       rootAgentsMd.includes('.agents/skills/studio-conversation-debugger/SKILL.md') &&
-      !upstreamAgentsMd.includes('Looker Artifacts Lightweight-Only Rule') &&
-      !upstreamAgentsMd.includes('studio-conversation-debugger') &&
       !antigravityTs.includes('Looker Artifacts Lightweight-Only Rule') &&
       !antigravityTs.includes('studio-conversation-debugger') &&
+      !antigravityTs.includes('data-apps-sync') &&
       !sandboxSkillsBundleTs.includes('studio-conversation-debugger') &&
+      !sandboxSkillsBundleTs.includes('data-apps-sync') &&
       !sandboxSkillsBundleTs.includes('"issue-authoring/') &&
       !sandboxSkillsBundleTs.includes('"studio-design-system/') &&
       convDebuggerSkillMd.includes('name: studio-conversation-debugger') &&
@@ -766,16 +781,17 @@ chmod +x "${fakeBinDir}/uv"
       !/thelook|argolis_scratch|default_bigquery_connection|demowest|looker-private-demo/i.test(
         convDebuggerSkillMd + '\n' + convDebuggerScriptPy
       ),
-    'Issue #155: single continuous messages/session, close/restore tab ribbon testids, root-only Looker Artifacts Lightweight-Only Rule, and studio-conversation-debugger exclusion from sandbox skills must hold'
+    'Issue #155: single continuous messages/session, close/restore tab ribbon testids, root-only Looker Artifacts Lightweight-Only Rule, and studio-conversation-debugger / data-apps-sync exclusion from sandbox skills must hold'
   )
   if (statSync(distBundlePath, { throwIfNoEntry: false })) {
     const distBundleContent = readFileSync(distBundlePath, 'utf8')
     assert(
       !distBundleContent.includes('studio-conversation-debugger') &&
+        !distBundleContent.includes('data-apps-sync') &&
         !distBundleContent.includes('name: issue-authoring') &&
         !distBundleContent.includes('name: studio-design-system') &&
         !distBundleContent.includes('Looker Artifacts Lightweight-Only Rule'),
-      'Issue #155: dist/bundle.js must exclude repo-internal skills (studio-conversation-debugger, issue-authoring, studio-design-system) and root-only Looker Artifacts Lightweight-Only Rule'
+      'Issue #155: dist/bundle.js must exclude repo-internal skills (studio-conversation-debugger, data-apps-sync, issue-authoring, studio-design-system) and root-only Looker Artifacts Lightweight-Only Rule'
     )
   }
 
