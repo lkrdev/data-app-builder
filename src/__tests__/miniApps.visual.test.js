@@ -8057,4 +8057,136 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
       noZombiePromptInConvB: true,
     })
   }, 25000)
+
+  test('Issue #196: supports .sql/.json drag-drop onto chat-composer-dropzone, renders chat-attached-file chips & Overview filenames, removes Overview Hidden badge, links dashboard/Look contentRows, and isolates Turn Code Mode API Calls per conversation', async () => {
+    chrome.close()
+    chrome = await startHeadlessChrome()
+    await chrome.send('Emulation.setDeviceMetricsOverride', {
+      width: 1440,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    })
+    await chrome.send('Page.navigate', { url: `http://127.0.0.1:${port}/?scenario=data_app` })
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="chat-composer-dropzone"]'))`,
+        returnByValue: true,
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 60))
+    }
+
+    const res196 = await chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const s = window.__DAB_STUDIO__;
+        const dropzone = document.querySelector('[data-testid="chat-composer-dropzone"]');
+        const dt = new DataTransfer();
+        dt.items.add(new File(['SELECT region, SUM(sale_price) FROM order_items GROUP BY 1;'], 'revenue_by_region.sql', { type: '' }));
+        dt.items.add(new File(['{"model":"thelook"}'], 'config.json', { type: 'application/json' }));
+        const overEv = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt });
+        dropzone.dispatchEvent(overEv);
+        const dropEv = new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt });
+        dropzone.dispatchEvent(dropEv);
+        await new Promise((r) => setTimeout(r, 80));
+
+        const chip0 = (document.querySelector('[data-testid="attached-file-chip-0"]')?.textContent || '').trim();
+        const chip1 = (document.querySelector('[data-testid="attached-file-chip-1"]')?.textContent || '').trim();
+
+        const convA = s.activeConversationId || 'conv_a_196';
+        s.setActiveConversationId(convA);
+        s.setRightPaneCollapsed(false);
+        s.setContentItems([
+          { key: 'dashboard:42', id: '42', contentType: 'dashboard', title: 'Executive KPIs', embedPath: '/embed/dashboards/42', hidden: true },
+          { key: 'look:19', id: '19', contentType: 'look', title: 'Margin Look', embedPath: '/embed/looks/19', hidden: true },
+        ]);
+        // Push 1 host call (codemode: false) + 1 convA Code Mode call + 1 convB Code Mode call onto the live initial array
+        if (Array.isArray(window.lkr_codemode_api_calls)) {
+          window.lkr_codemode_api_calls.push(
+            { method: 'GET', route: '/api/4.0/session', codemode: false, duration_ms: 8, response: { ok: true, status: 200, body: {} } },
+            { method: 'POST', route: '/api/4.0/queries/run/json', codemode: true, conversation_id: convA, duration_ms: 42, response: { ok: true, status: 200, body: [] } },
+            { method: 'GET', route: '/api/4.0/projects/ecom', codemode: true, conversation_id: 'conv_b_196', duration_ms: 19, response: { ok: true, status: 200, body: {} } }
+          );
+        }
+        s.setMessages([
+          {
+            role: 'user',
+            text: 'Refactor attached SQL and JSON',
+            images: [
+              'data:text/plain;name=revenue_by_region.sql;base64,U0VMRUNUIDE7',
+              'data:application/json;name=config.json;base64,e30=',
+              'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+            ],
+          },
+          { role: 'assistant', text: 'Refactored SQL and JSON.' },
+        ]);
+        await new Promise((r) => setTimeout(r, 80));
+
+        const attachedChip0 = (document.querySelector('[data-testid="chat-attached-file-0"]')?.textContent || '').trim();
+        const attachedChip1 = (document.querySelector('[data-testid="chat-attached-file-1"]')?.textContent || '').trim();
+        const brokenTextImgs = Array.from(document.querySelectorAll('.dab-msg-user img')).filter((im) =>
+          (im.getAttribute('src') || '').startsWith('data:text/') || (im.getAttribute('src') || '').startsWith('data:application/')
+        ).length;
+        const validPngImgs = Array.from(document.querySelectorAll('.dab-msg-user img')).filter((im) =>
+          (im.getAttribute('src') || '').startsWith('data:image/png')
+        ).length;
+
+        document.querySelector('[data-testid="studio-overview-tab"]')?.click();
+        await new Promise((r) => setTimeout(r, 60));
+
+        const dashMeta = (document.querySelector('[data-testid="overview-content-item-dashboard:42"] .dab-ov-meta')?.textContent || '').trim();
+        const lookMeta = (document.querySelector('[data-testid="overview-content-item-look:19"] .dab-ov-meta')?.textContent || '').trim();
+        const linkLabels = Array.from(document.querySelectorAll('[data-testid^="overview-link-item-"] .dab-ov-txt')).map((el) => (el.textContent || '').trim());
+        const uploadLabels = Array.from(document.querySelectorAll('[data-testid="overview-section-uploads"] .dab-ov-txt')).map((el) => (el.textContent || '').trim());
+
+        document.querySelector('[data-testid="overview-section-api-calls-toggle"]')?.click();
+        await new Promise((r) => setTimeout(r, 50));
+        const convAApiRoutes = Array.from(document.querySelectorAll('[data-testid^="overview-api-call-"] .dab-ov-txt')).map((el) => (el.textContent || '').trim());
+
+        s.history.push('/c/conv_b_196');
+        s.setActiveConversationId('conv_b_196');
+        await new Promise((r) => setTimeout(r, 60));
+        document.querySelector('[data-testid="overview-section-api-calls-toggle"]')?.click();
+        await new Promise((r) => setTimeout(r, 50));
+        const convBApiRoutes = Array.from(document.querySelectorAll('[data-testid^="overview-api-call-"] .dab-ov-txt')).map((el) => (el.textContent || '').trim());
+
+        return {
+          overDefaultPrevented: overEv.defaultPrevented,
+          dropDefaultPrevented: dropEv.defaultPrevented,
+          chip0,
+          chip1,
+          attachedChip0,
+          attachedChip1,
+          brokenTextImgs,
+          validPngImgs,
+          dashMeta,
+          lookMeta,
+          linkLabels,
+          uploadLabels,
+          convAApiRoutes,
+          convBApiRoutes,
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+
+    expect(res196.result.value).toEqual({
+      overDefaultPrevented: true,
+      dropDefaultPrevented: true,
+      chip0: 'revenue_by_region.sql',
+      chip1: 'config.json',
+      attachedChip0: 'revenue_by_region.sql',
+      attachedChip1: 'config.json',
+      brokenTextImgs: 0,
+      validPngImgs: 1,
+      dashMeta: 'UDD',
+      lookMeta: 'Look',
+      linkLabels: ['Open Executive KPIs', 'Open Margin Look'],
+      uploadLabels: ['revenue_by_region.sql', 'config.json', 'Screenshot #3', 'revenue_by_region.sql', 'config.json'],
+      convAApiRoutes: ['/queries/run/json'],
+      convBApiRoutes: ['/projects/ecom'],
+    })
+  }, 20000)
 })

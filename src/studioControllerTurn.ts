@@ -835,7 +835,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           if (canonProj) {
             handledArtifact = true
             setLookerWorkspaceId('dev')
-            void syncLookerSessionWorkspace()
+            void syncLookerSessionWorkspace(true)
             setBusyStatus('Saving LookML project changes...')
             const prevFiles = lookmlBundle && resolveLookmlCanonicalProjectId(lookmlBundle) === canonProj ? lookmlBundle.files : []
             let mergedBundle: LookmlBundle = Object.assign({}, result.lookmlBundle, {

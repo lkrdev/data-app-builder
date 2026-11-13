@@ -9,6 +9,7 @@ import {
   normalizeLookerApiPath,
   rawLookerRequest,
   resolveLookerExtensionSdk,
+  withCodeModeApiScope,
 } from './lookerApi'
 
 export const CODEMODE_CDN_URL = 'https://cdn.lkr.dev/cli/codemode/0.0.67/codemode.js'
@@ -31,6 +32,7 @@ export interface LkrCodeModeRunOptions {
   extensionSDK?: unknown
   vars?: Record<string, unknown>
   thought?: string
+  conversationId?: string
   allowUpdateSession?: boolean
   allow_update_session?: boolean
   requirePermission?: boolean
@@ -295,7 +297,7 @@ function createGatedLookerHandler(
   }
 }
 
-const runCodeMode: LkrCodeModeRunFn = async (
+const runCodeModeInner: LkrCodeModeRunFn = async (
   codeOrParams: LkrCodeModeRunOptions | string,
   options?: LkrCodeModeRunOptions
 ): Promise<string> => {
@@ -410,6 +412,9 @@ const runCodeMode: LkrCodeModeRunFn = async (
   })
   return isObj ? runtime.runPythonCode(nextOpts) : runtime.runPythonCode(code, nextOpts)
 }
+
+const runCodeMode: LkrCodeModeRunFn = (c, o) =>
+  withCodeModeApiScope(() => runCodeModeInner(c, o), String((typeof c === 'object' ? c?.conversationId : o?.conversationId) || '').trim() || undefined)
 
 export const LkrCodeMode: LkrCodeModeRuntime = {
   RUN_LOOKER_CODEMODE_TOOL: getCodeModeToolDefinition('run_looker_codemode'),
@@ -1610,7 +1615,7 @@ export function classifyLookerOperation(
   return { operation: `${prefix}_resource`, requiresPermission: true }
 }
 
-export async function executeLkrExtensionToolRequest(params: {
+async function executeLkrExtensionToolRequestInner(params: {
   sdk: Looker40SDK
   req: LkrExtensionToolRequest
   defaultVars?: Record<string, unknown>
@@ -1618,8 +1623,9 @@ export async function executeLkrExtensionToolRequest(params: {
   requirePermission?: boolean
   approvedOperations?: Set<string>
   onPermissionRequest?: LkrCodeModeRunOptions['onPermissionRequest']
+  conversationId?: string
 }): Promise<{ cacheKey: string; result: unknown }> {
-  const { sdk, req, defaultVars, extensionSDK, requirePermission, approvedOperations, onPermissionRequest } = params
+  const { sdk, req, defaultVars, extensionSDK, requirePermission, approvedOperations, onPermissionRequest, conversationId } = params
   if (req.kind === 'file_ref') {
     throw new Error(`Unhydrated file_ref bridge request (${req.req_path || req.cache_key || 'unknown'})`)
   }
@@ -1671,7 +1677,7 @@ export async function executeLkrExtensionToolRequest(params: {
   await ensureDevSession(false)
   const rawOut = await LkrCodeMode.runPythonCode(
     Object.assign(
-      { code: String(req.code || ''), sdk, vars: Object.assign({}, defaultVars || null, req.vars || null), allowUpdateSession: Boolean(req.dev_mode), extensionSDK, requirePermission, approvedOperations, onPermissionRequest },
+      { code: String(req.code || ''), sdk, vars: Object.assign({}, defaultVars || null, req.vars || null), allowUpdateSession: Boolean(req.dev_mode), extensionSDK, requirePermission, approvedOperations, onPermissionRequest, conversationId },
       effectiveThought ? { thought: effectiveThought } : null
     )
   )
@@ -1688,3 +1694,6 @@ export async function executeLkrExtensionToolRequest(params: {
   }
   return { cacheKey, result }
 }
+
+export const executeLkrExtensionToolRequest: typeof executeLkrExtensionToolRequestInner = (params) =>
+  withCodeModeApiScope(() => executeLkrExtensionToolRequestInner(params), params.conversationId)

@@ -234,11 +234,32 @@ export function isTextAttachmentFile(name?: string, mimeType?: string): boolean 
   )
 }
 
+export function parseAttachmentDataUrl(src: string): { isImage: boolean; name?: string; mimeType: string } {
+  const s = String(src || '').trim()
+  const m = /^data:([^;,]+)(?:;name=([^;,]+))?;base64,/i.exec(s)
+  if (m) {
+    const mimeType = m[1].toLowerCase()
+    let name: string | undefined
+    if (m[2]) {
+      try {
+        name = decodeURIComponent(m[2])
+      } catch {
+        name = m[2]
+      }
+    }
+    const isImage = mimeType.startsWith('image/') && (!name || !TEXT_ATTACHMENT_EXT_RE.test(name))
+    return { isImage, name, mimeType }
+  }
+  const isImage = !TEXT_ATTACHMENT_EXT_RE.test(s) && !/\.pdf(?:$|\?)/i.test(s)
+  return { isImage, mimeType: isImage ? 'image/png' : 'application/octet-stream' }
+}
+
 export function readAttachedFile(file: File, index = 0): Promise<StudioAttachedFile | null> {
   return new Promise((resolve) => {
     const name = file.name || `attachment_${index + 1}`
     const mimeType = file.type || (TEXT_ATTACHMENT_EXT_RE.test(name) ? 'text/plain' : 'application/octet-stream')
     const id = `att_${Date.now()}_${index}_${name.replace(/[^a-zA-Z0-9._-]+/g, '_')}`
+    const nameParam = !mimeType.startsWith('image/') && name ? `;name=${encodeURIComponent(name)}` : ''
     if (isTextAttachmentFile(name, mimeType)) {
       const textReader = new FileReader()
       textReader.onload = () => {
@@ -255,7 +276,7 @@ export function readAttachedFile(file: File, index = 0): Promise<StudioAttachedF
           mimeType,
           size: file.size,
           data: base64,
-          dataUrl: `data:${mimeType};base64,${base64}`,
+          dataUrl: `data:${mimeType}${nameParam};base64,${base64}`,
           textContent,
         })
       }
@@ -266,8 +287,8 @@ export function readAttachedFile(file: File, index = 0): Promise<StudioAttachedF
 
     const reader = new FileReader()
     reader.onload = () => {
-      const dataUrl = String(reader.result || '')
-      const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] || '' : dataUrl
+      const rawUrl = String(reader.result || '')
+      const base64 = rawUrl.includes(',') ? rawUrl.split(',')[1] || '' : rawUrl
       if (!base64) {
         resolve(null)
         return
@@ -278,7 +299,7 @@ export function readAttachedFile(file: File, index = 0): Promise<StudioAttachedF
         mimeType,
         size: file.size,
         data: base64,
-        dataUrl,
+        dataUrl: nameParam ? `data:${mimeType}${nameParam};base64,${base64}` : rawUrl,
       })
     }
     reader.onerror = () => resolve(null)
@@ -305,9 +326,9 @@ export function handleImageClipboardPaste(
   setPastedImages: (updater: (prev: PastedImage[]) => PastedImage[]) => void
 ): void {
   const files = Array.from(e.clipboardData?.items || [])
-    .filter((item) => item.type.startsWith('image/'))
+    .filter((item) => !item.kind || item.kind === 'file')
     .map((item) => item.getAsFile())
-    .filter((f): f is File => Boolean(f))
+    .filter((f): f is File => Boolean(f && (f.type.startsWith('image/') || isTextAttachmentFile(f.name, f.type) || f.type === 'application/pdf')))
   if (files.length === 0) return
   e.preventDefault()
   handleFileInputSelection(files, setPastedImages)

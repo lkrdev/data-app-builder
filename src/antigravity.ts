@@ -848,6 +848,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                 const { cacheKey, result } = await executeLkrExtensionToolRequest({
                   sdk: turnSdk, req, defaultVars: defaultCodeModeVars, extensionSDK,
                   requirePermission, approvedOperations, onPermissionRequest: trackedPermissionHandler,
+                  conversationId: rawConversationId || conversationId,
                 })
                 resolvedBridgeCacheKeys.add(cacheKey)
                 const pErr = recordPermOutcome(result, prevSeq, req)
@@ -916,6 +917,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                       requirePermission,
                       approvedOperations,
                       onPermissionRequest: wrappedPermissionRequest,
+                      conversationId: rawConversationId || conversationId,
                     })
                     resolvedBridgeCacheKeys.add(bridged.cacheKey)
                     const pErr = recordPermOutcome(bridged.result, prevSeq, resolvedToolReq)
@@ -954,6 +956,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
                       requirePermission,
                       approvedOperations,
                       onPermissionRequest: wrappedPermissionRequest,
+                      conversationId: rawConversationId || conversationId,
                       vars: { ...defaultCodeModeVars, ...customVars },
                     })
                     recordPermOutcome(codeModeOutput, prevSeq)
@@ -1138,6 +1141,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
             const { cacheKey, result } = await executeLkrExtensionToolRequest({
               sdk: turnSdk, req, defaultVars: defaultCodeModeVars, extensionSDK,
               requirePermission, approvedOperations, onPermissionRequest: trackedPermissionHandler,
+              conversationId: rawConversationId || conversationId,
             })
             resolvedBridgeCacheKeys.add(cacheKey)
             const pErr = recordPermOutcome(result, prevSeq, req)

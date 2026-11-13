@@ -507,7 +507,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       return LkrCodeMode.runPythonCode(
         Object.assign(
           {
-            code: codeToRun, sdk: core40SDK, extensionSDK,
+            code: codeToRun, sdk: core40SDK, extensionSDK, conversationId: runConvId,
             vars: {
               mode: scriptMode, dashboard_filters: Object.assign({ script_mode: scriptMode }, parsedFilters),
               target_explores: selectedExplores, target_folder_id: selectedFolderId,
