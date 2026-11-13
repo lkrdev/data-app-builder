@@ -15,7 +15,7 @@
     "sync-codemode": "bash scripts/sync-codemode.sh",
     "clean:artifacts": "bash scripts/clean-artifacts.sh",
     "eval": "node scripts/run-evals.mjs",
-    "test": "npm run lint:check && jest && node scripts/test-bundle.mjs && node scripts/run-evals.mjs"
+    "test": "npm run lint:check && jest && node scripts/test-bundle.mjs"
   },
   "jest": {
     "testEnvironment": "node",

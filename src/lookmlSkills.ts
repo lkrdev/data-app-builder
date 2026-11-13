@@ -23,6 +23,7 @@ export const STUDIO_SLASH_SKILLS: readonly LookmlSkillCatalogEntry[] = [
   { id: 'key-driver-analysis', label: 'Key Driver Analysis', desc: 'Run & recursively drill Looker Key Driver Analysis (run_key_driver_analysis)', path: 'skills/key-driver-analysis/SKILL.md' },
   { id: 'data-investigator', label: 'Data Investigator', desc: 'Build root-cause narrative Data Apps in Doc or Slides format with fixed date windows', path: 'skills/data-investigator/SKILL.md' },
   { id: 'data-apps', label: 'Lit Data Apps', desc: 'Build interactive Lit web component Data Apps with KPIs, charts, grids & controls', path: 'skills/data-apps/SKILL.md' },
+  { id: 'looker-alerts', label: 'Looker Alerts', desc: 'Analyze running/failing alerts, verify filters & data, tune noisy frequency, diagnose mobile notifications & manage alerts', path: 'skills/looker-alerts/SKILL.md' },
 ] as const
 
 const KNOWN_SLASH_SKILL_IDS = new Set(STUDIO_SLASH_SKILLS.map((s) => s.id))

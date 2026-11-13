@@ -121,6 +121,7 @@ export function classifyLooker404Error(
   const message = String(parsed?.message || text || 'Not found')
   const docUrl = String(parsed?.documentation_url || '')
   const isInlineExt = path.includes('/data_app_extension') || path.includes('/inline_extension')
+  const isAlertPath = /\/(?:alerts|alert_details|alert_notifications)(?:\/|$|\?)/i.test(path)
   const hasErrDoc = docUrl.includes('/r/err/')
 
   if (status === 404 && (/Sinatra::NotFound/i.test(text) || (isInlineExt && !hasErrDoc))) {
@@ -134,13 +135,15 @@ export function classifyLooker404Error(
         : `Endpoint "${path}" is unmounted or its feature flag is disabled on this Looker instance.`,
     }
   }
-  if (status === 404 && (hasErrDoc || /^not found$/i.test(message.trim()))) {
+  if ((status === 404 || status === 403) && (hasErrDoc || isAlertPath || /^not found$/i.test(message.trim()))) {
     return {
       kind: 'role_denied',
       status,
       path,
       message,
-      remediation: `Looker returned a Role-Denied 404 on "${path}". Verify the user's Looker Role permissions (e.g. access_data, explore, save_content, save_dashboards, develop) and Model Set in Admin > Roles, or folder edit access.`,
+      remediation: isAlertPath
+        ? `Looker returned ${status} on alert endpoint "${path}". Verify the user's Looker Role includes create_alerts (own alerts), follow_alerts (follow/unfollow), or manage_alerts (admin / other owners' alerts), and that the user owns or has access to this alert.`
+        : `Looker returned a Role-Denied 404 on "${path}". Verify the user's Looker Role permissions (e.g. access_data, explore, save_content, save_dashboards, develop) and Model Set in Admin > Roles, or folder edit access.`,
     }
   }
   return {
@@ -212,7 +215,7 @@ export function studioModeToUseCase(mode?: string): ResolvedStudioUseCase {
 }
 
 export const getConvTargetId = (
-  c?: { dashboardId?: string; lookId?: string; lookmlDashboardId?: string; reportId?: string; projectId?: unknown; sessionId?: string; scriptId?: string; caConversationId?: string; id?: string; contentType?: string; [key: string]: unknown },
+  c?: { dashboardId?: string; lookId?: string; lookmlDashboardId?: string; reportId?: string; projectId?: unknown; sessionId?: string; scriptId?: string; alertId?: string; caConversationId?: string; id?: string; contentType?: string; [key: string]: unknown },
   type?: string
 ): string => {
   if (!c) return ''
@@ -221,12 +224,12 @@ export const getConvTargetId = (
   if (!raw || raw === 'auto') {
     const isLookmlObj = c.contentType === 'lookml' || c.projectId !== undefined || c.sessionId !== undefined
     const fallbackId = isLookmlObj ? cleanLookmlProjectId(c.id) : c.id
-    return String(c.dashboardId || c.lookId || c.lookmlDashboardId || c.reportId || lookmlTarget || c.scriptId || c.caConversationId || fallbackId || '').trim()
+    return String(c.dashboardId || c.lookId || c.lookmlDashboardId || c.reportId || lookmlTarget || c.scriptId || c.alertId || c.caConversationId || fallbackId || '').trim()
   }
   const pick: Partial<Record<ResolvedStudioUseCase, unknown>> = {
     lookml: lookmlTarget,
     'health-check': c.reportId,
-    tile: c.scriptId || c.id,
+    tile: c.scriptId || c.alertId || c.id,
     'conversational-analytics': c.caConversationId || c.id,
     dashboard: c.contentType === 'look' ? c.lookId || c.dashboardId : c.contentType === 'lookml_dashboard' ? c.lookmlDashboardId || c.dashboardId : c.dashboardId || c.lookmlDashboardId || c.lookId,
     app: c.dashboardId || c.id,
@@ -360,19 +363,24 @@ export const EXPLICIT_SCRIPT_CREATION_RE =
 const CONTENT_CREATION_VERB_RE =
   /\b(?:build|create|author|make|design|generate|update|edit|refactor|pin|schedule|convert|onboard)\b/i
 
+export const LOOKER_ALERT_QUERY_RE =
+  /\b(?:alerts?|alert_details|alert_notifications|follow_alert|unfollow_alert|enqueue_alert|update_alert_field|create_alert|update_alert|delete_alert)\b/i
+
 export const LOOKER_INSTANCE_API_QUERY_RE =
   /\b(?:personal\s*(?:space|folder)s?|shared\s*(?:space|folder)s?|(?:in|from|inside|under)\s+my\s+personal\b|(?:my|our)\s+favou?rite\s+(?:dashboards?|looks?|content|folders?)|(?:dashboards?|looks?)\s+(?:in\s+my\s+(?:personal|shared|favou?rites?|folder|space)|that\s+I\s+favou?rited)|(?:my|our|all|empty|unused|list|find|inspect|search|query)\s+(?:looker\s+)?(?:personal\s+|shared\s+)?(?:spaces|folders)\b|(?:my|our)\s+(?:looker\s+)?(?:space|folder)\b|(?:spaces|folders)\s+(?:that|which|without|with\s+no)|folder_children|all_folders|search_folders|search_dashboards|search_looks|looker\s*sdk|instance\s*metadata|(?:what|which|query|inspect|list|find|check|show)\s+(?:looker\s+)?(?:users?|roles?|permissions?|groups?|scheduled\s*plans?|schedules?|instance\s*metadata)\b(?:\s+(?:have|with|in|on|for|are|who|that))?|(?:users?|roles?)\s+have\s+(?:admin|developer|viewer)|admin\s+roles?\b)/i
 
 export function isLookerInstanceMetadataQuery(text?: string): boolean {
   const clean = String(text || '').replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '').trim()
-  if (!clean || EXPLICIT_SCRIPT_CREATION_RE.test(clean) || CONTENT_CREATION_VERB_RE.test(clean)) return false
+  if (!clean || EXPLICIT_SCRIPT_CREATION_RE.test(clean)) return false
+  if (LOOKER_ALERT_QUERY_RE.test(clean)) return true
+  if (CONTENT_CREATION_VERB_RE.test(clean)) return false
   return LOOKER_INSTANCE_API_QUERY_RE.test(clean)
 }
 
 const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
   ['health-check', /\b(3-pillar|three-pillar|health\s*check|transcriber\s*rubric|technical_design_document)\b/i],
   ['lookml', /\b(lookml(?!\s+dashboards?\b)|\.lkml|dimension\s*:|measure\s*:|explore\s*:|refinement|data\s*test|model\.lkml|view\.lkml|(?:create|onboard|build|set\s*up|start)\s+(?:a\s+)?(?:new\s+)?(?:looker\s+)?project\b|new_project_)\b/i],
-  ['tile', new RegExp(`${EXPLICIT_SCRIPT_CREATION_RE.source}|${LOOKER_INSTANCE_API_QUERY_RE.source}`, 'i')],
+  ['tile', new RegExp(`${EXPLICIT_SCRIPT_CREATION_RE.source}|${LOOKER_INSTANCE_API_QUERY_RE.source}|${LOOKER_ALERT_QUERY_RE.source}`, 'i')],
   ['dashboard', /\b(udd|user[- ]defined\s*dashboard|native\s*dashboard|saved\s*look|lookml\s*dashboard|pin\s*to\s*board|schedule\s*dashboard|content\s*studio)\b/i],
   [
     'data-investigator',
@@ -394,6 +402,7 @@ const SLASH_SKILL_USE_CASES: Record<string, ResolvedStudioUseCase> = Object.assi
     'data-investigator': 'data-investigator',
     'key-driver-analysis': 'data-investigator',
     'data-apps': 'app',
+    'looker-alerts': 'tile',
   } as Record<string, ResolvedStudioUseCase>
 )
 
@@ -457,7 +466,7 @@ export function matchExplicitUseCaseRule(
   const slashTarget = slashToken ? (SLASH_SKILL_USE_CASES[slashToken] || (slashToken.startsWith('lookml-') ? 'lookml' : undefined)) : undefined
   if (slashTarget && allowedSet.has(slashTarget)) return slashTarget
   for (const [candidate, re] of USE_CASE_RULES) {
-    if (candidate === 'tile' && CONTENT_CREATION_VERB_RE.test(rawText) && !EXPLICIT_SCRIPT_CREATION_RE.test(rawText)) continue
+    if (candidate === 'tile' && CONTENT_CREATION_VERB_RE.test(rawText) && !EXPLICIT_SCRIPT_CREATION_RE.test(rawText) && !LOOKER_ALERT_QUERY_RE.test(rawText)) continue
     if (allowedSet.has(candidate) && re.test(rawText)) return candidate
   }
   return null
