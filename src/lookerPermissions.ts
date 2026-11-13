@@ -731,14 +731,10 @@ export function resolveUserCapabilities(
 
   const hasExplore = isAdmin || explorableModels.size > 0
   const hasSaveDash = isAdmin || (globalPermissions.has('save_content') && globalPermissions.has('save_dashboards'))
-  const hasSaveContent =
-    isAdmin ||
-    (globalPermissions.has('save_content') &&
-      (globalPermissions.has('save_dashboards') || globalPermissions.has('save_looks')))
+  const hasSaveContent = isAdmin || (globalPermissions.has('save_content') && (globalPermissions.has('save_dashboards') || globalPermissions.has('save_looks')))
   const hasDevelop = isAdmin || developableProjects.size > 0 || globalPermissions.has('develop')
   const hasSeeLookml = hasDevelop || readableProjects.size > 0 || globalPermissions.has('see_lookml')
-  const hasPillar1 =
-    isAdmin || globalPermissions.has('see_system_activity') || hasModelPerm('explore', 'system__activity')
+  const hasPillar1 = isAdmin || globalPermissions.has('see_system_activity') || hasModelPerm('explore', 'system__activity')
   const hasPillar3 = isAdmin || sqlRunnerConnections.size > 0 || globalPermissions.has('use_sql_runner')
 
   const appMissing = [
@@ -749,66 +745,26 @@ export function resolveUserCapabilities(
   const dashMissing = [
     ...(!hasExplore ? ['explore'] : []),
     ...(!isAdmin && !globalPermissions.has('save_content') ? ['save_content'] : []),
-    ...(!isAdmin && !globalPermissions.has('save_dashboards') && !globalPermissions.has('save_looks')
-      ? ['save_dashboards']
-      : []),
+    ...(!isAdmin && !globalPermissions.has('save_dashboards') && !globalPermissions.has('save_looks') ? ['save_dashboards'] : []),
   ]
-  const healthMissing = [
-    ...(!hasPillar1 ? ['see_system_activity'] : []),
-    ...(!hasDevelop ? ['develop'] : []),
-    ...(!hasPillar3 ? ['use_sql_runner'] : []),
-  ]
+  const healthMissing = [...(!hasPillar1 ? ['see_system_activity'] : []), ...(!hasDevelop ? ['develop'] : []), ...(!hasPillar3 ? ['use_sql_runner'] : [])]
 
-  const mkTool = (
-    enabled: boolean,
-    readOnly: boolean,
-    missingPermissions: string[],
-    reason?: string
-  ): ToolAvailability =>
+  const mkTool = (enabled: boolean, readOnly: boolean, missingPermissions: string[], reason?: string): ToolAvailability =>
     !rolesLoaded
       ? { enabled: true, readOnly: false, missingPermissions: [] }
-      : {
-          enabled,
-          readOnly,
-          missingPermissions,
-          reason:
-            reason ??
-            (missingPermissions.length > 0
-              ? `Missing Looker permissions: ${missingPermissions.join(', ')}`
-              : undefined),
-        }
+      : { enabled, readOnly, missingPermissions, reason: reason ?? (missingPermissions.length > 0 ? `Missing Looker permissions: ${missingPermissions.join(', ')}` : undefined) }
 
   return {
-    isAdmin,
-    rolesLoaded,
-    globalPermissions,
-    modelsByPermission,
-    explorableModels,
-    developableProjects,
-    readableProjects,
-    sqlRunnerConnections,
-    editableFolderIds,
-    canConfigureExtension,
-    canManageUserAttributes,
+    isAdmin, rolesLoaded, globalPermissions, modelsByPermission, explorableModels, developableProjects, readableProjects,
+    sqlRunnerConnections, editableFolderIds, canConfigureExtension, canManageUserAttributes,
     tools: {
       app: mkTool(hasExplore, hasExplore && !hasSaveDash, appMissing),
       dashboard: mkTool(hasExplore, hasExplore && !hasSaveContent, dashMissing),
       lookml: mkTool(
-        hasSeeLookml,
-        !hasDevelop && hasSeeLookml,
-        hasDevelop ? [] : ['develop'],
-        !hasDevelop
-          ? hasSeeLookml
-            ? 'Read-only LookML access (missing develop permission)'
-            : 'Missing Looker permissions: develop'
-          : undefined
+        hasSeeLookml, !hasDevelop && hasSeeLookml, hasDevelop ? [] : ['develop'],
+        !hasDevelop ? (hasSeeLookml ? 'Read-only LookML access (missing develop permission)' : 'Missing Looker permissions: develop') : undefined
       ),
-      health: mkTool(
-        hasPillar1 || hasSeeLookml || hasPillar3,
-        false,
-        healthMissing,
-        healthMissing.length > 0 ? `Partial 3-Pillar access (missing: ${healthMissing.join(', ')})` : undefined
-      ),
+      health: mkTool(hasPillar1 || hasSeeLookml || hasPillar3, false, healthMissing, healthMissing.length > 0 ? `Partial 3-Pillar access (missing: ${healthMissing.join(', ')})` : undefined),
       tile: mkTool(hasExplore, hasExplore && !hasSaveDash, appMissing),
     },
   }

@@ -1,30 +1,39 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { ILookmlModelNavExplore } from '@looker/sdk'
 import useSWR from 'swr'
 
 import {
-  buildDynamicStarterPrompts, discoverStarterExploreContext,
-  generateDynamicStarterPrompts, getCachedStarterPrompts,
+  AntigravityActivityStep, buildDynamicStarterPrompts, discoverStarterExploreContext,
+  generateDynamicStarterPrompts, getCachedStarterPrompts, PastedImage,
   resolveTargetExploreFromModels, StarterPromptItem,
 } from './antigravity'
-import { StudioMode } from './components/App'
+import { ChatMessage, StudioMode } from './components/App'
+import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
+import { HealthCheckReportPayload } from './healthCheck'
+import type { LkrCodeModeRunOptions } from './lkrCliBridge'
 import {
-  buildAvailableExploresCatalog, buildDenseExploreSchema, buildRootLookerFolders,
-  DEFAULT_STUDIO_AGENT_NAME, fetchFolderChildren, fetchFolderWithAncestors,
+  type AlertInspectorBundle, buildAvailableExploresCatalog, buildDenseExploreSchema, buildRootLookerFolders,
+  CaConversationState, ConversationRecord, DEFAULT_STUDIO_AGENT_NAME, fetchFolderChildren, fetchFolderWithAncestors,
   fetchInitialLookerMetadata, fetchPreloadedContentSummary, getArtifactNamespace,
   getArtifactService, getConvTargetId, listSavedScripts, loadStoredSelectedFolderId,
-  loadUserEnvironmentId, LookerFolderNode, normalizeStudioAgentName,
-  parseExploreId, persistSelectedFolderId, readInitialSelectedFolderId,
+  loadUserEnvironmentId, LookerFolderNode, NativeContentState, normalizeStudioAgentName,
+  parseExploreId, persistSelectedFolderId, PublishedAppState, readInitialSelectedFolderId,
   ResolvedStudioUseCase, SavedScript, searchLookerFolders, SearchLookerFoldersParams,
-  StudioContextMention, studioModeToUseCase, StudioUseCase, studioUseCaseToMode,
+  STUDIO_OVERVIEW_TAB_KEY, StudioContentItem, StudioContentItemType, StudioContextMention,
+  studioModeToUseCase, StudioUseCase, studioUseCaseToMode, upsertStudioContentItem,
   UserArtifactIndex, UserConversationEntry,
 } from './lookerApi'
-import { getErrorMessage, StudioAuthAndPrefs } from './studioControllerAuth'
+import { LookmlBundle } from './lookmlTool'
+import { getErrorMessage, normalizeCatalogMode, StudioAuthAndPrefs } from './studioControllerAuth'
+
+export interface StudioViewerDocument {
+  path: string; displayPath: string; title: string; kind: 'skill' | 'file'; isMarkdown: boolean; content: string; loading?: boolean
+}
 
 export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   const {
-    extensionSDK, core40SDK, history, location, isTileMount, mockExt,
+    extensionSDK, core40SDK, history, location, isTileMount, mockExt, disabledModes,
     setAgentName, setAppInitializing, setCapabilities, setMessages,
     selectedUseCase, setSelectedUseCase, explicitUseCaseRef, parsedRoute,
     resolvedUseCaseByIdRef, allowedUseCases, availableModels,
@@ -78,19 +87,12 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     return () => window.removeEventListener('focus', onFocus)
   }, [syncLookerSessionWorkspace])
 
-  const [allModels, setAllModels] = useState<
-    Array<{ name: string; label: string; project_name?: string; explores: ILookmlModelNavExplore[] }>
-  >([])
-  const [loadingMetadata, setLoadingMetadata] = useState<boolean>(
-    () => Boolean(mockExt?.forceFolderSkeleton ?? true)
+  const [allModels, setAllModels] = useState<Array<{ name: string; label: string; project_name?: string; explores: ILookmlModelNavExplore[] }>>([])
+  const [loadingMetadata, setLoadingMetadata] = useState<boolean>(() => Boolean(mockExt?.forceFolderSkeleton ?? true))
+  const [folderTreeNodes, setFolderTreeNodes] = useState<Record<string, LookerFolderNode>>(() =>
+    Object.fromEntries(buildRootLookerFolders().map((r) => [r.id, r]))
   )
-  const [folderTreeNodes, setFolderTreeNodes] = useState<Record<string, LookerFolderNode>>(() => {
-    const roots = buildRootLookerFolders()
-    return Object.fromEntries(roots.map((r) => [r.id, r]))
-  })
-  const [rootFolderIds, setRootFolderIds] = useState<string[]>(() =>
-    buildRootLookerFolders().map((r) => r.id)
-  )
+  const [rootFolderIds, setRootFolderIds] = useState<string[]>(() => buildRootLookerFolders().map((r) => r.id))
   const rootFolderIdsRef = useRef<string[]>(rootFolderIds)
   rootFolderIdsRef.current = rootFolderIds
   const [folderChildrenById, setFolderChildrenById] = useState<Record<string, string[]>>({})
@@ -102,9 +104,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   const [selectedFolderId, setSelectedFolderIdState] = useState<string>(() =>
     String(mockExt?.initialSelectedFolderId || readInitialSelectedFolderId() || '1')
   )
-  const hasExplicitFolderRef = useRef<boolean>(
-    Boolean(mockExt?.initialSelectedFolderId || readInitialSelectedFolderId())
-  )
+  const hasExplicitFolderRef = useRef<boolean>(Boolean(mockExt?.initialSelectedFolderId || readInitialSelectedFolderId()))
   const setSelectedFolderId = useCallback(
     (next: string | ((prev: string) => string)) => {
       hasExplicitFolderRef.current = true
@@ -121,10 +121,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     if (mockExt?.initialSelectedFolderId) return
     let mounted = true
     void loadStoredSelectedFolderId(extensionSDK).then((stored) => {
-      if (mounted && stored) {
-        hasExplicitFolderRef.current = true
-        setSelectedFolderIdState(stored)
-      }
+      if (mounted && stored) { hasExplicitFolderRef.current = true; setSelectedFolderIdState(stored) }
     })
     return () => { mounted = false }
   }, [extensionSDK, mockExt?.initialSelectedFolderId])
@@ -132,9 +129,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   const [schemaMarkdown, setSchemaMarkdown] = useState('')
   const [loadingSchema, setLoadingSchema] = useState(false)
   const [starterPrompts, setStarterPrompts] = useState<StarterPromptItem[]>([])
-  const [starterPromptsLoading, setStarterPromptsLoading] = useState<boolean>(
-    () => Boolean(mockExt?.forceStarterPromptsSkeleton ?? true)
-  )
+  const [starterPromptsLoading, setStarterPromptsLoading] = useState<boolean>(() => Boolean(mockExt?.forceStarterPromptsSkeleton ?? true))
 
   const [activeObjectId, setActiveObjectId] = useState('')
   const conversationLabelsRef = useRef<Record<string, string>>({})
@@ -143,10 +138,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   const [healthScope, setHealthScope] = useState<'all' | 'looker' | 'bq'>('all')
 
   const artifactNamespace = getArtifactNamespace(extensionSDK)
-  const artifactService = useMemo(
-    () => getArtifactService(core40SDK, artifactNamespace),
-    [core40SDK, artifactNamespace]
-  )
+  const artifactService = useMemo(() => getArtifactService(core40SDK, artifactNamespace), [core40SDK, artifactNamespace])
   const { data: swrUserArtifacts } = useSWR<UserArtifactIndex[]>(
     !isTileMount && userId ? ['artifact:user_list', artifactNamespace, userId, 'all'] : null,
     () => artifactService.listUserArtifacts(userId),
@@ -161,10 +153,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   const conversations = useMemo<UserConversationEntry[]>(() => {
     const base = swrConversations ?? []
     const opt = optimisticConvRef.current
-    if (opt && base.some((c) => c.id === opt.id)) {
-      optimisticConvRef.current = null
-      return base
-    }
+    if (opt && base.some((c) => c.id === opt.id)) { optimisticConvRef.current = null; return base }
     return opt ? [opt, ...base] : base
   }, [swrConversations])
   const conversationsRef = useRef<UserConversationEntry[]>(conversations)
@@ -175,9 +164,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
       next: UserConversationEntry[] | ((prev: UserConversationEntry[]) => UserConversationEntry[]),
       opts?: { optimisticEntry?: UserConversationEntry | null }
     ) => {
-      if (opts && 'optimisticEntry' in opts) {
-        optimisticConvRef.current = opts.optimisticEntry ?? null
-      }
+      if (opts && 'optimisticEntry' in opts) optimisticConvRef.current = opts.optimisticEntry ?? null
       const resolved = typeof next === 'function' ? next(conversationsRef.current) : next
       conversationsRef.current = resolved
       void mutateConversations(resolved, { revalidate: false })
@@ -189,9 +176,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     async (nextName: string): Promise<string> => {
       const normalized = normalizeStudioAgentName(nextName)
       setAgentName(normalized)
-      try {
-        await artifactService.saveUserConfig(userIdRef.current || userId, { agentName: normalized })
-      } catch { /* ignore */ }
+      try { await artifactService.saveUserConfig(userIdRef.current || userId, { agentName: normalized }) } catch { /* ignore */ }
       return normalized
     },
     [artifactService, setAgentName, userId]
@@ -209,23 +194,15 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
       const cid = getConvTargetId(c.content, c.type)
       return Boolean((cid && (cid === id || cid === rawId)) || (c.type === 'lookml' && c.content?.sessionId && (c.content.sessionId === id || c.content.sessionId === rawId)))
     })
-    if (convMatch) {
-      if (convMatch.use_case === 'auto' && !convMatch.interactionId) return undefined
-      return studioModeToUseCase(convMatch.type)
-    }
+    if (convMatch) return convMatch.use_case === 'auto' && !convMatch.interactionId ? undefined : studioModeToUseCase(convMatch.type)
     const catMatch = catalogItems.find((it) => it.id === id || it.id === rawId)
-    if (catMatch) return studioModeToUseCase(catMatch.type)
-    return undefined
+    return catMatch ? studioModeToUseCase(catMatch.type) : undefined
   }, [parsedRoute, conversations, catalogItems, resolvedUseCaseByIdRef])
 
-  const isGenericConvRoute =
-    /^conv_[a-z0-9_-]+$/i.test(parsedRoute.conversationId || '') && parsedRoute.useCase === 'auto'
+  const isGenericConvRoute = /^conv_[a-z0-9_-]+$/i.test(parsedRoute.conversationId || '') && parsedRoute.useCase === 'auto'
   const effectiveUseCase: StudioUseCase =
-    selectedUseCase !== 'auto'
-      ? selectedUseCase
-      : inferredRouteUseCase || (parsedRoute.objectId && !isGenericConvRoute ? 'app' : 'auto')
-  const activeMode: StudioMode =
-    effectiveUseCase !== 'auto' ? studioUseCaseToMode(effectiveUseCase) : parsedRoute.mode
+    selectedUseCase !== 'auto' ? selectedUseCase : inferredRouteUseCase || (parsedRoute.objectId && !isGenericConvRoute ? 'app' : 'auto')
+  const activeMode: StudioMode = effectiveUseCase !== 'auto' ? studioUseCaseToMode(effectiveUseCase) : parsedRoute.mode
   activeModeRef.current = activeMode
   const isLookmlMode = activeMode === 'lookml'
   const isHealthCheckMode = location.pathname === '/health-check' || activeMode === 'health'
@@ -234,11 +211,8 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
 
   useEffect(() => {
     if (selectedUseCase === 'auto') {
-      if (inferredRouteUseCase) {
-        setSelectedUseCase(inferredRouteUseCase)
-      } else if (parsedRoute.objectId && !isGenericConvRoute) {
-        setSelectedUseCase('app')
-      }
+      if (inferredRouteUseCase) setSelectedUseCase(inferredRouteUseCase)
+      else if (parsedRoute.objectId && !isGenericConvRoute) setSelectedUseCase('app')
     }
   }, [parsedRoute.objectId, isGenericConvRoute, inferredRouteUseCase, selectedUseCase, setSelectedUseCase])
 
@@ -246,9 +220,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     (nextUseCase: StudioUseCase) => {
       explicitUseCaseRef.current = nextUseCase
       setSelectedUseCase(nextUseCase)
-      if (location.pathname !== '/' && !parsedRoute.objectId) {
-        history.replace('/')
-      }
+      if (location.pathname !== '/' && !parsedRoute.objectId) history.replace('/')
     },
     [explicitUseCaseRef, setSelectedUseCase, location.pathname, parsedRoute.objectId, history]
   )
@@ -266,11 +238,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     [capabilities.developableProjects]
   )
   const canDeployLookml = useMemo(
-    () =>
-      !capabilities.rolesLoaded ||
-      capabilities.isAdmin ||
-      capabilities.globalPermissions.has('deploy') ||
-      capabilities.globalPermissions.has('admin'),
+    () => !capabilities.rolesLoaded || capabilities.isAdmin || capabilities.globalPermissions.has('deploy') || capabilities.globalPermissions.has('admin'),
     [capabilities]
   )
 
@@ -282,17 +250,13 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
       setFolderTreeNodes((prev) => {
         const next = { ...prev }
         for (const c of visibleChildren) next[c.id] = { ...next[c.id], ...c }
-        if (markEmptyLeaf && next[fid] && visibleChildren.length === 0) {
-          next[fid] = { ...next[fid], child_count: 0, has_children: false }
-        }
+        if (markEmptyLeaf && next[fid] && visibleChildren.length === 0) next[fid] = { ...next[fid], child_count: 0, has_children: false }
         return next
       })
       if (visibleChildren.length > 0 || markEmptyLeaf) {
         setFolderChildrenById((prev) => {
           const existing = prev[fid] || []
-          const merged = Array.from(new Set([...visibleChildren.map((c) => c.id), ...existing])).filter(
-            (id) => !activeRootIds.includes(id)
-          )
+          const merged = Array.from(new Set([...visibleChildren.map((c) => c.id), ...existing])).filter((id) => !activeRootIds.includes(id))
           return { ...prev, [fid]: merged }
         })
       }
@@ -312,14 +276,12 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
         while (anchorIdx >= 0 && !activeRootIds.includes(res.chain[anchorIdx].id)) anchorIdx -= 1
         const effectiveChain = anchorIdx >= 0 ? res.chain.slice(anchorIdx) : res.chain
         const effectiveAncestors = effectiveChain.slice(0, -1)
-
         setFolderTreeNodes((prev) => {
           const next = { ...prev }
           for (const node of effectiveChain) {
             const existing = next[node.id]
             next[node.id] = {
-              ...existing,
-              ...node,
+              ...existing, ...node,
               name: existing?.is_personal && existing.name === 'My folder' ? existing.name : node.name,
               parent_id: activeRootIds.includes(node.id) ? null : node.parent_id,
             }
@@ -342,12 +304,8 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
             }
             return next
           })
-          setExpandedFolderIds((prev) =>
-            Array.from(new Set([...prev, ...effectiveAncestors.map((a) => a.id)]))
-          )
-          for (const anc of effectiveAncestors) {
-            void loadFolderChildren(anc.id, activeRootIds).catch(() => {})
-          }
+          setExpandedFolderIds((prev) => Array.from(new Set([...prev, ...effectiveAncestors.map((a) => a.id)])))
+          for (const anc of effectiveAncestors) void loadFolderChildren(anc.id, activeRootIds).catch(() => {})
         }
       } catch { /* ignore */ }
     },
@@ -359,14 +317,10 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
       const fid = String(folderId || '').trim()
       if (!fid) return
       const isCurrentlyExpanded = expandedFolderIds.includes(fid)
-      setExpandedFolderIds((prev) =>
-        prev.includes(fid) ? prev.filter((id) => id !== fid) : [...prev, fid]
-      )
+      setExpandedFolderIds((prev) => (prev.includes(fid) ? prev.filter((id) => id !== fid) : [...prev, fid]))
       if (isCurrentlyExpanded || folderChildrenById[fid]?.length) return
       setLoadingFolderIds((prev) => (prev.includes(fid) ? prev : [...prev, fid]))
-      try {
-        await loadFolderChildren(fid, undefined, true)
-      } catch { /* ignore */ } finally {
+      try { await loadFolderChildren(fid, undefined, true) } catch { /* ignore */ } finally {
         setLoadingFolderIds((prev) => prev.filter((id) => id !== fid))
       }
     },
@@ -393,16 +347,12 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   )
 
   useEffect(() => {
-    if (!selectedFolderId) return
-    void hydrateFolderAncestors(selectedFolderId)
+    if (selectedFolderId) void hydrateFolderAncestors(selectedFolderId)
   }, [selectedFolderId, hydrateFolderAncestors])
 
   useEffect(() => {
     let mounted = true
-    Promise.all([
-      fetchInitialLookerMetadata(core40SDK),
-      loadStoredSelectedFolderId(extensionSDK),
-    ])
+    Promise.all([fetchInitialLookerMetadata(core40SDK), loadStoredSelectedFolderId(extensionSDK)])
       .then(async ([meta, asyncStoredFolderId]) => {
         if (!mounted) return
         const resolvedUserId = String(meta.user?.id || '1')
@@ -410,37 +360,24 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
         setUserId(resolvedUserId)
         setUserDisplayName(String(meta.user?.display_name || ''))
         lastSessionSyncAtRef.current = Date.now()
-        if (meta.workspaceId === 'dev' || meta.workspaceId === 'production') {
-          setLookerWorkspaceId(meta.workspaceId)
-        }
+        if (meta.workspaceId === 'dev' || meta.workspaceId === 'production') setLookerWorkspaceId(meta.workspaceId)
         setCapabilities(meta.capabilities)
         if (meta.capabilities.rolesLoaded && meta.capabilities.sqlRunnerConnections.size === 0) {
           setHealthScope((prev) => (prev === 'all' || prev === 'bq' ? 'looker' : prev))
         }
         const extMock = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
-        await artifactService
-          .getUserConfig(resolvedUserId)
-          .then((cfg) => {
-            if (!mounted) return
-            const hasStoredCustom = Boolean(
-              cfg?.updatedAt || (cfg?.agentName && cfg.agentName !== DEFAULT_STUDIO_AGENT_NAME)
-            )
-            const resolvedName = hasStoredCustom
-              ? normalizeStudioAgentName(cfg.agentName)
-              : normalizeStudioAgentName(extMock?.initialAgentName || cfg?.agentName)
-            setAgentName(resolvedName)
-          })
-          .catch(() => {})
+        await artifactService.getUserConfig(resolvedUserId).then((cfg) => {
+          if (!mounted) return
+          const hasStoredCustom = Boolean(cfg?.updatedAt || (cfg?.agentName && cfg.agentName !== DEFAULT_STUDIO_AGENT_NAME))
+          setAgentName(hasStoredCustom ? normalizeStudioAgentName(cfg.agentName) : normalizeStudioAgentName(extMock?.initialAgentName || cfg?.agentName))
+        }).catch(() => {})
         loadUserEnvironmentId(core40SDK, resolvedUserId, getArtifactNamespace(extensionSDK)).then((savedEnvId) => {
           if (mounted && savedEnvId) syncSharedEnvironmentId(savedEnvId)
         })
-        listSavedScripts(core40SDK, resolvedUserId)
-          .then((items) => { if (mounted) setSavedScripts(items) })
-          .catch(() => {})
+        listSavedScripts(core40SDK, resolvedUserId).then((items) => { if (mounted) setSavedScripts(items) }).catch(() => {})
         setAllModels(
           meta.models.map((m) => ({
-            name: String(m.name || ''),
-            label: String(m.label || m.name || ''),
+            name: String(m.name || ''), label: String(m.label || m.name || ''),
             project_name: m.project_name ? String(m.project_name) : undefined,
             explores: (m.explores || []).filter((e) => !e.hidden),
           }))
@@ -455,31 +392,20 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
         })
         setRootFolderIds(initialRootIds)
         const storedFolderId = asyncStoredFolderId || readInitialSelectedFolderId()
-        const targetInitialFolder = extMock?.initialSelectedFolderId
-          ? String(extMock.initialSelectedFolderId)
-          : storedFolderId || meta.defaultFolderId
+        const targetInitialFolder = extMock?.initialSelectedFolderId ? String(extMock.initialSelectedFolderId) : storedFolderId || meta.defaultFolderId
         setSelectedFolderIdState((prev) =>
-          extMock?.initialSelectedFolderId
-            ? String(extMock.initialSelectedFolderId)
-            : storedFolderId || (hasExplicitFolderRef.current ? prev : meta.defaultFolderId)
+          extMock?.initialSelectedFolderId ? String(extMock.initialSelectedFolderId) : storedFolderId || (hasExplicitFolderRef.current ? prev : meta.defaultFolderId)
         )
         if (!extMock?.forceFolderSkeleton) setLoadingMetadata(false)
         void hydrateFolderAncestors(targetInitialFolder, initialRootIds)
         void loadFolderChildren(targetInitialFolder, initialRootIds).catch(() => {})
         void artifactService.listUserArtifacts(resolvedUserId).catch(() => {})
-        fetchPreloadedContentSummary(core40SDK)
-          .then((items) => { if (mounted) setPreloadedContent(items) })
-          .catch(() => {})
-        void artifactService.listConversations(resolvedUserId)
-          .then((loadedConvs) => {
-            if (!mounted) return
-            const opt = optimisticConvRef.current
-            void mutateConversations(
-              opt && !loadedConvs.some((c) => c.id === opt.id) ? [opt, ...loadedConvs] : loadedConvs,
-              { revalidate: false }
-            )
-          })
-          .catch(() => {})
+        fetchPreloadedContentSummary(core40SDK).then((items) => { if (mounted) setPreloadedContent(items) }).catch(() => {})
+        void artifactService.listConversations(resolvedUserId).then((loadedConvs) => {
+          if (!mounted) return
+          const opt = optimisticConvRef.current
+          void mutateConversations(opt && !loadedConvs.some((c) => c.id === opt.id) ? [opt, ...loadedConvs] : loadedConvs, { revalidate: false })
+        }).catch(() => {})
       })
       .catch((err: unknown) => {
         const extMock = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
@@ -505,19 +431,12 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
       selectedExplores.map(async (id) => {
         const parsed = parseExploreId(id)
         if (!parsed) return ''
-        try {
-          return await buildDenseExploreSchema(core40SDK, parsed.modelName, parsed.exploreName)
-        } catch (err: unknown) {
-          return `# Error loading explore \`${id}\`\n${getErrorMessage(err)}`
-        }
+        try { return await buildDenseExploreSchema(core40SDK, parsed.modelName, parsed.exploreName) }
+        catch (err: unknown) { return `# Error loading explore \`${id}\`\n${getErrorMessage(err)}` }
       })
     )
-      .then((sections) => {
-        if (mounted) setSchemaMarkdown(sections.filter(Boolean).join('\n\n---\n\n'))
-      })
-      .finally(() => {
-        if (mounted) setLoadingSchema(false)
-      })
+      .then((sections) => { if (mounted) setSchemaMarkdown(sections.filter(Boolean).join('\n\n---\n\n')) })
+      .finally(() => { if (mounted) setLoadingSchema(false) })
     return () => { mounted = false }
   }, [core40SDK, selectedExplores, models])
 
@@ -528,36 +447,25 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     const hasOAuth = Boolean(oauthAccessToken)
     const cached = getCachedStarterPrompts(selectedUseCase, exploreKey, allowedUseCases, hasOAuth)
     if (cached && cached.length > 0 && !mockExt?.forceStarterPromptsSkeleton) {
-      setStarterPrompts(cached)
-      setStarterPromptsLoading(false)
-      return () => { mounted = false }
+      setStarterPrompts(cached); setStarterPromptsLoading(false); return () => { mounted = false }
     }
     if ((loadingMetadata && models.length === 0 && selectedExplores.length === 0) || mockExt?.forceStarterPromptsSkeleton) {
-      setStarterPromptsLoading(true)
-      return () => { mounted = false }
+      setStarterPromptsLoading(true); return () => { mounted = false }
     }
-    setStarterPrompts((prev) => {
-      if (prev.length === 0) setStarterPromptsLoading(true)
-      return prev
-    })
+    setStarterPrompts((prev) => { if (prev.length === 0) setStarterPromptsLoading(true); return prev })
     void (async () => {
-      const exploreContext = await discoverStarterExploreContext({
-        sdk: core40SDK, selectedExplores, availableModels: models,
-      })
+      const exploreContext = await discoverStarterExploreContext({ sdk: core40SDK, selectedExplores, availableModels: models })
       if (!mounted) return
       const immediate = buildDynamicStarterPrompts({
-        useCase: selectedUseCase, selectedExplores, permittedUseCases: allowedUseCases,
-        availableModels: models, exploreContext,
+        useCase: selectedUseCase, selectedExplores, permittedUseCases: allowedUseCases, availableModels: models, exploreContext,
       })
       setStarterPrompts(immediate)
       setStarterPromptsLoading(false)
       if (hasOAuth) {
         const refined = await generateDynamicStarterPrompts({
-          sdk: core40SDK, extensionSDK,
-          auth: { mode: 'oauth', oauthToken: oauthAccessToken, clientId, projectId, apiKey },
-          environmentId: sharedEnvIdRef.current || undefined,
-          useCase: selectedUseCase, selectedExplores, permittedUseCases: allowedUseCases,
-          availableModels: models, exploreContext, model: selectedModel,
+          sdk: core40SDK, extensionSDK, auth: { mode: 'oauth', oauthToken: oauthAccessToken, clientId, projectId, apiKey },
+          environmentId: sharedEnvIdRef.current || undefined, useCase: selectedUseCase, selectedExplores,
+          permittedUseCases: allowedUseCases, availableModels: models, exploreContext, model: selectedModel,
         })
         if (mounted && refined.length > 0) setStarterPrompts(refined)
       }
@@ -568,6 +476,152 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     models, availableModels, oauthAccessToken, loadingMetadata, clientId,
     projectId, apiKey, selectedModel, sharedEnvIdRef, mockExt?.forceStarterPromptsSkeleton,
   ])
+
+  const [caConversation, setCaConversation] = useState<CaConversationState | null>(null)
+  const lastCaIdRef = useRef<string>('')
+  const isCaMode = Boolean(parsedRoute.isCaRoute || effectiveUseCase === 'conversational-analytics' || caConversation)
+  const [lookmlProjectId, setLookmlProjectId] = useState('')
+  const [activatedLookmlSkills, setActivatedLookmlSkills] = useState<string[]>([])
+  const [lookmlBundle, setLookmlBundle] = useState<LookmlBundle | null>(null)
+  const lastLookmlIdRef = useRef<string>('')
+  const [publishedApp, setPublishedAppState] = useState<PublishedAppState | null>(null)
+  const [nativeContent, setNativeContentState] = useState<NativeContentState | null>(null)
+  const [alertBundle, setAlertBundle] = useState<AlertInspectorBundle | null>(null)
+  const [contentItems, setContentItemsState] = useState<StudioContentItem[]>([])
+  const contentItemsRef = useRef<StudioContentItem[]>([])
+  const [activeContentTabKey, setActiveContentTabKeyState] = useState<string>('')
+  const activeContentTabKeyRef = useRef<string>('')
+  const codeModePermOptsRef = useRef<
+    (() => Pick<LkrCodeModeRunOptions, 'requirePermission' | 'approvedOperations' | 'onPermissionRequest' | 'thought'> & {
+      isCanceled?: () => boolean
+    }) | null
+  >(null)
+
+  const setContentItems = useCallback((next: StudioContentItem[] | ((prev: StudioContentItem[]) => StudioContentItem[])) => {
+    const resolved = typeof next === 'function' ? next(contentItemsRef.current) : next
+    contentItemsRef.current = resolved
+    setContentItemsState(resolved)
+  }, [])
+
+  const setActiveContentTabKey = useCallback((nextKey: string) => {
+    activeContentTabKeyRef.current = nextKey
+    setActiveContentTabKeyState(nextKey)
+  }, [])
+
+  const upsertContentItem = useCallback(
+    (rawItem: Partial<StudioContentItem> & { id: string; contentType: StudioContentItemType }, activate = true): StudioContentItem & { existed: boolean } => {
+      const res = upsertStudioContentItem(contentItemsRef.current, rawItem)
+      contentItemsRef.current = res.items
+      setContentItemsState(res.items)
+      if (activate || !activeContentTabKeyRef.current) {
+        activeContentTabKeyRef.current = res.activeKey
+        setActiveContentTabKeyState(res.activeKey)
+      }
+      return Object.assign({}, res.item, { existed: res.existed })
+    },
+    []
+  )
+
+  const applyStateWithSync = <T,>(setter: React.Dispatch<React.SetStateAction<T>>, next: T | ((prev: T) => T), sync: (resolved: T) => void) => {
+    if (typeof next !== 'function') { sync(next); setter(next); return }
+    setter((prev) => { const r = (next as (p: T) => T)(prev); sync(r); return r })
+  }
+
+  const setPublishedApp = useCallback(
+    (
+      next: PublishedAppState | null | ((prev: PublishedAppState | null) => PublishedAppState | null),
+      metaOpts?: { source?: 'created' | 'modified' | 'mention'; createdInConversation?: boolean; hidden?: boolean }
+    ) => {
+      applyStateWithSync(setPublishedAppState, next, (resolved) => {
+        if (resolved?.dashboardId) {
+          const uc = resolvedUseCaseByIdRef.current[resolved.dashboardId]
+          upsertContentItem({
+            id: String(resolved.dashboardId), dashboardId: String(resolved.dashboardId),
+            contentType: uc === 'data-investigator' ? 'data-investigator' : 'data_app',
+            title: resolved.title, embedPath: `/embed/dashboards/${encodeURIComponent(String(resolved.dashboardId))}`,
+            folderId: resolved.folderId, extensionId: resolved.extensionId, ...metaOpts,
+          })
+        }
+      })
+    },
+    [resolvedUseCaseByIdRef, upsertContentItem]
+  )
+
+  const setNativeContent = useCallback(
+    (
+      next: NativeContentState | null | ((prev: NativeContentState | null) => NativeContentState | null),
+      metaOpts?: { source?: 'created' | 'modified' | 'mention'; createdInConversation?: boolean; hidden?: boolean }
+    ) => {
+      applyStateWithSync(setNativeContentState, next, (resolved) => {
+        if (resolved?.id) {
+          const ct = (resolved.contentType || 'dashboard') as StudioContentItemType
+          upsertContentItem({
+            id: String(resolved.id), contentType: ct, title: resolved.title, embedPath: resolved.embedPath, folderId: resolved.folderId,
+            dashboardId: ct === 'dashboard' ? String(resolved.id) : undefined,
+            lookId: resolved.lookId || (ct === 'look' ? String(resolved.id) : undefined),
+            lookmlDashboardId: resolved.lookmlDashboardId || (ct === 'lookml_dashboard' ? String(resolved.id) : undefined),
+            ...metaOpts,
+          })
+        }
+      })
+    },
+    [upsertContentItem]
+  )
+
+  const activeContentItem = useMemo<StudioContentItem | null>(() => {
+    if (activeContentTabKey === STUDIO_OVERVIEW_TAB_KEY) return null
+    const visible = contentItems.filter((it) => !it.hidden)
+    return visible.length === 0 ? null : visible.find((it) => it.key === activeContentTabKey) || visible[visible.length - 1] || null
+  }, [contentItems, activeContentTabKey])
+
+  const [embedNonce, setEmbedNonce] = useState<number>(0)
+  const bumpEmbedNonce = useCallback(() => setEmbedNonce((n) => n + 1), [])
+  const lastPublishedIdRef = useRef<string>('')
+  const lastNativeIdRef = useRef<string>('')
+  const [healthReport, setHealthReport] = useState<HealthCheckReportPayload | null>(null)
+  const lastHealthIdRef = useRef<string>('')
+  const [scriptId, setScriptId] = useState(() => parsedRoute.objectId || 'demo1')
+  const [scriptTitle, setScriptTitle] = useState('Looker Explore & Filter Summary')
+  const [scriptCode, setScriptCode] = useState(DEFAULT_PYTHON_SCRIPT)
+  const [filtersJson, setFiltersJson] = useState('{}')
+  const [scriptOutput, setScriptOutput] = useState('')
+  const [scriptMode, setScriptMode] = useState('summary')
+  const [publishedTileDash, setPublishedTileDash] = useState<{ dashboardId: string; elementId: string } | null>(null)
+  const [schedulerOpen, setSchedulerOpen] = useState(() => Boolean(mockExt?.openSchedulerModal))
+  const [infoModalUseCase, setInfoModalUseCase] = useState<StudioUseCase | null>(() => (mockExt?.initialInfoModalUseCase as StudioUseCase) || null)
+  const [scheduleConfig, setScheduleConfig] = useState<{
+    name: string; cron: string; mode: string; customVarsJson: string
+    destination: 'artifact_snapshot' | 'webhook' | 'looker_scheduled_plan'; targetUrlOrEmail: string; enabled: boolean
+  }>({
+    name: 'Daily Morning Explore & Filter Snapshot', cron: '0 8 * * *', mode: 'summary',
+    customVarsJson: '{"region":"AMER","threshold":0.95}', destination: 'artifact_snapshot',
+    targetUrlOrEmail: 'https://hooks.example.com/looker-script-webhook', enabled: true,
+  })
+  const [savedScheduleBadge, setSavedScheduleBadge] = useState<string | null>('0 8 * * * · summary')
+  const [loadedScript, setLoadedScript] = useState(false)
+  const lastScriptIdRef = useRef<string>('')
+  const [currentAppCode, setCurrentAppCode] = useState('')
+  const [activeViewerDocument, setActiveViewerDocument] = useState<StudioViewerDocument | null>(null)
+  const [prompt, setPrompt] = useState(() => String(mockExt?.initialPrompt || ''))
+  const [pastedImages, setPastedImages] = useState<PastedImage[]>(() => (mockExt?.initialPastedImages as PastedImage[] | undefined) || [])
+  const [showArchivedConversations, setShowArchivedConversations] = useState<boolean>(() => Boolean(mockExt?.initialShowArchived))
+  const [pendingDeleteConv, setPendingDeleteConv] = useState<ConversationRecord | null>(() => (mockExt?.initialPendingDeleteConv as ConversationRecord | undefined) || null)
+  const [deleteRelatedContent, setDeleteRelatedContent] = useState<boolean>(() => Boolean(mockExt?.initialDeleteRelatedContent))
+  const hydratedConvRouteRef = useRef<string>('')
+  const activityStepsByInteractionIdRef = useRef<Record<string, AntigravityActivityStep[]>>({})
+  const mergeCachedActivitySteps = useCallback((msgs: ChatMessage[]): ChatMessage[] =>
+    msgs.map((m) =>
+      m.role === 'assistant' && !m.activitySteps?.length && m.interactionId && activityStepsByInteractionIdRef.current[m.interactionId]?.length
+        ? { ...m, activitySteps: activityStepsByInteractionIdRef.current[m.interactionId] }
+        : m
+    ), [])
+
+  const modeAllowedConversations = useMemo(
+    () => conversations.filter((conv) => !disabledModes.includes(normalizeCatalogMode(conv.type))),
+    [conversations, disabledModes]
+  )
+  const filteredConversations = useMemo(() => modeAllowedConversations.filter((conv) => !conv.archived), [modeAllowedConversations])
+  const archivedConversations = useMemo(() => modeAllowedConversations.filter((conv) => Boolean(conv.archived)), [modeAllowedConversations])
 
   return {
     userId, userIdRef, userDisplayName,
@@ -589,6 +643,32 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     conversations, conversationsRef, setConversations, conversationLabelsRef,
     savedScripts, setSavedScripts,
     healthScope, setHealthScope,
+    caConversation, setCaConversation, lastCaIdRef, isCaMode,
+    lookmlProjectId, setLookmlProjectId, activatedLookmlSkills, setActivatedLookmlSkills,
+    lookmlBundle, setLookmlBundle, lastLookmlIdRef,
+    publishedApp, setPublishedAppState, setPublishedApp, lastPublishedIdRef,
+    nativeContent, setNativeContentState, setNativeContent, lastNativeIdRef,
+    alertBundle, setAlertBundle,
+    contentItems, contentItemsRef, setContentItems,
+    activeContentTabKey, activeContentTabKeyRef, setActiveContentTabKey,
+    activeContentItem, upsertContentItem,
+    embedNonce, setEmbedNonce, bumpEmbedNonce,
+    healthReport, setHealthReport, lastHealthIdRef,
+    scriptId, setScriptId, scriptTitle, setScriptTitle,
+    scriptCode, setScriptCode, filtersJson, setFiltersJson,
+    scriptOutput, setScriptOutput, scriptMode, setScriptMode,
+    publishedTileDash, setPublishedTileDash, schedulerOpen, setSchedulerOpen,
+    infoModalUseCase, setInfoModalUseCase,
+    scheduleConfig, setScheduleConfig, savedScheduleBadge, setSavedScheduleBadge,
+    loadedScript, setLoadedScript, lastScriptIdRef,
+    currentAppCode, setCurrentAppCode,
+    activeViewerDocument, setActiveViewerDocument,
+    prompt, setPrompt, pastedImages, setPastedImages,
+    showArchivedConversations, setShowArchivedConversations,
+    pendingDeleteConv, setPendingDeleteConv, deleteRelatedContent, setDeleteRelatedContent,
+    hydratedConvRouteRef, activityStepsByInteractionIdRef, mergeCachedActivitySteps,
+    modeAllowedConversations, filteredConversations, archivedConversations,
+    codeModePermOptsRef,
   }
 }
 

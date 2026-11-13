@@ -2,8 +2,49 @@ import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { ILookmlModel, Looker40SDK } from '@looker/sdk'
 import { mutate, SWRConfig, unstable_serialize } from 'swr'
 
-import { AntigravityAuth, callInteractionsApi, DEFAULT_ANTIGRAVITY_MODEL } from './antigravity'
-import { extractResolvedUseCase, formatExploreId, rawLookerRequest, ResolvedStudioUseCase, StudioUseCase } from './lookerApi'
+import { callInteractionsApi } from './antigravityAuth'
+import { AntigravityAuth, DEFAULT_ANTIGRAVITY_MODEL } from './antigravityTypes'
+import { loadSingleConversationArtifact, type UserConversationEntry } from './lookerArtifacts'
+import { extractResolvedUseCase, ResolvedStudioUseCase, StudioUseCase } from './lookerPermissions'
+import {
+  coalesceLookerMetadataRequest,
+  formatExploreId,
+  LOOKER_METADATA_CACHE_TTL_MS,
+  normalizeQueryFiltersToFixedDates,
+  parseExploreId,
+  rawLookerRequest,
+} from './lookerTransport'
+
+export const CA_EMBED_COLLAPSE_PARAMS: ReadonlyArray<readonly [string, string]> = [
+  ['hide_sidebar', 'true'], ['hide_data_source_panel', 'true'], ['sidebar_collapsed', 'true'], ['right_panel_collapsed', 'true'],
+]
+
+export function normalizeCaEmbedPath(rawPath: string, agentId?: string): string {
+  const cleanRaw = String(rawPath || '').trim()
+  if (!cleanRaw) return ''
+  const [pathAndQuery, hashPart] = cleanRaw.split('#')
+  const qIdx = pathAndQuery.indexOf('?')
+  let pathname = qIdx >= 0 ? pathAndQuery.slice(0, qIdx) : pathAndQuery
+  if (/^\/(?:conversations|agents)\//.test(pathname)) pathname = `/embed${pathname}`
+  const params = new URLSearchParams(qIdx >= 0 ? pathAndQuery.slice(qIdx + 1) : '')
+  const cleanAgentId = String(agentId || '').trim()
+  if (cleanAgentId && !params.has('agent_id')) params.set('agent_id', cleanAgentId)
+  for (const [k, v] of CA_EMBED_COLLAPSE_PARAMS) if (!params.has(k)) params.set(k, v)
+  const qs = params.toString()
+  return `${pathname}${qs ? `?${qs}` : ''}${hashPart ? `#${hashPart}` : ''}`
+}
+
+export function buildCaEmbedPath(caConversationId: string, agentId?: string): string {
+  const cleanConvId = encodeURIComponent(String(caConversationId || '').trim())
+  const cleanAgentId = String(agentId || '').trim()
+  return normalizeCaEmbedPath(cleanAgentId ? `/embed/conversations/${cleanConvId}?agent_id=${encodeURIComponent(cleanAgentId)}` : `/embed/conversations/${cleanConvId}`, cleanAgentId)
+}
+
+export function resolveCaEmbedPath(agentId: string, caConversationId: string, explicitPath?: string): string {
+  return explicitPath && /^\/(?:embed\/)?(?:conversations|agents)\//.test(explicitPath)
+    ? normalizeCaEmbedPath(explicitPath, agentId)
+    : buildCaEmbedPath(caConversationId, agentId)
+}
 
 export const CA_AGENT_SELECTION_REQUEST_TAG = '[CA_AGENT_SELECTION_REQUEST]'
 
@@ -246,37 +287,6 @@ export async function selectCaAgentViaIsolatedSubagent(params: {
   return parseCaAgentSelectionResponse('', catalog, question)
 }
 
-export const CA_EMBED_COLLAPSE_PARAMS: ReadonlyArray<readonly [string, string]> = [
-  ['hide_sidebar', 'true'], ['hide_data_source_panel', 'true'], ['sidebar_collapsed', 'true'], ['right_panel_collapsed', 'true'],
-]
-
-export function normalizeCaEmbedPath(rawPath: string, agentId?: string): string {
-  const cleanRaw = String(rawPath || '').trim()
-  if (!cleanRaw) return ''
-  const [pathAndQuery, hashPart] = cleanRaw.split('#')
-  const qIdx = pathAndQuery.indexOf('?')
-  let pathname = qIdx >= 0 ? pathAndQuery.slice(0, qIdx) : pathAndQuery
-  if (/^\/(?:conversations|agents)\//.test(pathname)) pathname = `/embed${pathname}`
-  const params = new URLSearchParams(qIdx >= 0 ? pathAndQuery.slice(qIdx + 1) : '')
-  const cleanAgentId = String(agentId || '').trim()
-  if (cleanAgentId && !params.has('agent_id')) params.set('agent_id', cleanAgentId)
-  for (const [k, v] of CA_EMBED_COLLAPSE_PARAMS) if (!params.has(k)) params.set(k, v)
-  const qs = params.toString()
-  return `${pathname}${qs ? `?${qs}` : ''}${hashPart ? `#${hashPart}` : ''}`
-}
-
-export function buildCaEmbedPath(caConversationId: string, agentId?: string): string {
-  const cleanConvId = encodeURIComponent(String(caConversationId || '').trim())
-  const cleanAgentId = String(agentId || '').trim()
-  return normalizeCaEmbedPath(cleanAgentId ? `/embed/conversations/${cleanConvId}?agent_id=${encodeURIComponent(cleanAgentId)}` : `/embed/conversations/${cleanConvId}`, cleanAgentId)
-}
-
-export function resolveCaEmbedPath(agentId: string, caConversationId: string, explicitPath?: string): string {
-  return explicitPath && /^\/(?:embed\/)?(?:conversations|agents)\//.test(explicitPath)
-    ? normalizeCaEmbedPath(explicitPath, agentId)
-    : buildCaEmbedPath(caConversationId, agentId)
-}
-
 export interface CreateCaConversationOptions {
   sdk: Looker40SDK; agent?: LookerCaAgentSummary; selection?: CaAgentSelectionResult; userPrompt: string
 }
@@ -328,5 +338,412 @@ export async function createLookerCaConversation(
     caConversationId, agentId: cleanAgentId, agentName: resolvedAgentName,
     embedPath: resolveCaEmbedPath(cleanAgentId, caConversationId),
     title: label, label, ...(assistantReply ? { assistantReply } : {}),
+  }
+}
+
+export type StudioContextCategory = 'explore' | 'dashboard' | 'look' | 'conversation'
+
+export interface StudioContextMention {
+  type: StudioContextCategory
+  id: string
+  title: string
+  subtitle?: string
+  model?: string
+  explore?: string
+  folderId?: string
+  description?: string
+  url?: string
+}
+
+export interface HydratedMentionedContext {
+  explores: string[]
+  extraSources: Array<{ type: 'inline'; content: string; target: string }>
+  promptSummary: string
+}
+
+function normalizeRawContentMention(raw: Record<string, unknown>, fallbackCategory?: StudioContextCategory): StudioContextMention | null {
+  const rawType = String(raw.content_type || raw.type || raw.section || fallbackCategory || '').toLowerCase().trim()
+
+  if (
+    rawType.includes('explore') ||
+    (typeof raw.model_name === 'string' && typeof raw.explore_name === 'string') ||
+    (typeof raw.model === 'string' && typeof raw.explore === 'string')
+  ) {
+    const model = String(raw.model_name || raw.model || '').trim()
+    const explore = String(raw.explore_name || raw.explore || raw.name || '').trim()
+    const id = model && explore ? formatExploreId(model, explore) : String(raw.content_id || raw.id || '').trim()
+    const parsed = parseExploreId(id)
+    if (!parsed) return null
+    return {
+      type: 'explore', id, model: parsed.modelName, explore: parsed.exploreName,
+      title: String(raw.title || raw.label || parsed.exploreName).trim(), subtitle: parsed.modelName,
+      description: raw.description ? String(raw.description) : undefined,
+      url: raw.content_url || raw.url ? String(raw.content_url || raw.url) : undefined,
+    }
+  }
+
+  if (rawType.includes('conversation')) {
+    const id = String(raw.content_id || raw.id || '').trim()
+    if (!id) return null
+    return {
+      type: 'conversation', id, title: String(raw.title || raw.label || raw.name || id).trim(),
+      subtitle: raw.use_case ? String(raw.use_case) : undefined,
+      description: raw.description ? String(raw.description) : undefined,
+    }
+  }
+
+  const isLook = rawType === 'look' || rawType === 'looks'
+  const isDash = rawType.includes('dashboard') || (!isLook && fallbackCategory === 'dashboard')
+  if (!isLook && !isDash && fallbackCategory !== 'look') return null
+
+  const type: StudioContextCategory = isLook || fallbackCategory === 'look' ? 'look' : 'dashboard'
+  const id = String(raw.content_id || raw.content_slug || raw.id || '').trim()
+  if (!id) return null
+  const title = String(raw.title || raw.name || raw.label || id).trim()
+  const folderObj = raw.folder as Record<string, unknown> | undefined
+  const folderId = raw.folder_id ? String(raw.folder_id) : folderObj?.id ? String(folderObj.id) : undefined
+  const subtitle = folderObj?.name ? String(folderObj.name) : `${type === 'dashboard' ? 'Dashboard' : 'Look'} #${id}`
+  return {
+    type, id, title, subtitle, folderId,
+    description: raw.description ? String(raw.description) : undefined,
+    url: raw.content_url || raw.url ? String(raw.content_url || raw.url) : undefined,
+  }
+}
+
+function dedupeContextMentions(items: StudioContextMention[]): StudioContextMention[] {
+  const seen = new Set<string>()
+  return items.filter(item => {
+    const key = `${item.type}:${item.id}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+export async function fetchPreloadedContentSummary(sdk: Looker40SDK): Promise<StudioContextMention[]> {
+  return coalesceLookerMetadataRequest(
+    'meta:content_summary',
+    async () => {
+      const sdkRec = sdk as unknown as { content_summary?: (params: Record<string, unknown>) => Promise<unknown>; ok?: <T>(p: Promise<T> | T) => Promise<T> }
+      const summaryFields = 'id,content_type,content_id,content_slug,content_url,title,description,view_count,favorite_count,last_viewed_at'
+      let rawRows: unknown = null
+      if (typeof sdkRec.content_summary === 'function') {
+        try {
+          const callRes = sdkRec.content_summary({ limit: 30, fields: summaryFields })
+          rawRows = typeof sdkRec.ok === 'function' ? await sdkRec.ok(callRes) : await callRes
+        } catch {
+          rawRows = null
+        }
+      }
+      if (!Array.isArray(rawRows) || rawRows.length === 0) {
+        try {
+          rawRows = await rawLookerRequest<unknown>(sdk, 'GET', '/api/4.0/content_summary', { limit: 30, fields: summaryFields })
+        } catch {
+          rawRows = null
+        }
+      }
+      if (!Array.isArray(rawRows) || rawRows.length === 0) {
+        try {
+          rawRows = await sdk.ok(sdk.search_content({ terms: '', types: 'dashboard,look', limit: 30 } as Parameters<Looker40SDK['search_content']>[0]))
+        } catch {
+          rawRows = []
+        }
+      }
+      const rows = Array.isArray(rawRows) ? rawRows : []
+      const mentions: StudioContextMention[] = []
+      for (const row of rows) {
+        if (row && typeof row === 'object') {
+          const normalized = normalizeRawContentMention(row as Record<string, unknown>)
+          if (normalized) mentions.push(normalized)
+        }
+      }
+      return dedupeContextMentions(mentions)
+    },
+    LOOKER_METADATA_CACHE_TTL_MS,
+    ['looker:content_summary']
+  )
+}
+
+export async function searchGlobalContentV2(
+  sdk: Looker40SDK,
+  params: { term: string; category?: StudioContextCategory | 'all'; limit?: number }
+): Promise<StudioContextMention[]> {
+  const cleanTerm = String(params.term || '').trim()
+  const limit = params.limit ?? 15
+  const category = params.category && params.category !== 'all' ? params.category : undefined
+  const sections =
+    category === 'look' ? ['Looks']
+    : category === 'dashboard' ? ['Dashboards', 'LookML Dashboards']
+    : category === 'explore' ? ['Explore', 'Self-Service Explore']
+    : category === 'conversation' ? ['Conversations']
+    : undefined
+
+  let payload: unknown = null
+  try {
+    payload = await rawLookerRequest<unknown>(
+      sdk,
+      'GET',
+      '/api/4.0/global_search_v2',
+      Object.assign({ term: cleanTerm, curate: true, limit }, sections ? { sections } : null)
+    )
+  } catch {
+    try {
+      payload = await sdk.ok(
+        sdk.search_content(
+          Object.assign(
+            { terms: cleanTerm, limit },
+            category === 'look' ? { types: 'look' } : category === 'dashboard' ? { types: 'dashboard' } : null
+          ) as Parameters<Looker40SDK['search_content']>[0]
+        )
+      )
+    } catch {
+      payload = []
+    }
+  }
+
+  const mentions: StudioContextMention[] = []
+  const collectFromList = (list: unknown[], sectionHint?: StudioContextCategory) => {
+    for (const entry of list) {
+      if (!entry || typeof entry !== 'object') continue
+      const rec = entry as Record<string, unknown>
+      if (Array.isArray(rec.items) || Array.isArray(rec.results)) {
+        const secName = String(rec.name || rec.title || rec.section || rec.type || '').toLowerCase()
+        const hint: StudioContextCategory | undefined =
+          secName.includes('look') && !secName.includes('lookml') ? 'look'
+          : secName.includes('dashboard') ? 'dashboard'
+          : secName.includes('explore') ? 'explore'
+          : secName.includes('conversation') ? 'conversation'
+          : sectionHint
+        collectFromList((rec.items || rec.results) as unknown[], hint)
+        continue
+      }
+      const item = normalizeRawContentMention(rec, sectionHint || category)
+      if (item && (!category || item.type === category)) mentions.push(item)
+    }
+  }
+
+  if (Array.isArray(payload)) {
+    collectFromList(payload, category)
+  } else if (payload && typeof payload === 'object') {
+    const obj = payload as Record<string, unknown>
+    if (Array.isArray(obj.sections)) collectFromList(obj.sections, category)
+    if (Array.isArray(obj.results)) collectFromList(obj.results, category)
+    if (Array.isArray(obj.items)) collectFromList(obj.items, category)
+  }
+
+  return dedupeContextMentions(mentions).slice(0, limit)
+}
+
+function sanitizeContextFilename(rawId: string): string {
+  return String(rawId || 'item').trim().replace(/[^a-zA-Z0-9._-]+/g, '_')
+}
+
+function summarizeQuerySpec(q: Record<string, unknown> | null | undefined, fixedDates = false, anchorDate?: string) {
+  if (!q || typeof q !== 'object') return null
+  const model = String(q.model || '').trim()
+  const view = String(q.view || q.explore || '').trim()
+  const rawFilters = q.filters && typeof q.filters === 'object' ? (q.filters as Record<string, string>) : undefined
+  const filters = rawFilters && fixedDates ? normalizeQueryFiltersToFixedDates(rawFilters, anchorDate) : rawFilters
+  return {
+    model: model || undefined,
+    view: view || undefined,
+    fields: Array.isArray(q.fields) ? q.fields : undefined,
+    pivots: Array.isArray(q.pivots) ? q.pivots : undefined,
+    fill_fields: Array.isArray(q.fill_fields) ? q.fill_fields : undefined,
+    filters,
+    sorts: Array.isArray(q.sorts) ? q.sorts : undefined,
+    limit: q.limit !== undefined && q.limit !== null ? String(q.limit) : undefined,
+    dynamic_fields: q.dynamic_fields,
+    vis_config: q.vis_config && typeof q.vis_config === 'object' ? q.vis_config : undefined,
+  }
+}
+
+async function fetchLookerEntityRecord(
+  sdk: Looker40SDK,
+  method: 'dashboard' | 'look',
+  paramKey: 'dashboard_id' | 'look_id',
+  pathPrefix: '/dashboards' | '/looks',
+  id: string
+): Promise<Record<string, unknown> | null> {
+  try {
+    const fn = sdk[method] as unknown as (arg: unknown) => Promise<unknown>
+    let raw: unknown
+    try {
+      raw = await sdk.ok(fn.call(sdk, id))
+    } catch {
+      raw = await sdk.ok(fn.call(sdk, { [paramKey]: id }))
+    }
+    if (raw && typeof raw === 'object') return raw as Record<string, unknown>
+  } catch {
+    try {
+      return await rawLookerRequest<Record<string, unknown>>(sdk, 'GET', `${pathPrefix}/${encodeURIComponent(id)}`)
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+export async function hydrateMentionedContext(params: {
+  sdk: Looker40SDK
+  mentions: StudioContextMention[]
+  conversations?: UserConversationEntry[]
+  selectedExplores?: string[]
+  useCase?: string
+  anchorDate?: string
+}): Promise<HydratedMentionedContext> {
+  const { sdk, mentions, conversations = [], selectedExplores = [], useCase, anchorDate } = params
+  const fixedDates = useCase === 'data-investigator' || useCase === 'data_investigator'
+  const exploresSet = new Set<string>(selectedExplores.filter(Boolean))
+  const extraSources: Array<{ type: 'inline'; content: string; target: string }> = []
+  const summaryLines: string[] = []
+
+  for (const mention of dedupeContextMentions(mentions)) {
+    if (mention.type === 'explore') {
+      const expId =
+        mention.model && mention.explore
+          ? formatExploreId(mention.model, mention.explore)
+          : mention.id
+      if (parseExploreId(expId)) {
+        exploresSet.add(expId)
+        summaryLines.push(`- **@explore:${mention.title}** (\`${expId}\`)`)
+      }
+      continue
+    }
+
+    if (mention.type === 'dashboard') {
+      const dashId = String(mention.id).trim()
+      if (!dashId) continue
+      const dashObj = await fetchLookerEntityRecord(sdk, 'dashboard', 'dashboard_id', '/dashboards', dashId)
+
+      if (dashObj) {
+        const elements = Array.isArray(dashObj.dashboard_elements)
+          ? (dashObj.dashboard_elements as Array<Record<string, unknown>>)
+          : []
+        const dashExplores = new Set<string>()
+        const tiles = elements.map((el) => {
+          const resultMaker = el.result_maker as Record<string, unknown> | undefined
+          const rawQ = (el.query || resultMaker?.query) as Record<string, unknown> | undefined
+          const qSpec = summarizeQuerySpec(rawQ, fixedDates, anchorDate)
+          if (qSpec?.model && qSpec?.view) {
+            const expId = formatExploreId(qSpec.model, qSpec.view)
+            exploresSet.add(expId)
+            dashExplores.add(expId)
+          }
+          return {
+            id: el.id ? String(el.id) : undefined,
+            title: el.title || el.title_text || undefined,
+            type: el.type || undefined,
+            subtitle_text: el.subtitle_text || undefined,
+            body_text: el.body_text || undefined,
+            query: qSpec,
+          }
+        })
+        const safeId = sanitizeContextFilename(dashId)
+        const targetPath = `/workspace/context/dashboard_${safeId}.json`
+        const payload = {
+          id: String(dashObj.id || dashId),
+          title: String(dashObj.title || mention.title || dashId),
+          description: dashObj.description || undefined,
+          folder_id: dashObj.folder_id || (dashObj.folder as Record<string, unknown> | undefined)?.id,
+          explores: Array.from(dashExplores),
+          dashboard_filters: Array.isArray(dashObj.dashboard_filters) ? dashObj.dashboard_filters : [],
+          dashboard_layouts: Array.isArray(dashObj.dashboard_layouts) ? dashObj.dashboard_layouts : [],
+          tiles,
+        }
+        extraSources.push({ type: 'inline', target: targetPath, content: JSON.stringify(payload, null, 2) })
+        summaryLines.push(
+          `- **@dashboard:${payload.title}** (ID \`${payload.id}\`, saved to \`${targetPath}\`, ${tiles.length} tile(s), explores: ${
+            payload.explores.length > 0 ? payload.explores.map((e) => `\`${e}\``).join(', ') : 'none'
+          })`
+        )
+      }
+      continue
+    }
+
+    if (mention.type === 'look') {
+      const lookId = String(mention.id).trim()
+      if (!lookId) continue
+      const lookObj = await fetchLookerEntityRecord(sdk, 'look', 'look_id', '/looks', lookId)
+
+      if (lookObj) {
+        const qSpec = summarizeQuerySpec(
+          lookObj.query as Record<string, unknown> | undefined,
+          fixedDates,
+          anchorDate
+        )
+        const expId = qSpec?.model && qSpec?.view ? formatExploreId(qSpec.model, qSpec.view) : ''
+        if (expId) exploresSet.add(expId)
+        const safeId = sanitizeContextFilename(lookId)
+        const targetPath = `/workspace/context/look_${safeId}.json`
+        const payload = {
+          id: String(lookObj.id || lookId),
+          title: String(lookObj.title || mention.title || lookId),
+          description: lookObj.description || undefined,
+          folder_id: lookObj.folder_id || (lookObj.folder as Record<string, unknown> | undefined)?.id,
+          explore: expId || undefined,
+          query: qSpec,
+        }
+        extraSources.push({ type: 'inline', target: targetPath, content: JSON.stringify(payload, null, 2) })
+        summaryLines.push(
+          `- **@look:${payload.title}** (ID \`${payload.id}\`, saved to \`${targetPath}\`${
+            expId ? `, explore: \`${expId}\`` : ''
+          })`
+        )
+      }
+      continue
+    }
+
+    if (mention.type === 'conversation') {
+      const convId = String(mention.id).trim()
+      if (!convId) continue
+      let conv: UserConversationEntry | null =
+        conversations.find((c) => c.id === convId || c.label === mention.title) || null
+      if (!conv) {
+        try {
+          conv = await loadSingleConversationArtifact(sdk, convId)
+        } catch {
+          conv = null
+        }
+      }
+      if (conv) {
+        for (const exp of conv.explores || []) {
+          if (parseExploreId(exp)) exploresSet.add(exp)
+        }
+        const safeId = sanitizeContextFilename(conv.id || convId)
+        const targetPath = `/workspace/context/conversation_${safeId}.md`
+        const turnLines = (conv.messages || []).map(
+          (m) => `### ${String(m.role || 'user').toUpperCase()}\n${String(m.text || '')}`
+        )
+        const mdContent = [
+          `# Conversation: ${conv.label || mention.title} (${conv.id})`,
+          `- Use Case: ${conv.use_case || conv.type || 'app'}`,
+          `- Explores: ${(conv.explores || []).join(', ') || 'none'}`,
+          conv.content ? `- Content Metadata: \`${JSON.stringify(conv.content)}\`` : '',
+          '',
+          '## Transcript',
+          ...(turnLines.length > 0 ? turnLines : ['_No messages recorded._']),
+        ]
+          .filter(Boolean)
+          .join('\n\n')
+        extraSources.push({
+          type: 'inline',
+          target: targetPath,
+          content: mdContent,
+        })
+        summaryLines.push(
+          `- **@conversation:${conv.label || mention.title}** (ID \`${conv.id}\`, saved to \`${targetPath}\`)`
+        )
+      }
+    }
+  }
+
+  return {
+    explores: Array.from(exploresSet),
+    extraSources,
+    promptSummary:
+      summaryLines.length > 0
+        ? ['### Referenced Looker Context (@-mentions)', ...summaryLines].join('\n')
+        : '',
   }
 }
