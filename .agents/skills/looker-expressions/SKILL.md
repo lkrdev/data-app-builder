@@ -163,7 +163,7 @@ Pass `"dynamic_fields"` as a JSON-encoded string on `run_inline_query(result_for
 import json
 
 body = {
-    "model": "<model_name>",
+    "model": "agentic_thelook",
     "view": "orders",
     "fields": ["orders.created_month", "orders.total_net_revenue"],
     "sorts": ["orders.created_month asc"],
@@ -206,7 +206,7 @@ Custom Fields and Custom Filters compile directly into the warehouse SQL query (
 import json
 
 body = {
-    "model": "<model_name>",
+    "model": "agentic_thelook",
     "view": "orders",
     "fields": ["orders.created_date", "age_cohort", "us_completed_revenue"],
     "dynamic_fields": json.dumps([

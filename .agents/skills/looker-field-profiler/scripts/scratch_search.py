@@ -336,7 +336,7 @@ def cli_main(default_dialect: str | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="Profile LookML string fields, compile Explore queries via run_inline_query(result_format='sql'), and generate per-model _field_value_search_<model> PDT views & hidden Explores."
     )
-    parser.add_argument("--model", required=True, help="Comma-separated LookML model name(s) (e.g. agentic_ecommerce_analytics,streaming_platform_analytics)")
+    parser.add_argument("--model", required=True, help="Comma-separated LookML model name(s) (e.g. agentic_thelook,streaming_platform_analytics)")
     parser.add_argument("--explore", default="", help="Optional comma-separated Explore names (defaults to all visible Explores)")
     parser.add_argument("--path", default="", help="Optional local LookML directory path for offline model/explore discovery")
     parser.add_argument("--dialect", default=default_dialect or "", help="Dialect (bigquery, snowflake, postgres, databricks, duckdb)")

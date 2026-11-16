@@ -2,9 +2,9 @@
 """
 Script designed to run in looker code-mode sandbox (Monty interpreter):
 Pass variables via --var arguments:
-  --var project=my_new_project
-  --var connection=<connection_name>
-  --var model=my_model
+  --var project=embed-demo-bryan-meep
+  --var connection=looker-private-demo
+  --var model=thelook
   --var view_name=order_nested_logic (optional)
   --var sql_content="..." (or --var sql_file=...)
 """

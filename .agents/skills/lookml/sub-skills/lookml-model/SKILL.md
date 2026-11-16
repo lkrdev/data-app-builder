@@ -56,7 +56,7 @@ Use strict patterns to control scope and performance.
 ## Basic Model
 
 ```lookml
-connection: "<connection_name>"
+connection: "thelook"
 
 # Include all views in the views/ folder
 include: "/views/*.view"
@@ -92,7 +92,7 @@ include: "/views/marketing/*.view"
 ## Model with Datagroup (Best Practice)
 
 ```lookml
-connection: "<connection_name>"
+connection: "thelook"
 
 # Define the caching policy
 datagroup: ecommerce_etl {
