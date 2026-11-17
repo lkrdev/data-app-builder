@@ -15,13 +15,18 @@ import {
 import {
   ARTIFACT_NAMESPACE,
   type ArtifactExtensionHostLike,
+  formatStudioContentItemTitle,
   getArtifactNamespace,
   type SavedScript,
   type SaveUserArtifactParams,
   type SharedArtifactPayload,
   STUDIO_TOOL_MODES,
+  type StudioContentItem,
+  type StudioContentItemType,
   type StudioToolMode,
   type TileScriptBinding,
+  toTurnCrudItem,
+  type TurnCrudItem,
   type UserArtifactIndexEntry,
   type UserConversationEntry,
 } from './lookerArtifactTypes'
@@ -561,3 +566,114 @@ export const loadAlertArtifact = (
     String(alertId || '').trim().replace(/^obj_alert_/, ''),
     namespace
   )
+
+export interface DeletedLookerResource {
+  kind: 'dashboards' | 'looks' | 'boards'
+  id: string
+}
+
+const decodeLookerId = (raw: string): string => {
+  try { return decodeURIComponent(raw) } catch { return raw }
+}
+
+export function extractDeletedLookerResources(
+  activitySteps?: ReadonlyArray<{ kind?: string; content?: string }>
+): DeletedLookerResource[] {
+  const seen = new Set<string>()
+  const out: DeletedLookerResource[] = []
+  const push = (rawKind: string, rawId: string) => {
+    const k = rawKind.toLowerCase().replace(/s$/, '')
+    const kind: DeletedLookerResource['kind'] = k === 'look' ? 'looks' : k === 'board' ? 'boards' : 'dashboards'
+    const id = decodeLookerId(String(rawId || '').trim())
+    const key = `${kind}:${id}`
+    if (id && !seen.has(key)) { seen.add(key); out.push({ kind, id }) }
+  }
+  const hardDeleteRe = /^(?:#\s*)?DELETE\s+\/(?:api\/[0-9.]+\/)?(dashboards|looks|boards)\/([^/?#\s)]+)(?:\?[^\s)]*)?\s+\(\d+ms\)$/gim
+  const patchRe = /^(?:#\s*)?PATCH\s+\/(?:api\/[0-9.]+\/)?(dashboards|looks)\/([^/?#\s)]+)(?:\?[^\s)]*)?\s+(\[ERR\](?:\s+\(\d+ms\))?|\(\d+ms\))$/gim
+  const literalIdPrefixRe = /^\s*(?:(?:dashboard_id|look_id)\s*=\s*)?(?:['"]([^'"]+)['"]|(\d+))\s*,/
+  const hasTrashFlagRe = /\bdeleted['"]?\s*[:=]\s*(?:True|true)\b/
+
+  for (const st of activitySteps || []) {
+    if (st?.kind !== 'codemode') continue
+    const txt = String(st.content || '')
+    for (const m of txt.matchAll(hardDeleteRe)) push(m[1], m[2])
+    const errKeys = new Set<string>()
+    const okPatches: Array<[string, string]> = []
+    for (const m of txt.matchAll(patchRe)) {
+      const kind = m[1].toLowerCase()
+      const id = decodeLookerId(m[2])
+      if (m[3].startsWith('[ERR]')) errKeys.add(`${kind}:${id}`)
+      else okPatches.push([kind, id])
+    }
+    const codePart = txt.split(/\n#\s*(?:Looker API Telemetry|Output)\b/)[0].replace(/^\s*#.*$/gm, '')
+    const outputPart = txt.includes('\n# Output') ? txt.slice(txt.indexOf('\n# Output')) : ''
+    const literalTrashKeys = new Set<string>()
+    const nonTrashLiteralKeys = new Set<string>()
+    const dynamicTrash = new Set<string>()
+    const dynamicNonTrash = new Set<string>()
+    let sawUpdateCall = false
+    for (const m of codePart.matchAll(/\bupdate_(dashboard|look)\s*\(/g)) {
+      sawUpdateCall = true
+      const kind = m[1].toLowerCase() === 'look' ? 'looks' : 'dashboards'
+      const start = (m.index || 0) + m[0].length
+      let depth = 1
+      let i = start
+      while (i < codePart.length && depth > 0) {
+        if (codePart[i] === '(') depth += 1
+        else if (codePart[i] === ')') depth -= 1
+        i += 1
+      }
+      const argsSlice = codePart.slice(start, Math.max(start, i - 1))
+      const isTrash = hasTrashFlagRe.test(argsSlice)
+      const idMatch = argsSlice.match(literalIdPrefixRe)
+      const litId = idMatch ? decodeLookerId(idMatch[1] || idMatch[2] || '') : ''
+      if (litId) {
+        if (isTrash) literalTrashKeys.add(`${kind}:${litId}`)
+        else nonTrashLiteralKeys.add(`${kind}:${litId}`)
+      } else if (isTrash) dynamicTrash.add(kind)
+      else dynamicNonTrash.add(kind)
+    }
+    const rawSoftTrash = !sawUpdateCall && hasTrashFlagRe.test(codePart)
+    for (const [kind, id] of okPatches) {
+      const key = `${kind}:${id}`
+      if (errKeys.has(key) || nonTrashLiteralKeys.has(key)) continue
+      if (literalTrashKeys.has(key) || rawSoftTrash) push(kind, id)
+      else if (dynamicTrash.has(kind)) {
+        const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        if (!dynamicNonTrash.has(kind) || (outputPart && new RegExp(`["']${escaped}["']`).test(outputPart))) push(kind, id)
+      }
+    }
+  }
+  return out
+}
+
+export function reconcileDeletedLookerContent(
+  items: ReadonlyArray<StudioContentItem>,
+  activeTabKey: string,
+  activitySteps?: ReadonlyArray<{ kind?: string; content?: string }>
+): {
+  deletedIds: Set<string>
+  nextItems: StudioContentItem[]
+  nextActiveTabKey: string
+  crudItems: TurnCrudItem[]
+} {
+  const deletedResources = extractDeletedLookerResources(activitySteps)
+  const deletedIds = new Set<string>()
+  let nextItems = [...items]
+  let nextActiveTabKey = activeTabKey
+  const crudItems: TurnCrudItem[] = []
+  for (const { kind, id: delId } of deletedResources) {
+    deletedIds.add(delId)
+    const fbType: StudioContentItemType = kind === 'looks' ? 'look' : kind === 'boards' ? 'board' : delId.includes('::') ? 'lookml_dashboard' : 'dashboard'
+    const hit = nextItems.find(
+      (it) => it.id === delId && (kind === 'looks' ? it.contentType === 'look' : kind === 'boards' ? it.contentType === 'board' : ['dashboard', 'lookml_dashboard', 'data_app', 'data-investigator'].includes(it.contentType))
+    )
+    if (hit) {
+      nextItems = nextItems.filter((it) => it.key !== hit.key)
+      if (nextActiveTabKey === hit.key) nextActiveTabKey = nextItems.filter((it) => !it.hidden).slice(-1)[0]?.key || ''
+    }
+    const ct = hit ? hit.contentType : fbType
+    crudItems.push(toTurnCrudItem(hit || { key: `${ct}:${delId}`, id: delId, title: formatStudioContentItemTitle(ct, delId), contentType: ct }, 'deleted'))
+  }
+  return { deletedIds, nextItems, nextActiveTabKey, crudItems }
+}
