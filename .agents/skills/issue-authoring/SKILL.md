@@ -20,7 +20,7 @@ Load when capturing feedback, filing GitHub issues (`gh issue create`), or evalu
 | **Library-First TypeScript Types & Zero-`any` (#77)** — Hand-rolling duplicate Looker/Extension interfaces or using `: any` breaks `@typescript-eslint/no-explicit-any` (`npm run lint:check`). | Always import canonical types from `@looker/sdk`, `@looker/extension-sdk`, `@looker/extension-sdk-react`, `@looker/embed-sdk`, `swr`, and `react` first, composing with `Partial<...>` / `Pick<...>` / `unknown` instead of `any`. |
 | **Non-Webpack Dynamic `require` in Node/Jest & `gh issue view` JSON (#104)** — `Function('return require')()` evaluates in global scope where CommonJS `require` is undefined in Jest (`ReferenceError: require is not defined`), and bare `gh issue view` fails on deprecated `projectCards` GraphQL fields. | Use `eval('require')('./vendor/codemode.js')` for non-webpack-bundled Node/Jest fallbacks, serve `/codemode.js` locally in `src/__tests__/miniApps.visual.test.js`, and always pass `--json title,body,comments` to `gh issue view`. |
 | **Headless Chrome `localStorage` Isolation & `useCallback` Setter Dependencies (#112)** — Adding new `localStorage`-persisted state keys (`STUDIO_FOLDER_STORAGE_KEY`) or wrapping a `useState` setter in `useCallback` (`setSelectedFolderId`) can leak persisted state across sequential visual tests or trigger `react-hooks/exhaustive-deps` warnings (`--max-warnings=0`). | Clear new `dab_*` `localStorage` keys in the inline HTML bootstrap of `src/__tests__/miniApps.visual.test.js` unless `?preserve<Key>=1` is present, and grep all `useCallback`/`useEffect` blocks calling the wrapped setter to include it in their dependency arrays. |
-| **Antigravity Sub-Module Layout & `lkr-dev-cli` / `CODEMODE_CDN_URL` Version Parity** — `src/antigravity.ts` is split into 6 modules (`src/antigravityTypes.ts`, `src/antigravityAuth.ts`, `src/antigravitySteps.ts`, `src/antigravityStarters.ts`, `src/antigravityPrompts.ts`, and `src/antigravity.ts`), and `.githooks/pre-commit` enforces exact version parity across `lkr-dev-cli-version.txt`, `LKR_DEV_CLI_VERSION`, and `CODEMODE_CDN_URL`. | Cite the specific sub-module in issues (`antigravityAuth.ts` for OAuth/API calls, `antigravitySteps.ts` for workspace sources/bundles/activity steps, `antigravityStarters.ts` for labeling/starters/`@`-mentions, `antigravityPrompts.ts` for prompts/Python preambles/bundled skills, `antigravityTypes.ts` for types/uploads, `antigravity.ts` for turn orchestration), and update `lkr-dev-cli-version.txt`, `LKR_DEV_CLI_VERSION`, and `CODEMODE_CDN_URL` (`src/lkrCliBridge.ts`) together whenever bumping `lkr-dev-cli`. |
+| **Antigravity Sub-Module Layout & `lkr-dev-cli` / `CODEMODE_CDN_URL` Version Parity** — `src/antigravity.ts` is split into 8 modules (`src/antigravityTypes.ts`, `src/antigravityAuth.ts`, `src/antigravitySteps.ts`, `src/antigravityStarters.ts`, `src/antigravityPrompts.ts`, `src/antigravityEnv.ts`, `src/antigravityLoop.ts`, and `src/antigravity.ts`), and `.githooks/pre-commit` + `scripts/test-bundle.mjs` enforce exact version and SHA-256 parity across `lkr-dev-cli-version.txt`, `src/lkrCliBridge.ts`, `src/lkrCliSitecustomize.ts`, and `src/vendor/codemode.js`. | Cite the specific sub-module in issues (`antigravityAuth.ts` for OAuth/API calls, `antigravitySteps.ts` for bundles/activity steps, `antigravityEnv.ts` for workspace sources/prewarm/recovery/debug dumps, `antigravityLoop.ts` for polling, `antigravityStarters.ts` for labeling/starters/dashboard & profiler skills, `antigravityPrompts.ts` for prompts/Python preambles, `antigravityTypes.ts` for types/SSE merge/uploads, `antigravity.ts` for turn orchestration), and update `lkr-dev-cli-version.txt`, `LKR_DEV_CLI_VERSION` (`src/lkrCliBridge.ts` & `src/lkrCliSitecustomize.ts`), `CODEMODE_CDN_URL`, and `EXPECTED_CODEMODE_SHA256` together whenever bumping `lkr-dev-cli`. |
 | **Visual Test `routeMap` Registration & Fast Readiness Selectors (#126)** — Unmapped `?scenario=<name>` URLs in `src/__tests__/miniApps.visual.test.js` fall back to legacy `/app/42` (which does not hydrate `conv_app_42` chat messages), and waiting on a selector that is only mounted later via `window.__DAB_STUDIO__.setMessages(...)` burns the full 8s loop and triggers Chrome's `net::ERR_BLOCKED_BY_ADMINISTRATOR` force-installed extension timeout on subsequent navigations. | Register every new visual test scenario in `routeMap` inside `buildHtmlPage` (e.g. `'/c/conv_app_42'`), and always poll for an already-rendered readiness selector (`Boolean(window.__DAB_STUDIO__ && document.querySelector(...))`) after `Page.navigate`. |
 | **`STUDIO_SLASH_SKILLS` (`composer-slash-skill-menu`), `DOC_UI_COMPONENTS.LookmlTurnSkills` & `formatFriendlyLookerActivityLabel` Contracts (#145, #151)** — The composer uses `/` slash-command autocomplete (`STUDIO_SLASH_SKILLS`, `extractSlashSkillIds`, `composer-slash-skill-menu` in `src/lookmlSkills.ts` & `src/components/StudioWorkspace.tsx`) and mobile-only `+` menu items (`.dab-mobile-only-menu-item`: `mobile-menu-folder-btn`, `mobile-menu-approval-btn`, `mobile-menu-edit-agent-name-btn`), while `LOOKML_TURN_SKILLS = LOOKML_SKILLS_CATALOG.slice(1, 6)` is retained for `DOC_UI_COMPONENTS.LookmlTurnSkills` (`permissions.test.ts#L2725-L2732`). Also, `src/__tests__/permissions.test.ts#L5145-L5152` asserts `toEqual` on `formatFriendlyLookerActivityLabel` return objects. | Keep `LOOKML_TURN_SKILLS` bounded to `slice(1, 6)` for `DOC_UI_COMPONENTS.LookmlTurnSkills`, update `STUDIO_SLASH_SKILLS` when adding new slash-activatable skills, and scope any extra properties on `formatFriendlyLookerActivityLabel` to the newly added macro branch. |
 | **SSE Chunk Non-Trimming, `rawCoreSdkRequest` Alias & `skills/` Byte-Parity (#152)** — `extractNonThoughtText` and `extractInteractionOutputText` (`src/antigravitySteps.ts`) must join streamed chunks with `''` without per-chunk `.trim()`, `rawCoreSdkRequest` is exported from `src/lookerApi.ts` as an alias for `rawLookerRequest`, and `skills/looker-project-onboarding/SKILL.md` (at repo root) is asserted byte-identical to `LOOKER_PROJECT_ONBOARDING_SKILL_MD` in `src/__tests__/permissions.test.ts#L5264-L5275` (`#L5958`). | Never `.trim()` or `.join('\n')` individual SSE text deltas in `antigravitySteps.ts`/`antigravityAuth.ts`, import `rawCoreSdkRequest` from `lookerApi.ts`, and update root `skills/<name>/SKILL.md` in lockstep with `src/antigravityPrompts.ts`. |
@@ -79,6 +79,39 @@ Load when capturing feedback, filing GitHub issues (`gh issue create`), or evalu
 - **Verification**:
   - `npx jest src/__tests__/permissions.test.ts && node scripts/test-bundle.mjs`
   - `UPDATE_VISUAL_SNAPSHOTS=1 npx jest src/__tests__/miniApps.visual.test.js` (cropped `clipSelector` + `24px` margin)
+```
+
+### 2b. Upstream Parity Issue Sub-Template (`scripts/check-upstream-releases.mjs`)
+
+Automated parity issues opened or updated by `.github/workflows/watch-upstream-releases.yml` (`scripts/check-upstream-releases.mjs`, label `upstream-parity`) use this deterministic zero-LLM markdown shape (one open issue max per upstream repo, deduplicated across open and closed/`not planned` issues via the hidden HTML marker):
+
+```markdown
+<!-- upstream-parity:<repo>:<ver> -->
+## Upstream Release Summary
+
+- **Upstream Repository**: `looker-open-source/<repo>`
+- **Baseline → Latest**: `<fromLabel>` → `<toLabel>`
+- **Compare / Release URL**: <url>
+
+<release_notes_or_commit_bullets>
+
+## Changed Upstream Paths → Local `data-app-builder` Counterparts
+
+| Upstream Path / Surface | Local `data-app-builder` Counterparts |
+| --- | --- |
+| `<upstream_path_or_surface>` | `src/lkrCliBridge.ts`, `.agents/skills/*`, `src/lookerPermissions.ts`, `scripts/run-evals.mjs` |
+
+## Out-of-Scope Filter Reminder
+
+- **No MCP**: Ignore MCP server/tool features and `looker-mcp-skill`.
+- **No Go `looker-cli` binary in `/workspace/`**: Port worthwhile workflows into browser/WASM `LkrCodeMode` (`src/lkrCliBridge.ts`), `.agents/skills/*`, or `src/lookerPermissions.ts` — never install or shell out to the Go `looker-cli` binary in `/workspace/`.
+- **Bundle Budget**: Keep `dist/bundle.js < 2.00 MiB`.
+
+## Verification
+
+- [ ] Implement relevant parity changes or close this issue as `not planned` to suppress `<repo>:<ver>`.
+- [ ] `node scripts/check-upstream-releases.mjs --ack`
+- [ ] `npx jest src/__tests__/permissions.test.ts && node scripts/test-bundle.mjs && npm run eval`
 ```
 
 ## 3. Mandatory Pre-PR Self-Evaluation Loop

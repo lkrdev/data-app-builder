@@ -21,6 +21,7 @@ import {
 export * from './lkrCliSitecustomize'
 
 export const CODEMODE_CDN_URL = 'https://cdn.lkr.dev/cli/codemode/0.0.69/codemode.js'
+export const EXPECTED_CODEMODE_SHA256 = '7001b844407366c43ad8ad957997486409baab905c57c3c6146ac4c4cf5e3517'
 
 export interface LkrCodeModeToolDefinition {
   type: string

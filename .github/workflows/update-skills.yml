@@ -22,58 +22,93 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version-file: ".nvmrc"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Update installed skills and sync lkr-dev-cli release pin
         id: sync_skills
         run: |
           set -euo pipefail
 
-          # 1. Update all existing skills tracked in skills-lock.json (if present)
+          EXCLUDED_SKILLS=(
+            lookml-modeling-guidelines
+            lookml-reviewer
+            lookml-field-curation
+            looker-audit
+            looker-performance-optimizer
+            looker-architect
+            creating-looker-dashboard
+            snowflake-to-bigquery-converter
+            looker-mcp-skill
+            installing-looker-cli
+            authenticating-looker-cli
+            using-looker-cli
+            connecting-looker-to-bigquery
+          )
+          PROTECTED_SKILLS=(
+            "${EXCLUDED_SKILLS[@]}"
+            agentic-lookml
+            generate-view-from-table
+            lookml
+            lookml-view
+            issue-authoring
+            studio-conversation-debugger
+            studio-design-system
+            data-apps-sync
+            looker-dashboard
+            looker-permissions
+          )
+
+          is_excluded_skill() {
+            [[ "$1" =~ ^[a-z0-9][a-z0-9-]*$ ]] || return 0
+            [[ " ${PROTECTED_SKILLS[*]} " == *" $1 "* ]]
+          }
+
+          prune_lock_excluded() {
+            [ -f skills-lock.json ] || return 0
+            node -e 'const fs=require("node:fs"),l=JSON.parse(fs.readFileSync("skills-lock.json","utf8"));for(const k of process.argv.slice(1))delete l.skills?.[k];fs.writeFileSync("skills-lock.json",JSON.stringify(l,null,2)+"\n")' "${EXCLUDED_SKILLS[@]}"
+          }
+
+          # 1. Update non-excluded skills tracked in skills-lock.json
           if [ -f skills-lock.json ]; then
+            prune_lock_excluded
             npx --yes skills update -p -y
           fi
 
-          # 2. Check lkrdev/cli for any new skills under skills/*
+          # 2. Check lkrdev/cli for any new non-excluded skills under skills/*
           CLI_DIR=$(mktemp -d)
           git clone --depth 1 https://github.com/lkrdev/cli.git "$CLI_DIR"
           NEW_CLI_SKILLS=()
           for skill_dir in "$CLI_DIR"/skills/*; do
-            [ -d "$skill_dir" ] || continue
-            [ -f "$skill_dir/SKILL.md" ] || continue
+            [ -d "$skill_dir" ] && [ -f "$skill_dir/SKILL.md" ] || continue
             skill_name=$(basename "$skill_dir")
-            if [ ! -d ".agents/skills/$skill_name" ]; then
-              NEW_CLI_SKILLS+=("$skill_name")
-            fi
+            is_excluded_skill "$skill_name" && continue
+            [ ! -d ".agents/skills/$skill_name" ] && NEW_CLI_SKILLS+=("$skill_name")
           done
           rm -rf "$CLI_DIR"
 
           if [ ${#NEW_CLI_SKILLS[@]} -gt 0 ]; then
             echo "Installing new lkrdev/cli skills: ${NEW_CLI_SKILLS[*]}"
-            npx --yes skills add lkrdev/cli \
-              --agent antigravity \
-              --skill "${NEW_CLI_SKILLS[@]}" \
-              -y
+            npx --yes skills add lkrdev/cli --agent antigravity --skill "${NEW_CLI_SKILLS[@]}" -y
           fi
 
-          # 3. Check looker-open-source/looker-skills for any new lookml-* skills
+          # 3. Check looker-open-source/looker-skills for any new non-excluded lookml-* skills
           LOOKER_SKILLS_DIR=$(mktemp -d)
           git clone --depth 1 https://github.com/looker-open-source/looker-skills.git "$LOOKER_SKILLS_DIR"
           NEW_LOOKML_SKILLS=()
           for skill_dir in "$LOOKER_SKILLS_DIR"/skills/lookml-*; do
-            [ -d "$skill_dir" ] || continue
+            [ -d "$skill_dir" ] && [ -f "$skill_dir/SKILL.md" ] || continue
             skill_name=$(basename "$skill_dir")
-            if [ "$skill_name" != "lookml-modeling-guidelines" ] && [ ! -d ".agents/skills/$skill_name" ]; then
-              NEW_LOOKML_SKILLS+=("$skill_name")
-            fi
+            is_excluded_skill "$skill_name" && continue
+            [ ! -d ".agents/skills/$skill_name" ] && NEW_LOOKML_SKILLS+=("$skill_name")
           done
           rm -rf "$LOOKER_SKILLS_DIR"
 
           if [ ${#NEW_LOOKML_SKILLS[@]} -gt 0 ]; then
             echo "Installing new looker-open-source/looker-skills: ${NEW_LOOKML_SKILLS[*]}"
-            npx --yes skills add looker-open-source/looker-skills \
-              --agent antigravity \
-              --skill "${NEW_LOOKML_SKILLS[@]}" \
-              -y
+            npx --yes skills add looker-open-source/looker-skills --agent antigravity --skill "${NEW_LOOKML_SKILLS[@]}" -y
           fi
 
           # 4. Check lkrdev/ojof-gym for any new *ojof* skills
@@ -81,42 +116,59 @@ jobs:
           git clone --depth 1 https://github.com/lkrdev/ojof-gym.git "$OJOF_DIR"
           NEW_OJOF_SKILLS=()
           while IFS= read -r skill_md; do
-            skill_dir=$(dirname "$skill_md")
-            skill_name=$(basename "$skill_dir")
-            if [[ "$skill_name" == *ojof* ]] && [ ! -d ".agents/skills/$skill_name" ]; then
-              NEW_OJOF_SKILLS+=("$skill_name")
-            fi
+            skill_name=$(basename "$(dirname "$skill_md")")
+            is_excluded_skill "$skill_name" && continue
+            [[ "$skill_name" == *ojof* ]] && [ ! -d ".agents/skills/$skill_name" ] && NEW_OJOF_SKILLS+=("$skill_name")
           done < <(find "$OJOF_DIR" -name "SKILL.md")
           rm -rf "$OJOF_DIR"
 
           if [ ${#NEW_OJOF_SKILLS[@]} -gt 0 ]; then
             echo "Installing new lkrdev/ojof-gym skills: ${NEW_OJOF_SKILLS[*]}"
-            npx --yes skills add lkrdev/ojof-gym \
-              --agent antigravity \
-              --skill "${NEW_OJOF_SKILLS[@]}" \
-              -y
+            npx --yes skills add lkrdev/ojof-gym --agent antigravity --skill "${NEW_OJOF_SKILLS[@]}" -y
           fi
 
-          # 5. Check PyPI for a newer release of lkr-dev-cli and update pinned version
+          # Restore any excluded or Studio-owned skills from HEAD and keep lockfile clean
+          prune_lock_excluded
+          for ex in "${PROTECTED_SKILLS[@]}"; do rm -rf ".agents/skills/$ex"; git checkout -q HEAD -- ".agents/skills/$ex" 2>/dev/null || true; done
+
+          # 5. Sync upstream Data Apps toolkit payload, mirror looker-field-profiler, and repack sandboxSkillsBundle.ts
+          npm run sync-upstream
+          cp -f skills/looker-field-profiler/SKILL.md .agents/skills/looker-field-profiler/SKILL.md
+          if [ -f .agents/skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md ]; then
+            cp -f .agents/skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md skills/looker-field-profiler/sub-skills/scratch-search/SKILL.md
+          fi
+          node scripts/pack-sandbox-skills.mjs
+
+          # 6. Check PyPI for a newer release of lkr-dev-cli, sync codemode.js, and update EXPECTED_CODEMODE_SHA256
           LATEST_LKR_CLI=$(curl -fsSL https://pypi.org/pypi/lkr-dev-cli/json | jq -r '.info.version')
           CURRENT_LKR_CLI=$(tr -d '[:space:]' < lkr-dev-cli-version.txt)
-          if [ -n "$LATEST_LKR_CLI" ] && [ "$LATEST_LKR_CLI" != "null" ] && [ "$LATEST_LKR_CLI" != "$CURRENT_LKR_CLI" ]; then
+          if [[ "$LATEST_LKR_CLI" =~ ^[0-9]+\.[0-9]+\.[0-9]+([a-zA-Z0-9._-]*)?$ ]] && [ "$LATEST_LKR_CLI" != "$CURRENT_LKR_CLI" ]; then
             echo "Updating pinned lkr-dev-cli version: ${CURRENT_LKR_CLI} -> ${LATEST_LKR_CLI}"
             printf "%s\n" "$LATEST_LKR_CLI" > lkr-dev-cli-version.txt
+            npm run sync-codemode
             node -e '
-              const fs = require("fs"), [oldVer, newVer] = process.argv.slice(1);
-              for (const f of ["src/lkrCliBridge.ts", "src/lookmlTool.tsx", "AGENTS.md"]) {
-                if (fs.existsSync(f)) fs.writeFileSync(f, fs.readFileSync(f, "utf8").split(oldVer).join(newVer));
+              const crypto = require("node:crypto"), fs = require("node:fs"), [oldVer, newVer] = process.argv.slice(1);
+              const esc = oldVer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              const sha = crypto.createHash("sha256").update(fs.readFileSync("src/vendor/codemode.js")).digest("hex");
+              for (const f of ["src/lkrCliBridge.ts", "src/lkrCliSitecustomize.ts", "AGENTS.md"]) {
+                let txt = fs.readFileSync(f, "utf8")
+                  .replace(new RegExp(`(LKR_DEV_CLI_VERSION\\s*=\\s*[\\x27"])${esc}([\\x27"])`, "g"), `$1${newVer}$2`)
+                  .replace(new RegExp(`(https://cdn\\.lkr\\.dev/cli/codemode/)${esc}(/codemode\\.js)`, "g"), `$1${newVer}$2`)
+                  .replace(new RegExp(`(os\\.environ\\.get\\("LKR_DEV_CLI_VERSION",\\s*")${esc}(")`, "g"), `$1${newVer}$2`)
+                  .replace(new RegExp(`(lkr-dev-cli\\[[^\\]]+\\]==)${esc}`, "g"), `$1${newVer}`)
+                  .replace(new RegExp(`(\`lkr-dev-cli\`\\s*\\(\`)${esc}(\`\\))`, "g"), `$1${newVer}$2`);
+                if (f === "src/lkrCliBridge.ts") {
+                  const next = txt.replace(/(export const EXPECTED_CODEMODE_SHA256 = [\x27"])[0-9a-f]{64}([\x27"])/, `$1${sha}$2`);
+                  if (!next.includes(sha)) throw new Error("Failed to update EXPECTED_CODEMODE_SHA256 in src/lkrCliBridge.ts");
+                  txt = next;
+                }
+                fs.writeFileSync(f, txt);
               }
             ' "$CURRENT_LKR_CLI" "$LATEST_LKR_CLI"
             echo "lkr_cli_version=${CURRENT_LKR_CLI} -> ${LATEST_LKR_CLI}" >> "$GITHUB_OUTPUT"
           else
             echo "lkr_cli_version=${CURRENT_LKR_CLI} (unchanged)" >> "$GITHUB_OUTPUT"
           fi
-
-          # 6. Sync upstream Data Apps toolkit payload and repack sandbox skills bundle
-          npm run sync-upstream
-          npm run pack-skills
 
           ALL_NEW_SKILLS=("${NEW_CLI_SKILLS[@]}" "${NEW_LOOKML_SKILLS[@]}" "${NEW_OJOF_SKILLS[@]}")
           if [ ${#ALL_NEW_SKILLS[@]} -gt 0 ]; then
@@ -125,7 +177,7 @@ jobs:
             echo "new_skills=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create or Update Pull Request
+      - name: Verify, Commit, and Create or Update Pull Request
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
           NEW_SKILLS: ${{ steps.sync_skills.outputs.new_skills }}
@@ -137,20 +189,26 @@ jobs:
             exit 0
           fi
 
+          npm run build && npm test
+
           BRANCH="chore/update-skills"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$BRANCH"
-          git add lkr-dev-cli-version.txt src/lkrCliBridge.ts src/lookmlTool.tsx src/antigravityPrompts.ts src/sandboxSkillsBundle.ts AGENTS.md skills/data-apps
+          git add lkr-dev-cli-version.txt src/lkrCliBridge.ts src/lkrCliSitecustomize.ts src/antigravityPrompts.ts src/sandboxSkillsBundle.ts src/vendor/codemode.js AGENTS.md skills/data-apps skills/looker-field-profiler
           [ -d .agents/skills ] && git add .agents/skills
           [ -f skills-lock.json ] && git add skills-lock.json
+          if git diff --cached --quiet; then
+            echo "No staged changes to commit."
+            exit 0
+          fi
           git commit -m "chore(skills): sync agent skills, skills-lock.json, and lkr-dev-cli pin"
           git push --force origin "$BRANCH"
 
           BODY="Automated Monday/Thursday sync of agent skills and \`lkr-dev-cli\` release pin from [\`lkrdev/cli\`](https://github.com/lkrdev/cli), [\`looker-open-source/looker-skills\`](https://github.com/looker-open-source/looker-skills), [\`lkrdev/ojof-gym\`](https://github.com/lkrdev/ojof-gym), and Looker Data Apps upstream.
 
-          - Updates version-controlled skills in \`.agents/skills/*\` and \`skills-lock.json\`.
-          - \`lkr-dev-cli\` release pin (\`LKR_DEV_CLI_VERSION\`): \`${LKR_CLI_VERSION}\`
+          - Updates version-controlled skills in \`.agents/skills/*\`, \`src/sandboxSkillsBundle.ts\`, and \`skills-lock.json\`.
+          - \`lkr-dev-cli\` release pin (\`LKR_DEV_CLI_VERSION\` & \`src/vendor/codemode.js\`): \`${LKR_CLI_VERSION}\`
           - Newly discovered skills installed: \`${NEW_SKILLS:-none}\`"
 
           EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')

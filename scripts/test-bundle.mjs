@@ -9,18 +9,18 @@ import path from 'node:path'
 
 const require = createRequire(import.meta.url)
 const repoRoot = path.resolve(import.meta.dirname, '..')
-const vendorCodeModePath = path.join(repoRoot, 'src/vendor/codemode.js')
-assert.equal(
-  createHash('sha256').update(readFileSync(vendorCodeModePath)).digest('hex'),
-  '7001b844407366c43ad8ad957997486409baab905c57c3c6146ac4c4cf5e3517',
-  'src/vendor/codemode.js must match CDN 0.0.69/codemode.js SHA-256 byte-for-byte'
-)
-
 const babel = require('@babel/core')
 for (const ext of ['.ts', '.tsx']) {
   Module._extensions[ext] = (m, f) => m._compile(babel.transformSync(readFileSync(f, 'utf8'), { filename: f, envName: 'test' }).code, f)
 }
-const { LkrCodeMode } = require(path.join(repoRoot, 'src/lkrCliBridge.ts'))
+const { LkrCodeMode, EXPECTED_CODEMODE_SHA256, LKR_DEV_CLI_VERSION } = require(path.join(repoRoot, 'src/lkrCliBridge.ts'))
+const vendorCodeModePath = path.join(repoRoot, 'src/vendor/codemode.js')
+assert.match(EXPECTED_CODEMODE_SHA256, /^[0-9a-f]{64}$/)
+assert.equal(
+  createHash('sha256').update(readFileSync(vendorCodeModePath)).digest('hex'),
+  EXPECTED_CODEMODE_SHA256,
+  `src/vendor/codemode.js must match CDN ${LKR_DEV_CLI_VERSION}/codemode.js SHA-256 byte-for-byte`
+)
 
 assert.equal(LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL.name, 'run_looker_codemode')
 const mockSdk = {
@@ -61,9 +61,10 @@ const antigravityTs = [
   .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
   .join('\n')
 assert(
-  antigravityTs.includes('https://cdn.lkr.dev/cli/codemode/0.0.69/codemode.js') &&
+  /^\d+\.\d+\.\d+/.test(LKR_DEV_CLI_VERSION) &&
+    antigravityTs.includes(`https://cdn.lkr.dev/cli/codemode/${LKR_DEV_CLI_VERSION}/codemode.js`) &&
     antigravityTs.includes('export async function ensureCodeModeLoaded()'),
-  'src/lkrCliBridge.ts must define CODEMODE_CDN_URL (https://cdn.lkr.dev/cli/codemode/0.0.69/codemode.js) and ensureCodeModeLoaded()'
+  `src/lkrCliBridge.ts must define CODEMODE_CDN_URL (https://cdn.lkr.dev/cli/codemode/${LKR_DEV_CLI_VERSION}/codemode.js) and ensureCodeModeLoaded()`
 )
 const distBundlePath = path.join(repoRoot, 'dist/bundle.js')
 if (statSync(distBundlePath, { throwIfNoEntry: false })) {
@@ -74,8 +75,8 @@ if (statSync(distBundlePath, { throwIfNoEntry: false })) {
   )
   const distBundleText = readFileSync(distBundlePath, 'utf8')
   assert(
-    distBundleText.includes('https://cdn.lkr.dev/cli/codemode/0.0.69/codemode.js'),
-    'Expected dist/bundle.js to reference https://cdn.lkr.dev/cli/codemode/0.0.69/codemode.js'
+    distBundleText.includes(`https://cdn.lkr.dev/cli/codemode/${LKR_DEV_CLI_VERSION}/codemode.js`),
+    `Expected dist/bundle.js to reference https://cdn.lkr.dev/cli/codemode/${LKR_DEV_CLI_VERSION}/codemode.js`
   )
 }
 assert(
@@ -525,9 +526,12 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
   const dataAppsLitRefMd = readFileSync(path.join(repoRoot, 'skills/data-apps/reference/LIT_DATA_APPS.md'), 'utf8')
   const dataAppsSyncSkillMd = readFileSync(path.join(repoRoot, '.agents/skills/data-apps-sync/SKILL.md'), 'utf8')
   const pinnedVersionTxt = readFileSync(path.join(repoRoot, 'lkr-dev-cli-version.txt'), 'utf8').trim()
+  const sitecustomizeTs = readFileSync(path.join(repoRoot, 'src/lkrCliSitecustomize.ts'), 'utf8')
   const updateSkillsYml = readFileSync(path.join(repoRoot, '.github/workflows/update-skills.yml'), 'utf8')
-  assert.equal(pinnedVersionTxt, '0.0.69', 'lkr-dev-cli-version.txt must pin 0.0.69')
-  assert.equal(dataAppsVersionTxt, '1.3.0', 'skills/data-apps/VERSION must pin 1.3.0')
+  assert.equal(pinnedVersionTxt, LKR_DEV_CLI_VERSION, 'lkr-dev-cli-version.txt must match LKR_DEV_CLI_VERSION')
+  assert(sitecustomizeTs.includes(`export const LKR_DEV_CLI_VERSION = '${LKR_DEV_CLI_VERSION}'`), 'src/lkrCliSitecustomize.ts must match LKR_DEV_CLI_VERSION')
+  assert.match(dataAppsVersionTxt, /^\d+\.\d+\.\d+$/, 'skills/data-apps/VERSION must pin a valid semver')
+  assert(antigravityTs.includes(`DEFAULT_VERSION = "${dataAppsVersionTxt}"`), 'src/antigravityPrompts.ts DEFAULT_VERSION must match skills/data-apps/VERSION')
   assert.equal(statSync(path.join(repoRoot, 'upstream'), { throwIfNoEntry: false }), undefined, 'upstream/ directory must not exist')
   assert(
     rootAgentsMd.includes(`lkr-dev-cli[tools,code-mode,parse]==${pinnedVersionTxt}`) &&
@@ -554,14 +558,14 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
   assert(readFileSync(`${syncTestRoot}/skills/data-apps/reference/LIT_DATA_APPS.md`, 'utf8').includes('15. **Metric Selector Data App Standards'))
   assert(readFileSync(`${syncTestRoot}/skills/data-apps/recipes/card.md`, 'utf8').includes('run_looker_codemode'))
   assert(
-    lookmlToolTsx.includes("export const LKR_DEV_CLI_VERSION = '0.0.69'") &&
+    lookmlToolTsx.includes(`export const LKR_DEV_CLI_VERSION = '${LKR_DEV_CLI_VERSION}'`) &&
       lookmlToolTsx.includes('"install", "--break-system-packages", "--quiet", "uv"') &&
       lookmlToolTsx.includes('"UV_TOOL_BIN_DIR": "/usr/local/bin"') &&
       lookmlToolTsx.includes('"uv", "tool", "install", "--force", "--quiet", pkg_spec') &&
       updateSkillsYml.includes('cron: "0 9 * * 1,4"') &&
       updateSkillsYml.includes('https://pypi.org/pypi/lkr-dev-cli/json') &&
       updateSkillsYml.includes('chore/update-skills'),
-    'Issue #32: lookmlTool.tsx and .github/workflows/update-skills.yml must pin lkr-dev-cli==0.0.69, bootstrap uv via pip --break-system-packages + uv tool install, and auto-PR new PyPI releases'
+    `Issue #32: lookmlTool.tsx/lkrCliBridge.ts and .github/workflows/update-skills.yml must pin lkr-dev-cli==${LKR_DEV_CLI_VERSION}, bootstrap uv via pip --break-system-packages + uv tool install, and auto-PR new PyPI releases`
   )
 
   // Live prototype check of bootstrap_lookml.py cli with mock pip & uv shims
@@ -578,7 +582,7 @@ echo "UV_TOOL_BIN_DIR=\${UV_TOOL_BIN_DIR:-} uv $@" >> "${cmdLogPath}"
 echo "UV_TOOL_DIR=\${UV_TOOL_DIR:-}" >> "${cmdLogPath}"
 cat << 'INNER' > "${fakeBinDir}/lkr"
 #!/bin/sh
-echo "lkr, version 0.0.69"
+echo "lkr, version ${LKR_DEV_CLI_VERSION}"
 INNER
 chmod +x "${fakeBinDir}/lkr"
 EOF
@@ -595,11 +599,11 @@ chmod +x "${fakeBinDir}/uv"
   })
   const cliBootstrapJson = JSON.parse(cliBootstrapOut.trim())
   assert.equal(cliBootstrapJson.ok, true)
-  assert.equal(cliBootstrapJson.version, '0.0.69')
+  assert.equal(cliBootstrapJson.version, LKR_DEV_CLI_VERSION)
   const loggedCmds = readFileSync(cmdLogPath, 'utf8')
   assert(
     loggedCmds.includes('pip install --break-system-packages --quiet uv') &&
-      loggedCmds.includes('UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet lkr-dev-cli[tools,code-mode,parse]==0.0.69') &&
+      loggedCmds.includes(`UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}`) &&
       loggedCmds.includes(`UV_TOOL_DIR=${workDir}/.uv_tools`),
     'bootstrap_lookml.py cli must execute pip install --break-system-packages --quiet uv followed by UV_TOOL_DIR=<workspace>/.uv_tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool install'
   )
@@ -608,7 +612,7 @@ chmod +x "${fakeBinDir}/uv"
   const persistedUvBin = path.join(workDir, '.uv_tools/lkr-dev-cli/bin')
   const persistedUvSp = path.join(workDir, '.uv_tools/lkr-dev-cli/lib/python3.12/site-packages')
   execFileSync('mkdir', ['-p', hibernatedBinDir, persistedUvBin, persistedUvSp])
-  writeFileSync(path.join(persistedUvBin, 'lkr'), '#!/bin/sh\necho "lkr, version 0.0.69"\n', { mode: 0o755 })
+  writeFileSync(path.join(persistedUvBin, 'lkr'), `#!/bin/sh\necho "lkr, version ${LKR_DEV_CLI_VERSION}"\n`, { mode: 0o755 })
   writeFileSync(path.join(hibernatedBinDir, 'uv'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
   writeFileSync(path.join(workDir, 'sitecustomize.py'), '# bridge shim\n', 'utf8')
   const hibernateOut = JSON.parse(
@@ -893,6 +897,179 @@ chmod +x "${fakeBinDir}/uv"
   // Issue #213: verify package.json pack-skills script & byte-for-byte sandboxSkillsBundle.ts parity via --check
   assert.equal(pkgJson.scripts?.['pack-skills'], 'node scripts/pack-sandbox-skills.mjs', 'package.json must define pack-skills script')
   execFileSync(process.execPath, [path.join(repoRoot, 'scripts/pack-sandbox-skills.mjs'), '--check'], { encoding: 'utf8' })
+
+  // Issue #216: Verify update-skills.yml hardening, watch-upstream-releases.yml, Section 2b sub-template, and check-upstream-releases.mjs
+  const watchUpstreamYml = readFileSync(path.join(repoRoot, '.github/workflows/watch-upstream-releases.yml'), 'utf8')
+  const upstreamVersions = JSON.parse(readFileSync(path.join(repoRoot, 'upstream-versions.json'), 'utf8'))
+  const issueAuthoringSkillMd = readFileSync(path.join(repoRoot, '.agents/skills/issue-authoring/SKILL.md'), 'utf8')
+  const checkUpstreamScriptPath = path.join(repoRoot, 'scripts/check-upstream-releases.mjs')
+  for (const excluded of [
+    'lookml-modeling-guidelines',
+    'lookml-reviewer',
+    'lookml-field-curation',
+    'looker-audit',
+    'looker-performance-optimizer',
+    'looker-architect',
+    'creating-looker-dashboard',
+    'snowflake-to-bigquery-converter',
+    'looker-mcp-skill',
+    'installing-looker-cli',
+    'authenticating-looker-cli',
+    'using-looker-cli',
+    'connecting-looker-to-bigquery',
+  ]) {
+    assert(updateSkillsYml.includes(excluded), `update-skills.yml must exclude ${excluded}`)
+  }
+  assert(
+    updateSkillsYml.includes('npm ci') &&
+      updateSkillsYml.includes('node scripts/pack-sandbox-skills.mjs') &&
+      updateSkillsYml.includes('npm run sync-codemode') &&
+      updateSkillsYml.includes('EXPECTED_CODEMODE_SHA256') &&
+      updateSkillsYml.includes('npm run build && npm test') &&
+      updateSkillsYml.includes('src/lkrCliSitecustomize.ts') &&
+      updateSkillsYml.includes('src/sandboxSkillsBundle.ts') &&
+      updateSkillsYml.includes('src/vendor/codemode.js'),
+    'update-skills.yml must run npm ci, pack-sandbox-skills.mjs, sync-codemode + EXPECTED_CODEMODE_SHA256, gate commit/push on npm run build && npm test, and stage lkrCliSitecustomize.ts, sandboxSkillsBundle.ts & vendor/codemode.js'
+  )
+  assert(
+    watchUpstreamYml.includes('cron: "30 9 * * 1,4"') &&
+      watchUpstreamYml.includes('workflow_dispatch:') &&
+      watchUpstreamYml.includes('issues: write') &&
+      watchUpstreamYml.includes('GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}') &&
+      watchUpstreamYml.includes('node scripts/check-upstream-releases.mjs') &&
+      /^v\d+\.\d+\.\d+$/.test(upstreamVersions.lookerCliTag) &&
+      /^[0-9a-f]{40}$/.test(upstreamVersions.lookerSkillsSha) &&
+      Object.keys(upstreamVersions).length === 2 &&
+      issueAuthoringSkillMd.includes('### 2b. Upstream Parity Issue Sub-Template') &&
+      issueAuthoringSkillMd.includes('<!-- upstream-parity:<repo>:<ver> -->') &&
+      issueAuthoringSkillMd.includes('node scripts/check-upstream-releases.mjs --ack'),
+    'watch-upstream-releases.yml, 2-key upstream-versions.json, and issue-authoring Section 2b must be configured'
+  )
+
+  const newSha = '1111111111111111111111111111111111111111'
+  // 1. Exact marker deduplication + closed not-planned suppression -> no-op
+  const dedupFixture = path.join(workDir, 'upstream_dedup.json')
+  writeFileSync(
+    dedupFixture,
+    JSON.stringify({
+      versions: { lookerCliTag: 'v1.3.0', lookerSkillsSha: '0000000000000000000000000000000000000000' },
+      cliRelease: { tag_name: 'v1.4.0', html_url: 'https://github.com/looker-open-source/looker-cli/releases/tag/v1.4.0', body: 'New CLI flags' },
+      skillsCompare: { commits: [{ sha: newSha, commit: { message: 'feat: audit update' } }], files: [{ filename: 'skills/looker-audit/SKILL.md' }] },
+      issues: [
+        { number: 10, state: 'OPEN', title: 'CLI parity', body: '<!-- upstream-parity:looker-cli:v1.4.0 -->\nBody' },
+        { number: 11, state: 'CLOSED', title: 'Skills closed not planned', body: `<!-- upstream-parity:looker-skills:${newSha} -->\nClosed as not planned` },
+      ],
+    }),
+    'utf8'
+  )
+  const dedupOut = JSON.parse(execFileSync(process.execPath, [checkUpstreamScriptPath, '--dry-run', `--fixtures=${dedupFixture}`], { encoding: 'utf8' }))
+  assert.deepEqual(
+    dedupOut.actions.map((a) => `${a.repo}:${a.action}`),
+    ['looker-cli:noop', 'looker-skills:noop'],
+    'Exact marker match (open or closed not-planned) must no-op'
+  )
+
+  // 2. MCP / CLI-setup directory filter + downgrade/prerelease/behind guards -> zero candidate issues created
+  const mcpOnlyFixture = path.join(workDir, 'upstream_mcp_only.json')
+  writeFileSync(
+    mcpOnlyFixture,
+    JSON.stringify({
+      versions: { lookerCliTag: 'v1.3.0', lookerSkillsSha: '0000000000000000000000000000000000000000' },
+      cliRelease: { tag_name: 'v1.2.9', body: 'Older patch release' },
+      skillsCompare: {
+        status: 'ahead',
+        commits: [{ sha: newSha, commit: { message: 'chore: update mcp and cli install docs' } }],
+        files: [
+          { filename: 'skills/looker-mcp-skill/SKILL.md' },
+          { filename: 'skills/installing-looker-cli/SKILL.md' },
+          { filename: 'skills/authenticating-looker-cli/SKILL.md' },
+          { filename: 'skills/using-looker-cli/SKILL.md' },
+          { filename: 'skills/connecting-looker-to-bigquery/SKILL.md' },
+        ],
+      },
+      issues: [],
+    }),
+    'utf8'
+  )
+  const mcpOnlyOut = JSON.parse(execFileSync(process.execPath, [checkUpstreamScriptPath, '--dry-run', `--fixtures=${mcpOnlyFixture}`], { encoding: 'utf8' }))
+  assert.deepEqual(mcpOnlyOut.actions, [], 'Changes confined to excluded MCP/CLI-setup skill directories or tag downgrades must produce zero issues')
+
+  // 3. Single-open-issue upsert (gh issue edit, ignoring prose-quoted markers in unrelated issues) + fresh issue creation + --ack & --ack=<repo>
+  const ghCallsPath = path.join(workDir, 'gh_calls.jsonl')
+  const fakeGhPath = path.join(workDir, 'fake_gh')
+  const existingIssuesJson = JSON.stringify([
+    { number: 216, state: 'OPEN', title: 'Meta spec issue quoting markers', body: `## Summary\nExample markers: \`<!-- upstream-parity:looker-cli:v1.4.0 -->\` and \`<!-- upstream-parity:looker-skills:${newSha} -->\`` },
+    { number: 77, state: 'OPEN', title: 'Old CLI parity', body: '<!-- upstream-parity:looker-cli:v1.3.0 -->\nOld body' },
+    { number: 50, state: 'CLOSED', title: 'Closed older skills parity', body: '<!-- upstream-parity:looker-skills:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->\nOld' },
+  ])
+  writeFileSync(
+    fakeGhPath,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(ghCallsPath)}, JSON.stringify(args) + '\\n');
+if (args[0] === 'issue' && args[1] === 'list') process.stdout.write(${JSON.stringify(existingIssuesJson)});
+else if (args[0] === 'issue' && args[1] === 'create') process.stdout.write('https://github.com/lkrdev/data-app-builder/issues/999\\n');
+`,
+    { mode: 0o755 }
+  )
+  const upsertFixture = path.join(workDir, 'upstream_upsert.json')
+  writeFileSync(
+    upsertFixture,
+    JSON.stringify({
+      versions: { lookerCliTag: 'v1.3.0', lookerSkillsSha: '0000000000000000000000000000000000000000' },
+      cliRelease: { tag_name: 'v1.4.0', html_url: 'https://github.com/looker-open-source/looker-cli/releases/tag/v1.4.0', body: '- Added health vacuum flags' },
+      skillsCompare: {
+        html_url: `https://github.com/looker-open-source/looker-skills/compare/0000000...${newSha.slice(0, 7)}`,
+        commits: [{ sha: newSha, commit: { message: 'feat(audit): add pdt check\ndetails' } }],
+        files: [{ filename: 'skills/looker-mcp-skill/SKILL.md' }, { filename: 'skills/looker-audit/SKILL.md' }],
+      },
+    }),
+    'utf8'
+  )
+  const upsertOut = JSON.parse(
+    execFileSync(process.execPath, [checkUpstreamScriptPath, `--fixtures=${upsertFixture}`], {
+      env: { ...process.env, GH_BIN: fakeGhPath },
+      encoding: 'utf8',
+    })
+  )
+  assert.equal(upsertOut.actions.length, 2)
+  assert.equal(upsertOut.actions[0].action, 'edit')
+  assert.equal(upsertOut.actions[0].number, 77)
+  assert(upsertOut.actions[0].body.startsWith('<!-- upstream-parity:looker-cli:v1.4.0 -->'))
+  assert.equal(upsertOut.actions[1].action, 'create')
+  assert.equal(upsertOut.actions[1].url, 'https://github.com/lkrdev/data-app-builder/issues/999')
+  assert(
+    upsertOut.actions[1].body.startsWith(`<!-- upstream-parity:looker-skills:${newSha} -->`) &&
+      upsertOut.actions[1].body.includes('skills/looker-audit/SKILL.md') &&
+      !upsertOut.actions[1].body.includes('looker-mcp-skill/SKILL.md') &&
+      upsertOut.actions[1].body.includes('src/lkrCliBridge.ts') &&
+      upsertOut.actions[1].body.includes('.agents/skills/looker-audit/SKILL.md') &&
+      upsertOut.actions[1].body.includes('src/lookerPermissions.ts') &&
+      upsertOut.actions[1].body.includes('scripts/run-evals.mjs') &&
+      upsertOut.actions[1].body.includes('dist/bundle.js < 2.00 MiB') &&
+      upsertOut.actions[1].body.includes('node scripts/check-upstream-releases.mjs --ack'),
+    'Generated parity issue body must match Section 2b sub-template and exclude MCP paths'
+  )
+  const ghCalls = readFileSync(ghCallsPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+  assert.deepEqual(
+    ghCalls.map((c) => c.slice(0, 2).join(' ')),
+    ['issue list', 'issue edit', 'label create', 'issue create'],
+    'Must query gh issue list once, gh issue edit existing open looker-cli issue #77, create label once, and gh issue create looker-skills issue'
+  )
+
+  const tempVersionsPath = path.join(workDir, 'temp_upstream_versions.json')
+  writeFileSync(tempVersionsPath, JSON.stringify({ lookerCliTag: 'v1.3.0', lookerSkillsSha: '0000000000000000000000000000000000000000' }), 'utf8')
+  execFileSync(process.execPath, [checkUpstreamScriptPath, '--ack=looker-cli', `--versions=${tempVersionsPath}`, `--fixtures=${upsertFixture}`], { encoding: 'utf8' })
+  assert.deepEqual(JSON.parse(readFileSync(tempVersionsPath, 'utf8')), {
+    lookerCliTag: 'v1.4.0',
+    lookerSkillsSha: '0000000000000000000000000000000000000000',
+  })
+  execFileSync(process.execPath, [checkUpstreamScriptPath, '--ack', `--versions=${tempVersionsPath}`, `--fixtures=${upsertFixture}`], { encoding: 'utf8' })
+  assert.deepEqual(JSON.parse(readFileSync(tempVersionsPath, 'utf8')), {
+    lookerCliTag: 'v1.4.0',
+    lookerSkillsSha: newSha,
+  })
 
   console.log('✓ test-bundle.mjs: all assertions passed!')
 } finally {
