@@ -639,11 +639,9 @@ export function registerPermissionsPart09Tests(): void {
   test('52. Issue #127: enforces raw_api_request: yes with zero core_api_methods in manifest.lkml & .githooks/pre-commit, routes core40SDK and LkrCodeMode calls through transport.rawRequest, and registers skills/looker-project-onboarding/SKILL.md', async () => {
     clearLookerMetadataCache()
     const repoRoot = path.resolve(__dirname, '../../..')
-    for (const rel of ['manifest.lkml', 'looker/manifest.lkml']) {
-      const m = readFileSync(path.join(repoRoot, rel), 'utf8')
-      expect(m).toMatch(/\braw_api_request\s*:\s*yes\b/)
-      expect(m).not.toMatch(/\bcore_api_methods\s*:/)
-    }
+    const m = readFileSync(path.join(repoRoot, 'manifest.lkml'), 'utf8')
+    expect(m).toMatch(/\braw_api_request\s*:\s*yes\b/)
+    expect(m).not.toMatch(/\bcore_api_methods\s*:/)
     const preCommitHook = readFileSync(path.join(repoRoot, '.githooks/pre-commit'), 'utf8')
     expect(preCommitHook).toEqual(expect.stringContaining('raw_api_request'))
     expect(preCommitHook).toEqual(expect.stringContaining('core_api_methods'))

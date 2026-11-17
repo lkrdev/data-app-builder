@@ -11,7 +11,7 @@
     "lint:check": "eslint src --ext js,jsx,ts,tsx --max-warnings=0",
     "prepare": "git config core.hooksPath .githooks || true",
     "format": "prettier --write src",
-    "sync-upstream": "bash scripts/sync-upstream.sh",
+    "sync-upstream": "python3 .agents/skills/data-apps-sync/scripts/sync_data_apps.py",
     "sync-codemode": "bash scripts/sync-codemode.sh",
     "pack-skills": "node scripts/pack-sandbox-skills.mjs",
     "clean:artifacts": "bash scripts/clean-artifacts.sh",
