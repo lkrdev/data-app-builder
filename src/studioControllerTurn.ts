@@ -309,8 +309,9 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       }
 
       const promptSlashSkills = extractSlashSkillIds(effectivePrompt)
-      const turnActivatedSkills = Array.from(new Set([...activatedLookmlSkills, ...promptSlashSkills]))
-      if (promptSlashSkills.length > 0) setActivatedLookmlSkills(turnActivatedSkills)
+      const stickyPromptSkills = promptSlashSkills.filter((id) => id !== 'looker-audit')
+      const turnActivatedSkills = Array.from(new Set([...activatedLookmlSkills.filter((id) => id !== 'looker-audit'), ...stickyPromptSkills]))
+      if (stickyPromptSkills.length > 0 || activatedLookmlSkills.includes('looker-audit')) setActivatedLookmlSkills(turnActivatedSkills)
       const effectiveLookmlTurn = turnTargetUseCase === 'lookml' || (turnTargetUseCase === 'auto' && isLookmlMode)
       const effectiveBuilderMode: 'data_app' | 'dashboard' =
         turnTargetUseCase === 'dashboard' ? 'dashboard' : turnTargetUseCase === 'app' || turnTargetUseCase === 'data-investigator' ? 'data_app' : builderMode
@@ -418,7 +419,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         const isExplicitScriptRequest = explicitUseCase === 'tile' || loadedScript || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
         const pyMatch = (result.assistantText || '').match(/```(?:python|py)?\s*\n([\s\S]*?)```/i)
         const extractedPy = pyMatch ? pyMatch[1].trim() : ''
-        const isAlertQuery = LOOKER_ALERT_QUERY_RE.test(effectivePrompt) || turnActivatedSkills.includes('looker-alerts')
+        const isAlertQuery = LOOKER_ALERT_QUERY_RE.test(effectivePrompt) || turnActivatedSkills.includes('looker-alerts') || promptSlashSkills.includes('looker-audit')
         const baseReply = result.assistantText || (isExplicitScriptRequest ? 'Updated script and executed Looker queries.' : 'Executed Looker API calls.')
         const replyText =
           !isExplicitScriptRequest && !isAlertQuery && !/\b(?:save|reusable|turn\s+(?:this|it)\s+into)\b[\s\S]{0,60}\b(?:script|tile)\b/i.test(baseReply)
@@ -648,7 +649,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         }
 
         if (!handledArtifact && deletedIds.size === 0) {
-          if (explicitUseCase === 'auto' && resolvedMode !== activeMode && resolvedUseCase === 'health-check') {
+          if (explicitUseCase === 'auto' && resolvedMode !== activeMode && resolvedUseCase === 'health-check' && !promptSlashSkills.includes('looker-audit')) {
             await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages, convId)
             return
           }

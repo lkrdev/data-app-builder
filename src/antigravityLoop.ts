@@ -296,6 +296,7 @@ export async function executeAntigravityPollingLoop(
   const executedCodeModeByCode = new Map<string, Record<string, unknown>>()
   const isDataAppBundleTurn = (): boolean =>
     !isNoOpTurn &&
+    requiresBashSandbox &&
     !effectiveLookmlIntent &&
     (useCase === 'app' ||
       isDataInvestigatorTurn ||

@@ -403,19 +403,19 @@ const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
   ['dashboard', /\b(?:build|create|generate|make|design)\s+(?:a\s+|an\s+)?(?:[a-z0-9_-]+\s+){0,4}(?:dashboard|look|board)\b/i],
 ]
 
-const SLASH_SKILL_USE_CASES: Record<string, ResolvedStudioUseCase> = Object.assign(
-  Object.fromEntries(STUDIO_SLASH_SKILLS.map((s) => [s.id, 'lookml' as ResolvedStudioUseCase])),
-  {
-    'agentic-lookml': 'lookml',
-    'lkr-project-helper': 'lookml',
-    'looker-dashboard': 'dashboard',
-    'creating-looker-dashboard': 'dashboard',
-    'data-investigator': 'data-investigator',
-    'key-driver-analysis': 'data-investigator',
-    'data-apps': 'app',
-    'looker-alerts': 'tile',
-  } as Record<string, ResolvedStudioUseCase>
-)
+const SLASH_SKILL_USE_CASES: Record<string, ResolvedStudioUseCase> = {
+  ...Object.fromEntries(STUDIO_SLASH_SKILLS.map((s) => [s.id, 'lookml' as const])),
+  'agentic-lookml': 'lookml',
+  'looker-architect': 'lookml',
+  'lkr-project-helper': 'lookml',
+  'looker-dashboard': 'dashboard',
+  'creating-looker-dashboard': 'dashboard',
+  'data-investigator': 'data-investigator',
+  'key-driver-analysis': 'data-investigator',
+  'data-apps': 'app',
+  'looker-alerts': 'tile',
+  'looker-audit': 'tile',
+}
 
 const ALL_RESOLVED_USE_CASES: ResolvedStudioUseCase[] = [
   'app', 'data-investigator', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics',

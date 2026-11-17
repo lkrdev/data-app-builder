@@ -21,7 +21,7 @@ The Looker query execution lifecycle is divided into four distinct, sequential p
 
 - **Identify the slowest dashboards**: find dashboards and looks run in the past 1-2 years or as specified by the user where the total loading time for dashboards is >30 seconds, flag for critical review. If 10-30 seconds, flag as needing review - at risk of users abandoning dashboards.
 
-*(Use `SKILL.md` for actionable CLI commands to check this)*
+*(Use `SKILL.md` for actionable `run_looker_codemode` queries to check this)*
 
 - **High-Complexity Dashboards:** use Dashboard System Activity Explore to check High-Complexity Dashboards (dashboard with more than 25 tiles). Flag in the report for review.
 - **Refresh interval:** check for dashboards with auto refresh on and review the refresh interval is no shorter than ETL process update interval. If a short interval is set e.g. minutes or seconds, immediately flag in the report.
@@ -31,7 +31,7 @@ The Looker query execution lifecycle is divided into four distinct, sequential p
   3. If row limit >2000 + dynamic field used, flag as a high risk for browser lag.
   4. If using merge queries, flag to refactor LookML model to join natively in SQL
 
-*(Use `SKILL.md` for actionable CLI commands to check merged queries)*
+*(Use `SKILL.md` for actionable `run_looker_codemode` queries to check merged queries)*
 
 ## Analyse Query Performance
 
@@ -56,7 +56,6 @@ The Looker query execution lifecycle is divided into four distinct, sequential p
   - **Strict Include Rules:** Avoid using wildcard “include” statements (e.g., include: "*.view") in model files. Explicitly define only the view files needed for the explores in that model to decrease validation and pre-query processing times.
   - **Enforce Primary Key:** Require a defined primary key (primary_key: yes) on every view and derived table. Lack of primary keys throws validation errors, disrupts symmetric aggregation, and produces mathematically incorrect calculations.
   - **DRY Field Substitution Syntax:** Avoid referencing raw database columns (e.g., ${TABLE}.column) inside measure calculations. Enforce LookML substitution syntax (${field_name}) to maintain query reusability and trace dependencies.
-  - **Drill Field with Set:** Ensure View files leverage set definitions for drill fields to provide clean, structured, and repeatable drilling paths across measures
 
 ## Review PDT & Datagroups
 
@@ -72,7 +71,7 @@ The Looker query execution lifecycle is divided into four distinct, sequential p
   - If end-users are not querying “real-time” data, consider reducing the refresh frequency of your PDTs and staggering their builds throughout the day. 
   - Scan the database connection settings to ensure PDTs leverage warehouse partitioning or clustering.
 
-*(Use `SKILL.md` for actionable CLI commands to review failed PDTs and datagroups)*
+*(Use `SKILL.md` for actionable `run_looker_codemode` queries to review failed PDTs and datagroups)*
 
 ## Analyse Cache Efficiency
 
@@ -85,7 +84,7 @@ The Looker query execution lifecycle is divided into four distinct, sequential p
 - **Implement Persistent Derived Tables (PDTs):** For resource-intensive calculations, materialize the logic in the database using PDTs triggered by the same Datagroup. This transfers the query workload from the live dashboard load time onto an automated background schedule.
 - **Reduce Dashboard Tile Density:** Dashboards with 25 or more tiles trigger substantial parallel database requests simultaneously. Restructuring dense dashboards across multiple tabs or utilizing cross-filtering keeps query sizes lean and highly cacheable.
 
-*(Use `SKILL.md` for actionable CLI commands to check cache efficiency)*
+*(Use `SKILL.md` for actionable `run_looker_codemode` queries to check cache efficiency)*
 
 ## Audit user & content activity
 
@@ -101,7 +100,7 @@ Review Scheduled Plan System Activity Explore:
   - Identify any contents with “test”, “copy” or “draft” in the title and review if they need to be deleted.
   - Personal folder housekeeping - keep a personal folder for the development/ sandbox exploration stage only. Use a shared folder for production stages that should be managed by BI team. Schedule contents for deletion if not being used.
 
-*(See `SKILL.md` for actionable queries to identify unused content)*
+*(Query `system__activity::content_usage` with `filters={"content_usage.days_since_last_accessed": ">=120"}` and `limit="100"` in `run_looker_codemode` to list unused dashboards and Looks)*
 
 ## 🛡️ Remediation Workflow (Next Steps)
 

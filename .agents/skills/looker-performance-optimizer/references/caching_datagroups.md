@@ -133,19 +133,15 @@ To prevent the first morning user from experiencing a slow dashboard load while 
 ### The API-Driven Cache-Warming Protocol:
 1.  **Trigger Webhook**: Configure your orchestrator (Airflow, dbt Cloud, or a cron job) to trigger a webhook immediately after the ETL pipeline completes.
 2.  **Looker API Script**: The webhook runs a script that calls the Looker API to pre-compute the dashboard queries.
-3.  **Bash Implementation (Looker CLI)**:
-    Run this script in your orchestration environment to warm a specific dashboard's cache:
-    ```bash
-    #!/bin/bash
-    # 1. Fetch all tile query IDs from the dashboard
-    DASHBOARD_ID="124"
-    QUERY_IDS=$(looker-cli api dashboard dashboard_dashboard_elements $DASHBOARD_ID --fields query_id | grep -o '"query_id": [0-9]*' | awk '{print $2}')
-    
-    # 2. Run each query in the background to warm the database and Looker cache
-    for QID in $QUERY_IDS; do
-      echo "Warming query ID: $QID"
-      looker-cli api query run_query --query_id $QID --result_format json > /dev/null &
-    done
-    wait
-    echo "Cache warming complete for Dashboard $DASHBOARD_ID!"
+3.  **Code Mode Python Implementation (`run_looker_codemode`)**:
+    Run this script in `run_looker_codemode` (or `lkr code-mode sandbox`) to warm a dashboard's cache:
+    ```python
+    elems = dashboard_dashboard_elements(dashboard_id="124", fields="id,query_id") or []
+    warmed = []
+    for el in elems:
+        qid = el.get("query_id")
+        if qid:
+            run_query(query_id=str(qid), result_format="json", limit=500, cache=False)
+            warmed.append(str(qid))
+    return {"dashboard_id": "124", "warmed_query_ids": warmed}
     ```

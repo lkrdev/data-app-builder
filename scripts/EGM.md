@@ -34,6 +34,9 @@ No child subdirectories exist under `scripts/`. Every file below is a standalone
 - **`scripts/bench-concurrent-convs.mjs`** — 10-iteration concurrent 2-conversation (`Conv A` Data App + `Conv B` Content Studio) benchmark:
   - CLI flags: `--iter=<N>` (`[bench-concurrent-convs.mjs:--iter=]`), `--all` (`[bench-concurrent-convs.mjs:--all]`, default when neither `--iter=` nor `--all` is passed), `--live` (`[bench-concurrent-convs.mjs:--live]`, uses `LKR_CLI_DIR || ~/lkrdev/cli`).
   - Symbols: `OUT_DIR`, `PREAMBLE_PY`, `runBundleAppStdinAsync`, `buildConvACode`, `CONV_A_TURNS`, `CONV_B_TURNS`, `tm`, `ITERATION_SPECS`, `evaluateTurnA`, `evaluateTurnB`, `buildTurnTelemetry`, `runConcurrentBenchmarkIteration`, `runLiveDevArgolisVerification`, `buildSummaryMarkdown`, `main` (`[bench-concurrent-convs.mjs:main]`).
+- **`scripts/pack-sandbox-skills.mjs`** — Deterministic stdlib sandbox skill packer (`node scripts/pack-sandbox-skills.mjs` / `npm run pack-skills`):
+  - CLI flag: `--check` (`[pack-sandbox-skills.mjs:checkOnly]`, verifies byte-for-byte parity with `src/sandboxSkillsBundle.ts` and zero unscrubbed demo identifiers, exiting `1` if stale).
+  - Walks `.agents/skills/` excluding repo-internal skills (`data-apps-sync`, `issue-authoring`, `studio-conversation-debugger`, `studio-design-system`) and prompt-inlined duplicates (`looker-dashboard`, `looker-field-profiler/SKILL.md`), scrubs banned demo identifiers, verifies round-trip decoding, and writes `src/sandboxSkillsBundle.ts` (`[pack-sandbox-skills.mjs:EXCLUDED_DIRS]`, `[pack-sandbox-skills.mjs:SCRUB_RULES]`).
 - **`scripts/sync-codemode.sh`** — Downloads `https://cdn.lkr.dev/cli/codemode/<version>/codemode.js` (matching `lkr-dev-cli-version.txt`) into `src/vendor/codemode.js` (`npm run sync-codemode`):
   - Env var: `CODEMODE_CDN_URL` (defaults to `https://cdn.lkr.dev/cli/codemode/${VERSION}/codemode.js`) (`[sync-codemode.sh:CDN_URL]`).
 - **`scripts/sync-upstream.sh`** — Unpacks the upstream Looker Data Apps installer & tarball in a temp directory and repackages `skills/data-apps/` via `.agents/skills/data-apps-sync/scripts/sync_data_apps.py` (`npm run sync-upstream`):
@@ -63,7 +66,8 @@ No child subdirectories exist under `scripts/`. Every file below is a standalone
 ## Side Effects
 
 - **Disk Writes & Artifacts**:
-  - `test-bundle.mjs` creates/deletes `tmpdir()/dab-bundle-test-*` (writing `bundle_app.py`, `app.js`, `bootstrap_lookml.py`, `.lkml` files, `lookml_result.json`, and fake `pip`/`uv`/`lkr` shims) and triggers `bench-concurrent-convs.mjs --iter=1` (`[test-bundle.mjs:workDir]`, `[test-bundle.mjs:fakeBinDir]`).
+  - `test-bundle.mjs` creates/deletes `tmpdir()/dab-bundle-test-*` (writing `bundle_app.py`, `app.js`, `bootstrap_lookml.py`, `.lkml` files, `lookml_result.json`, and fake `pip`/`uv`/`lkr` shims) and triggers `bench-concurrent-convs.mjs --iter=1` and `pack-sandbox-skills.mjs --check` (`[test-bundle.mjs:workDir]`, `[test-bundle.mjs:fakeBinDir]`).
+  - `pack-sandbox-skills.mjs` scrubs demo identifiers in `.agents/skills/*` in place (unless `--check` is passed) and writes `src/sandboxSkillsBundle.ts` (`[pack-sandbox-skills.mjs:outPath]`).
   - `run-evals.mjs` creates `tmp/eval/<eval-id>.md` (`eval-01.md`..`eval-11.md`), `tmp/eval/scorecard.md`, `tmp/eval/results.json`, `tmp/evals/scorecard.md`, and `tmp/evals/results.json`, spawns `bench-data-app.mjs`, `bench-dashboard.mjs`, and `bench-concurrent-convs.mjs --iter=10`, and uses `tmpdir()/dab-eval06-*` and `tmpdir()/dab-eval07-*` (`[run-evals.mjs:main]`).
   - `bench-data-app.mjs` writes `tmp/bench/iter-1.json`..`iter-10.json` and `tmp/bench/summary.md` (`[bench-data-app.mjs:ITERATION_CONFIGS]`).
   - `bench-dashboard.mjs` writes `tmp/bench-dashboard/iter-1.json`..`iter-10.json`, `model-shootout.json`, and `summary.md` (`[bench-dashboard.mjs:OUT_DIR]`, `[bench-dashboard.mjs:main]`).

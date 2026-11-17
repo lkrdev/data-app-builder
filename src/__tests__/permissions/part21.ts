@@ -3,8 +3,18 @@ import path from 'node:path'
 
 import type { Looker40SDK } from '@looker/sdk'
 
-import { recoverInFlightInteraction } from '../../antigravity'
-import { clearArtifactServiceCache, getArtifactService, STUDIO_INFLIGHT_CONV_SESSION_KEY } from '../../lookerApi'
+import { buildWorkspaceSources, recoverInFlightInteraction, runAntigravityTurn } from '../../antigravity'
+import { BUILTIN_SKILLS_FILES, resolveBuiltinWorkspaceFileContent } from '../../antigravitySteps'
+import {
+  clearArtifactServiceCache,
+  extractResolvedUseCase,
+  getArtifactService,
+  LOOKER_DASHBOARD_SKILL_MD,
+  matchExplicitUseCaseRule,
+  STUDIO_INFLIGHT_CONV_SESSION_KEY,
+} from '../../lookerApi'
+import { extractSlashSkillIds, LOOKML_TURN_SKILLS } from '../../lookmlSkills'
+import { SANDBOX_AGENT_SKILL_FILES } from '../../sandboxSkillsBundle'
 
 const asSdk = (mock: Record<string, unknown>): Looker40SDK => mock as unknown as Looker40SDK
 
@@ -152,5 +162,176 @@ export function registerPermissionsPart21Tests(): void {
     expect(loadersSrc).toContain('const isTurnInFlightInTab =')
     expect(loadersSrc).toContain("setBusyStatus('Resuming in-flight turn...')")
     expect(loadersSrc).toContain('void recoverInFlightInteraction({')
+  })
+
+  test('83. Issue #213: aliases consolidated upstream skills, validates bundled relative reference links, and wires Code-Mode review/audit/optimizer/Snowflake-to-BigQuery slash skills', async () => {
+    const repoRoot = path.resolve(__dirname, '../../..')
+    const agenticLookmlMd = SANDBOX_AGENT_SKILL_FILES['agentic-lookml/SKILL.md']
+    const sfToBqMd = SANDBOX_AGENT_SKILL_FILES['snowflake-to-bigquery-converter/SKILL.md']
+    expect(agenticLookmlMd).toContain('Greenfield projects use Medallion')
+    expect(sfToBqMd).toContain('name: snowflake-to-bigquery-converter')
+    expect(SANDBOX_AGENT_SKILL_FILES['looker-audit/SKILL.md']).toContain('<USE_CASE>tile</USE_CASE>')
+
+    const wsSources = buildWorkspaceSources({ schemaMarkdown: '# Schema' })
+    const aliasPairs: Array<[string, string]> = [
+      ['creating-looker-dashboard', LOOKER_DASHBOARD_SKILL_MD],
+      ['lookml-modeling-guidelines', agenticLookmlMd],
+      ['looker-architect', agenticLookmlMd],
+    ]
+    for (const [id, expectedDoc] of aliasPairs) {
+      for (const k of [
+        id,
+        `skills/${id}/SKILL.md`,
+        `/workspace/skills/${id}/SKILL.md`,
+        `.agents/skills/${id}/SKILL.md`,
+        `/workspace/.agents/skills/${id}/SKILL.md`,
+      ]) {
+        expect(BUILTIN_SKILLS_FILES[k]).toBe(expectedDoc)
+        expect(resolveBuiltinWorkspaceFileContent(k)).toBe(expectedDoc)
+      }
+      expect(wsSources.find((s) => s.target === `/workspace/skills/${id}/SKILL.md`)?.content).toBe(expectedDoc)
+    }
+
+    for (const k of [
+      'snowflake-to-bigquery-converter',
+      'skills/snowflake-to-bigquery-converter/SKILL.md',
+      '/workspace/skills/snowflake-to-bigquery-converter/SKILL.md',
+    ]) {
+      expect(BUILTIN_SKILLS_FILES[k]).toBe(sfToBqMd)
+      expect(resolveBuiltinWorkspaceFileContent(k)).toBe(sfToBqMd)
+    }
+
+    for (const [relPath, md] of Object.entries(SANDBOX_AGENT_SKILL_FILES)) {
+      if (!relPath.endsWith('/SKILL.md')) continue
+      const skillDir = path.posix.dirname(relPath)
+      for (const m of md.matchAll(/\]\(((?:\.\.?\/|references\/|sub-skills\/|scripts\/)[^)#\s]+\.(?:md|py))\)/g)) {
+        const resolvedRel = path.posix.normalize(path.posix.join(skillDir, m[1]))
+        expect(SANDBOX_AGENT_SKILL_FILES[resolvedRel]).toBeDefined()
+      }
+    }
+
+    expect(LOOKML_TURN_SKILLS.map((s) => s.id)).toEqual([
+      'lookml-field-curation',
+      'lookml-tests',
+      'lookml-snapshot',
+      'generate-view-from-table',
+      'agentic-lookml-workflow',
+    ])
+
+    expect(
+      extractSlashSkillIds(
+        'Run /lookml-reviewer, /looker-performance-optimizer, /snowflake-to-bigquery-converter, and /looker-audit'
+      )
+    ).toEqual(['lookml-reviewer', 'looker-performance-optimizer', 'snowflake-to-bigquery-converter', 'looker-audit'])
+
+    expect(matchExplicitUseCaseRule('/looker-audit check slow dashboards')).toBe('tile')
+    expect(extractResolvedUseCase('Audit complete.', '/looker-audit check slow dashboards')).toBe('tile')
+    for (const slash of ['/lookml-reviewer', '/looker-performance-optimizer', '/snowflake-to-bigquery-converter']) {
+      expect(matchExplicitUseCaseRule(`${slash} on orders`)).toBe('lookml')
+      expect(extractResolvedUseCase('Reviewed.', `${slash} on orders`)).toBe('lookml')
+    }
+
+    const postedBodies: Array<Record<string, unknown>> = []
+    let seq = 0
+    const origFetch = globalThis.fetch
+    globalThis.fetch = (async (_url: unknown, init?: { method?: string; body?: string }) => {
+      if ((init?.method || 'GET').toUpperCase() === 'POST' && init?.body) {
+        postedBodies.push(JSON.parse(init.body) as Record<string, unknown>)
+      }
+      seq += 1
+      const payload = JSON.stringify({
+        id: `int_213_${seq}`,
+        environment_id: 'env_213',
+        status: 'completed',
+        steps: [],
+        output_text: seq === 2 ? 'Built Data App.' : '<USE_CASE>tile</USE_CASE>Audit complete.',
+      })
+      return { ok: true, status: 200, text: async () => payload } as unknown as Response
+    }) as typeof fetch
+    try {
+      const baseTurnOpts = {
+        extensionSDK: {},
+        auth: { mode: 'apikey' as const, apiKey: 'key-213', oauthToken: '', clientId: '', projectId: '' },
+        selectedExplores: ['ecom::orders'],
+        schemaMarkdown: '## Model: ecom',
+        warmEnvironmentInBackground: false,
+        pollScheduleMs: [1],
+        onStatus: () => {},
+      }
+
+      const t1 = await runAntigravityTurn({
+        ...baseTurnOpts,
+        session: {},
+        useCase: 'auto',
+        mode: 'data_app',
+        activatedLookmlSkills: ['looker-audit'],
+        userPrompt: '/looker-audit, check slow dashboards',
+      })
+      expect(t1.session.toolType).toBe('tile')
+      expect(t1.resolvedUseCase).toBe('tile')
+      expect((postedBodies[0].tools as Array<{ type?: string }>).some((t) => t.type === 'code_execution')).toBe(false)
+      expect(((postedBodies[0].input as Array<{ text: string }>)[0] || {}).text).toContain('name: looker-audit')
+
+      const t2 = await runAntigravityTurn({
+        ...baseTurnOpts,
+        environmentId: 'env_213',
+        session: t1.session,
+        useCase: 'auto',
+        mode: 'data_app',
+        activatedLookmlSkills: ['looker-audit'],
+        userPrompt: 'Build me an executive sales Data App',
+      })
+      expect(t2.session.toolType).toBe('app')
+      expect((postedBodies[1].tools as Array<{ type?: string }>).some((t) => t.type === 'code_execution')).toBe(true)
+      const t2Text = ((postedBodies[1].input as Array<{ text: string }>)[0] || {}).text
+      expect(t2Text).toContain('You are building a Looker Data App')
+      expect(t2Text).not.toContain('name: looker-audit')
+
+      const t3 = await runAntigravityTurn({
+        ...baseTurnOpts,
+        environmentId: 'env_213',
+        session: t2.session,
+        useCase: 'auto',
+        mode: 'data_app',
+        existingAppCode: 'export class SalesApp {}',
+        userPrompt: '/looker-audit.',
+      })
+      expect(t3.session.toolType).toBe('tile')
+      expect((postedBodies[2].tools as Array<{ type?: string }>).some((t) => t.type === 'code_execution')).toBe(false)
+      const t3Text = ((postedBodies[2].input as Array<{ text: string }>)[0] || {}).text
+      expect(t3Text).toContain('name: looker-audit')
+      expect(t3Text).not.toContain('[WARM SANDBOX FAST PATH:')
+
+      const t4 = await runAntigravityTurn({
+        ...baseTurnOpts,
+        session: {},
+        useCase: 'auto',
+        allowedModes: ['app'],
+        mode: 'data_app',
+        userPrompt: '/looker-audit check slow dashboards',
+      })
+      expect(t4.session.toolType).toBe('app')
+      expect(((postedBodies[3].input as Array<{ text: string }>)[0] || {}).text).not.toContain('name: looker-audit')
+    } finally {
+      globalThis.fetch = origFetch
+    }
+
+    const skillsLock = JSON.parse(readFileSync(path.join(repoRoot, 'skills-lock.json'), 'utf8')) as {
+      skills: Record<string, unknown>
+    }
+    for (const excluded of [
+      'creating-looker-dashboard',
+      'lookml-modeling-guidelines',
+      'looker-architect',
+      'lookml-reviewer',
+      'looker-audit',
+      'looker-performance-optimizer',
+      'agentic-lookml',
+      'generate-view-from-table',
+      'lookml',
+      'lookml-view',
+    ]) {
+      expect(skillsLock.skills[excluded]).toBeUndefined()
+    }
   })
 }

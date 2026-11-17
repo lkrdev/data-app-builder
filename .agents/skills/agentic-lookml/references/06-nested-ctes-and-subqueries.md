@@ -113,7 +113,7 @@ explore: orders {
 }
 ```
 
-### Canonical Looker `WriteQuery` / MCP `run_inline_query` payload
+### Canonical Looker `WriteQuery` / `run_inline_query` payload
 
 ```json
 {

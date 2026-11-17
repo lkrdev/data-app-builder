@@ -21,6 +21,7 @@ import {
 import { sanitizeConversationLabel } from './antigravityStarters'
 import {
   type AlertInspectorBundle,
+  BUILTIN_SKILLS_FILES,
   collectInteractionTextCandidates,
   extractAlertBundleFromInteraction,
   extractBundleFromInteraction,
@@ -69,7 +70,7 @@ import {
   type ResolvedStudioUseCase,
   type StudioUseCase,
 } from './lookerApi'
-import { KDA_SKILL_MD } from './lookmlSkills'
+import { extractSlashSkillIds, KDA_SKILL_MD } from './lookmlSkills'
 import {
   buildLookmlSystemGuide,
   extractLookmlBundleFromInteraction,
@@ -239,10 +240,13 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
   const isNoOpTurn = isConversationalNoOpPrompt(userPrompt)
   const effectiveLookmlIntent =
     toolMode === 'lookml' || useCase === 'lookml' || (useCase === 'auto' && matchExplicitUseCaseRule(userPrompt, allowedModes) === 'lookml')
+  const isAuditSkillActive =
+    extractSlashSkillIds(userPrompt).includes('looker-audit') &&
+    (useCase === 'tile' || (useCase === 'auto' && matchExplicitUseCaseRule(userPrompt, allowedModes) === 'tile'))
   const effectiveToolType: AntigravityToolType =
     toolMode === 'lookml' || effectiveLookmlIntent ? 'lookml'
       : customSystemGuide?.includes('3-Pillar') ? 'health'
-      : customSystemGuide?.includes('codemode-script-tile') ? 'tile'
+      : customSystemGuide?.includes('codemode-script-tile') || isAuditSkillActive ? 'tile'
       : mode === 'dashboard' ? 'dashboard' : 'app'
   const isDashboardMode = effectiveToolType === 'dashboard'
 
@@ -344,9 +348,11 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     (effectiveLookmlIntent || isLookmlOnboardingIntake
       ? buildLookmlSystemGuide({
           selectedExplores, primaryModel, primaryExplore, projectId: lookmlProjectId,
-          activatedSkills: activatedLookmlSkills, userPrompt, developableProjects, canDeploy,
+          activatedSkills: (activatedLookmlSkills || []).filter((id) => id !== 'looker-audit'), userPrompt, developableProjects, canDeploy,
           availableConnections: resolvedAvailableConnections,
         })
+      : isAuditSkillActive
+      ? BUILTIN_SKILLS_FILES['looker-audit']
       : dataAppOrNativeGuide)
 
   const uploadSources: Array<{ type: 'inline'; content: string; target: string }> = []
@@ -389,12 +395,14 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       ]
 
   const warmTurnDirective =
-    !isNoOpTurn && !effectiveLookmlIntent && mode === 'data_app' && Boolean(existingAppCode?.trim())
+    !isNoOpTurn && isAuditSkillActive
+      ? `${systemGuide}\n\n`
+      : !isNoOpTurn && !effectiveLookmlIntent && mode === 'data_app' && Boolean(existingAppCode?.trim())
       ? `[WARM SANDBOX FAST PATH: ${appFilePath} and the discovered Looker schema are already in /workspace. Do NOT re-run run_looker_codemode discovery or re-read guides unless a brand-new explore is requested. Update ${appFilePath} and bundle in ONE code_execution call via: python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\n...\nEOF\nNEVER echo <DATA_APP_BUNDLE> in your text reply.]\n\n`
       : !isNoOpTurn && isDashboardMode && normalizedExistingNative
       ? `[WARM CONTENT STUDIO FAST PATH: Active Looker ${normalizedExistingNative.contentType} id="${normalizedExistingNative.id}" ("${normalizedExistingNative.title}") and pre-hydrated active_content (element_ids=${JSON.stringify(normalizedExistingNative.elementIds || [])}, filter_names=${JSON.stringify(normalizedExistingNative.filterNames || [])}, lookml_dashboard_id="${normalizedExistingNative.lookmlDashboardId || ''}", project_id="${normalizedExistingNative.projectId || lookmlProjectId || ''}") are pre-injected in run_looker_codemode vars. Execute the update in ONE run_looker_codemode call using upsert_udd / upsert_lookml_dashboard / reflow_24col / pin_to_board / schedule_dashboard + return emit_native_bundle(...). NEVER echo <NATIVE_CONTENT_BUNDLE> in your text reply.]\n\n`
-      : !isNoOpTurn && isDashboardMode && !normalizedExistingNative
-      ? `${systemGuide}\n\n`
+      : !isNoOpTurn && ((isDashboardMode && !normalizedExistingNative) || (session.toolType === 'tile' && effectiveToolType !== 'tile'))
+      ? `${systemGuide}${requiresBashSandbox && effectiveLookmlIntent ? `\n\n[WARM LOOKML SANDBOX: Before running \`lkr\`, ensure \`command -v lkr >/dev/null 2>&1 || python3 /workspace/bootstrap_lookml.py cli\` so \`/usr/local/bin/lkr\` is linked from \`/workspace/.uv_tools\`.]` : ''}\n\n`
       : !isNoOpTurn && requiresBashSandbox && effectiveLookmlIntent
       ? `[WARM LOOKML SANDBOX: Before running \`lkr\`, ensure \`command -v lkr >/dev/null 2>&1 || python3 /workspace/bootstrap_lookml.py cli\` so \`/usr/local/bin/lkr\` is linked from \`/workspace/.uv_tools\`.]\n\n`
       : ''

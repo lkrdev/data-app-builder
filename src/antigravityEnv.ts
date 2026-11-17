@@ -120,6 +120,9 @@ export function buildWorkspaceSources(params: {
       content: BUILTIN_SKILLS_FILES['lookml-snapshot'],
       target: '/workspace/skills/lookml-snapshot/SKILL.md',
     },
+    { type: 'inline', content: LOOKER_DASHBOARD_SKILL_MD, target: '/workspace/skills/creating-looker-dashboard/SKILL.md' },
+    { type: 'inline', content: SANDBOX_AGENT_SKILL_FILES['agentic-lookml/SKILL.md'], target: '/workspace/skills/lookml-modeling-guidelines/SKILL.md' },
+    { type: 'inline', content: SANDBOX_AGENT_SKILL_FILES['agentic-lookml/SKILL.md'], target: '/workspace/skills/looker-architect/SKILL.md' },
     ...Object.entries(SANDBOX_AGENT_SKILL_FILES).map(([relPath, content]) => ({
       type: 'inline' as const,
       content,

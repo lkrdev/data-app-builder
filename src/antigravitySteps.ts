@@ -206,29 +206,23 @@ const LOOKML_SNAPSHOT_SKILL_MD =
   '# LookML SQL & Explore Parity Snapshot Skill\nVerify 100% row/value parity between raw SQL (`run_sql_query`) and LookML Explore (`run_inline_query`) using `lkr parse lookml snapshot` and `lkr parse sql-lookml-compare --offline`.'
 
 export const BUILTIN_SKILLS_FILES: Record<string, string> = {
-  '/workspace/skills/data-apps/SKILL.md': DATA_APP_GUIDE_MD, 'skills/data-apps/SKILL.md': DATA_APP_GUIDE_MD,
-  '/workspace/skills/data-apps/skill.md': DATA_APP_GUIDE_MD, 'skills/data-apps/skill.md': DATA_APP_GUIDE_MD,
-  'data-apps': DATA_APP_GUIDE_MD, 'data-app-creator': DATA_APP_GUIDE_MD,
-  '/workspace/skills/data-investigator/SKILL.md': DATA_INVESTIGATOR_GUIDE_MD, 'skills/data-investigator/SKILL.md': DATA_INVESTIGATOR_GUIDE_MD,
-  '/workspace/skills/data-investigator/skill.md': DATA_INVESTIGATOR_GUIDE_MD, 'skills/data-investigator/skill.md': DATA_INVESTIGATOR_GUIDE_MD,
-  'data-investigator': DATA_INVESTIGATOR_GUIDE_MD,
-  '/workspace/skills/key-driver-analysis/SKILL.md': KDA_SKILL_MD, 'skills/key-driver-analysis/SKILL.md': KDA_SKILL_MD,
-  '/workspace/skills/key-driver-analysis/skill.md': KDA_SKILL_MD, 'skills/key-driver-analysis/skill.md': KDA_SKILL_MD,
-  'key-driver-analysis': KDA_SKILL_MD,
-  '/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py': KDA_TOOLKIT_PY, 'skills/key-driver-analysis/scripts/kda_toolkit.py': KDA_TOOLKIT_PY, 'kda_toolkit.py': KDA_TOOLKIT_PY,
-  '/workspace/skills/looker-dashboard/SKILL.md': LOOKER_DASHBOARD_SKILL_MD, 'skills/looker-dashboard/SKILL.md': LOOKER_DASHBOARD_SKILL_MD,
-  'looker-dashboard': LOOKER_DASHBOARD_SKILL_MD, 'creating-looker-dashboard': LOOKER_DASHBOARD_SKILL_MD,
-  '/workspace/skills/looker-field-profiler/SKILL.md': LOOKER_FIELD_PROFILER_SKILL_MD, 'skills/looker-field-profiler/SKILL.md': LOOKER_FIELD_PROFILER_SKILL_MD,
-  'looker-field-profiler': LOOKER_FIELD_PROFILER_SKILL_MD,
-  '/workspace/skills/looker-project-onboarding/SKILL.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD, 'skills/looker-project-onboarding/SKILL.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
-  '/workspace/skills/looker-project-onboarding/skill.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD, 'skills/looker-project-onboarding/skill.md': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
-  'looker-project-onboarding': LOOKER_PROJECT_ONBOARDING_SKILL_MD,
-  '/workspace/skills/looker-alerts/SKILL.md': LOOKER_ALERTS_SKILL_MD, 'skills/looker-alerts/SKILL.md': LOOKER_ALERTS_SKILL_MD,
-  '/workspace/skills/looker-alerts/skill.md': LOOKER_ALERTS_SKILL_MD, 'skills/looker-alerts/skill.md': LOOKER_ALERTS_SKILL_MD,
-  'looker-alerts': LOOKER_ALERTS_SKILL_MD,
-  '/workspace/skills/lookml-snapshot/SKILL.md': LOOKML_SNAPSHOT_SKILL_MD, 'skills/lookml-snapshot/SKILL.md': LOOKML_SNAPSHOT_SKILL_MD,
-  'lookml-snapshot': LOOKML_SNAPSHOT_SKILL_MD,
+  'data-app-creator': DATA_APP_GUIDE_MD,
+  '/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py': KDA_TOOLKIT_PY,
+  'skills/key-driver-analysis/scripts/kda_toolkit.py': KDA_TOOLKIT_PY,
+  'kda_toolkit.py': KDA_TOOLKIT_PY,
   'lookml-bronze-view': SANDBOX_AGENT_SKILL_FILES['generate-view-from-table/SKILL.md'],
+}
+for (const [id, doc] of [
+  ['data-apps', DATA_APP_GUIDE_MD], ['data-investigator', DATA_INVESTIGATOR_GUIDE_MD],
+  ['key-driver-analysis', KDA_SKILL_MD], ['looker-project-onboarding', LOOKER_PROJECT_ONBOARDING_SKILL_MD],
+  ['looker-alerts', LOOKER_ALERTS_SKILL_MD], ['lookml-snapshot', LOOKML_SNAPSHOT_SKILL_MD],
+  ['creating-looker-dashboard', LOOKER_DASHBOARD_SKILL_MD],
+  ['lookml-modeling-guidelines', SANDBOX_AGENT_SKILL_FILES['agentic-lookml/SKILL.md']],
+  ['looker-architect', SANDBOX_AGENT_SKILL_FILES['agentic-lookml/SKILL.md']],
+] as const) {
+  for (const k of [id, `skills/${id}/SKILL.md`, `/workspace/skills/${id}/SKILL.md`, `skills/${id}/skill.md`, `/workspace/skills/${id}/skill.md`, `.agents/skills/${id}/SKILL.md`, `/workspace/.agents/skills/${id}/SKILL.md`]) {
+    BUILTIN_SKILLS_FILES[k] = doc
+  }
 }
 SANDBOX_AGENT_SKILL_FILES['looker-dashboard/SKILL.md'] = LOOKER_DASHBOARD_SKILL_MD
 SANDBOX_AGENT_SKILL_FILES['looker-field-profiler/SKILL.md'] = LOOKER_FIELD_PROFILER_SKILL_MD
