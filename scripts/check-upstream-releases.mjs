@@ -27,7 +27,7 @@ const isNewerTag = (cur, next, release) => {
 const mapSkillCounterparts = (file) => {
   const s = /^skills\/([^/]+)\//.exec(file)?.[1]
   if (!s) return '`.agents/skills/*`, `src/lkrCliBridge.ts`, `src/lookerPermissions.ts`, `scripts/run-evals.mjs`'
-  if (s === 'creating-looker-dashboard') return '`skills/looker-dashboard/SKILL.md`, `.agents/skills/looker-dashboard/SKILL.md`, `src/antigravityPrompts.ts`, `scripts/run-evals.mjs`'
+  if (s === 'creating-looker-dashboard') return '`skills/looker-dashboard/SKILL.md`, `.agents/skills/looker-dashboard/SKILL.md`, `src/antigravityStarters.ts`, `scripts/run-evals.mjs`'
   if (s === 'lookml-modeling-guidelines' || s === 'looker-architect') return '`.agents/skills/agentic-lookml/SKILL.md`, `src/sandboxSkillsBundle.ts`, `scripts/run-evals.mjs`'
   if (s === 'looker-audit') return '`.agents/skills/looker-audit/SKILL.md`, `src/lkrCliBridge.ts`, `src/lookerPermissions.ts`, `scripts/run-evals.mjs`'
   return `\`.agents/skills/${s}/SKILL.md\`, \`src/sandboxSkillsBundle.ts\`, \`src/lookerPermissions.ts\`, \`scripts/run-evals.mjs\``
