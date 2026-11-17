@@ -269,6 +269,7 @@ export async function executeAntigravityPollingLoop(
   }
 
   let bridgePermissionError = ''
+  let batchPermErr = false
   const trackedPermissionHandler = effectivePermissionHandler
     ? async (r: CodeModePermissionRequest) => {
         const d = await effectivePermissionHandler(r)
@@ -279,8 +280,10 @@ export async function executeAntigravityPollingLoop(
   const recordPermOutcome = (val: unknown, prevSeq: number, req?: LkrExtensionToolRequest): string => {
     const s = typeof val === 'string' ? val : val instanceof Error ? val.message : JSON.stringify(val || '')
     const pErr = s.match(/PermissionError:[^\n"\\]+/)?.[0] || ''
-    if (pErr) bridgePermissionError = bridgePermissionError || pErr
-    else if (mutSuccessSeq > prevSeq || (req?.kind === 'sdk_request' && classifyLookerOperation(req.method, req.path).requiresPermission)) {
+    if (pErr) {
+      bridgePermissionError = pErr
+      batchPermErr = true
+    } else if (!batchPermErr && (mutSuccessSeq > prevSeq || (req?.kind === 'sdk_request' && classifyLookerOperation(req.method, req.path).requiresPermission))) {
       bridgePermissionError = ''
     }
     return pErr
@@ -320,6 +323,7 @@ export async function executeAntigravityPollingLoop(
 
           if (pendingLookerCalls.length > 0 && actionRound + bridgeRound < resolvedMaxToolRounds) {
             actionRound += 1
+            batchPermErr = false
             await throwIfAborted(interaction.id)
             let preBridgeDenied = ''
             const explicitBridgeKeys = new Set(
@@ -385,7 +389,12 @@ export async function executeAntigravityPollingLoop(
                       Object.assign({}, permReq, permReq.thought || callThought ? { thought: permReq.thought || callThought } : null)
                     )
                 : undefined
-              const codeKey = call.name === 'lkr_cli_extension_bridge' ? '' : String(args.code || '').trim()
+              const customVars =
+                args.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
+                  ? (args.vars as Record<string, unknown>)
+                  : {}
+              const trimmedCode = call.name === 'lkr_cli_extension_bridge' ? '' : String(args.code || '').trim()
+              const codeKey = trimmedCode ? computeLkrExtensionCacheKey({ kind: 'codemode', code: trimmedCode, vars: customVars }) : ''
               const cachedCodeMode = codeKey ? executedCodeModeByCode.get(codeKey) : undefined
               let structResult: Record<string, unknown>
               if (cachedCodeMode) {
@@ -426,10 +435,6 @@ export async function executeAntigravityPollingLoop(
                       })
                     }
                   } else {
-                    const customVars =
-                      args.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
-                        ? (args.vars as Record<string, unknown>)
-                        : {}
                     const rawCode = wrapKdaCodeMode(String(args.code || ''), isKdaSkillActive)
                     const needsDashboardMacros =
                       isDashboardMode ||
@@ -586,6 +591,7 @@ export async function executeAntigravityPollingLoop(
       const pendingBridgeReqs = await getPendingBridgeReqs(interaction)
 
       if (pendingBridgeReqs.length > 0 && actionRound + bridgeRound < resolvedMaxToolRounds) {
+        batchPermErr = false
         await throwIfAborted(interaction.id)
         const firstBridgeThought = pendingBridgeReqs.map((r) => sanitizeActivityThought(r.thought)).find(Boolean)
         const firstBridgeReq = pendingBridgeReqs[0]

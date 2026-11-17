@@ -377,19 +377,23 @@ const CONTENT_CREATION_VERB_RE =
 export const LOOKER_ALERT_QUERY_RE =
   /\b(?:alerts?|alert_details|alert_notifications|follow_alert|unfollow_alert|enqueue_alert|update_alert_field|create_alert|update_alert|delete_alert)\b/i
 
+export const LOOKER_INSTANCE_ADMIN_OP_RE =
+  /\b(?:health(?:[_\s-]*check)?[_\s-]*(?:pulse|analyze|vacuum)\b|unused\s+(?:explores?|joins?|fields?|models?|lookml)\b|(?:api_template|describe_body)\b|(?:request|api|writable)\s+body\s+(?:template|schema|skeleton)s?\b|(?:export|import)_(?:dashboard|look)_json\b|(?:export|import)\s+(?:portable\s+)?(?:dashboard|look)\s+json\b|(?:delete|remove|trash|clean\s*up)\b[\s\S]{0,100}\b(?:personal|home)\s*(?:folder|space)s?\b)/i
+
 export const LOOKER_INSTANCE_API_QUERY_RE =
-  /\b(?:personal\s*(?:space|folder)s?|shared\s*(?:space|folder)s?|(?:in|from|inside|under)\s+my\s+personal\b|(?:my|our)\s+favou?rite\s+(?:dashboards?|looks?|content|folders?)|(?:dashboards?|looks?)\s+(?:in\s+my\s+(?:personal|shared|favou?rites?|folder|space)|that\s+I\s+favou?rited)|(?:my|our|all|empty|unused|list|find|inspect|search|query)\s+(?:looker\s+)?(?:personal\s+|shared\s+)?(?:spaces|folders)\b|(?:my|our)\s+(?:looker\s+)?(?:space|folder)\b|(?:spaces|folders)\s+(?:that|which|without|with\s+no)|folder_children|all_folders|search_folders|search_dashboards|search_looks|looker\s*sdk|instance\s*metadata|(?:what|which|query|inspect|list|find|check|show)\s+(?:looker\s+)?(?:users?|roles?|permissions?|groups?|scheduled\s*plans?|schedules?|instance\s*metadata)\b(?:\s+(?:have|with|in|on|for|are|who|that))?|(?:users?|roles?)\s+have\s+(?:admin|developer|viewer)|admin\s+roles?\b)/i
+  /\b(?:personal\s*(?:space|folder)s?|home\s*(?:folder|space)s?|shared\s*(?:space|folder)s?|(?:in|from|inside|under)\s+my\s+personal\b|(?:in|from|inside|under)\s+my\s+home\b|(?:my|our)\s+favou?rite\s+(?:dashboards?|looks?|content|folders?)|(?:dashboards?|looks?)\s+(?:in\s+my\s+(?:personal|home|shared|favou?rites?|folder|space)|that\s+I\s+favou?rited)|(?:my|our|all|empty|unused|list|find|inspect|search|query)\s+(?:looker\s+)?(?:personal\s+|home\s+|shared\s+)?(?:spaces|folders)\b|(?:my|our)\s+(?:looker\s+)?(?:space|folder)\b|(?:spaces|folders)\s+(?:that|which|without|with\s+no)|folder_children|all_folders|search_folders|search_dashboards|search_looks|looker\s*sdk|instance\s*metadata|(?:what|which|query|inspect|list|find|check|show)\s+(?:looker\s+)?(?:users?|roles?|permissions?|groups?|scheduled\s*plans?|schedules?|instance\s*metadata)\b(?:\s+(?:have|with|in|on|for|are|who|that))?|(?:users?|roles?)\s+have\s+(?:admin|developer|viewer)|admin\s+roles?\b)/i
 
 export function isLookerInstanceMetadataQuery(text?: string): boolean {
   const clean = String(text || '').replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '').trim()
   if (!clean || EXPLICIT_SCRIPT_CREATION_RE.test(clean)) return false
-  if (LOOKER_ALERT_QUERY_RE.test(clean)) return true
+  if (LOOKER_ALERT_QUERY_RE.test(clean) || LOOKER_INSTANCE_ADMIN_OP_RE.test(clean)) return true
   if (CONTENT_CREATION_VERB_RE.test(clean)) return false
   return LOOKER_INSTANCE_API_QUERY_RE.test(clean)
 }
 
 const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
-  ['health-check', /\b(3-pillar|three-pillar|health\s*check|transcriber\s*rubric|technical_design_document)\b/i],
+  ['health-check', /\b(3-pillar|three-pillar|health\s*check(?!\s*[_\s-]*(?:pulse|analyze|vacuum)\b)|transcriber\s*rubric|technical_design_document)\b/i],
+  ['tile', LOOKER_INSTANCE_ADMIN_OP_RE],
   ['lookml', /\b(lookml(?!\s+dashboards?\b)|\.lkml|dimension\s*:|measure\s*:|explore\s*:|refinement|data\s*test|model\.lkml|view\.lkml|(?:create|onboard|build|set\s*up|start)\s+(?:a\s+)?(?:new\s+)?(?:looker\s+)?project\b|new_project_)\b/i],
   ['tile', new RegExp(`${EXPLICIT_SCRIPT_CREATION_RE.source}|${LOOKER_INSTANCE_API_QUERY_RE.source}|${LOOKER_ALERT_QUERY_RE.source}`, 'i')],
   ['dashboard', /\b(udd|user[- ]defined\s*dashboard|native\s*dashboard|saved\s*look|lookml\s*dashboard|pin\s*to\s*board|schedule\s*dashboard|content\s*studio)\b/i],
@@ -471,14 +475,20 @@ export function matchExplicitUseCaseRule(
       .replace(/\s+/g, '-')
     const tagged = USE_CASE_ALIAS_MAP[token]
     if (tagged && allowedSet.has(tagged)) return tagged
+    if (tagged === 'lookml' && allowedSet.has('tile')) return 'tile'
   }
   if (isConversationalNoOpPrompt(rawText)) return null
   const slashToken = rawText.match(/(?:^|\s)\/([a-z0-9_-]+)(?=\s|$|[.,;!?])/i)?.[1]?.toLowerCase()
   const slashTarget = slashToken ? (SLASH_SKILL_USE_CASES[slashToken] || (slashToken.startsWith('lookml-') ? 'lookml' : undefined)) : undefined
-  if (slashTarget && allowedSet.has(slashTarget)) return slashTarget
+  if (slashTarget) {
+    if (allowedSet.has(slashTarget)) return slashTarget
+    if (slashTarget === 'lookml' && allowedSet.has('tile')) return 'tile'
+  }
   for (const [candidate, re] of USE_CASE_RULES) {
-    if (candidate === 'tile' && CONTENT_CREATION_VERB_RE.test(rawText) && !EXPLICIT_SCRIPT_CREATION_RE.test(rawText) && !LOOKER_ALERT_QUERY_RE.test(rawText)) continue
-    if (allowedSet.has(candidate) && re.test(rawText)) return candidate
+    if (candidate === 'tile' && CONTENT_CREATION_VERB_RE.test(rawText) && !EXPLICIT_SCRIPT_CREATION_RE.test(rawText) && !LOOKER_ALERT_QUERY_RE.test(rawText) && !LOOKER_INSTANCE_ADMIN_OP_RE.test(rawText)) continue
+    if (!re.test(rawText)) continue
+    if (allowedSet.has(candidate)) return candidate
+    if (candidate === 'lookml' && allowedSet.has('tile')) return 'tile'
   }
   return null
 }

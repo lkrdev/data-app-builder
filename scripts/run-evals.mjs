@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Unified 10-Eval Suite & Multi-Dimensional Grader for Looker Data App Studio (scripts/run-evals.mjs).
+ * Unified 16-Eval Suite & Multi-Dimensional Grader for Looker Data App Studio (scripts/run-evals.mjs).
  *
- * Grades Evals #1 through #10 across 4 dimensions:
+ * Grades Evals #1 through #16 across 4 dimensions:
  *   1. routing      — Turn-1 use-case classification & isolated CA / CodeMode routing
  *   2. toolBudget   — Tool-call efficiency (codemode, bash, looker_http) & zero redundant calls
  *   3. outputRubric — Output structure, bundle validity, links, truncation, and schema compliance
@@ -966,6 +966,471 @@ async function eval11AlertsTriageAndActions() {
   }
 }
 
+async function eval12ApiBodyTemplates() {
+  const { matchExplicitUseCaseRule, extractResolvedUseCase, isLookerInstanceMetadataQuery } = require(path.join(repoRoot, 'src/lookerPermissions.ts'))
+  const { shouldOfferReusableScriptPrompt } = require(path.join(repoRoot, 'src/lookerApi.ts'))
+
+  const prompts = [
+    'Generate a request body template for create_connection',
+    "Show api_template('create_dashboard')",
+    'Use describe_body on WriteLookWithQuery',
+    'Show writable body schema for scheduled_plan',
+  ]
+  const routingOk = prompts.every(
+    (p) => isLookerInstanceMetadataQuery(p) && matchExplicitUseCaseRule(p) === 'tile' && extractResolvedUseCase('', p) === 'tile'
+  )
+
+  let httpCalls = 0
+  let permPrompts = 0
+  const raw = await LkrCodeMode.runPythonCode({
+    code: [
+      'op_doc = lookup("create_dashboard")',
+      'dash_ty = lookup_type("WriteDashboard")',
+      'sched_ty = lookup_type("WriteScheduledPlan")',
+      'return {"has_op": "create_dashboard" in str(op_doc), "has_dash_fields": "title" in str(dash_ty), "has_sched_fields": "crontab" in str(sched_ty) or "datagroup" in str(sched_ty)}',
+    ].join('\n'),
+    requestHandler: async () => {
+      httpCalls += 1
+      return {}
+    },
+    requirePermission: true,
+    onPermissionRequest: async () => {
+      permPrompts += 1
+      return 'deny'
+    },
+  })
+  const parsed = JSON.parse(raw)
+  const out = parsed.result || parsed
+  const suppressScriptOffer = !shouldOfferReusableScriptPrompt({
+    effectivePrompt: prompts[0],
+    baseReply: 'Generated request body template.',
+    activitySteps: [],
+    crudItemsCount: 0,
+  })
+
+  return {
+    routing: routingOk,
+    toolBudget: httpCalls === 0,
+    outputRubric: Boolean(out?.has_op && out?.has_dash_fields && out?.has_sched_fields),
+    safety: permPrompts === 0 && suppressScriptOffer,
+    useCase: 'tile',
+    detail: `Template/schema prompts routed to tile (bypassing CONTENT_CREATION_VERB_RE); Monty OpenAPI lookup_type verified in 1 call (${httpCalls} HTTP calls, ${permPrompts} perm prompts); Script offer suppressed`,
+    messages: [
+      { role: 'user', text: prompts[0] },
+      { role: 'assistant', text: `Inspected OpenAPI writable request schemas (${JSON.stringify(out)}).` },
+    ],
+  }
+}
+
+async function eval13HealthPulseAndVacuum() {
+  const { matchExplicitUseCaseRule, extractResolvedUseCase, isLookerInstanceMetadataQuery } = require(path.join(repoRoot, 'src/lookerPermissions.ts'))
+  const { shouldOfferReusableScriptPrompt } = require(path.join(repoRoot, 'src/lookerApi.ts'))
+
+  const healthTilePrompts = [
+    'Run a health pulse on this Looker instance',
+    'Run health_analyze on slow queries',
+    'Run health-vacuum to find unused explores',
+    'Find unused LookML fields and joins in thelook',
+  ]
+  const routingOk =
+    healthTilePrompts.every((p) => isLookerInstanceMetadataQuery(p) && matchExplicitUseCaseRule(p) === 'tile' && extractResolvedUseCase('', p) === 'tile') &&
+    !isLookerInstanceMetadataQuery('Run a 3-pillar health check on thelook') &&
+    extractResolvedUseCase('', 'Run a 3-pillar health check on thelook') === 'health-check'
+
+  let httpCalls = 0
+  const raw = await LkrCodeMode.runPythonCode({
+    code: [
+      'models = all_lookml_models(fields="name,project_name,explores")',
+      'used = set()',
+      'rb_denied = False',
+      'try:',
+      '    rows = run_inline_query("json", {"model": "system__activity", "view": "history", "fields": ["query.model", "query.view", "history.query_run_count"], "limit": "500"})',
+      '    for r in (rows or []): used.add(str(r.get("query.model")) + "::" + str(r.get("query.view")))',
+      'except Exception:',
+      '    rb_denied = True',
+      'unused = []',
+      'for m in (models or []):',
+      '    for ex in (m.get("explores") or []):',
+      '        key = str(m.get("name")) + "::" + str(ex.get("name"))',
+      '        if key not in used: unused.append(key)',
+      'return {"unused_explores": unused[:10], "total_unused": len(unused), "rbac_safe": not rb_denied}',
+    ].join('\n'),
+    requestHandler: async (_method, urlPath) => {
+      httpCalls += 1
+      if (String(urlPath).includes('/lookml_models')) {
+        return [{ name: 'thelook', project_name: 'thelook', explores: [{ name: 'order_items' }, { name: 'legacy_abandoned_cart' }] }]
+      }
+      return [{ 'query.model': 'thelook', 'query.view': 'order_items', 'history.query_run_count': 142 }]
+    },
+    requirePermission: true,
+    onPermissionRequest: async () => 'deny',
+  })
+  const out = JSON.parse(raw)
+  const res = out.result || out
+  const nonAdminRaw = await LkrCodeMode.runPythonCode({
+    code: [
+      'try:',
+      '    run_inline_query("json", {"model": "system__activity", "view": "history", "fields": ["history.query_run_count"], "limit": "10"})',
+      '    return {"graceful": False}',
+      'except Exception as e:',
+      '    return {"graceful": "403" in str(e) or "404" in str(e)}',
+    ].join('\n'),
+    requestHandler: async () => {
+      throw new Error('403 Forbidden: system__activity inaccessible')
+    },
+  })
+  const nonAdmin = JSON.parse(nonAdminRaw)
+  const suppressOffer = !shouldOfferReusableScriptPrompt({
+    effectivePrompt: healthTilePrompts[2],
+    baseReply: 'Identified 1 unused explore.',
+    activitySteps: [],
+    crudItemsCount: 0,
+  })
+
+  return {
+    routing: routingOk,
+    toolBudget: httpCalls === 2,
+    outputRubric: Array.isArray(res.unused_explores) && res.unused_explores.includes('thelook::legacy_abandoned_cart') && res.total_unused === 1,
+    safety: Boolean((nonAdmin.result || nonAdmin).graceful) && suppressOffer,
+    useCase: 'tile',
+    detail: `health pulse/analyze/vacuum -> tile (3-pillar -> health-check preserved); ${httpCalls} Looker calls found unused thelook::legacy_abandoned_cart; 403 System Activity RBAC graceful`,
+    messages: [
+      { role: 'user', text: healthTilePrompts[2] },
+      { role: 'assistant', text: `Unused explores: \`${(res.unused_explores || []).join(', ')}\`.` },
+    ],
+  }
+}
+
+async function eval14HomeFolderTrashCleanup() {
+  const { matchExplicitUseCaseRule, extractResolvedUseCase, isLookerInstanceMetadataQuery } = require(path.join(repoRoot, 'src/lookerPermissions.ts'))
+  const { reconcileDeletedLookerContent, shouldOfferReusableScriptPrompt } = require(path.join(repoRoot, 'src/lookerApi.ts'))
+
+  const runId = Date.now().toString(36)
+  const testDashTitle = `test_eval_${runId}_draft_dash`
+  const testLookTitle = `test_eval_${runId}_draft_look`
+  const routingOk =
+    isLookerInstanceMetadataQuery('Find out how many dashboards are in my home folder') &&
+    extractResolvedUseCase('', 'Find out how many dashboards are in my home folder') === 'tile' &&
+    matchExplicitUseCaseRule('Clean up test dashboards in my home folder') === 'tile' &&
+    extractResolvedUseCase('', 'Find out what drove Q4 returns') === 'data-investigator'
+
+  const dashStore = new Map([
+    ['701', { id: '701', title: 'Executive Revenue KPIs', folder_id: '5', deleted: false }],
+    ['702', { id: '702', title: testDashTitle, folder_id: '5', deleted: false }],
+  ])
+  const lookStore = new Map([['802', { id: '802', title: testLookTitle, folder_id: '5', deleted: false }]])
+  const approvedOps = []
+  let httpCalls = 0
+
+  const raw = await LkrCodeMode.runPythonCode({
+    code: [
+      'u = me()',
+      'home_id = str(u.get("home_folder_id") or u.get("personal_folder_id") or "5")',
+      'f = folder(home_id)',
+      'inv = format_content_inventory([f])',
+      'trashed_d = []',
+      'trashed_l = []',
+      'for d in (f.get("dashboards") or []):',
+      '    if str(d.get("title") or "").lower().startswith("test_eval_"):',
+      '        update_dashboard(str(d["id"]), {"deleted": True})',
+      '        trashed_d.append(str(d["id"]))',
+      'for l in (f.get("looks") or []):',
+      '    if str(l.get("title") or "").lower().startswith("test_eval_"):',
+      '        update_look(str(l["id"]), {"deleted": True})',
+      '        trashed_l.append(str(l["id"]))',
+      'return {"home_id": home_id, "before_total": inv.get("total_items"), "trashed_dashboards": trashed_d, "trashed_looks": trashed_l}',
+    ].join('\n'),
+    requestHandler: async (method, urlPath, _qp, body) => {
+      httpCalls += 1
+      const m = String(method).toUpperCase()
+      const p = String(urlPath)
+      if (m === 'GET' && p.endsWith('/user')) return { id: '7', home_folder_id: '5', personal_folder_id: '5' }
+      if (m === 'GET' && p.endsWith('/folders/5')) {
+        return {
+          id: '5',
+          name: 'Home Folder',
+          dashboards: Array.from(dashStore.values()).filter((d) => !d.deleted),
+          looks: Array.from(lookStore.values()).filter((l) => !l.deleted),
+        }
+      }
+      if (m === 'PATCH' && p.includes('/dashboards/')) {
+        const id = p.split('/').pop()
+        const cur = dashStore.get(id)
+        const next = Object.assign({}, cur, typeof body === 'string' ? JSON.parse(body) : body)
+        dashStore.set(id, next)
+        return next
+      }
+      if (m === 'PATCH' && p.includes('/looks/')) {
+        const id = p.split('/').pop()
+        const cur = lookStore.get(id)
+        const next = Object.assign({}, cur, typeof body === 'string' ? JSON.parse(body) : body)
+        lookStore.set(id, next)
+        return next
+      }
+      return {}
+    },
+    requirePermission: true,
+    onPermissionRequest: async (req) => {
+      approvedOps.push(req.operation)
+      return 'allow_op'
+    },
+  })
+  const res = JSON.parse(raw)
+  const out = res.result || res
+
+  const openItems = [
+    { key: 'dashboard:701', id: '701', contentType: 'dashboard', title: 'Executive Revenue KPIs', embedPath: '/embed/dashboards/701', hidden: false },
+    { key: 'dashboard:702', id: '702', contentType: 'dashboard', title: testDashTitle, embedPath: '/embed/dashboards/702', hidden: false },
+    { key: 'look:802', id: '802', contentType: 'look', title: testLookTitle, embedPath: '/embed/looks/802', hidden: false },
+  ]
+  const activitySteps = [
+    {
+      kind: 'codemode',
+      content: `update_dashboard("702", {"deleted": True})\nupdate_look("802", {"deleted": True})\n# Looker API Telemetry\n# PATCH /dashboards/702 (12ms)\n# PATCH /looks/802 (9ms)\n# Output\n${JSON.stringify(out)}`,
+    },
+  ]
+  const rec = reconcileDeletedLookerContent(openItems, 'dashboard:702', activitySteps)
+  const suppressMutatingOffer = !shouldOfferReusableScriptPrompt({
+    effectivePrompt: 'Clean up test dashboards in my home folder',
+    baseReply: 'Soft-trashed 2 test items.',
+    activitySteps,
+    crudItemsCount: rec.crudItems.length,
+  })
+  const allowLookupOffer = shouldOfferReusableScriptPrompt({
+    effectivePrompt: 'What dashboards are in my home folder?',
+    baseReply: 'Found 1 dashboard in your home folder.',
+    activitySteps: [{ kind: 'codemode', content: '# GET /user (4ms)\n# GET /folders/5 (7ms)' }],
+    crudItemsCount: 0,
+  })
+
+  return {
+    routing: routingOk,
+    toolBudget: httpCalls === 4,
+    outputRubric:
+      out.before_total === 3 &&
+      JSON.stringify(out.trashed_dashboards) === '["702"]' &&
+      JSON.stringify(out.trashed_looks) === '["802"]' &&
+      rec.nextItems.length === 1 &&
+      rec.nextItems[0].key === 'dashboard:701' &&
+      rec.nextActiveTabKey === 'dashboard:701' &&
+      rec.crudItems.length === 2,
+    safety:
+      dashStore.get('701')?.deleted === false &&
+      dashStore.get('702')?.deleted === true &&
+      lookStore.get('802')?.deleted === true &&
+      approvedOps.includes('update_dashboard') &&
+      approvedOps.includes('update_look') &&
+      suppressMutatingOffer &&
+      allowLookupOffer,
+    useCase: 'tile',
+    detail: `Home-folder inventory + soft-trash cleanup (${testDashTitle}, ${testLookTitle}) in ${httpCalls} HTTP calls; reconciled tabs (3 -> 1) + 2 deleted CRUD pills; Script prompt suppressed on mutation`,
+    messages: [
+      { role: 'user', text: 'Clean up test_eval_* dashboards and Looks in my home folder' },
+      { role: 'assistant', text: `Soft-trashed \`702\` and \`802\`; kept \`Executive Revenue KPIs\` (\`701\`).` },
+    ],
+  }
+}
+
+async function eval15PortableJsonRoundTripAndVars() {
+  const { runAntigravityTurn } = require(path.join(repoRoot, 'src/antigravity.ts'))
+  const { matchExplicitUseCaseRule, extractResolvedUseCase, isLookerInstanceMetadataQuery } = require(path.join(repoRoot, 'src/lookerPermissions.ts'))
+
+  const runId = Date.now().toString(36)
+  const dashTitle = `test_eval_${runId}_portable_dash`
+  const lookTitle = `test_eval_${runId}_portable_look`
+  const jsonPrompts = [
+    'Export portable dashboard json for dashboard 42',
+    'Call export_dashboard_json and import_dashboard_json',
+    'Import look json from backup',
+  ]
+  const routingOk = jsonPrompts.every(
+    (p) => isLookerInstanceMetadataQuery(p) && matchExplicitUseCaseRule(p) === 'tile' && extractResolvedUseCase('', p) === 'tile'
+  )
+
+  const createdDashIds = []
+  const createdLookIds = []
+  let nextId = 900
+  let step = 0
+  const posted = []
+
+  await runAntigravityTurn({
+    sdk: {
+      authSession: {
+        transport: {
+          rawRequest: async (method, reqPath, _qp, body) => {
+            const m = String(method).toUpperCase()
+            const p = String(reqPath)
+            const b = typeof body === 'string' && body ? JSON.parse(body) : body || {}
+            if (m === 'GET' && p === '/dashboards/42') {
+              return {
+                ok: true,
+                statusCode: 200,
+                body: JSON.stringify({
+                  id: '42',
+                  title: dashTitle,
+                  dashboard_elements: [{ id: 'el_1', title: 'Sales KPI', type: 'vis', query: { id: 'q_old', model: 'thelook', view: 'order_items', fields: ['order_items.total_sale_price'] } }],
+                }),
+              }
+            }
+            if (m === 'POST' && p === '/dashboards') {
+              const id = String(++nextId)
+              createdDashIds.push({ id, title: b.title, folder_id: b.folder_id })
+              return { ok: true, statusCode: 200, body: JSON.stringify({ id, title: b.title, folder_id: b.folder_id }) }
+            }
+            if (m === 'POST' && p === '/looks') {
+              const id = String(++nextId)
+              createdLookIds.push({ id, title: b.title, folder_id: b.folder_id })
+              return { ok: true, statusCode: 200, body: JSON.stringify({ id, title: b.title, folder_id: b.folder_id }) }
+            }
+            return { ok: true, statusCode: 200, body: '{}' }
+          },
+        },
+      },
+    },
+    userId: '1',
+    extensionSDK: {
+      serverProxy: async (_url, init) => {
+        step += 1
+        const parsedBody = init?.body ? JSON.parse(String(init.body)) : {}
+        posted.push(parsedBody)
+        if (step === 1) {
+          const sharedImportCode = [
+            'src = dashboard("42")',
+            'portable = {"title": import_title, "folder_id": dest_folder, "elements": [{"title": e.get("title"), "query": {k: v for k, v in (e.get("query") or {}).items() if k != "id"}} for e in (src.get("dashboard_elements") or [])]}',
+            'created = create_dashboard({"title": portable["title"], "folder_id": portable["folder_id"]})',
+            'return {"created_id": created.get("id"), "title": portable["title"], "folder_id": portable["folder_id"], "stripped_query_id": "id" not in portable["elements"][0]["query"]}',
+          ].join('\n')
+          return {
+            ok: true,
+            status: 200,
+            body: JSON.stringify({
+              id: 'int_eval15_1',
+              environment_id: 'env_eval15',
+              status: 'requires_action',
+              steps: [
+                { id: 'c1', type: 'function_call', name: 'run_looker_codemode', arguments: JSON.stringify({ code: sharedImportCode, vars: { import_title: `${dashTitle}_a`, dest_folder: '5' } }) },
+                { id: 'c2', type: 'function_call', name: 'run_looker_codemode', arguments: JSON.stringify({ code: sharedImportCode, vars: { import_title: `${dashTitle}_b`, dest_folder: '8' } }) },
+                { id: 'c3', type: 'function_call', name: 'run_looker_codemode', arguments: JSON.stringify({ code: 'l = create_look({"title": ltitle, "folder_id": "5"})\nreturn {"look_id": l.get("id")}', vars: { ltitle: lookTitle } }) },
+              ],
+            }),
+          }
+        }
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({ id: 'int_eval15_2', environment_id: 'env_eval15', status: 'completed', output_text: '<USE_CASE>tile</USE_CASE>Completed portable JSON round-trip.' }),
+        }
+      },
+    },
+    auth: { mode: 'apikey', apiKey: 'eval15-key', oauthToken: '', clientId: '', projectId: '' },
+    session: { environmentId: 'env_eval15', lastInteractionId: 'int_prev_15' },
+    selectedExplores: [],
+    schemaMarkdown: '',
+    userPrompt: jsonPrompts[0],
+    requirePermission: true,
+    onPermissionRequest: async () => 'allow_op',
+    onStatus: () => {},
+  })
+
+  const fnResults = posted[1]?.input || []
+  const r1 = fnResults[0]?.result || {}
+  const r2 = fnResults[1]?.result || {}
+  const r3 = fnResults[2]?.result || {}
+
+  return {
+    routing: routingOk,
+    toolBudget: createdDashIds.length === 2 && createdLookIds.length === 1,
+    outputRubric:
+      r1.title === `${dashTitle}_a` &&
+      r2.title === `${dashTitle}_b` &&
+      r1.stripped_query_id === true &&
+      !r1._duplicate_call_notice &&
+      !r2._duplicate_call_notice &&
+      Boolean(r3.look_id),
+    safety: createdDashIds[0]?.folder_id === '5' && createdDashIds[1]?.folder_id === '8',
+    useCase: 'tile',
+    detail: `Portable JSON round-trip created 2 dashboards (${dashTitle}_a/b via identical code + distinct args.vars without _duplicate_call_notice) + 1 Look (${lookTitle}) with server query.id stripped`,
+    messages: [
+      { role: 'user', text: jsonPrompts[0] },
+      { role: 'assistant', text: `Exported & imported portable JSON into folders 5 and 8 (\`${r1.created_id}\`, \`${r2.created_id}\`, Look \`${r3.look_id}\`).` },
+    ],
+  }
+}
+
+async function eval16LookmlReviewDialectAndPivot() {
+  const { matchExplicitUseCaseRule, extractResolvedUseCase } = require(path.join(repoRoot, 'src/lookerPermissions.ts'))
+  const { SANDBOX_WORKSPACE_SKILL_FILES } = require(path.join(repoRoot, 'src/antigravitySteps.ts'))
+
+  const readOnlyLookmlModes = ['app', 'data-investigator', 'dashboard', 'tile', 'conversational-analytics']
+  const devLookmlModes = ['app', 'data-investigator', 'dashboard', 'lookml', 'tile', 'conversational-analytics']
+  const routingOk =
+    matchExplicitUseCaseRule('Inspect the LookML dimensions in order_items.view.lkml', readOnlyLookmlModes) === 'tile' &&
+    extractResolvedUseCase('', '/lookml-reviewer audit order_items.view.lkml', readOnlyLookmlModes) === 'tile' &&
+    extractResolvedUseCase('<USE_CASE>lookml</USE_CASE>\nReviewed LookML.', 'Check view', readOnlyLookmlModes) === 'tile' &&
+    matchExplicitUseCaseRule('/lookml-reviewer audit order_items.view.lkml', devLookmlModes) === 'lookml' &&
+    Boolean(SANDBOX_WORKSPACE_SKILL_FILES['.agents/skills/lookml-reviewer/SKILL.md'])
+
+  let capturedQueryBody = null
+  let permPrompts = 0
+  let httpCalls = 0
+  const raw = await LkrCodeMode.runPythonCode({
+    code: [
+      'exp = lookml_model_explore("thelook", "order_items")',
+      'piv = run_inline_query("json_detail", {',
+      '    "model": "thelook",',
+      '    "view": "order_items",',
+      '    "fields": ["order_items.created_month", "products.category", "order_items.total_sale_price"],',
+      '    "pivots": ["products.category"],',
+      '    "filters": {"order_items.created_date": to_fixed_date_range("last quarter", "2026-04-15")},',
+      '    "limit": "50",',
+      '})',
+      'dims = [d.get("name") for d in ((exp.get("fields") or {}).get("dimensions") or [])]',
+      'return {"dims": dims, "row_count": len(piv.get("data") or []), "has_pivots": len(piv.get("pivots") or []) == 2}',
+    ].join('\n'),
+    requestHandler: async (method, urlPath, _qp, body) => {
+      httpCalls += 1
+      if (String(method).toUpperCase() === 'GET' && String(urlPath).includes('/explores/order_items')) {
+        return {
+          name: 'order_items',
+          fields: {
+            dimensions: [{ name: 'order_items.id', primary_key: true }, { name: 'order_items.created_month' }, { name: 'products.category' }],
+            measures: [{ name: 'order_items.total_sale_price' }],
+          },
+        }
+      }
+      capturedQueryBody = typeof body === 'string' ? JSON.parse(body) : body
+      return {
+        pivots: [{ key: 'Accessories' }, { key: 'Outerwear' }],
+        data: [{ 'order_items.created_month': { value: '2026-01' }, 'order_items.total_sale_price': { Accessories: { value: 12400 }, Outerwear: { value: 18900 } } }],
+      }
+    },
+    requirePermission: true,
+    onPermissionRequest: async () => {
+      permPrompts += 1
+      return 'deny'
+    },
+  })
+  const out = JSON.parse(raw)
+  const res = out.result || out
+
+  return {
+    routing: routingOk,
+    toolBudget: httpCalls === 2,
+    outputRubric:
+      res.row_count === 1 &&
+      res.has_pivots === true &&
+      JSON.stringify(capturedQueryBody?.pivots) === '["products.category"]' &&
+      capturedQueryBody?.filters?.['order_items.created_date'] === '2026-01-01 to 2026-03-31',
+    safety: permPrompts === 0,
+    useCase: 'tile',
+    detail: `Read-only see_lookml routed to tile (dev -> lookml), lookml-reviewer bundled, and pivoted json_detail inline query verified (${capturedQueryBody?.filters?.['order_items.created_date']}, 0 perm prompts)`,
+    messages: [
+      { role: 'user', text: 'Inspect order_items LookML, review LAMS rules, and verify quarterly category pivot query' },
+      { role: 'assistant', text: `Verified \`order_items\` PK & LAMS rules and ran pivoted query (${res.row_count} row, 2 category pivots).` },
+    ],
+  }
+}
+
 const EVAL_SUITE = [
   { id: 'eval-01', num: 1, title: 'Looker Content & Folder Inventory Queries (`LkrCodeMode`)', fn: eval01ContentFolderInventory },
   { id: 'eval-02', num: 2, title: 'Open-Ended Analytical Routing (`search_agents()` vs. CodeMode)', fn: eval02CaVsCodemodeRouting },
@@ -978,6 +1443,11 @@ const EVAL_SUITE = [
   { id: 'eval-09', num: 9, title: 'Stateless Isolated Conversational Analytics Sub-Agent Router', fn: eval09ConversationalAnalyticsRouter },
   { id: 'eval-10', num: 10, title: 'Looker 4-Layer RBAC, Safe Mode Gates, & Conversational No-Op', fn: eval10RbacSafemodeNoopGuardrails },
   { id: 'eval-11', num: 11, title: 'Looker Alerts Triage, Actions & Inspector (`0.0.69` `alert_details`)', fn: eval11AlertsTriageAndActions },
+  { id: 'eval-12', num: 12, title: 'OpenAPI Request-Body Template & Schema Discovery (`lookup_type` / `api_template`)', fn: eval12ApiBodyTemplates },
+  { id: 'eval-13', num: 13, title: 'Instance Health Pulse & Unused-Explore Vacuum (`health_*` Routing & RBAC)', fn: eval13HealthPulseAndVacuum },
+  { id: 'eval-14', num: 14, title: 'Home/Personal Folder Inventory & `test_eval_*` Soft-Trash Reconciliation', fn: eval14HomeFolderTrashCleanup },
+  { id: 'eval-15', num: 15, title: 'Portable Dashboard/Look JSON Round-Trip & `args.vars` Cache Isolation', fn: eval15PortableJsonRoundTripAndVars },
+  { id: 'eval-16', num: 16, title: 'Read-Only `see_lookml` Fallback, LAMS Review & Inline Pivot Verification', fn: eval16LookmlReviewDialectAndPivot },
 ]
 
 async function main() {
@@ -1040,7 +1510,7 @@ async function main() {
   }
 
   const mdLines = [
-    '# Looker Data App Studio — 10-Eval Scorecard',
+    `# Looker Data App Studio — ${results.length}-Eval Scorecard`,
     '',
     `- **Mode:** \`${isLive ? 'live' : 'offline'}\``,
     `- **Overall Score:** **${totalPoints}/${maxPoints}** (${results.filter((r) => r.passed).length}/${results.length} Evals Passed)`,

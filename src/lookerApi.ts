@@ -7,8 +7,9 @@ import type {
 import useSWR from 'swr'
 
 import { fetchLookerCaAgentsCatalog } from './conversationalAnalytics'
+import { classifyLookerOperation } from './lkrCliSitecustomize'
 import { buildRootLookerFolders } from './lookerFolders'
-import { resolveUserCapabilities } from './lookerPermissions'
+import { LOOKER_INSTANCE_ADMIN_OP_RE, resolveUserCapabilities } from './lookerPermissions'
 import {
   coalesceLookerMetadataRequest,
   formatExploreId,
@@ -516,4 +517,31 @@ export function formatContentInventoryMarkdown(
     totalItems,
     folderCount: folderList.length,
   }
+}
+
+export function hasMutatingCodeModeRequest(
+  activitySteps?: ReadonlyArray<{ kind?: string; content?: string }>
+): boolean {
+  const methodPathRe = /^(?:#\s*)?(POST|PATCH|PUT|DELETE)\s+(\/[^\s)]+)(?:\s+\(\d+ms\))?$/gim
+  for (const st of activitySteps || []) {
+    if (st?.kind !== 'codemode') continue
+    for (const m of String(st.content || '').matchAll(methodPathRe)) {
+      if (classifyLookerOperation(m[1], m[2]).requiresPermission) return true
+    }
+  }
+  return false
+}
+
+export function shouldOfferReusableScriptPrompt(opts: {
+  isExplicitScriptRequest?: boolean
+  isAlertQuery?: boolean
+  effectivePrompt?: string
+  baseReply?: string
+  activitySteps?: ReadonlyArray<{ kind?: string; content?: string }>
+  crudItemsCount?: number
+}): boolean {
+  if (opts.isExplicitScriptRequest || opts.isAlertQuery) return false
+  if (LOOKER_INSTANCE_ADMIN_OP_RE.test(String(opts.effectivePrompt || ''))) return false
+  if ((opts.crudItemsCount || 0) > 0 || hasMutatingCodeModeRequest(opts.activitySteps)) return false
+  return !/\b(?:save|reusable|turn\s+(?:this|it)\s+into)\b[\s\S]{0,60}\b(?:script|tile)\b/i.test(String(opts.baseReply || ''))
 }

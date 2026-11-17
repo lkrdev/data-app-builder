@@ -11,10 +11,10 @@ import { ChatMessage, StudioMode } from './components/App'
 import {
   buildDenseExploreSchema, clearInFlightConvId, compactPersistedChatTurn, EXPLICIT_SCRIPT_CREATION_RE,
   extractExploreIdsFromCode, extractResolvedUseCase,
-  formatExploreId, formatStudioContentItemTitle, getArtifactNamespace, hydrateMentionedContext,
+  formatExploreId, getArtifactNamespace, hydrateMentionedContext,
   isConversationalNoOpPrompt, LOOKER_ALERT_QUERY_RE, matchExplicitUseCaseRule, parseExploreId,
-  ResolvedStudioUseCase, saveAlertArtifact, saveDashboardStudioMetadata, saveInFlightConvId, saveNativeContentArtifact,
-  saveUserArtifact, saveUserConversation, saveUserEnvironmentId, shouldRouteToIsolatedCaSubagent,
+  reconcileDeletedLookerContent, ResolvedStudioUseCase, saveAlertArtifact, saveDashboardStudioMetadata, saveInFlightConvId, saveNativeContentArtifact,
+  saveUserArtifact, saveUserConversation, saveUserEnvironmentId, shouldOfferReusableScriptPrompt, shouldRouteToIsolatedCaSubagent,
   STUDIO_INFLIGHT_CONV_SESSION_KEY, StudioContentItemType, StudioContextMention, StudioUseCase,
   studioUseCaseToMode, toTurnCrudItem, TurnCrudItem, upsertPublishedDataApp, UserConversationEntry,
 } from './lookerApi'
@@ -385,35 +385,20 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         })
       }
       const turnCrudItems: TurnCrudItem[] = []
-      const deletedIds = new Set<string>()
       const recordCrudItem = (item: TurnCrudItem) => {
         const idx = turnCrudItems.findIndex((x) => x.key === item.key)
         if (idx >= 0) turnCrudItems[idx] = item
         else turnCrudItems.push(item)
       }
-      const deletedRe = /^DELETE\s+\/(?:api\/4\.0\/)?(dashboards|looks|boards)\/([^/?#\s)]+)\s+\(\d+ms\)$/gim
-      ;(result.activitySteps || []).forEach((st) => {
-        if (st.kind !== 'codemode') return
-        ;(st.content || '').replace(deletedRe, (_s, rawKind: string, rawId: string) => {
-          const kind = rawKind.toLowerCase()
-          let delId = rawId
-          try { delId = decodeURIComponent(rawId) } catch { /* ignore */ }
-          deletedIds.add(delId)
-          const fbType: StudioContentItemType = kind === 'looks' ? 'look' : kind === 'boards' ? 'board' : delId.includes('::') ? 'lookml_dashboard' : 'dashboard'
-          const hit = contentItemsRef.current.find(
-            (it) => it.id === delId && (kind === 'looks' ? it.contentType === 'look' : kind === 'boards' ? it.contentType === 'board' : ['dashboard', 'lookml_dashboard', 'data_app', 'data-investigator'].includes(it.contentType))
-          )
-          if (hit) {
-            setContentItems((prev) => prev.filter((it) => it.key !== hit.key))
-            if (activeContentTabKeyRef.current === hit.key) setActiveContentTabKey(contentItemsRef.current.filter((it) => !it.hidden).slice(-1)[0]?.key || '')
-          }
-          if (effectiveNativeContent?.id === delId) { effectiveNativeContent = null; setNativeContent(null) }
-          if (effectivePublishedApp?.dashboardId === delId) { effectivePublishedApp = null; setPublishedApp(null); setCurrentAppCode('') }
-          const ct = hit ? hit.contentType : fbType
-          recordCrudItem(toTurnCrudItem(hit || { key: `${ct}:${delId}`, id: delId, title: formatStudioContentItemTitle(ct, delId), contentType: ct }, 'deleted'))
-          return ''
-        })
-      })
+      const reconciledDel = reconcileDeletedLookerContent(contentItemsRef.current, activeContentTabKeyRef.current, result.activitySteps)
+      const deletedIds = reconciledDel.deletedIds
+      if (deletedIds.size > 0) {
+        if (reconciledDel.nextItems.length !== contentItemsRef.current.length) setContentItems(reconciledDel.nextItems)
+        if (reconciledDel.nextActiveTabKey !== activeContentTabKeyRef.current) setActiveContentTabKey(reconciledDel.nextActiveTabKey)
+        if (effectiveNativeContent && deletedIds.has(effectiveNativeContent.id)) { effectiveNativeContent = null; setNativeContent(null) }
+        if (effectivePublishedApp && deletedIds.has(effectivePublishedApp.dashboardId)) { effectivePublishedApp = null; setPublishedApp(null); setCurrentAppCode('') }
+        reconciledDel.crudItems.forEach(recordCrudItem)
+      }
 
       if (resolvedUseCase === 'tile' && !result.lookmlBundle && !result.nativeBundle && !result.bundle && !result.alertBundle) {
         const isExplicitScriptRequest = explicitUseCase === 'tile' || loadedScript || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
@@ -421,10 +406,13 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         const extractedPy = pyMatch ? pyMatch[1].trim() : ''
         const isAlertQuery = LOOKER_ALERT_QUERY_RE.test(effectivePrompt) || turnActivatedSkills.includes('looker-alerts') || promptSlashSkills.includes('looker-audit')
         const baseReply = result.assistantText || (isExplicitScriptRequest ? 'Updated script and executed Looker queries.' : 'Executed Looker API calls.')
-        const replyText =
-          !isExplicitScriptRequest && !isAlertQuery && !/\b(?:save|reusable|turn\s+(?:this|it)\s+into)\b[\s\S]{0,60}\b(?:script|tile)\b/i.test(baseReply)
-            ? `${baseReply}\n\nWould you like me to save this Looker API lookup as a reusable **Script**?`
-            : baseReply
+        const canOfferScript = shouldOfferReusableScriptPrompt({
+          isExplicitScriptRequest, isAlertQuery, effectivePrompt, baseReply, activitySteps: result.activitySteps,
+          crudItemsCount: turnCrudItems.length,
+        })
+        const replyText = canOfferScript
+          ? `${baseReply}\n\nWould you like me to save this Looker API lookup as a reusable **Script**?`
+          : baseReply
         if (isExplicitScriptRequest && (extractedPy || explicitUseCase === 'tile' || loadedScript)) {
           const nextCode = extractedPy || scriptCode
           const prevKeys = new Set(contentItemsRef.current.map((it) => it.key))
