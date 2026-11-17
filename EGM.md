@@ -36,14 +36,13 @@ Core execution flow across subsystem boundaries:
   - `[package.json:scripts.build]`: Emits `dist/bundle.js`.
   - `[package.json:scripts.prepare]`: Sets `git config core.hooksPath .githooks`.
   - `[package.json:scripts.lint]`, `[package.json:scripts.format]`: Mutate files in `src/`.
-  - `[package.json:scripts.sync-upstream]`, `[package.json:scripts.sync-codemode]`, `[package.json:scripts.pack-skills]`, `[package.json:scripts.clean:artifacts]`: Invoke `scripts/sync-upstream.sh`, `scripts/sync-codemode.sh`, `scripts/pack-sandbox-skills.mjs`, and `scripts/clean-artifacts.sh`.
+  - `[package.json:scripts.sync-upstream]`, `[package.json:scripts.sync-codemode]`, `[package.json:scripts.pack-skills]`, `[package.json:scripts.clean:artifacts]`: Invoke `.agents/skills/data-apps-sync/scripts/sync_data_apps.py`, `scripts/sync-codemode.sh`, `scripts/pack-sandbox-skills.mjs`, and `scripts/clean-artifacts.sh`.
 
 ## Subdirectories & System Boundaries
 
 - **src**: [./src/EGM.md](./src/EGM.md) — Core Looker Extension React/TS application, studio controller hooks, Looker RBAC/API/Artifacts services, Antigravity Interactions client, CA sub-agent router, Health Check, LookML viewer, and Monty `lkr-dev-cli` bridge.
 - **skills**: [./skills/EGM.md](./skills/EGM.md) & `.agents/skills/` ([skills-lock.json](./skills-lock.json)) — Studio Looker skills (`data-apps`, `key-driver-analysis`, `looker-alerts`, `looker-dashboard`, `looker-field-profiler`, `scratch-search`, `looker-project-onboarding`) bundled for sandbox execution (`src/sandboxSkillsBundle.ts`), plus repo-internal developer skills (`data-apps-sync`, `studio-conversation-debugger`, `issue-authoring`, `studio-design-system`) synced via [.github/workflows/update-skills.yml](./.github/workflows/update-skills.yml).
-- **scripts**: [./scripts/EGM.md](./scripts/EGM.md) — Offline verification harness (`test-bundle.mjs`), 11-case studio eval suite (`run-evals.mjs`), live onboarding & SQL-workflow evals (`eval-new-project.mjs`, `eval-stackoverflow-workflow.mjs`), 10-iteration benchmarks, artifact cleaner (`clean-artifacts.sh`), upstream/codemode sync scripts, and zero-LLM upstream release parity watcher (`check-upstream-releases.mjs` via [.github/workflows/watch-upstream-releases.yml](./.github/workflows/watch-upstream-releases.yml)).
-- **looker**: [./looker/manifest.lkml](./looker/manifest.lkml) — Looker deployment manifest mirror (`data_app_builder`) tracked outside the build pipeline.
+- **scripts**: [./scripts/EGM.md](./scripts/EGM.md) — Offline verification harness (`test-bundle.mjs`), 11-case studio eval suite (`run-evals.mjs`), live onboarding & SQL-workflow evals (`eval-new-project.mjs`, `eval-stackoverflow-workflow.mjs`), 10-iteration benchmarks, artifact cleaner (`clean-artifacts.sh`), codemode sync script (`sync-codemode.sh`), and zero-LLM upstream release parity watcher (`check-upstream-releases.mjs` via [.github/workflows/watch-upstream-releases.yml](./.github/workflows/watch-upstream-releases.yml)).
 
 ## Global Invariants
 
@@ -57,7 +56,7 @@ Core execution flow across subsystem boundaries:
 ## Global Side Effects
 
 - **Looker API 4.0 & Artifacts Storage**: Reads and mutates dashboards, looks, boards, schedules, LookML project files/branches, user attributes, inline Data App extensions (`/data_app_extension`), and extension artifacts (`/artifacts/{namespace}`).
-- **External Network Integrations**: Calls Gemini Interactions API (`generativelanguage.googleapis.com` directly via OAuth or through Looker `serverProxy`), Google OAuth 2.0 popups (`accounts.google.com` / `oauth2.googleapis.com`), `cdn.lkr.dev` (WASM runtime), and `dl.google.com` (only when invoking `sync-upstream.sh`).
+- **External Network Integrations**: Calls Gemini Interactions API (`generativelanguage.googleapis.com` directly via OAuth or through Looker `serverProxy`), Google OAuth 2.0 popups (`accounts.google.com` / `oauth2.googleapis.com`), `cdn.lkr.dev` (WASM runtime), and `dl.google.com` (only when invoking `npm run sync-upstream`).
 - **Browser & Local Workspace State**: Mutates `localStorage` / `extensionSDK` storage, Looker embedded iframes, DOM theme attributes, `dist/bundle.js` (on build), and `tmp/` benchmark/eval reports (`tmp/eval/`, `tmp/evals/`, `tmp/bench*`).
 
 ## Architectural History & Open Evolution (GitHub Issues)

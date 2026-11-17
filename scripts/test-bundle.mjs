@@ -534,6 +534,7 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
   assert.match(dataAppsVersionTxt, /^\d+\.\d+\.\d+$/, 'skills/data-apps/VERSION must pin a valid semver')
   assert(antigravityTs.includes(`DEFAULT_VERSION = "${dataAppsVersionTxt}"`), 'src/antigravityPrompts.ts DEFAULT_VERSION must match skills/data-apps/VERSION')
   assert.equal(statSync(path.join(repoRoot, 'upstream'), { throwIfNoEntry: false }), undefined, 'upstream/ directory must not exist')
+  assert.equal(statSync(path.join(repoRoot, 'looker'), { throwIfNoEntry: false }), undefined, 'looker/ duplicate directory must not exist')
   assert(
     rootAgentsMd.includes(`lkr-dev-cli[tools,code-mode,parse]==${pinnedVersionTxt}`) &&
       rootAgentsMd.includes('.agents/skills/data-apps-sync/SKILL.md') &&
