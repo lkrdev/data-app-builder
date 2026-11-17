@@ -56,6 +56,7 @@ const antigravityTs = [
   'src/antigravityPrompts.ts',
   'src/lookmlSkills.ts',
   'src/lkrCliBridge.ts',
+  'src/lkrCliCodeModeHelpers.ts',
   'src/lkrCliSitecustomize.ts',
 ]
   .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
@@ -1070,6 +1071,56 @@ else if (args[0] === 'issue' && args[1] === 'create') process.stdout.write('http
     lookerCliTag: 'v1.4.0',
     lookerSkillsSha: newSha,
   })
+
+  // Issue #214: api_template/describe_body, Henry system__activity health/vacuum, and portable JSON export/import in LkrCodeMode
+  const bodyHelpersOut = JSON.parse(await LkrCodeMode.runPythonCode({
+    code: 'return {"tpl": api_template("WriteConnection"), "desc": describe_body("connections create"), "fold": api_template("Folder")}',
+  }))
+  assert.equal(bodyHelpersOut.tpl.password, '<CONFIGURE_IN_LOOKER_ADMIN_UI>')
+  assert.equal(bodyHelpersOut.tpl.certificate, '<CONFIGURE_IN_LOOKER_ADMIN_UI>')
+  assert.equal(bodyHelpersOut.desc.type, 'WriteDBConnection')
+  assert.deepEqual(bodyHelpersOut.fold, { name: '', parent_id: '' })
+
+  const vacTruncOut = JSON.parse(await LkrCodeMode.runPythonCode({
+    code: 'return health_vacuum(model="thelook", max_explores=1)',
+    requestHandler: async (_m, urlPath, _qp, body) => {
+      if (String(urlPath).includes('/queries/run/')) {
+        return body?.view === 'field_usage'
+          ? [{ 'field_usage.model': 'thelook', 'field_usage.explore': 'orders', 'field_usage.view': 'orders', 'field_usage.field': 'orders.unused', 'field_usage.times_used': 0 }]
+          : [{ 'query.model': 'thelook', 'query.view': 'orders', 'history.query_run_count': 5 }]
+      }
+      if (urlPath === '/lookml_models') return [{ name: 'thelook', project_name: 'p', explores: [{ name: 'orders', hidden: false }, { name: 'users', hidden: false }] }]
+      return {}
+    },
+  }))
+  assert.equal(vacTruncOut.vacuum_safe, false)
+  assert.equal(vacTruncOut.capped_explores, true)
+  assert.deepEqual(vacTruncOut.unused_fields, [])
+
+  const gzOut = JSON.parse(await LkrCodeMode.runPythonCode({
+    code: 'return {"exp": export_dashboard_json("10"), "imp": import_dashboard_json("d.json", "55", title="Imported")}',
+    vars: {
+      uploaded_files: {
+        'd.json': JSON.stringify({
+          title: 'Src',
+          dashboard_elements: [{ id: 'e1', title: 'KPI', type: 'vis', query: { id: 'q1', slug: 's1', model: 'm', view: 'e', fields: ['orders.count'] } }],
+          dashboard_layouts: [{ id: 'l1', type: 'newspaper', dashboard_layout_components: [{ id: 'c1', dashboard_element_id: 'e1', row: 0, column: 0, width: 8, height: 4 }] }],
+        }),
+      },
+    },
+    requestHandler: async (method, urlPath, _qp, body) => {
+      if (method === 'GET' && urlPath === '/dashboards/10') return { id: '10', user_id: '1', slug: 's', title: 'Orig', dashboard_elements: [], dashboard_filters: [], dashboard_layouts: [] }
+      if (method === 'GET' && urlPath === '/folders/55') return { id: '55', name: 'Personal' }
+      if (method === 'POST' && urlPath === '/dashboards') return { id: '99', title: body.title }
+      if (method === 'POST' && urlPath === '/queries') return { id: 'q_new' }
+      if (method === 'POST' && urlPath === '/dashboard_elements') return { id: 'e_new' }
+      if (method === 'GET' && urlPath === '/dashboards/99/dashboard_layouts') return [{ id: 'l_new', dashboard_layout_components: [{ id: 'comp_new', dashboard_element_id: 'e_new' }] }]
+      return {}
+    },
+  }))
+  assert.equal('id' in gzOut.exp, false)
+  assert.equal(gzOut.imp.id, '99')
+  assert.deepEqual(gzOut.imp.element_id_map, { e1: 'e_new' })
 
   console.log('✓ test-bundle.mjs: all assertions passed!')
 } finally {

@@ -64,6 +64,7 @@ const antigravityTs = [
   .join('\n')
 const lkrCliBridgeTs = [
   'src/lkrCliBridge.ts',
+  'src/lkrCliCodeModeHelpers.ts',
   'src/lkrCliSitecustomize.ts',
 ]
   .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
