@@ -3,6 +3,7 @@ import type { Looker40SDK } from '@looker/sdk'
 
 import type { CodeModePermissionDecision, CodeModePermissionRequest } from './antigravityTypes'
 import { fetchLookerCaAgentsCatalog, LookerCaAgentSummary, normalizeCaAgent } from './conversationalAnalytics'
+import { applyCodeModeHelpers } from './lkrCliCodeModeHelpers'
 import {
   canonicalizeLookerRoute,
   classifyLookerOperation,
@@ -18,6 +19,7 @@ import {
   resolveLookerExtensionSdk,
   withCodeModeApiScope,
 } from './lookerTransport'
+export * from './lkrCliCodeModeHelpers'
 export * from './lkrCliSitecustomize'
 
 export const CODEMODE_CDN_URL = 'https://cdn.lkr.dev/cli/codemode/0.0.69/codemode.js'
@@ -175,7 +177,7 @@ function getCodeModeToolDefinition(name = 'run_looker_codemode'): LkrCodeModeToo
     type: 'function',
     name,
     description:
-      'Execute Python code in the browser Looker Code Mode WASM (Monty) sandbox with direct access to all Looker 4.0 SDK methods (e.g. `search_agents()`, `lookml_model_explore(target_model, target_explore)`, `run_inline_query("json", {...})`, `run_key_driver_analysis({...})`, `format_content_inventory(folders)`, `to_fixed_date_range("last 30 days")`, `INVESTIGATION_ANCHOR_DATE`, `me()`, `search_folders()`, `folder_children()`, `search_dashboards()`, `search_looks()`, `help("*query*")`, `lookup("run_inline_query")`, `lookup_type("WriteQuery")`). Variables passed in `vars` (such as `target_model`, `target_explore`, `target_folder_id`, and `INVESTIGATION_ANCHOR_DATE`) are pre-injected. Return a compact dict/list instead of raw multi-MB responses.',
+      'Execute Python code in the browser Looker Code Mode WASM (Monty) sandbox with direct access to all Looker 4.0 SDK methods (e.g. `search_agents()`, `lookml_model_explore(target_model, target_explore)`, `run_inline_query("json", {...})`, `run_key_driver_analysis({...})`, `format_content_inventory(folders)`, `to_fixed_date_range("last 30 days")`, `api_template("create_connection")`, `describe_body("WriteDashboard")`, `health_pulse()`, `health_analyze()`, `health_vacuum()`, `export_dashboard_json(id)`, `import_dashboard_json(spec, folder_id)`, `export_look_json(id)`, `import_look_json(spec, folder_id)`, `INVESTIGATION_ANCHOR_DATE`, `me()`, `search_folders()`, `folder_children()`, `search_dashboards()`, `search_looks()`, `help("*query*")`, `lookup("run_inline_query")`, `lookup_type("WriteQuery")`). Variables passed in `vars` (such as `target_model`, `target_explore`, `target_folder_id`, `uploaded_files`, and `INVESTIGATION_ANCHOR_DATE`) are pre-injected. Return a compact dict/list instead of raw multi-MB responses.',
     parameters: {
       type: 'object',
       properties: {
@@ -419,12 +421,13 @@ const runCodeModeInner: LkrCodeModeRunFn = async (
     ].join('\n')
   }
 
-  const nextOpts: LkrCodeModeRunOptions = Object.assign({}, baseOpts, gatedRequestHandler ? { requestHandler: gatedRequestHandler } : null, {
+  const applied = applyCodeModeHelpers(runtime, rawCode, code, gatedRequestHandler)
+  const nextOpts: LkrCodeModeRunOptions = Object.assign({}, baseOpts, applied.requestHandler ? { requestHandler: applied.requestHandler } : null, {
     requirePermission: false,
-    code,
+    code: applied.code,
     vars: mergedVars,
   })
-  return isObj ? runtime.runPythonCode(nextOpts) : runtime.runPythonCode(code, nextOpts)
+  return isObj ? runtime.runPythonCode(nextOpts) : runtime.runPythonCode(applied.code, nextOpts)
 }
 
 const runCodeMode: LkrCodeModeRunFn = (c, o) =>

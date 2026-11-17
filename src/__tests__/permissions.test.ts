@@ -19,6 +19,7 @@ import { registerPermissionsPart18Tests } from './permissions/part18'
 import { registerPermissionsPart19Tests } from './permissions/part19'
 import { registerPermissionsPart20Tests } from './permissions/part20'
 import { registerPermissionsPart21Tests } from './permissions/part21'
+import { registerPermissionsPart22Tests } from './permissions/part22'
 
 describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics', () => {
   registerPermissionsPart01Tests()
@@ -42,4 +43,5 @@ describe('Looker 4-Layer Permissions, Model->Project Expansion & 404 Diagnostics
   registerPermissionsPart19Tests()
   registerPermissionsPart20Tests()
   registerPermissionsPart21Tests()
+  registerPermissionsPart22Tests()
 })

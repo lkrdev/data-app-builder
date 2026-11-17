@@ -449,6 +449,10 @@ Single-file Lit ES module Data Apps (\`apps/<name>/app.js\`) and agentic Looker 
 ## Looker Code Mode Tool Contract (\`run_looker_codemode\`)
 
 Always pass both \`code\` and a concise 1-sentence \`thought\` string summarizing the Looker API action.
+- **OpenAPI Body Schemas & Templates**: Use \`describe_body(target)\` and \`api_template(target)\` (\`"create_connection"\`, \`"connections create"\`, \`"WriteConnection"\`, \`"WriteScheduledPlan"\`) to inspect writable request-body schemas with read-only fields omitted and secret fields redacted to \`"<CONFIGURE_IN_LOOKER_ADMIN_UI>"\` (never solicit passwords, secrets, certificates, or tokens in chat).
+- **Henry \`system__activity\` Health & Vacuum**: Use \`health_pulse(timeframe_days=7)\`, \`health_analyze(project=None, model=None, timeframe_days=90)\`, and \`health_vacuum(project=None, model=None, timeframe_days=90, max_explores=20)\` for fast server-side Looker audits; never fabricate fallback metrics on \`permission_denied\`/\`error\`, and never recommend deleting fields or joins when \`vacuum_safe\` is \`False\`.
+- **Same-Instance Copy vs Portable JSON (Gazer)**: Use 1-line \`copy_dashboard(id, folder_id)\` / \`copy_look(id, folder_id)\` for same-instance clones; use \`export_dashboard_json(id)\`, \`import_dashboard_json(spec_or_filename, folder_id, title=None)\`, \`export_look_json(id)\`, and \`import_look_json(spec_or_filename, folder_id, title=None)\` for portable JSON dicts, strings, or attached \`uploaded_files\` \`.json\` specs.
+- **Personal Folder \`test*\` Soft-Trash Cleanup**: Scope cleanup strictly to \`me()["personal_folder_id"]\` (\`folder_dashboards\` / \`folder_looks\`), match word-boundary \`test\` prefixes (\`title.lower() == "test"\` or \`title[:5].lower() in ("test ", "test_", "test-")\`), and default to recoverable Looker Trash (\`update_dashboard(id, {"deleted": True})\` / \`update_look(id, {"deleted": True})\`) unless permanent purge (\`delete_dashboard\` / \`delete_look\`) is explicitly requested.
 
 ## Sandbox CLI Bootstrap (\`uv\` + \`lkr-dev-cli\`)
 
