@@ -984,10 +984,17 @@ async function eval12ApiBodyTemplates() {
   let permPrompts = 0
   const raw = await LkrCodeMode.runPythonCode({
     code: [
-      'op_doc = lookup("create_dashboard")',
-      'dash_ty = lookup_type("WriteDashboard")',
-      'sched_ty = lookup_type("WriteScheduledPlan")',
-      'return {"has_op": "create_dashboard" in str(op_doc), "has_dash_fields": "title" in str(dash_ty), "has_sched_fields": "crontab" in str(sched_ty) or "datagroup" in str(sched_ty)}',
+      'dash_tpl = api_template("create_dashboard")',
+      'conn_tpl = api_template("create_connection")',
+      'look_desc = describe_body("WriteLookWithQuery")',
+      'sched_tpl = api_template("WriteScheduledPlan")',
+      'return {',
+      '    "dash_tpl": dash_tpl,',
+      '    "conn_tpl": conn_tpl,',
+      '    "look_type": look_desc.get("type"),',
+      '    "look_writable": [f.get("name") for f in (look_desc.get("fields") or []) if not f.get("read_only")],',
+      '    "sched_tpl": sched_tpl,',
+      '}',
     ].join('\n'),
     requestHandler: async () => {
       httpCalls += 1
@@ -1001,6 +1008,12 @@ async function eval12ApiBodyTemplates() {
   })
   const parsed = JSON.parse(raw)
   const out = parsed.result || parsed
+  const secretsRedacted = Object.entries(out?.conn_tpl || {}).every(
+    ([k, v]) => !/password|secret|certificate|private_key|token/i.test(k) || v === '<CONFIGURE_IN_LOOKER_ADMIN_UI>'
+  )
+  const destSecretRedacted =
+    out?.sched_tpl?.scheduled_plan_destination?.[0]?.secret_parameters === '<CONFIGURE_IN_LOOKER_ADMIN_UI>' &&
+    !('id' in (out?.sched_tpl?.scheduled_plan_destination?.[0] || {}))
   const suppressScriptOffer = !shouldOfferReusableScriptPrompt({
     effectivePrompt: prompts[0],
     baseReply: 'Generated request body template.',
@@ -1011,13 +1024,17 @@ async function eval12ApiBodyTemplates() {
   return {
     routing: routingOk,
     toolBudget: httpCalls === 0,
-    outputRubric: Boolean(out?.has_op && out?.has_dash_fields && out?.has_sched_fields),
-    safety: permPrompts === 0 && suppressScriptOffer,
+    outputRubric:
+      Boolean(out?.dash_tpl && 'title' in out.dash_tpl && !('id' in out.dash_tpl)) &&
+      out?.look_type === 'WriteLookWithQuery' &&
+      Array.isArray(out?.look_writable) &&
+      out.look_writable.includes('title'),
+    safety: permPrompts === 0 && secretsRedacted && destSecretRedacted && suppressScriptOffer,
     useCase: 'tile',
-    detail: `Template/schema prompts routed to tile (bypassing CONTENT_CREATION_VERB_RE); Monty OpenAPI lookup_type verified in 1 call (${httpCalls} HTTP calls, ${permPrompts} perm prompts); Script offer suppressed`,
+    detail: `Template/schema prompts routed to tile; live api_template & describe_body verified (${httpCalls} HTTP calls, ${permPrompts} perm prompts, read-only omitted, secrets redacted); Script offer suppressed`,
     messages: [
       { role: 'user', text: prompts[0] },
-      { role: 'assistant', text: `Inspected OpenAPI writable request schemas (${JSON.stringify(out)}).` },
+      { role: 'assistant', text: `Generated writable templates via \`api_template\` & \`describe_body\` (\`${out?.look_type}\`).` },
     ],
   }
 }
@@ -1038,48 +1055,88 @@ async function eval13HealthPulseAndVacuum() {
     extractResolvedUseCase('', 'Run a 3-pillar health check on thelook') === 'health-check'
 
   let httpCalls = 0
+  let analyzeExploreCalls = 0
+  let inAnalyzePhase = true
+  let permPrompts = 0
   const raw = await LkrCodeMode.runPythonCode({
     code: [
-      'models = all_lookml_models(fields="name,project_name,explores")',
-      'used = set()',
-      'rb_denied = False',
-      'try:',
-      '    rows = run_inline_query("json", {"model": "system__activity", "view": "history", "fields": ["query.model", "query.view", "history.query_run_count"], "limit": "500"})',
-      '    for r in (rows or []): used.add(str(r.get("query.model")) + "::" + str(r.get("query.view")))',
-      'except Exception:',
-      '    rb_denied = True',
-      'unused = []',
-      'for m in (models or []):',
-      '    for ex in (m.get("explores") or []):',
-      '        key = str(m.get("name")) + "::" + str(ex.get("name"))',
-      '        if key not in used: unused.append(key)',
-      'return {"unused_explores": unused[:10], "total_unused": len(unused), "rbac_safe": not rb_denied}',
+      'pulse = health_pulse(7)',
+      'analyze = health_analyze(project="thelook", timeframe_days=90)',
+      'vac = health_vacuum(project="thelook", timeframe_days=90)',
+      'return {"pulse": pulse, "analyze": analyze, "vac": vac}',
     ].join('\n'),
-    requestHandler: async (_method, urlPath) => {
+    requestHandler: async (_method, urlPath, _qp, body) => {
       httpCalls += 1
-      if (String(urlPath).includes('/lookml_models')) {
-        return [{ name: 'thelook', project_name: 'thelook', explores: [{ name: 'order_items' }, { name: 'legacy_abandoned_cart' }] }]
+      const p = String(urlPath)
+      const b = (typeof body === 'string' && body ? JSON.parse(body) : body) || {}
+      if (p.includes('/explores/') && inAnalyzePhase) analyzeExploreCalls += 1
+      if (p.includes('/queries/run/') && b.view === 'field_usage') {
+        inAnalyzePhase = false
+        return [
+          { 'field_usage.model': 'thelook', 'field_usage.explore': 'order_items', 'field_usage.view': 'orders', 'field_usage.field': 'orders.unused_note', 'field_usage.times_used': 0 },
+          { 'field_usage.model': 'thelook', 'field_usage.explore': 'order_items', 'field_usage.view': 'unused_leaf', 'field_usage.field': 'unused_leaf.code', 'field_usage.times_used': 0 },
+        ]
       }
-      return [{ 'query.model': 'thelook', 'query.view': 'order_items', 'history.query_run_count': 142 }]
+      if (p.includes('/queries/run/') && b.view === 'history') {
+        if (Array.isArray(b.fields) && b.fields.includes('history.result_source')) {
+          return [
+            { 'history.status': 'complete', 'history.result_source': 'cache', 'history.query_run_count': 80 },
+            { 'history.status': 'error', 'history.result_source': 'query', 'history.query_run_count': 20 },
+          ]
+        }
+        if (Array.isArray(b.fields) && b.fields.includes('history.query_run_count')) {
+          return [{ 'query.model': 'thelook', 'query.view': 'order_items', 'history.query_run_count': 142 }]
+        }
+        return []
+      }
+      if (p.includes('/queries/run/')) return []
+      if (p === '/lookml_models') {
+        return [{ name: 'thelook', project_name: 'thelook', explores: [{ name: 'order_items', hidden: false }, { name: 'legacy_abandoned_cart', hidden: false }] }]
+      }
+      if (p.includes('/explores/order_items')) {
+        return {
+          name: 'order_items',
+          joins: [{ name: 'orders' }, { name: 'users', dependent_fields: ['orders.user_id', 'users.id'] }, { name: 'unused_leaf' }],
+          fields: {
+            dimensions: [
+              { name: 'order_items.id', hidden: false },
+              { name: 'orders.unused_note', hidden: false },
+              { name: 'users.country', hidden: false },
+              { name: 'unused_leaf.code', hidden: false },
+            ],
+            measures: [],
+            filters: [],
+            parameters: [],
+          },
+        }
+      }
+      if (p.includes('/explores/legacy_abandoned_cart')) {
+        return {
+          name: 'legacy_abandoned_cart',
+          joins: [],
+          fields: { dimensions: [{ name: 'legacy_abandoned_cart.id', hidden: false }], measures: [], filters: [], parameters: [] },
+        }
+      }
+      return {}
     },
     requirePermission: true,
-    onPermissionRequest: async () => 'deny',
+    onPermissionRequest: async () => {
+      permPrompts += 1
+      return 'deny'
+    },
   })
   const out = JSON.parse(raw)
   const res = out.result || out
   const nonAdminRaw = await LkrCodeMode.runPythonCode({
-    code: [
-      'try:',
-      '    run_inline_query("json", {"model": "system__activity", "view": "history", "fields": ["history.query_run_count"], "limit": "10"})',
-      '    return {"graceful": False}',
-      'except Exception as e:',
-      '    return {"graceful": "403" in str(e) or "404" in str(e)}',
-    ].join('\n'),
-    requestHandler: async () => {
-      throw new Error('403 Forbidden: system__activity inaccessible')
+    code: 'return {"pulse": health_pulse(7), "vac": health_vacuum(model="thelook")}',
+    requestHandler: async (_m, urlPath) => {
+      if (String(urlPath) === '/lookml_models') {
+        return [{ name: 'thelook', project_name: 'thelook', explores: [{ name: 'order_items', hidden: false }] }]
+      }
+      return { ok: false, statusCode: 403, body: '403 Forbidden: see_system_activity required' }
     },
   })
-  const nonAdmin = JSON.parse(nonAdminRaw)
+  const nonAdmin = JSON.parse(nonAdminRaw).result || JSON.parse(nonAdminRaw)
   const suppressOffer = !shouldOfferReusableScriptPrompt({
     effectivePrompt: healthTilePrompts[2],
     baseReply: 'Identified 1 unused explore.',
@@ -1089,14 +1146,30 @@ async function eval13HealthPulseAndVacuum() {
 
   return {
     routing: routingOk,
-    toolBudget: httpCalls === 2,
-    outputRubric: Array.isArray(res.unused_explores) && res.unused_explores.includes('thelook::legacy_abandoned_cart') && res.total_unused === 1,
-    safety: Boolean((nonAdmin.result || nonAdmin).graceful) && suppressOffer,
+    toolBudget: analyzeExploreCalls === 0 && httpCalls > 0 && httpCalls <= 12,
+    outputRubric:
+      res.pulse?.status === 'ok' &&
+      res.pulse?.query_volume === 100 &&
+      res.pulse?.cache_hit_ratio === 0.8 &&
+      res.analyze?.unused_explores?.some((x) => x.explore === 'legacy_abandoned_cart') &&
+      res.vac?.status === 'ok' &&
+      res.vac?.unused_joins?.some((j) => j.join === 'unused_leaf') &&
+      !res.vac?.unused_joins?.some((j) => j.join === 'users') &&
+      res.vac?.unused_fields?.some((f) => f.field === 'orders.unused_note'),
+    safety:
+      permPrompts === 0 &&
+      nonAdmin.pulse?.status === 'permission_denied' &&
+      nonAdmin.pulse?.query_volume === null &&
+      nonAdmin.vac?.status === 'permission_denied' &&
+      nonAdmin.vac?.vacuum_safe === false &&
+      Array.isArray(nonAdmin.vac?.unused_fields) &&
+      nonAdmin.vac.unused_fields.length === 0 &&
+      suppressOffer,
     useCase: 'tile',
-    detail: `health pulse/analyze/vacuum -> tile (3-pillar -> health-check preserved); ${httpCalls} Looker calls found unused thelook::legacy_abandoned_cart; 403 System Activity RBAC graceful`,
+    detail: `health_pulse/health_analyze/health_vacuum -> tile (3-pillar -> health-check preserved); ${httpCalls} Looker calls (0 explore calls in health_analyze) found unused legacy_abandoned_cart & unused_leaf; 403 System Activity returns null metrics`,
     messages: [
       { role: 'user', text: healthTilePrompts[2] },
-      { role: 'assistant', text: `Unused explores: \`${(res.unused_explores || []).join(', ')}\`.` },
+      { role: 'assistant', text: `Unused explores: \`thelook::legacy_abandoned_cart\`; unused join: \`unused_leaf\`.` },
     ],
   }
 }
@@ -1249,6 +1322,7 @@ async function eval15PortableJsonRoundTripAndVars() {
 
   const createdDashIds = []
   const createdLookIds = []
+  const lastElByDash = new Map()
   let nextId = 900
   let step = 0
   const posted = []
@@ -1267,15 +1341,71 @@ async function eval15PortableJsonRoundTripAndVars() {
                 statusCode: 200,
                 body: JSON.stringify({
                   id: '42',
+                  user_id: '7',
+                  folder_id: '3',
+                  slug: 'slug42',
                   title: dashTitle,
-                  dashboard_elements: [{ id: 'el_1', title: 'Sales KPI', type: 'vis', query: { id: 'q_old', model: 'thelook', view: 'order_items', fields: ['order_items.total_sale_price'] } }],
+                  dashboard_filters: [
+                    { id: 'f_old', name: 'Region', title: 'Region', type: 'field_filter', model: 'thelook', explore: 'order_items', dimension: 'users.region', field: { name: 'users.region' }, row: 0 },
+                  ],
+                  dashboard_elements: [
+                    {
+                      id: 'el_1',
+                      dashboard_id: '42',
+                      dashboard_layout_id: 'lay_old',
+                      title: 'Sales KPI',
+                      type: 'vis',
+                      query: { id: 'q_old', slug: 'qs_old', model: 'thelook', view: 'order_items', fields: ['order_items.total_sale_price'] },
+                      result_maker: { filterables: [{ model: 'thelook', view: 'order_items', listen: [{ dashboard_filter_name: 'Region', field: 'users.region' }] }] },
+                    },
+                  ],
+                  dashboard_layouts: [
+                    { id: 'lay_old', active: true, type: 'newspaper', dashboard_layout_components: [{ id: 'cmp_old', dashboard_element_id: 'el_1', row: 0, column: 0, width: 12, height: 6 }] },
+                  ],
                 }),
               }
+            }
+            if (m === 'GET' && (p === '/folders/5' || p === '/folders/8')) {
+              const fid = p.split('/').pop()
+              return { ok: true, statusCode: 200, body: JSON.stringify({ id: fid, name: fid === '5' ? 'Home' : 'Shared' }) }
             }
             if (m === 'POST' && p === '/dashboards') {
               const id = String(++nextId)
               createdDashIds.push({ id, title: b.title, folder_id: b.folder_id })
               return { ok: true, statusCode: 200, body: JSON.stringify({ id, title: b.title, folder_id: b.folder_id }) }
+            }
+            if (m === 'POST' && p === '/dashboard_filters') {
+              return { ok: true, statusCode: 200, body: JSON.stringify({ id: `f_${++nextId}` }) }
+            }
+            if (m === 'POST' && p === '/queries') {
+              return { ok: true, statusCode: 200, body: JSON.stringify({ id: `q_${++nextId}` }) }
+            }
+            if (m === 'POST' && p === '/dashboard_elements') {
+              const eid = `el_${++nextId}`
+              lastElByDash.set(String(b.dashboard_id), eid)
+              return { ok: true, statusCode: 200, body: JSON.stringify({ id: eid }) }
+            }
+            if (m === 'GET' && /^\/dashboards\/\d+\/dashboard_layouts$/.test(p)) {
+              const did = p.split('/')[2]
+              const eid = lastElByDash.get(did) || 'el_none'
+              return { ok: true, statusCode: 200, body: JSON.stringify([{ id: `lay_${did}`, active: true, dashboard_layout_components: [{ id: `cmp_${did}`, dashboard_element_id: eid }] }]) }
+            }
+            if (m === 'PATCH' && p.startsWith('/dashboard_layout_components/')) {
+              return { ok: true, statusCode: 200, body: JSON.stringify({ id: p.split('/').pop() }) }
+            }
+            if (m === 'GET' && p === '/looks/20') {
+              return {
+                ok: true,
+                statusCode: 200,
+                body: JSON.stringify({
+                  id: '20',
+                  user_id: '7',
+                  slug: 'lslug20',
+                  title: 'Source Look',
+                  model: { id: 'thelook' },
+                  query: { id: 'ql_old', slug: 'qls_old', model: 'thelook', view: 'order_items', fields: ['products.brand', 'order_items.count'] },
+                }),
+              }
             }
             if (m === 'POST' && p === '/looks') {
               const id = String(++nextId)
@@ -1295,10 +1425,14 @@ async function eval15PortableJsonRoundTripAndVars() {
         posted.push(parsedBody)
         if (step === 1) {
           const sharedImportCode = [
-            'src = dashboard("42")',
-            'portable = {"title": import_title, "folder_id": dest_folder, "elements": [{"title": e.get("title"), "query": {k: v for k, v in (e.get("query") or {}).items() if k != "id"}} for e in (src.get("dashboard_elements") or [])]}',
-            'created = create_dashboard({"title": portable["title"], "folder_id": portable["folder_id"]})',
-            'return {"created_id": created.get("id"), "title": portable["title"], "folder_id": portable["folder_id"], "stripped_query_id": "id" not in portable["elements"][0]["query"]}',
+            'spec = export_dashboard_json("42")',
+            'imp = import_dashboard_json(spec, dest_folder, title=import_title)',
+            'return {"exported": spec, "imported": imp, "stripped_ro": ("id" not in spec and "id" not in spec["dashboard_elements"][0]["query"])}',
+          ].join('\n')
+          const lookImportCode = [
+            'lspec = export_look_json("20")',
+            'limp = import_look_json(lspec, "5", title=ltitle)',
+            'return {"exported_look": lspec, "imported_look": limp, "stripped_look_ro": ("id" not in lspec and "id" not in lspec["query"])}',
           ].join('\n')
           return {
             ok: true,
@@ -1310,7 +1444,7 @@ async function eval15PortableJsonRoundTripAndVars() {
               steps: [
                 { id: 'c1', type: 'function_call', name: 'run_looker_codemode', arguments: JSON.stringify({ code: sharedImportCode, vars: { import_title: `${dashTitle}_a`, dest_folder: '5' } }) },
                 { id: 'c2', type: 'function_call', name: 'run_looker_codemode', arguments: JSON.stringify({ code: sharedImportCode, vars: { import_title: `${dashTitle}_b`, dest_folder: '8' } }) },
-                { id: 'c3', type: 'function_call', name: 'run_looker_codemode', arguments: JSON.stringify({ code: 'l = create_look({"title": ltitle, "folder_id": "5"})\nreturn {"look_id": l.get("id")}', vars: { ltitle: lookTitle } }) },
+                { id: 'c3', type: 'function_call', name: 'run_looker_codemode', arguments: JSON.stringify({ code: lookImportCode, vars: { ltitle: lookTitle } }) },
               ],
             }),
           }
@@ -1341,34 +1475,48 @@ async function eval15PortableJsonRoundTripAndVars() {
     routing: routingOk,
     toolBudget: createdDashIds.length === 2 && createdLookIds.length === 1,
     outputRubric:
-      r1.title === `${dashTitle}_a` &&
-      r2.title === `${dashTitle}_b` &&
-      r1.stripped_query_id === true &&
+      r1.imported?.title === `${dashTitle}_a` &&
+      r2.imported?.title === `${dashTitle}_b` &&
+      Boolean(r1.imported?.element_id_map?.el_1) &&
+      Boolean(r2.imported?.element_id_map?.el_1) &&
+      r1.stripped_ro === true &&
+      r3.stripped_look_ro === true &&
       !r1._duplicate_call_notice &&
       !r2._duplicate_call_notice &&
-      Boolean(r3.look_id),
-    safety: createdDashIds[0]?.folder_id === '5' && createdDashIds[1]?.folder_id === '8',
+      Boolean(r3.imported_look?.look_id),
+    safety:
+      createdDashIds[0]?.folder_id === '5' &&
+      createdDashIds[1]?.folder_id === '8' &&
+      createdLookIds[0]?.folder_id === '5',
     useCase: 'tile',
-    detail: `Portable JSON round-trip created 2 dashboards (${dashTitle}_a/b via identical code + distinct args.vars without _duplicate_call_notice) + 1 Look (${lookTitle}) with server query.id stripped`,
+    detail: `Live export/import_dashboard_json & export/import_look_json round-trip created 2 dashboards (${dashTitle}_a/b via identical code + distinct args.vars without _duplicate_call_notice) + 1 Look (${lookTitle}) with read-only IDs stripped`,
     messages: [
       { role: 'user', text: jsonPrompts[0] },
-      { role: 'assistant', text: `Exported & imported portable JSON into folders 5 and 8 (\`${r1.created_id}\`, \`${r2.created_id}\`, Look \`${r3.look_id}\`).` },
+      { role: 'assistant', text: `Exported & imported portable JSON into folders 5 and 8 (\`${r1.imported?.dashboard_id}\`, \`${r2.imported?.dashboard_id}\`, Look \`${r3.imported_look?.look_id}\`).` },
     ],
   }
 }
 
 async function eval16LookmlReviewDialectAndPivot() {
   const { matchExplicitUseCaseRule, extractResolvedUseCase } = require(path.join(repoRoot, 'src/lookerPermissions.ts'))
-  const { SANDBOX_WORKSPACE_SKILL_FILES } = require(path.join(repoRoot, 'src/antigravitySteps.ts'))
+  const { SANDBOX_AGENT_SKILL_FILES, BUILTIN_SKILLS_FILES } = require(path.join(repoRoot, 'src/antigravitySteps.ts'))
 
   const readOnlyLookmlModes = ['app', 'data-investigator', 'dashboard', 'tile', 'conversational-analytics']
   const devLookmlModes = ['app', 'data-investigator', 'dashboard', 'lookml', 'tile', 'conversational-analytics']
+  const reviewerMd = SANDBOX_AGENT_SKILL_FILES['lookml-reviewer/SKILL.md'] || ''
+  const sfToBqMd = SANDBOX_AGENT_SKILL_FILES['snowflake-to-bigquery-converter/SKILL.md'] || ''
   const routingOk =
     matchExplicitUseCaseRule('Inspect the LookML dimensions in order_items.view.lkml', readOnlyLookmlModes) === 'tile' &&
     extractResolvedUseCase('', '/lookml-reviewer audit order_items.view.lkml', readOnlyLookmlModes) === 'tile' &&
+    extractResolvedUseCase('', '/snowflake-to-bigquery-converter migrate order_items.view.lkml', readOnlyLookmlModes) === 'tile' &&
     extractResolvedUseCase('<USE_CASE>lookml</USE_CASE>\nReviewed LookML.', 'Check view', readOnlyLookmlModes) === 'tile' &&
     matchExplicitUseCaseRule('/lookml-reviewer audit order_items.view.lkml', devLookmlModes) === 'lookml' &&
-    Boolean(SANDBOX_WORKSPACE_SKILL_FILES['.agents/skills/lookml-reviewer/SKILL.md'])
+    matchExplicitUseCaseRule('/snowflake-to-bigquery-converter migrate order_items.view.lkml', devLookmlModes) === 'lookml' &&
+    matchExplicitUseCaseRule('/looker-audit check slow dashboards', devLookmlModes) === 'tile' &&
+    Boolean(reviewerMd) &&
+    sfToBqMd.includes('SAFE_DIVIDE') &&
+    sfToBqMd.includes('QUALIFY') &&
+    BUILTIN_SKILLS_FILES['snowflake-to-bigquery-converter'] === sfToBqMd
 
   let capturedQueryBody = null
   let permPrompts = 0
@@ -1376,6 +1524,7 @@ async function eval16LookmlReviewDialectAndPivot() {
   const raw = await LkrCodeMode.runPythonCode({
     code: [
       'exp = lookml_model_explore("thelook", "order_items")',
+      'bq_sql = run_inline_query("sql", {"model": "thelook", "view": "order_items", "fields": ["order_items.created_month", "order_items.total_sale_price"], "limit": "10"})',
       'piv = run_inline_query("json_detail", {',
       '    "model": "thelook",',
       '    "view": "order_items",',
@@ -1385,7 +1534,7 @@ async function eval16LookmlReviewDialectAndPivot() {
       '    "limit": "50",',
       '})',
       'dims = [d.get("name") for d in ((exp.get("fields") or {}).get("dimensions") or [])]',
-      'return {"dims": dims, "row_count": len(piv.get("data") or []), "has_pivots": len(piv.get("pivots") or []) == 2}',
+      'return {"dims": dims, "bq_sql_ok": "SAFE_DIVIDE" in str(bq_sql) and "NVL(" not in str(bq_sql), "row_count": len(piv.get("data") or []), "has_pivots": len(piv.get("pivots") or []) == 2}',
     ].join('\n'),
     requestHandler: async (method, urlPath, _qp, body) => {
       httpCalls += 1
@@ -1397,6 +1546,9 @@ async function eval16LookmlReviewDialectAndPivot() {
             measures: [{ name: 'order_items.total_sale_price' }],
           },
         }
+      }
+      if (String(urlPath).endsWith('/queries/run/sql')) {
+        return 'SELECT TIMESTAMP_TRUNC(created_at, MONTH), SAFE_DIVIDE(SUM(sale_price), NULLIF(COUNT(*), 0)) FROM `prj.thelook.order_items` GROUP BY 1 LIMIT 10'
       }
       capturedQueryBody = typeof body === 'string' ? JSON.parse(body) : body
       return {
@@ -1415,18 +1567,19 @@ async function eval16LookmlReviewDialectAndPivot() {
 
   return {
     routing: routingOk,
-    toolBudget: httpCalls === 2,
+    toolBudget: httpCalls === 3,
     outputRubric:
+      res.bq_sql_ok === true &&
       res.row_count === 1 &&
       res.has_pivots === true &&
       JSON.stringify(capturedQueryBody?.pivots) === '["products.category"]' &&
       capturedQueryBody?.filters?.['order_items.created_date'] === '2026-01-01 to 2026-03-31',
     safety: permPrompts === 0,
     useCase: 'tile',
-    detail: `Read-only see_lookml routed to tile (dev -> lookml), lookml-reviewer bundled, and pivoted json_detail inline query verified (${capturedQueryBody?.filters?.['order_items.created_date']}, 0 perm prompts)`,
+    detail: `Read-only see_lookml routed to tile (dev -> lookml), lookml-reviewer & snowflake-to-bigquery-converter bundled, BigQuery SQL & pivoted json_detail query verified (${capturedQueryBody?.filters?.['order_items.created_date']}, 0 perm prompts)`,
     messages: [
-      { role: 'user', text: 'Inspect order_items LookML, review LAMS rules, and verify quarterly category pivot query' },
-      { role: 'assistant', text: `Verified \`order_items\` PK & LAMS rules and ran pivoted query (${res.row_count} row, 2 category pivots).` },
+      { role: 'user', text: 'Inspect order_items LookML, review LAMS & Snowflake->BigQuery dialect rules, and verify quarterly category pivot query' },
+      { role: 'assistant', text: `Verified \`order_items\` PK, LAMS & Snowflake->BigQuery SQL rules, and ran pivoted query (${res.row_count} row, 2 category pivots).` },
     ],
   }
 }
@@ -1443,11 +1596,11 @@ const EVAL_SUITE = [
   { id: 'eval-09', num: 9, title: 'Stateless Isolated Conversational Analytics Sub-Agent Router', fn: eval09ConversationalAnalyticsRouter },
   { id: 'eval-10', num: 10, title: 'Looker 4-Layer RBAC, Safe Mode Gates, & Conversational No-Op', fn: eval10RbacSafemodeNoopGuardrails },
   { id: 'eval-11', num: 11, title: 'Looker Alerts Triage, Actions & Inspector (`0.0.69` `alert_details`)', fn: eval11AlertsTriageAndActions },
-  { id: 'eval-12', num: 12, title: 'OpenAPI Request-Body Template & Schema Discovery (`lookup_type` / `api_template`)', fn: eval12ApiBodyTemplates },
-  { id: 'eval-13', num: 13, title: 'Instance Health Pulse & Unused-Explore Vacuum (`health_*` Routing & RBAC)', fn: eval13HealthPulseAndVacuum },
+  { id: 'eval-12', num: 12, title: 'OpenAPI Request-Body Template & Schema Discovery (`api_template` & `describe_body`)', fn: eval12ApiBodyTemplates },
+  { id: 'eval-13', num: 13, title: 'Instance Health Pulse & Unused-LookML Vacuum (`health_pulse` & `health_vacuum`)', fn: eval13HealthPulseAndVacuum },
   { id: 'eval-14', num: 14, title: 'Home/Personal Folder Inventory & `test_eval_*` Soft-Trash Reconciliation', fn: eval14HomeFolderTrashCleanup },
   { id: 'eval-15', num: 15, title: 'Portable Dashboard/Look JSON Round-Trip & `args.vars` Cache Isolation', fn: eval15PortableJsonRoundTripAndVars },
-  { id: 'eval-16', num: 16, title: 'Read-Only `see_lookml` Fallback, LAMS Review & Inline Pivot Verification', fn: eval16LookmlReviewDialectAndPivot },
+  { id: 'eval-16', num: 16, title: 'Read-Only `see_lookml` Fallback, LAMS / Snowflake->BigQuery & Pivot Verification', fn: eval16LookmlReviewDialectAndPivot },
 ]
 
 async function main() {
