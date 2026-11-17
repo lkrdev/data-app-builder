@@ -5,7 +5,7 @@ description: Unified Looker Dashboarding skill (`skills/looker-dashboard/SKILL.m
 
 # Unified Looker Dashboarding Skill (`looker-dashboard`)
 
-Create, update, and validate UDDs, LookML Dashboards (`.dashboard.lookml`), Looks, Boards, and Schedules via `run_looker_codemode`, Looker MCP, or `lkr-dev-cli`.
+Create, update, and validate UDDs, LookML Dashboards (`.dashboard.lookml`), Looks, Boards, and Schedules via `run_looker_codemode` or `lkr-dev-cli`.
 
 ## Step 1 — Field & Distribution Discovery (`profile_fields`)
 Profile fields via `profile_fields(model=m, view=e, fields=[...])` (`skills/looker-field-profiler/SKILL.md`):
@@ -24,7 +24,7 @@ Profile fields via `profile_fields(model=m, view=e, fields=[...])` (`skills/look
    - `upsert_lookml_dashboard(project_id, model, dashboard_name, title, tiles=[...], filters=[...], yaml_content=None, folder_id=None, sync_udd_id=None)`: When `tiles` are passed (omitting `yaml_content`), gates `lookml_model_explore` + partition-pruned 1-row `json_detail` SQL and normalizes field filters to `type: field_filter` (always set a concrete `default_value` on date filters for large tables); writes `dashboards/<slug>.dashboard.lookml`, wires `include:`, gates `validate_project(project_id)` (`ValueError` on `"fatal"` & `"warning"` `Unknown field`), and imports/syncs into `folder_id`.
    - `reflow_24col(dashboard_id, boxes)`, `pin_to_board(...)`, `schedule_dashboard(...)`, `emit_native_bundle(res, content_type="dashboard"|"lookml_dashboard"|"look"|"board", ...)`.
 2. **Clean Summary Rule**: **NEVER** include coordinates (`Row 0`, `col`, `width`, `height`, `24-Column Grid`) or vis identifiers (`single_value`, `looker_area`, `looker_pie`, `looker_column`, `looker_bar`, `looker_grid`) in chat replies; summarize tiles/filters and end with `[Open <Dashboard Title>](/dashboards/<id>)`.
-3. **MCP & CLI**: MCP `make_dashboard`/`create_lookml_dashboard`; CLI `lkr parse lookml-to-api --path /workspace/lookml --validate` && `lkr --dev tools lookml push /workspace/lookml --project-id <project_id> --file dashboards/<name>.dashboard.lookml --no-reset`.
+3. **CLI**: `lkr parse lookml-to-api --path /workspace/lookml --validate` && `lkr --dev tools lookml push /workspace/lookml --project-id <project_id> --file dashboards/<name>.dashboard.lookml --no-reset`.
 
 ## Step 3 — 24-Column `newspaper` Layout & Native `tabs:`
 1. **24-Column Grid (`layout: newspaper`, `preferred_viewer: dashboards-next`, `col + width <= 24`)**: Row 0 (`height: 4`): 3 (`width: 8`, `col: 0, 8, 16`) or 4 (`width: 6`) `single_value` KPIs; Row 4 (`height: 8`): 2 (`width: 12`) trend charts (`looker_line`, `looker_area`, `looker_column`); Row 12 (`height: 8`): breakdowns (`looker_bar`, `looker_pie`, `looker_funnel`, `looker_google_map`); Row 20 (`height: 8`): `col: 0, width: 24` `looker_grid` (`table_theme: modern`).

@@ -676,6 +676,10 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
       'data-investigator',
       'data-apps',
       'looker-alerts',
+      'lookml-reviewer',
+      'looker-performance-optimizer',
+      'snowflake-to-bigquery-converter',
+      'looker-audit',
     ])
 
     expect(extractSlashSkillIds('')).toEqual([])

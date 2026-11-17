@@ -11,11 +11,10 @@ metadata:
 
 ## 1. File Organization
 
--   **Standard Views**: `views/[datasource_name]/[view_name].view.lkml`
--   **Extended Views**: `views/[datasource_name]/[view_name]_ext.view.lkml`
--   **Refinements**: `views/[datasource_name]/[view_name]_rfn.view.lkml`
--   **NDTs**: `views/[datasource_name]/[view_name]_ndt.view.lkml`
--   **SDTs**: `views/[datasource_name]/[view_name]_sdt.view.lkml`
+> **Unified Folder Convention:** Greenfield projects use Medallion `bronze/`/`silver/`/`gold/` (`bronze/:table.view.lkml`, `bronze/:table.refinement.lkml`, `silver/:name.view.lkml`, `gold/:name.view.lkml`); brownfield repositories preserve their existing directory layout (e.g., `views/base/` + `views/refinements/` or `views/[datasource_name]/`) and `include:` globs.
+
+-   **Greenfield (Medallion)**: `bronze/[table].view.lkml`, `bronze/[table].refinement.lkml`, `silver/[view_name].view.lkml`, `gold/[view_name].view.lkml`
+-   **Brownfield (Preserve Existing Layout)**: `views/[datasource_name]/[view_name].view.lkml` (and existing `*_ext`, `*_rfn`, `*_ndt`, `*_sdt` conventions)
 
 ## 2. Core Standards
 

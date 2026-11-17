@@ -62,7 +62,7 @@ jobs:
           for skill_dir in "$LOOKER_SKILLS_DIR"/skills/lookml-*; do
             [ -d "$skill_dir" ] || continue
             skill_name=$(basename "$skill_dir")
-            if [ ! -d ".agents/skills/$skill_name" ]; then
+            if [ "$skill_name" != "lookml-modeling-guidelines" ] && [ ! -d ".agents/skills/$skill_name" ]; then
               NEW_LOOKML_SKILLS+=("$skill_name")
             fi
           done
@@ -114,8 +114,9 @@ jobs:
             echo "lkr_cli_version=${CURRENT_LKR_CLI} (unchanged)" >> "$GITHUB_OUTPUT"
           fi
 
-          # 6. Sync upstream Data Apps toolkit payload
+          # 6. Sync upstream Data Apps toolkit payload and repack sandbox skills bundle
           npm run sync-upstream
+          npm run pack-skills
 
           ALL_NEW_SKILLS=("${NEW_CLI_SKILLS[@]}" "${NEW_LOOKML_SKILLS[@]}" "${NEW_OJOF_SKILLS[@]}")
           if [ ${#ALL_NEW_SKILLS[@]} -gt 0 ]; then
@@ -140,7 +141,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$BRANCH"
-          git add lkr-dev-cli-version.txt src/lkrCliBridge.ts src/lookmlTool.tsx src/antigravityPrompts.ts AGENTS.md skills/data-apps
+          git add lkr-dev-cli-version.txt src/lkrCliBridge.ts src/lookmlTool.tsx src/antigravityPrompts.ts src/sandboxSkillsBundle.ts AGENTS.md skills/data-apps
           [ -d .agents/skills ] && git add .agents/skills
           [ -f skills-lock.json ] && git add skills-lock.json
           git commit -m "chore(skills): sync agent skills, skills-lock.json, and lkr-dev-cli pin"

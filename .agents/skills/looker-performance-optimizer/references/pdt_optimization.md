@@ -25,8 +25,8 @@ Materialized tables **MUST** be physically optimized to ensure fast scanning dur
 *   **Standard**: Always partition by a date or timestamp column, and cluster by high-frequency filter fields (e.g., IDs, categories).
     ```lookml
     # BigQuery PDT Configuration
-    partition_by: "order_date"
-    cluster_by: ["user_id", "status"] # Max 4 fields, order from highest to lowest cardinality
+    partition_keys: ["order_date"]
+    cluster_keys: ["user_id", "status"] # Max 4 fields, order from highest to lowest cardinality
     ```
 
 ### B. Google Cloud Spanner (Secondary Indexes & Interleaving)
@@ -68,8 +68,8 @@ To prevent initial load crashes, the agent and developers **MUST** execute the *
 [Initial Build] ➔ [Phase 1: Apply Date Cap (30 Days)] ➔ [Build Succeeds in Seconds] ➔ [Phase 2: Remove Cap / Deploy Incrementals] ➔ [Daily Batches Backfill History Safely]
 ```
 
-### Phase 1: Historical Capping (LookML Phase-In)
-Configure your LookML PDT query to dynamically cap the historical scan on the first run. Leverage the `{% if incremented %}` Liquid variable to detect if Looker is running a full rebuild or a daily increment:
+### Phase 1: Incremental PDT Filter (`{% incrementcondition %}`) & Cold-Start Cap
+Configure SQL-based incremental PDTs with `{% incrementcondition %} <database_time_column> {% endincrementcondition %}` so daily rebuilds scan only the `increment_offset` window (during initial cold start on multi-billion-row tables, add a temporary partition date floor and backfill history in batches before removing the floor):
 
 ```lookml
 view: pdt_historical_transactions {
@@ -80,18 +80,12 @@ view: pdt_historical_transactions {
         transaction_date,
         user_id,
         amount
-      FROM raw_transactions
-      WHERE
-        {% if incremented %}
-          # Daily incremental runs: Look back 3 days to capture late data
-          transaction_date >= DATE_SUB({% increment_value %}, INTERVAL 3 DAY)
-        {% else %}
-          # COLD START HACK: Cap the initial load to 30 days to prevent timeout
-          transaction_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
-        {% endif %}
+      FROM `analytics_prod.raw_transactions`
+      WHERE {% incrementcondition %} transaction_date {% endincrementcondition %}
     ;;
-    
     datagroup_trigger: daily_etl_datagroup
+    partition_keys: ["transaction_date"]
+    cluster_keys: ["user_id"]
     increment_key: "transaction_date"
     increment_offset: 3
   }
@@ -113,4 +107,4 @@ If a historical dataset is too massive to be compiled or backfilled even in batc
 ## 4. Incremental PDT Standards
 *   **`increment_key` (Mandatory)**: Must always be a time-based column (date, hour, month).
 *   **`increment_offset` (Mandatory)**: Always set a sensible look-back offset (e.g., `3` days) to capture late-arriving data and prevent data discrepancies.
-*   **Incremental Filter**: Always wrap your derived table SQL query in `{% if incremented %} ... {% else %} ... {% endif %}` to ensure Looker compiles a lightweight `WHERE` clause during incremental runs.
+*   **Incremental Filter**: In SQL-based PDTs, guard the `WHERE` clause with `{% incrementcondition %} <db_col> {% endincrementcondition %}` so Looker compiles a partition-pruned incremental predicate on every rebuild (NDTs with `explore_source:` inject this automatically).

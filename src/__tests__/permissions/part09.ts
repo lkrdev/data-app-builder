@@ -708,9 +708,10 @@ export function registerPermissionsPart09Tests(): void {
     }
     const wsSources = buildWorkspaceSources({ schemaMarkdown: '# Schema' })
     const bundledEntries = Object.entries(SANDBOX_AGENT_SKILL_FILES)
-    expect(bundledEntries.length).toBe(136)
+    expect(bundledEntries.length).toBe(109)
     for (const [relPath, bundledContent] of bundledEntries) {
       expect(relPath).not.toMatch(/^(data-apps-sync|issue-authoring|studio-conversation-debugger|studio-design-system)\//)
+      expect(bundledContent).not.toMatch(/\blooker-cli\b|\blooker[-_\s]mcp\b|\bmake_dashboard\b|\bcreate_lookml_dashboard\b/i)
       const diskContent = readFileSync(path.join(repoRoot, '.agents/skills', relPath), 'utf8')
       expect(bundledContent).toBe(diskContent)
       expect(wsSources.find((s) => s.target === `/workspace/skills/${relPath}`)?.content).toBe(diskContent)

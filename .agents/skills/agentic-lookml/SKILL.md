@@ -18,6 +18,7 @@ description: >
 - The 9 LookML syntax reference sub-skills under [lookml](../lookml/SKILL.md) (`.agents/skills/lookml/sub-skills/*/SKILL.md`).
 
 **Scope boundaries:**
+- **Folder convention (Greenfield vs. Brownfield):** Greenfield projects use Medallion `bronze/`/`silver/`/`gold/`; brownfield repositories preserve their existing directory layout (such as `views/base/` + `views/refinements/` or `explores/`) and `include:` globs.
 - **`drill_fields:` is out of scope:** Never author, add, or modify `drill_fields:` (or drill-only `set:` blocks) unless explicitly requested, and do not flag missing `drill_fields:`.
 - **Field curation (`suggestable:`, bulk descriptions) is on-demand:** Only run [lookml-field-curation](../lookml-field-curation/SKILL.md) when explicitly asked to curate fields.
 

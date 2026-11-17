@@ -890,6 +890,10 @@ chmod +x "${fakeBinDir}/uv"
   assert.equal(parsedAlertBundle?.alert_history_items?.length, 10)
   assert.equal(buildAlertDashboardFilterUrl(parsedAlertBundle), '/embed/dashboards/42?Region=AMER')
 
+  // Issue #213: verify package.json pack-skills script & byte-for-byte sandboxSkillsBundle.ts parity via --check
+  assert.equal(pkgJson.scripts?.['pack-skills'], 'node scripts/pack-sandbox-skills.mjs', 'package.json must define pack-skills script')
+  execFileSync(process.execPath, [path.join(repoRoot, 'scripts/pack-sandbox-skills.mjs'), '--check'], { encoding: 'utf8' })
+
   console.log('✓ test-bundle.mjs: all assertions passed!')
 } finally {
   rmSync(workDir, { recursive: true, force: true })

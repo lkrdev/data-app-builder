@@ -24,6 +24,10 @@ export const STUDIO_SLASH_SKILLS: readonly LookmlSkillCatalogEntry[] = [
   { id: 'data-investigator', label: 'Data Investigator', desc: 'Build root-cause narrative Data Apps in Doc or Slides format with fixed date windows', path: 'skills/data-investigator/SKILL.md' },
   { id: 'data-apps', label: 'Lit Data Apps', desc: 'Build interactive Lit web component Data Apps with KPIs, charts, grids & controls', path: 'skills/data-apps/SKILL.md' },
   { id: 'looker-alerts', label: 'Looker Alerts', desc: 'Analyze running/failing alerts, verify filters & data, tune noisy frequency, diagnose mobile notifications & manage alerts', path: 'skills/looker-alerts/SKILL.md' },
+  { id: 'lookml-reviewer', label: 'LookML Reviewer', desc: 'Review LookML views, explores & models for LAMS compliance, PKs, NULLIF & symmetric aggregate safety', path: 'skills/lookml-reviewer/SKILL.md' },
+  { id: 'looker-performance-optimizer', label: 'Performance Optimizer', desc: 'Diagnose slow Looker queries, symmetric aggregate hashes, datagroup caching & PDT partitioning', path: 'skills/looker-performance-optimizer/SKILL.md' },
+  { id: 'snowflake-to-bigquery-converter', label: 'Snowflake to BigQuery', desc: 'Translate Snowflake SQL & LookML views/explores/PDTs to BigQuery Standard SQL with parity checks', path: 'skills/snowflake-to-bigquery-converter/SKILL.md' },
+  { id: 'looker-audit', label: 'Looker Instance Audit', desc: 'Audit system__activity query performance, tile bloat, dynamic_fields, schedules & PDT/datagroup health', path: 'skills/looker-audit/SKILL.md' },
 ] as const
 
 const KNOWN_SLASH_SKILL_IDS = new Set(STUDIO_SLASH_SKILLS.map((s) => s.id))
