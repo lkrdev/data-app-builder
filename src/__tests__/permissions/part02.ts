@@ -442,20 +442,20 @@ export function registerPermissionsPart02Tests(): void {
   test('13. pins LKR_DEV_CLI_VERSION=0.0.69, bootstraps uv via pip --break-system-packages + uv tool install in new environments, and configures Monday/Thursday PyPI auto-PR workflow', async () => {
     const repoRoot = path.resolve(__dirname, '../../..')
     const versionTxt = readFileSync(path.join(repoRoot, 'lkr-dev-cli-version.txt'), 'utf8').trim()
-    expect(LKR_DEV_CLI_VERSION).toBe('0.0.69')
+    expect(LKR_DEV_CLI_VERSION).toMatch(/^\d+\.\d+\.\d+/)
     expect(versionTxt).toBe(LKR_DEV_CLI_VERSION)
-    expect(LKR_DEV_CLI_SPEC).toBe('lkr-dev-cli[tools,code-mode,parse]==0.0.69')
+    expect(LKR_DEV_CLI_SPEC).toBe(`lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}`)
 
     expect(BOOTSTRAP_SANDBOX_SH).toContain('pip install --break-system-packages --quiet uv')
     expect(BOOTSTRAP_SANDBOX_SH).toContain(
-      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.69"'
+      `UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}"`
     )
     expect(BOOTSTRAP_LOOKML_PY).toContain('"install", "--break-system-packages", "--quiet", "uv"')
     expect(BOOTSTRAP_LOOKML_PY).toContain('"UV_TOOL_BIN_DIR": "/usr/local/bin"')
     expect(BOOTSTRAP_LOOKML_PY).toContain('["uv", "tool", "install", "--force", "--quiet", pkg_spec]')
     expect(AGENTS_MD).toContain('pip install --break-system-packages --quiet uv')
     expect(AGENTS_MD).toContain(
-      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.69"'
+      `UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}"`
     )
 
     const workflowYml = readFileSync(
@@ -465,7 +465,8 @@ export function registerPermissionsPart02Tests(): void {
     expect(workflowYml).toContain('cron: "0 9 * * 1,4"')
     expect(workflowYml).toContain('https://pypi.org/pypi/lkr-dev-cli/json')
     expect(workflowYml).toContain('lkr-dev-cli-version.txt')
-    expect(workflowYml).toContain('src/lookmlTool.tsx')
+    expect(workflowYml).toContain('src/lkrCliBridge.ts')
+    expect(workflowYml).toContain('src/lkrCliSitecustomize.ts')
     expect(workflowYml).toContain('chore/update-skills')
 
     const postedBodies: MockInteractionPostBody[] = []
@@ -498,7 +499,7 @@ export function registerPermissionsPart02Tests(): void {
     expect(postedBodies[0].input?.[0]?.text).toContain('python3 /workspace/bootstrap_lookml.py cli')
     expect(postedBodies[0].input?.[0]?.text).toContain('pip install --break-system-packages --quiet uv')
     expect(postedBodies[0].input?.[0]?.text).toContain(
-      'UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.69"'
+      `UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}"`
     )
     expect(
       typeof postedBodies[0].environment === 'object' ? postedBodies[0].environment.sources : []

@@ -114,7 +114,7 @@ export function registerPermissionsPart14Tests(): void {
               status: 'completed',
               output_text: '<USE_CASE>lookml</USE_CASE>\nCompleted field curation on `thelook_proj`.',
               usage: { input_tokens: 200, output_tokens: 45, thought_tokens: 20 },
-              steps: [{ id: 'ce_2', type: 'code_execution', command: 'lkr --version', stdout: '0.0.69' }],
+              steps: [{ id: 'ce_2', type: 'code_execution', command: 'lkr --version', stdout: LKR_DEV_CLI_VERSION }],
             }),
           }
         },
@@ -290,7 +290,7 @@ export function registerPermissionsPart14Tests(): void {
                   previous_interaction_id: 'int_171_inc1',
                   status: 'completed',
                   input: [{ type: 'text', text: 'Continue and complete the current request.' }],
-                  steps: [{ id: 'ce_2', type: 'code_execution', command: 'lkr --version', stdout: '0.0.69' }],
+                  steps: [{ id: 'ce_2', type: 'code_execution', command: 'lkr --version', stdout: LKR_DEV_CLI_VERSION }],
                 }
               : {
                   id: 'int_171_inc1',
@@ -308,7 +308,7 @@ export function registerPermissionsPart14Tests(): void {
 
     // 3. Persist lkr-dev-cli under /workspace/.uv_tools + re-symlink /usr/local/bin/lkr after hibernation (Python + Shell + dangling shebang OSError fallback)
     expect(BOOTSTRAP_SANDBOX_SH).toContain(
-      'UV_TOOL_DIR=/workspace/.uv_tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==0.0.69"'
+      `UV_TOOL_DIR=/workspace/.uv_tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --quiet "lkr-dev-cli[tools,code-mode,parse]==${LKR_DEV_CLI_VERSION}"`
     )
     expect(BOOTSTRAP_SANDBOX_SH).toContain('UV_PYTHON_INSTALL_DIR=/workspace/.uv_python')
     expect(BOOTSTRAP_SANDBOX_SH).toContain('ln -sf /workspace/.uv_tools/lkr-dev-cli/bin/lkr /usr/local/bin/lkr')

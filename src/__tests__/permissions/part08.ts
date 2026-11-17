@@ -341,7 +341,7 @@ export function registerPermissionsPart08Tests(): void {
   })
 
   test('32. Issue #104: provides CODEMODE_CDN_URL, synchronous LkrCodeMode tool & operation classification, and ensureCodeModeLoaded() runtime loader', async () => {
-    expect(CODEMODE_CDN_URL).toBe('https://cdn.lkr.dev/cli/codemode/0.0.69/codemode.js')
+    expect(CODEMODE_CDN_URL).toBe(`https://cdn.lkr.dev/cli/codemode/${LKR_DEV_CLI_VERSION}/codemode.js`)
     expect(CODEMODE_CDN_URL).toContain(`/${LKR_DEV_CLI_VERSION}/codemode.js`)
     const preCommitHook = readFileSync(path.resolve(__dirname, '../../../.githooks/pre-commit'), 'utf8')
     expect(preCommitHook).toContain('lkr-dev-cli-version.txt')
