@@ -24,7 +24,7 @@
     "snapshotName": "03-mode-agentic-lookml-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "health_check",
@@ -33,7 +33,7 @@
     "snapshotName": "04-mode-3-pillar-health-check-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "python_tile_studio",
@@ -42,7 +42,7 @@
     "snapshotName": "05-mode-python-tile-studio-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "tile_mount_view",
@@ -83,7 +83,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "explore_dropdown_scrolled",
@@ -97,7 +97,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_lookml_skills",
@@ -111,7 +111,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_pasted_image_inspector",
@@ -122,7 +122,7 @@
     "height": 276,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_busy_running",
@@ -136,7 +136,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "chatbar_error_banner",
@@ -150,7 +150,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "python_tile_scheduler_modal",
@@ -181,7 +181,7 @@
     "height": 349,
     "clipSelector": ".dab-empty-prompt-card",
     "clipMargin": 24,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "studio_dark_theme",
