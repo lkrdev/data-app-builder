@@ -17,7 +17,7 @@ import {
   CaConversationState, ConversationRecord, DEFAULT_STUDIO_AGENT_NAME, fetchFolderChildren, fetchFolderWithAncestors,
   fetchInitialLookerMetadata, fetchPreloadedContentSummary, getArtifactNamespace,
   getArtifactService, getConvTargetId, listLocalDraftScripts, loadStoredSelectedFolderId,
-  loadUserEnvironmentId, LookerFolderNode, NativeContentState, normalizeStudioAgentName,
+  loadUserEnvironmentState, LookerFolderNode, NativeContentState, normalizeStudioAgentName,
   parseExploreId, persistSelectedFolderId, PublishedAppState, readInitialSelectedFolderId,
   ResolvedStudioUseCase, SavedScript, searchLookerFolders, SearchLookerFoldersParams,
   STUDIO_OVERVIEW_TAB_KEY, StudioContentItem, StudioContentItemType, StudioContextMention,
@@ -376,14 +376,15 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
           setHealthScope((prev) => (prev === 'all' || prev === 'bq' ? 'looker' : prev))
         }
         const extMock = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
-        await artifactService.getUserConfig(resolvedUserId).then((cfg) => {
-          if (!mounted) return
+        const [cfg, envState] = await Promise.all([
+          artifactService.getUserConfig(resolvedUserId).catch(() => null),
+          loadUserEnvironmentState(core40SDK, resolvedUserId, getArtifactNamespace(extensionSDK)).catch(() => null),
+        ])
+        if (mounted) {
           const hasStoredCustom = Boolean(cfg?.updatedAt || (cfg?.agentName && cfg.agentName !== DEFAULT_STUDIO_AGENT_NAME))
-          setAgentName(hasStoredCustom ? normalizeStudioAgentName(cfg.agentName) : normalizeStudioAgentName(extMock?.initialAgentName || cfg?.agentName))
-        }).catch(() => {})
-        loadUserEnvironmentId(core40SDK, resolvedUserId, getArtifactNamespace(extensionSDK)).then((savedEnvId) => {
-          if (mounted && savedEnvId) syncSharedEnvironmentId(savedEnvId)
-        })
+          setAgentName(hasStoredCustom ? normalizeStudioAgentName(cfg?.agentName) : normalizeStudioAgentName(extMock?.initialAgentName || cfg?.agentName))
+          if (envState?.environmentId) syncSharedEnvironmentId(envState.environmentId, envState.sourcesHash ?? null)
+        }
         listLocalDraftScripts(extensionSDK).then((items) => { if (mounted) setSavedScripts(items) }).catch(() => {})
         setAllModels(
           meta.models.map((m) => ({

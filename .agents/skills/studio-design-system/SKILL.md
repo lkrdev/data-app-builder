@@ -82,6 +82,7 @@ Accessible modal dialog shell with backdrop click dismissal, `Escape` key handle
   - `folder-advanced-search-modal` (`closeTestId="folder-search-modal-close"`)
   - `use-case-info-modal` (`closeTestId="use-case-info-close-btn"`)
   - `delete-conv-modal`
+  - `reset-env-modal` (`closeTestId="close-reset-env-modal"`)
   - `tile-schedule-modal`
   - `sandbox-markdown-preview-modal` (`closeTestId="sandbox-markdown-modal-close"`)
   - `lookml-details-modal` (`LookmlPreviewPane` project/model/branch/validator/tests/parity/summary modal)

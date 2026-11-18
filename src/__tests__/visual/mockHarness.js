@@ -3,6 +3,7 @@ const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs'
 const path = require('node:path')
 
 const { SAMPLE_PASTED_IMAGE_DATA_URL, buildMockFixturesScript } = require('./mockFixtures')
+const { MANAGED_SOURCES_FILE_HASHES, MANAGED_SOURCES_MANIFEST_JSON } = require('../../antigravitySkillSync')
 
 const repoRoot = path.resolve(__dirname, '../../..')
 const bundlePath = path.join(repoRoot, 'dist/bundle.js')
@@ -20,72 +21,6 @@ function buildHtmlPage(scenario) {
   <style>html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }</style>
   <script>
 ${buildMockFixturesScript(scenario)}
-        dashboard: async (id) => {
-          const did = String((id && id.dashboard_id) || id || '');
-          if (did === '901') {
-            return {
-              id: '901',
-              title: 'Business Pulse',
-              description: 'Executive KPIs and order margin breakdown',
-              folder: { id: '5' },
-              dashboard_filters: [{ name: 'Created Date', field: 'order_items.created_date', default_value: '30 days' }],
-              dashboard_elements: [
-                {
-                  id: '9011',
-                  title: 'Revenue by Category',
-                  type: 'vis',
-                  query: {
-                    model: 'thelook',
-                    view: 'order_items',
-                    fields: ['products.category', 'order_items.total_sale_price'],
-                    sorts: ['order_items.total_sale_price desc'],
-                    limit: '10'
-                  }
-                }
-              ],
-              dashboard_layouts: [{ id: '9012', type: 'newspaper', active: true }]
-            };
-          }
-          if (did === '7') {
-            return {
-              id: '7',
-              title: 'Executive Order Performance (Native UDD)',
-              folder: { id: '5' },
-              dashboard_elements: [{ id: '55' }, { id: '56' }]
-            };
-          }
-          if (did === '8') {
-            return {
-              id: '8',
-              title: 'Looker Explore & Filter Summary',
-              folder: { id: '5' },
-              dashboard_elements: [dashboardElements['57']].filter(Boolean),
-              dashboard_layouts: [{ id: '801', type: 'extension', active: true }]
-            };
-          }
-          return {
-            id: '42',
-            title: 'Executive Revenue App',
-            folder: { id: '5' },
-            dashboard_elements: [
-              {
-                id: '101',
-                type: 'extension',
-                extension_id: 'db::a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-                rich_content_json: JSON.stringify({
-                  queries: { 'da-kpi-rev': 'q1', 'da-kpi-orders': 'q2', 'da-chart-trend': 'q3' },
-                  data_app_studio: {
-                    explores: ['thelook::order_items'],
-                    lastInteractionId: 'v1_app_42',
-                    environmentId: 'env_42',
-                    messages: artifactObjects.obj_app_42.messages
-                  }
-                })
-              }
-            ],
-            dashboard_layouts: [{ id: '201', type: 'extension', active: true }]
-          };
-        },
         authSession: {
           transport: {
             rawRequest: async (method, reqPath, queryParams, body) => {
@@ -267,6 +202,14 @@ ${buildMockFixturesScript(scenario)}
               })
             };
           }
+          if (inputText.includes('[SKILL_SYNC:')) {
+            const marker = (inputText.match(/reply with ((?:CHUNK_OK:\\d+|SYNC_OK:[0-9a-f]+))/) || [])[1] || 'SYNC_OK';
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({ id: 'int_skill_sync_1', environment_id: (body && body.environment) || 'env_42', status: 'completed', output_text: marker })
+            };
+          }
           return {
             ok: true,
             status: 200,
@@ -320,6 +263,9 @@ ${buildMockFixturesScript(scenario)}
         openSchedulerModal: scenario === 'python_tile_scheduler_modal',
         forceAppInitializing: scenario === 'ripper_surf_loader',
         environmentFiles: {
+          '/workspace/.managed_sources_manifest.json': scenario === 'skills_outdated'
+            ? ${JSON.stringify(JSON.stringify({ sourcesHash: '000000000000dead', files: { ...MANAGED_SOURCES_FILE_HASHES, '/workspace/AGENTS.md': '000000000000dead', '/workspace/skills/legacy-removed/SKILL.md': '111111111111beef' } }))}
+            : ${JSON.stringify(MANAGED_SOURCES_MANIFEST_JSON)},
           '/workspace/analysis.md': '# Q4 Revenue Drop Root-Cause Analysis\\n\\n- **Primary Driver:** Outerwear stockouts in West region (-$420K YoY)\\n- **Secondary Driver:** Shipping carrier delay on express orders',
           '/workspace/report.md': '# Executive Remediation Report\\n\\n1. Rebalance West warehouse inventory\\n2. Enable fallback regional carrier routing'
         },

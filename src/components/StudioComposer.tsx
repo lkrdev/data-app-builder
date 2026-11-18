@@ -598,6 +598,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController; disabled?: boolea
             if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
               if (e.shiftKey && !(e.metaKey || e.ctrlKey)) { e.preventDefault(); insertEditorPlainText('\n'); return }
               e.preventDefault()
+              if (ctl.environmentStatus === 'resetting' || ctl.environmentStatus === 'syncing') return
               if (busyStatus) {
                 if (busySendAction === 'interject') void handleInterjectPrompt()
                 else handleQueuePrompt()
@@ -752,7 +753,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController; disabled?: boolea
               </StudioButton>
             </>
           ) : (
-            <StudioButton variant="gemini" testId="studio-send-btn" onClick={handleSendPrompt} disabled={!isAuthenticated || (!prompt.trim() && pastedImages.length === 0)}>
+            <StudioButton variant="gemini" testId="studio-send-btn" onClick={handleSendPrompt} disabled={!isAuthenticated || ctl.environmentStatus === 'resetting' || ctl.environmentStatus === 'syncing' || (!prompt.trim() && pastedImages.length === 0)}>
               {isCaMode || selectedUseCase === 'conversational-analytics'
                 ? (caConversation ? 'Ask CA Agent' : 'Route & Start CA Chat')
                 : isLookmlMode ? (lookmlBundle ? 'Update LookML' : 'Run Agentic LookML')

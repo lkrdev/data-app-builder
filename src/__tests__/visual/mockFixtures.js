@@ -1,3 +1,5 @@
+const { CURRENT_MANAGED_SOURCES_HASH } = require('../../antigravitySkillSync')
+
 const SAMPLE_PASTED_IMAGE_DATA_URL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
 
@@ -226,6 +228,11 @@ function buildMockFixturesScript(scenario) {
             { role: 'assistant', text: 'Routed to Looker Conversational Analytics Agent "eCommerce & BigQuery Analytics Agent" (ca_agent_ecommerce).\\n\\nQ4 order revenue rose +18.4% YoY ($4.28M), while looker-private-demo.thelook.events accounted for 84% of streaming buffer bytes (507.5 MB across 2.89M rows).' }
           ]
         },
+        'user_env:1': {
+          environmentId: 'env_42',
+          sourcesHash: scenario === 'skills_outdated' ? '000000000000dead' : ${JSON.stringify(CURRENT_MANAGED_SOURCES_HASH)},
+          updatedAt: '2026-10-30T23:40:00Z'
+        },
         'user_conversations:1': [
           {
             id: 'conv_app_42',
@@ -311,7 +318,8 @@ function buildMockFixturesScript(scenario) {
         conversational_analytics: '/c/ca_conv_streaming_1',
         centered_empty_prompt: '/',
         studio_dark_theme: '/c/conv_app_42',
-        ripper_surf_loader: '/c/conv_app_42'
+        ripper_surf_loader: '/c/conv_app_42',
+        skills_outdated: '/c/conv_app_42'
       };
 
       try {
@@ -625,6 +633,11 @@ function buildMockFixturesScript(scenario) {
           window.__DELETED_LOOKS__.push(String(id));
           return {};
         },
+        delete_board: async (id) => {
+          window.__DELETED_BOARDS__ = window.__DELETED_BOARDS__ || [];
+          window.__DELETED_BOARDS__.push(String(id));
+          return {};
+        },
         content_summary: async () => [
           {
             id: 'cs_1',
@@ -679,6 +692,39 @@ function buildMockFixturesScript(scenario) {
           window.__ELEMENT_UPDATES__ = window.__ELEMENT_UPDATES__ || [];
           window.__ELEMENT_UPDATES__.push({ id: eid, body: patch, saved: next });
           return next;
+        },
+        dashboard: async (id) => {
+          const did = String((id && id.dashboard_id) || id || '');
+          if (did === '901') {
+            return {
+              id: '901', title: 'Business Pulse', description: 'Executive KPIs and order margin breakdown', folder: { id: '5' },
+              dashboard_filters: [{ name: 'Created Date', field: 'order_items.created_date', default_value: '30 days' }],
+              dashboard_elements: [{
+                id: '9011', title: 'Revenue by Category', type: 'vis',
+                query: { model: 'thelook', view: 'order_items', fields: ['products.category', 'order_items.total_sale_price'], sorts: ['order_items.total_sale_price desc'], limit: '10' }
+              }],
+              dashboard_layouts: [{ id: '9012', type: 'newspaper', active: true }]
+            };
+          }
+          if (did === '7') return { id: '7', title: 'Executive Order Performance (Native UDD)', folder: { id: '5' }, dashboard_elements: [{ id: '55' }, { id: '56' }] };
+          if (did === '8') {
+            return {
+              id: '8', title: 'Looker Explore & Filter Summary', folder: { id: '5' },
+              dashboard_elements: [dashboardElements['57']].filter(Boolean),
+              dashboard_layouts: [{ id: '801', type: 'extension', active: true }]
+            };
+          }
+          return {
+            id: '42', title: 'Executive Revenue App', folder: { id: '5' },
+            dashboard_elements: [{
+              id: '101', type: 'extension', extension_id: 'db::a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+              rich_content_json: JSON.stringify({
+                queries: { 'da-kpi-rev': 'q1', 'da-kpi-orders': 'q2', 'da-chart-trend': 'q3' },
+                data_app_studio: { explores: ['thelook::order_items'], lastInteractionId: 'v1_app_42', environmentId: 'env_42', messages: artifactObjects.obj_app_42.messages }
+              })
+            }],
+            dashboard_layouts: [{ id: '201', type: 'extension', active: true }]
+          };
         },`
 }
 

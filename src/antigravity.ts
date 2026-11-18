@@ -6,6 +6,7 @@ import {
 } from './antigravityAuth'
 import {
   buildWorkspaceSources,
+  CURRENT_MANAGED_SOURCES_HASH,
   persistUserEnvIfChanged,
   prewarmOrWakeAntigravityEnvironment,
   stripControlTags,
@@ -123,7 +124,7 @@ export interface RunAntigravityTurnOptions {
   userId?: string
   environmentId?: string
   conversationId?: string
-  onEnvironmentUpdated?: (environmentId: string) => void | Promise<void>
+  onEnvironmentUpdated?: (environmentId: string, sourcesHash?: string) => void | Promise<void>
   auth: AntigravityAuth
   session: AgentSession
   model?: string
@@ -454,9 +455,11 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     },
   })
 
+  let provisionedFreshManagedEnv = false
   const provisionFreshEnvironmentInteraction = (): Promise<AntigravityInteractionPayload> =>
     withCoalescedEnvProvision(userProvisionKey, async () => {
       const created = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', buildFreshPayload())
+      provisionedFreshManagedEnv = true
       return { envId: normalizeEnvironmentId(created?.environment_id) || '', value: created }
     })
 
@@ -503,16 +506,16 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     } catch (err) {
       if ((!requiresBashSandbox ? !activeEnvId : !isEnvironmentNotFoundError(err)) && isFreshConversation) throw err
       initialApiRetries += 1
-      if (!requiresBashSandbox) {
+      if (isEnvironmentNotFoundError(err) || requiresBashSandbox) {
         activeEnvId = undefined
+        onStatus('Resumed sandbox expired; provisioning fresh sandbox with app state...')
+        initialInteraction = await provisionFreshEnvironmentInteraction()
+      } else {
         initialInteraction = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
           ...baseAgentBody,
           input: buildInputItems(true),
-          environment: { type: 'remote', sources: [] },
+          ...(activeEnvId ? { environment: activeEnvId } : {}),
         })
-      } else {
-        onStatus('Resumed sandbox expired; provisioning fresh sandbox with app state...')
-        initialInteraction = await provisionFreshEnvironmentInteraction()
       }
     }
   } else {
@@ -524,7 +527,14 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   if (initialTrackedEnvId && schemaMarkdown && selectedExplores.length > 0) {
     selectedExplores.forEach((expKey) => recordSharedEnvExploreSchema(initialTrackedEnvId, expKey, schemaMarkdown))
   }
-  await persistUserEnvIfChanged({ sdk, extensionSDK, userId, previousEnvId: initialEnvId, nextEnvId: initialTrackedEnvId, onEnvironmentUpdated })
+  const skipBareTurnEnvPersist =
+    !activeEnvId && !provisionedFreshManagedEnv && !cleanResumeId && (warmEnvironmentInBackground || inFlightEnvProvisionByUser.has(userProvisionKey))
+  if (!skipBareTurnEnvPersist) {
+    await persistUserEnvIfChanged({
+      sdk, extensionSDK, userId, previousEnvId: initialEnvId, nextEnvId: initialTrackedEnvId,
+      sourcesHash: provisionedFreshManagedEnv ? CURRENT_MANAGED_SOURCES_HASH : undefined, onEnvironmentUpdated,
+    })
+  }
 
   const n = normalizedExistingNative
   const activeContentVars = n

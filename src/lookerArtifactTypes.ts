@@ -20,6 +20,7 @@ export const ARTIFACT_NAMESPACE = 'data_app_builder::data_app_builder'
 export const DEFAULT_STUDIO_AGENT_NAME = 'Ripper'
 
 export interface UserStudioConfig { userId: string; agentName: string; updatedAt: string }
+export interface UserEnvironmentState { environmentId: string; sourcesHash?: string; updatedAt?: string }
 export const normalizeStudioAgentName = (raw?: string | null): string => String(raw ?? '').trim() || DEFAULT_STUDIO_AGENT_NAME
 export const userStudioConfigArtifactKey = (userId: string): string => `user_config:${String(userId || '').trim() || '1'}`
 const UUID_OR_TILE_ID_REGEX = /^(?:db::)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
