@@ -161,6 +161,7 @@ export interface RunAntigravityTurnOptions {
   onProgressSteps?: (steps: AntigravityActivityStep[]) => void
   pollScheduleMs?: number[]
   signal?: AbortSignal
+  resumeInteractionId?: string
   onInteractionCreated?: (interactionId: string) => void
   onStatus: (statusText: string) => void
 }
@@ -219,7 +220,7 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
     developableProjects, canDeploy, availableConnections: providedConnections, warmEnvironmentInBackground = false,
     schemaMarkdown, userPrompt, images, existingAppCode, existingNativeContent,
     customSystemGuide, extraSources, priorMessages, requirePermission = true, approvedOperations, onPermissionRequest,
-    onRequestWritePermission, onProgressSteps, pollScheduleMs = DEFAULT_POLL_SCHEDULE_MS, signal, onInteractionCreated, onStatus,
+    onRequestWritePermission, onProgressSteps, pollScheduleMs = DEFAULT_POLL_SCHEDULE_MS, signal, resumeInteractionId, onInteractionCreated, onStatus,
   } = params
 
   const throwIfAborted = (interactionId?: string): Promise<void> => {
@@ -459,15 +460,16 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       return { envId: normalizeEnvironmentId(created?.environment_id) || '', value: created }
     })
 
+  const cleanResumeId = String(resumeInteractionId || '').trim()
   if (signal?.aborted) await throwIfAborted()
-  onStatus(isLookmlOnboardingIntake ? 'Checking accessible Looker connections...' : 'Starting Antigravity sandbox interaction...')
-  if (!activeEnvId && inFlightEnvProvisionByUser.has(userProvisionKey) && (requiresBashSandbox || isDashboardMode)) {
+  onStatus(cleanResumeId ? 'Resuming in-flight turn...' : isLookmlOnboardingIntake ? 'Checking accessible Looker connections...' : 'Starting Antigravity sandbox interaction...')
+  if (!cleanResumeId && !activeEnvId && inFlightEnvProvisionByUser.has(userProvisionKey) && (requiresBashSandbox || isDashboardMode)) {
     try {
       const coalescedId = normalizeEnvironmentId(await inFlightEnvProvisionByUser.get(userProvisionKey)!)
       if (coalescedId) activeEnvId = coalescedId
     } catch { /* ignore */ }
   }
-  if (warmEnvironmentInBackground && !requiresBashSandbox && !activeEnvId && !inFlightEnvProvisionByUser.has(userProvisionKey)) {
+  if (!cleanResumeId && warmEnvironmentInBackground && !requiresBashSandbox && !activeEnvId && !inFlightEnvProvisionByUser.has(userProvisionKey)) {
     void prewarmOrWakeAntigravityEnvironment({
       sdk, userId, extensionSDK, auth, toolType: effectiveToolType, model: activeModel, maxTotalTokens: resolvedMaxTokens,
       selectedExplores, schemaMarkdown, existingAppCode: mode === 'data_app' ? existingAppCode : undefined, onEnvironmentUpdated,
@@ -477,7 +479,13 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
 
   let initialInteraction: AntigravityInteractionPayload
   let usedDirectStatelessModel = false
-  if (isLookmlOnboardingIntake || (isNoOpTurn && isFreshConversation)) {
+  if (cleanResumeId) {
+    initialInteraction = await callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(cleanResumeId)}`, 'GET')
+    const stepStr = JSON.stringify(initialInteraction.steps || [])
+    if (stepStr.includes('run_looker_codemode') && !activeTools.some((t) => (t as { name?: string }).name === 'run_looker_codemode')) activeTools.push(LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL)
+    if (stepStr.includes('lkr_cli_extension_bridge') && !activeTools.some((t) => (t as { name?: string }).name === 'lkr_cli_extension_bridge')) activeTools.push(LKR_CLI_BRIDGE_TOOL)
+    if ((stepStr.includes('"code_execution"') || stepStr.includes('bundle_app.py')) && !activeTools.some((t) => (t as { type?: string }).type === 'code_execution')) activeTools.unshift({ type: 'code_execution' })
+  } else if (isLookmlOnboardingIntake || (isNoOpTurn && isFreshConversation)) {
     usedDirectStatelessModel = true
     initialInteraction = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
       model: activeModel, store: false, background: false, tools: [],

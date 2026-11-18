@@ -314,12 +314,14 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
     pendingDeleteConv, deleteRelatedContent, setDeleteRelatedContent, activeConversationId,
     sidebarCollapsed, setSidebarCollapsed, handleSelectConversation, handleToggleArchiveConversation,
     handleRequestDeleteConversation, handleCancelDeleteConversation, handleConfirmDeleteConversation,
-    handleNewConversation, busyStatus, userId,
+    handleNewConversation, runningConvIds = [], pendingPermConvIds = [], userId,
   } = ctl
 
   const renderConversationRow = (conv: ConversationRecord, isArchived = false) => {
     const contentBadge = formatConversationContentTag(conv)
     const isActive = activeConversationId === conv.id
+    const isRunning = runningConvIds.includes(conv.id)
+    const hasBgPerm = !isActive && pendingPermConvIds.includes(conv.id)
     return (
       <div
         key={conv.id} data-testid={`conversation-item-${conv.id}`}
@@ -329,6 +331,16 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
       >
         <div className="dab-conv-item-top">
           <span className="dab-conv-type-badge">{conv.type}</span>
+          {isRunning && (
+            <Loader2
+              size={12}
+              strokeWidth={2}
+              className="dab-spin dab-conv-running-indicator"
+              data-testid={`conv-running-indicator-${conv.id}`}
+              aria-label="Turn running"
+            />
+          )}
+          {hasBgPerm && <StudioBadge tone="warning" testId={`conv-perm-badge-${conv.id}`}>Approval</StudioBadge>}
           {contentBadge && <span className="dab-conv-content-tag">{contentBadge}</span>}
           <div className="dab-conv-item-actions">
             <button
@@ -371,7 +383,7 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
       <div className="dab-conv-sidebar-actions">
         <button
           type="button" className="dab-conv-new-btn" data-testid="new-conversation-btn"
-          onClick={() => handleNewConversation('auto')} disabled={!!busyStatus} title="Start a new conversation"
+          onClick={() => handleNewConversation('auto')} title="Start a new conversation"
         >
           {sidebarCollapsed ? '+' : '+ New Conversation'}
         </button>

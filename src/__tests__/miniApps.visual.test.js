@@ -23,6 +23,7 @@ const { registerVisualPart09Tests } = require('./visual/part09')
 const { registerVisualPart10Tests } = require('./visual/part10')
 const { registerVisualPart11Tests } = require('./visual/part11')
 const { registerVisualPart12Tests } = require('./visual/part12')
+const { registerVisualPart13Tests } = require('./visual/part13')
 
 describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite', () => {
   let server
@@ -96,4 +97,5 @@ describe('Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite'
   registerVisualPart10Tests(ctx)
   registerVisualPart11Tests(ctx)
   registerVisualPart12Tests(ctx)
+  registerVisualPart13Tests(ctx)
 })

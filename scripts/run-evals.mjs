@@ -75,6 +75,7 @@ const conversationalAnalyticsTs = readFileSync(path.join(repoRoot, 'src/conversa
 const useStudioControllerTs = [
   'src/useStudioController.ts',
   'src/studioControllerAuth.ts',
+  'src/studioControllerConcurrency.ts',
   'src/studioControllerMetadata.ts',
   'src/studioControllerLoaders.ts',
   'src/studioControllerTurn.ts',

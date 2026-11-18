@@ -37,7 +37,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     setAgentName, setAppInitializing, setCapabilities, setMessages,
     selectedUseCase, setSelectedUseCase, explicitUseCaseRef, parsedRoute,
     resolvedUseCaseByIdRef, allowedUseCases, availableModels,
-    oauthAccessToken, clientId, projectId, apiKey, selectedModel,
+    oauthAccessToken, oauthTokenRef, clientId, projectId, apiKey, selectedModel, triggerSilentOAuthRefresh,
     sharedEnvIdRef, syncSharedEnvironmentId, agentSession, messages, activeModeRef,
     capabilities,
   } = auth
@@ -132,8 +132,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   const [starterPromptsLoading, setStarterPromptsLoading] = useState<boolean>(() => Boolean(mockExt?.forceStarterPromptsSkeleton ?? true))
 
   const [activeObjectId, setActiveObjectId] = useState('')
-  const conversationLabelsRef = useRef<Record<string, string>>({})
-  const optimisticConvRef = useRef<UserConversationEntry | null>(null)
+  const optimisticConvsRef = useRef<UserConversationEntry[]>([])
   const [savedScripts, setSavedScripts] = useState<SavedScript[]>([])
   const [healthScope, setHealthScope] = useState<'all' | 'looker' | 'bq'>('all')
 
@@ -150,12 +149,15 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     () => artifactService.listConversations(userId),
     { revalidateOnFocus: false }
   )
+  const [optimisticVersion, bumpOptimisticConvs] = useState(0)
   const conversations = useMemo<UserConversationEntry[]>(() => {
+    void optimisticVersion
     const base = swrConversations ?? []
-    const opt = optimisticConvRef.current
-    if (opt && base.some((c) => c.id === opt.id)) { optimisticConvRef.current = null; return base }
-    return opt ? [opt, ...base] : base
-  }, [swrConversations])
+    if (optimisticConvsRef.current.length === 0) return base
+    const baseIds = new Set(base.map((c) => c.id))
+    optimisticConvsRef.current = optimisticConvsRef.current.filter((c) => !baseIds.has(c.id))
+    return optimisticConvsRef.current.length > 0 ? [...optimisticConvsRef.current, ...base] : base
+  }, [optimisticVersion, swrConversations])
   const conversationsRef = useRef<UserConversationEntry[]>(conversations)
   conversationsRef.current = conversations
 
@@ -164,9 +166,16 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
       next: UserConversationEntry[] | ((prev: UserConversationEntry[]) => UserConversationEntry[]),
       opts?: { optimisticEntry?: UserConversationEntry | null }
     ) => {
-      if (opts && 'optimisticEntry' in opts) optimisticConvRef.current = opts.optimisticEntry ?? null
       const resolved = typeof next === 'function' ? next(conversationsRef.current) : next
+      const resolvedIds = new Set(resolved.map((c) => c.id))
+      optimisticConvsRef.current = optimisticConvsRef.current
+        .filter((c) => resolvedIds.has(c.id))
+        .map((c) => resolved.find((r) => r.id === c.id) || c)
+      if (opts?.optimisticEntry && !optimisticConvsRef.current.some((c) => c.id === opts.optimisticEntry!.id)) {
+        optimisticConvsRef.current = [opts.optimisticEntry, ...optimisticConvsRef.current]
+      }
       conversationsRef.current = resolved
+      bumpOptimisticConvs((v) => v + 1)
       void mutateConversations(resolved, { revalidate: false })
     },
     [mutateConversations]
@@ -403,8 +412,9 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
         fetchPreloadedContentSummary(core40SDK).then((items) => { if (mounted) setPreloadedContent(items) }).catch(() => {})
         void artifactService.listConversations(resolvedUserId).then((loadedConvs) => {
           if (!mounted) return
-          const opt = optimisticConvRef.current
-          void mutateConversations(opt && !loadedConvs.some((c) => c.id === opt.id) ? [opt, ...loadedConvs] : loadedConvs, { revalidate: false })
+          const loadedIds = new Set(loadedConvs.map((c) => c.id))
+          const missingOpt = optimisticConvsRef.current.filter((c) => !loadedIds.has(c.id))
+          void mutateConversations(missingOpt.length > 0 ? [...missingOpt, ...loadedConvs] : loadedConvs, { revalidate: false })
         }).catch(() => {})
       })
       .catch((err: unknown) => {
@@ -463,7 +473,11 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
       setStarterPromptsLoading(false)
       if (hasOAuth) {
         const refined = await generateDynamicStarterPrompts({
-          sdk: core40SDK, extensionSDK, auth: { mode: 'oauth', oauthToken: oauthAccessToken, clientId, projectId, apiKey },
+          sdk: core40SDK, extensionSDK,
+          auth: {
+            mode: 'oauth', oauthToken: oauthTokenRef.current || oauthAccessToken, getOAuthToken: () => oauthTokenRef.current,
+            clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true),
+          },
           environmentId: sharedEnvIdRef.current || undefined, useCase: selectedUseCase, selectedExplores,
           permittedUseCases: allowedUseCases, availableModels: models, exploreContext, model: selectedModel,
         })
@@ -473,8 +487,8 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     return () => { mounted = false }
   }, [
     core40SDK, extensionSDK, selectedUseCase, selectedExplores, allowedUseCases,
-    models, availableModels, oauthAccessToken, loadingMetadata, clientId,
-    projectId, apiKey, selectedModel, sharedEnvIdRef, mockExt?.forceStarterPromptsSkeleton,
+    models, availableModels, oauthAccessToken, oauthTokenRef, loadingMetadata, clientId,
+    projectId, apiKey, selectedModel, sharedEnvIdRef, triggerSilentOAuthRefresh, mockExt?.forceStarterPromptsSkeleton,
   ])
 
   const [caConversation, setCaConversation] = useState<CaConversationState | null>(null)
@@ -492,7 +506,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   const [activeContentTabKey, setActiveContentTabKeyState] = useState<string>('')
   const activeContentTabKeyRef = useRef<string>('')
   const codeModePermOptsRef = useRef<
-    (() => Pick<LkrCodeModeRunOptions, 'requirePermission' | 'approvedOperations' | 'onPermissionRequest' | 'thought'> & {
+    (() => Pick<LkrCodeModeRunOptions, 'requirePermission' | 'approvedOperations' | 'onPermissionRequest' | 'thought' | 'signal'> & {
       isCanceled?: () => boolean
     }) | null
   >(null)
@@ -640,7 +654,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     isUseCaseLocked, handleChangeUseCase,
     agentSession, messages,
     catalogItems, activeObjectId, setActiveObjectId,
-    conversations, conversationsRef, setConversations, conversationLabelsRef,
+    conversations, conversationsRef, setConversations,
     savedScripts, setSavedScripts,
     healthScope, setHealthScope,
     caConversation, setCaConversation, lastCaIdRef, isCaMode,

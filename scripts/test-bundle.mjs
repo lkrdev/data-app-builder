@@ -103,6 +103,7 @@ const appTsx = [
   'src/components/StudioStagePanels.tsx',
   'src/useStudioController.ts',
   'src/studioControllerAuth.ts',
+  'src/studioControllerConcurrency.ts',
   'src/studioControllerMetadata.ts',
   'src/studioControllerLoaders.ts',
   'src/studioControllerTurn.ts',

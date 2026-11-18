@@ -37,62 +37,35 @@ export function ensureGeminiApiKeyUserAttribute(
     .then((attrs) => {
       const existing = (attrs || []).find((a) => a.name === attrName)
       if (!existing) {
-        return sdk.ok(
-          sdk.create_user_attribute({
-            name: attrName,
-            label: 'Looker Agent Gemini API Key',
-            type: 'string',
-            value_is_hidden: true,
-            user_can_view: false,
-            user_can_edit: false,
-            hidden_value_domain_whitelist: 'https://generativelanguage.googleapis.com/*',
-            default_value: trimmedKey || undefined,
-          })
-        )
+        return sdk.ok(sdk.create_user_attribute({
+          name: attrName, label: 'Looker Agent Gemini API Key', type: 'string',
+          value_is_hidden: true, user_can_view: false, user_can_edit: false,
+          hidden_value_domain_whitelist: 'https://generativelanguage.googleapis.com/*',
+          default_value: trimmedKey || undefined,
+        }))
       }
-      if (trimmedKey && existing.id) {
-        return sdk.ok(sdk.update_user_attribute(String(existing.id), { default_value: trimmedKey }))
-      }
-      return undefined
+      return trimmedKey && existing.id ? sdk.ok(sdk.update_user_attribute(String(existing.id), { default_value: trimmedKey })) : undefined
     })
     .then(
       () => attrName,
       (err: unknown) => {
-        const errMsg = err instanceof Error ? err.message : String(err || '')
-        throw new Error(
-          `Looker Admin required to create/update hidden user attribute "${attrName}" (value_is_hidden=true, user_can_view=false, whitelist="https://generativelanguage.googleapis.com/*"): ${errMsg}`
-        )
+        throw new Error(`Looker Admin required to create/update hidden user attribute "${attrName}" (value_is_hidden=true, user_can_view=false, whitelist="https://generativelanguage.googleapis.com/*"): ${err instanceof Error ? err.message : String(err || '')}`)
       }
     )
 }
 
-export interface GoogleOAuthOptions {
-  signal?: AbortSignal
-  timeoutMs?: number
-  focusReturnDelayMs?: number
-}
-
-export interface LookerOAuthRedirectUris {
-  extensionUri: string
-  spartanUri: string
-  activeUri: string
-}
+export interface GoogleOAuthOptions { signal?: AbortSignal; timeoutMs?: number; focusReturnDelayMs?: number }
+export interface LookerOAuthRedirectUris { extensionUri: string; spartanUri: string; activeUri: string }
 
 export function resolveLookerOAuthRedirectUris(
   hostUrl?: string | null,
   fallbackOrigin?: string,
   hostTypeOrPathname?: string | null
 ): LookerOAuthRedirectUris {
-  const base = (
-    hostUrl?.trim() ||
-    fallbackOrigin ||
-    (typeof window !== 'undefined' && window.location?.origin) ||
-    'https://looker.example.com'
-  ).replace(/\/+$/, '')
+  const base = (hostUrl?.trim() || fallbackOrigin || (typeof window !== 'undefined' && window.location?.origin) || 'https://looker.example.com').replace(/\/+$/, '')
   const extensionUri = `${base}/extensions/oauth2_redirect`
   const spartanUri = `${base}/spartan/oauth2_redirect`
-  const pathOrHostType =
-    hostTypeOrPathname?.trim() || (typeof window !== 'undefined' && window.location?.pathname) || ''
+  const pathOrHostType = hostTypeOrPathname?.trim() || (typeof window !== 'undefined' && window.location?.pathname) || ''
   const isSpartan = pathOrHostType === 'spartan' || /^\/spartan(\/|$)/.test(pathOrHostType)
   return { extensionUri, spartanUri, activeUri: isSpartan ? spartanUri : extensionUri }
 }
@@ -290,8 +263,15 @@ export function refreshOAuthSessionIfNeeded(opts: {
     return Promise.resolve({ token: '', expiresAt: 0, refreshedByOtherTab: false, deferredUntilVisible: true })
   }
   return loadStoredOAuthSession(extensionSDK, clientId).then((stored) => {
-    if (stored && stored.expiresAt > Date.now() && (!force || (Boolean(currentToken?.trim()) && stored.token !== currentToken?.trim()))) {
-      return { token: stored.token, expiresAt: stored.expiresAt, refreshedByOtherTab: true, deferredUntilVisible: false }
+    const cleanCur = currentToken?.trim() || ''
+    const isFresh = (s: StoredOAuthSession | null) => Boolean(s && s.expiresAt > Date.now() && (!force || (Boolean(cleanCur) && s.token !== cleanCur)))
+    if (isFresh(stored)) {
+      return { token: stored!.token, expiresAt: stored!.expiresAt, refreshedByOtherTab: true, deferredUntilVisible: false }
+    }
+    if (inFlightOAuthRefreshPromise) {
+      return inFlightOAuthRefreshPromise.catch(() => '').then(() => loadStoredOAuthSession(extensionSDK, clientId)).then((afterInFlight) => ({
+        token: afterInFlight?.token || '', expiresAt: afterInFlight?.expiresAt || 0, refreshedByOtherTab: true, deferredUntilVisible: false,
+      }))
     }
     const ls = typeof window !== 'undefined' ? window.localStorage : undefined
     const readLock = (): { tabId?: string; expiresAt?: number } | null => {
@@ -299,10 +279,16 @@ export function refreshOAuthSessionIfNeeded(opts: {
     }
     const existingLock = readLock()
     if (existingLock && Number(existingLock.expiresAt) > Date.now() && existingLock.tabId && existingLock.tabId !== effectiveTabId) {
-      const waitP: Promise<unknown> = inFlightOAuthRefreshPromise
-        ? inFlightOAuthRefreshPromise.catch(() => '')
-        : lockWaitMs > 0 ? new Promise((r) => setTimeout(r, lockWaitMs)) : Promise.resolve()
-      return waitP.then(() => loadStoredOAuthSession(extensionSDK, clientId)).then((afterLock) => ({
+      const maxWait = opts.lockWaitMs !== undefined ? Math.max(0, lockWaitMs) : Math.min(4000, Math.max(25, Number(existingLock.expiresAt) - Date.now()))
+      const stepMs = opts.lockWaitMs !== undefined ? Math.max(1, lockWaitMs) : 50
+      const deadline = Date.now() + maxWait
+      const pollCrossTab = (): Promise<StoredOAuthSession | null> =>
+        loadStoredOAuthSession(extensionSDK, clientId).then((s) => {
+          const lk = readLock()
+          if (isFresh(s) || !lk || Number(lk.expiresAt) <= Date.now() || Date.now() >= deadline) return s
+          return new Promise<void>((r) => setTimeout(r, Math.min(stepMs, Math.max(1, deadline - Date.now())))).then(pollCrossTab)
+        })
+      return (maxWait > 0 ? new Promise<void>((r) => setTimeout(r, Math.min(stepMs, maxWait))).then(pollCrossTab) : loadStoredOAuthSession(extensionSDK, clientId)).then((afterLock) => ({
         token: afterLock?.token || '', expiresAt: afterLock?.expiresAt || 0, refreshedByOtherTab: true, deferredUntilVisible: false,
       }))
     }
@@ -327,6 +313,51 @@ function transientRetryDelayMs(status: number, method: string, attempt: number):
   if (status === 429 && attempt < 3) return (attempt + 1) * 10000
   if (method === 'GET' && (status === 502 || status === 503 || status === 504) && attempt < 2) return (attempt + 1) * 1500
   return 0
+}
+
+const resolveAuthOAuthToken = (auth: AntigravityAuth): string => (auth.getOAuthToken?.() || auth.oauthToken || '').trim()
+const isDocHidden = (): boolean => typeof document !== 'undefined' && document.visibilityState === 'hidden'
+
+function waitUntilDocVisible(): Promise<void> {
+  if (!isDocHidden()) return Promise.resolve()
+  return new Promise((resolve) => {
+    const check = () => {
+      if (!isDocHidden()) {
+        clearInterval(iv)
+        if (typeof document !== 'undefined') document.removeEventListener?.('visibilitychange', check)
+        resolve()
+      }
+    }
+    const iv = setInterval(check, 50)
+    if (typeof document !== 'undefined') document.addEventListener?.('visibilitychange', check)
+  })
+}
+
+function recoverOAuthTokenOn401(extensionSDK: AntigravityExtensionHostLike, auth: AntigravityAuth, usedToken: string): Promise<string> {
+  if (auth.mode !== 'oauth') return Promise.resolve('')
+  const tryStored = () =>
+    loadStoredOAuthSession(extensionSDK, auth.clientId || '').then((s) =>
+      s && s.expiresAt > Date.now() && s.token && s.token !== usedToken ? ((auth.oauthToken = s.token), s.token) : ''
+    )
+  if (typeof auth.onUnauthorizedRefresh !== 'function') {
+    return tryStored().then((tok) => {
+      if (!tok && !isDocHidden()) clearStoredOAuthSession(extensionSDK)
+      return tok
+    })
+  }
+  return waitUntilDocVisible()
+    .then(() => auth.onUnauthorizedRefresh!().catch(() => null))
+    .then((rt) => {
+      const refreshed = String(rt || '').trim()
+      if (refreshed) {
+        auth.oauthToken = refreshed
+        return refreshed
+      }
+      return tryStored().then((tok) => {
+        if (!tok && !isDocHidden()) clearStoredOAuthSession(extensionSDK)
+        return tok
+      })
+    })
 }
 
 export function callInteractionsApi(
@@ -364,7 +395,8 @@ export function callInteractionsApi(
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (auth.mode === 'oauth') {
-    if (!auth.oauthToken?.trim()) return Promise.reject(new Error('Please sign in with Google OAuth first.'))
+    const liveToken = resolveAuthOAuthToken(auth)
+    if (!liveToken) return Promise.reject(new Error('Please sign in with Google OAuth first.'))
     if (typeof window !== 'undefined' && window.__MOCK_LOOKER_EXTENSION__) {
       const mockInteractions = (window.__MOCK_LOOKER_EXTENSION__ as { mockInteractions?: Record<string, AntigravityInteractionPayload> }).mockInteractions
       if (method === 'GET' && /^interactions\//i.test(path)) {
@@ -440,7 +472,7 @@ export function callInteractionsApi(
         isDirectStatelessModel ? null : { environment_id: `env_${inferred}_mock` }
       ))
     }
-    headers['Authorization'] = `Bearer ${auth.oauthToken.trim()}`
+    headers['Authorization'] = `Bearer ${liveToken}`
     if (auth.projectId?.trim()) headers['x-goog-user-project'] = auth.projectId.trim()
   } else {
     if (!auth.apiKey?.trim()) return Promise.reject(new Error('Gemini API Key is not configured.'))
@@ -457,17 +489,13 @@ export function callInteractionsApi(
             throw new Error(`Antigravity API error (${resp.status}): ${parsed?.error?.message || text || `HTTP ${resp.status}`}`)
           }
           if (resp.status === 401) {
-            clearStoredOAuthSession(extensionSDK)
-            if (auth.mode === 'oauth' && typeof auth.onUnauthorizedRefresh === 'function') {
-              return auth.onUnauthorizedRefresh().catch(() => null).then((rt) => {
-                const refreshedToken = rt?.trim()
-                if (refreshedToken) {
-                  return callInteractionsApi(extensionSDK, Object.assign({}, auth, { oauthToken: refreshedToken, onUnauthorizedRefresh: undefined }), path, method, body)
-                }
-                clearStoredOAuthSession(extensionSDK)
-                return fail()
-              })
-            }
+            const usedTok = (headers['Authorization'] || '').replace(/^Bearer\s+/i, '').trim()
+            return recoverOAuthTokenOn401(extensionSDK, auth, usedTok).then((refreshedToken) => {
+              if (refreshedToken) {
+                return callInteractionsApi(extensionSDK, Object.assign({}, auth, { oauthToken: refreshedToken, getOAuthToken: () => refreshedToken, onUnauthorizedRefresh: undefined }), path, method, body)
+              }
+              return fail()
+            })
           }
           const delay = transientRetryDelayMs(resp.status, method, attempt)
           if (delay > 0) return new Promise<void>((r) => setTimeout(r, delay)).then(() => doFetchWithRetry(attempt + 1))
@@ -483,7 +511,7 @@ export function listAvailableAntigravityModels(
   extensionSDK: AntigravityExtensionHostLike,
   auth: AntigravityAuth
 ): Promise<AntigravityModelOption[]> {
-  const canQuery = auth.mode === 'oauth' ? Boolean(auth.oauthToken?.trim()) : Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy)
+  const canQuery = auth.mode === 'oauth' ? Boolean(resolveAuthOAuthToken(auth)) : Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy)
   if (!canQuery) return Promise.resolve(ANTIGRAVITY_ALLOWED_MODELS)
   return callInteractionsApi(extensionSDK, auth, 'models', 'GET')
     .then((res) => {
@@ -565,8 +593,9 @@ export function fetchEnvironmentFile(params: {
 
   const headers: Record<string, string> = {}
   if (auth.mode === 'oauth') {
-    if (!auth.oauthToken?.trim()) return Promise.reject(new Error('Please sign in with Google OAuth first.'))
-    headers['Authorization'] = `Bearer ${auth.oauthToken.trim()}`
+    const liveFileToken = resolveAuthOAuthToken(auth)
+    if (!liveFileToken) return Promise.reject(new Error('Please sign in with Google OAuth first.'))
+    headers['Authorization'] = `Bearer ${liveFileToken}`
     if (auth.projectId?.trim()) headers['x-goog-user-project'] = auth.projectId.trim()
   } else {
     if (!auth.apiKey?.trim()) return Promise.reject(new Error('Gemini API Key is not configured.'))
@@ -586,22 +615,18 @@ export function fetchEnvironmentFile(params: {
             throw new Error(`Antigravity file fetch error (${resp.status}): ${errMsg}`)
           }
           if (resp.status === 401) {
-            clearStoredOAuthSession(extensionSDK)
-            if (auth.mode === 'oauth' && typeof auth.onUnauthorizedRefresh === 'function') {
-              return auth.onUnauthorizedRefresh().catch(() => null).then((rt) => {
-                const refreshedToken = rt?.trim()
-                if (refreshedToken) {
-                  return fetchEnvironmentFile({
-                    extensionSDK,
-                    auth: Object.assign({}, auth, { oauthToken: refreshedToken, onUnauthorizedRefresh: undefined }),
-                    environmentId: envId,
-                    path: normalizedPath,
-                  })
-                }
-                clearStoredOAuthSession(extensionSDK)
-                return fail()
-              })
-            }
+            const usedTok = (headers['Authorization'] || '').replace(/^Bearer\s+/i, '').trim()
+            return recoverOAuthTokenOn401(extensionSDK, auth, usedTok).then((refreshedToken) => {
+              if (refreshedToken) {
+                return fetchEnvironmentFile({
+                  extensionSDK,
+                  auth: Object.assign({}, auth, { oauthToken: refreshedToken, getOAuthToken: () => refreshedToken, onUnauthorizedRefresh: undefined }),
+                  environmentId: envId,
+                  path: normalizedPath,
+                })
+              }
+              return fail()
+            })
           }
           const delay = transientRetryDelayMs(resp.status, 'GET', attempt)
           if (delay > 0) return new Promise<void>((r) => setTimeout(r, delay)).then(() => doFileFetch(attempt + 1))
@@ -630,7 +655,7 @@ export function streamInteractionUntilActionOrDone(options: StreamInteractionOpt
   const cleanId = String(interactionId || '').trim()
   const effectiveFetch = fetchImpl || (typeof fetch === 'function' ? fetch : undefined)
   if (
-    auth.mode !== 'oauth' || !auth.oauthToken?.trim() || !cleanId || !effectiveFetch ||
+    auth.mode !== 'oauth' || !resolveAuthOAuthToken(auth) || !cleanId || !effectiveFetch ||
     (typeof window !== 'undefined' && window.__MOCK_LOOKER_EXTENSION__ && !allowMockWindow && !fetchImpl)
   ) {
     return Promise.resolve({ interaction: initialInteraction || null, streamed: false, eventCount: 0, lastEventId: initialLastEventId })
@@ -648,11 +673,12 @@ export function streamInteractionUntilActionOrDone(options: StreamInteractionOpt
   })
 
   const runAttempt = (attempt: number): Promise<StreamInteractionResult> => {
-    if (attempt > maxReconnects || signal?.aborted) return Promise.resolve(buildResult())
+    const streamToken = resolveAuthOAuthToken(auth)
+    if (attempt > maxReconnects || signal?.aborted || !streamToken) return Promise.resolve(buildResult())
     const sseUrl = `https://generativelanguage.googleapis.com/v1beta/interactions/${encodeURIComponent(cleanId)}?stream=true&alt=sse${currentLastEventId ? `&last_event_id=${encodeURIComponent(currentLastEventId)}` : ''}`
     const reqHeaders: Record<string, string> = {
       Accept: 'text/event-stream',
-      Authorization: `Bearer ${auth.oauthToken!.trim()}`,
+      Authorization: `Bearer ${streamToken}`,
     }
     if (auth.projectId?.trim()) reqHeaders['x-goog-user-project'] = auth.projectId.trim()
     if (currentLastEventId) reqHeaders['Last-Event-ID'] = currentLastEventId

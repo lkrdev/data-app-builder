@@ -3,8 +3,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useHistory, useLocation } from 'react-router-dom'
 
 import {
-  AgentSession, AntigravityActivityStep, ANTIGRAVITY_ALLOWED_MODELS, AntigravityModelOption,
-  clearStoredOAuthSession, CodeModePermissionDecision, CodeModePermissionRequest, DEFAULT_ANTIGRAVITY_MODEL,
+  AgentSession, ANTIGRAVITY_ALLOWED_MODELS, AntigravityModelOption,
+  clearStoredOAuthSession, DEFAULT_ANTIGRAVITY_MODEL,
   DEFAULT_THINKING_LEVEL, ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig,
   getInitialStoredOAuthSession, getInitialStoredOAuthToken, isHostOAuthWedged, listAvailableAntigravityModels,
   loadStoredOAuthSession, loadStoredThinkingLevel, loadStoredThinkingLevelByModel, loginWithGoogleOAuth, normalizeEnvironmentId,
@@ -15,7 +15,7 @@ import {
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
 import { useLookerExtension } from './contexts/LookerExtensionContext'
 import {
-  applyStudioDocumentTheme, clampLeftPaneWidth, clearInFlightConvId, getAllowedUseCases, loadStoredBusySendAction,
+  applyStudioDocumentTheme, clampLeftPaneWidth, getAllowedUseCases, loadStoredBusySendAction,
   loadStoredLeftPaneWidth, loadStoredRightPaneCollapsed, loadStoredStudioThemeMode,
   normalizeBusySendAction, normalizeStudioAgentName, normalizeStudioThemeMode,
   persistStudioThemeMode, readInitialBusySendAction, readInitialLeftPaneWidth,
@@ -24,6 +24,7 @@ import {
   saveStoredBusySendAction, saveStoredLeftPaneWidth, saveStoredRightPaneCollapsed,
   STUDIO_USE_CASE_OPTIONS, StudioBusySendAction, StudioContextMention, StudioThemeMode, StudioUseCase, UserCapabilities,
 } from './lookerApi'
+import { nextStudioConvId, useStudioTurnConcurrency } from './studioControllerConcurrency'
 
 export type HostDataWithMount = { mountType?: string; mountPoint?: string; hostUrl?: string; extensionId?: string }
 export interface QueuedPromptItem { id: string; text: string; images: PastedImage[]; mentions: StudioContextMention[] }
@@ -87,7 +88,14 @@ export function useStudioAuthAndPrefs() {
 
   const initialClientId = initialCtx?.clientId || ''
   const initialOAuthSession = getInitialStoredOAuthSession(initialClientId)
-  const [oauthToken, setOauthToken] = useState(() => initialOAuthSession?.token || getInitialStoredOAuthToken(initialClientId))
+  const [oauthToken, setOauthTokenState] = useState(() => initialOAuthSession?.token || getInitialStoredOAuthToken(initialClientId))
+  const oauthTokenRef = useRef<string>(oauthToken)
+  oauthTokenRef.current = oauthToken
+  const setOauthToken = useCallback((next: React.SetStateAction<string>) => {
+    const resolved = typeof next === 'function' ? next(oauthTokenRef.current) : next
+    oauthTokenRef.current = resolved
+    setOauthTokenState(resolved)
+  }, [])
   const [oauthExpiresAt, setOauthExpiresAt] = useState<number>(
     () => initialOAuthSession?.expiresAt || (initialOAuthSession?.token ? Date.now() + STUDIO_OAUTH_REFRESH_INTERVAL_MS : 0)
   )
@@ -107,7 +115,7 @@ export function useStudioAuthAndPrefs() {
       }
       return msg
     },
-    [authMode, extensionSDK]
+    [authMode, extensionSDK, setOauthToken]
   )
 
   const triggerSilentOAuthRefresh = useCallback(
@@ -119,7 +127,7 @@ export function useStudioAuthAndPrefs() {
       }
       try {
         const res = await refreshOAuthSessionIfNeeded({
-          extensionSDK, clientId, tabId: tabIdRef.current, force, currentToken: oauthToken,
+          extensionSDK, clientId, tabId: tabIdRef.current, force, currentToken: oauthTokenRef.current,
         })
         if (res?.deferredUntilVisible) { oauthPendingRefreshRef.current = true; return null }
         if (res?.token) {
@@ -134,7 +142,7 @@ export function useStudioAuthAndPrefs() {
         return null
       }
     },
-    [authMode, clientId, extensionSDK, oauthToken]
+    [authMode, clientId, extensionSDK, setOauthToken]
   )
 
   useEffect(() => {
@@ -146,7 +154,7 @@ export function useStudioAuthAndPrefs() {
       setOauthExpiresAt((prev) => prev || stored.expiresAt)
     })
     return () => { mounted = false }
-  }, [extensionSDK, initialClientId, mockExt])
+  }, [extensionSDK, initialClientId, mockExt, setOauthToken])
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.addEventListener) return
@@ -162,7 +170,7 @@ export function useStudioAuthAndPrefs() {
     }
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
-  }, [clientId])
+  }, [clientId, setOauthToken])
 
   useEffect(() => {
     if (authMode !== 'oauth' || !oauthToken.trim() || !clientId.trim() || !oauthExpiresAt) return
@@ -431,10 +439,8 @@ export function useStudioAuthAndPrefs() {
     []
   )
 
-  const [busyStatus, setBusyStatus] = useState<string | null>(() => mockExt?.initialBusyStatus || null)
-
   const [activeConversationId, setActiveConversationIdState] = useState<string>(
-    () => (parsedRoute.conversationId && /^conv_/i.test(parsedRoute.conversationId) ? parsedRoute.conversationId : `conv_${Date.now()}`)
+    () => (parsedRoute.conversationId && /^conv_/i.test(parsedRoute.conversationId) ? parsedRoute.conversationId : nextStudioConvId())
   )
   const activeConversationIdRef = useRef<string>(activeConversationId)
   activeConversationIdRef.current = activeConversationId
@@ -444,133 +450,25 @@ export function useStudioAuthAndPrefs() {
     setActiveConversationIdState(resolved)
   }, [])
 
-  const [requirePermission, setRequirePermissionState] = useState(true)
-  const requirePermissionRef = useRef(requirePermission)
-  requirePermissionRef.current = requirePermission
-  const approvedOpsRef = useRef<Set<string>>(new Set())
-  const [pendingPerm, setPendingPerm] = useState<{
-    req: CodeModePermissionRequest
-    resolve: (decision: CodeModePermissionDecision) => void
-    approvedSet?: Set<string>
-    convId?: string
-    signal?: AbortSignal
-  } | null>(() =>
-    mockExt?.initialPendingPerm ? { req: mockExt.initialPendingPerm as CodeModePermissionRequest, resolve: () => {} } : null
-  )
-  const pendingPermRef = useRef<typeof pendingPerm>(pendingPerm)
-  const permQueueRef = useRef<Promise<unknown>>(Promise.resolve())
-  const permEpochRef = useRef(0)
-  const activeTurnConvIdRef = useRef('')
-  const turnAbortControllerRef = useRef<AbortController | null>(null)
-  const [liveActivitySteps, setLiveActivitySteps] = useState<AntigravityActivityStep[]>(() =>
-    Array.isArray(mockExt?.initialLiveActivitySteps) ? (mockExt.initialLiveActivitySteps as AntigravityActivityStep[]) : []
-  )
-  const liveActivityStepsRef = useRef<AntigravityActivityStep[]>(liveActivitySteps)
-  liveActivityStepsRef.current = liveActivitySteps
-  const [queuedPrompts, setQueuedPrompts] = useState<QueuedPromptItem[]>([])
-  const queuedPromptsRef = useRef<QueuedPromptItem[]>([])
-  queuedPromptsRef.current = queuedPrompts
-
-  const updateQueuedPrompts = useCallback(
-    (updater: QueuedPromptItem[] | ((prev: QueuedPromptItem[]) => QueuedPromptItem[])) => {
-      const next = typeof updater === 'function' ? updater(queuedPromptsRef.current) : updater
-      queuedPromptsRef.current = next
-      setQueuedPrompts(next)
-    },
-    []
-  )
-
-  const syncPendingPerm = useCallback((next: typeof pendingPerm) => {
-    pendingPermRef.current = next
-    setPendingPerm(next)
-  }, [])
-
-  const dismissPendingPerm = useCallback(
-    (decision: CodeModePermissionDecision = 'deny') => {
-      const cur = pendingPermRef.current
-      if (!cur) return
-      syncPendingPerm(null)
-      cur.resolve(decision)
-    },
-    [syncPendingPerm]
-  )
-
-  const setRequirePermission = useCallback(
-    (next: React.SetStateAction<boolean>) => {
-      const val = typeof next === 'function' ? next(requirePermissionRef.current) : next
-      requirePermissionRef.current = val
-      setRequirePermissionState(val)
-      if (!val && pendingPermRef.current) dismissPendingPerm('allow_once')
-    },
-    [dismissPendingPerm]
-  )
-
-  const requestCodeModePermission = useCallback(
-    (req: CodeModePermissionRequest, signal?: AbortSignal, approvedSet?: Set<string>, epoch?: number, convId?: string): Promise<CodeModePermissionDecision> => {
-      const activeSignal = signal || turnAbortControllerRef.current?.signal
-      const callEpoch = epoch !== undefined ? epoch : permEpochRef.current
-      const targetApproved = approvedSet || approvedOpsRef.current
-      const next = permQueueRef.current.then(() => {
-        if (permEpochRef.current !== callEpoch || activeSignal?.aborted || (convId !== undefined && activeConversationIdRef.current !== convId)) {
-          return 'deny' as CodeModePermissionDecision
-        }
-        if (!requirePermissionRef.current) return 'allow_once' as CodeModePermissionDecision
-        if (targetApproved.has('*')) return 'allow_all' as CodeModePermissionDecision
-        if (targetApproved.has(req.operation)) return 'allow_op' as CodeModePermissionDecision
-        return new Promise<CodeModePermissionDecision>((resolve) => {
-          syncPendingPerm({ req, resolve, approvedSet: targetApproved, convId, signal: activeSignal })
-        })
-      })
-      permQueueRef.current = next.then(() => {}, () => {})
-      return next
-    },
-    [syncPendingPerm]
-  )
-
-  const resolvePermDecision = useCallback(
-    (decision: CodeModePermissionDecision) => {
-      const cur = pendingPermRef.current || pendingPerm
-      if (!cur) return
-      const targetApproved = cur.approvedSet || approvedOpsRef.current
-      if (decision === 'allow_op') targetApproved.add(cur.req.operation)
-      else if (decision === 'allow_all') targetApproved.add('*')
-      syncPendingPerm(null)
-      cur.resolve(decision)
-    },
-    [pendingPerm, syncPendingPerm]
-  )
-
-  const abortActiveTurn = useCallback(
-    (reasonText?: string) => {
-      permEpochRef.current += 1
-      activeTurnConvIdRef.current = ''
-      turnAbortControllerRef.current?.abort()
-      turnAbortControllerRef.current = null
-      dismissPendingPerm('deny')
-      const partialSteps = liveActivityStepsRef.current
-      if (reasonText && partialSteps.length > 0) {
-        setMessages((prev) => [...prev, { role: 'assistant', text: reasonText, activitySteps: partialSteps }])
-      }
-      liveActivityStepsRef.current = []
-      setLiveActivitySteps([])
-    },
-    [dismissPendingPerm, setMessages]
-  )
-
-  const handleStopTurn = useCallback(() => {
-    abortActiveTurn('Stopped by user.')
-    setBusyStatus(null)
-    clearInFlightConvId()
-  }, [abortActiveTurn])
+  const concurrency = useStudioTurnConcurrency({
+    mockExt: mockExt as Record<string, unknown> | undefined,
+    activeConversationId,
+    activeConversationIdRef,
+    setMessages,
+  })
+  const { setBusyStatus } = concurrency
 
   useEffect(() => {
     if (!isConfigured && !oauthToken && !apiKey) return
     let mounted = true
-    listAvailableAntigravityModels(extensionSDK, { mode: authMode, oauthToken, clientId, projectId, apiKey }).then((list) => {
+    listAvailableAntigravityModels(extensionSDK, {
+      mode: authMode, oauthToken, getOAuthToken: () => oauthTokenRef.current,
+      clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true),
+    }).then((list) => {
       if (mounted && list.length > 0) setAvailableModels(list)
     })
     return () => { mounted = false }
-  }, [extensionSDK, isConfigured, authMode, oauthToken, clientId, projectId, apiKey])
+  }, [extensionSDK, isConfigured, authMode, oauthToken, oauthTokenRef, clientId, projectId, apiKey, triggerSilentOAuthRefresh])
 
   const handleSaveAuthSetup = async () => {
     const permErr = !capabilities.canConfigureExtension
@@ -619,7 +517,7 @@ export function useStudioAuthAndPrefs() {
   const handleOAuthLogout = useCallback(() => {
     oauthAbortRef.current?.abort(); oauthAbortRef.current = null; oauthPendingRefreshRef.current = false
     setOauthSigningIn(false); clearStoredOAuthSession(extensionSDK); setOauthToken(''); setOauthExpiresAt(0)
-  }, [extensionSDK])
+  }, [extensionSDK, setOauthToken])
 
   const handleOAuthLogin = useCallback(async () => {
     if (!clientId.trim()) {
@@ -660,7 +558,7 @@ export function useStudioAuthAndPrefs() {
     } finally {
       if (oauthAbortRef.current === controller) { oauthAbortRef.current = null; setOauthSigningIn(false) }
     }
-  }, [clientId, extensionSDK, mockExt, setMessages])
+  }, [clientId, extensionSDK, mockExt, setMessages, setOauthToken])
 
   return {
     extensionSDK, core40SDK, lookerHostData, extHostData, history, location, isTileMount, mockExt,
@@ -671,7 +569,7 @@ export function useStudioAuthAndPrefs() {
     disabledModes, setDisabledModes, selectedModel, setSelectedModel,
     thinkingLevel, setThinkingLevel, thinkingLevelByModel, setModelThinkingLevel, defaultThinkingLevel, setDefaultThinkingLevel,
     maxTotalTokens, setMaxTotalTokens, maxToolRounds, setMaxToolRounds, availableModels, enabledModes,
-    oauthToken, oauthAccessToken, setOauthToken, oauthExpiresAt, setOauthExpiresAt,
+    oauthToken, oauthTokenRef, oauthAccessToken, setOauthToken, oauthExpiresAt, setOauthExpiresAt,
     triggerSilentOAuthRefresh, resetOAuthOnUnauthorized, apiKey, setApiKey,
     isAuthenticated, isConfigured, oauthSigningIn, oauthRedirectUri,
     handleSaveAuthSetup, handleOAuthLogin, handleOAuthLogout, handleCancelOAuthLogin,
@@ -682,14 +580,8 @@ export function useStudioAuthAndPrefs() {
     sharedEnvironmentId, sharedEnvIdRef, syncSharedEnvironmentId,
     agentSession, agentSessionRef, messages, messagesRef,
     activeModeRef, setAgentSession, setMessages,
-    busyStatus, setBusyStatus,
     activeConversationId, activeConversationIdRef, setActiveConversationId,
-    requirePermission, requirePermissionRef, approvedOpsRef, pendingPerm, pendingPermRef,
-    permEpochRef, activeTurnConvIdRef, turnAbortControllerRef,
-    setRequirePermission, dismissPendingPerm, requestCodeModePermission, resolvePermDecision,
-    abortActiveTurn, handleStopTurn,
-    liveActivitySteps, liveActivityStepsRef, setLiveActivitySteps,
-    queuedPrompts, queuedPromptsRef, updateQueuedPrompts,
+    ...concurrency,
   }
 }
 

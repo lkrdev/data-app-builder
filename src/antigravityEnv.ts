@@ -195,7 +195,7 @@ export function prewarmOrWakeAntigravityEnvironment(params: {
   const appFilePath = `/workspace/apps/${toSafeConversationId(rawConversationId, existingSession)}/app.js`
   const initialEnvId = forceFresh ? undefined : normalizeEnvironmentId(environmentId || existingSession?.environmentId)
   let activeEnvId = initialEnvId
-  const canAuth = Boolean(auth.mode === 'apikey' || auth.oauthToken)
+  const canAuth = Boolean(auth.mode === 'apikey' || (auth.getOAuthToken?.() || auth.oauthToken || '').trim())
   const persistEnv = (nextEnvId?: string) =>
     persistUserEnvIfChanged({ sdk, extensionSDK, userId, previousEnvId: initialEnvId, nextEnvId, onEnvironmentUpdated })
   const standby = () => ({
@@ -318,7 +318,7 @@ export function hydrateInteractionActivitySteps(opts: {
   const { extensionSDK, auth, maxHops = 105 } = opts
   const startId = String(opts.interactionId || '').trim()
   const stopId = String(opts.stopAtInteractionId || '').trim()
-  const canFetch = Boolean(auth && (auth.mode === 'apikey' ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy) : Boolean(auth.oauthToken?.trim())))
+  const canFetch = Boolean(auth && (auth.mode === 'apikey' ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy) : Boolean((auth.getOAuthToken?.() || auth.oauthToken || '').trim())))
   if (!startId || !canFetch) return Promise.resolve([])
   const chainNewestFirst: AntigravityInteractionPayload[] = []
   const seen = new Set<string>()
@@ -400,7 +400,7 @@ export async function recoverInFlightInteraction(opts: {
 } | null> {
   const { extensionSDK, auth, maxPollAttempts = 60, pollIntervalMs = 2000 } = opts
   const cleanId = String(opts.interactionId || '').trim()
-  const canFetch = Boolean(auth && (auth.mode === 'apikey' ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy) : Boolean(auth.oauthToken?.trim())))
+  const canFetch = Boolean(auth && (auth.mode === 'apikey' ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy) : Boolean((auth.getOAuthToken?.() || auth.oauthToken || '').trim())))
   if (!cleanId || !canFetch) return null
   let fetched = await callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(cleanId)}`, 'GET')
   for (
@@ -499,7 +499,7 @@ export function fetchConversationSandboxDebugMarkdown(opts: FetchConversationSan
   const { extensionSDK, auth, conversationId, label, useCase, model, thinkingLevel, messages = [], liveActivitySteps = [], busyStatus, contentItems = [], maxTurns = 120, maxWorkspaceFiles = 10 } = opts
   const startId = String(opts.lastInteractionId || messages.slice().reverse().find((m) => m.interactionId)?.interactionId || '').trim()
   let resolvedEnvId = normalizeEnvironmentId(opts.environmentId) || String(opts.environmentId || '').trim()
-  const canFetch = Boolean(auth && (auth.mode === 'apikey' ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy) : Boolean(auth.oauthToken?.trim())))
+  const canFetch = Boolean(auth && (auth.mode === 'apikey' ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy) : Boolean((auth.getOAuthToken?.() || auth.oauthToken || '').trim())))
   const chainNewestFirst: AntigravityInteractionPayload[] = []
   const remoteErrors: string[] = []
   const seen = new Set<string>()

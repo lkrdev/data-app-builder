@@ -208,19 +208,35 @@ export interface BuildCodeModeApiCallEntryInput {
   conversationId?: string
 }
 
-let codeModeScopeDepth = 0
-let activeCodeModeConversationId = ''
+const codeModeScopeStack: Array<{ convId: string; suspended: boolean }> = []
+const activeScopeFrame = () => {
+  for (let i = codeModeScopeStack.length - 1; i >= 0; i--) {
+    if (!codeModeScopeStack[i].suspended) return codeModeScopeStack[i]
+  }
+  return undefined
+}
 
-export const isInsideCodeModeApiScope = (): boolean => codeModeScopeDepth > 0
-export const getActiveCodeModeConversationId = (): string => activeCodeModeConversationId
+export const isInsideCodeModeApiScope = (): boolean => Boolean(activeScopeFrame())
+export const getActiveCodeModeConversationId = (): string => activeScopeFrame()?.convId || ''
+
+export function suspendCodeModeApiScope(): () => void {
+  const unsuspended = codeModeScopeStack.filter((f) => !f.suspended)
+  unsuspended.forEach((f) => { f.suspended = true })
+  let restored = false
+  return () => {
+    if (!restored) {
+      restored = true
+      unsuspended.forEach((f) => { f.suspended = false })
+    }
+  }
+}
 
 export function withCodeModeApiScope<T>(fn: () => Promise<T> | T, conversationId?: string): Promise<T> {
-  codeModeScopeDepth += 1
-  const prevConvId = activeCodeModeConversationId
-  if (conversationId) activeCodeModeConversationId = conversationId
+  const frame = { convId: conversationId || activeScopeFrame()?.convId || '', suspended: false }
+  codeModeScopeStack.push(frame)
   const done = () => {
-    codeModeScopeDepth = Math.max(0, codeModeScopeDepth - 1)
-    activeCodeModeConversationId = prevConvId
+    const idx = codeModeScopeStack.indexOf(frame)
+    if (idx >= 0) codeModeScopeStack.splice(idx, 1)
   }
   return Promise.resolve().then(fn).then(
     (res) => (done(), res),
@@ -301,8 +317,9 @@ function traceCodeModeCall<T>(
 ): Promise<T> {
   const startedAt = Date.now()
   const timestamp = new Date(startedAt).toISOString()
-  const codemode = isInsideCodeModeApiScope()
-  const conversationId = getActiveCodeModeConversationId() || undefined
+  const isArtifactRoute = /(?:^|\/)artifacts(?:\/|$|\?)/i.test(String(base.path || '')) || /^(?:artifact|search_artifacts|update_artifacts|purge_artifacts)$/i.test(String(base.method || ''))
+  const codemode = !isArtifactRoute && isInsideCodeModeApiScope()
+  const conversationId = codemode ? getActiveCodeModeConversationId() || undefined : undefined
   const push = (extra: BuildCodeModeApiCallEntryInput) =>
     getCodeModeApiCallsStore().push(
       buildCodeModeApiCallEntry(
@@ -310,8 +327,8 @@ function traceCodeModeCall<T>(
           {
             timestamp,
             durationMs: Date.now() - startedAt,
-            codemode: codemode || isInsideCodeModeApiScope(),
-            conversationId: conversationId || getActiveCodeModeConversationId() || undefined,
+            codemode,
+            conversationId,
           },
           base,
           extra

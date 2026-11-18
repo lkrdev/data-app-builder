@@ -8,10 +8,10 @@ Contains the self-contained Looker Code Mode WASM runtime (`codemode.js`), embed
   - `[codemode.js:init]` — `() => Promise<LkrCodeMode>` asynchronously initializes WASM.
   - `[codemode.js:getCodeModeRuntime]` — `() => LkrCodeMode` returns the runtime singleton.
   - `[codemode.js:getToolDefinition]` / `[codemode.js:RUN_LOOKER_CODEMODE_TOOL]` — Returns function tool schema (`properties: { code }`, `required: ['code']`) defaulting to `'run_looker_codemode'`.
-  - `[codemode.js:connect]` — `(options) => Promise<any>` initializes WASM, syncs host data, and returns `getHostData()` (when extension SDK resolved) or `connectHost()`.
+  - `[codemode.js:connect]` — `(options) => Promise<unknown>` initializes WASM, syncs host data, and returns `getHostData()` (when extension SDK resolved) or `connectHost()`.
   - `[codemode.js:setExtensionSDK]` — `(sdk) => Promise<void>` stores `sdk` on `root.__LKR_EXTENSION_SDK__` and syncs host data once initialized.
-  - `[codemode.js:getHostData]` — `() => any` syncs host data from `resolveExtSdk(null)` and returns `wasm_bindgen.getHostData()`.
-  - `[codemode.js:runPythonCode]` / `[codemode.js:run_python_code]` / `[codemode.js:executeLookerCodeMode]` — `(codeOrParams, optionsOrSdk) => Promise<any>` aliases of `runCode` (supporting 2-arg `(code, sdkWithInvokeCoreSdkRawOrInvokeCoreSdk)`) executing Python in the Monty WASM sandbox.
+  - `[codemode.js:getHostData]` — `() => unknown` syncs host data from `resolveExtSdk(null)` and returns `wasm_bindgen.getHostData()`.
+  - `[codemode.js:runPythonCode]` / `[codemode.js:run_python_code]` / `[codemode.js:executeLookerCodeMode]` — `(codeOrParams, optionsOrSdk) => Promise<unknown>` aliases of `runCode` (supporting 2-arg `(code, sdkWithInvokeCoreSdkRawOrInvokeCoreSdk)`) executing Python in the Monty WASM sandbox.
 
 ## Invariants
 - `[codemode.js:initAsync]` Singleton WASM initialization: `__wbg_init` and `initSync` return early if `wasm !== undefined`, and `initAsync` caches a single `initPromise`.

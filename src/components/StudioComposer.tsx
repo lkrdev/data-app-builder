@@ -28,8 +28,8 @@ import {
 } from './StudioComposerTokens'
 import { StudioButton, StudioSelect } from './StudioDesignSystem'
 import {
-  ComposerAutocompleteMenus, renderMentionCategoryIcon, SandboxMarkdownPreviewModal,
-  StarterPromptButtons, UseCaseInfoModal, UseCaseInfoTrigger,
+  ComposerAutocompleteMenus, renderMentionCategoryIcon,
+  UseCaseInfoModal, UseCaseInfoTrigger,
 } from './StudioUseCaseGuides'
 
 export const StudioComposer: React.FC<{ ctl: StudioController; disabled?: boolean }> = ({ ctl, disabled = false }) => {
@@ -764,31 +764,5 @@ export const StudioComposer: React.FC<{ ctl: StudioController; disabled?: boolea
         </div>
       </div>
     </div>
-  )
-}
-
-export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
-  const { agentName: rawAgentName, activeMode, builderMode, isLookmlMode, isHealthCheckMode, selectedUseCase, selectedExplores, starterPrompts, starterPromptsLoading, setPrompt, busyStatus } = ctl
-  const agentName = normalizeStudioAgentName(rawAgentName)
-  return (
-    <main className="dab-empty-stage-centered" data-testid="centered-empty-prompt">
-      <div className="dab-empty-prompt-card" data-testid="studio-empty-stage">
-        <div className="dab-empty-hero">
-          <h2>
-            {isHealthCheckMode ? 'Run a 3-Pillar Looker & BigQuery Health Check'
-              : isLookmlMode ? 'Author & Validate Agentic LookML'
-              : activeMode === 'tile' ? 'Author & Schedule a Looker Script'
-              : builderMode === 'dashboard' ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)'
-              : `${agentName} is ready`}
-          </h2>
-          <p className="dab-muted">
-            {selectedExplores.length > 0 ? <>Exploring <code>{selectedExplores.join(', ')}</code> — pick a starter prompt below or describe what you want to build.</> : 'Pick a starter prompt below or describe what you want to build, analyze, or automate.'}
-          </p>
-          <StarterPromptButtons useCase={selectedUseCase} prompts={starterPrompts} loading={starterPromptsLoading} onSelect={setPrompt} disabled={!!busyStatus} />
-        </div>
-        <StudioComposer ctl={ctl} />
-        <SandboxMarkdownPreviewModal ctl={ctl} />
-      </div>
-    </main>
   )
 }
