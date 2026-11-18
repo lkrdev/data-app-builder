@@ -81,7 +81,7 @@ function createManagedWorkspaceSourcesList(): ManagedWorkspaceSource[] {
 const MANAGED_WORKSPACE_SOURCES = createManagedWorkspaceSourcesList()
 
 export function buildManagedWorkspaceSources(): ManagedWorkspaceSource[] {
-  return MANAGED_WORKSPACE_SOURCES.map((entry) => ({ ...entry }))
+  return MANAGED_WORKSPACE_SOURCES.map((entry) => Object.assign({}, entry))
 }
 
 export const MANAGED_SOURCES_FILE_HASHES: Record<string, string> = Object.fromEntries(
@@ -131,7 +131,7 @@ function bytesToBase64(bytes: Uint8Array): string {
   if (typeof Buffer !== 'undefined') return Buffer.from(bytes).toString('base64')
   let bin = ''
   for (let i = 0; i < bytes.length; i += 0x8000) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+    bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 0x8000)))
   }
   return btoa(bin)
 }

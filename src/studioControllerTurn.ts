@@ -198,7 +198,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   const handleResetEnvironment = useCallback((): Promise<void> => {
     setResetEnvModalOpen(false); clearEnvNotices()
     const uid = userIdRef.current || userId, ns = getArtifactNamespace(extensionSDK)
-    const priorConvIds = Array.from(new Set([...conversationsRef.current.map((c) => c.id), ...inFlightTurnsRef.current.keys()]))
+    const priorConvIds = Array.from(new Set([...conversationsRef.current.map((c) => c.id), ...Array.from(inFlightTurnsRef.current.keys())]))
     conversationsRef.current = []
     clearAllEnvSessions('resetting')
     const resetEpoch = envLifecycleEpochRef.current

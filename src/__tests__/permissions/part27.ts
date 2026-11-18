@@ -3,6 +3,7 @@ import { gunzipSync } from 'node:zlib'
 import type { Looker40SDK } from '@looker/sdk'
 
 import {
+  type AntigravityExtensionHostLike,
   buildManagedWorkspaceSources,
   buildWorkspaceSources,
   CURRENT_MANAGED_SOURCES_HASH,
@@ -30,6 +31,7 @@ import {
 } from '../../lookerApi'
 
 const asSdk = (mock: Record<string, unknown>): Looker40SDK => mock as unknown as Looker40SDK
+const asHost = (mock: Record<string, unknown>): AntigravityExtensionHostLike => mock as unknown as AntigravityExtensionHostLike
 
 function createInMemoryArtifactSdk() {
   const store = new Map<string, { version: number; value: string }>()
@@ -100,8 +102,6 @@ export function registerPermissionsPart27Tests(): void {
     expect(uniqueTargets.has('/workspace/skills/agentic-lookml/SKILL.md')).toBe(true)
 
     const wsSources = buildWorkspaceSources({
-      toolMode: 'data_app',
-      mode: 'data_app',
       schemaMarkdown: '# Schema',
     })
     const manifestEntry = wsSources.find((s) => s.target === MANAGED_SOURCES_MANIFEST_PATH)
@@ -165,20 +165,20 @@ export function registerPermissionsPart27Tests(): void {
 
     // prewarmOrWakeAntigravityEnvironment fresh provision stamps CURRENT_MANAGED_SOURCES_HASH
     const updatedCalls: Array<{ envId: string; hash?: string | null }> = []
-    const prewarmHost = {
+    const prewarmHost = asHost({
       serverProxy: async () => ({
         ok: true,
         status: 200,
         body: JSON.stringify({ id: 'int_prewarm_229', environment_id: 'env_provisioned_229', status: 'completed', output_text: 'READY' }),
       }),
-    }
+    })
     const provisionedId = await prewarmOrWakeAntigravityEnvironment({
       sdk,
       userId: '1',
       extensionSDK: prewarmHost,
       auth: { mode: 'apikey', apiKey: 'test_key' },
       toolType: 'app',
-      onEnvironmentUpdated: (envId, hash) => updatedCalls.push({ envId, hash }),
+      onEnvironmentUpdated: (envId, hash) => { updatedCalls.push({ envId, hash }) },
     })
     expect(provisionedId.session.environmentId).toBe('env_provisioned_229')
     expect(updatedCalls).toEqual([{ envId: 'env_provisioned_229', hash: CURRENT_MANAGED_SOURCES_HASH }])
@@ -192,8 +192,8 @@ export function registerPermissionsPart27Tests(): void {
       sdk,
       userId: '1',
       environmentId: 'env_stale_404',
-      onEnvironmentUpdated: (envId, hash) => turnUpdatedCalls.push({ envId, hash }),
-      extensionSDK: {
+      onEnvironmentUpdated: (envId, hash) => { turnUpdatedCalls.push({ envId, hash }) },
+      extensionSDK: asHost({
         serverProxy: async () => {
           turnAttempt += 1
           if (turnAttempt === 1) {
@@ -210,7 +210,7 @@ export function registerPermissionsPart27Tests(): void {
             }),
           }
         },
-      },
+      }),
       auth: { mode: 'apikey', apiKey: 'test_key' },
       session: { environmentId: 'env_stale_404' },
       mode: 'dashboard',
@@ -259,13 +259,13 @@ export function registerPermissionsPart27Tests(): void {
       userId: '1',
       environmentId: 'env_sync_229',
       auth: { mode: 'apikey', apiKey: 'test_key' },
-      extensionSDK: {
-        serverProxy: async (url) => {
+      extensionSDK: asHost({
+        serverProxy: async (url: string) => {
           if (url.includes('/files/')) return { ok: true, status: 200, body: MANAGED_SOURCES_MANIFEST_JSON }
           postCalls += 1
           return { ok: true, status: 200, body: '{}' }
         },
-      },
+      }),
     })
     expect(postCalls).toBe(0)
     expect(upToDateRes).toEqual({
@@ -294,8 +294,8 @@ export function registerPermissionsPart27Tests(): void {
       userId: '1',
       environmentId: 'env_sync_229',
       auth: { mode: 'apikey', apiKey: 'test_key' },
-      extensionSDK: {
-        serverProxy: async (url, init) => {
+      extensionSDK: asHost({
+        serverProxy: async (url: string, init?: { body?: string }) => {
           if (url.includes('/files/')) return { ok: true, status: 200, body: driftedManifest }
           const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>
           capturedBodies.push(body)
@@ -303,7 +303,7 @@ export function registerPermissionsPart27Tests(): void {
           const marker = prompt.match(/reply with ((?:CHUNK_OK:\d+|SYNC_OK:[0-9a-f]+))/)?.[1] || ''
           return { ok: true, status: 200, body: JSON.stringify({ id: 'int_delta_1', status: 'completed', output_text: marker }) }
         },
-      },
+      }),
     })
     expect(deltaRes).toEqual({
       status: 'synced',
@@ -348,15 +348,15 @@ export function registerPermissionsPart27Tests(): void {
         environmentId: 'env_sync_229',
         signal: abortCtl.signal,
         auth: { mode: 'apikey', apiKey: 'test_key' },
-        extensionSDK: {
-          serverProxy: async (url) => {
+        extensionSDK: asHost({
+          serverProxy: async (url: string) => {
             if (url.includes('/files/')) {
               abortCtl.abort()
               return { ok: true, status: 200, body: driftedManifest }
             }
             return { ok: true, status: 200, body: '{}' }
           },
-        },
+        }),
       })
     ).rejects.toThrow(/aborted/i)
     expect((await loadUserEnvironmentState(sdk, '1'))?.sourcesHash).toBe('222222222222dead')
@@ -369,12 +369,12 @@ export function registerPermissionsPart27Tests(): void {
         userId: '1',
         environmentId: 'env_sync_229',
         auth: { mode: 'apikey', apiKey: 'test_key' },
-        extensionSDK: {
-          serverProxy: async (url) => {
+        extensionSDK: asHost({
+          serverProxy: async (url: string) => {
             if (url.includes('/files/')) return { ok: true, status: 200, body: driftedManifest }
             return { ok: true, status: 200, body: JSON.stringify({ id: 'int_bad', status: 'completed', output_text: 'Forgot marker' }) }
           },
-        },
+        }),
       })
     ).rejects.toThrow(`SYNC_OK:${CURRENT_MANAGED_SOURCES_HASH}`)
     expect((await loadUserEnvironmentState(sdk, '1'))?.sourcesHash).toBe('555555555555dead')
@@ -386,8 +386,8 @@ export function registerPermissionsPart27Tests(): void {
       userId: '1',
       environmentId: 'env_sync_229',
       auth: { mode: 'apikey', apiKey: 'test_key' },
-      extensionSDK: {
-        serverProxy: async (url, init) => {
+      extensionSDK: asHost({
+        serverProxy: async (url: string, init?: { body?: string }) => {
           if (url.includes('/files/')) return { ok: false, status: 404, body: JSON.stringify({ error: { message: 'File not found in remote sandbox' } }) }
           legacyChunks += 1
           const body = JSON.parse(String(init?.body || '{}')) as { input?: Array<{ text?: string }> }
@@ -395,7 +395,7 @@ export function registerPermissionsPart27Tests(): void {
           const marker = prompt.match(/reply with ((?:CHUNK_OK:\d+|SYNC_OK:[0-9a-f]+))/)?.[1] || ''
           return { ok: true, status: 200, body: JSON.stringify({ id: `int_leg_${legacyChunks}`, status: 'completed', output_text: marker }) }
         },
-      },
+      }),
     })
     expect(legacyChunks).toBeGreaterThan(1)
     expect(legacyRes.status).toBe('synced')
@@ -407,13 +407,13 @@ export function registerPermissionsPart27Tests(): void {
       userId: '1',
       environmentId: 'env_expired_404',
       auth: { mode: 'apikey', apiKey: 'test_key' },
-      extensionSDK: {
+      extensionSDK: asHost({
         serverProxy: async () => ({
           ok: false,
           status: 404,
           body: JSON.stringify({ error: { message: 'Environment env_expired_404 was not found' } }),
         }),
-      },
+      }),
     })
     expect(expiredRes).toEqual({
       status: 'environment_expired',

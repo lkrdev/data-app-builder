@@ -575,7 +575,7 @@ export class ArtifactService {
     this.conversationsCache.set(uid, [])
     this.userListCache.set(uid, [])
     writeSwrCache(['artifact:conversations', this.namespace, uid], [])
-    for (const t of ['all', undefined, ...STUDIO_TOOL_MODES] as const) writeSwrCache(['artifact:user_list', this.namespace, uid, t], [])
+    for (const t of ['all', undefined, ...Array.from(STUDIO_TOOL_MODES)] as const) writeSwrCache(['artifact:user_list', this.namespace, uid, t], [])
     const searched = await this.search(`user_${uid}_%`).catch(() => [] as ArtifactRowLike[])
     for (const row of searched || []) {
       const k = String(row?.key || '').trim()
