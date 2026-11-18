@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
-  AtSign, BookOpen, Bug, Check, ChevronDown, CornerDownRight, Database, FileText, Folder,
+  Bug, Check, ChevronDown, CornerDownRight, FileText, Folder,
   Loader2, PanelRightOpen, Paperclip, Pencil, Plus, Shield,
-  Square, Wrench, X, Zap,
+  Square, X, Zap,
 } from 'lucide-react'
 
 import {
@@ -17,13 +17,22 @@ import {
 import { LookmlSkillCatalogEntry, STUDIO_SLASH_SKILLS } from '../lookmlTool'
 export { fetchConversationSandboxDebugMarkdown, formatConversationThreadMarkdown }
 import { StudioController } from '../useStudioController'
+import {
+  appendScopedPrefixToSegments, applyComposerBackspaceOrDelete, attachComposerElementCompat,
+  buildGroupedExplores, buildMentionOptions, collectPillKeySet, ComposerHydrationContext,
+  ComposerSegment, detectActiveMention, detectActiveSlashSkill, diffRemovedPills,
+  getComposerSelectionOffsets, insertPlainTextAtSelection, parsePromptIntoSegments,
+  readSegmentsFromDom, removeMentionPillFromSegments, renderSegmentsToDom, resolveHydratedPills,
+  segmentsSignature, serializeComposerSegments, setComposerSelectionOffsets, sliceComposerPrompt,
+  splicePillIntoSegments, stepComposerArrowAcrossPill,
+} from './StudioComposerTokens'
 import { StudioButton, StudioSelect } from './StudioDesignSystem'
 import {
-  AT_MENTION_DETECT_RE, renderMentionCategoryIcon, SandboxMarkdownPreviewModal,
-  SLASH_SKILL_DETECT_RE, StarterPromptButtons, UseCaseInfoModal, UseCaseInfoTrigger,
+  ComposerAutocompleteMenus, renderMentionCategoryIcon, SandboxMarkdownPreviewModal,
+  StarterPromptButtons, UseCaseInfoModal, UseCaseInfoTrigger,
 } from './StudioUseCaseGuides'
 
-export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
+export const StudioComposer: React.FC<{ ctl: StudioController; disabled?: boolean }> = ({ ctl, disabled = false }) => {
   const {
     core40SDK, agentName: rawAgentName, models, selectedExplores, setSelectedExplores,
     preloadedContent, mentionedItems, setMentionedItems, searchGlobalContentV2,
@@ -36,13 +45,13 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     isAuthenticated, authMode, clientId, oauthSigningIn, handleOAuthLogin, history,
     lookmlBundle, nativeContent, infoModalUseCase, setInfoModalUseCase,
     folderTreeNodes, selectedFolderId, requirePermission, setRequirePermission,
-    setFolderModalOpen, setEditingAgentName,
+    setFolderModalOpen, setEditingAgentName, contentItems = [],
     messages, liveActivitySteps, copyThreadState, handleCopyThreadDebugTrace, activeConversationId,
   } = ctl
 
   const mockExt = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const editorRef = useRef<HTMLDivElement | null>(null)
   const addMenuWrapRef = useRef<HTMLDivElement | null>(null)
   const busyActionWrapRef = useRef<HTMLDivElement | null>(null)
   const mentionMenuRef = useRef<HTMLDivElement | null>(null)
@@ -56,60 +65,161 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   )
   const [activeMentionIndex, setActiveMentionIndex] = useState(0)
   const [activeSlashIndex, setActiveSlashIndex] = useState(0)
-  const [slashDismissedAt, setSlashDismissedAt] = useState<string | null>(null)
+  const [dismissedTriggerStart, setDismissedTriggerStart] = useState<number | null>(null)
   const [remoteSearchResults, setRemoteSearchResults] = useState<StudioContextMention[]>([])
   const [mentionLoading, setMentionLoading] = useState(false)
   const historyRef = useRef<{ convId?: string; idx: number | null; draft: string }>({ idx: null, draft: '' })
+  const isDomInputRef = useRef(false)
+  const prevExternalPromptRef = useRef(prompt)
+  const prevPillKeysRef = useRef<Set<string>>(new Set())
   const userHistory = useMemo(
     () => messages.filter((m) => m.role === 'user' && m.text.trim()).map((m) => m.text),
     [messages]
   )
   const selectedFolderLabel = folderTreeNodes?.[selectedFolderId]?.name || 'My folder'
 
-  useEffect(() => { setCursorPos((prev) => Math.min(prev, prompt.length)) }, [prompt.length])
+  const exploreLookup = useMemo(() => {
+    const map: Record<string, { id: string; label: string; modelLabel: string; model: string; explore: string }> = {}
+    models.forEach((model) => {
+      ;(model.explores || []).forEach((explore) => {
+        if (explore.hidden) return
+        const id = formatExploreId(model.name, String(explore.name))
+        map[id] = { id, label: String(explore.label || explore.name), modelLabel: String(model.label || model.name), model: model.name, explore: String(explore.name) }
+      })
+    })
+    return map
+  }, [models])
+
+  const hydrationCtx = useMemo<ComposerHydrationContext>(
+    () => ({ slashSkills: STUDIO_SLASH_SKILLS, mentionedItems, exploreLookup, selectedExplores, preloadedContent, contentItems, conversations: allConversations || conversations }),
+    [mentionedItems, exploreLookup, selectedExplores, preloadedContent, contentItems, allConversations, conversations]
+  )
+  const hydrationCtxRef = useRef<ComposerHydrationContext>(hydrationCtx)
+  hydrationCtxRef.current = hydrationCtx
+  const recallAddedRef = useRef<{ slash: Set<string>; mentions: Set<string>; explores: Set<string> }>({
+    slash: new Set(), mentions: new Set(), explores: new Set(),
+  })
+  const [segments, setSegments] = useState<ComposerSegment[]>(() => parsePromptIntoSegments(prompt, hydrationCtx))
+
+  const bindEditorRef = (node: HTMLDivElement | null) => {
+    editorRef.current = node
+    if (node) attachComposerElementCompat(node, () => hydrationCtxRef.current)
+  }
+
+  const ensureHydratedPillsInState = useCallback((segs: readonly ComposerSegment[], trackForRecall = false) => {
+    const { slashIds, mentions, exploreIds } = resolveHydratedPills(segs, hydrationCtxRef.current)
+    const rc = recallAddedRef.current
+    if (trackForRecall) {
+      const pruneRecalled = (tracked: Set<string>, keep: Set<string>) => {
+        const rm = Array.from(tracked).filter((k) => !keep.has(k))
+        rm.forEach((k) => tracked.delete(k))
+        return rm
+      }
+      const rmSlash = pruneRecalled(rc.slash, new Set(slashIds))
+      const rmMentions = pruneRecalled(rc.mentions, new Set(mentions.map((m) => `${m.type}:${m.id}`)))
+      const rmExplores = pruneRecalled(rc.explores, new Set(exploreIds))
+      if (rmSlash.length) setActivatedLookmlSkills((prev) => prev.filter((id) => !rmSlash.includes(id)))
+      if (rmMentions.length) { const s = new Set(rmMentions); setMentionedItems((prev) => prev.filter((x) => !s.has(`${x.type}:${x.id}`))) }
+      if (rmExplores.length) setSelectedExplores((prev) => prev.filter((id) => !rmExplores.includes(id)))
+    }
+    if (slashIds.length) {
+      setActivatedLookmlSkills((prev) => {
+        const add = slashIds.filter((id) => !prev.includes(id))
+        if (trackForRecall) add.forEach((id) => rc.slash.add(id))
+        return add.length ? [...prev, ...add] : prev
+      })
+    }
+    if (mentions.length) {
+      setMentionedItems((prev) => {
+        const add = mentions.filter((m) => !prev.some((x) => x.type === m.type && x.id === m.id))
+        if (trackForRecall) add.forEach((m) => rc.mentions.add(`${m.type}:${m.id}`))
+        return add.length ? [...prev, ...add] : prev
+      })
+    }
+    if (exploreIds.length) {
+      setSelectedExplores((prev) => {
+        const add = exploreIds.filter((id) => !prev.includes(id))
+        if (trackForRecall) add.forEach((id) => rc.explores.add(id))
+        return add.length ? [...prev, ...add] : prev
+      })
+    }
+  }, [setActivatedLookmlSkills, setMentionedItems, setSelectedExplores])
+
+  const commitEditorSegments = (
+    nextSegs: ComposerSegment[], nextPrompt: string, nextPos: number,
+    opts?: { renderDom?: boolean; focusDom?: boolean; prune?: boolean }
+  ) => {
+    const el = editorRef.current
+    if (el && opts?.renderDom) {
+      renderSegmentsToDom(el, nextSegs)
+      if (opts.focusDom) el.focus()
+      setComposerSelectionOffsets(el, nextPos, nextPos)
+    }
+    if (opts?.prune) {
+      const { nextKeys, removedSlash, removedMentions } = diffRemovedPills(prevPillKeysRef.current, nextSegs)
+      prevPillKeysRef.current = nextKeys
+      if (removedSlash.length > 0) setActivatedLookmlSkills((prev) => prev.filter((id) => !removedSlash.includes(id)))
+      if (removedMentions.length > 0) {
+        const rmSet = new Set(removedMentions)
+        setMentionedItems((prev) => prev.filter((x) => !rmSet.has(`${x.type}:${x.id}`)))
+        const rmExp = removedMentions.filter((m) => m.startsWith('explore:')).map((m) => m.slice(8))
+        if (rmExp.length > 0) setSelectedExplores((prev) => prev.filter((id) => !rmExp.includes(id)))
+      }
+    } else {
+      prevPillKeysRef.current = collectPillKeySet(nextSegs)
+    }
+    setDismissedTriggerStart((prev) => (prev !== null && nextPrompt[prev] !== '@' && nextPrompt[prev] !== '/' ? null : prev))
+    isDomInputRef.current = true
+    prevExternalPromptRef.current = nextPrompt
+    setSegments(nextSegs); setPrompt(nextPrompt); setCursorPos(nextPos)
+  }
+
+  useEffect(() => {
+    if (isDomInputRef.current) { isDomInputRef.current = false; return }
+    const promptChangedExternally = prompt !== prevExternalPromptRef.current
+    prevExternalPromptRef.current = prompt
+    const hydrated = parsePromptIntoSegments(prompt, hydrationCtx)
+    const nextKeys = collectPillKeySet(hydrated)
+    if (promptChangedExternally) {
+      recallAddedRef.current.slash.clear(); recallAddedRef.current.mentions.clear(); recallAddedRef.current.explores.clear()
+    }
+    if (promptChangedExternally ? nextKeys.size > 0 : Array.from(nextKeys).some((k) => !prevPillKeysRef.current.has(k))) {
+      ensureHydratedPillsInState(hydrated, !promptChangedExternally && historyRef.current.idx !== null)
+    }
+    const el = editorRef.current
+    prevPillKeysRef.current = nextKeys
+    setSegments((prev) => (segmentsSignature(prev) === segmentsSignature(hydrated) ? prev : hydrated))
+    if (promptChangedExternally) setCursorPos(prompt.length)
+    if (el && (promptChangedExternally || segmentsSignature(readSegmentsFromDom(el)) !== segmentsSignature(hydrated))) {
+      const hadFocus = document.activeElement === el
+      const prevSel = !promptChangedExternally && hadFocus ? getComposerSelectionOffsets(el) : { start: prompt.length, end: prompt.length }
+      renderSegmentsToDom(el, hydrated)
+      setComposerSelectionOffsets(el, prevSel.start, prevSel.end, hadFocus || prompt.length === 0)
+    }
+  }, [prompt, hydrationCtx, ensureHydratedPillsInState])
+
   const applyRecalledPrompt = (idx: number | null, text: string) => {
     historyRef.current.convId = activeConversationId
     historyRef.current.idx = idx
-    setPrompt(text); setCursorPos(text.length)
-    setSlashDismissedAt(text || null); setForceMentionCategory(null)
-    requestAnimationFrame(() => textareaRef.current?.setSelectionRange(text.length, text.length))
+    const hydrated = parsePromptIntoSegments(text, hydrationCtx)
+    ensureHydratedPillsInState(hydrated, true)
+    const rawMention = detectActiveMention(hydrated, text.length, null, null)
+    const rawSlash = detectActiveSlashSkill(hydrated, text.length, null, rawMention.open)
+    setDismissedTriggerStart(rawMention.open ? rawMention.tokenStart : rawSlash.open ? rawSlash.tokenStart : null)
+    setForceMentionCategory(null)
+    commitEditorSegments(hydrated, text, text.length, { renderDom: true, focusDom: true })
   }
 
-  const detectedMention = useMemo(() => {
-    const uptoCursor = prompt.slice(0, cursorPos || prompt.length)
-    const m = slashDismissedAt !== uptoCursor ? uptoCursor.match(AT_MENTION_DETECT_RE) : null
-    if (m) {
-      const category = (m[1]?.toLowerCase() as StudioContextCategory | undefined) || 'all'
-      const query = (m[1] ? m[2] || '' : m[3] || '').trim()
-      const atIdx = uptoCursor.lastIndexOf('@')
-      return { open: true, category, query, tokenStart: atIdx >= 0 ? atIdx : uptoCursor.length, tokenEnd: uptoCursor.length }
-    }
-    return {
-      open: forceMentionCategory !== null, category: forceMentionCategory ?? ('all' as const),
-      query: '', tokenStart: prompt.length, tokenEnd: prompt.length,
-    }
-  }, [prompt, cursorPos, forceMentionCategory, slashDismissedAt])
+  const detectedMention = useMemo(
+    () => detectActiveMention(segments, cursorPos, dismissedTriggerStart, forceMentionCategory),
+    [segments, cursorPos, forceMentionCategory, dismissedTriggerStart]
+  )
 
   useEffect(() => {
     if (detectedMention.open && mentionMenuRef.current && typeof mockExt?.initialExploreScrollTop === 'number') {
       mentionMenuRef.current.scrollTop = mockExt.initialExploreScrollTop
     }
   }, [detectedMention.open, models.length, mockExt?.initialExploreScrollTop])
-
-  useEffect(() => {
-    const onDocMouseDown = (e: MouseEvent) => {
-      if (addMenuWrapRef.current && !addMenuWrapRef.current.contains(e.target as Node)) setAddContextOpen(false)
-      if (busyActionWrapRef.current && !busyActionWrapRef.current.contains(e.target as Node)) setBusyActionMenuOpen(false)
-      if (mentionMenuRef.current && !mentionMenuRef.current.contains(e.target as Node) && textareaRef.current && !textareaRef.current.contains(e.target as Node)) {
-        setForceMentionCategory(null)
-      }
-      if (slashMenuRef.current && !slashMenuRef.current.contains(e.target as Node) && textareaRef.current && !textareaRef.current.contains(e.target as Node)) {
-        setSlashDismissedAt(prompt.slice(0, cursorPos || prompt.length))
-      }
-    }
-    document.addEventListener('mousedown', onDocMouseDown)
-    return () => document.removeEventListener('mousedown', onDocMouseDown)
-  }, [cursorPos, prompt])
 
   useEffect(() => {
     if (!detectedMention.open || !detectedMention.query) {
@@ -127,99 +237,38 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     return () => { cancelled = true; clearTimeout(timer) }
   }, [core40SDK, detectedMention.open, detectedMention.query, detectedMention.category, searchGlobalContentV2])
 
-  const groupedExplores = useMemo(() => {
-    const tokens = detectedMention.query.toLowerCase().split(/\s+/).filter(Boolean)
-    return models
-      .reduce(
-        (acc: Array<{ label: string; modelName: string; options: Array<{ label: string; value: string; mention: StudioContextMention }> }>, model) => {
-          if (model?.explores?.length) {
-            const matchingExplores = model.explores.filter((explore) => {
-              if (explore.hidden) return false
-              if (tokens.length === 0) return true
-              const expId = formatExploreId(model.name, String(explore.name))
-              const haystack = `${model.label} ${model.name} ${explore.label || ''} ${explore.name} ${expId}`.toLowerCase()
-              return tokens.every((tk) => haystack.includes(tk))
-            })
-            if (matchingExplores.length > 0) {
-              acc.push({
-                label: model.label || model.name,
-                modelName: model.name,
-                options: matchingExplores
-                  .map((explore) => {
-                    const value = formatExploreId(model.name, String(explore.name))
-                    const label = String(explore.label || explore.name)
-                    return {
-                      label, value,
-                      mention: {
-                        type: 'explore' as const, id: value, title: label,
-                        subtitle: String(model.label || model.name), model: model.name,
-                        explore: String(explore.name), description: explore.description ? String(explore.description) : undefined,
-                      },
-                    }
-                  })
-                  .sort((a, b) => a.label.localeCompare(b.label)),
-              })
-            }
-          }
-          return acc
-        },
-        []
-      )
-      .sort((a, b) => a.label.localeCompare(b.label))
-  }, [models, detectedMention.query])
+  const groupedExplores = useMemo(
+    () => buildGroupedExplores(models, detectedMention.query),
+    [models, detectedMention.query]
+  )
 
-  const exploreLookup = useMemo(() => {
-    const map: Record<string, { id: string; label: string; modelLabel: string; model: string; explore: string }> = {}
-    models.forEach((model) => {
-      ;(model.explores || []).forEach((explore) => {
-        if (explore.hidden) return
-        const id = formatExploreId(model.name, String(explore.name))
-        map[id] = { id, label: String(explore.label || explore.name), modelLabel: String(model.label || model.name), model: model.name, explore: String(explore.name) }
-      })
-    })
-    return map
-  }, [models])
-
-  const mentionOptions = useMemo(() => {
-    const tokens = detectedMention.query.toLowerCase().split(/\s+/).filter(Boolean)
-    const matchTokens = (text: string) => tokens.length === 0 || tokens.every((tk) => text.toLowerCase().includes(tk))
-    const cat = detectedMention.category
-    const seen = new Set<string>()
-    const out: StudioContextMention[] = []
-    const pushItem = (item: StudioContextMention) => {
-      const key = `${item.type}:${item.id}`
-      if (!seen.has(key)) { seen.add(key); out.push(item) }
-    }
-    if (cat === 'all' || cat === 'explore') {
-      groupedExplores.forEach((group) => group.options.forEach((opt) => pushItem(opt.mention)))
-      remoteSearchResults.forEach((r) => { if (r.type === 'explore') pushItem(r) })
-    }
-    ;(['dashboard', 'look'] as const).forEach((contentType) => {
-      if (cat === 'all' || cat === contentType) {
-        preloadedContent.forEach((item) => { if (item.type === contentType && matchTokens(`${item.title} ${item.id} ${item.description || ''}`)) pushItem(item) })
-        remoteSearchResults.forEach((r) => { if (r.type === contentType) pushItem(r) })
-      }
-    })
-    if (cat === 'all' || cat === 'conversation') {
-      ;(allConversations || conversations || []).forEach((c) => {
-        const label = c.label || c.id
-        if (matchTokens(`${label} ${c.id} ${c.type || ''}`)) pushItem({ type: 'conversation', id: c.id, title: label, subtitle: c.use_case || c.type || 'conversation' })
-      })
-      remoteSearchResults.forEach((r) => { if (r.type === 'conversation') pushItem(r) })
-    }
-    return out
-  }, [detectedMention.category, detectedMention.query, groupedExplores, preloadedContent, remoteSearchResults, allConversations, conversations])
+  const mentionOptions = useMemo(
+    () => buildMentionOptions(detectedMention.category, detectedMention.query, groupedExplores, preloadedContent, remoteSearchResults, allConversations || conversations || []),
+    [detectedMention.category, detectedMention.query, groupedExplores, preloadedContent, remoteSearchResults, allConversations, conversations]
+  )
 
   useEffect(() => { setActiveMentionIndex(0) }, [detectedMention.category, detectedMention.query, mentionOptions.length])
 
-  const detectedSlashSkill = useMemo(() => {
-    if (detectedMention.open) return { open: false, query: '', tokenStart: prompt.length, tokenEnd: prompt.length }
-    const uptoCursor = prompt.slice(0, cursorPos || prompt.length)
-    const m = uptoCursor.match(SLASH_SKILL_DETECT_RE)
-    if (!m || slashDismissedAt === uptoCursor) return { open: false, query: '', tokenStart: prompt.length, tokenEnd: prompt.length }
-    const slashIdx = uptoCursor.lastIndexOf('/')
-    return { open: true, query: (m[1] || '').toLowerCase(), tokenStart: slashIdx >= 0 ? slashIdx : uptoCursor.length, tokenEnd: uptoCursor.length }
-  }, [prompt, cursorPos, detectedMention.open, slashDismissedAt])
+  const detectedSlashSkill = useMemo(
+    () => detectActiveSlashSkill(segments, cursorPos, dismissedTriggerStart, detectedMention.open),
+    [segments, cursorPos, detectedMention.open, dismissedTriggerStart]
+  )
+
+  useEffect(() => {
+    const onDocMouseDown = (e: MouseEvent) => {
+      if (addMenuWrapRef.current && !addMenuWrapRef.current.contains(e.target as Node)) setAddContextOpen(false)
+      if (busyActionWrapRef.current && !busyActionWrapRef.current.contains(e.target as Node)) setBusyActionMenuOpen(false)
+      if (mentionMenuRef.current && !mentionMenuRef.current.contains(e.target as Node) && editorRef.current && !editorRef.current.contains(e.target as Node)) {
+        setForceMentionCategory(null)
+        setDismissedTriggerStart(detectedMention.tokenStart)
+      }
+      if (slashMenuRef.current && !slashMenuRef.current.contains(e.target as Node) && editorRef.current && !editorRef.current.contains(e.target as Node)) {
+        setDismissedTriggerStart(detectedSlashSkill.tokenStart)
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [detectedMention.tokenStart, detectedSlashSkill.tokenStart])
 
   const slashSkillOptions = useMemo(() => {
     const q = detectedSlashSkill.query.trim().toLowerCase()
@@ -230,11 +279,12 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 
   const handleSelectSlashSkill = (sk: LookmlSkillCatalogEntry) => {
     setActivatedLookmlSkills((prev) => (prev.includes(sk.id) ? prev : [...prev, sk.id]))
-    const prefix = prompt.slice(0, detectedSlashSkill.tokenStart)
-    const head = `${prefix}${prefix && !/\s$/.test(prefix) ? ' ' : ''}/${sk.id} `
-    setPrompt(`${head}${prompt.slice(detectedSlashSkill.tokenEnd)}`)
-    setCursorPos(head.length); setSlashDismissedAt(null)
-    requestAnimationFrame(() => { if (textareaRef.current) { textareaRef.current.focus(); textareaRef.current.setSelectionRange(head.length, head.length) } })
+    const curSegs = editorRef.current ? readSegmentsFromDom(editorRef.current) : segments
+    const res = splicePillIntoSegments(curSegs, detectedSlashSkill.tokenStart, detectedSlashSkill.tokenEnd, {
+      pillKind: 'slash', tokenId: sk.id, label: sk.id, rawValue: `/${sk.id}`,
+    })
+    setDismissedTriggerStart(null); setForceMentionCategory(null)
+    commitEditorSegments(res.segments, res.prompt, res.cursorPos, { renderDom: true, focusDom: true })
   }
 
   const contextChips = useMemo(() => {
@@ -256,31 +306,32 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
   }, [mentionedItems, selectedExplores, exploreLookup])
 
   const handleSelectMentionOption = (item: StudioContextMention) => {
-    setMentionedItems((prev) => (prev.some((x) => x.type === item.type && x.id === item.id) ? prev : [...prev, item]))
-    if (item.type === 'explore') setSelectedExplores((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]))
-    const replacement = `@${item.type}:${item.title} `
-    const prefix = prompt.slice(0, detectedMention.tokenStart)
-    const suffix = prompt.slice(detectedMention.tokenEnd)
-    const needsLeadingSpace = prefix.length > 0 && !/\s$/.test(prefix)
-    const nextPrompt = `${prefix}${needsLeadingSpace ? ' ' : ''}${replacement}${suffix}`
-    setPrompt(nextPrompt)
-    const nextPos = (prefix + (needsLeadingSpace ? ' ' : '') + replacement).length
-    setCursorPos(nextPos); setForceMentionCategory(null)
-    requestAnimationFrame(() => { if (textareaRef.current) { textareaRef.current.focus(); textareaRef.current.setSelectionRange(nextPos, nextPos) } })
+    const cleanTitle = item.title.trim()
+    const normalized = cleanTitle === item.title ? item : { ...item, title: cleanTitle }
+    setMentionedItems((prev) => (prev.some((x) => x.type === normalized.type && x.id === normalized.id) ? prev : [...prev, normalized]))
+    if (normalized.type === 'explore') setSelectedExplores((prev) => (prev.includes(normalized.id) ? prev : [...prev, normalized.id]))
+    const curSegs = editorRef.current ? readSegmentsFromDom(editorRef.current) : segments
+    const res = splicePillIntoSegments(curSegs, detectedMention.tokenStart, detectedMention.tokenEnd, {
+      pillKind: 'mention', mentionType: normalized.type, tokenId: `${normalized.type}:${normalized.id}`, label: cleanTitle, rawValue: `@${normalized.type}:${cleanTitle}`,
+    })
+    setDismissedTriggerStart(null); setForceMentionCategory(null)
+    commitEditorSegments(res.segments, res.prompt, res.cursorPos, { renderDom: true, focusDom: true })
   }
 
   const handleRemoveContextChip = (chip: StudioContextMention) => {
     setMentionedItems((prev) => prev.filter((x) => !(x.type === chip.type && x.id === chip.id)))
     if (chip.type === 'explore') setSelectedExplores((prev) => prev.filter((id) => id !== chip.id))
+    const curSegs = editorRef.current ? readSegmentsFromDom(editorRef.current) : segments
+    const stripped = removeMentionPillFromSegments(curSegs, `${chip.type}:${chip.id}`)
+    if (stripped.changed) commitEditorSegments(stripped.segments, stripped.prompt, stripped.prompt.length, { renderDom: true })
   }
 
   const handleInsertScopedPrefix = (category: StudioContextCategory) => {
     setAddContextOpen(false)
-    const token = `@${category}:`
-    const trimmed = prompt.replace(/\s+$/, '')
-    const nextPrompt = trimmed ? `${trimmed} ${token}` : token
-    setPrompt(nextPrompt); setCursorPos(nextPrompt.length); setForceMentionCategory(category)
-    requestAnimationFrame(() => { if (textareaRef.current) { textareaRef.current.focus(); textareaRef.current.setSelectionRange(nextPrompt.length, nextPrompt.length) } })
+    const curSegs = editorRef.current ? readSegmentsFromDom(editorRef.current) : segments
+    const res = appendScopedPrefixToSegments(curSegs, category)
+    setDismissedTriggerStart(null); setForceMentionCategory(category)
+    commitEditorSegments(res.segments, res.prompt, res.cursorPos, { renderDom: true, focusDom: true })
   }
 
   const activeGuideUseCase: StudioUseCase =
@@ -290,7 +341,46 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       : activeMode === 'tile' ? 'tile'
       : builderMode === 'dashboard' ? 'dashboard'
       : selectedUseCase || 'auto'
-  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => handleImageClipboardPaste(e, setPastedImages)
+
+  const placeholderText = isHealthCheckMode
+    ? 'Optional custom focus for 3-Pillar Looker & BigQuery Health Check...'
+    : isCaMode || selectedUseCase === 'conversational-analytics'
+    ? 'Ask a natural-language data question for Looker Conversational Analytics...'
+    : isLookmlMode
+    ? 'Describe LookML changes, SQL query to model, or field descriptions/tests to run in your active dev mode...'
+    : activeMode === 'tile'
+    ? 'Describe the Script to generate or update (or paste a screenshot)...'
+    : builderMode === 'dashboard'
+    ? 'Describe a Looker UDD, Look, Board, or Schedule to create or update (type @ to mention context)...'
+    : `Ask ${normalizeStudioAgentName(rawAgentName)} what you want to build, analyze, or automate (type @ to mention Explores, Dashboards, Looks, or Conversations)...`
+
+  const insertEditorPlainText = (text: string) => {
+    if (!editorRef.current) return
+    const res = insertPlainTextAtSelection(editorRef.current, text)
+    historyRef.current.idx = null
+    if (forceMentionCategory !== null) setForceMentionCategory(null)
+    commitEditorSegments(res.segments, res.prompt, res.cursorPos, { prune: res.removedPills.length > 0 })
+  }
+
+  const copyOrCutSelection = (e: React.ClipboardEvent<HTMLDivElement>, cut: boolean) => {
+    if ((cut && disabled) || !editorRef.current || !e.clipboardData) return
+    const sel = getComposerSelectionOffsets(editorRef.current)
+    if (sel.start === sel.end) return
+    const curSegs = readSegmentsFromDom(editorRef.current)
+    if (curSegs.some((s) => s.kind === 'pill' && s.end > sel.start && s.start < sel.end)) {
+      e.preventDefault()
+      e.clipboardData.setData('text/plain', sliceComposerPrompt(curSegs, sel.start, sel.end))
+      if (cut) insertEditorPlainText('')
+    }
+  }
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    if (disabled) { e.preventDefault(); return }
+    handleImageClipboardPaste(e, setPastedImages)
+    if (e.defaultPrevented || !editorRef.current) return
+    const text = e.clipboardData?.getData('text/plain')
+    if (text) { e.preventDefault(); insertEditorPlainText(text) }
+  }
 
   return (
     <div
@@ -380,149 +470,68 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       )}
 
       <div className="dab-composer-input-wrap" style={{ position: 'relative' }}>
-        {detectedSlashSkill.open && (
-          <div ref={slashMenuRef} className="dab-at-mention-menu dab-dropdown" data-testid="composer-slash-skill-menu" role="listbox" aria-label="Studio slash skills">
-            <div className="dab-at-mention-header">
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <Wrench size={12} strokeWidth={1.75} aria-hidden="true" /><span>Skills (/{detectedSlashSkill.query})</span>
-              </span>
-            </div>
-            {slashSkillOptions.length === 0 ? (
-              <div className="dab-option dab-muted">No matching skills</div>
-            ) : (
-              slashSkillOptions.map((sk, idx) => {
-                const isSelected = activatedLookmlSkills.includes(sk.id)
-                const isHighlighted = idx === activeSlashIndex
-                return (
-                  <div
-                    key={sk.id} role="option" aria-selected={isSelected || isHighlighted} data-testid={`composer-slash-skill-option-${sk.id}`}
-                    className={`dab-option ${isSelected || isHighlighted ? 'dab-option-selected' : ''}`}
-                    style={{ gap: 8 }}
-                    onMouseEnter={() => setActiveSlashIndex(idx)} onClick={(e) => { e.stopPropagation(); handleSelectSlashSkill(sk) }}
-                    title={`${sk.desc} (${sk.path})`}
-                  >
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0, overflow: 'hidden' }}>
-                      <BookOpen size={13} strokeWidth={1.75} style={{ flexShrink: 0 }} aria-hidden="true" />
-                      <code style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>/{sk.id}</code>
-                      <span className="dab-muted dab-studio-menu-text" style={{ fontSize: 12 }}>{sk.desc}</span>
-                    </span>
-                    {isSelected && <Check size={13} strokeWidth={2} style={{ flexShrink: 0 }} aria-hidden="true" />}
-                  </div>
-                )
-              })
-            )}
-          </div>
-        )}
+        <ComposerAutocompleteMenus
+          slashMenuRef={slashMenuRef} mentionMenuRef={mentionMenuRef}
+          detectedSlashSkill={detectedSlashSkill} slashSkillOptions={slashSkillOptions}
+          activatedLookmlSkills={activatedLookmlSkills} activeSlashIndex={activeSlashIndex}
+          setActiveSlashIndex={setActiveSlashIndex} onSelectSlashSkill={handleSelectSlashSkill}
+          detectedMention={detectedMention} mentionLoading={mentionLoading}
+          selectedExplores={selectedExplores} mentionedItems={mentionedItems}
+          remoteSearchResults={remoteSearchResults} groupedExplores={groupedExplores}
+          mentionOptions={mentionOptions} activeMentionIndex={activeMentionIndex}
+          setActiveMentionIndex={setActiveMentionIndex} onSelectMentionOption={handleSelectMentionOption}
+          onClearExplores={() => {
+            setSelectedExplores([])
+            setMentionedItems((prev) => prev.filter((x) => x.type !== 'explore'))
+            const curSegs = editorRef.current ? readSegmentsFromDom(editorRef.current) : segments
+            const stripped = removeMentionPillFromSegments(curSegs, 'explore:*')
+            if (stripped.changed) commitEditorSegments(stripped.segments, stripped.prompt, stripped.prompt.length, { renderDom: true })
+          }}
+        />
 
-        {detectedMention.open && (
-          <div ref={mentionMenuRef} className="dab-at-mention-menu dab-dropdown" data-testid="composer-at-mention-menu" role="listbox" aria-label="Looker context mentions">
-            <div className="dab-at-mention-header">
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <AtSign size={12} strokeWidth={1.75} aria-hidden="true" />
-                <span>
-                  {detectedMention.category === 'all'
-                    ? 'Mention Looker Context (@explore:, @dashboard:, @look:, @conversation:)'
-                    : `Mention ${detectedMention.category} (@${detectedMention.category}:${detectedMention.query})`}
-                </span>
-              </span>
-              {mentionLoading && (
-                <span data-testid="composer-mention-loading" className="dab-at-mention-spinner" title="Searching Looker via global_search_v2...">
-                  <Loader2 size={13} strokeWidth={2} className="dab-spin" aria-hidden="true" />
-                </span>
-              )}
-            </div>
-
-            {selectedExplores.length > 0 && (detectedMention.category === 'all' || detectedMention.category === 'explore') && (
-              <div
-                className="dab-option" style={{ color: 'var(--dab-accent)', fontWeight: 600 }}
-                onClick={(e) => { e.stopPropagation(); setSelectedExplores([]); setMentionedItems((prev) => prev.filter((x) => x.type !== 'explore')) }}
-              >
-                <span>Clear selection (let agent decide)</span>
-              </div>
-            )}
-
-            {detectedMention.category === 'explore' && !remoteSearchResults.length ? (
-              groupedExplores.length === 0 ? (
-                <div className="dab-option dab-muted">No matching explores</div>
-              ) : (
-                groupedExplores.map((group) => (
-                  <div key={group.modelName}>
-                    <div className="dab-group-header">{group.label}</div>
-                    {group.options.map((opt) => {
-                      const isSelected = selectedExplores.includes(opt.value)
-                      const flatIdx = mentionOptions.findIndex((m) => m.type === 'explore' && m.id === opt.value)
-                      const isHighlighted = flatIdx === activeMentionIndex
-                      return (
-                        <div
-                          key={opt.value} role="option" aria-selected={isSelected || isHighlighted}
-                          data-testid={`composer-mention-option-explore-${opt.value}`}
-                          className={`dab-option ${isSelected || isHighlighted ? 'dab-option-selected' : ''}`}
-                          onMouseEnter={() => { if (flatIdx >= 0) setActiveMentionIndex(flatIdx) }}
-                          onClick={(e) => { e.stopPropagation(); handleSelectMentionOption(opt.mention) }}
-                          title={opt.value}
-                        >
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                            <Database size={13} strokeWidth={1.75} aria-hidden="true" /><span>{opt.label}</span>
-                          </span>
-                          {isSelected && <Check size={13} strokeWidth={2} aria-hidden="true" />}
-                        </div>
-                      )
-                    })}
-                  </div>
-                ))
-              )
-            ) : mentionOptions.length === 0 ? (
-              <div className="dab-option dab-muted">{mentionLoading ? 'Searching Looker...' : 'No matching Looker items'}</div>
-            ) : (
-              mentionOptions.map((item, idx) => {
-                const isSelected = (item.type === 'explore' && selectedExplores.includes(item.id)) || mentionedItems.some((m) => m.type === item.type && m.id === item.id)
-                const isHighlighted = idx === activeMentionIndex
-                return (
-                  <div
-                    key={`${item.type}:${item.id}`} role="option" aria-selected={isSelected || isHighlighted}
-                    data-testid={`composer-mention-option-${item.type}-${item.id}`}
-                    className={`dab-option ${isSelected || isHighlighted ? 'dab-option-selected' : ''}`}
-                    onMouseEnter={() => setActiveMentionIndex(idx)}
-                    onClick={(e) => { e.stopPropagation(); handleSelectMentionOption(item) }}
-                    title={`${item.type}: ${item.title} (${item.id})`}
-                  >
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
-                      {renderMentionCategoryIcon(item.type)}
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title}</span>
-                      {item.subtitle && <span className="dab-muted" style={{ fontSize: 11 }}>· {item.subtitle}</span>}
-                    </span>
-                    <span className="dab-muted" style={{ fontSize: 10, textTransform: 'uppercase' }}>
-                      {isSelected ? <Check size={13} strokeWidth={2} aria-hidden="true" /> : item.type}
-                    </span>
-                  </div>
-                )
-              })
-            )}
-          </div>
-        )}
-
-        <textarea
-          ref={textareaRef} rows={3} data-testid="studio-prompt-input"
-          placeholder={
-            isHealthCheckMode ? 'Optional custom focus for 3-Pillar Looker & BigQuery Health Check...'
-              : isCaMode || selectedUseCase === 'conversational-analytics' ? 'Ask a natural-language data question for Looker Conversational Analytics...'
-              : isLookmlMode ? 'Describe LookML changes, SQL query to model, or field descriptions/tests to run in your active dev mode...'
-              : activeMode === 'tile' ? 'Describe the Script to generate or update (or paste a screenshot)...'
-              : builderMode === 'dashboard' ? 'Describe a Looker UDD, Look, Board, or Schedule to create or update (type @ to mention context)...'
-              : `Ask ${normalizeStudioAgentName(rawAgentName)} what you want to build, analyze, or automate (type @ to mention Explores, Dashboards, Looks, or Conversations)...`
-          }
-          value={prompt}
-          onChange={(e) => {
-            setPrompt(e.target.value)
-            setCursorPos(e.target.selectionStart ?? e.target.value.length)
+        <div
+          ref={bindEditorRef}
+          className="dab-composer-editor"
+          data-testid="studio-prompt-input"
+          role="textbox"
+          aria-multiline="true"
+          aria-label={placeholderText}
+          aria-disabled={disabled ? 'true' : undefined}
+          tabIndex={disabled ? -1 : 0}
+          contentEditable={!disabled}
+          suppressContentEditableWarning
+          data-placeholder={placeholderText}
+          data-empty={prompt.length === 0 ? 'true' : 'false'}
+          {...({ placeholder: placeholderText } as React.HTMLAttributes<HTMLDivElement>)}
+          onInput={() => {
+            const el = editorRef.current
+            if (!el || disabled) return
+            const domSegs = readSegmentsFromDom(el)
+            const domPrompt = serializeComposerSegments(domSegs)
+            const sel = getComposerSelectionOffsets(el)
             historyRef.current.idx = null
             if (forceMentionCategory !== null) setForceMentionCategory(null)
-            if (slashDismissedAt !== null) setSlashDismissedAt(null)
+            const prevKeys = prevPillKeysRef.current
+            if (Array.from(collectPillKeySet(domSegs)).some((k) => !prevKeys.has(k))) ensureHydratedPillsInState(domSegs, false)
+            commitEditorSegments(domSegs, domPrompt, sel.end, { prune: true })
           }}
-          onClick={(e) => setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? prompt.length)}
-          onKeyUp={(e) => setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? prompt.length)}
+          onClick={() => { if (editorRef.current) setCursorPos(getComposerSelectionOffsets(editorRef.current).end) }}
+          onKeyUp={(e) => {
+            if (e.key === 'Escape' || e.key === 'Enter') return
+            if (editorRef.current) setCursorPos(getComposerSelectionOffsets(editorRef.current).end)
+          }}
+          onCopy={(e) => copyOrCutSelection(e, false)}
+          onCut={(e) => copyOrCutSelection(e, true)}
+          onDrop={(e) => {
+            if (e.dataTransfer?.files?.length) return
+            e.preventDefault()
+            if (disabled) return
+            const text = e.dataTransfer?.getData('text/plain')
+            if (text) insertEditorPlainText(text)
+          }}
           onPaste={handlePaste}
           onKeyDown={(e) => {
+            if (disabled) { e.preventDefault(); return }
             if (detectedSlashSkill.open && slashSkillOptions.length > 0) {
               if (e.key === 'ArrowDown') { e.preventDefault(); setActiveSlashIndex((i) => (i + 1) % slashSkillOptions.length); return }
               if (e.key === 'ArrowUp') { e.preventDefault(); setActiveSlashIndex((i) => (i - 1 + slashSkillOptions.length) % slashSkillOptions.length); return }
@@ -533,7 +542,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 return
               }
             }
-            if (e.key === 'Escape' && detectedSlashSkill.open) { e.preventDefault(); setSlashDismissedAt(prompt.slice(0, cursorPos || prompt.length)); return }
+            if (e.key === 'Escape' && detectedSlashSkill.open) { e.preventDefault(); setDismissedTriggerStart(detectedSlashSkill.tokenStart); return }
             if (detectedMention.open && mentionOptions.length > 0) {
               if (e.key === 'ArrowDown') { e.preventDefault(); setActiveMentionIndex((i) => (i + 1) % mentionOptions.length); return }
               if (e.key === 'ArrowUp') { e.preventDefault(); setActiveMentionIndex((i) => (i - 1 + mentionOptions.length) % mentionOptions.length); return }
@@ -544,27 +553,50 @@ export const StudioComposer: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                 return
               }
             }
-            if (e.key === 'Escape' && detectedMention.open) { e.preventDefault(); setSlashDismissedAt(prompt.slice(0, cursorPos || prompt.length)); setForceMentionCategory(null); return }
+            if (e.key === 'Escape' && detectedMention.open) { e.preventDefault(); setDismissedTriggerStart(detectedMention.tokenStart); setForceMentionCategory(null); return }
+            if ((e.key === 'Backspace' || e.key === 'Delete') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+              const curSegs = editorRef.current ? readSegmentsFromDom(editorRef.current) : segments
+              const sel = editorRef.current ? getComposerSelectionOffsets(editorRef.current) : { start: cursorPos, end: cursorPos }
+              const res = applyComposerBackspaceOrDelete(curSegs, sel.start, sel.end, e.key)
+              if (res) {
+                e.preventDefault()
+                historyRef.current.idx = null
+                if (forceMentionCategory !== null) setForceMentionCategory(null)
+                commitEditorSegments(res.segments, res.prompt, res.cursorPos, { renderDom: true, prune: true })
+                return
+              }
+            }
+            if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && editorRef.current) {
+              const curSegs = readSegmentsFromDom(editorRef.current)
+              const sel = getComposerSelectionOffsets(editorRef.current)
+              const hopped = stepComposerArrowAcrossPill(curSegs, sel.start, sel.end, e.key)
+              if (hopped !== null) {
+                e.preventDefault()
+                setComposerSelectionOffsets(editorRef.current, hopped, hopped)
+                setCursorPos(hopped)
+                return
+              }
+            }
             if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
               const h = historyRef.current
               const curIdx = h.convId === activeConversationId && h.idx !== null && prompt === userHistory[h.idx] ? h.idx : null
-              const selStart = e.currentTarget.selectionStart ?? prompt.length
-              const selEnd = e.currentTarget.selectionEnd ?? selStart
-              if (e.key === 'ArrowUp' && userHistory.length > 0 && !prompt.slice(0, selStart).includes('\n') && (curIdx !== null || !prompt.trim())) {
+              const sel = editorRef.current ? getComposerSelectionOffsets(editorRef.current) : { start: prompt.length, end: prompt.length }
+              if (e.key === 'ArrowUp' && userHistory.length > 0 && !prompt.slice(0, sel.start).includes('\n') && (curIdx !== null || !prompt.trim())) {
                 e.preventDefault()
                 if (curIdx === null) h.draft = prompt
                 const nextIdx = curIdx === null ? userHistory.length - 1 : Math.max(0, curIdx - 1)
                 applyRecalledPrompt(nextIdx, userHistory[nextIdx])
                 return
               }
-              if (e.key === 'ArrowDown' && curIdx !== null && !prompt.slice(selEnd).includes('\n')) {
+              if (e.key === 'ArrowDown' && curIdx !== null && !prompt.slice(sel.end).includes('\n')) {
                 e.preventDefault()
                 if (curIdx < userHistory.length - 1) applyRecalledPrompt(curIdx + 1, userHistory[curIdx + 1])
                 else applyRecalledPrompt(null, h.draft)
                 return
               }
             }
-            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+              if (e.shiftKey && !(e.metaKey || e.ctrlKey)) { e.preventDefault(); insertEditorPlainText('\n'); return }
               e.preventDefault()
               if (busyStatus) {
                 if (busySendAction === 'interject') void handleInterjectPrompt()

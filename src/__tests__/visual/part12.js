@@ -478,6 +478,200 @@ function registerVisualPart12Tests(ctx) {
       convBApiRoutes: ['/projects/ecom'],
     })
   }, 20000)
+
+  test('Issue #223: renders inline atomic pill bubbles for @mentions and /slash skills with auto-space, immediate menu close, plain-text typing after pill, and 2-step whole-pill Backspace', async () => {
+    const url = `http://127.0.0.1:${ctx.port}/?scenario=centered_empty_prompt`
+    await ctx.chrome.send('Page.navigate', { url })
+
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const r = await ctx.chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="studio-prompt-input"]'))`,
+        returnByValue: true,
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 100))
+    }
+
+    const pressBackspace = async () => {
+      await ctx.chrome.send('Input.dispatchKeyEvent', {
+        type: 'rawKeyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8,
+      })
+      await ctx.chrome.send('Input.dispatchKeyEvent', {
+        type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8,
+      })
+      await new Promise((res) => setTimeout(res, 50))
+    }
+
+    const clickSelectorWithMouse = async (selector) => {
+      const boxRes = await ctx.chrome.send('Runtime.evaluate', {
+        expression: `(() => {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return null;
+          el.scrollIntoView({ block: 'nearest' });
+          const r = el.getBoundingClientRect();
+          return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+        })()`,
+        returnByValue: true,
+      })
+      const pt = boxRes.result && boxRes.result.value
+      expect(pt).not.toBeNull()
+      await ctx.chrome.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: pt.x, y: pt.y, button: 'left', clickCount: 1 })
+      await ctx.chrome.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: pt.x, y: pt.y, button: 'left', clickCount: 1 })
+      await new Promise((res) => setTimeout(res, 60))
+    }
+
+    // 1. Focus composer and type @dashboard:Halloween -> wait for multi-word dashboard 902 in menu
+    await ctx.chrome.send('Runtime.evaluate', {
+      expression: `(() => { const ta = document.querySelector('[data-testid="studio-prompt-input"]'); ta.focus(); return true; })()`,
+      returnByValue: true,
+    })
+    await ctx.chrome.send('Input.insertText', { text: '@dashboard:Halloween' })
+
+    const menuWait = Date.now() + 4000
+    while (Date.now() < menuWait) {
+      const r = await ctx.chrome.send('Runtime.evaluate', {
+        expression: `Boolean(document.querySelector('[data-testid="composer-mention-option-dashboard-902"]'))`,
+        returnByValue: true,
+      })
+      if (r.result && r.result.value) break
+      await new Promise((res) => setTimeout(res, 60))
+    }
+
+    // 2. Click multi-word @mention option with real mouse events -> keeps focus, inserts atomic pill + trailing space, closes menu
+    await clickSelectorWithMouse('[data-testid="composer-mention-option-dashboard-902"]')
+
+    const afterMentionClick = await ctx.chrome.send('Runtime.evaluate', {
+      expression: `(() => {
+        const ta = document.querySelector('[data-testid="studio-prompt-input"]');
+        const pill = ta.querySelector('[data-testid="composer-inline-pill"]');
+        const svg = pill?.querySelector('svg');
+        const lbl = pill?.querySelector('.dab-inline-token-pill-label');
+        return {
+          role: ta.getAttribute('role'),
+          ariaMultiline: ta.getAttribute('aria-multiline'),
+          keptFocus: document.activeElement === ta,
+          menuClosed: !document.querySelector('[data-testid="composer-at-mention-menu"]'),
+          value: ta.value,
+          selStart: ta.selectionStart,
+          pillEditable: pill?.getAttribute('contenteditable'),
+          pillKind: pill?.getAttribute('data-token-kind'),
+          pillId: pill?.getAttribute('data-token-id'),
+          pillRaw: pill?.getAttribute('data-token-value'),
+          svgW: svg?.getAttribute('width'),
+          labelText: lbl?.textContent,
+          labelWeight: lbl ? Number(window.getComputedStyle(lbl).fontWeight) : 0,
+        };
+      })()`,
+      returnByValue: true,
+    })
+    expect(afterMentionClick.result.value).toEqual({
+      role: 'textbox',
+      ariaMultiline: 'true',
+      keptFocus: true,
+      menuClosed: true,
+      value: '@dashboard:Halloween Sales Drop — KDA Investigation ',
+      selStart: '@dashboard:Halloween Sales Drop — KDA Investigation '.length,
+      pillEditable: 'false',
+      pillKind: 'mention',
+      pillId: 'dashboard:902',
+      pillRaw: '@dashboard:Halloween Sales Drop — KDA Investigation',
+      svgW: '12',
+      labelText: 'Halloween Sales Drop — KDA Investigation',
+      labelWeight: 600,
+    })
+
+    // 3. Type normal text -> does NOT reopen @mention menu; then type /lookml -> opens /slash menu & selects /lookml-tests
+    await ctx.chrome.send('Input.insertText', { text: 'compare Q4 ' })
+    await new Promise((res) => setTimeout(res, 60))
+    const afterNormalTyping = await ctx.chrome.send('Runtime.evaluate', {
+      expression: `({
+        menuClosed: !document.querySelector('[data-testid="composer-at-mention-menu"]'),
+        value: document.querySelector('[data-testid="studio-prompt-input"]').value,
+      })`,
+      returnByValue: true,
+    })
+    expect(afterNormalTyping.result.value).toEqual({
+      menuClosed: true,
+      value: '@dashboard:Halloween Sales Drop — KDA Investigation compare Q4 ',
+    })
+
+    await ctx.chrome.send('Input.insertText', { text: '/lookml' })
+    await new Promise((res) => setTimeout(res, 60))
+    await clickSelectorWithMouse('[data-testid="composer-slash-skill-option-lookml-tests"]')
+
+    // 4. Backspace #1 removes trailing " "; Backspace #2 removes entire /lookml-tests pill atomically
+    await pressBackspace()
+    const afterSlashBs1 = await ctx.chrome.send('Runtime.evaluate', {
+      expression: `({
+        value: document.querySelector('[data-testid="studio-prompt-input"]').value,
+        pillCount: document.querySelectorAll('[data-testid="composer-inline-pill"]').length,
+        skills: window.__DAB_STUDIO__.activatedLookmlSkills,
+      })`,
+      returnByValue: true,
+    })
+    expect(afterSlashBs1.result.value).toEqual({
+      value: '@dashboard:Halloween Sales Drop — KDA Investigation compare Q4 /lookml-tests',
+      pillCount: 2,
+      skills: ['lookml-tests'],
+    })
+
+    await pressBackspace()
+    const afterSlashBs2 = await ctx.chrome.send('Runtime.evaluate', {
+      expression: `({
+        value: document.querySelector('[data-testid="studio-prompt-input"]').value,
+        pillCount: document.querySelectorAll('[data-testid="composer-inline-pill"]').length,
+        skills: window.__DAB_STUDIO__.activatedLookmlSkills,
+      })`,
+      returnByValue: true,
+    })
+    expect(afterSlashBs2.result.value).toEqual({
+      value: '@dashboard:Halloween Sales Drop — KDA Investigation compare Q4 ',
+      pillCount: 1,
+      skills: [],
+    })
+
+    // 5. Verify 2-step Backspace directly on the multi-word @mention pill ([pill] | -> [pill]| -> empty)
+    await ctx.chrome.send('Runtime.evaluate', {
+      expression: `(() => {
+        const ta = document.querySelector('[data-testid="studio-prompt-input"]');
+        ta.value = '@dashboard:Halloween Sales Drop — KDA Investigation ';
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        ta.focus();
+      })()`,
+      returnByValue: true,
+    })
+    await new Promise((res) => setTimeout(res, 40))
+    await pressBackspace()
+    const afterMentionBs1 = await ctx.chrome.send('Runtime.evaluate', {
+      expression: `({
+        value: document.querySelector('[data-testid="studio-prompt-input"]').value,
+        pillCount: document.querySelectorAll('[data-testid="composer-inline-pill"]').length,
+        mentions: window.__DAB_STUDIO__.mentionedItems.length,
+      })`,
+      returnByValue: true,
+    })
+    expect(afterMentionBs1.result.value).toEqual({
+      value: '@dashboard:Halloween Sales Drop — KDA Investigation',
+      pillCount: 1,
+      mentions: 1,
+    })
+
+    await pressBackspace()
+    const afterMentionBs2 = await ctx.chrome.send('Runtime.evaluate', {
+      expression: `({
+        value: document.querySelector('[data-testid="studio-prompt-input"]').value,
+        pillCount: document.querySelectorAll('[data-testid="composer-inline-pill"]').length,
+        mentions: window.__DAB_STUDIO__.mentionedItems.length,
+      })`,
+      returnByValue: true,
+    })
+    expect(afterMentionBs2.result.value).toEqual({
+      value: '',
+      pillCount: 0,
+      mentions: 0,
+    })
+  }, 20000)
 }
 
 module.exports = { registerVisualPart12Tests }

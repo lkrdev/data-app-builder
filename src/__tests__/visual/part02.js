@@ -85,10 +85,13 @@ function registerVisualPart02Tests(ctx) {
         window.__DAB_STUDIO__.setOauthToken('mock_oauth_token');
         await new Promise((r) => setTimeout(r, 40));
         const ta = document.querySelector('[data-testid="studio-prompt-input"]');
-        const taSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-        taSetter.call(ta, 'Add a measure for gross_margin to order_items.view.lkml and run LookML data tests');
-        ta.dispatchEvent(new Event('input', { bubbles: true }));
-        ta.dispatchEvent(new Event('change', { bubbles: true }));
+        const setPromptInputVal = (el, val) => {
+          const setter = (Object.getOwnPropertyDescriptor(el, 'value') || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')).set;
+          setter.call(el, val);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+        setPromptInputVal(ta, 'Add a measure for gross_margin to order_items.view.lkml and run LookML data tests');
         await new Promise((r) => setTimeout(r, 60));
 
         const sendBtn = document.querySelector('.dab-composer .dab-btn-gemini');
@@ -110,9 +113,7 @@ function registerVisualPart02Tests(ctx) {
         // 4. Submit Turn 2 Dashboard prompt in the SAME conversation -> dynamically routes to 'dashboard' without locking
         const ta2 = document.querySelector('[data-testid="studio-prompt-input"]');
         const sendBtn2 = document.querySelector('[data-testid="studio-send-btn"]');
-        taSetter.call(ta2, 'Create a native Looker UDD dashboard for executive KPIs');
-        ta2.dispatchEvent(new Event('input', { bubbles: true }));
-        ta2.dispatchEvent(new Event('change', { bubbles: true }));
+        setPromptInputVal(ta2, 'Create a native Looker UDD dashboard for executive KPIs');
         await new Promise((r) => setTimeout(r, 60));
         if (sendBtn2) sendBtn2.click();
         await new Promise((r) => setTimeout(r, 200));
@@ -210,7 +211,7 @@ function registerVisualPart02Tests(ctx) {
         await new Promise((r) => setTimeout(r, 100));
 
         const ta = document.querySelector('[data-testid="studio-prompt-input"]');
-        const taSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        const taSetter = (Object.getOwnPropertyDescriptor(ta, 'value') || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')).set;
         taSetter.call(ta, 'Ask the Conversational Analytics CA agent: What are the top 3 product categories by gross margin in Q4?');
         ta.dispatchEvent(new Event('input', { bubbles: true }));
         ta.dispatchEvent(new Event('change', { bubbles: true }));

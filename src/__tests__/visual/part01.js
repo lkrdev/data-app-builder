@@ -373,7 +373,7 @@ function registerVisualPart01Tests(ctx) {
     const deadline = Date.now() + 8000
     while (Date.now() < deadline) {
       const r = await ctx.chrome.send('Runtime.evaluate', {
-        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('textarea'))`,
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="studio-prompt-input"]'))`,
         returnByValue: true
       })
       if (r.result && r.result.value) break
@@ -392,8 +392,8 @@ function registerVisualPart01Tests(ctx) {
         window.__DAB_STUDIO__.setSelectedUseCase('dashboard');
         await new Promise((r) => setTimeout(r, 50));
 
-        const ta = document.querySelector('.dab-composer textarea');
-        const taSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        const ta = document.querySelector('[data-testid="studio-prompt-input"]');
+        const taSetter = (Object.getOwnPropertyDescriptor(ta, 'value') || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')).set;
         taSetter.call(ta, 'Build a quarterly order margin dashboard on order_items');
         ta.dispatchEvent(new Event('input', { bubbles: true }));
         ta.dispatchEvent(new Event('change', { bubbles: true }));

@@ -96,6 +96,7 @@ const appTsx = [
   'src/components/StudioWorkspace.tsx',
   'src/components/StudioMarkdown.tsx',
   'src/components/StudioUseCaseGuides.tsx',
+  'src/components/StudioComposerTokens.tsx',
   'src/components/StudioComposer.tsx',
   'src/components/StudioLeftPane.tsx',
   'src/components/StudioOverviewSidebar.tsx',

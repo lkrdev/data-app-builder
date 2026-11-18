@@ -88,6 +88,7 @@ ${buildMockFixturesScript(scenario)}
                 const term = String((queryParams && queryParams.term) || '').toLowerCase();
                 const items = [
                   { content_type: 'dashboard', content_id: '901', title: 'Business Pulse', description: 'Executive KPIs and order margin breakdown' },
+                  { content_type: 'dashboard', content_id: '902', title: 'Halloween Sales Drop — KDA Investigation', description: 'Holiday sales root-cause investigation' },
                   { content_type: 'look', content_id: '301', title: 'Monthly Order Margin Look', description: 'Monthly revenue and gross margin trend' },
                   { content_type: 'explore', id: 'thelook::order_items', model_name: 'thelook', explore_name: 'order_items', title: 'Order Items' }
                 ].filter((it) => !term || it.title.toLowerCase().includes(term));

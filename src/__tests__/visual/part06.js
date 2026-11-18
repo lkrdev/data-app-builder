@@ -195,7 +195,7 @@ function registerVisualPart06Tests(ctx) {
         };
 
         // 1. Type a follow-up prompt while busy and click Queue
-        const taSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        const taSetter = (Object.getOwnPropertyDescriptor(ta, 'value') || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')).set;
         taSetter.call(ta, 'Add a regional breakdown filter');
         ta.dispatchEvent(new Event('input', { bubbles: true }));
         ta.dispatchEvent(new Event('change', { bubbles: true }));
