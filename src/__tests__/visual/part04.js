@@ -20,7 +20,7 @@ function registerVisualPart04Tests(ctx) {
     const signedOutRes = await ctx.chrome.send('Runtime.evaluate', {
       expression: `(async () => {
         const ta = document.querySelector('[data-testid="studio-prompt-input"]');
-        const taSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        const taSetter = (Object.getOwnPropertyDescriptor(ta, 'value') || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')).set;
         taSetter.call(ta, 'Build an executive revenue dashboard');
         ta.dispatchEvent(new Event('input', { bubbles: true }));
         ta.dispatchEvent(new Event('change', { bubbles: true }));

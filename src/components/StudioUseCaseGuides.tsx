@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
 
 import {
-  Archive, ArchiveRestore, BookOpen, Check, Code2, Copy, Database, Eye, FileText,
-  LayoutDashboard, MessageSquare, PanelLeftClose, PanelLeftOpen, PanelRightOpen, Trash2, Wrench,
+  Archive, ArchiveRestore, AtSign, BookOpen, Check, Code2, Copy, Database, Eye, FileText,
+  LayoutDashboard, Loader2, MessageSquare, PanelLeftClose, PanelLeftOpen, PanelRightOpen, Trash2, Wrench,
 } from 'lucide-react'
 
 import {
@@ -11,10 +11,13 @@ import {
 } from '../antigravity'
 import {
   ConversationRecord, copyTextWithExtensionSdk, resolveConversationRelatedContent,
-  StudioContextCategory,
+  StudioContextCategory, StudioContextMention,
 } from '../lookerApi'
-import { STUDIO_SLASH_SKILLS } from '../lookmlTool'
+import { LookmlSkillCatalogEntry, STUDIO_SLASH_SKILLS } from '../lookmlTool'
 import { StudioController } from '../useStudioController'
+import {
+  DetectedMentionState, DetectedSlashSkillState, GroupedExploreGroup,
+} from './StudioComposerTokens'
 import {
   StudioBadge, StudioButton, StudioDocPreview, StudioModal, StudioSelect, StudioSkeleton,
 } from './StudioDesignSystem'
@@ -609,12 +612,156 @@ export const SandboxMarkdownPreviewModal: React.FC<{ ctl: StudioController }> = 
   )
 }
 
-export const AT_MENTION_DETECT_RE = /(?:^|\s)@(?:(explore|dashboard|look|conversation):([^\n@]*)|([^\s@]*))$/i
-export const SLASH_SKILL_DETECT_RE = /(?:^|\s)\/([a-z0-9_-]*)$/i
-
 export function renderMentionCategoryIcon(type: StudioContextCategory): React.ReactElement {
   if (type === 'explore') return <Database size={13} strokeWidth={1.75} aria-hidden="true" />
   if (type === 'dashboard') return <LayoutDashboard size={13} strokeWidth={1.75} aria-hidden="true" />
   if (type === 'look') return <Eye size={13} strokeWidth={1.75} aria-hidden="true" />
   return <MessageSquare size={13} strokeWidth={1.75} aria-hidden="true" />
 }
+
+export const ComposerAutocompleteMenus: React.FC<{
+  slashMenuRef: React.RefObject<HTMLDivElement | null>
+  mentionMenuRef: React.RefObject<HTMLDivElement | null>
+  detectedSlashSkill: DetectedSlashSkillState
+  slashSkillOptions: readonly LookmlSkillCatalogEntry[]
+  activatedLookmlSkills: readonly string[]
+  activeSlashIndex: number
+  setActiveSlashIndex: (idx: number) => void
+  onSelectSlashSkill: (sk: LookmlSkillCatalogEntry) => void
+  detectedMention: DetectedMentionState
+  mentionLoading: boolean
+  selectedExplores: readonly string[]
+  mentionedItems: readonly StudioContextMention[]
+  remoteSearchResults: readonly StudioContextMention[]
+  groupedExplores: readonly GroupedExploreGroup[]
+  mentionOptions: readonly StudioContextMention[]
+  activeMentionIndex: number
+  setActiveMentionIndex: (idx: number) => void
+  onSelectMentionOption: (item: StudioContextMention) => void
+  onClearExplores: () => void
+}> = ({
+  slashMenuRef, mentionMenuRef, detectedSlashSkill, slashSkillOptions, activatedLookmlSkills,
+  activeSlashIndex, setActiveSlashIndex, onSelectSlashSkill, detectedMention, mentionLoading,
+  selectedExplores, mentionedItems, remoteSearchResults, groupedExplores, mentionOptions,
+  activeMentionIndex, setActiveMentionIndex, onSelectMentionOption, onClearExplores,
+}) => (
+  <>
+    {detectedSlashSkill.open && (
+      <div ref={slashMenuRef} className="dab-at-mention-menu dab-dropdown" data-testid="composer-slash-skill-menu" role="listbox" aria-label="Studio slash skills">
+        <div className="dab-at-mention-header">
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <Wrench size={12} strokeWidth={1.75} aria-hidden="true" /><span>Skills (/{detectedSlashSkill.query})</span>
+          </span>
+        </div>
+        {slashSkillOptions.length === 0 ? (
+          <div className="dab-option dab-muted">No matching skills</div>
+        ) : (
+          slashSkillOptions.map((sk, idx) => {
+            const isSelected = activatedLookmlSkills.includes(sk.id)
+            const isHighlighted = idx === activeSlashIndex
+            return (
+              <div
+                key={sk.id} role="option" aria-selected={isSelected || isHighlighted} data-testid={`composer-slash-skill-option-${sk.id}`}
+                className={`dab-option ${isSelected || isHighlighted ? 'dab-option-selected' : ''}`} style={{ gap: 8 }}
+                onMouseDown={(e) => e.preventDefault()} onMouseEnter={() => setActiveSlashIndex(idx)}
+                onClick={(e) => { e.stopPropagation(); onSelectSlashSkill(sk) }} title={`${sk.desc} (${sk.path})`}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0, overflow: 'hidden' }}>
+                  <BookOpen size={13} strokeWidth={1.75} style={{ flexShrink: 0 }} aria-hidden="true" />
+                  <code style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>/{sk.id}</code>
+                  <span className="dab-muted dab-studio-menu-text" style={{ fontSize: 12 }}>{sk.desc}</span>
+                </span>
+                {isSelected && <Check size={13} strokeWidth={2} style={{ flexShrink: 0 }} aria-hidden="true" />}
+              </div>
+            )
+          })
+        )}
+      </div>
+    )}
+
+    {detectedMention.open && (
+      <div ref={mentionMenuRef} className="dab-at-mention-menu dab-dropdown" data-testid="composer-at-mention-menu" role="listbox" aria-label="Looker context mentions">
+        <div className="dab-at-mention-header">
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <AtSign size={12} strokeWidth={1.75} aria-hidden="true" />
+            <span>
+              {detectedMention.category === 'all'
+                ? 'Mention Looker Context (@explore:, @dashboard:, @look:, @conversation:)'
+                : `Mention ${detectedMention.category} (@${detectedMention.category}:${detectedMention.query})`}
+            </span>
+          </span>
+          {mentionLoading && (
+            <span data-testid="composer-mention-loading" className="dab-at-mention-spinner" title="Searching Looker via global_search_v2...">
+              <Loader2 size={13} strokeWidth={2} className="dab-spin" aria-hidden="true" />
+            </span>
+          )}
+        </div>
+
+        {selectedExplores.length > 0 && (detectedMention.category === 'all' || detectedMention.category === 'explore') && (
+          <div
+            className="dab-option" style={{ color: 'var(--dab-accent)', fontWeight: 600 }}
+            onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.stopPropagation(); onClearExplores() }}
+          >
+            <span>Clear selection (let agent decide)</span>
+          </div>
+        )}
+
+        {detectedMention.category === 'explore' && !remoteSearchResults.length ? (
+          groupedExplores.length === 0 ? (
+            <div className="dab-option dab-muted">No matching explores</div>
+          ) : (
+            groupedExplores.map((group) => (
+              <div key={group.modelName}>
+                <div className="dab-group-header">{group.label}</div>
+                {group.options.map((opt) => {
+                  const isSelected = selectedExplores.includes(opt.value)
+                  const flatIdx = mentionOptions.findIndex((m) => m.type === 'explore' && m.id === opt.value)
+                  const isHighlighted = flatIdx === activeMentionIndex
+                  return (
+                    <div
+                      key={opt.value} role="option" aria-selected={isSelected || isHighlighted}
+                      data-testid={`composer-mention-option-explore-${opt.value}`}
+                      className={`dab-option ${isSelected || isHighlighted ? 'dab-option-selected' : ''}`}
+                      onMouseDown={(e) => e.preventDefault()} onMouseEnter={() => { if (flatIdx >= 0) setActiveMentionIndex(flatIdx) }}
+                      onClick={(e) => { e.stopPropagation(); onSelectMentionOption(opt.mention) }} title={opt.value}
+                    >
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <Database size={13} strokeWidth={1.75} aria-hidden="true" /><span>{opt.label}</span>
+                      </span>
+                      {isSelected && <Check size={13} strokeWidth={2} aria-hidden="true" />}
+                    </div>
+                  )
+                })}
+              </div>
+            ))
+          )
+        ) : mentionOptions.length === 0 ? (
+          <div className="dab-option dab-muted">{mentionLoading ? 'Searching Looker...' : 'No matching Looker items'}</div>
+        ) : (
+          mentionOptions.map((item, idx) => {
+            const isSelected = (item.type === 'explore' && selectedExplores.includes(item.id)) || mentionedItems.some((m) => m.type === item.type && m.id === item.id)
+            const isHighlighted = idx === activeMentionIndex
+            return (
+              <div
+                key={`${item.type}:${item.id}`} role="option" aria-selected={isSelected || isHighlighted}
+                data-testid={`composer-mention-option-${item.type}-${item.id}`}
+                className={`dab-option ${isSelected || isHighlighted ? 'dab-option-selected' : ''}`}
+                onMouseDown={(e) => e.preventDefault()} onMouseEnter={() => setActiveMentionIndex(idx)}
+                onClick={(e) => { e.stopPropagation(); onSelectMentionOption(item) }} title={`${item.type}: ${item.title} (${item.id})`}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
+                  {renderMentionCategoryIcon(item.type)}
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title}</span>
+                  {item.subtitle && <span className="dab-muted" style={{ fontSize: 11 }}>· {item.subtitle}</span>}
+                </span>
+                <span className="dab-muted" style={{ fontSize: 10, textTransform: 'uppercase' }}>
+                  {isSelected ? <Check size={13} strokeWidth={2} aria-hidden="true" /> : item.type}
+                </span>
+              </div>
+            )
+          })
+        )}
+      </div>
+    )}
+  </>
+)

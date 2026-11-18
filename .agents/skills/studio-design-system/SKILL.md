@@ -102,6 +102,9 @@ Non-interactive wrapper for live UI components embedded inside documentation Mar
 Accessible custom dropdown (`role="listbox"`) with a synchronized hidden `<select className="dab-studio-select-native">` for `.value` compatibility.
 - **Submenu Flyout (`StudioSelectOption.subMenu`)**: Pass `subMenu?: { value: string; options: Array<{ value: string; label: string; testId?: string }>; onChange: (val: string) => void; testId?: string }` on any option to render a right-aligned muted value + `›` chevron (`.dab-studio-menu-subtrigger`) and a side flyout menu (`.dab-studio-submenu`, with `.dab-studio-menu.has-submenu { overflow: visible; max-height: none; }` so the side flyout is never clipped).
 
+### Inline Composer Atomic Token Pills (`src/components/StudioComposerTokens.tsx`)
+Committed `/slash` skills and `@mention` items inside `[data-testid="studio-prompt-input"]` (`.dab-composer-editor`, `role="textbox"`, `aria-multiline="true"`) render as `<span contenteditable="false" class="dab-inline-token-pill" data-testid="composer-inline-pill" data-token-kind="slash|mention" data-token-id="..." data-token-value="...">` using `--dab-surface-subtle`, `--dab-border-strong`, and `--dab-text` with a `12px` SVG category icon and bold (`font-weight: 600`) label. Autocomplete option rows must keep `onMouseDown={(e) => e.preventDefault()}` so clicking never blurs the `contentEditable` composer.
+
 ### Library-First TypeScript Typing & Zero-`any` Rule
 All Studio UI components and hooks enforce `"@typescript-eslint/no-explicit-any": "error"` (`npm run lint:check`):
 - Import canonical types from `@looker/sdk` (`Looker40SDK`, `IDashboard`, `IFolder`, `ILookmlModel`, `IRole`, `IUser`), `@looker/extension-sdk` (`ExtensionSDK`, `LookerHostData`, `TileHostData`, `FetchCustomParameters`), `@looker/extension-sdk-react` (`ExtensionContextData`), `@looker/embed-sdk` (`ILookerConnection`), `swr`, `react`, and `react-router-dom` before defining custom interfaces.

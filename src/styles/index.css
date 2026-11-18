@@ -34,7 +34,13 @@ html,body {margin:0;padding:0;height:100%;font-family:-apple-system,BlinkMacSyst
 :root[data-theme="dark"] .dab-status-banner {background:rgba(14,165,233,0.16);border-color:rgba(56,189,248,0.35);color:#7dd3fc}
 .dab-spinner {width:12px;height:12px;border:2px solid #0284c7;border-top-color:transparent;border-radius:50%;animation:dab-spin 0.8s linear infinite}
 .dab-composer {border-top:1px solid var(--dab-border,#e2e8f0);padding:10px;display:flex;flex-direction:column;gap:8px;background:var(--dab-surface-muted,#f8fafc)}
-.dab-composer textarea {width:100%;resize:vertical;border:1px solid var(--dab-border-strong,#cbd5e1);border-radius:6px;padding:8px;font-family:inherit;font-size:13px;background:var(--dab-input-bg,#ffffff);color:var(--dab-text,#1f2937)}
+.dab-composer-editor {width:100%;min-height:72px;max-height:220px;overflow-y:auto;border:1px solid var(--dab-border-strong,#cbd5e1);border-radius:6px;padding:8px;font-family:inherit;font-size:13px;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--dab-input-bg,#ffffff);color:var(--dab-text,#1f2937);outline:none}
+.dab-composer-editor:focus {border-color:var(--dab-accent,#2563eb);box-shadow:0 0 0 2px rgba(37,99,235,0.15)}
+.dab-composer-editor[aria-disabled="true"] {opacity:0.55;cursor:not-allowed;background:var(--dab-surface-muted,#f8fafc)}
+.dab-composer-editor[data-empty="true"]::before {content:attr(data-placeholder);color:var(--dab-text-muted,#64748b);pointer-events:none}
+.dab-inline-token-pill {display:inline-flex;align-items:center;gap:4px;padding:1px 7px;margin:0 1px;border-radius:999px;background:var(--dab-surface-subtle,#f1f5f9);border:1px solid var(--dab-border-strong,#cbd5e1);color:var(--dab-text,#1f2937);font-size:12px;font-weight:600;line-height:1.35;vertical-align:baseline;white-space:nowrap;user-select:all}
+.dab-inline-token-pill-icon {flex-shrink:0;color:var(--dab-text-secondary,#475569)}
+.dab-inline-token-pill-label {font-weight:600;color:var(--dab-text,#1f2937)}
 .dab-composer-actions {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
 .dab-composer-model-select .dab-studio-select-trigger {height:28px;font-size:11.5px;padding:0 8px;border-radius:6px;border:1px solid var(--dab-border-strong,#cbd5e1);background:var(--dab-surface,#ffffff);color:var(--dab-text-strong,#0f172a);font-weight:500}
 .dab-starter-prompts {display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:10px}

@@ -631,6 +631,7 @@ function buildMockFixturesScript(scenario) {
           const t = String((params && params.terms) || '').toLowerCase();
           const all = [
             { content_id: '901', type: 'dashboard', title: 'Business Pulse', description: 'Executive KPIs and order margin breakdown' },
+            { content_id: '902', type: 'dashboard', title: 'Halloween Sales Drop — KDA Investigation', description: 'Holiday sales root-cause investigation' },
             { content_id: '301', type: 'look', title: 'Monthly Order Margin Look', description: 'Monthly revenue and gross margin trend' }
           ];
           return all.filter((item) => !t || item.title.toLowerCase().includes(t));

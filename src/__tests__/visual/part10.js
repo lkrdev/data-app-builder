@@ -510,7 +510,7 @@ function registerVisualPart10Tests(ctx) {
 
         // Slash skills menu: non-wrapping /<skill-id> + description, zero redundant sk.label
         const ta = document.querySelector('[data-testid="studio-prompt-input"]');
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        const nativeSetter = (Object.getOwnPropertyDescriptor(ta, 'value') || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')).set;
         ta.focus();
         nativeSetter.call(ta, '/');
         ta.dispatchEvent(new Event('input', { bubbles: true }));
