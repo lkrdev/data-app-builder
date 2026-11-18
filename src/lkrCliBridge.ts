@@ -3,7 +3,7 @@ import type { Looker40SDK } from '@looker/sdk'
 
 import type { CodeModePermissionDecision, CodeModePermissionRequest } from './antigravityTypes'
 import { fetchLookerCaAgentsCatalog, LookerCaAgentSummary, normalizeCaAgent } from './conversationalAnalytics'
-import { applyCodeModeHelpers } from './lkrCliCodeModeHelpers'
+import { applyCodeModeHelpers, enqueueCodeModeExecution, yieldCodeModeExecution } from './lkrCliCodeModeHelpers'
 import {
   canonicalizeLookerRoute,
   classifyLookerOperation,
@@ -17,6 +17,7 @@ import {
   normalizeLookerApiPath,
   rawLookerRequest,
   resolveLookerExtensionSdk,
+  suspendCodeModeApiScope,
   withCodeModeApiScope,
 } from './lookerTransport'
 export * from './lkrCliCodeModeHelpers'
@@ -44,6 +45,8 @@ export interface LkrCodeModeRunOptions {
   vars?: Record<string, unknown>
   thought?: string
   conversationId?: string
+  signal?: AbortSignal
+  beforeRun?: () => Promise<unknown>
   allowUpdateSession?: boolean
   allow_update_session?: boolean
   requirePermission?: boolean
@@ -251,7 +254,7 @@ function resolveLookerBaseHandler(opts: LkrCodeModeRunOptions, rawArg?: unknown)
 
 function createGatedLookerHandler(
   baseHandler: LkrCodeModeRunOptions['requestHandler'],
-  opts: Pick<LkrCodeModeRunOptions, 'requirePermission' | 'approvedOperations' | 'onPermissionRequest' | 'thought'>,
+  opts: Pick<LkrCodeModeRunOptions, 'requirePermission' | 'approvedOperations' | 'onPermissionRequest' | 'thought' | 'conversationId' | 'signal'>,
   codeFallback?: string
 ): LkrCodeModeRunOptions['requestHandler'] {
   const shouldRequirePermission =
@@ -281,10 +284,10 @@ function createGatedLookerHandler(
       if (isApproved()) return
       if (typeof opts.onPermissionRequest !== 'function') return Promise.reject(toHandlerError(denyMsg))
       const thought = typeof opts.thought === 'string' && opts.thought.trim() ? opts.thought.trim() : undefined
-      return Promise.resolve(
-        opts.onPermissionRequest(
-          Object.assign({ operation: info.operation, httpMethod: verb, path: p, args: { params: q, body: b } }, thought ? { thought } : null)
-        )
+      return yieldCodeModeExecution(
+        () => Promise.resolve(opts.onPermissionRequest!(Object.assign({ operation: info.operation, httpMethod: verb, path: p, args: { params: q, body: b } }, thought ? { thought } : null))),
+        opts.signal,
+        suspendCodeModeApiScope
       ).then((decision) => {
         if (decision === 'allow_op') approvedOps.add(info.operation)
         else if (decision === 'allow_all') approvedOps.add('*')
@@ -307,6 +310,7 @@ const runCodeModeInner: LkrCodeModeRunFn = async (
     : isLookerExtensionSdk(options) && !('code' in (options as object)) && !('requirePermission' in (options as object))
     ? { extensionSDK: options }
     : Object.assign({}, options || null, isLookerExtensionSdk(options) && !(options as LkrCodeModeRunOptions)?.extensionSDK ? { extensionSDK: options } : null)
+  if (typeof baseOpts.beforeRun === 'function') await baseOpts.beforeRun()
   const rawInputCode = String(isObj ? baseOpts.code || '' : codeOrParams || '')
   const rawCode = /\bsdk\s*=/.test(rawInputCode)
     ? rawInputCode
@@ -430,8 +434,10 @@ const runCodeModeInner: LkrCodeModeRunFn = async (
   return isObj ? runtime.runPythonCode(nextOpts) : runtime.runPythonCode(applied.code, nextOpts)
 }
 
-const runCodeMode: LkrCodeModeRunFn = (c, o) =>
-  withCodeModeApiScope(() => runCodeModeInner(c, o), String((typeof c === 'object' ? c?.conversationId : o?.conversationId) || '').trim() || undefined)
+const runCodeMode: LkrCodeModeRunFn = (c, o) => {
+  const opts = typeof c === 'object' ? c : o
+  return enqueueCodeModeExecution(() => withCodeModeApiScope(() => runCodeModeInner(c, o), String(opts?.conversationId || '').trim() || undefined), opts?.signal)
+}
 
 export const LkrCodeMode: LkrCodeModeRuntime = {
   RUN_LOOKER_CODEMODE_TOOL: getCodeModeToolDefinition('run_looker_codemode'),
@@ -712,8 +718,9 @@ async function executeLkrExtensionToolRequestInner(params: {
   approvedOperations?: Set<string>
   onPermissionRequest?: LkrCodeModeRunOptions['onPermissionRequest']
   conversationId?: string
+  signal?: AbortSignal
 }): Promise<{ cacheKey: string; result: unknown }> {
-  const { sdk, req, defaultVars, extensionSDK, requirePermission, approvedOperations, onPermissionRequest, conversationId } = params
+  const { sdk, req, defaultVars, extensionSDK, requirePermission, approvedOperations, onPermissionRequest, conversationId, signal } = params
   if (req.kind === 'file_ref') {
     throw new Error(`Unhydrated file_ref bridge request (${req.req_path || req.cache_key || 'unknown'})`)
   }
@@ -752,20 +759,20 @@ async function executeLkrExtensionToolRequestInner(params: {
         }
       : undefined
     const gated = createGatedLookerHandler(sdkHandler, {
-      requirePermission,
-      approvedOperations,
-      onPermissionRequest,
+      requirePermission, approvedOperations, onPermissionRequest, conversationId, signal,
       thought: effectiveThought || `${method} ${cleanPath}`,
     })
     if (!gated) throw new Error(`Looker SDK transport is not configured for ${method} ${cleanPath}`)
-    const result = await gated(method, cleanPath, queryParams, body)
+    const result = await enqueueCodeModeExecution(
+      () => withCodeModeApiScope(() => gated(method, cleanPath, queryParams, body), String(conversationId || '').trim() || undefined),
+      signal
+    )
     return { cacheKey, result }
   }
 
-  await ensureDevSession(false)
   const rawOut = await LkrCodeMode.runPythonCode(
     Object.assign(
-      { code: String(req.code || ''), sdk, vars: Object.assign({}, defaultVars || null, req.vars || null), allowUpdateSession: Boolean(req.dev_mode), extensionSDK, requirePermission, approvedOperations, onPermissionRequest, conversationId },
+      { code: String(req.code || ''), sdk, vars: Object.assign({}, defaultVars || null, req.vars || null), allowUpdateSession: Boolean(req.dev_mode), extensionSDK, requirePermission, approvedOperations, onPermissionRequest, conversationId, signal, beforeRun: () => ensureDevSession(false) },
       effectiveThought ? { thought: effectiveThought } : null
     )
   )
@@ -773,15 +780,10 @@ async function executeLkrExtensionToolRequestInner(params: {
   if (typeof rawOut === 'string') {
     const trimmed = rawOut.trim()
     if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-      try {
-        result = JSON.parse(trimmed)
-      } catch {
-        result = rawOut
-      }
+      try { result = JSON.parse(trimmed) } catch { result = rawOut }
     }
   }
   return { cacheKey, result }
 }
 
-export const executeLkrExtensionToolRequest: typeof executeLkrExtensionToolRequestInner = (params) =>
-  withCodeModeApiScope(() => executeLkrExtensionToolRequestInner(params), params.conversationId)
+export const executeLkrExtensionToolRequest = executeLkrExtensionToolRequestInner

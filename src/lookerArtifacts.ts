@@ -501,6 +501,8 @@ export const saveConversationArtifact = saveUserConversation
 export const archiveUserConversation = (sdk: Looker40SDK, userId: string, conversationId: string, archived = true, namespace = ARTIFACT_NAMESPACE): Promise<UserConversationEntry[]> =>
   getArtifactService(sdk, namespace).archiveConversation(userId, conversationId, archived)
 export const archiveConversationArtifact = archiveUserConversation
+export const isUserConversationDeleted = (sdk: Looker40SDK, userId: string, conversationId: string, namespace = ARTIFACT_NAMESPACE): boolean =>
+  getArtifactService(sdk, namespace).isConversationDeleted(userId, conversationId)
 
 export async function deleteUserConversation(
   sdk: Looker40SDK,

@@ -37,6 +37,9 @@ export class ArtifactService {
   private readonly knownMissingKeys = new Set<string>()
   private readonly valueByKey = new Map<string, unknown>()
   private readonly conversationsCache = new Map<string, UserConversationEntry[]>()
+  private readonly convLoadByUser = new Map<string, Promise<UserConversationEntry[]>>()
+  private readonly convPutByUser = new Map<string, Promise<void>>()
+  private readonly deletedConvIdsByUser = new Map<string, Set<string>>()
   private readonly userListCache = new Map<string, UserArtifactIndexEntry[]>()
   private readonly scriptsCache = new Map<string, SavedScript[]>()
   private readonly tileScriptCache = new Map<string, TileScriptBinding | null>()
@@ -55,6 +58,9 @@ export class ArtifactService {
     this.knownMissingKeys.clear()
     this.valueByKey.clear()
     this.conversationsCache.clear()
+    this.convLoadByUser.clear()
+    this.convPutByUser.clear()
+    this.deletedConvIdsByUser.clear()
     this.userListCache.clear()
     this.scriptsCache.clear()
     this.tileScriptCache.clear()
@@ -112,12 +118,24 @@ export class ArtifactService {
     if (convMatch) {
       const uid = convMatch[1]
       const prevList = this.conversationsCache.get(uid)
-      const normalized = normalizeConversationsArray(parsedVal).map((c) => {
+      const deletedSet = this.deletedConvIdsByUser.get(uid)
+      const byId = new Map<string, UserConversationEntry>()
+      for (const c of normalizeConversationsArray(parsedVal)) {
+        if (deletedSet?.has(c.id)) continue
         const p = prevList?.find((x) => x.id === c.id)
-        return p?.messages && (!c.messages || (p.messages.length > c.messages.length && c.messages[c.messages.length - 1]?.role === 'user'))
-          ? { ...c, messages: p.messages, interactionId: c.interactionId || p.interactionId }
-          : c
-      })
+        const keepMsgs = Boolean(p?.messages && (!c.messages || (p.messages.length > c.messages.length && c.messages[c.messages.length - 1]?.role === 'user')))
+        const keepItems = Boolean(p?.contentItems?.length && (!c.contentItems || p.contentItems.length > c.contentItems.length))
+        const pNewer = Boolean(p && String(p.updatedAt || '') >= String(c.updatedAt || ''))
+        byId.set(c.id, p ? {
+          ...(pNewer ? c : p), ...(pNewer ? p : c),
+          ...(keepMsgs ? { messages: p.messages } : {}),
+          ...(keepItems ? { contentItems: p.contentItems } : {}),
+          ...(p.interactionId || c.interactionId ? { interactionId: (pNewer ? p.interactionId : c.interactionId) || p.interactionId || c.interactionId } : {}),
+          ...(p.environmentId || c.environmentId ? { environmentId: (pNewer ? p.environmentId : c.environmentId) || p.environmentId || c.environmentId } : {}),
+        } : c)
+      }
+      for (const p of prevList || []) if (!byId.has(p.id) && !deletedSet?.has(p.id)) byId.set(p.id, p)
+      const normalized = Array.from(byId.values()).sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
       this.conversationsCache.set(uid, normalized)
       writeSwrCache(['artifact:conversations', this.namespace, uid], normalized)
       return
@@ -378,15 +396,37 @@ export class ArtifactService {
     return nextConfig
   }
 
+  private enqueueConversationsPut(uid: string): Promise<void> {
+    const run = () => this.put([{ key: formatUserConversationsKey(uid), value: this.conversationsCache.get(uid) || [] }]).then(() => {})
+    const active = this.convPutByUser.get(uid)
+    const next = active ? active.then(run, run) : run()
+    const tracked = next.finally(() => { if (this.convPutByUser.get(uid) === tracked) this.convPutByUser.delete(uid) })
+    this.convPutByUser.set(uid, tracked)
+    return next
+  }
+
   async listConversations(userId: string): Promise<UserConversationEntry[]> {
     const uid = String(userId || '1').trim()
     const cached = this.conversationsCache.get(uid)
     if (cached) return cached
-    const raw = await this.get<UserConversationEntry[] | { conversations?: UserConversationEntry[] }>(formatUserConversationsKey(uid))
-    const normalized = normalizeConversationsArray(raw)
-    this.conversationsCache.set(uid, normalized)
-    writeSwrCache(['artifact:conversations', this.namespace, uid], normalized)
-    return normalized
+    let pending = this.convLoadByUser.get(uid)
+    if (!pending) {
+      pending = this.get<UserConversationEntry[] | { conversations?: UserConversationEntry[] }>(formatUserConversationsKey(uid))
+        .then((raw) => {
+          this.convLoadByUser.delete(uid)
+          const deletedSet = this.deletedConvIdsByUser.get(uid)
+          const loaded = normalizeConversationsArray(raw).filter((c) => !deletedSet?.has(c.id))
+          const current = this.conversationsCache.get(uid)
+          const merged = current
+            ? [...current, ...loaded.filter((c) => !current.some((x) => x.id === c.id))].sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+            : loaded
+          this.conversationsCache.set(uid, merged)
+          writeSwrCache(['artifact:conversations', this.namespace, uid], merged)
+          return merged
+        }, (err) => { this.convLoadByUser.delete(uid); throw err })
+      this.convLoadByUser.set(uid, pending)
+    }
+    return pending
   }
 
   async getConversation(id: string, userId = '1'): Promise<UserConversationEntry | null> {
@@ -396,12 +436,19 @@ export class ArtifactService {
     return list.find((c) => c.id === cleanId) || null
   }
 
+  isConversationDeleted(userId: string, conversationId: string): boolean {
+    const uid = String(userId || '1').trim()
+    const cleanId = String(conversationId || '').trim()
+    return Boolean(cleanId && this.deletedConvIdsByUser.get(uid)?.has(cleanId))
+  }
+
   async saveConversation(userId: string, entry: Partial<UserConversationEntry> & { id: string }): Promise<UserConversationEntry[]> {
     const uid = String(userId || '1').trim()
     const cleanId = String(entry.id || '').trim()
     if (!cleanId) return []
     const now = new Date().toISOString()
     if (!this.conversationsCache.has(uid)) await this.listConversations(uid)
+    if (this.isConversationDeleted(uid, cleanId)) return this.conversationsCache.get(uid) || []
     const existing = this.conversationsCache.get(uid) || []
     const prev = existing.find((c) => c.id === cleanId)
     let mergedContentItems = entry.contentItems
@@ -427,17 +474,25 @@ export class ArtifactService {
     const nextList = [merged, ...existing.filter((c) => c.id !== cleanId)].sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
     this.conversationsCache.set(uid, nextList)
     writeSwrCache(['artifact:conversations', this.namespace, uid], nextList)
-    await this.put([{ key: formatUserConversationsKey(uid), value: nextList }])
+    await this.enqueueConversationsPut(uid)
     return this.conversationsCache.get(uid) || nextList
   }
 
   async archiveConversation(userId: string, conversationId: string, archived = true): Promise<UserConversationEntry[]> {
     const uid = String(userId || '1').trim()
     const cleanId = String(conversationId || '').trim()
+    const nowIso = new Date().toISOString()
     const existing = this.conversationsCache.has(uid) ? this.conversationsCache.get(uid)! : await this.listConversations(uid)
-    const nextList = existing.map((c) => (c.id === cleanId ? { ...c, archived } : c))
-    await this.put([{ key: formatUserConversationsKey(uid), value: nextList }])
-    return nextList
+    const nextList = existing.map((c) => {
+      if (c.id !== cleanId) return c
+      const prevTs = Date.parse(String(c.updatedAt || ''))
+      const updatedAt = nowIso > String(c.updatedAt || '') || !Number.isFinite(prevTs) ? nowIso : new Date(prevTs + 1).toISOString()
+      return { ...c, archived, updatedAt }
+    })
+    this.conversationsCache.set(uid, nextList)
+    writeSwrCache(['artifact:conversations', this.namespace, uid], nextList)
+    await this.enqueueConversationsPut(uid)
+    return this.conversationsCache.get(uid) || nextList
   }
 
   async deleteConversation(
@@ -448,10 +503,23 @@ export class ArtifactService {
     const uid = String(userId || '1').trim()
     const cleanId = String(conversationId || '').trim()
     const deleteRelatedContent = typeof options === 'boolean' ? options : Boolean(options?.deleteRelatedContent)
+    const preCached = this.conversationsCache.get(uid)
+    let deletedSet = this.deletedConvIdsByUser.get(uid)
+    if (!deletedSet) { deletedSet = new Set(); this.deletedConvIdsByUser.set(uid, deletedSet) }
+    deletedSet.add(cleanId)
+    let rawColdTarget: UserConversationEntry | undefined
+    if (!preCached && !(typeof options === 'object' && options?.conversation)) {
+      const raw = await this.get<UserConversationEntry[] | { conversations?: UserConversationEntry[] }>(formatUserConversationsKey(uid))
+      const allLoaded = normalizeConversationsArray(raw)
+      rawColdTarget = allLoaded.find((c) => c.id === cleanId)
+      if (!this.conversationsCache.has(uid)) this.conversationsCache.set(uid, allLoaded.filter((c) => !deletedSet!.has(c.id)))
+    }
     const existing = this.conversationsCache.has(uid) ? this.conversationsCache.get(uid)! : await this.listConversations(uid)
-    const targetConv = (typeof options === 'object' && options?.conversation) || existing.find((c) => c.id === cleanId) || { id: cleanId }
+    const targetConv = (typeof options === 'object' && options?.conversation) || preCached?.find((c) => c.id === cleanId) || rawColdTarget || existing.find((c) => c.id === cleanId) || { id: cleanId }
     const next = existing.filter((c) => c.id !== cleanId)
-    await this.put([{ key: formatUserConversationsKey(uid), value: next }])
+    this.conversationsCache.set(uid, next)
+    writeSwrCache(['artifact:conversations', this.namespace, uid], next)
+    await this.enqueueConversationsPut(uid)
 
     // ponytail: always delete matching `user_${userId}_${type}_${id}` index artifact(s) so stale index entries never linger or resurrect.
     const related = resolveConversationRelatedContent(targetConv, uid)

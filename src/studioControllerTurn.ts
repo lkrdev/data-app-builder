@@ -1,32 +1,25 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
-  AgentSession, AntigravityActivityStep, AntigravityAuth,
-  cleanLookmlProjectId, CodeModePermissionRequest,
-  inFlightEnvProvisionByUser,
-  PastedImage, prewarmOrWakeAntigravityEnvironment,
+  AgentSession, AntigravityAuth, cleanLookmlProjectId, CodeModePermissionRequest,
+  inFlightEnvProvisionByUser, PastedImage, prewarmOrWakeAntigravityEnvironment,
   runAntigravityTurn, sanitizeConversationLabel, sharedEnvExploreSchemas,
 } from './antigravity'
 import { ChatMessage, StudioMode } from './components/App'
 import {
-  buildDenseExploreSchema, clearInFlightConvId, compactPersistedChatTurn, EXPLICIT_SCRIPT_CREATION_RE,
-  extractExploreIdsFromCode, extractResolvedUseCase,
-  formatExploreId, getArtifactNamespace, hydrateMentionedContext,
-  isConversationalNoOpPrompt, LOOKER_ALERT_QUERY_RE, matchExplicitUseCaseRule, parseExploreId,
-  reconcileDeletedLookerContent, ResolvedStudioUseCase, saveAlertArtifact, saveDashboardStudioMetadata, saveInFlightConvId, saveNativeContentArtifact,
-  saveUserArtifact, saveUserConversation, saveUserEnvironmentId, shouldOfferReusableScriptPrompt, shouldRouteToIsolatedCaSubagent,
-  STUDIO_INFLIGHT_CONV_SESSION_KEY, StudioContentItemType, StudioContextMention, StudioUseCase,
-  studioUseCaseToMode, toTurnCrudItem, TurnCrudItem, upsertPublishedDataApp, UserConversationEntry,
+  clearInFlightConvId, compactPersistedChatTurn, EXPLICIT_SCRIPT_CREATION_RE,
+  extractResolvedUseCase, getArtifactNamespace,
+  hydrateConversationContentItems, isConversationalNoOpPrompt, isUserConversationDeleted,
+  LOOKER_ALERT_QUERY_RE, matchExplicitUseCaseRule, reconcileDeletedLookerContent,
+  ResolvedStudioUseCase, saveDashboardStudioMetadata, saveInFlightConvId,
+  saveNativeContentArtifact, saveUserConversation, saveUserEnvironmentId,
+  shouldOfferReusableScriptPrompt, shouldRouteToIsolatedCaSubagent, STUDIO_INFLIGHT_CONV_SESSION_KEY,
+  StudioContentItemType, StudioContextMention, StudioUseCase, studioUseCaseToMode,
+  toTurnCrudItem, TurnCrudItem, UserConversationEntry,
 } from './lookerApi'
-import {
-  extractLookmlDashboardsFromBundle,
-  extractSlashSkillIds,
-  LookmlBundle,
-  mergeLookmlFiles,
-  resolveLookmlCanonicalProjectId,
-  saveLookmlSessionArtifact,
-} from './lookmlTool'
+import { extractSlashSkillIds, resolveLookmlCanonicalProjectId } from './lookmlTool'
 import { QueuedPromptItem, StudioAuthAndPrefs, StudioEnvironmentStatus } from './studioControllerAuth'
+import { checkDataAppPublishGate, materializeTurnBundles, nextStudioConvId, prepareTurnMentionsAndContext, TurnSnapshotState, upsertLocalTurnContentItem } from './studioControllerConcurrency'
 import { StudioLoaders } from './studioControllerLoaders'
 import { StudioMetadata } from './studioControllerMetadata'
 
@@ -37,13 +30,14 @@ const stripMessagesForStorage = (msgs: ChatMessage[]) => msgs.map((m) => compact
 
 export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, loaders: StudioLoaders) {
   const {
-    extensionSDK, core40SDK, history, location, mockExt, authMode, oauthToken, clientId, projectId, apiKey, selectedModel,
+    extensionSDK, core40SDK, history, location, authMode, oauthToken, oauthTokenRef, clientId, projectId, apiKey, selectedModel,
     thinkingLevel, maxTotalTokens, maxToolRounds, isAuthenticated, disabledModes, resolvedUseCaseByIdRef, parsedRoute,
-    setSelectedUseCase, explicitUseCaseRef, allowedUseCases, resetOAuthOnUnauthorized, sharedEnvIdRef, syncSharedEnvironmentId,
-    agentSession, agentSessionRef, messagesRef, activeModeRef, setAgentSession, setMessages, busyStatus, setBusyStatus,
-    activeConversationId, activeConversationIdRef, setActiveConversationId, requirePermissionRef, approvedOpsRef, pendingPermRef,
-    permEpochRef, activeTurnConvIdRef, turnAbortControllerRef, dismissPendingPerm, requestCodeModePermission,
-    abortActiveTurn, handleStopTurn, liveActivityStepsRef, setLiveActivitySteps, queuedPromptsRef, updateQueuedPrompts,
+    setSelectedUseCase, explicitUseCaseRef, allowedUseCases, triggerSilentOAuthRefresh, resetOAuthOnUnauthorized, sharedEnvIdRef,
+    syncSharedEnvironmentId, agentSession, agentSessionRef, messagesRef, activeModeRef, setAgentSession, setMessages, busyStatus,
+    activeConversationId, activeConversationIdRef, setActiveConversationId, requirePermissionRef, approvedOpsRef,
+    permEpochByConvIdRef, inFlightTurnsRef, convLabelsRef, turnResumerRef, setConvBusyStatus, setConvLiveSteps,
+    requestCodeModePermission, registerTurnEntry, finishTurnEntry, abortActiveTurn, abortAllConvTurns, cancelStandaloneForConv,
+    queuedPromptsRef, updateQueuedPrompts, shiftQueuedPromptForConv,
   } = auth
   const {
     userId, userIdRef, setLookerWorkspaceId, syncLookerSessionWorkspace, availableLookmlProjects, canDeployLookml, loadingMetadata,
@@ -51,12 +45,14 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     setSchemaMarkdown, activeMode, isLookmlMode, isHealthCheckMode, builderMode, setActiveObjectId, conversations,
     conversationsRef, setConversations, isCaMode, lookmlProjectId, setLookmlProjectId, activatedLookmlSkills,
     setActivatedLookmlSkills, lookmlBundle, setLookmlBundle, lastLookmlIdRef, publishedApp, setPublishedApp, lastPublishedIdRef,
-    nativeContent, setNativeContent, lastNativeIdRef, setAlertBundle, contentItemsRef, setContentItems, activeContentTabKeyRef,
-    setActiveContentTabKey, upsertContentItem, setEmbedNonce, scriptCode, setScriptCode, filtersJson, publishedTileDash,
+    nativeContent, setNativeContent, lastNativeIdRef, alertBundle, setAlertBundle, contentItemsRef, setContentItems, activeContentTabKeyRef,
+    setActiveContentTabKey, upsertContentItem, setEmbedNonce, scriptId, scriptTitle, scriptCode, setScriptCode, filtersJson, publishedTileDash,
     loadedScript, currentAppCode, setCurrentAppCode, prompt, setPrompt, pastedImages, setPastedImages, hydratedConvRouteRef,
-    activityStepsByInteractionIdRef, codeModePermOptsRef,
+    activityStepsByInteractionIdRef, mergeCachedActivitySteps, codeModePermOptsRef,
   } = meta
-  const { persistConversationAndLabel, handleRunPython, handleSaveScript, handleRunHealthCheck, handleRunConversationalAnalytics } = loaders
+  const { recoveredInFlightIdsRef, persistConversationAndLabel, handleRunPython, handleSaveScript, handleRunHealthCheck, handleRunConversationalAnalytics } = loaders
+
+  conversations.forEach((c) => { if (c.label) convLabelsRef.current[c.id] = c.label })
 
   const [environmentStatus, setEnvironmentStatus] = useState<StudioEnvironmentStatus>('active')
   const environmentStatusRef = useRef<StudioEnvironmentStatus>('active')
@@ -74,7 +70,10 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         const existingSession: AgentSession = forceFresh ? { toolType: modeToWake } : ctx.agentSession
         const res = await prewarmOrWakeAntigravityEnvironment({
           sdk: core40SDK, userId: userIdRef.current || userId, extensionSDK,
-          auth: { mode: authMode, oauthToken, clientId, projectId, apiKey },
+          auth: {
+            mode: authMode, oauthToken: oauthTokenRef.current || oauthToken, getOAuthToken: () => oauthTokenRef.current,
+            clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true),
+          },
           toolType: modeToWake, model: selectedModel, maxTotalTokens,
           environmentId: forceFresh ? undefined : sharedEnvIdRef.current || existingSession?.environmentId,
           existingSession, selectedExplores: ctx.selectedExplores, schemaMarkdown: ctx.schemaMarkdown,
@@ -84,11 +83,11 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         const nextEnvId = sharedEnvIdRef.current || res.session.environmentId
         const cur = agentSessionRef.current
         if (forceFresh || cur.environmentId !== nextEnvId || (!cur.lastInteractionId && res.session.lastInteractionId)) {
-          setAgentSession({ ...cur, ...res.session, lastInteractionId: forceFresh ? res.session.lastInteractionId : cur.lastInteractionId || res.session.lastInteractionId, environmentId: nextEnvId }, modeToWake)
+          setAgentSession(Object.assign({}, cur, res.session, { lastInteractionId: forceFresh ? res.session.lastInteractionId : cur.lastInteractionId || res.session.lastInteractionId, environmentId: nextEnvId }), modeToWake)
         }
       } catch { /* ignore */ }
     },
-    [activeModeRef, agentSessionRef, apiKey, authMode, clientId, core40SDK, extensionSDK, maxTotalTokens, oauthToken, projectId, selectedModel, setAgentSession, sharedEnvIdRef, syncSharedEnvironmentId, userId, userIdRef]
+    [activeModeRef, agentSessionRef, apiKey, authMode, clientId, core40SDK, extensionSDK, maxTotalTokens, oauthToken, oauthTokenRef, projectId, selectedModel, setAgentSession, sharedEnvIdRef, syncSharedEnvironmentId, triggerSilentOAuthRefresh, userId, userIdRef]
   )
 
   useEffect(() => {
@@ -98,11 +97,13 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   }, [activeMode, disabledModes, environmentStatus, handleWakeModeEnv, loadingMetadata, models.length, selectedExplores.length, sharedEnvIdRef])
 
   codeModePermOptsRef.current = () => {
-    const standaloneApproved = new Set<string>(), standaloneEpoch = permEpochRef.current, standaloneConvId = activeConversationIdRef.current
+    const standaloneApproved = new Set<string>(), standaloneConvId = activeConversationIdRef.current
+    const standaloneEpoch = permEpochByConvIdRef.current[standaloneConvId] ?? 0
     return {
       requirePermission: true, approvedOperations: standaloneApproved,
       onPermissionRequest: (req) => requestCodeModePermission(req, undefined, standaloneApproved, standaloneEpoch, standaloneConvId),
-      isCanceled: () => permEpochRef.current !== standaloneEpoch, thought: 'Execute Looker Python script',
+      isCanceled: () => (permEpochByConvIdRef.current[standaloneConvId] ?? 0) !== standaloneEpoch,
+      thought: 'Execute Looker Python script',
     }
   }
 
@@ -110,17 +111,8 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   useEffect(() => {
     const prevConvId = lastSeenConvIdRef.current
     lastSeenConvIdRef.current = activeConversationId
-    if (activeTurnConvIdRef.current && activeConversationId !== activeTurnConvIdRef.current && turnAbortControllerRef.current) {
-      abortActiveTurn()
-      setBusyStatus((prev) => (prev && /^Loading\b/.test(prev) ? prev : mockExt?.initialBusyStatus || null))
-    } else if (prevConvId !== activeConversationId) {
-      if (pendingPermRef.current && pendingPermRef.current.convId !== activeConversationId) {
-        permEpochRef.current += 1
-        dismissPendingPerm('deny')
-      }
-      setBusyStatus((prev) => (prev === 'Executing Looker queries...' ? mockExt?.initialBusyStatus || null : prev))
-    }
-  }, [abortActiveTurn, activeConversationId, activeTurnConvIdRef, dismissPendingPerm, mockExt?.initialBusyStatus, pendingPermRef, permEpochRef, setBusyStatus, turnAbortControllerRef])
+    if (prevConvId !== activeConversationId) cancelStandaloneForConv(prevConvId)
+  }, [activeConversationId, cancelStandaloneForConv])
 
   const handleQueuePrompt = useCallback(() => {
     if (!busyStatus) return
@@ -134,11 +126,11 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
 
   const clearAllEnvSessions = useCallback(
     (nextStatus: StudioEnvironmentStatus) => {
-      handleStopTurn(); sharedEnvIdRef.current = ''; syncSharedEnvironmentId('')
+      abortAllConvTurns(); sharedEnvIdRef.current = ''; syncSharedEnvironmentId('')
       setAgentSession({ toolType: activeModeRef.current, environmentId: '' })
       environmentStatusRef.current = nextStatus; setEnvironmentStatus(nextStatus)
     },
-    [activeModeRef, handleStopTurn, setAgentSession, sharedEnvIdRef, syncSharedEnvironmentId]
+    [abortAllConvTurns, activeModeRef, setAgentSession, sharedEnvIdRef, syncSharedEnvironmentId]
   )
 
   const handleResetEnvironment = useCallback((): Promise<void> => {
@@ -158,107 +150,142 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     envResetNoticeTimerRef.current = null; setEnvResetNotice(false); clearAllEnvSessions('stopped')
   }, [clearAllEnvSessions])
 
-  const handleSendPrompt = async (
-    overrideItem?:
-      | { text: string; images?: PastedImage[]; mentions?: StudioContextMention[]; bypassBusy?: boolean }
-      | React.SyntheticEvent
-  ) => {
+  type PromptOverrideInput = {
+    text: string; images?: PastedImage[]; mentions?: StudioContextMention[]
+    bypassBusy?: boolean; targetConvId?: string; resumeConv?: UserConversationEntry
+  }
+
+  const handleSendPrompt = async (overrideItem?: PromptOverrideInput | React.SyntheticEvent) => {
     const isOverride =
       Boolean(overrideItem) && typeof overrideItem === 'object' &&
       !('nativeEvent' in (overrideItem as object)) &&
       typeof (overrideItem as { text?: unknown }).text === 'string'
-    const typedOverride = isOverride
-      ? (overrideItem as { text: string; images?: PastedImage[]; mentions?: StudioContextMention[]; bypassBusy?: boolean })
-      : undefined
+    const typedOverride = isOverride ? (overrideItem as PromptOverrideInput) : undefined
+    const resumeConv = typedOverride?.resumeConv
     const text = typedOverride ? typedOverride.text.trim() : prompt.trim()
     const attachedImages = typedOverride ? typedOverride.images || [] : pastedImages
     const activeMentions = typedOverride ? typedOverride.mentions || [] : mentionedItems
-    if (!isAuthenticated || (!text && attachedImages.length === 0) || (busyStatus && !typedOverride?.bypassBusy)) return
-    const turnApprovedOps = new Set<string>()
-    approvedOpsRef.current = turnApprovedOps
-    if (!turnAbortControllerRef.current) {
-      permEpochRef.current += 1
-      if (pendingPermRef.current) dismissPendingPerm('deny')
+    const fgAtStart = !resumeConv && (!typedOverride?.targetConvId || typedOverride.targetConvId === activeConversationIdRef.current)
+    const hasSavedRouteConv = Boolean(parsedRoute.conversationId && conversations.some((c) => c.id === parsedRoute.conversationId))
+    const candidateConvId = resumeConv
+      ? resumeConv.id
+      : typedOverride?.targetConvId
+      ? typedOverride.targetConvId
+      : fgAtStart && messagesRef.current.filter((m) => m.role === 'user').length === 0 && !hasSavedRouteConv && (!parsedRoute.conversationId || location.pathname === '/')
+      ? nextStudioConvId()
+      : activeConversationIdRef.current || parsedRoute.conversationId || nextStudioConvId()
+    const isConvBusy = inFlightTurnsRef.current.has(candidateConvId) || (candidateConvId === activeConversationIdRef.current && Boolean(busyStatus))
+    if (!isAuthenticated || (!resumeConv && !text && attachedImages.length === 0) || (isConvBusy && !typedOverride?.bypassBusy)) return
+
+    const convId = candidateConvId
+    if (fgAtStart && activeConversationIdRef.current !== convId) {
+      lastSeenConvIdRef.current = convId
+      setActiveConversationId(convId)
     }
-    if (environmentStatusRef.current === 'stopped') {
-      environmentStatusRef.current = 'active'
-      setEnvironmentStatus('active')
-    }
-    const authCfg: AntigravityAuth = { mode: authMode, oauthToken, clientId, projectId, apiKey }
-    const effectivePrompt = text || 'See the attached screenshot.'
-    const currentMessages = messagesRef.current
+    const isFg = () => activeConversationIdRef.current === convId
+    const existingConv = resumeConv || conversationsRef.current.find((c) => c.id === convId)
+    const rawResumeMsgs = resumeConv ? mergeCachedActivitySteps((resumeConv.messages || []) as ChatMessage[]) : []
+    const effectivePrompt = resumeConv
+      ? rawResumeMsgs[rawResumeMsgs.length - 1]?.text || resumeConv.label || 'Continue request'
+      : text || 'See the attached screenshot.'
+    const currentMessages: ChatMessage[] = resumeConv
+      ? rawResumeMsgs.slice(0, -1)
+      : fgAtStart
+      ? messagesRef.current
+      : ((existingConv?.messages as ChatMessage[] | undefined) || [])
     const isFirstTurn = currentMessages.filter((m) => m.role === 'user').length === 0
     const userMsg: ChatMessage = { role: 'user', text: effectivePrompt, images: attachedImages.map((img) => img.dataUrl) }
-    const messagesWithUser = [...currentMessages, userMsg]
-    if (!typedOverride) {
-      setPrompt('')
-      setPastedImages([])
-      setMentionedItems([])
+    const messagesWithUser: ChatMessage[] = resumeConv ? (rawResumeMsgs.length > 0 ? rawResumeMsgs : [userMsg]) : [...currentMessages, userMsg]
+    if (!typedOverride) { setPrompt(''); setPastedImages([]); setMentionedItems([]) }
+    if (environmentStatusRef.current === 'stopped') { environmentStatusRef.current = 'active'; setEnvironmentStatus('active') }
+    const authCfg: AntigravityAuth = {
+      mode: authMode, oauthToken: oauthTokenRef.current || oauthToken, getOAuthToken: () => oauthTokenRef.current,
+      clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true),
     }
-    setMessages(messagesWithUser)
 
-    const explicitUseCase = explicitUseCaseRef.current
+    const explicitUseCase: StudioUseCase = fgAtStart ? explicitUseCaseRef.current : ((existingConv?.use_case as StudioUseCase) || 'auto')
     const classifiedPromptUseCase = matchExplicitUseCaseRule(effectivePrompt, allowedUseCases)
     const turnTargetUseCase: StudioUseCase = explicitUseCase !== 'auto' ? explicitUseCase : (classifiedPromptUseCase || 'auto')
 
-    const hasSavedRouteConv = Boolean(parsedRoute.conversationId && conversations.some((c) => c.id === parsedRoute.conversationId))
-    const convId =
-      isFirstTurn && !hasSavedRouteConv && (!parsedRoute.conversationId || location.pathname === '/')
-        ? `conv_${Date.now()}`
-        : activeConversationIdRef.current || parsedRoute.conversationId || `conv_${Date.now()}`
-
-    setActiveConversationId(convId)
-    const targetConvRoute = `/c/${encodeURIComponent(convId)}`
-    if (location.pathname !== targetConvRoute) history.replace(targetConvRoute)
-    const nowIso = new Date().toISOString()
-    const existingConv = conversationsRef.current.find((c) => c.id === convId)
-    const inFlightEntry: UserConversationEntry = {
-      ...existingConv,
-      id: convId,
-      type: existingConv?.type || (turnTargetUseCase !== 'auto' ? turnTargetUseCase : allowedUseCases[0] || 'app'),
-      use_case: existingConv?.use_case || turnTargetUseCase,
-      label: existingConv?.label || sanitizeConversationLabel('', effectivePrompt),
-      explores: selectedExplores.length ? selectedExplores : existingConv?.explores,
-      messages: stripMessagesForStorage(messagesWithUser),
-      createdAt: existingConv?.createdAt || nowIso,
-      updatedAt: nowIso,
+    const snapExplores = fgAtStart ? (selectedExplores.length ? [...selectedExplores] : [...(existingConv?.explores || [])]) : [...(existingConv?.explores || [])]
+    const snapItems = fgAtStart ? [...contentItemsRef.current] : (existingConv ? hydrateConversationContentItems(existingConv) : [])
+    const snapTabKey = fgAtStart ? activeContentTabKeyRef.current : (existingConv?.activeContentTabKey === 'lookml:default' ? '' : existingConv?.activeContentTabKey || '')
+    const snapPublishedApp = fgAtStart
+      ? publishedApp
+      : existingConv?.content?.appArtifactId && existingConv.content.dashboardId
+      ? { dashboardId: String(existingConv.content.dashboardId), title: existingConv.label || '', folderId: selectedFolderId, extensionId: String(existingConv.content.extensionId || ''), elementId: '' }
+      : null
+    const snapNativeContent = fgAtStart
+      ? nativeContent
+      : !existingConv?.content?.appArtifactId && existingConv?.content?.dashboardId
+      ? { id: String(existingConv.content.dashboardId), title: existingConv.label || '', contentType: (existingConv.content.contentType as 'dashboard') || 'dashboard', folderId: selectedFolderId, embedPath: String(existingConv.content.embedPath || '') }
+      : null
+    const snapshot: TurnSnapshotState = {
+      selectedExplores: snapExplores, selectedFolderId, currentAppCode: fgAtStart ? currentAppCode : '',
+      nativeContent: snapNativeContent, publishedApp: snapPublishedApp,
+      lookmlProjectId: fgAtStart ? lookmlProjectId : String(existingConv?.content?.projectId || ''),
+      lookmlBundle: fgAtStart ? lookmlBundle : null, alertBundle: fgAtStart ? alertBundle : null,
+      scriptCode: fgAtStart ? scriptCode : '',
+      scriptId: fgAtStart ? scriptId : String(existingConv?.content?.scriptId || ''),
+      scriptTitle: fgAtStart ? scriptTitle : (existingConv?.label || ''),
+      filtersJson: fgAtStart ? filtersJson : '{}',
+      publishedTileDash: fgAtStart
+        ? publishedTileDash
+        : existingConv?.content?.dashboardId
+        ? { dashboardId: String(existingConv.content.dashboardId), elementId: String(existingConv.content.elementId || '') }
+        : null,
+      contentItems: snapItems, activeContentTabKey: snapTabKey, messagesWithUser,
     }
+
+    if (isFg()) {
+      setMessages(messagesWithUser); setActiveConversationId(convId)
+      const targetConvRoute = `/c/${encodeURIComponent(convId)}`
+      if (location.pathname !== targetConvRoute) history.replace(targetConvRoute)
+    }
+
+    const turnApprovedOps = new Set<string>()
+    const turnEntry = registerTurnEntry(convId, snapshot, existingConv?.label || sanitizeConversationLabel('', effectivePrompt))
+    turnEntry.approvedOps = turnApprovedOps
+    approvedOpsRef.current = turnApprovedOps
+    const abortController = turnEntry.abortController, turnEpoch = turnEntry.permEpoch
+    if (resumeConv) setConvBusyStatus(convId, 'Resuming in-flight turn...')
+
+    const nowIso = new Date().toISOString()
+    const inFlightEntry: UserConversationEntry = Object.assign({}, existingConv, {
+      id: convId, type: existingConv?.type || (turnTargetUseCase !== 'auto' ? turnTargetUseCase : allowedUseCases[0] || 'app'),
+      use_case: existingConv?.use_case || turnTargetUseCase, label: existingConv?.label || sanitizeConversationLabel('', effectivePrompt),
+      explores: snapExplores.length ? snapExplores : existingConv?.explores, messages: stripMessagesForStorage(messagesWithUser),
+      createdAt: existingConv?.createdAt || nowIso, updatedAt: nowIso,
+    })
     setConversations((prev) => [inFlightEntry, ...prev.filter((c) => c.id !== convId)], { optimisticEntry: inFlightEntry })
     saveInFlightConvId(convId)
-    if (userId) {
-      void saveUserConversation(core40SDK, userId, inFlightEntry, getArtifactNamespace(extensionSDK)).catch(() => {})
+    if (userId && !resumeConv) void saveUserConversation(core40SDK, userId, inFlightEntry, getArtifactNamespace(extensionSDK)).catch(() => {})
+
+    const itemState = { items: [...snapshot.contentItems], activeKey: snapshot.activeContentTabKey }
+    const syncLocalItem = (raw: Partial<typeof itemState.items[0]> & { id: string; contentType: StudioContentItemType }, activate = true) => {
+      const up = upsertLocalTurnContentItem(itemState, raw, activate)
+      turnEntry.snapshot.contentItems = itemState.items; turnEntry.snapshot.activeContentTabKey = itemState.activeKey
+      return up
     }
 
-    const caRouteBase = { prompt: effectivePrompt, explicitUseCase, isCaMode, isFirstTurn, allowedModes: allowedUseCases }
-    if (!isConversationalNoOpPrompt(effectivePrompt) && (turnTargetUseCase === 'health-check' || (explicitUseCase !== 'auto' && isHealthCheckMode))) {
-      setSelectedUseCase('health-check')
-      await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages, convId)
-      clearInFlightConvId()
-      return
-    }
-
-    if (shouldRouteToIsolatedCaSubagent(caRouteBase)) {
-      setSelectedUseCase('conversational-analytics')
-      await handleRunConversationalAnalytics(effectivePrompt, messagesWithUser, undefined, convId)
-      clearInFlightConvId()
-      return
-    }
-
-    const currentSession = agentSessionRef.current
-    const abortController = new AbortController()
-    turnAbortControllerRef.current = abortController
-    const turnEpoch = permEpochRef.current
-    activeTurnConvIdRef.current = convId
-    const turnPermRequest = (req: CodeModePermissionRequest) =>
-      requestCodeModePermission(req, abortController.signal, turnApprovedOps, turnEpoch, convId)
-    setBusyStatus('Connecting to Antigravity...')
-    liveActivityStepsRef.current = []
-    setLiveActivitySteps([])
     try {
-      let turnExplores = selectedExplores
-      let turnSchemaMarkdown = schemaMarkdown
-      let turnExtraSources: Array<{ type: 'inline'; content: string; target: string }> | undefined
-      let turnPromptWithContext = effectivePrompt
+      const caRouteBase = { prompt: effectivePrompt, explicitUseCase, isCaMode: fgAtStart && isCaMode, isFirstTurn, allowedModes: allowedUseCases }
+      if (!resumeConv && !isConversationalNoOpPrompt(effectivePrompt) && (turnTargetUseCase === 'health-check' || (explicitUseCase !== 'auto' && fgAtStart && isHealthCheckMode))) {
+        if (isFg()) setSelectedUseCase('health-check')
+        await handleRunHealthCheck(effectivePrompt, messagesWithUser, attachedImages, convId)
+        return
+      }
+      if (!resumeConv && shouldRouteToIsolatedCaSubagent(caRouteBase)) {
+        if (isFg()) setSelectedUseCase('conversational-analytics')
+        await handleRunConversationalAnalytics(effectivePrompt, messagesWithUser, undefined, convId)
+        return
+      }
+
+      const currentSession: AgentSession = fgAtStart
+        ? agentSessionRef.current
+        : { lastInteractionId: existingConv?.interactionId, environmentId: sharedEnvIdRef.current || existingConv?.environmentId || 'env_app_isolated', conversationId: convId, explores: snapExplores }
+      const turnPermRequest = (req: CodeModePermissionRequest) =>
+        requestCodeModePermission(req, abortController.signal, turnApprovedOps, turnEpoch, convId)
 
       const mentionsToHydrate: StudioContextMention[] = [...activeMentions]
       for (const urlMatch of effectivePrompt.matchAll(/(?:https?:\/\/[^\s/]+)?\/(dashboards|looks|explore)\/([^\s?#)]+)/gi)) {
@@ -268,51 +295,28 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         if (!rawRef) continue
         const mType: StudioContextMention['type'] = rawKind === 'dashboards' ? 'dashboard' : rawKind === 'looks' ? 'look' : 'explore'
         const mId = mType === 'explore' && rawRef.includes('/') && !rawRef.includes('::') ? rawRef.replace('/', '::') : rawRef
-        if (!mentionsToHydrate.some((m) => m.type === mType && m.id === mId)) {
-          mentionsToHydrate.push({ type: mType, id: mId, title: mId })
-        }
+        if (!mentionsToHydrate.some((m) => m.type === mType && m.id === mId)) mentionsToHydrate.push({ type: mType, id: mId, title: mId })
       }
-
-      if (mentionsToHydrate.length > 0) {
-        mentionsToHydrate.forEach((m) => {
-          if (m.type === 'explore' || m.type === 'dashboard' || m.type === 'look') {
-            const ct: StudioContentItemType = m.type === 'explore' ? 'explore' : m.type === 'look' ? 'look' : m.id.includes('::') ? 'lookml_dashboard' : 'dashboard'
-            upsertContentItem({
-              id: m.id, contentType: ct, title: m.title, source: 'mention', createdInConversation: false,
-              ...(ct === 'explore' ? { exploreId: m.id } : {}), ...(ct === 'look' ? { lookId: m.id } : {}),
-              ...(ct === 'dashboard' ? { dashboardId: m.id } : {}), ...(ct === 'lookml_dashboard' ? { lookmlDashboardId: m.id } : {}),
-            })
-          }
-        })
-        setBusyStatus('Hydrating referenced Looker @-mention context...')
-        const hydrated = await hydrateMentionedContext({
-          sdk: core40SDK, mentions: mentionsToHydrate, conversations, selectedExplores, useCase: turnTargetUseCase,
-        })
-        if (hydrated.explores.length > 0) {
-          turnExplores = hydrated.explores
-          if (JSON.stringify(turnExplores) !== JSON.stringify(selectedExplores)) {
-            setSelectedExplores(turnExplores)
-            const sections = await Promise.all(
-              turnExplores.map(async (id) => {
-                const parsed = parseExploreId(id)
-                if (!parsed) return ''
-                try { return await buildDenseExploreSchema(core40SDK, parsed.modelName, parsed.exploreName) } catch { return '' }
-              })
-            )
-            const joined = sections.filter(Boolean).join('\n\n---\n\n')
-            if (joined) { turnSchemaMarkdown = joined; setSchemaMarkdown(joined) }
-          }
-        }
-        if (hydrated.extraSources.length > 0) turnExtraSources = hydrated.extraSources
-        if (hydrated.promptSummary) turnPromptWithContext = `${effectivePrompt}\n\n${hydrated.promptSummary}`
-        if (abortController.signal.aborted) return
+      const hydratedCtx = await prepareTurnMentionsAndContext({
+        effectivePrompt, mentionsToHydrate, resumeConv, core40SDK, conversations, snapExplores, turnTargetUseCase,
+        initialSchemaMarkdown: fgAtStart ? schemaMarkdown : '',
+        onMentionItem: (rawMention) => { syncLocalItem(rawMention); if (isFg()) upsertContentItem(rawMention) },
+        onHydratingStatus: () => setConvBusyStatus(convId, 'Hydrating referenced Looker @-mention context...'),
+      })
+      if (abortController.signal.aborted) return
+      const turnExplores = hydratedCtx.explores, turnSchemaMarkdown = hydratedCtx.schemaMarkdown
+      const turnExtraSources = hydratedCtx.extraSources, turnPromptWithContext = hydratedCtx.promptWithContext
+      turnEntry.snapshot.selectedExplores = turnExplores
+      if (hydratedCtx.exploresChanged && isFg()) {
+        setSelectedExplores(turnExplores)
+        if (turnSchemaMarkdown) setSchemaMarkdown(turnSchemaMarkdown)
       }
 
       const promptSlashSkills = extractSlashSkillIds(effectivePrompt)
       const stickyPromptSkills = promptSlashSkills.filter((id) => id !== 'looker-audit')
       const turnActivatedSkills = Array.from(new Set([...activatedLookmlSkills.filter((id) => id !== 'looker-audit'), ...stickyPromptSkills]))
-      if (stickyPromptSkills.length > 0 || activatedLookmlSkills.includes('looker-audit')) setActivatedLookmlSkills(turnActivatedSkills)
-      const effectiveLookmlTurn = turnTargetUseCase === 'lookml' || (turnTargetUseCase === 'auto' && isLookmlMode)
+      if (isFg() && (stickyPromptSkills.length > 0 || activatedLookmlSkills.includes('looker-audit'))) setActivatedLookmlSkills(turnActivatedSkills)
+      const effectiveLookmlTurn = turnTargetUseCase === 'lookml' || (turnTargetUseCase === 'auto' && fgAtStart && isLookmlMode)
       const effectiveBuilderMode: 'data_app' | 'dashboard' =
         turnTargetUseCase === 'dashboard' ? 'dashboard' : turnTargetUseCase === 'app' || turnTargetUseCase === 'data-investigator' ? 'data_app' : builderMode
       const result = await runAntigravityTurn({
@@ -322,65 +326,62 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         auth: authCfg, session: currentSession,
         model: selectedModel, thinkingLevel, maxTotalTokens, maxToolRounds,
         mode: effectiveBuilderMode, useCase: explicitUseCase, allowedModes: allowedUseCases,
-        selectedExplores: turnExplores, folderId: selectedFolderId,
+        selectedExplores: turnExplores, folderId: snapshot.selectedFolderId,
         toolMode: effectiveLookmlTurn ? 'lookml' : 'data_app',
-        lookmlProjectId, activatedLookmlSkills: turnActivatedSkills, developableProjects: availableLookmlProjects,
+        lookmlProjectId: snapshot.lookmlProjectId, activatedLookmlSkills: turnActivatedSkills, developableProjects: availableLookmlProjects,
         canDeploy: canDeployLookml, warmEnvironmentInBackground: true,
         schemaMarkdown: turnSchemaMarkdown,
         userPrompt:
-          explicitUseCase === 'tile' || loadedScript || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
-            ? `Write a LkrCodeMode Python script for the user's request. Return the Python snippet inside a \`\`\`python code block.\n\nCurrent script:\n\`\`\`python\n${scriptCode}\n\`\`\`\n\nUser request: ${turnPromptWithContext}`
+          explicitUseCase === 'tile' || (fgAtStart && loadedScript) || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
+            ? `Write a LkrCodeMode Python script for the user's request. Return the Python snippet inside a \`\`\`python code block.\n\nCurrent script:\n\`\`\`python\n${snapshot.scriptCode}\n\`\`\`\n\nUser request: ${turnPromptWithContext}`
             : turnPromptWithContext,
-        images: attachedImages, existingAppCode: currentAppCode || undefined,
-        existingNativeContent: nativeContent, extraSources: turnExtraSources,
+        images: attachedImages, existingAppCode: snapshot.currentAppCode || undefined,
+        existingNativeContent: snapshot.nativeContent, extraSources: turnExtraSources,
         priorMessages: currentMessages, requirePermission: true,
         approvedOperations: turnApprovedOps, onPermissionRequest: turnPermRequest,
-        onProgressSteps: (steps) => { liveActivityStepsRef.current = steps; setLiveActivitySteps(steps) },
+        onProgressSteps: (steps) => setConvLiveSteps(convId, steps),
         onInteractionCreated: (id) => {
+          if (abortController.signal.aborted || isUserConversationDeleted(core40SDK, userId, convId, getArtifactNamespace(extensionSDK))) {
+            recoveredInFlightIdsRef.current.add(id)
+            return
+          }
           latestTurnInteractionRef.current = { convId, id }
-          const updatedInFlightEntry: UserConversationEntry = {
-            ...(conversationsRef.current.find((c) => c.id === convId) || inFlightEntry),
-            interactionId: id,
-            environmentId: sharedEnvIdRef.current || currentSession.environmentId,
-            messages: stripMessagesForStorage(messagesWithUser),
-            updatedAt: new Date().toISOString(),
-          }
+          const updatedInFlightEntry: UserConversationEntry = Object.assign({}, conversationsRef.current.find((c) => c.id === convId) || inFlightEntry, {
+            interactionId: id, environmentId: sharedEnvIdRef.current || currentSession.environmentId,
+            messages: stripMessagesForStorage(messagesWithUser), updatedAt: new Date().toISOString(),
+          })
           setConversations((prev) => [updatedInFlightEntry, ...prev.filter((c) => c.id !== convId)], { optimisticEntry: updatedInFlightEntry })
-          if (userId) {
-            void saveUserConversation(core40SDK, userId, updatedInFlightEntry, getArtifactNamespace(extensionSDK)).catch(() => {})
-          }
+          if (userId) void saveUserConversation(core40SDK, userId, updatedInFlightEntry, getArtifactNamespace(extensionSDK)).catch(() => {})
         },
-        signal: abortController.signal, onStatus: setBusyStatus,
+        resumeInteractionId: resumeConv?.interactionId, signal: abortController.signal, onStatus: (s) => setConvBusyStatus(convId, s),
       })
       if (abortController.signal.aborted) return
 
       const resolvedUseCase: ResolvedStudioUseCase =
-        explicitUseCase !== 'auto'
-          ? explicitUseCase
-          : result.resolvedUseCase || extractResolvedUseCase(result.assistantText, effectivePrompt, allowedUseCases)
+        explicitUseCase !== 'auto' ? explicitUseCase : result.resolvedUseCase || extractResolvedUseCase(result.assistantText, effectivePrompt, allowedUseCases)
       resolvedUseCaseByIdRef.current[convId] = resolvedUseCase
-      setSelectedUseCase(resolvedUseCase)
-      if (shouldRouteToIsolatedCaSubagent({ ...caRouteBase, assistantOutput: result.rawOutputText ?? result.assistantText })) {
+      if (isFg()) setSelectedUseCase(resolvedUseCase)
+      if (!resumeConv && shouldRouteToIsolatedCaSubagent(Object.assign({}, caRouteBase, { assistantOutput: result.rawOutputText ?? result.assistantText }))) {
         await handleRunConversationalAnalytics(effectivePrompt, messagesWithUser, result.rawOutputText ?? result.assistantText, convId)
         return
       }
       const resolvedMode: StudioMode = studioUseCaseToMode(resolvedUseCase)
-
-      let convType: string = resolvedUseCase
-      let convTitle = ''
-      let convExplores = turnExplores
-      let convContent: Record<string, unknown> | undefined
-      let finalMsgs: ChatMessage[] = []
-      let effectivePublishedApp = publishedApp
-      let effectiveNativeContent = nativeContent
+      let convType: string = resolvedUseCase, convTitle = '', convExplores = turnExplores
+      let convContent: Record<string, unknown> | undefined, finalMsgs: ChatMessage[] = []
+      let effectivePublishedApp = snapshot.publishedApp
+      let effectiveNativeContent = snapshot.nativeContent
       const recordTurnDenial = (denyText: string, modeArg: StudioMode, typeArg: string, exploresArg: string[], contentArg?: Record<string, unknown>) => {
-        setAgentSession(Object.assign({}, result.session, { conversationId: convId, explores: exploresArg }), modeArg)
         const errMsgs: ChatMessage[] = [...messagesWithUser, { role: 'error', text: denyText }]
-        setMessages(errMsgs)
-        hydratedConvRouteRef.current = `/c/${encodeURIComponent(convId)}:${convId}`
+        turnEntry.snapshot.messagesWithUser = errMsgs
+        if (isFg()) {
+          setAgentSession(Object.assign({}, result.session, { conversationId: convId, explores: exploresArg }), modeArg)
+          setMessages(errMsgs)
+          hydratedConvRouteRef.current = `/c/${encodeURIComponent(convId)}:${convId}`
+        }
         void persistConversationAndLabel({
           id: convId, type: typeArg, interactionId: result.session.lastInteractionId, environmentId: result.session.environmentId,
           label: isFirstTurn ? sanitizeConversationLabel('', effectivePrompt) : undefined, explores: exploresArg, content: contentArg,
+          contentItems: itemState.items, activeContentTabKey: itemState.activeKey,
           messages: errMsgs, isFirstTurn, userPrompt: effectivePrompt, assistantText: denyText, updateArtifactIndex: false,
         })
       }
@@ -390,18 +391,35 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         if (idx >= 0) turnCrudItems[idx] = item
         else turnCrudItems.push(item)
       }
-      const reconciledDel = reconcileDeletedLookerContent(contentItemsRef.current, activeContentTabKeyRef.current, result.activitySteps)
+      const reconciledDel = reconcileDeletedLookerContent(itemState.items, itemState.activeKey, result.activitySteps)
       const deletedIds = reconciledDel.deletedIds
       if (deletedIds.size > 0) {
-        if (reconciledDel.nextItems.length !== contentItemsRef.current.length) setContentItems(reconciledDel.nextItems)
-        if (reconciledDel.nextActiveTabKey !== activeContentTabKeyRef.current) setActiveContentTabKey(reconciledDel.nextActiveTabKey)
-        if (effectiveNativeContent && deletedIds.has(effectiveNativeContent.id)) { effectiveNativeContent = null; setNativeContent(null) }
-        if (effectivePublishedApp && deletedIds.has(effectivePublishedApp.dashboardId)) { effectivePublishedApp = null; setPublishedApp(null); setCurrentAppCode('') }
+        itemState.items = reconciledDel.nextItems
+        itemState.activeKey = reconciledDel.nextActiveTabKey
+        turnEntry.snapshot.contentItems = itemState.items
+        turnEntry.snapshot.activeContentTabKey = itemState.activeKey
+        if (isFg()) {
+          if (reconciledDel.nextItems.length !== contentItemsRef.current.length) setContentItems(reconciledDel.nextItems)
+          if (reconciledDel.nextActiveTabKey !== activeContentTabKeyRef.current) setActiveContentTabKey(reconciledDel.nextActiveTabKey)
+        }
+        if (effectiveNativeContent && deletedIds.has(effectiveNativeContent.id)) {
+          effectiveNativeContent = null; turnEntry.snapshot.nativeContent = null
+          if (isFg()) setNativeContent(null)
+        }
+        if (effectivePublishedApp && deletedIds.has(effectivePublishedApp.dashboardId)) {
+          effectivePublishedApp = null; turnEntry.snapshot.publishedApp = null; turnEntry.snapshot.currentAppCode = ''
+          if (isFg()) { setPublishedApp(null); setCurrentAppCode('') }
+        }
         reconciledDel.crudItems.forEach(recordCrudItem)
       }
 
+      if (result.permissionError) {
+        recordTurnDenial(result.permissionError, resolvedMode, convType, turnExplores, convContent)
+        return
+      }
+
       if (resolvedUseCase === 'tile' && !result.lookmlBundle && !result.nativeBundle && !result.bundle && !result.alertBundle) {
-        const isExplicitScriptRequest = explicitUseCase === 'tile' || loadedScript || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
+        const isExplicitScriptRequest = explicitUseCase === 'tile' || (fgAtStart && loadedScript) || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
         const pyMatch = (result.assistantText || '').match(/```(?:python|py)?\s*\n([\s\S]*?)```/i)
         const extractedPy = pyMatch ? pyMatch[1].trim() : ''
         const isAlertQuery = LOOKER_ALERT_QUERY_RE.test(effectivePrompt) || turnActivatedSkills.includes('looker-alerts') || promptSlashSkills.includes('looker-audit')
@@ -413,228 +431,134 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         const replyText = canOfferScript
           ? `${baseReply}\n\nWould you like me to save this Looker API lookup as a reusable **Script**?`
           : baseReply
-        if (isExplicitScriptRequest && (extractedPy || explicitUseCase === 'tile' || loadedScript)) {
-          const nextCode = extractedPy || scriptCode
-          const prevKeys = new Set(contentItemsRef.current.map((it) => it.key))
-          const pyOut = await handleRunPython(nextCode, filtersJson, {
-            requirePermission: true, approvedOperations: turnApprovedOps, onPermissionRequest: turnPermRequest,
-            isCanceled: () => abortController.signal.aborted || permEpochRef.current !== turnEpoch,
-            thought: 'Execute generated Looker Python script',
-          })
+        if (isExplicitScriptRequest && (extractedPy || explicitUseCase === 'tile' || (fgAtStart && loadedScript))) {
+          const nextCode = extractedPy || snapshot.scriptCode
+          const prevKeys = new Set(itemState.items.map((it) => it.key))
+          const pyOut = await handleRunPython(
+            nextCode,
+            snapshot.filtersJson,
+            {
+              requirePermission: true, approvedOperations: turnApprovedOps, onPermissionRequest: turnPermRequest, signal: abortController.signal,
+              isCanceled: () => abortController.signal.aborted || (permEpochByConvIdRef.current[convId] ?? 0) !== turnEpoch,
+              thought: 'Execute generated Looker Python script',
+            },
+            { convId, targetExplores: turnExplores, targetFolderId: snapshot.selectedFolderId }
+          )
           if (abortController.signal.aborted) return
           if (pyOut.includes('PermissionError:')) {
             const denyErr = pyOut.match(/PermissionError:[^\n"]+/)?.[0] || 'PermissionError: Script execution mutates Looker state and was not approved.'
             recordTurnDenial(denyErr, 'tile', 'tile', turnExplores)
             return
           }
-          if (extractedPy) setScriptCode(extractedPy)
+          if (extractedPy) {
+            turnEntry.snapshot.scriptCode = extractedPy
+            if (isFg()) setScriptCode(extractedPy)
+          }
           try {
-            const saved = await handleSaveScript(nextCode, messagesWithUser, publishedTileDash)
+            const saved = await handleSaveScript(nextCode, messagesWithUser, snapshot.publishedTileDash, {
+              convId, scriptId: snapshot.scriptId, scriptTitle: snapshot.scriptTitle, baseItems: itemState.items,
+            })
             if (abortController.signal.aborted) return
             const existedScript = prevKeys.has(`script:${saved.id}`)
-            convType = 'tile'
-            convTitle = saved.title
+            turnEntry.snapshot.scriptId = saved.id; turnEntry.snapshot.scriptTitle = saved.title
+            convType = 'tile'; convTitle = saved.title
             convContent = { scriptId: saved.id, dashboardId: saved.dashboardId, elementId: saved.elementId }
-            setActiveObjectId(saved.id)
-            const sItem = contentItemsRef.current.find((it) => it.key === `script:${saved.id}`)
-            if (sItem) recordCrudItem(toTurnCrudItem(sItem, existedScript ? 'updated' : 'created'))
+            const sItem = syncLocalItem({
+              id: String(saved.id), scriptId: String(saved.id), contentType: 'script',
+              title: saved.title || saved.id, embedPath: `/tile/${encodeURIComponent(String(saved.id))}`,
+              updatedAt: saved.updatedAt, source: existedScript ? 'modified' : 'created', createdInConversation: true, hidden: false,
+            })
+            if (isFg()) setActiveObjectId(saved.id)
+            recordCrudItem(toTurnCrudItem(sItem, existedScript ? 'updated' : 'created'))
           } catch { /* ignore */ }
         }
         if (abortController.signal.aborted) return
-        setAgentSession({ ...result.session, conversationId: convId, explores: turnExplores }, 'tile')
         finalMsgs = [
           ...messagesWithUser,
-          {
-            role: 'assistant', text: replyText, interactionId: result.session.lastInteractionId,
-            activitySteps: result.activitySteps, thinkingDurationSec: result.thinkingDurationSec,
-            ...(turnCrudItems.length > 0 ? { crudItems: turnCrudItems } : {}),
-          },
+          Object.assign(
+            {
+              role: 'assistant' as const, text: replyText, interactionId: result.session.lastInteractionId,
+              activitySteps: result.activitySteps, thinkingDurationSec: result.thinkingDurationSec,
+            },
+            turnCrudItems.length > 0 ? { crudItems: turnCrudItems } : null
+          ),
         ]
-        setMessages(finalMsgs)
+        if (isFg()) {
+          setAgentSession(Object.assign({}, result.session, { conversationId: convId, explores: turnExplores }), 'tile')
+          setMessages(finalMsgs)
+        }
       } else {
-        const bundleExplores = result.bundle
-          ? Array.from(
-              new Set([
-                ...(result.bundle.widgets || []).filter((w) => w.query?.model && w.query?.view).map((w) => formatExploreId(w.query.model, w.query.view)),
-                ...extractExploreIdsFromCode(result.bundle.raw_code || ''),
-              ])
-            )
-          : result.nativeBundle?.explores || []
-        const effectiveExplores = turnExplores.length > 0 ? turnExplores : bundleExplores
-        convExplores = effectiveExplores
-        if (turnExplores.length === 0 && bundleExplores.length > 0) setSelectedExplores(bundleExplores)
-
-        const studioMeta = { explores: effectiveExplores, lastInteractionId: result.session.lastInteractionId, environmentId: result.session.environmentId }
-        let handledArtifact = false
-        let finalDashId: string | undefined
-        let finalWidgetCount: number | undefined
-        let publishedDataAppDashboardLink: { title: string; path: string } | null = null
-
-        if (result.permissionError) {
-          recordTurnDenial(result.permissionError, resolvedMode, convType, effectiveExplores, convContent)
-          return
+        if (result.lookmlBundle && (resolveLookmlCanonicalProjectId(result.lookmlBundle) || cleanLookmlProjectId(snapshot.lookmlProjectId))) {
+          setLookerWorkspaceId('dev')
+          void syncLookerSessionWorkspace(true)
         }
-
-        if (result.bundle && requirePermissionRef.current && !turnApprovedOps.has('*')) {
+        if (result.bundle && requirePermissionRef.current) {
           const pubOp = effectivePublishedApp?.dashboardId ? 'update_dashboard' : 'create_dashboard'
-          const pubPath = effectivePublishedApp?.dashboardId ? `/api/4.0/dashboards/${effectivePublishedApp.dashboardId}` : '/api/4.0/dashboards'
-          if (!turnApprovedOps.has(pubOp)) {
-            const decision = await turnPermRequest({
-              operation: pubOp, httpMethod: effectivePublishedApp?.dashboardId ? 'PATCH' : 'POST', path: pubPath,
-              args: { title: result.bundle.title, folder_id: selectedFolderId },
-              thought: `Publish Data App "${result.bundle.title}" to Looker dashboard`,
-            })
-            if (abortController.signal.aborted) return
-            if (decision === 'allow_op') turnApprovedOps.add(pubOp)
-            else if (decision === 'allow_all') turnApprovedOps.add('*')
-            else if (decision !== 'allow_once' && (decision as unknown) !== true) {
-              recordTurnDenial(`PermissionError: Operation '${pubOp}' mutates Looker state and was not approved.`, resolvedMode, convType, effectiveExplores, convContent)
-              return
-            }
-          }
+          const gate = await checkDataAppPublishGate({
+            pubOp, dashboardId: effectivePublishedApp?.dashboardId, title: result.bundle.title, folderId: snapshot.selectedFolderId,
+            thought: `Publish Data App "${result.bundle.title}" to Looker dashboard`,
+            approvedOperations: turnApprovedOps, signal: abortController.signal, onPermissionRequest: turnPermRequest,
+          })
+          if (gate === 'aborted') return
+          if (gate !== 'allowed') { recordTurnDenial(gate, resolvedMode, 'app', turnExplores, convContent); return }
         }
-
-        if (result.lookmlBundle) {
-          const canonProj = resolveLookmlCanonicalProjectId(result.lookmlBundle) || cleanLookmlProjectId(lookmlProjectId)
-          if (canonProj) {
-            handledArtifact = true
-            setLookerWorkspaceId('dev')
-            void syncLookerSessionWorkspace(true)
-            setBusyStatus('Saving LookML project changes...')
-            const prevFiles = lookmlBundle && resolveLookmlCanonicalProjectId(lookmlBundle) === canonProj ? lookmlBundle.files : []
-            let mergedBundle: LookmlBundle = Object.assign({}, result.lookmlBundle, {
-              id: canonProj, project_id: cleanLookmlProjectId(result.lookmlBundle.project_id) || canonProj,
-              files: mergeLookmlFiles(prevFiles, result.lookmlBundle.files),
-            })
-            try {
-              const saved = await saveLookmlSessionArtifact({ sdk: core40SDK, extensionSDK, userId, bundle: mergedBundle, studio: studioMeta })
-              mergedBundle = saved.payload.bundle
-            } catch { /* ignore */ }
-            if (abortController.signal.aborted) return
-            const lookmlId = cleanLookmlProjectId(mergedBundle.project_id) || canonProj
-            setLookmlBundle(mergedBundle)
-            setLookmlProjectId(lookmlId)
-            const isExistingLookml = contentItemsRef.current.some((it) => it.contentType === 'lookml' && (it.projectId || it.id) === lookmlId)
-            const upLookml = upsertContentItem({
-              id: lookmlId, sessionId: lookmlId, projectId: lookmlId, contentType: 'lookml', title: `LookML: ${lookmlId}`,
-              embedPath: `/lookml/${encodeURIComponent(lookmlId)}`, updatedAt: new Date().toISOString(),
-              source: isExistingLookml ? 'modified' : 'created', createdInConversation: true, hidden: false,
-            })
-            recordCrudItem(toTurnCrudItem(upLookml, upLookml.existed ? 'updated' : 'created'))
+        const mat = await materializeTurnBundles({
+          sdk: core40SDK, extensionSDK, userId, result, userPrompt: effectivePrompt, resolvedUseCase, allowedModes: allowedUseCases,
+          folderId: snapshot.selectedFolderId, turnExplores, itemState,
+          existingPublishedApp: effectivePublishedApp, existingNativeContent: effectiveNativeContent,
+          existingLookmlBundle: snapshot.lookmlBundle, existingLookmlProjectId: snapshot.lookmlProjectId,
+          initialConvType: convType, initialConvContent: convContent,
+          requirePermission: false,
+          signal: abortController.signal, onStatus: (s) => setConvBusyStatus(convId, s),
+          onItemUpserted: () => { turnEntry.snapshot.contentItems = itemState.items; turnEntry.snapshot.activeContentTabKey = itemState.activeKey },
+          onLookmlSaved: (mergedBundle, lookmlId, rawLookmlItem) => {
+            turnEntry.snapshot.lookmlBundle = mergedBundle; turnEntry.snapshot.lookmlProjectId = lookmlId
             resolvedUseCaseByIdRef.current[lookmlId] = 'lookml'
-            convType = 'lookml'
-            convTitle = result.lookmlBundle.title || `LookML: ${lookmlId}`
-            convContent = { sessionId: lookmlId, projectId: lookmlId, model: mergedBundle.model_name, branch: mergedBundle.branch_name }
-            lastLookmlIdRef.current = lookmlId
-            setActiveObjectId(lookmlId)
-
-            extractLookmlDashboardsFromBundle(
-              Object.assign({}, result.lookmlBundle, { model_name: result.lookmlBundle.model_name || mergedBundle.model_name, project_id: lookmlId })
-            ).forEach((d) => {
-              if (result.nativeBundle && (result.nativeBundle.id === d.id || result.nativeBundle.lookml_dashboard_id === d.id)) return
-              const isExistingDash = contentItemsRef.current.some((it) => it.key === `lookml_dashboard:${d.id}`)
+            if (isFg()) { setLookmlBundle(mergedBundle); setLookmlProjectId(lookmlId); upsertContentItem(rawLookmlItem); lastLookmlIdRef.current = lookmlId; setActiveObjectId(lookmlId) }
+          },
+          onLookmlDashSaved: (d, lookmlId, isExistingDash) => {
+            if (isFg()) {
               setNativeContent(
-                { id: d.id, contentType: 'lookml_dashboard', title: d.title, folderId: selectedFolderId, embedPath: d.embedPath, lookmlDashboardId: d.id, projectId: lookmlId, model: d.model },
+                { id: d.id, contentType: 'lookml_dashboard', title: d.title, folderId: snapshot.selectedFolderId, embedPath: d.embedPath, lookmlDashboardId: d.id, projectId: lookmlId, model: d.model },
                 { source: isExistingDash ? 'modified' : 'created', createdInConversation: true, hidden: false }
               )
-              recordCrudItem(toTurnCrudItem({ key: `lookml_dashboard:${d.id}`, id: d.id, title: d.title, contentType: 'lookml_dashboard', embedPath: d.embedPath }, isExistingDash ? 'updated' : 'created'))
               setEmbedNonce((n) => n + 1)
-              finalDashId = d.id
-            })
-          }
-        }
-
-        if (result.nativeBundle) {
-          handledArtifact = true
-          setBusyStatus('Indexing native Looker content in user catalog...')
-          const reqCt = (result.nativeBundle.contentType || 'dashboard') as StudioContentItemType
-          const isExistingNative = contentItemsRef.current.some(
-            (it) => it.id === String(result.nativeBundle!.id) && (it.contentType === reqCt || (['dashboard', 'lookml_dashboard'].includes(it.contentType) && ['dashboard', 'lookml_dashboard'].includes(reqCt)))
-          )
-          const savedNative = await saveNativeContentArtifact(core40SDK, extensionSDK, userId, result.nativeBundle, selectedFolderId, effectiveNativeContent, studioMeta)
-          if (abortController.signal.aborted) return
-          lastNativeIdRef.current = savedNative.id
-          resolvedUseCaseByIdRef.current[savedNative.id] = 'dashboard'
-          setNativeContent(savedNative, { source: isExistingNative ? 'modified' : 'created', createdInConversation: true, hidden: false })
-          const nativeCt = (savedNative.contentType || 'dashboard') as StudioContentItemType
-          recordCrudItem(toTurnCrudItem({ key: `${nativeCt}:${savedNative.id}`, id: String(savedNative.id), title: savedNative.title, contentType: nativeCt, embedPath: savedNative.embedPath }, isExistingNative ? 'updated' : 'created'))
-          setEmbedNonce((n) => n + 1)
-          setActiveObjectId(savedNative.id)
-          finalDashId = savedNative.id
-          finalWidgetCount = result.nativeBundle.tile_count
-          convType = 'dashboard'
-          convTitle = savedNative.title
-          convContent = Object.assign({}, convContent, {
-            dashboardId: savedNative.id, contentType: savedNative.contentType, embedPath: savedNative.embedPath, lookId: savedNative.lookId, lookmlDashboardId: savedNative.lookmlDashboardId,
-          })
-        }
-
-        if (result.alertBundle) {
-          handledArtifact = true
-          setBusyStatus('Saving Looker Alert snapshot to Artifacts...')
-          const alertId = String(result.alertBundle.alert_id || result.alertBundle.id || '').trim()
-          const isExistingAlert = contentItemsRef.current.some((it) => it.contentType === 'alert' && it.id === alertId)
-          const savedAlert = await saveAlertArtifact(core40SDK, userId, result.alertBundle, getArtifactNamespace(extensionSDK))
-          if (abortController.signal.aborted) return
-          resolvedUseCaseByIdRef.current[alertId] = 'tile'
-          setAlertBundle(savedAlert)
-          const alertTitle = String(savedAlert.custom_title || savedAlert.title || `Alert #${alertId}`)
-          const upAlert = upsertContentItem({
-            id: alertId, alertId, dashboardId: savedAlert.dashboard_id ? String(savedAlert.dashboard_id) : undefined,
-            contentType: 'alert', title: alertTitle, embedPath: `/alerts/${encodeURIComponent(alertId)}`,
-            updatedAt: savedAlert.updated_at, source: isExistingAlert ? 'modified' : 'created', createdInConversation: true, hidden: false,
-          })
-          recordCrudItem(toTurnCrudItem(upAlert, isExistingAlert ? 'updated' : 'created'))
-          setActiveObjectId(alertId)
-          convType = 'tile'
-          convTitle = alertTitle
-          convContent = Object.assign({}, convContent, { alertId, dashboardId: savedAlert.dashboard_id ? String(savedAlert.dashboard_id) : undefined, contentType: 'alert' })
-        }
-
-        if (result.bundle) {
-          handledArtifact = true
-          setBusyStatus('Publishing inline extension & updating Looker dashboard...')
-          const upserted = await upsertPublishedDataApp(core40SDK, result.bundle, selectedFolderId, effectivePublishedApp, studioMeta)
-          if (abortController.signal.aborted) return
-          const appUseCaseType: ResolvedStudioUseCase = resolvedUseCase === 'data-investigator' ? 'data-investigator' : 'app'
-          const appCt: StudioContentItemType = appUseCaseType === 'data-investigator' ? 'data-investigator' : 'data_app'
-          const isExistingApp = contentItemsRef.current.some(
-            (it) => (it.contentType === 'data_app' || it.contentType === 'data-investigator') && it.id === String(upserted.dashboardId)
-          )
-          lastPublishedIdRef.current = upserted.dashboardId
-          resolvedUseCaseByIdRef.current[upserted.dashboardId] = appUseCaseType
-          setPublishedApp(upserted, { source: isExistingApp ? 'modified' : 'created', createdInConversation: true, hidden: false })
-          const appItem = contentItemsRef.current.find((it) => it.key === `${appCt}:${upserted.dashboardId}`)
-          if (appItem) recordCrudItem(toTurnCrudItem(appItem, isExistingApp ? 'updated' : 'created'))
-          setEmbedNonce((n) => n + 1)
-          setActiveObjectId(upserted.dashboardId)
-          setCurrentAppCode(result.bundle.raw_code)
-          finalDashId = upserted.dashboardId
-          finalWidgetCount = result.bundle?.widgets?.length || 0
-          if (upserted.dashboardId) {
-            publishedDataAppDashboardLink = {
-              title: upserted.title || result.bundle.title || 'Data App Dashboard',
-              path: `/dashboards/${encodeURIComponent(String(upserted.dashboardId))}`,
             }
-          }
-          const appEntryBase = {
-            id: upserted.dashboardId, type: appUseCaseType, title: upserted.title,
-            explores: effectiveExplores, updatedAt: new Date().toISOString(), createdBy: userId,
-          }
-          try {
-            await saveUserArtifact(
-              core40SDK, userId, appEntryBase,
-              Object.assign({}, appEntryBase, { dashboardId: upserted.dashboardId, extensionId: upserted.extensionId }),
-              getArtifactNamespace(extensionSDK)
-            )
-          } catch { /* ignore */ }
-          if (abortController.signal.aborted) return
-          convType = appUseCaseType
-          convTitle = upserted.title
-          convContent = Object.assign({}, convContent, {
-            dashboardId: upserted.dashboardId, appArtifactId: `obj_app_${upserted.dashboardId}`, extensionId: upserted.extensionId,
-          })
-        }
+          },
+          onNativeSaved: (savedNative, isExistingNative) => {
+            resolvedUseCaseByIdRef.current[savedNative.id] = 'dashboard'
+            turnEntry.snapshot.nativeContent = savedNative
+            if (isFg()) {
+              lastNativeIdRef.current = savedNative.id
+              setNativeContent(savedNative, { source: isExistingNative ? 'modified' : 'created', createdInConversation: true, hidden: false })
+              setEmbedNonce((n) => n + 1); setActiveObjectId(savedNative.id)
+            }
+          },
+          onAlertSaved: (savedAlert, alertId, rawAlertItem) => {
+            resolvedUseCaseByIdRef.current[alertId] = 'tile'
+            turnEntry.snapshot.alertBundle = savedAlert
+            if (isFg()) { setAlertBundle(savedAlert); upsertContentItem(rawAlertItem); setActiveObjectId(alertId) }
+          },
+          onDataAppSaved: (upserted, appUseCaseType, isExistingApp) => {
+            resolvedUseCaseByIdRef.current[upserted.dashboardId] = appUseCaseType
+            turnEntry.snapshot.publishedApp = upserted
+            turnEntry.snapshot.currentAppCode = result.bundle?.raw_code || ''
+            if (isFg()) {
+              lastPublishedIdRef.current = upserted.dashboardId
+              setPublishedApp(upserted, { source: isExistingApp ? 'modified' : 'created', createdInConversation: true, hidden: false })
+              setEmbedNonce((n) => n + 1); setActiveObjectId(upserted.dashboardId); setCurrentAppCode(result.bundle?.raw_code || '')
+            }
+          },
+        })
+        if (mat.aborted || abortController.signal.aborted) return
+        const effectiveExplores = mat.effectiveExplores
+        convExplores = effectiveExplores
+        turnEntry.snapshot.selectedExplores = effectiveExplores
+        if (isFg() && turnExplores.length === 0 && effectiveExplores.length > 0) setSelectedExplores(effectiveExplores)
+        mat.crudItems.forEach(recordCrudItem)
+        convType = mat.convType; convTitle = mat.convTitle; convContent = mat.convContent
+        effectivePublishedApp = mat.publishedApp; effectiveNativeContent = mat.nativeContent
+        const { studioMeta, handledArtifact, finalDashId, finalWidgetCount, publishedDataAppDashboardLink } = mat
 
         if (!handledArtifact && deletedIds.size === 0) {
           if (explicitUseCase === 'auto' && resolvedMode !== activeMode && resolvedUseCase === 'health-check' && !promptSlashSkills.includes('looker-audit')) {
@@ -645,10 +569,16 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             const updatedNative = await saveNativeContentArtifact(
               core40SDK, extensionSDK, userId,
               { id: effectiveNativeContent.id, title: effectiveNativeContent.title, explores: effectiveExplores },
-              selectedFolderId, effectiveNativeContent, studioMeta
+              snapshot.selectedFolderId, effectiveNativeContent, studioMeta
             )
             if (abortController.signal.aborted) return
-            setNativeContent(updatedNative, { source: 'modified', hidden: false })
+            turnEntry.snapshot.nativeContent = updatedNative
+            syncLocalItem({
+              id: String(updatedNative.id), contentType: (updatedNative.contentType || 'dashboard') as StudioContentItemType,
+              title: updatedNative.title, embedPath: updatedNative.embedPath, folderId: updatedNative.folderId,
+              dashboardId: String(updatedNative.id), source: 'modified', hidden: false,
+            })
+            if (isFg()) setNativeContent(updatedNative, { source: 'modified', hidden: false })
             convType = 'dashboard'
             convContent = { dashboardId: updatedNative.id, contentType: updatedNative.contentType, embedPath: updatedNative.embedPath }
           } else if (effectivePublishedApp) {
@@ -660,7 +590,8 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             ) {
               const updatedApp = await saveDashboardStudioMetadata(core40SDK, effectivePublishedApp, studioMeta)
               if (abortController.signal.aborted) return
-              setPublishedApp(updatedApp, { source: 'modified', hidden: false })
+              turnEntry.snapshot.publishedApp = updatedApp
+              if (isFg()) setPublishedApp(updatedApp, { source: 'modified', hidden: false })
             }
             convType = 'app'
             convContent = { dashboardId: effectivePublishedApp.dashboardId, appArtifactId: `obj_app_${effectivePublishedApp.dashboardId}` }
@@ -674,86 +605,72 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
             : baseAssistantText
         finalMsgs = [
           ...messagesWithUser,
-          {
-            role: 'assistant', text: finalAssistantText, interactionId: result.session.lastInteractionId,
-            ...(finalDashId ? { dashboardId: finalDashId } : {}),
-            ...(finalWidgetCount !== undefined ? { widgetCount: finalWidgetCount } : {}),
-            ...(turnCrudItems.length > 0 ? { crudItems: turnCrudItems } : {}),
-            activitySteps: result.activitySteps, thinkingDurationSec: result.thinkingDurationSec,
-          },
+          Object.assign(
+            { role: 'assistant' as const, text: finalAssistantText, interactionId: result.session.lastInteractionId, activitySteps: result.activitySteps, thinkingDurationSec: result.thinkingDurationSec },
+            finalDashId ? { dashboardId: finalDashId } : null,
+            finalWidgetCount !== undefined ? { widgetCount: finalWidgetCount } : null,
+            turnCrudItems.length > 0 ? { crudItems: turnCrudItems } : null
+          ),
         ]
-        setAgentSession(
-          { ...result.session, conversationId: convId, explores: effectiveExplores },
-          result.lookmlBundle && !result.nativeBundle && !result.bundle ? 'lookml' : resolvedMode
-        )
-        setMessages(finalMsgs)
+        if (isFg()) {
+          setAgentSession(Object.assign({}, result.session, { conversationId: convId, explores: effectiveExplores }), result.lookmlBundle && !result.nativeBundle && !result.bundle ? 'lookml' : resolvedMode)
+          setMessages(finalMsgs)
+        }
       }
 
-      if (result.session.lastInteractionId && result.activitySteps?.length) {
-        activityStepsByInteractionIdRef.current[result.session.lastInteractionId] = result.activitySteps
+      turnEntry.snapshot.messagesWithUser = finalMsgs
+      if (result.session.lastInteractionId && result.activitySteps?.length) activityStepsByInteractionIdRef.current[result.session.lastInteractionId] = result.activitySteps
+      if (isFg()) {
+        setActiveConversationId(convId)
+        const nextConvRoute = `/c/${encodeURIComponent(convId)}`
+        hydratedConvRouteRef.current = `${nextConvRoute}:${convId}`
+        if (location.pathname !== nextConvRoute) history.replace(nextConvRoute)
       }
-      setActiveConversationId(convId)
-      const nextConvRoute = `/c/${encodeURIComponent(convId)}`
-      hydratedConvRouteRef.current = `${nextConvRoute}:${convId}`
-      if (location.pathname !== nextConvRoute) history.replace(nextConvRoute)
 
-      void persistConversationAndLabel({
-        id: convId, type: convType, interactionId: result.session.lastInteractionId,
-        environmentId: result.session.environmentId,
-        label: isFirstTurn ? convTitle || sanitizeConversationLabel('', effectivePrompt) : undefined,
-        explores: convExplores, content: convContent, messages: finalMsgs,
-        isFirstTurn, userPrompt: effectivePrompt, assistantText: finalMsgs[finalMsgs.length - 1]?.text || result.assistantText,
-        updateArtifactIndex: Boolean(convContent),
+      await persistConversationAndLabel({
+        id: convId, type: convType, interactionId: result.session.lastInteractionId, environmentId: result.session.environmentId,
+        label: isFirstTurn ? convTitle || sanitizeConversationLabel('', effectivePrompt) : undefined, explores: convExplores, content: convContent,
+        contentItems: itemState.items, activeContentTabKey: itemState.activeKey, messages: finalMsgs, isFirstTurn, userPrompt: effectivePrompt,
+        assistantText: finalMsgs[finalMsgs.length - 1]?.text || result.assistantText, updateArtifactIndex: Boolean(convContent),
       })
+      if (!abortController.signal.aborted && isFg()) setMessages(finalMsgs)
     } catch (err: unknown) {
       if ((err instanceof Error && err.name === 'AbortError') || abortController.signal.aborted) return
-      const msg = resetOAuthOnUnauthorized(err)
-      setMessages((prev) => [...prev, { role: 'error', text: msg }])
+      const errMsgs: ChatMessage[] = [...messagesWithUser, { role: 'error', text: resetOAuthOnUnauthorized(err) }]
+      if (isFg()) setMessages(errMsgs)
+      else {
+        const ns = getArtifactNamespace(extensionSDK)
+        if (!isUserConversationDeleted(core40SDK, userId, convId, ns)) {
+          const failedConv: UserConversationEntry = Object.assign({}, conversationsRef.current.find((c) => c.id === convId) || inFlightEntry, {
+            messages: stripMessagesForStorage(errMsgs), updatedAt: new Date().toISOString(),
+          })
+          setConversations((prev) => [failedConv, ...prev.filter((c) => c.id !== convId)], { optimisticEntry: failedConv })
+          if (userId) void saveUserConversation(core40SDK, userId, failedConv, ns).catch(() => {})
+        }
+      }
     } finally {
       if (!abortController.signal.aborted) {
-        if (turnAbortControllerRef.current === abortController) {
-          turnAbortControllerRef.current = null
-          activeTurnConvIdRef.current = ''
-        }
-        if (pendingPermRef.current?.signal === abortController.signal) dismissPendingPerm('deny')
-        setBusyStatus(null)
-        clearInFlightConvId()
-        const nextSteps = Array.isArray(mockExt?.initialLiveActivitySteps)
-          ? (mockExt.initialLiveActivitySteps as AntigravityActivityStep[])
-          : []
-        liveActivityStepsRef.current = nextSteps
-        setLiveActivitySteps(nextSteps)
-        const nextQueued = queuedPromptsRef.current[0]
-        if (nextQueued) {
-          updateQueuedPrompts((prev) => prev.slice(1))
-          void handleSendPrompt({
-            text: nextQueued.text, images: nextQueued.images, mentions: nextQueued.mentions, bypassBusy: true,
-          })
-        }
+        finishTurnEntry(convId, abortController)
+        clearInFlightConvId(convId)
+        const nextQueued = shiftQueuedPromptForConv(convId)
+        if (nextQueued) void handleSendPrompt({ text: nextQueued.text, images: nextQueued.images, mentions: nextQueued.mentions, bypassBusy: true, targetConvId: convId })
       }
     }
   }
 
   const sendPromptRef = useRef(handleSendPrompt)
   sendPromptRef.current = handleSendPrompt
+  turnResumerRef.current = (conv: UserConversationEntry) => sendPromptRef.current({ text: '', resumeConv: conv, bypassBusy: true })
 
   const handleInterjectPrompt = useCallback(
     (queuedId?: string | React.MouseEvent) => {
-      const targetId = typeof queuedId === 'string' ? queuedId : undefined
-      const queuedItem = targetId ? queuedPromptsRef.current.find((q) => q.id === targetId) : undefined
+      const queuedItem = typeof queuedId === 'string' ? queuedPromptsRef.current.find((q) => q.id === queuedId) : undefined
       const textToSend = queuedItem ? queuedItem.text : prompt.trim()
       const imagesToSend = queuedItem ? queuedItem.images : pastedImages
       const mentionsToSend = queuedItem ? queuedItem.mentions : mentionedItems
       if (!isAuthenticated || (!textToSend && imagesToSend.length === 0)) return
-
-      if (queuedItem) {
-        updateQueuedPrompts((prev) => prev.filter((q) => q.id !== queuedItem.id))
-      } else {
-        setPrompt('')
-        setPastedImages([])
-        setMentionedItems([])
-      }
-
+      if (queuedItem) updateQueuedPrompts((prev) => prev.filter((q) => q.id !== queuedItem.id))
+      else { setPrompt(''); setPastedImages([]); setMentionedItems([]) }
       abortActiveTurn('Interjected by user.')
       void sendPromptRef.current({ text: textToSend, images: imagesToSend, mentions: mentionsToSend, bypassBusy: true })
     },
@@ -761,11 +678,8 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   )
 
   return {
-    environmentStatus, setEnvironmentStatus, envResetNotice, setEnvResetNotice,
-    latestTurnInteractionRef,
-    handleResetEnvironment, handleStopEnvironment, handleWakeModeEnv,
-    handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt,
-    handleSendPrompt,
+    environmentStatus, setEnvironmentStatus, envResetNotice, setEnvResetNotice, latestTurnInteractionRef,
+    handleResetEnvironment, handleStopEnvironment, handleWakeModeEnv, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, handleSendPrompt,
   }
 }
 

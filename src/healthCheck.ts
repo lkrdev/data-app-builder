@@ -673,6 +673,8 @@ export async function runThreePillarHealthCheckViaCodeMode(params: {
   healthScope?: 'all' | 'looker' | 'bq';
   customFocus?: string;
   messages?: PersistedChatTurn[];
+  conversationId?: string;
+  signal?: AbortSignal;
   onStatus?: (msg: string) => void;
 }): Promise<{
   report: HealthCheckReportPayload;
@@ -687,6 +689,8 @@ export async function runThreePillarHealthCheckViaCodeMode(params: {
     healthScope = 'all',
     customFocus,
     messages,
+    conversationId,
+    signal,
     onStatus,
   } = params;
   onStatus?.(
@@ -696,6 +700,8 @@ export async function runThreePillarHealthCheckViaCodeMode(params: {
     code: THREE_PILLAR_CODEMODE_PY,
     sdk,
     extensionSDK,
+    conversationId,
+    signal,
     vars: {
       target_project: targetProject || '',
       health_scope: healthScope,

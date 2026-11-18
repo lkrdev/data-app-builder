@@ -14,13 +14,49 @@ import { copyTextWithExtensionSdk, normalizeStudioAgentName } from '../lookerApi
 import { LookmlBundle } from '../lookmlTool'
 import { StudioController } from '../useStudioController'
 import { StudioComposer } from './StudioComposer'
-import { StudioButton, StudioSkeleton } from './StudioDesignSystem'
+import { StudioBadge, StudioButton, StudioSkeleton } from './StudioDesignSystem'
 import {
   fetchAvailableLookerConnectionsMarkdown, InViewerLookerLinkTarget,
   openContentLinkTargetInViewer, openOrCopyMarkdownLink,
   renderContentTabIcon, StudioMarkdown,
 } from './StudioMarkdown'
 import { SandboxMarkdownPreviewModal, StarterPromptButtons } from './StudioUseCaseGuides'
+
+export const BackgroundPermNoticeBanner: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
+  const bg = ctl.backgroundPendingPerm
+  if (!bg) return null
+  const label = bg.convLabel || ctl.allConversations.find((c) => c.id === bg.convId)?.label || bg.convId
+  return (
+    <div className="dab-background-perm-notice" data-testid="background-perm-notice" role="region" aria-label="Background conversation approval needed">
+      <div className="dab-background-perm-info">
+        <StudioBadge tone="warning">Approval</StudioBadge>
+        <span className="dab-background-perm-text">
+          <strong>{label}</strong> needs approval for <code>{bg.req.operation}</code> (<code>{bg.req.httpMethod} {bg.req.path}</code>)
+        </span>
+      </div>
+      <div className="dab-background-perm-actions">
+        <StudioButton
+          variant="secondary"
+          testId="background-perm-switch-btn"
+          onClick={() => {
+            const target = ctl.allConversations.find((c) => c.id === bg.convId) ||
+              ctl.conversations.find((c) => c.id === bg.convId) ||
+              { id: bg.convId, type: 'app', label, updatedAt: '' }
+            void ctl.handleSelectConversation(target)
+          }}
+        >
+          Switch
+        </StudioButton>
+        <StudioButton variant="primary" testId="background-perm-allow-btn" onClick={() => ctl.resolveBackgroundPermDecision(bg.convId, 'allow_once')}>
+          Allow once
+        </StudioButton>
+        <StudioButton variant="secondary" testId="background-perm-deny-btn" onClick={() => ctl.resolveBackgroundPermDecision(bg.convId, 'deny')}>
+          Deny
+        </StudioButton>
+      </div>
+    </div>
+  )
+}
 
 export const STEP_BADGES: Record<string, React.ReactNode> = {
   thought: <><Brain size={13} strokeWidth={1.75} aria-hidden="true" /> Thought</>,
@@ -604,6 +640,8 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
         )}
       </div>
 
+      <BackgroundPermNoticeBanner ctl={ctl} />
+
       {pendingPerm && (
         <div className="dab-permission-bar">
           <div>
@@ -647,5 +685,32 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
         />
       )}
     </aside>
+  )
+}
+
+export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
+  const { agentName: rawAgentName, activeMode, builderMode, isLookmlMode, isHealthCheckMode, selectedUseCase, selectedExplores, starterPrompts, starterPromptsLoading, setPrompt, busyStatus } = ctl
+  const agentName = normalizeStudioAgentName(rawAgentName)
+  return (
+    <main className="dab-empty-stage-centered" data-testid="centered-empty-prompt">
+      <div className="dab-empty-prompt-card" data-testid="studio-empty-stage">
+        <div className="dab-empty-hero">
+          <h2>
+            {isHealthCheckMode ? 'Run a 3-Pillar Looker & BigQuery Health Check'
+              : isLookmlMode ? 'Author & Validate Agentic LookML'
+              : activeMode === 'tile' ? 'Author & Schedule a Looker Script'
+              : builderMode === 'dashboard' ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)'
+              : `${agentName} is ready`}
+          </h2>
+          <p className="dab-muted">
+            {selectedExplores.length > 0 ? <>Exploring <code>{selectedExplores.join(', ')}</code> — pick a starter prompt below or describe what you want to build.</> : 'Pick a starter prompt below or describe what you want to build, analyze, or automate.'}
+          </p>
+          <StarterPromptButtons useCase={selectedUseCase} prompts={starterPrompts} loading={starterPromptsLoading} onSelect={setPrompt} disabled={!!busyStatus} />
+        </div>
+        <BackgroundPermNoticeBanner ctl={ctl} />
+        <StudioComposer ctl={ctl} />
+        <SandboxMarkdownPreviewModal ctl={ctl} />
+      </div>
+    </main>
   )
 }

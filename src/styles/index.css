@@ -574,4 +574,9 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 .dab-alert-kv-list {display:flex;flex-direction:column;gap:6px;font-size:12.5px}
 .dab-alert-list {margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:12.5px}
 .dab-alert-banner-card {border-color:var(--dab-danger-border,#fca5a5);background:var(--dab-danger-bg,#fef2f2)}
+.dab-conv-running-indicator {color:var(--dab-accent);flex-shrink:0}
+.dab-background-perm-notice {display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:8px 12px;border-top:1px solid var(--dab-border);border-bottom:1px solid var(--dab-border);background:var(--dab-surface-muted);font-size:12px}
+.dab-background-perm-info {display:flex;align-items:center;gap:6px;min-width:0;flex:1 1 200px}
+.dab-background-perm-text {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dab-text)}
+.dab-background-perm-actions {display:flex;align-items:center;gap:6px;flex-shrink:0}
 

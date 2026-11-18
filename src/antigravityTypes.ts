@@ -158,6 +158,7 @@ export interface ExtensionAuthContextConfig {
 export interface AntigravityAuth {
   mode: 'oauth' | 'apikey'
   oauthToken?: string
+  getOAuthToken?: () => string
   clientId?: string
   projectId?: string
   apiKey?: string

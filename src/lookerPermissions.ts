@@ -99,15 +99,30 @@ export async function saveStoredBusySendAction(action: StudioBusySendAction, ext
 }
 
 export const STUDIO_INFLIGHT_CONV_SESSION_KEY = 'dab_inflight_conv_id'
-export function readInFlightConvId(): string | null {
-  try { return typeof window !== 'undefined' ? (window.sessionStorage?.getItem?.(STUDIO_INFLIGHT_CONV_SESSION_KEY) ?? null) : null } catch { return null }
+export function readInFlightConvIds(): string[] {
+  try {
+    const raw = (typeof window !== 'undefined' ? (window.sessionStorage?.getItem?.(STUDIO_INFLIGHT_CONV_SESSION_KEY) ?? '') : '').trim()
+    if (!raw) return []
+    if (raw.startsWith('[')) {
+      const p: unknown = JSON.parse(raw)
+      if (Array.isArray(p)) return Array.from(new Set(p.map((x) => String(x || '').trim()).filter(Boolean)))
+    }
+    return [raw]
+  } catch { return [] }
 }
-export function saveInFlightConvId(convId: string): void {
-  try { if (typeof window !== 'undefined') window.sessionStorage?.setItem?.(STUDIO_INFLIGHT_CONV_SESSION_KEY, convId) } catch { /* ignore */ }
+const writeInFlightConvIds = (ids: string[]): void => {
+  try {
+    if (typeof window === 'undefined') return
+    const uniq = Array.from(new Set(ids.map((x) => String(x || '').trim()).filter(Boolean)))
+    if (uniq.length === 0) window.sessionStorage?.removeItem?.(STUDIO_INFLIGHT_CONV_SESSION_KEY)
+    else window.sessionStorage?.setItem?.(STUDIO_INFLIGHT_CONV_SESSION_KEY, JSON.stringify(uniq))
+  } catch { /* ignore */ }
 }
-export function clearInFlightConvId(): void {
-  try { if (typeof window !== 'undefined') window.sessionStorage?.removeItem?.(STUDIO_INFLIGHT_CONV_SESSION_KEY) } catch { /* ignore */ }
-}
+export const addInFlightConvId = (convId: string): void => { const id = String(convId || '').trim(); if (id) writeInFlightConvIds([...readInFlightConvIds().filter((x) => x !== id), id]) }
+export const removeInFlightConvId = (convId: string): void => { const id = String(convId || '').trim(); if (id) writeInFlightConvIds(readInFlightConvIds().filter((x) => x !== id)) }
+export const readInFlightConvId = (): string | null => { const ids = readInFlightConvIds(); return ids.length > 0 ? ids[ids.length - 1] : null }
+export const saveInFlightConvId = (convId: string): void => addInFlightConvId(convId)
+export const clearInFlightConvId = (convId?: string): void => { if (convId) removeInFlightConvId(convId); else writeInFlightConvIds([]) }
 
 export interface Looker404Diagnostic {
   kind: 'role_denied' | 'feature_disabled' | 'not_found'

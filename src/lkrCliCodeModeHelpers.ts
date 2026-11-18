@@ -276,6 +276,61 @@ def import_look_json(spec_or_filename, folder_id, title=None):
 `
 const BODY_HELPER_ROUTE_RE = /^\/(?:api\/[0-9.]+\/)?folders\/__cm_helper__(?:%3A|:)(desc|tpl)(?:%3A|:)([\s\S]*)$/i
 const needsHelper = (raw: string, fns: string[]): boolean => fns.some((fn) => new RegExp(`\\b${fn}\\b`).test(raw) && !new RegExp(`\\bdef\\s+${fn}\\b`).test(raw))
+let codeModeMutexTail: Promise<void> = Promise.resolve()
+let activeCodeModeHolder: { release: (() => void) | null } | null = null
+const makeCodeModeAbortError = () => Object.assign(new Error('Code Mode execution aborted'), { name: 'AbortError', toJSON: () => 'Code Mode execution aborted' })
+function acquireCodeModeSlot(signal?: AbortSignal): Promise<() => void> {
+  if (signal?.aborted) return Promise.reject(makeCodeModeAbortError())
+  let releaseNext!: () => void
+  const prevTail = codeModeMutexTail
+  codeModeMutexTail = new Promise<void>((r) => { releaseNext = r })
+  let released = false
+  const release = () => {
+    if (!released) {
+      released = true
+      if (activeCodeModeHolder?.release === release) activeCodeModeHolder.release = null
+      releaseNext()
+    }
+  }
+  return new Promise<() => void>((resolve, reject) => {
+    let settled = false
+    const onAbort = () => { if (!settled) { settled = true; reject(makeCodeModeAbortError()) } }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    prevTail.then(() => {
+      signal?.removeEventListener('abort', onAbort)
+      if (settled || signal?.aborted) {
+        release()
+        if (!settled) { settled = true; reject(makeCodeModeAbortError()) }
+        return
+      }
+      settled = true
+      resolve(release)
+    })
+  })
+}
+export function enqueueCodeModeExecution<T>(fn: () => Promise<T> | T, signal?: AbortSignal): Promise<T> {
+  return acquireCodeModeSlot(signal).then((initialRelease) => {
+    const holder: { release: (() => void) | null } = { release: initialRelease }
+    activeCodeModeHolder = holder
+    return Promise.resolve().then(fn).then(
+      (val) => { holder.release?.(); return val },
+      (err) => { holder.release?.(); throw err }
+    )
+  })
+}
+export function yieldCodeModeExecution<T>(waitFn: () => Promise<T>, signal?: AbortSignal, onSuspend?: () => () => void): Promise<T> {
+  const holder = activeCodeModeHolder
+  if (!holder?.release) return waitFn()
+  const rel = holder.release
+  holder.release = null
+  activeCodeModeHolder = null
+  const resumeScope = onSuspend?.()
+  rel()
+  return waitFn().then(
+    (val) => acquireCodeModeSlot(signal).then((nextRel) => { holder.release = nextRel; activeCodeModeHolder = holder; resumeScope?.(); return val }),
+    (err) => acquireCodeModeSlot(signal).then((nextRel) => { holder.release = nextRel; activeCodeModeHolder = holder; resumeScope?.(); throw err }, () => { throw err })
+  )
+}
 export function applyCodeModeHelpers(rt: CodeModeSchemaRuntimeLike, rawCode: string, currentCode: string, gatedHandler: CodeModeRequestHandler | undefined): { code: string; requestHandler: CodeModeRequestHandler | undefined } {
   let code = currentCode
   if (needsHelper(rawCode, ['export_dashboard_json', 'import_dashboard_json', 'export_look_json', 'import_look_json'])) code = GAZER_JSON_PREAMBLE_PY + code

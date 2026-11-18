@@ -343,7 +343,7 @@ export async function executeAntigravityPollingLoop(
                 const { cacheKey, result } = await executeLkrExtensionToolRequest({
                   sdk: turnSdk, req, defaultVars: defaultCodeModeVars, extensionSDK,
                   requirePermission, approvedOperations, onPermissionRequest: trackedPermissionHandler,
-                  conversationId: rawConversationId || conversationId,
+                  conversationId: rawConversationId || conversationId, signal,
                 })
                 resolvedBridgeCacheKeys.add(cacheKey)
                 const pErr = recordPermOutcome(result, prevSeq, req)
@@ -352,6 +352,7 @@ export async function executeAntigravityPollingLoop(
                   preBridgePayloads[`/workspace/.lkr_extension_cache/${cacheKey}.json`] = JSON.stringify(compactBridgeValue(result))
                 }
               } catch (err: unknown) {
+                if (signal?.aborted || (err as { name?: string })?.name === 'AbortError') { await throwIfAborted(interaction.id); throw err }
                 const pErr = recordPermOutcome(err, prevSeq)
                 if (pErr) {
                   resolvedBridgeCacheKeys.add(req.cache_key || computeLkrExtensionCacheKey(req))
@@ -412,7 +413,7 @@ export async function executeAntigravityPollingLoop(
                     const bridged = await executeLkrExtensionToolRequest({
                       sdk: turnSdk, req: resolvedToolReq, defaultVars: defaultCodeModeVars, extensionSDK,
                       requirePermission, approvedOperations, onPermissionRequest: wrappedPermissionRequest,
-                      conversationId: rawConversationId || conversationId,
+                      conversationId: rawConversationId || conversationId, signal,
                     })
                     resolvedBridgeCacheKeys.add(bridged.cacheKey)
                     const pErr = recordPermOutcome(bridged.result, prevSeq, resolvedToolReq)
@@ -444,12 +445,13 @@ export async function executeAntigravityPollingLoop(
                       sdk: turnSdk, extensionSDK,
                       allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard' || effectiveLookmlIntent,
                       requirePermission, approvedOperations, onPermissionRequest: wrappedPermissionRequest,
-                      conversationId: rawConversationId || conversationId,
+                      conversationId: rawConversationId || conversationId, signal,
                       vars: { ...defaultCodeModeVars, ...customVars },
                     })
                     recordPermOutcome(codeModeOutput, prevSeq)
                   }
                 } catch (err: unknown) {
+                  if (signal?.aborted || (err as { name?: string })?.name === 'AbortError') { await throwIfAborted(interaction.id); throw err }
                   const errMsg = err instanceof Error ? err.message : String(err)
                   if (!recordPermOutcome(errMsg, prevSeq)) apiRetries += 1
                   codeModeOutput = JSON.stringify({ ok: false, error: errMsg })
@@ -546,9 +548,13 @@ export async function executeAntigravityPollingLoop(
           interaction = await callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(interaction.id)}`, 'GET')
           transientPollErrors = 0
         } catch (pollErr: unknown) {
+          await throwIfAborted(interaction.id)
           const msg = pollErr instanceof Error ? pollErr.message : String(pollErr)
-          if (transientPollErrors < 6 && /\b(?:500|502|503|504|429)\b|deadline_exceeded|fetch failed|network/i.test(msg)) {
-            transientPollErrors += 1; apiRetries += 1
+          const hiddenTab = typeof document !== 'undefined' && document.visibilityState === 'hidden'
+          const transient = /\b(?:500|502|503|504|429)\b|deadline_exceeded|fetch failed|network|failed to fetch|load failed/i.test(msg) || (hiddenTab && /\b401\b/.test(msg))
+          if (transient && (hiddenTab || transientPollErrors < 6)) {
+            if (!hiddenTab) transientPollErrors += 1
+            apiRetries += 1
             continue
           }
           throw pollErr
@@ -611,7 +617,7 @@ export async function executeAntigravityPollingLoop(
             const { cacheKey, result } = await executeLkrExtensionToolRequest({
               sdk: turnSdk, req, defaultVars: defaultCodeModeVars, extensionSDK,
               requirePermission, approvedOperations, onPermissionRequest: trackedPermissionHandler,
-              conversationId: rawConversationId || conversationId,
+              conversationId: rawConversationId || conversationId, signal,
             })
             resolvedBridgeCacheKeys.add(cacheKey)
             const pErr = recordPermOutcome(result, prevSeq, req)
@@ -624,6 +630,7 @@ export async function executeAntigravityPollingLoop(
               )
             }
           } catch (err: unknown) {
+            if (signal?.aborted || (err as { name?: string })?.name === 'AbortError') { await throwIfAborted(interaction.id); throw err }
             const cacheKey = req.cache_key || computeLkrExtensionCacheKey(req)
             resolvedBridgeCacheKeys.add(cacheKey)
             const errMsg = err instanceof Error ? err.message : String(err)

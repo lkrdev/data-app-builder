@@ -217,17 +217,21 @@ function registerVisualPart12Tests(ctx) {
         await reEnabledSafePy;
         await new Promise((r) => setTimeout(r, 50));
 
-        // Turn 7: switching conversations (handleNewConversation) while pendingPerm is open cancels the turn with 0 mutations AND does NOT pollute new conversation messages
+        // Turn 7: switching conversations (handleNewConversation) while pendingPerm is open keeps Turn 7 queued in the background (surfacing background-perm-notice) without polluting new conversation messages or foreground pendingPerm
         pubMutations.length = 0;
         const t7 = window.__DAB_STUDIO__.handleSendPrompt({ text: 'Update Safe Pulse v7' });
         await new Promise((r) => setTimeout(r, 120));
         const t7HadPerm = Boolean(window.__DAB_STUDIO__.pendingPerm);
         window.__DAB_STUDIO__.handleNewConversation('auto');
+        await new Promise((r) => setTimeout(r, 60));
+        const permClearedAfterSwitch =
+          window.__DAB_STUDIO__.pendingPerm === null &&
+          Boolean(document.querySelector('[data-testid="background-perm-notice"]'));
+        const newConvMsgsClean = window.__DAB_STUDIO__.messages.length === 0 && window.__DAB_STUDIO__.busyStatus === null;
+        document.querySelector('[data-testid="background-perm-deny-btn"]')?.click();
         await t7;
         await new Promise((r) => setTimeout(r, 80));
-        const permClearedAfterSwitch = window.__DAB_STUDIO__.pendingPerm === null;
         const mutationsAfterSwitchedT7 = pubMutations.length;
-        const newConvMsgsClean = window.__DAB_STUDIO__.messages.length === 0 && window.__DAB_STUDIO__.busyStatus === null;
 
         // Turn 8: standalone handleRunPython running slow read-only call before mutation does NOT pop late prompt or leave busyStatus stuck after conversation switch
         window.__DAB_STUDIO__.setActiveConversationId('conv_slow_script_A');
