@@ -63,10 +63,12 @@ html,body {margin:0;padding:0;height:100%;font-family:-apple-system,BlinkMacSyst
 .dab-option:hover {background:var(--dab-accent-subtle,#eff6ff)}
 .dab-option-selected {background:#f0fdf4;font-weight:600}
 :root[data-theme="dark"] .dab-option-selected {background:rgba(16,185,129,0.18)}
-.dab-tile-edit {display:flex;flex-direction:column;gap:10px;padding:14px;background:var(--dab-surface,#ffffff);color:var(--dab-text,#1f2937);height:100%;overflow:auto}
-.dab-tile-edit-header {display:flex;align-items:center;justify-content:space-between}
-.dab-tile-select-row {display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600}
-.dab-tile-select-row select {height:30px;padding:0 8px;border:1px solid var(--dab-border-strong,#cbd5e1);border-radius:6px;flex:1;background:var(--dab-input-bg,#ffffff);color:var(--dab-text,#1f2937)}
+.dab-tile-edit {display:flex;flex-direction:column;gap:10px;padding:14px;background:var(--dab-surface,#ffffff);color:var(--dab-text,#1f2937);height:100%;min-width:0;overflow:auto}
+.dab-tile-edit-header {display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;min-width:0}
+.dab-tile-edit-field {display:flex;flex-direction:column;gap:4px;min-width:0}
+.dab-tile-edit-label {font-size:11.5px;font-weight:600;color:var(--dab-text-secondary,#334155)}
+textarea.dab-tile-code-input {height:auto;min-height:150px;padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;line-height:1.5;resize:vertical;width:100%}
+.dab-tile-edit-actions {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;min-width:0}
 .dab-tile-view {position:relative;height:100%;width:100%;overflow:auto;padding:12px;background:var(--dab-surface,#ffffff);color:var(--dab-text,#1f2937)}
 .dab-tile-idle {display:flex;align-items:center;justify-content:center;height:100%}
 .dab-tile-run-floating {position:absolute;top:8px;right:8px;height:24px;padding:0 8px;border:1px solid var(--dab-border-strong,#cbd5e1);border-radius:4px;background:var(--dab-surface-muted,#f8fafc);color:var(--dab-text-secondary,#334155);font-size:11px;font-weight:600;cursor:pointer}
@@ -208,7 +210,7 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 .dab-folder-search-result-row:hover {border-color:var(--dab-accent-border,#93c5fd);background:var(--dab-accent-subtle,#eff6ff)}
 .dab-folder-search-result-row.selected {border-color:var(--dab-accent,#2563eb);background:var(--dab-accent-subtle,#eff6ff)}
 .dab-studio-select {position:relative;display:inline-flex;align-items:center;vertical-align:middle}
-.dab-tile-select-row .dab-studio-select,.dab-modal-row > .dab-studio-select,.dab-modal-row .dab-studio-select {min-width:0;width:100%;flex:1}
+.dab-modal-row > .dab-studio-select,.dab-modal-row .dab-studio-select {min-width:0;width:100%;flex:1}
 .dab-modal-row .dab-studio-select-trigger {min-width:0;width:100%}
 .dab-studio-select-native {position:absolute;width:0;height:0;opacity:0;pointer-events:none;overflow:hidden;border:0;padding:0;margin:0}
 .dab-studio-select-trigger {height:28px;min-width:84px;width:100%;padding:0 8px;border:1px solid var(--dab-border-strong,#cbd5e1);border-radius:6px;background:var(--dab-input-bg,#ffffff);color:var(--dab-text,#1f2937);font-size:12px;font-weight:500;font-family:inherit;display:inline-flex;align-items:center;justify-content:space-between;gap:6px;cursor:pointer;text-align:left}

@@ -502,7 +502,7 @@ export function resolveConversationRelatedContent(
       } else if (item.contentType === 'script') {
         extraUserKeys.push(`user_${uid}_script_${itemId}`, `user_${uid}_tile_${itemId}`)
         extraSharedKeys.push(`obj_script_${itemId}`, `obj_schedule_${itemId}`)
-        extraItems.push(`Shared script artifact (obj_script_${itemId})`, `Script schedule (obj_schedule_${itemId})`)
+        extraItems.push(`Local draft script (${itemId})`)
       } else if (item.contentType === 'alert') {
         extraUserKeys.push(`user_${uid}_alert_${itemId}`, `user_${uid}_tile_${itemId}`)
         extraSharedKeys.push(`obj_alert_${itemId}`)
@@ -565,15 +565,14 @@ export function resolveConversationRelatedContent(
     const objectId = stripPrefix(String(conv.objectId || c.scriptId || c.id || conv.id || ''))
     const dashboardId = c.dashboardId ? String(c.dashboardId).trim() : undefined
     const items = uniq(
-      objectId && `Shared script artifact (obj_script_${objectId})`,
-      objectId && `Script schedule (obj_schedule_${objectId})`,
+      objectId && `Local draft script (${objectId})`,
       dashboardId && `Published wrapper Dashboard #${dashboardId} (sdk.delete_dashboard)`
     )
     return enrichWithContentItems({
       mode: 'tile', objectId,
       userIndexKeys: uniq(objectId && `user_${uid}_script_${objectId}`, objectId && `user_${uid}_tile_${objectId}`),
       sharedObjectKeys: uniq(objectId && `obj_script_${objectId}`, objectId && `obj_schedule_${objectId}`),
-      dashboardId, summary: items.join(' + ') || 'Python script & schedule artifacts', items,
+      dashboardId, summary: items.join(' + ') || 'Local draft Python script', items,
     })
   }
 

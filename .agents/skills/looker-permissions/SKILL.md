@@ -167,10 +167,10 @@ Executes Monty Python scripts against Looker SDK in `LkrCodeMode` and renders ri
 
 | Context | Required Permissions | Folder / Resource Requirements | SDK Endpoints Invoked |
 |---|---|---|---|
-| **Studio Authoring (`/tile/:id?`)** | `access_data`, `explore` (on models queried by the script) | Authenticated extension user (`update_artifacts` for saving script artifacts) | `run_inline_query`, `lookml_model_explore`, `search_artifacts`, `update_artifacts` |
-| **Publish to Extension Dashboard** | `access_data`, `see_looks`, `see_user_dashboards` + `save_content`, `save_dashboards` | Folder **Edit** access (`folder.can.edit_content`) | `POST/PATCH /dashboards`, `POST/PATCH /dashboard_elements`, `update_artifacts` (`tile_element_${id}`) |
-| **Dashboard Tile View Mode (`mountType === 'dashboard_tile'`, not editing)** | `access_data`, `see_user_dashboards` (or `see_lookml_dashboards`) + whatever read permissions the bound Python script calls | Dashboard **View** access | `artifact` / `search_artifacts` (`tile_element_${id}`), plus script's read-only SDK calls |
-| **Dashboard Tile Edit Mode (`isDashboardEditing === true`)** | `access_data`, `save_content`, `save_dashboards` | Dashboard **Edit** access (`dashboard.can.update`) | `update_artifacts` (`tile_element_${id}`) |
+| **Studio Authoring (`/tile/:id?`)** | `access_data`, `explore` (on models queried by the script) | Browser-local draft storage (`dab_draft_python_scripts_v1`, zero Looker Artifact writes; read-only legacy `GET /artifacts` fallback) | `run_inline_query`, `lookml_model_explore` |
+| **Publish to Extension Dashboard** | `access_data`, `see_looks`, `see_user_dashboards` + `save_content`, `save_dashboards` | Folder **Edit** access (`folder.can.edit_content`) | `POST/PATCH /dashboards`, `GET /dashboards/{id}`, `POST/PATCH /dashboard_elements` (`rich_content_json.python_tile_script`), `PATCH /dashboard_layouts/{id}` |
+| **Dashboard Tile View Mode (`mountType === 'dashboard_tile'`, not editing)** | `access_data`, `see_user_dashboards` (or `see_lookml_dashboards`) + whatever read permissions the bound Python script calls | Dashboard **View** access | `GET /dashboard_elements` (`rich_content_json`, with read-only legacy `tile_element_${id}` fallback), plus script's read-only SDK calls |
+| **Dashboard Tile Edit Mode (`isDashboardEditing === true`)** | `access_data`, `save_content`, `save_dashboards` | Dashboard **Edit** access (`dashboard.can.update`) | `GET/PATCH /dashboard_elements` (`rich_content_json.python_tile_script`) |
 
 ---
 

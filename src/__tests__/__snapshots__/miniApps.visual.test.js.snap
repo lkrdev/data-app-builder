@@ -192,7 +192,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "scenario": "python_tile_scheduler_modal",
   "verifiedVisibleText": [
     "Custom CodeMode Script Scheduler",
-    "obj_schedule_demo1",
+    "Schedule · demo1",
     "Daily at 8:00 AM (0 8 * * *)",
     "Script Execution Mode (\`vars.mode\`)",
     "Custom Controls / Non-Query Variables (\`vars.custom_controls\` JSON)",
@@ -239,7 +239,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "verifiedVisibleText": [
     "CodeMode Python Tile Configuration",
     "Tile #57",
-    "Looker Explore & Filter Summary (demo1)",
+    "Save Tile Script",
   ],
 }
 `;

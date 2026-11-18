@@ -3,19 +3,17 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import useSWR from 'swr'
 
 import { LkrCodeMode } from '../antigravity'
-import {
-  bindTileScriptArtifact,
-  getArtifactNamespace,
-  listSavedScripts,
-  loadScriptArtifact,
-  loadTileScriptArtifact,
-  SavedScript,
-  TileScriptBinding,
-} from '../lookerApi'
-import { ScriptOutputRenderer, renderMarkdownOrHtmlString } from './ScriptStudioView'
-import { StudioSelect } from './StudioSelect'
 import { useLookerExtension } from '../contexts/LookerExtensionContext'
-export { ScriptOutputRenderer, renderMarkdownOrHtmlString }
+import {
+  getArtifactNamespace,
+  loadTileScriptFromElement,
+  saveTileScriptToElement,
+  type TileElementScriptPayload,
+} from '../lookerApi'
+import { renderMarkdownOrHtmlString, ScriptOutputRenderer } from './ScriptStudioView'
+import { StudioBadge, StudioButton } from './StudioDesignSystem'
+
+export { renderMarkdownOrHtmlString, ScriptOutputRenderer }
 
 export const PYTHON_TILE_SKILL_GUIDE = [
   `# Skill: codemode-script-tile (Scriptable CodeMode Python Tiles, Custom Controls & Scheduling)`,
@@ -25,8 +23,8 @@ export const PYTHON_TILE_SKILL_GUIDE = [
   `2. **Multi-Mode & Variable-Driven Python Scripts**:`,
   `   - Always read \`filters = dashboard_filters if isinstance(dashboard_filters, dict) else {}\` and \`active_mode = mode if "mode" in globals() else filters.get("script_mode", "summary")\`.`,
   `   - Branch script behavior by \`active_mode\` (e.g., \`"summary"\` returns a KPI/model rollup table, \`"detailed_audit"\` runs deeper \`run_inline_query\` breakdowns, \`"anomaly_alert"\` returns Markdown alerts for scheduled runs).`,
-  `3. **Custom Script Scheduling (\`obj_schedule_<scriptId>\`)**:`,
-  `   - Scripts can be scheduled independently of Looker dashboard emails via the Studio Scheduler (\`obj_schedule_<scriptId>\`), injecting \`mode\` and \`custom_controls\` on each scheduled run.`,
+  `3. **Custom Script Scheduling**:`,
+  `   - Scripts can be scheduled independently of Looker dashboard emails via the Studio Scheduler, injecting \`mode\` and \`custom_controls\` on each scheduled run.`,
 ].join('\n')
 
 export const DEFAULT_PYTHON_SCRIPT = `# Looker CodeMode Python Runner (Monty WASM)
@@ -62,26 +60,28 @@ export const PythonTile: React.FC = () => {
   const filtersJson = JSON.stringify(tileHostData?.dashboardFilters || {})
 
   const namespace = getArtifactNamespace(extensionSDK)
-  const { data: swrBinding, error: bindingError } = useSWR<TileScriptBinding | null>(
-    elementId ? ['artifact:tile_script', namespace, elementId] : null,
-    () => loadTileScriptArtifact(core40SDK, elementId, namespace).catch(() => null)
-  )
-  const { data: swrScripts } = useSWR<SavedScript[]>(
-    isEditing ? ['artifact:scripts', namespace, undefined] : null,
-    () => listSavedScripts(core40SDK, undefined, namespace).catch(() => [])
+  const {
+    data: swrBinding,
+    error: bindingError,
+    mutate: mutateTileScript,
+  } = useSWR<TileElementScriptPayload | null>(
+    elementId ? ['tile:rich_content_script', elementId, namespace] : null,
+    () => loadTileScriptFromElement(core40SDK, elementId, namespace).catch(() => null)
   )
 
-  const [localBinding, setLocalBinding] = useState<TileScriptBinding | null | undefined>(undefined)
-  const [selectedScriptId, setSelectedScriptId] = useState('')
+  const [localBinding, setLocalBinding] = useState<TileElementScriptPayload | null | undefined>(undefined)
+  const [editTitle, setEditTitle] = useState('')
+  const [editCode, setEditCode] = useState('')
+  const [saving, setSaving] = useState(false)
   const [output, setOutput] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
   const runningRef = useRef(false)
+  const hydratedEditKeyRef = useRef('')
   const lastRunStateRef = useRef<string | undefined>(dashboardRunState)
   const lastExecutedFiltersRef = useRef<string | null>(null)
 
   const binding = localBinding !== undefined ? localBinding : swrBinding ?? null
-  const scripts = swrScripts || []
   const bindingLoaded =
     !elementId || swrBinding !== undefined || Boolean(bindingError) || localBinding !== undefined
 
@@ -91,18 +91,26 @@ export const PythonTile: React.FC = () => {
 
   useEffect(() => {
     setLocalBinding(undefined)
+    hydratedEditKeyRef.current = ''
     lastExecutedFiltersRef.current = null
   }, [core40SDK, elementId])
 
   useEffect(() => {
-    if (binding?.scriptId) {
-      setSelectedScriptId((prev) => prev || binding.scriptId)
+    if (!isEditing) {
+      hydratedEditKeyRef.current = ''
+      return
     }
-  }, [binding?.scriptId])
+    if (!bindingLoaded) return
+    const key = `${elementId}:${binding?.updatedAt || (binding?.code ? 'bound' : 'unbound')}`
+    if (hydratedEditKeyRef.current === key) return
+    hydratedEditKeyRef.current = key
+    setEditTitle(binding?.title || 'Python Script Tile')
+    setEditCode(binding?.code || DEFAULT_PYTHON_SCRIPT)
+  }, [binding?.code, binding?.title, binding?.updatedAt, bindingLoaded, elementId, isEditing])
 
   const executeBoundScript = useCallback(
     async (
-      overrideBinding?: TileScriptBinding | null,
+      overrideBinding?: Pick<TileElementScriptPayload, 'code'> | null,
       overrideFilters?: Record<string, unknown>
     ) => {
       const code = (overrideBinding ?? binding)?.code
@@ -140,7 +148,7 @@ export const PythonTile: React.FC = () => {
       (dashboardRunState === 'RUNNING' && prevRunState !== 'RUNNING')
     ) {
       lastExecutedFiltersRef.current = filtersJson
-      executeBoundScript(binding, tileHostData?.dashboardFilters)
+      void executeBoundScript(binding, tileHostData?.dashboardFilters)
     }
   }, [
     binding,
@@ -155,8 +163,7 @@ export const PythonTile: React.FC = () => {
   // Notify Looker host (PDF/PNG renderer & Scheduled Plans) only after React commits and browser paints DOM
   useEffect(() => {
     const readyAfterRun = !isEditing && !running && output !== null
-    const readyWithoutRun =
-      bindingLoaded && (!isEditing || swrScripts !== undefined) && (!binding?.code || isEditing)
+    const readyWithoutRun = bindingLoaded && (!binding?.code || isEditing)
     if (!readyAfterRun && !readyWithoutRun) return
 
     const fire = () => extensionSDK?.rendered?.()
@@ -172,56 +179,89 @@ export const PythonTile: React.FC = () => {
       cancelAnimationFrame(raf1)
       cancelAnimationFrame(raf2)
     }
-  }, [binding?.code, bindingLoaded, extensionSDK, isEditing, output, running, swrScripts])
+  }, [binding?.code, bindingLoaded, extensionSDK, isEditing, output, running])
 
-  const handleBindScript = async (scriptId: string) => {
-    setSelectedScriptId(scriptId)
-    const chosen =
-      scripts.find((s) => s.id === scriptId) ||
-      (scriptId ? await loadScriptArtifact(core40SDK, scriptId, namespace) : null)
-    if (!chosen || !elementId) return
-    setStatusMsg('Saving tile script binding...')
-    const nextBinding = await bindTileScriptArtifact(
-      core40SDK,
-      elementId,
-      {
-        scriptId: chosen.id,
-        code: chosen.code,
-        title: chosen.title,
-      },
-      namespace
-    )
-    setLocalBinding(nextBinding)
-    setStatusMsg(`Bound "${chosen.title}" to tile #${elementId}`)
+  const handleSaveTileScript = async () => {
+    if (!elementId || saving) return
+    setSaving(true)
+    setStatusMsg('Saving tile script to dashboard element...')
+    try {
+      const saved = await saveTileScriptToElement(core40SDK, elementId, {
+        scriptId: binding?.scriptId || `tile_${elementId}`,
+        title: editTitle,
+        code: editCode,
+      })
+      hydratedEditKeyRef.current = `${elementId}:${saved.updatedAt}`
+      setLocalBinding(saved)
+      void mutateTileScript(saved, false)
+      setStatusMsg(`Saved "${saved.title}" to tile #${elementId} (rich_content_json)`)
+      await executeBoundScript(saved, tileHostData?.dashboardFilters)
+    } catch (err: unknown) {
+      setStatusMsg(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setSaving(false)
+    }
   }
 
   if (isEditing) {
     return (
-      <div className="dab-tile-edit">
+      <div className="dab-tile-edit" data-testid="tile-edit-mode">
         <div className="dab-tile-edit-header">
           <strong>CodeMode Python Tile Configuration</strong>
-          <span className="dab-badge">Tile #{elementId || 'unsaved'}</span>
+          <StudioBadge tone="neutral">Tile #{elementId || 'unsaved'}</StudioBadge>
         </div>
-        <div className="dab-tile-select-row">
-          <span>Saved Script (`search_artifacts`):</span>
-          <StudioSelect
-            testId="tile-edit-script-select"
-            value={selectedScriptId}
-            onChange={(val) => handleBindScript(val)}
-            options={[
-              { value: '', label: '-- Select a saved Python script --' },
-              ...scripts.map((s) => ({
-                value: s.id,
-                label: `${s.title} (${s.id})`,
-              })),
-            ]}
+        <div className="dab-tile-edit-field">
+          <label className="dab-tile-edit-label" htmlFor="tile-script-title-input">
+            Script Title
+          </label>
+          <input
+            id="tile-script-title-input"
+            type="text"
+            className="dab-input"
+            data-testid="tile-script-title-input"
+            value={editTitle}
+            disabled={!bindingLoaded || saving}
+            onChange={(e) => setEditTitle(e.target.value)}
+            placeholder="Python Script Tile"
+            style={{ width: '100%' }}
           />
         </div>
-        {statusMsg && <div className="dab-muted">{statusMsg}</div>}
-        {binding?.code && (
-          <pre className="dab-py-pre" style={{ maxHeight: 200 }}>
-            {binding.code}
-          </pre>
+        <div className="dab-tile-edit-field">
+          <label className="dab-tile-edit-label" htmlFor="tile-script-code-input">
+            Monty Python Code
+          </label>
+          <textarea
+            id="tile-script-code-input"
+            className="dab-input dab-tile-code-input"
+            data-testid="tile-script-code-input"
+            rows={8}
+            value={editCode}
+            disabled={!bindingLoaded || saving}
+            onChange={(e) => setEditCode(e.target.value)}
+          />
+        </div>
+        <div className="dab-tile-edit-actions">
+          <StudioButton
+            type="button"
+            variant="primary"
+            testId="tile-script-save-btn"
+            disabled={!elementId || !bindingLoaded || saving || running || !editCode.trim()}
+            onClick={() => {
+              void handleSaveTileScript()
+            }}
+          >
+            {saving ? 'Saving…' : 'Save Tile Script'}
+          </StudioButton>
+          {statusMsg && (
+            <span className="dab-muted" data-testid="tile-script-status">
+              {statusMsg}
+            </span>
+          )}
+        </div>
+        {output !== null && (
+          <div data-testid="tile-edit-live-preview" style={{ minWidth: 0 }}>
+            <ScriptOutputRenderer output={output} />
+          </div>
         )}
       </div>
     )
@@ -235,7 +275,9 @@ export const PythonTile: React.FC = () => {
           <button
             type="button"
             className="dab-tile-run-floating"
-            onClick={() => executeBoundScript()}
+            onClick={() => {
+              void executeBoundScript()
+            }}
             disabled={running || !binding?.code}
             title="Re-run Python script with current dashboard_filters"
           >
@@ -249,7 +291,9 @@ export const PythonTile: React.FC = () => {
             <button
               type="button"
               className="dab-btn-primary"
-              onClick={() => executeBoundScript()}
+              onClick={() => {
+                void executeBoundScript()
+              }}
               disabled={running}
             >
               {running ? 'Running Python…' : '▶ Run Script'}
@@ -257,7 +301,7 @@ export const PythonTile: React.FC = () => {
           ) : (
             <span className="dab-muted">
               No script bound to tile #{elementId || '?'}. Enter Dashboard Edit mode to
-              select a script.
+              author and save a Python script.
             </span>
           )}
         </div>

@@ -127,6 +127,7 @@ const lookerApiTs = [
   'src/lookerTransport.ts',
   'src/lookerFolders.ts',
   'src/lookerPermissions.ts',
+  'src/lookerDraftScripts.ts',
   'src/lookerArtifacts.ts',
   'src/lookerArtifactTypes.ts',
   'src/lookerArtifactService.ts',
@@ -178,22 +179,26 @@ const pythonTileTsx = [
   .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
   .join('\n')
 assert(
-  lookerApiTs.includes('user_${uid}_script_${payload.id}') &&
-    lookerApiTs.includes('obj_script_${payload.id}') &&
-    lookerApiTs.includes('tile_element_${String(elementId).trim()}') &&
+  lookerApiTs.includes('python_tile_script') &&
+    lookerApiTs.includes('rich_content_json') &&
+    lookerApiTs.includes('dab_draft_python_scripts_v1') &&
+    lookerApiTs.includes('tile_element_${cleanElId}') &&
     lookerApiTs.includes("load_configuration: 'wait'") &&
     lookerApiTs.includes('run_on_load: false') &&
     lookerApiTs.includes('show_dashboard_header: true'),
-  'lookerApi.ts must persist user/obj/tile_element script artifacts and publish extension-layout dashboards with load_configuration="wait" and show_dashboard_header=true'
+  'lookerApi.ts must persist published tile scripts on IDashboardElement.rich_content_json (python_tile_script) with read-only tile_element_ fallback, store local draft scripts in dab_draft_python_scripts_v1, and publish extension-layout dashboards with load_configuration="wait" and show_dashboard_header=true'
 )
 assert(
   pythonTileTsx.includes('isDashboardEditing') &&
     pythonTileTsx.includes('dashboardRunState') &&
     pythonTileTsx.includes('dashboard_filters: dashboardFilters') &&
+    pythonTileTsx.includes('tile-script-title-input') &&
+    pythonTileTsx.includes('tile-script-code-input') &&
+    pythonTileTsx.includes('tile-script-save-btn') &&
     pythonTileTsx.includes('dab-py-table') &&
     pythonTileTsx.includes('dab-py-markdown') &&
     pythonTileTsx.includes('dab-py-pre'),
-  'PythonTile.tsx must handle Edit/View modes, dashboardRunState, vars.dashboard_filters, and list[dict]/string/dict return value rendering'
+  'PythonTile.tsx must handle inline Edit/View modes (tile-script-title-input, tile-script-code-input, tile-script-save-btn), dashboardRunState, vars.dashboard_filters, and list[dict]/string/dict return value rendering'
 )
 const tileTableOut = await LkrCodeMode.runPythonCode({
   code: 'return [{"filter_status": dashboard_filters.get("status", "ALL"), "rows": 42}]',

@@ -320,10 +320,10 @@ export const TilePreviewPane: React.FC<{
         title="Custom CodeMode Script Scheduler"
         subtitle={
           <>
-            Schedule <code>obj_script_{scriptId}</code> with custom <code>vars.mode</code> &amp; non-query controls
+            Schedule script <code>{scriptId}</code> with custom <code>vars.mode</code> &amp; non-query controls
           </>
         }
-        headerRight={<StudioBadge>obj_schedule_{scriptId}</StudioBadge>}
+        headerRight={<StudioBadge>Schedule · {scriptId}</StudioBadge>}
         footer={
           <>
             <button
@@ -416,7 +416,7 @@ export const TilePreviewPane: React.FC<{
               options={[
                 {
                   value: 'artifact_snapshot',
-                  label: `Persist Snapshot Artifact (obj_script_run_${scriptId})`,
+                  label: `Persist Run Snapshot (${scriptId})`,
                 },
                 { value: 'webhook', label: 'Webhook POST (JSON / Markdown)' },
                 {

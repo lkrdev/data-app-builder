@@ -15,7 +15,7 @@
     "snapshotName": "02-mode-native-dashboard-builder-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "lookml",
@@ -42,7 +42,7 @@
     "snapshotName": "05-mode-python-tile-studio-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "tile_mount_view",
@@ -60,7 +60,7 @@
     "snapshotName": "07-dashboard-tile-mount-edit-mode-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "config_page",
@@ -161,7 +161,7 @@
     "height": 416,
     "clipSelector": ".dab-modal",
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "conversational_analytics",
@@ -170,7 +170,7 @@
     "snapshotName": "16-mode-conversational-analytics-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "centered_empty_prompt",

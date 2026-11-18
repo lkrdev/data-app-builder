@@ -220,6 +220,175 @@ function registerVisualPart13Tests(ctx) {
       convACompletedCleanly: true,
     })
   }, 25000)
+
+  test('Issue #228: renders inline PythonTile editor in Light & Dark themes, saves to IDashboardElement.rich_content_json with 0 artifact writes, previews with dashboard_filters, and round-trips Studio local draft scripts when !isConfigured', async () => {
+    await ctx.chrome.send('Emulation.setDeviceMetricsOverride', {
+      width: 1280,
+      height: 840,
+      deviceScaleFactor: 1,
+      mobile: false,
+    })
+    await ctx.chrome.send('Page.navigate', { url: `http://127.0.0.1:${ctx.port}/?scenario=tile_mount_edit` })
+    const tileReadyDeadline = Date.now() + 8000
+    while (Date.now() < tileReadyDeadline) {
+      const r = await ctx.chrome.send('Runtime.evaluate', {
+        expression: `Boolean(document.querySelector('[data-testid="tile-script-title-input"]')?.value && document.querySelector('[data-testid="tile-script-code-input"]')?.value)`,
+        returnByValue: true,
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 60))
+    }
+
+    const tileEditRes = await ctx.chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const setReactValue = (el, val) => {
+          const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+          setter.call(el, val);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        };
+
+        const card = document.querySelector('[data-testid="tile-edit-mode"]');
+        const titleInput = document.querySelector('[data-testid="tile-script-title-input"]');
+        const codeInput = document.querySelector('[data-testid="tile-script-code-input"]');
+        const saveBtn = document.querySelector('[data-testid="tile-script-save-btn"]');
+        const legacySelect = document.querySelector('[data-testid="tile-edit-script-select"]');
+        const noOverflow = document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1;
+
+        const lightCardBg = getComputedStyle(card).backgroundColor;
+        const lightInputBg = getComputedStyle(titleInput).backgroundColor;
+        const lightCodeColor = getComputedStyle(codeInput).color;
+
+        window.__DAB_STUDIO__.setThemeMode('dark');
+        await new Promise((r) => setTimeout(r, 60));
+        const darkRootTheme = document.documentElement.getAttribute('data-theme');
+        const darkCardBg = getComputedStyle(card).backgroundColor;
+        const darkInputBg = getComputedStyle(titleInput).backgroundColor;
+        const darkCodeColor = getComputedStyle(codeInput).color;
+
+        window.__DAB_STUDIO__.setThemeMode('light');
+        await new Promise((r) => setTimeout(r, 40));
+
+        window.__ARTIFACT_UPDATES__ = [];
+        window.__ELEMENT_UPDATES__ = [];
+        setReactValue(titleInput, 'Inline Rich Content Revenue Audit');
+        setReactValue(
+          codeInput,
+          'return [{"saved_mode": "rich_content_inline", "active_status": dashboard_filters.get("status", "Unknown")}]'
+        );
+        await new Promise((r) => setTimeout(r, 40));
+
+        saveBtn.click();
+        const saveDeadline = Date.now() + 5000;
+        while (Date.now() < saveDeadline) {
+          const preview = document.querySelector('[data-testid="tile-edit-live-preview"]');
+          if (preview && preview.innerText.includes('rich_content_inline')) break;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+
+        const previewEl = document.querySelector('[data-testid="tile-edit-live-preview"]');
+        const statusEl = document.querySelector('[data-testid="tile-script-status"]');
+        const elUpdates = window.__ELEMENT_UPDATES__ || [];
+        const savedRich = elUpdates[0] && elUpdates[0].body && elUpdates[0].body.rich_content_json
+          ? JSON.parse(elUpdates[0].body.rich_content_json)
+          : null;
+
+        return {
+          hasInputsAndSaveBtn: Boolean(titleInput && codeInput && saveBtn),
+          legacySelectRemoved: legacySelect === null,
+          noOverflow,
+          darkRootTheme,
+          themeContrastsChanged:
+            lightCardBg !== darkCardBg &&
+            lightInputBg !== darkInputBg &&
+            lightCodeColor !== darkCodeColor,
+          artifactWriteCount: (window.__ARTIFACT_UPDATES__ || []).length,
+          elementUpdateCount: elUpdates.length,
+          savedScriptTitle: savedRich?.python_tile_script?.title || null,
+          statusMentionsRichContent: String(statusEl?.innerText || '').includes('rich_content_json'),
+          previewShowsSavedOutputAndFilter:
+            String(previewEl?.innerText || '').includes('rich_content_inline') &&
+            String(previewEl?.innerText || '').includes('Complete'),
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+
+    if (tileEditRes.exceptionDetails) {
+      throw new Error(tileEditRes.exceptionDetails.exception?.description || tileEditRes.exceptionDetails.text)
+    }
+    expect(tileEditRes.result.value).toEqual({
+      hasInputsAndSaveBtn: true,
+      legacySelectRemoved: true,
+      noOverflow: true,
+      darkRootTheme: 'dark',
+      themeContrastsChanged: true,
+      artifactWriteCount: 0,
+      elementUpdateCount: 1,
+      savedScriptTitle: 'Inline Rich Content Revenue Audit',
+      statusMentionsRichContent: true,
+      previewShowsSavedOutputAndFilter: true,
+    })
+
+    // Verify Studio /tile local draft save & reload works when !isConfigured with 0 Looker Artifact writes
+    await ctx.chrome.send('Page.navigate', { url: `http://127.0.0.1:${ctx.port}/?scenario=python_tile_studio&unconfigured=1` })
+    const studioDeadline = Date.now() + 8000
+    while (Date.now() < studioDeadline) {
+      const r = await ctx.chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="tile-preview-toolbar"]'))`,
+        returnByValue: true,
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 60))
+    }
+
+    const studioDraftRes = await ctx.chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const unconfigured = window.__DAB_STUDIO__.isConfigured === false;
+        const stayedOutOfConfig = window.__DAB_STUDIO__.location.pathname !== '/config';
+        window.__ARTIFACT_UPDATES__ = [];
+        window.__DAB_STUDIO__.setScriptId('local_draft_228');
+        window.__DAB_STUDIO__.setScriptTitle('Local Unconfigured Draft');
+        await new Promise((r) => setTimeout(r, 40));
+
+        const saved = await window.__DAB_STUDIO__.handleSaveScript('return [{"local_draft": 228}]');
+        const scriptArtifactWrites = (window.__ARTIFACT_UPDATES__ || []).filter(
+          (u) => String(u.key || '').includes('script') || String(u.key || '').includes('tile_element_')
+        );
+        const rawLocal = window.localStorage.getItem('dab_draft_python_scripts_v1') || '[]';
+        const parsedLocal = JSON.parse(rawLocal);
+
+        window.__DAB_STUDIO__.setScriptCode('return []');
+        await new Promise((r) => setTimeout(r, 40));
+        await window.__DAB_STUDIO__.loadScriptById('local_draft_228', true);
+        await new Promise((r) => setTimeout(r, 80));
+
+        return {
+          unconfigured: unconfigured && stayedOutOfConfig,
+          savedId: saved?.id || null,
+          savedHasNoStaleDash: !saved?.dashboardId && !window.__DAB_STUDIO__.publishedTileDash,
+          scriptArtifactWriteCount: scriptArtifactWrites.length,
+          storedInDualStorage: parsedLocal.some((d) => d.id === 'local_draft_228' && d.code.includes('228')),
+          reloadedCodeMatches: String(window.__DAB_STUDIO__.scriptCode || '').includes('228'),
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+
+    if (studioDraftRes.exceptionDetails) {
+      throw new Error(studioDraftRes.exceptionDetails.exception?.description || studioDraftRes.exceptionDetails.text)
+    }
+    expect(studioDraftRes.result.value).toEqual({
+      unconfigured: true,
+      savedId: 'local_draft_228',
+      savedHasNoStaleDash: true,
+      scriptArtifactWriteCount: 0,
+      storedInDualStorage: true,
+      reloadedCodeMatches: true,
+    })
+  }, 25000)
 }
 
 module.exports = { registerVisualPart13Tests }

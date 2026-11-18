@@ -3,6 +3,7 @@ import type { IDashboard, IDashboardElement, Looker40SDK } from '@looker/sdk'
 import { type AlertInspectorBundle } from './antigravityTypes'
 import {
   DashboardStudioMetadata,
+  isLooker404Error,
   mergeStudioMetadata,
   StudioMetadataUpdate,
 } from './dataAppPublisher'
@@ -302,6 +303,39 @@ export async function listUserDashboardArtifacts(
   }
 }
 
+export interface TileElementScriptPayload { scriptId: string; title: string; code: string; updatedAt: string }
+
+function parseRichContentJsonObject(raw: string | null | undefined): Record<string, unknown> {
+  if (!raw || typeof raw !== 'string') return {}
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {}
+  } catch { return {} }
+}
+
+async function getDashboardElementSafe(
+  sdk: Looker40SDK,
+  cleanElId: string,
+  allowMissing404Only = false
+): Promise<Partial<IDashboardElement> | null> {
+  try {
+    return typeof (sdk as Partial<Looker40SDK>).dashboard_element === 'function'
+      ? await sdk.ok(sdk.dashboard_element(cleanElId))
+      : await rawLookerRequest<IDashboardElement>(sdk, 'GET', `/dashboard_elements/${encodeURIComponent(cleanElId)}`)
+  } catch (err) {
+    if (allowMissing404Only && !isLooker404Error(err)) throw err
+    return null
+  }
+}
+
+async function patchDashboardElementVerified(sdk: Looker40SDK, cleanElId: string, body: Partial<IDashboardElement>): Promise<IDashboardElement> {
+  const updated = typeof (sdk as Partial<Looker40SDK>).update_dashboard_element === 'function'
+    ? await sdk.ok(sdk.update_dashboard_element(cleanElId, body as Parameters<Looker40SDK['update_dashboard_element']>[1]))
+    : await rawLookerRequest<IDashboardElement>(sdk, 'PATCH', `/dashboard_elements/${encodeURIComponent(cleanElId)}`, undefined, body)
+  if (!updated?.rich_content_json) throw new Error(`Looker update_dashboard_element(#${cleanElId}) returned empty rich_content_json`)
+  return updated
+}
+
 export const saveScriptArtifact = (sdk: Looker40SDK, userId: string, script: SavedScript, namespace = ARTIFACT_NAMESPACE): Promise<SavedScript> =>
   getArtifactService(sdk, namespace).saveScript(userId, script)
 export const loadScriptArtifact = (sdk: Looker40SDK, scriptId: string, namespace = ARTIFACT_NAMESPACE): Promise<SavedScript | null> =>
@@ -318,122 +352,98 @@ export const bindScriptToTileArtifact = bindTileScriptArtifact
 export const loadTileScriptArtifact = (sdk: Looker40SDK, elementId: string, namespace = ARTIFACT_NAMESPACE): Promise<TileScriptBinding | null> =>
   getArtifactService(sdk, namespace).loadTileScript(elementId)
 
+export async function saveTileScriptToElement(
+  sdk: Looker40SDK, elementId: string, binding: { scriptId: string; title: string; code: string }
+): Promise<TileElementScriptPayload> {
+  const cleanElId = String(elementId || '').trim()
+  if (!cleanElId) throw new Error('saveTileScriptToElement requires a non-empty dashboard elementId')
+  const existingEl = await getDashboardElementSafe(sdk, cleanElId, true)
+  const payload: TileElementScriptPayload = {
+    scriptId: String(binding.scriptId || '').trim() || `tile_${cleanElId}`,
+    title: String(binding.title || '').trim() || 'Python Script Tile',
+    code: String(binding.code ?? ''),
+    updatedAt: new Date().toISOString(),
+  }
+  const rich_content_json = JSON.stringify({ ...parseRichContentJsonObject(existingEl?.rich_content_json), python_tile_script: payload })
+  await patchDashboardElementVerified(sdk, cleanElId, { rich_content_json })
+  return payload
+}
+
+export async function loadTileScriptFromElement(
+  sdk: Looker40SDK, elementId: string, namespace = ARTIFACT_NAMESPACE
+): Promise<TileElementScriptPayload | null> {
+  const cleanElId = String(elementId || '').trim()
+  if (!cleanElId) return null
+  const el = await getDashboardElementSafe(sdk, cleanElId)
+  const rawTileScript = parseRichContentJsonObject(el?.rich_content_json).python_tile_script
+  if (rawTileScript && typeof rawTileScript === 'object' && !Array.isArray(rawTileScript)) {
+    const rec = rawTileScript as Record<string, unknown>, code = String(rec.code ?? '')
+    if (code.trim().length > 0) {
+      const scriptId = String(rec.scriptId ?? '').trim() || `tile_${cleanElId}`
+      return { scriptId, title: String(rec.title ?? '').trim() || scriptId, code, updatedAt: String(rec.updatedAt ?? '') }
+    }
+  }
+  const legacy = await loadTileScriptArtifact(sdk, cleanElId, namespace)
+  if (legacy && String(legacy.code ?? '').trim().length > 0) {
+    const scriptId = String(legacy.scriptId || '').trim() || `tile_${cleanElId}`
+    return { scriptId, title: String(legacy.title || '').trim() || scriptId, code: legacy.code, updatedAt: String(legacy.updatedAt || '') }
+  }
+  return null
+}
+
 export async function publishScriptDashboard(
   sdk: Looker40SDK,
-  params: {
-    script: SavedScript
-    folderId: string
-    extensionId: string
-    existingDashboardId?: string
-    namespace?: string
-  }
+  params: { script: SavedScript; folderId: string; extensionId: string; existingDashboardId?: string; namespace?: string }
 ): Promise<{ dashboardId: string; elementId: string; extensionId: string }> {
-  const {
-    script,
-    folderId,
-    extensionId,
-    existingDashboardId,
-    namespace = ARTIFACT_NAMESPACE,
-  } = params
+  const { script, folderId, extensionId, existingDashboardId } = params
   const title = script.title || 'Python Runner Dashboard'
   const extId = extensionId || 'data_app_builder::data_app_builder'
-
   const dashBody = {
-    title,
-    load_configuration: 'wait',
-    run_on_load: false,
-    show_filters_bar: true,
-    appearance: {
-      show_dashboard_header: true,
-      page_side_margins: 0,
-      tile_space_between: 0,
-      tile_shadow: false,
-    },
+    title, load_configuration: 'wait', run_on_load: false, show_filters_bar: true,
+    appearance: { show_dashboard_header: true, page_side_margins: 0, tile_space_between: 0, tile_shadow: false },
   }
   let dashId = existingDashboardId?.trim() || ''
   if (dashId) {
-    await rawLookerRequest(
-      sdk,
-      'PATCH',
-      `/dashboards/${encodeURIComponent(dashId)}`,
-      undefined,
-      dashBody
-    )
-  } else {
     try {
-      const dash = await rawLookerRequest<{ id: string | number }>(sdk, 'POST', '/dashboards', undefined, {
-        ...dashBody,
-        folder_id: folderId,
-      })
+      await rawLookerRequest(sdk, 'PATCH', `/dashboards/${encodeURIComponent(dashId)}`, undefined, dashBody)
+    } catch (err) {
+      if (!isLooker404Error(err)) throw err
+      dashId = ''
+    }
+  }
+  if (!dashId) {
+    try {
+      const dash = await rawLookerRequest<{ id: string | number }>(sdk, 'POST', '/dashboards', undefined, { ...dashBody, folder_id: folderId })
       dashId = String(dash.id)
     } catch {
-      const dash = await sdk.ok(
-        sdk.create_dashboard({
-          title,
-          folder_id: folderId,
-          load_configuration: 'wait',
-          show_filters_bar: true,
-        } as Parameters<Looker40SDK['create_dashboard']>[0])
-      )
+      const dash = await sdk.ok(sdk.create_dashboard({ title, folder_id: folderId, load_configuration: 'wait', show_filters_bar: true } as Parameters<Looker40SDK['create_dashboard']>[0]))
       dashId = String(dash.id)
     }
   }
-
   const fullDash = await sdk.ok(sdk.dashboard(dashId))
-  let elementId = String(
-    (fullDash.dashboard_elements || []).find((e) => e.type === 'extension')?.id || ''
-  )
+  const els = fullDash.dashboard_elements || []
+  const existingExtEl =
+    els.find((e) => e.type === 'extension' && script.elementId && String(e.id) === String(script.elementId)) ??
+    els.find((e) => e.type === 'extension' && e.extension_id === extId) ??
+    els.find((e) => e.type === 'extension')
+  let elementId = String(existingExtEl?.id || '')
+  const tilePayload: TileElementScriptPayload = {
+    scriptId: String(script.id || '').trim() || 'script_tile', title, code: String(script.code ?? ''), updatedAt: new Date().toISOString(),
+  }
+  const rich_content_json = JSON.stringify({ ...parseRichContentJsonObject(existingExtEl?.rich_content_json), python_tile_script: tilePayload })
   if (!elementId) {
-    const createdEl = await rawLookerRequest<{ id?: string }>(
-      sdk,
-      'POST',
-      '/dashboard_elements',
-      undefined,
-      {
-        dashboard_id: dashId,
-        type: 'extension',
-        extension_id: extId,
-        title,
-        title_hidden: true,
-      }
-    )
+    const createdEl = await rawLookerRequest<Partial<IDashboardElement>>(sdk, 'POST', '/dashboard_elements', undefined, {
+      dashboard_id: dashId, type: 'extension', extension_id: extId, title, title_hidden: true, rich_content_json,
+    })
     elementId = String(createdEl?.id || '')
   } else {
-    await sdk.ok(
-      sdk.update_dashboard_element(elementId, {
-        title,
-        title_hidden: true,
-        extension_id: extId,
-      } as Parameters<Looker40SDK['update_dashboard_element']>[1])
-    )
+    await patchDashboardElementVerified(sdk, elementId, { title, title_hidden: true, extension_id: extId, rich_content_json })
   }
-
-  const layouts = fullDash.dashboard_layouts || []
-  const activeLayout = layouts.find((l) => l.active) || layouts[0]
+  const layouts = fullDash.dashboard_layouts || [], activeLayout = layouts.find((l) => l.active) || layouts[0]
   if (activeLayout?.id) {
-    await rawLookerRequest(
-      sdk,
-      'PATCH',
-      `/dashboard_layouts/${encodeURIComponent(String(activeLayout.id))}`,
-      undefined,
-      { type: 'extension' }
-    )
+    await rawLookerRequest(sdk, 'PATCH', `/dashboard_layouts/${encodeURIComponent(String(activeLayout.id))}`, undefined, { type: 'extension' })
   }
-
-  if (elementId) {
-    await bindTileScriptArtifact(
-      sdk,
-      elementId,
-      { scriptId: script.id, code: script.code, title: script.title },
-      namespace
-    )
-  }
-
-  return {
-    dashboardId: dashId,
-    elementId,
-    extensionId: extId,
-  }
+  return { dashboardId: dashId, elementId, extensionId: extId }
 }
 
 // ponytail: two-tier artifact store — compact (<1 KB) per-user index key (user_${userId}_${type}_${id})

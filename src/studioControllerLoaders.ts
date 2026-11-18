@@ -7,9 +7,9 @@ import { HEALTH_CHECK_SYSTEM_GUIDE, loadHealthCheckArtifact, runThreePillarHealt
 import type { LkrCodeModeRunOptions } from './lkrCliBridge'
 import {
   CaConversationState, clearInFlightConvId, ConversationRecord, createLookerCaConversation, extractExploreIdsFromCode,
-  formatExploreId, getArtifactNamespace, getConvTargetId, hydrateConversationContentItems, isLookmlTargetAlreadyLoaded, isUserConversationDeleted, listSavedScripts,
-  loadAlertArtifact, loadExistingDashboardApp, loadNativeContentById, loadObjectArtifact, loadScriptArtifact,
-  publishScriptDashboard, readInFlightConvId, readInFlightConvIds, resolveCaEmbedPath, ResolvedStudioUseCase, SavedScript, saveScriptArtifact,
+  formatExploreId, getArtifactNamespace, getConvTargetId, hydrateConversationContentItems, isLookmlTargetAlreadyLoaded, isUserConversationDeleted, listLocalDraftScripts,
+  loadAlertArtifact, loadExistingDashboardApp, loadLocalDraftScript, loadNativeContentById, loadObjectArtifact, loadScriptArtifact,
+  publishScriptDashboard, readInFlightConvId, readInFlightConvIds, resolveCaEmbedPath, ResolvedStudioUseCase, SavedScript, saveLocalDraftScript,
   saveUserArtifact, saveUserConversation, selectCaAgentViaIsolatedSubagent, STUDIO_OVERVIEW_TAB_KEY, StudioContentItem, studioModeToUseCase,
   StudioToolMode, studioUseCaseToMode, toTurnCrudItem, upsertStudioContentItem,
 } from './lookerApi'
@@ -37,7 +37,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   const {
     userId, userIdRef, availableLookmlProjects, selectedExplores, setSelectedExplores, selectedFolderId, setSelectedFolderId,
     schemaMarkdown, inferredRouteUseCase, activeMode, agentSession, messages, catalogItems, activeObjectId, setActiveObjectId,
-    conversations, setConversations, setSavedScripts, healthScope, caConversation, setCaConversation,
+    conversations, setConversations, savedScripts, setSavedScripts, healthScope, caConversation, setCaConversation,
     lastCaIdRef, isCaMode, lookmlProjectId, setLookmlProjectId, lookmlBundle, setLookmlBundle, lastLookmlIdRef, publishedApp,
     setPublishedApp, lastPublishedIdRef, nativeContent, setNativeContent, lastNativeIdRef, alertBundle, setAlertBundle, contentItemsRef,
     setContentItems, activeContentTabKeyRef, setActiveContentTabKey, upsertContentItem, healthReport, setHealthReport,
@@ -138,7 +138,8 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
                 .then((list) => { if (!isUserConversationDeleted(core40SDK, userId, opts.id, namespace)) setConversations(list, { optimisticEntry: null }) })
                 .catch(() => {})
                 .then(() => {
-                  if (opts.updateArtifactIndex && targetArtifactId && !isUserConversationDeleted(core40SDK, userId, opts.id, namespace)) {
+                  const hasScriptId = Boolean((opts.content as { scriptId?: string } | undefined)?.scriptId)
+                  if (opts.updateArtifactIndex && !hasScriptId && targetArtifactId && !isUserConversationDeleted(core40SDK, userId, opts.id, namespace)) {
                     return saveUserArtifact(
                       core40SDK, userId,
                       { id: targetArtifactId, type: studioUseCaseToMode(studioModeToUseCase(opts.type)), title: label, label, explores: opts.explores, lastInteractionId: opts.interactionId, environmentId: opts.environmentId, updatedAt, createdBy: userId },
@@ -289,27 +290,29 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     const loadConvId = activeConversationIdRef.current
     lastScriptIdRef.current = id; resolvedUseCaseByIdRef.current[id] = 'tile'
     setSelectedUseCase('tile'); setLoadedScript(true); setScriptId(id)
-    return loadScriptArtifact(core40SDK, id).then((loaded) => {
-      if (activeConversationIdRef.current !== loadConvId) return
-      const effectiveCode = loaded?.code || scriptCode
-      if (loaded) {
-        setScriptId(loaded.id); setScriptTitle(loaded.title || loaded.id); setScriptCode(loaded.code || DEFAULT_PYTHON_SCRIPT)
-        if (loaded.dashboardId) setPublishedTileDash({ dashboardId: loaded.dashboardId, elementId: loaded.elementId || '' })
-      }
-      const effectiveScriptId = loaded?.id || id
-      upsertContentItem({ id: String(effectiveScriptId), scriptId: String(effectiveScriptId), contentType: 'script', title: loaded?.title || scriptTitle || effectiveScriptId, embedPath: `/tile/${encodeURIComponent(String(effectiveScriptId))}`, updatedAt: loaded?.updatedAt })
-      hydrateLoadedArtifact({
-        mode: 'tile', id: effectiveScriptId, route: `/c/${encodeURIComponent(effectiveScriptId)}`, pushRoute, convTypes: ['tile', 'script'], studio: loaded,
-        messages: loaded?.messages as ChatMessage[] | undefined, defaultEnvId: 'env_tile_isolated',
-        fallbackText: loaded ? `Loaded script "${loaded.title}" (${loaded.id}).` : `Opened Script "${scriptTitle}" (${id}).`,
+    return loadLocalDraftScript(id, extensionSDK)
+      .then((local): Promise<SavedScript | null> | SavedScript => local || loadScriptArtifact(core40SDK, id, getArtifactNamespace(extensionSDK)))
+      .then((loaded) => {
+        if (activeConversationIdRef.current !== loadConvId || lastScriptIdRef.current !== id) return
+        const effectiveCode = loaded?.code || scriptCode
+        if (loaded) {
+          setScriptId(loaded.id); setScriptTitle(loaded.title || loaded.id); setScriptCode(loaded.code || DEFAULT_PYTHON_SCRIPT)
+        }
+        setPublishedTileDash(loaded?.dashboardId ? { dashboardId: loaded.dashboardId, elementId: loaded.elementId || '' } : null)
+        const effectiveScriptId = loaded?.id || id
+        upsertContentItem({ id: String(effectiveScriptId), scriptId: String(effectiveScriptId), contentType: 'script', title: loaded?.title || scriptTitle || effectiveScriptId, embedPath: `/tile/${encodeURIComponent(String(effectiveScriptId))}`, updatedAt: loaded?.updatedAt })
+        hydrateLoadedArtifact({
+          mode: 'tile', id: effectiveScriptId, route: `/c/${encodeURIComponent(effectiveScriptId)}`, pushRoute, convTypes: ['tile', 'script'], studio: loaded,
+          messages: loaded?.messages as ChatMessage[] | undefined, defaultEnvId: 'env_tile_isolated',
+          fallbackText: loaded ? `Loaded script "${loaded.title}" (${loaded.id}).` : `Opened Script "${scriptTitle}" (${id}).`,
+        })
+        return handleRunPython(effectiveCode, filtersJson).then(() => {})
       })
-      return handleRunPython(effectiveCode, filtersJson).then(() => {})
-    })
-  }, [activeConversationIdRef, core40SDK, filtersJson, handleRunPython, hydrateLoadedArtifact, lastScriptIdRef, resolvedUseCaseByIdRef, scriptCode, scriptTitle, setLoadedScript, setPublishedTileDash, setScriptCode, setScriptId, setScriptTitle, setSelectedUseCase, upsertContentItem])
+  }, [activeConversationIdRef, core40SDK, extensionSDK, filtersJson, handleRunPython, hydrateLoadedArtifact, lastScriptIdRef, resolvedUseCaseByIdRef, scriptCode, scriptTitle, setLoadedScript, setPublishedTileDash, setScriptCode, setScriptId, setScriptTitle, setSelectedUseCase, upsertContentItem])
 
   const handleSaveScript = useCallback(
     (
-      overrideCode = scriptCode, _overrideMsgs = messages, dashInfo = publishedTileDash,
+      overrideCode = scriptCode, _overrideMsgs = messages, explicitDashInfo?: { dashboardId: string; elementId: string } | null,
       bgOpts?: { convId?: string; scriptId?: string; scriptTitle?: string; baseItems?: StudioContentItem[] }
     ): Promise<SavedScript> => {
       const saveConvId = bgOpts?.convId || activeConversationIdRef.current
@@ -317,19 +320,29 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       const rawScriptId = bgOpts?.scriptId !== undefined ? bgOpts.scriptId : scriptId
       const rawScriptTitle = bgOpts?.scriptTitle !== undefined ? bgOpts.scriptTitle : scriptTitle
       const cleanId = rawScriptId.trim().replace(/[^a-zA-Z0-9_-]/g, '_') || `script_${Date.now().toString(36).slice(-5)}`
-      setConvBusyStatus(saveConvId, `Saving script "${cleanId}" to Looker Artifacts...`)
+      const priorSaved = savedScripts.find((s) => s.id === cleanId)
+      const dashInfo =
+        explicitDashInfo !== undefined
+          ? (bgOpts?.scriptId === undefined || cleanId === lastScriptIdRef.current || Boolean(priorSaved?.dashboardId) ? explicitDashInfo : null)
+          : cleanId === lastScriptIdRef.current
+          ? publishedTileDash
+          : priorSaved?.dashboardId
+          ? { dashboardId: priorSaved.dashboardId, elementId: priorSaved.elementId || '' }
+          : null
+      setConvBusyStatus(saveConvId, `Saving draft script "${cleanId}"...`)
       const isExisting = (bgOpts?.baseItems ?? contentItemsRef.current).some((it) => it.key === `script:${cleanId}`)
-      return saveScriptArtifact(core40SDK, userId, {
-        id: cleanId, title: rawScriptTitle.trim() || cleanId, code: overrideCode, updatedAt: new Date().toISOString(),
+      return saveLocalDraftScript({
+        id: cleanId, title: rawScriptTitle.trim() || cleanId, code: overrideCode,
         ...(dashInfo?.dashboardId ? { dashboardId: dashInfo.dashboardId } : {}),
         ...(dashInfo?.elementId ? { elementId: dashInfo.elementId } : {}),
-      }).then(
-        (saved) => listSavedScripts(core40SDK, userId).then((list) => {
+      }, extensionSDK).then(
+        (saved) => listLocalDraftScripts(extensionSDK).then((list) => {
           resolvedUseCaseByIdRef.current[saved.id] = 'tile'
           setSavedScripts(list)
           if (isFg()) {
             lastScriptIdRef.current = saved.id
-            setLoadedScript(true); setScriptId(saved.id)
+            setLoadedScript(true); setScriptId(saved.id); setScriptCode(saved.code)
+            setPublishedTileDash(saved.dashboardId ? { dashboardId: saved.dashboardId, elementId: saved.elementId || '' } : null)
             upsertContentItem({
               id: String(saved.id), scriptId: String(saved.id), contentType: 'script',
               title: saved.title || saved.id, embedPath: `/tile/${encodeURIComponent(String(saved.id))}`,
@@ -343,16 +356,16 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         (err) => { if (!inFlightTurnsRef.current.has(saveConvId)) setConvBusyStatus(saveConvId, mockExt?.initialBusyStatus || null); throw err }
       )
     },
-    [activeConversationIdRef, contentItemsRef, core40SDK, history, inFlightTurnsRef, lastScriptIdRef, location.pathname, messages, mockExt?.initialBusyStatus, publishedTileDash, resolvedUseCaseByIdRef, scriptCode, scriptId, scriptTitle, setConvBusyStatus, setLoadedScript, setSavedScripts, setScriptId, upsertContentItem, userId]
+    [activeConversationIdRef, contentItemsRef, extensionSDK, history, inFlightTurnsRef, lastScriptIdRef, location.pathname, messages, mockExt?.initialBusyStatus, publishedTileDash, resolvedUseCaseByIdRef, savedScripts, scriptCode, scriptId, scriptTitle, setConvBusyStatus, setLoadedScript, setPublishedTileDash, setSavedScripts, setScriptCode, setScriptId, upsertContentItem]
   )
 
   const handlePublishTileDashboard = useCallback(async () => {
     try {
       const saved = await handleSaveScript()
-      setBusyStatus('Publishing extension-layout Looker dashboard & binding tile artifact...')
+      setBusyStatus('Publishing extension-layout Looker dashboard & saving tile script...')
       const extId = extHostData?.extensionId || 'data_app_builder::data_app_builder'
       const pub = await publishScriptDashboard(core40SDK, {
-        script: saved, folderId: selectedFolderId, extensionId: extId, existingDashboardId: publishedTileDash?.dashboardId,
+        script: saved, folderId: selectedFolderId, extensionId: extId, existingDashboardId: saved.dashboardId,
       })
       const nextDash = { dashboardId: pub.dashboardId, elementId: pub.elementId }
       setPublishedTileDash(nextDash)
@@ -366,7 +379,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         ...prev,
         {
           role: 'assistant',
-          text: `Published Dashboard #${pub.dashboardId} (load_configuration="wait", show_dashboard_header=true, layout="extension") and bound tile_element_${pub.elementId} -> ${saved.id}.`,
+          text: `Published Dashboard #${pub.dashboardId} (load_configuration="wait", show_dashboard_header=true, layout="extension") and saved script "${saved.id}" to dashboard_element.rich_content_json (#${pub.elementId}).`,
           dashboardId: pub.dashboardId, crudItems: [toTurnCrudItem(upDash, upDash.existed ? 'updated' : 'created')],
         },
       ])
@@ -374,7 +387,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       setBusyStatus(mockExt?.initialBusyStatus || null)
       setMessages((prev) => [...prev, { role: 'error', text: getErrorMessage(err) }])
     }
-  }, [contentItemsRef, core40SDK, extHostData?.extensionId, handleSaveScript, mockExt?.initialBusyStatus, publishedTileDash?.dashboardId, selectedFolderId, setBusyStatus, setMessages, setPublishedTileDash, upsertContentItem])
+  }, [contentItemsRef, core40SDK, extHostData?.extensionId, handleSaveScript, mockExt?.initialBusyStatus, selectedFolderId, setBusyStatus, setMessages, setPublishedTileDash, upsertContentItem])
 
   const loadCaConversationById = useCallback(
     (rawId: string, pushRoute = true) => {
@@ -585,6 +598,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         dashboard: loadNativeById, lookml: loadLookmlSessionById, health: loadHealthCheckById, tile: loadScriptById,
       }
       if (typeOrMode === 'auto') {
+        if (await loadLocalDraftScript(id, extensionSDK)) return loaders.tile(id, pushRoute)
         const ns = getArtifactNamespace(extensionSDK)
         const probes: Array<[StudioToolMode, string]> = [
           ['conversational-analytics', 'conversational-analytics'], ['lookml', 'lookml'],
@@ -658,6 +672,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       setActiveConversationId(routeConvId)
     }
     if (!id) return
+    const wasConvHydrated = Boolean(convMatch && hydratedConvRouteRef.current === `${location.pathname}:${convMatch.id}`)
     if (convMatch) {
       const hydrationKey = `${location.pathname}:${convMatch.id}`
       const isTurnInFlightInTab =
@@ -728,7 +743,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       : targetMode === 'lookml' ? [lookmlBundle?.project_id || lookmlBundle?.id, lastLookmlIdRef.current]
       : targetMode === 'health' ? [healthReport?.id, lastHealthIdRef.current]
       : targetMode === 'dashboard' ? [nativeContent?.id, lastNativeIdRef.current]
-      : targetMode === 'tile' ? [loadedScript ? scriptId : undefined, lastScriptIdRef.current]
+      : targetMode === 'tile' ? [loadedScript ? (wasConvHydrated ? targetArtifactId : scriptId) : undefined, lastScriptIdRef.current]
       : [publishedApp?.dashboardId, lastPublishedIdRef.current]
     if (
       targetArtifactId !== loadedPair[0] && targetArtifactId !== loadedPair[1] &&

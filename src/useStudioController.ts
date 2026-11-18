@@ -11,9 +11,9 @@ import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
 import { loadHealthCheckArtifact } from './healthCheck'
 import {
   archiveUserConversation, compactPersistedChatTurn, ConversationRecord, copyTextWithExtensionSdk,
-  deleteUserConversation, getArtifactNamespace, getConvTargetId, getUseCaseLabel,
+  deleteLocalDraftScript, deleteUserConversation, getArtifactNamespace, getConvTargetId, getUseCaseLabel,
   hydrateConversationContentItems, isLookmlTargetAlreadyLoaded, isUserConversationDeleted, loadAlertArtifact,
-  loadExistingDashboardApp, loadScriptArtifact, normalizeStudioContentItem,
+  loadExistingDashboardApp, loadLocalDraftScript, loadScriptArtifact, normalizeStudioContentItem,
   resolveConversationRelatedContent, saveUserConversation, searchGlobalContentV2,
   STUDIO_OVERVIEW_TAB_KEY, StudioContentItem, studioModeToUseCase, StudioUseCase,
 } from './lookerApi'
@@ -71,7 +71,7 @@ export function useStudioController() {
   const {
     userId, userIdRef, setSelectedExplores, selectedExplores, setMentionedItems,
     selectedFolderId, schemaMarkdown, activeObjectId, setActiveObjectId,
-    conversations, conversationsRef, setConversations,
+    conversations, conversationsRef, setConversations, setSavedScripts,
     caConversation, setCaConversation, lastCaIdRef,
     setLookmlProjectId, lookmlBundle, setLookmlBundle, lastLookmlIdRef,
     publishedApp, setPublishedAppState, lastPublishedIdRef,
@@ -80,7 +80,7 @@ export function useStudioController() {
     contentItems, contentItemsRef, setContentItems,
     activeContentTabKeyRef, setActiveContentTabKey,
     healthReport, setHealthReport, lastHealthIdRef,
-    scriptId, setScriptId, setScriptTitle, setScriptCode, filtersJson,
+    scriptId, setScriptId, setScriptTitle, setScriptCode, filtersJson, setPublishedTileDash,
     loadedScript, setLoadedScript, lastScriptIdRef,
     currentAppCode, setCurrentAppCode,
     setActiveViewerDocument, setPrompt, setPastedImages,
@@ -297,6 +297,7 @@ export function useStudioController() {
       lastCaIdRef.current = ''
       lastScriptIdRef.current = ''
       setLoadedScript(false)
+      setPublishedTileDash(null)
       setActiveObjectId('')
       setActiveConversationId(freshConvId)
       setPublishedAppState(null)
@@ -324,7 +325,7 @@ export function useStudioController() {
       setSelectedUseCase(nextUseCase)
       if (typeof window !== 'undefined' && window.innerWidth <= 768) setSidebarCollapsed(true)
     },
-    [explicitUseCaseRef, history, hydratedConvRouteRef, lastCaIdRef, lastHealthIdRef, lastLookmlIdRef, lastNativeIdRef, lastPublishedIdRef, lastScriptIdRef, location.pathname, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setCaConversation, setContentItems, setCurrentAppCode, setHealthReport, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMentionedItems, setMessages, setNativeContentState, setPastedImages, setPrompt, setPublishedAppState, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef]
+    [explicitUseCaseRef, history, hydratedConvRouteRef, lastCaIdRef, lastHealthIdRef, lastLookmlIdRef, lastNativeIdRef, lastPublishedIdRef, lastScriptIdRef, location.pathname, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setCaConversation, setContentItems, setCurrentAppCode, setHealthReport, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMentionedItems, setMessages, setNativeContentState, setPastedImages, setPrompt, setPublishedAppState, setPublishedTileDash, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef]
   )
 
   const handleNewConversation = useCallback(
@@ -360,7 +361,13 @@ export function useStudioController() {
         }
       } else if (ct === 'script' && (!loadedScript || scriptId !== item.id)) {
         setLoadedScript(true); setScriptId(item.id)
-        void loadScriptArtifact(core40SDK, item.id).then((l) => { if (l) { setScriptTitle(l.title || l.id); setScriptCode(l.code || DEFAULT_PYTHON_SCRIPT); void handleRunPython(l.code || DEFAULT_PYTHON_SCRIPT, filtersJson) } }).catch(() => {})
+        void loadLocalDraftScript(item.id, extensionSDK)
+          .then((local) => local || loadScriptArtifact(core40SDK, item.id, getArtifactNamespace(extensionSDK)))
+          .then((l) => {
+            setPublishedTileDash(l?.dashboardId ? { dashboardId: l.dashboardId, elementId: l.elementId || '' } : null)
+            if (l) { setScriptTitle(l.title || l.id); setScriptCode(l.code || DEFAULT_PYTHON_SCRIPT); void handleRunPython(l.code || DEFAULT_PYTHON_SCRIPT, filtersJson) }
+          })
+          .catch(() => {})
       } else if (ct === 'alert' && alertBundle?.alert_id !== (item.alertId || item.id)) {
         void loadAlertArtifact(core40SDK, item.alertId || item.id, getArtifactNamespace(extensionSDK)).then((l) => { if (l) setAlertBundle(l) }).catch(() => {})
       } else if (ct === 'report' && healthReport?.id !== item.id) {
@@ -373,7 +380,7 @@ export function useStudioController() {
         )
       }
     },
-    [alertBundle?.alert_id, core40SDK, currentAppCode, extensionSDK, filtersJson, handleRunPython, healthReport?.id, loadedScript, lookmlBundle?.id, lookmlBundle?.project_id, scriptId, selectedExplores, selectedFolderId, setAlertBundle, setCaConversation, setCurrentAppCode, setHealthReport, setLoadedScript, setLookmlBundle, setLookmlProjectId, setNativeContentState, setPublishedAppState, setScriptCode, setScriptId, setScriptTitle]
+    [alertBundle?.alert_id, core40SDK, currentAppCode, extensionSDK, filtersJson, handleRunPython, healthReport?.id, loadedScript, lookmlBundle?.id, lookmlBundle?.project_id, scriptId, selectedExplores, selectedFolderId, setAlertBundle, setCaConversation, setCurrentAppCode, setHealthReport, setLoadedScript, setLookmlBundle, setLookmlProjectId, setNativeContentState, setPublishedAppState, setPublishedTileDash, setScriptCode, setScriptId, setScriptTitle]
   )
 
   const persistTabStateToConversation = useCallback(
@@ -492,6 +499,7 @@ export function useStudioController() {
         if (activeConversationIdRef.current !== conv.id) return
       } else {
         setLoadedScript(false)
+        setPublishedTileDash(null)
         setActiveObjectId('')
         setPublishedAppState(null)
         setNativeContentState(null)
@@ -524,7 +532,7 @@ export function useStudioController() {
         void turnResumerRef.current?.(conv)
       }
     },
-    [activeConversationIdRef, contentItemsRef, explicitUseCaseRef, history, hydratedConvRouteRef, inFlightTurnsRef, location.pathname, mergeCachedActivitySteps, openArtifactByMode, recoveredInFlightIdsRef, resolvedUseCaseByIdRef, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setContentItems, setCurrentAppCode, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMessages, setNativeContentState, setPublishedAppState, setScriptCode, setScriptId, setScriptTitle, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef, syncContentItemViewer, turnResumerRef]
+    [activeConversationIdRef, contentItemsRef, explicitUseCaseRef, history, hydratedConvRouteRef, inFlightTurnsRef, location.pathname, mergeCachedActivitySteps, openArtifactByMode, recoveredInFlightIdsRef, resolvedUseCaseByIdRef, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setContentItems, setCurrentAppCode, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMessages, setNativeContentState, setPublishedAppState, setPublishedTileDash, setScriptCode, setScriptId, setScriptTitle, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef, syncContentItemViewer, turnResumerRef]
   )
 
   const handleToggleArchiveConversation = (
@@ -569,8 +577,9 @@ export function useStudioController() {
     const cleanId = String(conversationId || '').trim()
     abortConvTurn(cleanId)
     const target = explicitTarget || conversations.find((c) => c.id === cleanId)
+    const targetItems = (target?.contentItems || []).map((it) => normalizeStudioContentItem(it))
     const targetIds = new Set(
-      [cleanId, target?.objectId, getConvTargetId(target?.content, target?.type), ...(target?.contentItems || []).map((it) => normalizeStudioContentItem(it).id)]
+      [cleanId, target?.objectId, getConvTargetId(target?.content, target?.type), ...targetItems.map((it) => it.id)]
         .map((v) => String(v || '').trim())
         .filter(Boolean)
     )
@@ -582,6 +591,31 @@ export function useStudioController() {
       (Boolean(parsedRoute.objectId) && targetIds.has(parsedRoute.objectId)) ||
       (Boolean(routeSeg) && location.pathname !== '/' && location.pathname !== '/config' && targetIds.has(routeSeg)) ||
       (Boolean(activeObjectId) && targetIds.has(activeObjectId))
+
+    if (deleteRelated && target) {
+      const mentionScriptIds = new Set(
+        targetItems
+          .filter((it) => it.contentType === 'script' && (it.source === 'mention' || it.createdInConversation === false))
+          .map((it) => it.id)
+      )
+      const relatedScripts = new Set(
+        [
+          target.content?.scriptId,
+          target.type === 'tile' || target.type === 'script' ? target.objectId : '',
+          ...targetItems
+            .filter((it) => it.contentType === 'script' && it.source !== 'mention' && it.createdInConversation !== false)
+            .map((it) => it.id),
+        ]
+          .map((v) => String(v || '').trim().replace(/^obj_script_/, ''))
+          .filter((id) => Boolean(id) && !mentionScriptIds.has(id))
+      )
+      if (relatedScripts.size > 0) {
+        setSavedScripts((prev) => prev.filter((s) => !relatedScripts.has(s.id)))
+        Array.from(relatedScripts).forEach((sid) => {
+          void deleteLocalDraftScript(sid, extensionSDK).then(setSavedScripts, () => {})
+        })
+      }
+    }
 
     setConversations((prev) => prev.filter((c) => c.id !== cleanId), { optimisticEntry: null })
     if (isDeletingActive) handleNewConversation()

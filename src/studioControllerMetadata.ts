@@ -16,7 +16,7 @@ import {
   type AlertInspectorBundle, buildAvailableExploresCatalog, buildDenseExploreSchema, buildRootLookerFolders,
   CaConversationState, ConversationRecord, DEFAULT_STUDIO_AGENT_NAME, fetchFolderChildren, fetchFolderWithAncestors,
   fetchInitialLookerMetadata, fetchPreloadedContentSummary, getArtifactNamespace,
-  getArtifactService, getConvTargetId, listSavedScripts, loadStoredSelectedFolderId,
+  getArtifactService, getConvTargetId, listLocalDraftScripts, loadStoredSelectedFolderId,
   loadUserEnvironmentId, LookerFolderNode, NativeContentState, normalizeStudioAgentName,
   parseExploreId, persistSelectedFolderId, PublishedAppState, readInitialSelectedFolderId,
   ResolvedStudioUseCase, SavedScript, searchLookerFolders, SearchLookerFoldersParams,
@@ -204,9 +204,10 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
       return Boolean((cid && (cid === id || cid === rawId)) || (c.type === 'lookml' && c.content?.sessionId && (c.content.sessionId === id || c.content.sessionId === rawId)))
     })
     if (convMatch) return convMatch.use_case === 'auto' && !convMatch.interactionId ? undefined : studioModeToUseCase(convMatch.type)
+    if (savedScripts.some((s) => s.id === id || s.id === rawId)) return 'tile'
     const catMatch = catalogItems.find((it) => it.id === id || it.id === rawId)
     return catMatch ? studioModeToUseCase(catMatch.type) : undefined
-  }, [parsedRoute, conversations, catalogItems, resolvedUseCaseByIdRef])
+  }, [parsedRoute, conversations, savedScripts, catalogItems, resolvedUseCaseByIdRef])
 
   const isGenericConvRoute = /^conv_[a-z0-9_-]+$/i.test(parsedRoute.conversationId || '') && parsedRoute.useCase === 'auto'
   const effectiveUseCase: StudioUseCase =
@@ -383,7 +384,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
         loadUserEnvironmentId(core40SDK, resolvedUserId, getArtifactNamespace(extensionSDK)).then((savedEnvId) => {
           if (mounted && savedEnvId) syncSharedEnvironmentId(savedEnvId)
         })
-        listSavedScripts(core40SDK, resolvedUserId).then((items) => { if (mounted) setSavedScripts(items) }).catch(() => {})
+        listLocalDraftScripts(extensionSDK).then((items) => { if (mounted) setSavedScripts(items) }).catch(() => {})
         setAllModels(
           meta.models.map((m) => ({
             name: String(m.name || ''), label: String(m.label || m.name || ''),

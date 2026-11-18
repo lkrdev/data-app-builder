@@ -54,6 +54,15 @@ ${buildMockFixturesScript(scenario)}
               dashboard_elements: [{ id: '55' }, { id: '56' }]
             };
           }
+          if (did === '8') {
+            return {
+              id: '8',
+              title: 'Looker Explore & Filter Summary',
+              folder: { id: '5' },
+              dashboard_elements: [dashboardElements['57']].filter(Boolean),
+              dashboard_layouts: [{ id: '801', type: 'extension', active: true }]
+            };
+          }
           return {
             id: '42',
             title: 'Executive Revenue App',
@@ -79,7 +88,27 @@ ${buildMockFixturesScript(scenario)}
         },
         authSession: {
           transport: {
-            rawRequest: async (method, reqPath, queryParams) => {
+            rawRequest: async (method, reqPath, queryParams, body) => {
+              const m = String(method || 'GET').toUpperCase();
+              if (reqPath.includes('/dashboard_elements')) {
+                const payload = typeof body === 'string' ? JSON.parse(body || '{}') : (body || {});
+                const parts = reqPath.split('?')[0].split('/').filter(Boolean);
+                const tail = decodeURIComponent(parts[parts.length - 1] || '');
+                if (m === 'POST' && tail === 'dashboard_elements') {
+                  const newId = String(payload.id || Object.keys(dashboardElements).length + 58);
+                  const created = Object.assign({ id: newId, type: 'extension' }, payload);
+                  dashboardElements[newId] = created;
+                  return { ok: true, statusCode: 200, body: JSON.stringify(created) };
+                }
+                if (m === 'PATCH') {
+                  const updated = await mockCore40SDK.update_dashboard_element(tail, payload);
+                  return { ok: true, statusCode: 200, body: JSON.stringify(updated) };
+                }
+                if (m === 'GET') {
+                  const el = await mockCore40SDK.dashboard_element(tail);
+                  return { ok: true, statusCode: 200, body: JSON.stringify(el) };
+                }
+              }
               if (reqPath.includes('content_summary')) {
                 const items = await mockCore40SDK.content_summary(queryParams || {});
                 return { ok: true, statusCode: 200, body: JSON.stringify(items) };
@@ -122,12 +151,14 @@ ${buildMockFixturesScript(scenario)}
         }
       };
 
-      let savedContextData = {
-        authMode: 'oauth',
-        clientId: 'looker-data-app-studio.apps.googleusercontent.com',
-        projectId: 'looker-private-demo',
-        disabledModes: []
-      };
+      let savedContextData = window.location.search.includes('unconfigured=1')
+        ? {}
+        : {
+            authMode: 'oauth',
+            clientId: 'looker-data-app-studio.apps.googleusercontent.com',
+            projectId: 'looker-private-demo',
+            disabledModes: []
+          };
 
       const mockExtensionSDK = {
         lookerHostData: {
@@ -571,7 +602,7 @@ const scenarios = [
       expectText: [
         'CodeMode Python Tile Configuration',
         'Tile #57',
-        'Looker Explore & Filter Summary (demo1)'
+        'Save Tile Script'
       ]
     },
     {
@@ -670,7 +701,7 @@ const scenarios = [
       clipSelector: '.dab-modal',
       expectText: [
         'Custom CodeMode Script Scheduler',
-        'obj_schedule_demo1',
+        'Schedule · demo1',
         'Daily at 8:00 AM (0 8 * * *)',
         'Script Execution Mode (`vars.mode`)',
         'Custom Controls / Non-Query Variables (`vars.custom_controls` JSON)',

@@ -631,7 +631,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         id: convId, type: convType, interactionId: result.session.lastInteractionId, environmentId: result.session.environmentId,
         label: isFirstTurn ? convTitle || sanitizeConversationLabel('', effectivePrompt) : undefined, explores: convExplores, content: convContent,
         contentItems: itemState.items, activeContentTabKey: itemState.activeKey, messages: finalMsgs, isFirstTurn, userPrompt: effectivePrompt,
-        assistantText: finalMsgs[finalMsgs.length - 1]?.text || result.assistantText, updateArtifactIndex: Boolean(convContent),
+        assistantText: finalMsgs[finalMsgs.length - 1]?.text || result.assistantText, updateArtifactIndex: Boolean(convContent && !convContent.scriptId),
       })
       if (!abortController.signal.aborted && isFg()) setMessages(finalMsgs)
     } catch (err: unknown) {
