@@ -336,12 +336,28 @@ function buildMockFixturesScript(scenario) {
         if (!window.location.search.includes('preserveThinkingLevel=1')) {
           window.localStorage.removeItem('dab_thinking_level');
         }
+        if (!window.location.search.includes('preserveDraftScripts=1')) {
+          window.localStorage.removeItem('dab_draft_python_scripts_v1');
+        }
       } catch {}
 
       const isTile =
         scenario === 'tile_mount_view' ||
         scenario === 'tile_mount_edit' ||
         scenario === 'tile_mount_unbound';
+
+      const dashboardElements = {
+        '57': {
+          id: '57',
+          dashboard_id: '8',
+          type: 'extension',
+          extension_id: 'data_app_builder::data_app_builder',
+          title: 'Looker Explore & Filter Summary',
+          title_hidden: true,
+          rich_content_json: JSON.stringify({ python_tile_script: artifactObjects.tile_element_57 })
+        }
+      };
+      window.__DASHBOARD_ELEMENTS__ = dashboardElements;
 
       const mockCore40SDK = {
         ok: async (p) => p,
@@ -650,6 +666,19 @@ function buildMockFixturesScript(scenario) {
               limit: '12'
             }
           };
+        },
+        dashboard_element: async (idOrParams) => {
+          const eid = String((idOrParams && (idOrParams.element_id || idOrParams.id)) || idOrParams || '');
+          return dashboardElements[eid] || { id: eid, type: 'extension', rich_content_json: null };
+        },
+        update_dashboard_element: async (idOrParams, bodyArg) => {
+          const eid = String((idOrParams && (idOrParams.element_id || idOrParams.id)) || idOrParams || '');
+          const patch = (idOrParams && typeof idOrParams === 'object' && idOrParams.body) || bodyArg || {};
+          const next = Object.assign({ id: eid, type: 'extension' }, dashboardElements[eid] || {}, patch);
+          dashboardElements[eid] = next;
+          window.__ELEMENT_UPDATES__ = window.__ELEMENT_UPDATES__ || [];
+          window.__ELEMENT_UPDATES__.push({ id: eid, body: patch, saved: next });
+          return next;
         },`
 }
 

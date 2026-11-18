@@ -2,7 +2,10 @@ import type { ExtensionSDK } from '@looker/extension-sdk'
 import type { IFolder, ILookmlModel, IRole, IUser } from '@looker/sdk'
 
 import { cleanLookmlProjectId } from './antigravityTypes'
+import { type ExtensionHostStorageLike, getDualStorage, getWinStorage, setDualStorage } from './lookerDraftScripts'
 import { STUDIO_SLASH_SKILLS } from './lookmlSkills'
+
+export * from './lookerDraftScripts'
 
 export const STUDIO_FOLDER_STORAGE_KEY = 'dab_selected_folder_id'
 
@@ -27,12 +30,8 @@ export async function loadStoredSelectedFolderId(extensionSDK?: Partial<Extensio
 
 export function persistSelectedFolderId(extensionSDK: Partial<ExtensionSDK> | undefined, folderId: string): void {
   const clean = String(folderId ?? '').trim()
-  if (!clean) return
-  try { if (typeof window !== 'undefined') window.localStorage?.setItem?.(STUDIO_FOLDER_STORAGE_KEY, clean) } catch { /* ignore */ }
-  try { void extensionSDK?.localStorageSetItem?.(STUDIO_FOLDER_STORAGE_KEY, clean) } catch { /* ignore */ }
+  if (clean) void setDualStorage(STUDIO_FOLDER_STORAGE_KEY, clean, extensionSDK)
 }
-
-export type ExtensionHostStorageLike = Partial<Pick<ExtensionSDK, 'localStorageGetItem' | 'localStorageSetItem'>> | null | undefined
 
 export const STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY = 'dab_left_pane_width'
 export const DEFAULT_LEFT_PANE_WIDTH = 380
@@ -45,23 +44,13 @@ export function clampLeftPaneWidth(width: number): number {
   return Number.isFinite(n) ? Math.min(MAX_LEFT_PANE_WIDTH, Math.max(MIN_LEFT_PANE_WIDTH, Math.round(n))) : DEFAULT_LEFT_PANE_WIDTH
 }
 
-const getWinStorage = (key: string): string | null => {
-  try { return typeof window !== 'undefined' ? (window.localStorage?.getItem?.(key) ?? null) : null } catch { return null }
-}
-const setDualStorage = async (key: string, val: string, ext?: ExtensionHostStorageLike | null): Promise<void> => {
-  try { if (typeof window !== 'undefined') window.localStorage?.setItem?.(key, val) } catch { /* ignore */ }
-  try { await ext?.localStorageSetItem?.(key, val) } catch { /* ignore */ }
-}
-
 export function readInitialLeftPaneWidth(): number {
   const raw = getWinStorage(STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY)
   return raw == null || String(raw).trim() === '' ? DEFAULT_LEFT_PANE_WIDTH : clampLeftPaneWidth(Number(raw))
 }
 export async function loadStoredLeftPaneWidth(extensionSDK?: ExtensionHostStorageLike | null): Promise<number> {
-  try {
-    const raw = (await extensionSDK?.localStorageGetItem?.(STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY)) ?? getWinStorage(STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY)
-    return raw == null || String(raw).trim() === '' ? DEFAULT_LEFT_PANE_WIDTH : clampLeftPaneWidth(Number(raw))
-  } catch { return readInitialLeftPaneWidth() }
+  const raw = await getDualStorage(STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY, extensionSDK)
+  return raw == null || String(raw).trim() === '' ? DEFAULT_LEFT_PANE_WIDTH : clampLeftPaneWidth(Number(raw))
 }
 export async function saveStoredLeftPaneWidth(width: number, extensionSDK?: ExtensionHostStorageLike | null): Promise<void> {
   await setDualStorage(STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY, String(clampLeftPaneWidth(width)), extensionSDK)
@@ -73,10 +62,8 @@ export function readInitialRightPaneCollapsed(): boolean {
 }
 export async function loadStoredRightPaneCollapsed(extensionSDK?: ExtensionHostStorageLike | null): Promise<boolean> {
   if (typeof window !== 'undefined' && typeof window.innerWidth === 'number' && window.innerWidth <= 768) return true
-  try {
-    const norm = String(((await extensionSDK?.localStorageGetItem?.(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY)) ?? getWinStorage(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY)) ?? '').trim().toLowerCase()
-    return norm === 'true' || norm === '1'
-  } catch { return readInitialRightPaneCollapsed() }
+  const norm = String((await getDualStorage(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY, extensionSDK)) ?? '').trim().toLowerCase()
+  return norm === 'true' || norm === '1'
 }
 export async function saveStoredRightPaneCollapsed(collapsed: boolean, extensionSDK?: ExtensionHostStorageLike | null): Promise<void> {
   await setDualStorage(STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY, collapsed ? 'true' : 'false', extensionSDK)
@@ -90,9 +77,7 @@ export const normalizeBusySendAction = (val?: string | null): StudioBusySendActi
 export const readInitialBusySendAction = (): StudioBusySendAction =>
   normalizeBusySendAction(getWinStorage(STUDIO_BUSY_SEND_ACTION_STORAGE_KEY))
 export async function loadStoredBusySendAction(extensionSDK?: ExtensionHostStorageLike | null): Promise<StudioBusySendAction> {
-  try {
-    return normalizeBusySendAction((await extensionSDK?.localStorageGetItem?.(STUDIO_BUSY_SEND_ACTION_STORAGE_KEY)) ?? getWinStorage(STUDIO_BUSY_SEND_ACTION_STORAGE_KEY))
-  } catch { return readInitialBusySendAction() }
+  return normalizeBusySendAction(await getDualStorage(STUDIO_BUSY_SEND_ACTION_STORAGE_KEY, extensionSDK))
 }
 export async function saveStoredBusySendAction(action: StudioBusySendAction, extensionSDK?: ExtensionHostStorageLike | null): Promise<void> {
   await setDualStorage(STUDIO_BUSY_SEND_ACTION_STORAGE_KEY, normalizeBusySendAction(action), extensionSDK)
