@@ -29,7 +29,7 @@ import { nextStudioConvId, resumeInFlightConversationTurn } from '../../studioCo
 const asSdk = (mock: Record<string, unknown>): Looker40SDK => mock as unknown as Looker40SDK
 
 export function registerPermissionsPart25Tests(): void {
-  test('91. Issue #224: serializes concurrent LkrCodeMode executions via enqueueCodeModeExecution with isolated conversation_id attribution and early AbortSignal cancellation', async () => {
+  test('89. Issue #224: serializes concurrent LkrCodeMode executions via enqueueCodeModeExecution with isolated conversation_id attribution and early AbortSignal cancellation', async () => {
     const id1 = nextStudioConvId()
     const id2 = nextStudioConvId()
     expect(id1).not.toBe(id2)
@@ -238,7 +238,7 @@ export function registerPermissionsPart25Tests(): void {
     expect(order.some((x) => x.startsWith('permA:'))).toBe(true)
   })
 
-  test('91. Issue #224: resumes requires_action turns + publishes <DATA_APP_BUNDLE>, refreshes OAuth tokens live across polls, survives hidden-tab poll errors, and merges concurrent ArtifactService.saveConversation writes', async () => {
+  test('90. Issue #224: resumes requires_action turns + publishes <DATA_APP_BUNDLE>, refreshes OAuth tokens live across polls, survives hidden-tab poll errors, and merges concurrent ArtifactService.saveConversation writes', async () => {
     // 1. Multi-ID session storage helpers + backwards-compatible single-ID wrappers
     const gWin = globalThis as unknown as { window?: { sessionStorage?: Storage } }
     const origWin = gWin.window
