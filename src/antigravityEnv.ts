@@ -6,19 +6,14 @@ import {
   normalizeSandboxFilePath,
 } from './antigravityAuth'
 import {
-  AGENTS_MD,
-  BUNDLE_APP_PY,
-  DATA_APP_GUIDE_MD,
-  DATA_INVESTIGATOR_GUIDE_MD,
-  LOOKER_PROJECT_ONBOARDING_SKILL_MD,
-} from './antigravityPrompts'
+  buildManagedWorkspaceSources,
+  CURRENT_MANAGED_SOURCES_HASH,
+  MANAGED_SOURCES_MANIFEST_JSON,
+  MANAGED_SOURCES_MANIFEST_PATH,
+  persistUserEnvIfChanged,
+} from './antigravitySkillSync'
+export * from './antigravitySkillSync'
 import {
-  LOOKER_ALERTS_SKILL_MD,
-  LOOKER_DASHBOARD_SKILL_MD,
-  LOOKER_FIELD_PROFILER_SKILL_MD,
-} from './antigravityStarters'
-import {
-  BUILTIN_SKILLS_FILES,
   BUILTIN_WORKSPACE_FILES,
   type ConversationThreadTurnLike,
   extractBundleFromInteraction,
@@ -30,7 +25,6 @@ import {
   extractThoughtText,
   formatConversationThreadMarkdown,
   parseStepArguments,
-  SANDBOX_AGENT_SKILL_FILES,
 } from './antigravitySteps'
 import {
   type AgentSession,
@@ -48,18 +42,10 @@ import {
   normalizeEnvironmentId,
   resolveUserProvisionKey,
 } from './antigravityTypes'
+import type { DataAppBundle, NativeContentBundle } from './lookerApi'
 import {
-  type DataAppBundle,
-  getArtifactNamespace,
-  type NativeContentBundle,
-  saveUserEnvironmentId,
-} from './lookerApi'
-import { KDA_SKILL_MD, KDA_TOOLKIT_PY } from './lookmlSkills'
-import {
-  BOOTSTRAP_LOOKML_PY,
   BOOTSTRAP_SANDBOX_SH,
   extractLookmlBundleFromInteraction,
-  LKR_CLI_SITECUSTOMIZE_PY,
   LKR_DEV_CLI_SPEC,
   LkrCodeMode,
   type LookmlBundle,
@@ -100,36 +86,9 @@ export function buildWorkspaceSources(params: {
     extraSources,
   } = params
   return [
-    { type: 'inline', content: AGENTS_MD, target: '/workspace/AGENTS.md' },
+    ...buildManagedWorkspaceSources(),
+    { type: 'inline', content: MANAGED_SOURCES_MANIFEST_JSON, target: MANAGED_SOURCES_MANIFEST_PATH },
     { type: 'inline', content: schemaMarkdown, target: '/workspace/schema.md' },
-    { type: 'inline', content: BUNDLE_APP_PY, target: '/workspace/bundle_app.py' },
-    { type: 'inline', content: DATA_APP_GUIDE_MD, target: '/workspace/skills/data-apps/SKILL.md' },
-    { type: 'inline', content: DATA_INVESTIGATOR_GUIDE_MD, target: '/workspace/skills/data-investigator/SKILL.md' },
-    { type: 'inline', content: KDA_SKILL_MD, target: '/workspace/skills/key-driver-analysis/SKILL.md' },
-    { type: 'inline', content: KDA_TOOLKIT_PY, target: '/workspace/skills/key-driver-analysis/scripts/kda_toolkit.py' },
-    { type: 'inline', content: LOOKER_DASHBOARD_SKILL_MD, target: '/workspace/skills/looker-dashboard/SKILL.md' },
-    { type: 'inline', content: LOOKER_FIELD_PROFILER_SKILL_MD, target: '/workspace/skills/looker-field-profiler/SKILL.md' },
-    { type: 'inline', content: LOOKER_ALERTS_SKILL_MD, target: '/workspace/skills/looker-alerts/SKILL.md' },
-    {
-      type: 'inline',
-      content: LOOKER_PROJECT_ONBOARDING_SKILL_MD,
-      target: '/workspace/skills/looker-project-onboarding/SKILL.md',
-    },
-    {
-      type: 'inline',
-      content: BUILTIN_SKILLS_FILES['lookml-snapshot'],
-      target: '/workspace/skills/lookml-snapshot/SKILL.md',
-    },
-    { type: 'inline', content: LOOKER_DASHBOARD_SKILL_MD, target: '/workspace/skills/creating-looker-dashboard/SKILL.md' },
-    { type: 'inline', content: SANDBOX_AGENT_SKILL_FILES['agentic-lookml/SKILL.md'], target: '/workspace/skills/lookml-modeling-guidelines/SKILL.md' },
-    { type: 'inline', content: SANDBOX_AGENT_SKILL_FILES['agentic-lookml/SKILL.md'], target: '/workspace/skills/looker-architect/SKILL.md' },
-    ...Object.entries(SANDBOX_AGENT_SKILL_FILES).map(([relPath, content]) => ({
-      type: 'inline' as const,
-      content,
-      target: `/workspace/skills/${relPath}`,
-    })),
-    { type: 'inline', content: BOOTSTRAP_LOOKML_PY, target: '/workspace/bootstrap_lookml.py' },
-    { type: 'inline', content: LKR_CLI_SITECUSTOMIZE_PY, target: '/workspace/sitecustomize.py' },
     {
       type: 'inline',
       content: JSON.stringify(cachedExploreSchemas || {}),
@@ -138,32 +97,6 @@ export function buildWorkspaceSources(params: {
     ...(extraSources || []),
     ...(existingAppCode ? [{ type: 'inline' as const, content: existingAppCode, target: appFilePath }] : []),
   ]
-}
-
-export function persistUserEnvIfChanged(params: {
-  sdk?: Looker40SDK
-  extensionSDK?: AntigravityExtensionHostLike
-  userId?: string
-  previousEnvId?: string
-  nextEnvId?: string
-  onEnvironmentUpdated?: (environmentId: string) => void | Promise<void>
-}): Promise<void> {
-  const next = normalizeEnvironmentId(params.nextEnvId)
-  if (!next || next === normalizeEnvironmentId(params.previousEnvId)) return Promise.resolve()
-  return Promise.resolve(params.onEnvironmentUpdated?.(next)).then(() => {
-    if (!params.sdk || typeof (params.sdk as Partial<Looker40SDK>).update_artifacts !== 'function') return
-    const explicitUid = String(params.userId || '').trim()
-    const uidPromise =
-      explicitUid || typeof (params.sdk as Partial<Looker40SDK>).me !== 'function'
-        ? Promise.resolve(explicitUid)
-        : Promise.resolve(params.sdk.ok ? params.sdk.ok(params.sdk.me('id')) : params.sdk.me('id')).then(
-            (me) => String((me as { id?: string | number } | undefined)?.id || '').trim(),
-            () => ''
-          )
-    return uidPromise.then((uid) =>
-      uid ? saveUserEnvironmentId(params.sdk!, uid, next, getArtifactNamespace(params.extensionSDK)).then(() => {}) : undefined
-    )
-  })
 }
 
 // ponytail: pre-launch or wake a single per-user Antigravity remote environment shared across
@@ -184,7 +117,7 @@ export function prewarmOrWakeAntigravityEnvironment(params: {
   existingAppCode?: string
   extraSources?: Array<{ type: 'inline'; content: string; target: string }>
   forceFresh?: boolean
-  onEnvironmentUpdated?: (environmentId: string) => void | Promise<void>
+  onEnvironmentUpdated?: (environmentId: string, sourcesHash?: string) => void | Promise<void>
 }): Promise<{ session: AgentSession; status: 'woken' | 'prelaunched' | 'standby' }> {
   const {
     sdk, userId, extensionSDK, auth, toolType, model = DEFAULT_ANTIGRAVITY_MODEL,
@@ -196,8 +129,8 @@ export function prewarmOrWakeAntigravityEnvironment(params: {
   const initialEnvId = forceFresh ? undefined : normalizeEnvironmentId(environmentId || existingSession?.environmentId)
   let activeEnvId = initialEnvId
   const canAuth = Boolean(auth.mode === 'apikey' || (auth.getOAuthToken?.() || auth.oauthToken || '').trim())
-  const persistEnv = (nextEnvId?: string) =>
-    persistUserEnvIfChanged({ sdk, extensionSDK, userId, previousEnvId: initialEnvId, nextEnvId, onEnvironmentUpdated })
+  const persistEnv = (nextEnvId?: string, sourcesHash?: string) =>
+    persistUserEnvIfChanged({ sdk, extensionSDK, userId, previousEnvId: initialEnvId, nextEnvId, sourcesHash, onEnvironmentUpdated })
   const standby = () => ({
     session: {
       environmentId: activeEnvId || existingSession?.environmentId || `env_${toolType}_isolated`,
@@ -247,7 +180,7 @@ export function prewarmOrWakeAntigravityEnvironment(params: {
           environment: { type: 'remote', sources },
         }).then((pre) => {
           const newEnvId = normalizeEnvironmentId(pre?.environment_id) || `env_${toolType}_${Date.now().toString(36).slice(-4)}`
-          return persistEnv(newEnvId).then(() => ({
+          return persistEnv(newEnvId, CURRENT_MANAGED_SOURCES_HASH).then(() => ({
             envId: newEnvId,
             value: {
               session: {
@@ -427,7 +360,7 @@ export async function recoverInFlightInteraction(opts: {
 }
 
 const STATIC_SANDBOX_PATH_RE =
-  /^workspace\/(?:\.lkr_extension_cache\/|\.uv_tools\/|\.uv_python\/|(?:\.agents\/)?skills\/|AGENTS\.md$|DATA_APP_GUIDE\.md$|DATA_INVESTIGATOR_GUIDE\.md$|bootstrap_lookml\.py$|bundle_app\.py$|sitecustomize\.py$)/i
+  /^workspace\/(?:\.lkr_extension_cache\/|\.managed_sources_manifest\.json$|\.uv_tools\/|\.uv_python\/|(?:\.agents\/)?skills\/|AGENTS\.md$|DATA_APP_GUIDE\.md$|DATA_INVESTIGATOR_GUIDE\.md$|bootstrap_lookml\.py$|bundle_app\.py$|sitecustomize\.py$)/i
 const BINARY_SANDBOX_EXT_RE = /\.(?:png|jpe?g|gif|webp|ico|pdf|tar|gz|zip|pyc|wasm)$/i
 const WORKSPACE_FILE_RE = /\/workspace\/[A-Za-z0-9_./-]+\.[A-Za-z0-9]+/g
 

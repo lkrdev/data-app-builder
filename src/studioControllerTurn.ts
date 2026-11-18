@@ -2,12 +2,12 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   AgentSession, AntigravityAuth, cleanLookmlProjectId, CodeModePermissionRequest,
-  inFlightEnvProvisionByUser, PastedImage, prewarmOrWakeAntigravityEnvironment,
-  runAntigravityTurn, sanitizeConversationLabel, sharedEnvExploreSchemas,
+  CURRENT_MANAGED_SOURCES_HASH, inFlightEnvProvisionByUser, PastedImage, prewarmOrWakeAntigravityEnvironment,
+  runAntigravityTurn, sanitizeConversationLabel, sharedEnvExploreSchemas, syncManagedSkillsIntoEnvironment,
 } from './antigravity'
 import { ChatMessage, StudioMode } from './components/App'
 import {
-  clearInFlightConvId, compactPersistedChatTurn, EXPLICIT_SCRIPT_CREATION_RE,
+  clearAllUserConversations, clearInFlightConvId, compactPersistedChatTurn, EXPLICIT_SCRIPT_CREATION_RE,
   extractResolvedUseCase, getArtifactNamespace,
   hydrateConversationContentItems, isConversationalNoOpPrompt, isUserConversationDeleted,
   LOOKER_ALERT_QUERY_RE, matchExplicitUseCaseRule, reconcileDeletedLookerContent,
@@ -58,7 +58,18 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   const environmentStatusRef = useRef<StudioEnvironmentStatus>('active')
   environmentStatusRef.current = environmentStatus
   const [envResetNotice, setEnvResetNotice] = useState<boolean>(false)
-  const envResetNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [envSyncNotice, setEnvSyncNotice] = useState<boolean>(false)
+  const envNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const envLifecycleEpochRef = useRef(0)
+  const skillSyncAbortRef = useRef<AbortController | null>(null)
+  const [resetEnvModalOpen, setResetEnvModalOpen] = useState<boolean>(false)
+  const onResetAppStateRef = useRef<(() => void) | null>(null)
+  const onClearSandboxFileCacheRef = useRef<(() => void) | null>(null)
+  const activeTurnCount = auth.runningConvIds.length + (busyStatus && auth.runningConvIds.length === 0 ? 1 : 0)
+  const hasInFlightTurns = activeTurnCount > 0
+  const envSkillsOutdated = Boolean(
+    auth.sharedEnvironmentId && environmentStatus === 'active' && auth.envSourcesHash !== CURRENT_MANAGED_SOURCES_HASH
+  )
   const latestTurnInteractionRef = useRef<{ convId: string; id: string } | null>(null)
   const wakeContextRef = useRef({ agentSession, selectedExplores, schemaMarkdown, currentAppCode })
   wakeContextRef.current = { agentSession, selectedExplores, schemaMarkdown, currentAppCode }
@@ -91,7 +102,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   )
 
   useEffect(() => {
-    if (disabledModes.includes(activeMode) || environmentStatus === 'stopped' || environmentStatus === 'resetting' || sharedEnvIdRef.current) return
+    if (disabledModes.includes(activeMode) || environmentStatus !== 'active' || sharedEnvIdRef.current) return
     if (loadingMetadata && models.length === 0 && selectedExplores.length === 0) return
     void handleWakeModeEnv(activeMode)
   }, [activeMode, disabledModes, environmentStatus, handleWakeModeEnv, loadingMetadata, models.length, selectedExplores.length, sharedEnvIdRef])
@@ -124,8 +135,21 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
 
   const handleRemoveQueuedPrompt = useCallback((id: string) => updateQueuedPrompts((prev) => prev.filter((q) => q.id !== id)), [updateQueuedPrompts])
 
+  const clearEnvNotices = useCallback(() => {
+    if (envNoticeTimerRef.current) { clearTimeout(envNoticeTimerRef.current); envNoticeTimerRef.current = null }
+    setEnvResetNotice(false); setEnvSyncNotice(false)
+  }, [])
+
+  const flashEnvNotice = useCallback((kind: 'reset' | 'sync') => {
+    if (envNoticeTimerRef.current) clearTimeout(envNoticeTimerRef.current)
+    setEnvResetNotice(kind === 'reset'); setEnvSyncNotice(kind === 'sync')
+    envNoticeTimerRef.current = setTimeout(() => { setEnvResetNotice(false); setEnvSyncNotice(false); envNoticeTimerRef.current = null }, 2500)
+  }, [])
+
   const clearAllEnvSessions = useCallback(
     (nextStatus: StudioEnvironmentStatus) => {
+      envLifecycleEpochRef.current += 1
+      if (skillSyncAbortRef.current) { skillSyncAbortRef.current.abort(); skillSyncAbortRef.current = null }
       abortAllConvTurns(); sharedEnvIdRef.current = ''; syncSharedEnvironmentId('')
       setAgentSession({ toolType: activeModeRef.current, environmentId: '' })
       environmentStatusRef.current = nextStatus; setEnvironmentStatus(nextStatus)
@@ -133,22 +157,74 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     [abortAllConvTurns, activeModeRef, setAgentSession, sharedEnvIdRef, syncSharedEnvironmentId]
   )
 
+  const handleSyncEnvironmentSkills = useCallback(async (): Promise<void> => {
+    const targetEnvId = sharedEnvIdRef.current || auth.sharedEnvironmentId
+    if (!targetEnvId || environmentStatusRef.current !== 'active' || hasInFlightTurns) return
+    clearEnvNotices()
+    const syncEpoch = ++envLifecycleEpochRef.current
+    const ac = new AbortController()
+    skillSyncAbortRef.current = ac
+    environmentStatusRef.current = 'syncing'; setEnvironmentStatus('syncing')
+    try {
+      const res = await syncManagedSkillsIntoEnvironment({
+        sdk: core40SDK, userId: userIdRef.current || userId, extensionSDK,
+        auth: {
+          mode: authMode, oauthToken: oauthTokenRef.current || oauthToken, getOAuthToken: () => oauthTokenRef.current,
+          clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true),
+        },
+        environmentId: targetEnvId, model: selectedModel, signal: ac.signal,
+      })
+      if (ac.signal.aborted || envLifecycleEpochRef.current !== syncEpoch) return
+      if (res.status === 'environment_expired') {
+        syncSharedEnvironmentId('')
+        await handleWakeModeEnv(activeModeRef.current, true)
+        if (ac.signal.aborted || envLifecycleEpochRef.current !== syncEpoch) return
+      } else if (sharedEnvIdRef.current === targetEnvId) {
+        syncSharedEnvironmentId(targetEnvId, res.sourcesHash)
+      } else {
+        return
+      }
+      onClearSandboxFileCacheRef.current?.()
+      environmentStatusRef.current = 'active'; setEnvironmentStatus('active'); flashEnvNotice('sync')
+    } catch (err: unknown) {
+      if (ac.signal.aborted || envLifecycleEpochRef.current !== syncEpoch) return
+      environmentStatusRef.current = 'active'; setEnvironmentStatus('active')
+      setMessages((prev) => [...prev, { role: 'error', text: `Skill sync failed: ${resetOAuthOnUnauthorized(err)}` }])
+    } finally {
+      if (skillSyncAbortRef.current === ac) skillSyncAbortRef.current = null
+    }
+  }, [activeModeRef, apiKey, auth.sharedEnvironmentId, authMode, clearEnvNotices, clientId, core40SDK, extensionSDK, flashEnvNotice, handleWakeModeEnv, hasInFlightTurns, oauthToken, oauthTokenRef, projectId, resetOAuthOnUnauthorized, selectedModel, setMessages, sharedEnvIdRef, syncSharedEnvironmentId, triggerSilentOAuthRefresh, userId, userIdRef])
+
   const handleResetEnvironment = useCallback((): Promise<void> => {
-    if (envResetNoticeTimerRef.current) clearTimeout(envResetNoticeTimerRef.current)
-    envResetNoticeTimerRef.current = null; setEnvResetNotice(false); clearAllEnvSessions('resetting')
+    setResetEnvModalOpen(false); clearEnvNotices()
+    const uid = userIdRef.current || userId, ns = getArtifactNamespace(extensionSDK)
+    const priorConvIds = Array.from(new Set([...conversationsRef.current.map((c) => c.id), ...Array.from(inFlightTurnsRef.current.keys())]))
+    conversationsRef.current = []
+    clearAllEnvSessions('resetting')
+    const resetEpoch = envLifecycleEpochRef.current
+    auth.queuedPromptsByConvIdRef.current = {}
+    updateQueuedPrompts(() => [])
+    setConversations([], { optimisticEntry: null })
+    onResetAppStateRef.current?.()
+    wakeContextRef.current = { agentSession: { toolType: activeModeRef.current, environmentId: '' }, selectedExplores: [], schemaMarkdown: '', currentAppCode: '' }
+    onClearSandboxFileCacheRef.current?.()
     sharedEnvExploreSchemas.clear(); inFlightEnvProvisionByUser.clear()
     const finish = () => {
-      environmentStatusRef.current = 'active'; setEnvironmentStatus('active'); setEnvResetNotice(true)
-      envResetNoticeTimerRef.current = setTimeout(() => { setEnvResetNotice(false); envResetNoticeTimerRef.current = null }, 2500)
+      if (envLifecycleEpochRef.current !== resetEpoch) return
+      environmentStatusRef.current = 'active'; setEnvironmentStatus('active'); flashEnvNotice('reset')
     }
-    return saveUserEnvironmentId(core40SDK, userIdRef.current || userId, '', getArtifactNamespace(extensionSDK))
-      .catch(() => {}).then(() => handleWakeModeEnv(activeModeRef.current, true)).then(finish, (err) => { finish(); throw err })
-  }, [activeModeRef, clearAllEnvSessions, core40SDK, extensionSDK, handleWakeModeEnv, userId, userIdRef])
+    return Promise.all([
+      uid ? clearAllUserConversations(core40SDK, uid, ns, priorConvIds).catch(() => {}) : Promise.resolve(),
+      saveUserEnvironmentId(core40SDK, uid, '', ns).catch(() => {}),
+    ])
+      .then(() => (envLifecycleEpochRef.current === resetEpoch ? handleWakeModeEnv(activeModeRef.current, true) : undefined))
+      .then(finish, (err) => { finish(); throw err })
+  }, [activeModeRef, auth.queuedPromptsByConvIdRef, clearAllEnvSessions, clearEnvNotices, conversationsRef, core40SDK, extensionSDK, flashEnvNotice, handleWakeModeEnv, inFlightTurnsRef, setConversations, updateQueuedPrompts, userId, userIdRef])
 
   const handleStopEnvironment = useCallback(() => {
-    if (envResetNoticeTimerRef.current) clearTimeout(envResetNoticeTimerRef.current)
-    envResetNoticeTimerRef.current = null; setEnvResetNotice(false); clearAllEnvSessions('stopped')
-  }, [clearAllEnvSessions])
+    clearEnvNotices()
+    clearAllEnvSessions('stopped')
+  }, [clearAllEnvSessions, clearEnvNotices])
 
   type PromptOverrideInput = {
     text: string; images?: PastedImage[]; mentions?: StudioContextMention[]
@@ -175,7 +251,8 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       ? nextStudioConvId()
       : activeConversationIdRef.current || parsedRoute.conversationId || nextStudioConvId()
     const isConvBusy = inFlightTurnsRef.current.has(candidateConvId) || (candidateConvId === activeConversationIdRef.current && Boolean(busyStatus))
-    if (!isAuthenticated || (!resumeConv && !text && attachedImages.length === 0) || (isConvBusy && !typedOverride?.bypassBusy)) return
+    const isEnvBusy = environmentStatusRef.current === 'resetting' || environmentStatusRef.current === 'syncing'
+    if (!isAuthenticated || isEnvBusy || (!resumeConv && !text && attachedImages.length === 0) || (isConvBusy && !typedOverride?.bypassBusy)) return
 
     const convId = candidateConvId
     if (fgAtStart && activeConversationIdRef.current !== convId) {
@@ -678,8 +755,12 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   )
 
   return {
-    environmentStatus, setEnvironmentStatus, envResetNotice, setEnvResetNotice, latestTurnInteractionRef,
-    handleResetEnvironment, handleStopEnvironment, handleWakeModeEnv, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, handleSendPrompt,
+    environmentStatus, setEnvironmentStatus, envResetNotice, setEnvResetNotice,
+    envSyncNotice, setEnvSyncNotice, resetEnvModalOpen, setResetEnvModalOpen,
+    activeTurnCount, hasInFlightTurns, envSkillsOutdated,
+    onResetAppStateRef, onClearSandboxFileCacheRef, latestTurnInteractionRef,
+    handleSyncEnvironmentSkills, handleResetEnvironment, handleStopEnvironment, handleWakeModeEnv,
+    handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt, handleSendPrompt,
   }
 }
 

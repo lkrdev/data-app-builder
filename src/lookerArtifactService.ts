@@ -1,32 +1,13 @@
 import type { Looker40SDK } from '@looker/sdk'
 
 import {
-  ARTIFACT_NAMESPACE,
-  type ArtifactRowLike,
-  formatObjectArtifactKey,
-  formatUserArtifactKey,
-  formatUserConversationsKey,
-  formatUserEnvArtifactKey,
-  matchesArtifactType,
-  normalizeArtifactNamespace,
-  normalizeConversationsArray,
-  normalizeStudioAgentName,
-  parseArtifactValue,
-  parseUserIndexRow,
-  prunePersistedContentItem,
-  prunePersistedMessages,
-  readSwrCache,
-  resolveConversationRelatedContent,
-  type SavedScript,
-  type SaveUserArtifactParams,
-  type SharedArtifactPayload,
-  type StudioToolMode,
-  type TileScriptBinding,
-  type UserArtifactIndexEntry,
-  type UserConversationEntry,
-  type UserStudioConfig,
-  userStudioConfigArtifactKey,
-  writeSwrCache,
+  ARTIFACT_NAMESPACE, type ArtifactRowLike, formatObjectArtifactKey, formatUserArtifactKey,
+  formatUserConversationsKey, formatUserEnvArtifactKey, matchesArtifactType, normalizeArtifactNamespace,
+  normalizeConversationsArray, normalizeStudioAgentName, parseArtifactValue, parseUserIndexRow,
+  prunePersistedContentItem, prunePersistedMessages, readSwrCache, resolveConversationRelatedContent,
+  type SavedScript, type SaveUserArtifactParams, type SharedArtifactPayload, STUDIO_TOOL_MODES, type StudioToolMode,
+  type TileScriptBinding, type UserArtifactIndexEntry, type UserConversationEntry, type UserEnvironmentState,
+  type UserStudioConfig, userStudioConfigArtifactKey, writeSwrCache,
 } from './lookerArtifactTypes'
 import { rawLookerRequest } from './lookerTransport'
 
@@ -39,6 +20,7 @@ export class ArtifactService {
   private readonly conversationsCache = new Map<string, UserConversationEntry[]>()
   private readonly convLoadByUser = new Map<string, Promise<UserConversationEntry[]>>()
   private readonly convPutByUser = new Map<string, Promise<void>>()
+  private readonly envPutByUser = new Map<string, Promise<void>>()
   private readonly deletedConvIdsByUser = new Map<string, Set<string>>()
   private readonly userListCache = new Map<string, UserArtifactIndexEntry[]>()
   private readonly scriptsCache = new Map<string, SavedScript[]>()
@@ -60,6 +42,7 @@ export class ArtifactService {
     this.conversationsCache.clear()
     this.convLoadByUser.clear()
     this.convPutByUser.clear()
+    this.envPutByUser.clear()
     this.deletedConvIdsByUser.clear()
     this.userListCache.clear()
     this.scriptsCache.clear()
@@ -357,24 +340,45 @@ export class ArtifactService {
     }
   }
 
-  async getUserEnvironmentId(userId: string): Promise<string | null> {
+  async getUserEnvironmentState(userId: string): Promise<UserEnvironmentState | null> {
     const key = formatUserEnvArtifactKey(userId)
-    const stored = this.valueByKey.has(key) ? this.valueByKey.get(key) : await this.get<{ environmentId?: string; updatedAt?: string } | string>(key)
-    const envId = typeof stored === 'string' ? stored.trim() : String(stored?.environmentId || '').trim()
-    return envId || null
+    const stored = this.valueByKey.has(key) ? this.valueByKey.get(key) : await this.get<UserEnvironmentState | string>(key)
+    if (typeof stored === 'string') return stored.trim() ? { environmentId: stored.trim() } : null
+    const envId = String((stored as UserEnvironmentState | undefined)?.environmentId || '').trim()
+    if (!envId) return null
+    const hash = typeof (stored as UserEnvironmentState).sourcesHash === 'string' ? (stored as UserEnvironmentState).sourcesHash!.trim() : ''
+    const updatedAt = typeof (stored as UserEnvironmentState).updatedAt === 'string' ? (stored as UserEnvironmentState).updatedAt : undefined
+    return { environmentId: envId, ...(hash ? { sourcesHash: hash } : {}), ...(updatedAt ? { updatedAt } : {}) }
   }
 
-  async saveUserEnvironmentId(userId: string, environmentId: string): Promise<void> {
+  async getUserEnvironmentId(userId: string): Promise<string | null> {
+    return (await this.getUserEnvironmentState(userId))?.environmentId || null
+  }
+
+  private enqueueEnvOp(userId: string, op: () => Promise<void>): Promise<void> {
+    const uid = String(userId || '').trim() || '1'
+    const next = (this.envPutByUser.get(uid) || Promise.resolve()).catch(() => {}).then(op)
+    this.envPutByUser.set(uid, next)
+    return next
+  }
+
+  saveUserEnvironmentId(userId: string, environmentId: string, sourcesHash?: string): Promise<void> {
     const envId = String(environmentId || '').trim()
-    if (!envId) {
-      try { await this.clearUserEnvironmentId(userId) } catch { /* Ignore clear errors */ }
-      return
-    }
-    await this.put([{ key: formatUserEnvArtifactKey(userId), value: { environmentId: envId, updatedAt: new Date().toISOString() } }])
+    if (!envId) return this.clearUserEnvironmentId(userId).catch(() => {})
+    return this.enqueueEnvOp(userId, async () => {
+      const explicitHash = typeof sourcesHash === 'string' ? sourcesHash.trim() : undefined
+      const prev = explicitHash === undefined ? await this.getUserEnvironmentState(userId) : null
+      const rawHash = explicitHash ?? (prev?.environmentId === envId ? prev.sourcesHash || '' : '')
+      const effectiveHash = rawHash.length <= 64 ? rawHash : ''
+      const updatedAt = new Date().toISOString()
+      let payload: UserEnvironmentState = { environmentId: envId, ...(effectiveHash ? { sourcesHash: effectiveHash } : {}), updatedAt }
+      if (new TextEncoder().encode(JSON.stringify(payload)).length > 512) payload = { environmentId: envId.slice(0, 256), updatedAt }
+      await this.put([{ key: formatUserEnvArtifactKey(userId), value: payload }])
+    })
   }
 
-  async clearUserEnvironmentId(userId: string): Promise<void> {
-    await this.delete(formatUserEnvArtifactKey(userId))
+  clearUserEnvironmentId(userId: string): Promise<void> {
+    return this.enqueueEnvOp(userId, () => this.delete(formatUserEnvArtifactKey(userId)))
   }
 
   async getUserConfig(userId: string): Promise<UserStudioConfig> {
@@ -555,6 +559,37 @@ export class ArtifactService {
     return next
   }
 
+  async clearAllConversations(userId: string, extraConversationIds?: readonly string[]): Promise<void> {
+    const uid = String(userId || '1').trim()
+    let deletedSet = this.deletedConvIdsByUser.get(uid)
+    if (!deletedSet) { deletedSet = new Set(); this.deletedConvIdsByUser.set(uid, deletedSet) }
+    for (const id of extraConversationIds || []) if (id) deletedSet.add(String(id).trim())
+    const existing = this.conversationsCache.has(uid) ? this.conversationsCache.get(uid)! : await this.listConversations(uid).catch(() => [])
+    const preUserEntries = this.userListCache.get(uid) || []
+    const indexKeySet = new Set<string>()
+    for (const conv of existing) {
+      if (conv?.id) deletedSet.add(conv.id)
+      for (const k of resolveConversationRelatedContent(conv, uid).userIndexKeys) indexKeySet.add(k)
+    }
+    for (const entry of preUserEntries) indexKeySet.add(formatUserArtifactKey(uid, entry.type, entry.id))
+    this.conversationsCache.set(uid, [])
+    this.userListCache.set(uid, [])
+    writeSwrCache(['artifact:conversations', this.namespace, uid], [])
+    for (const t of ['all', undefined, ...Array.from(STUDIO_TOOL_MODES)] as const) writeSwrCache(['artifact:user_list', this.namespace, uid, t], [])
+    const searched = await this.search(`user_${uid}_%`).catch(() => [] as ArtifactRowLike[])
+    for (const row of searched || []) {
+      const k = String(row?.key || '').trim()
+      if (k.startsWith(`user_${uid}_`)) indexKeySet.add(k)
+    }
+    const remaining = (this.conversationsCache.get(uid) || []).filter((c) => !deletedSet.has(c.id))
+    this.conversationsCache.set(uid, remaining)
+    writeSwrCache(['artifact:conversations', this.namespace, uid], remaining)
+    await this.enqueueConversationsPut(uid)
+    if (indexKeySet.size > 0) {
+      try { await this.delete(Array.from(indexKeySet)) } catch { /* Ignore missing index keys */ }
+    }
+  }
+
   async listUserArtifacts(userId: string, type?: StudioToolMode): Promise<UserArtifactIndexEntry[]> {
     const uid = String(userId || '1').trim()
     let allEntries = this.userListCache.get(uid)
@@ -723,27 +758,17 @@ export class ArtifactService {
 
 let servicesBySdk = new WeakMap<object, Map<string, ArtifactService>>()
 const DEFAULT_SDK_KEY = {}
-
 export function getArtifactService(sdk: Looker40SDK, namespace = ARTIFACT_NAMESPACE): ArtifactService {
   const ns = normalizeArtifactNamespace(namespace)
   const rawCandidate = (sdk as Looker40SDK & { __rawSdk?: object })?.__rawSdk || sdk
   const rawKey = rawCandidate && (typeof rawCandidate === 'object' || typeof rawCandidate === 'function') ? (rawCandidate as object) : DEFAULT_SDK_KEY
   let byNs = servicesBySdk.get(rawKey)
-  if (!byNs) {
-    byNs = new Map<string, ArtifactService>()
-    servicesBySdk.set(rawKey, byNs)
-  }
+  if (!byNs) { byNs = new Map<string, ArtifactService>(); servicesBySdk.set(rawKey, byNs) }
   let svc = byNs.get(ns)
-  if (!svc) {
-    svc = new ArtifactService(sdk, ns)
-    byNs.set(ns, svc)
-  }
+  if (!svc) { svc = new ArtifactService(sdk, ns); byNs.set(ns, svc) }
   return svc
 }
-
-export function clearArtifactServiceCache(): void {
-  servicesBySdk = new WeakMap<object, Map<string, ArtifactService>>()
-}
+export const clearArtifactServiceCache = (): void => { servicesBySdk = new WeakMap<object, Map<string, ArtifactService>>() }
 
 export const searchArtifactsRaw = (sdk: Looker40SDK, namespace: string, key: string): Promise<ArtifactRowLike[]> =>
   getArtifactService(sdk, namespace).search(key)
@@ -759,9 +784,13 @@ export const deleteArtifacts = (sdk: Looker40SDK, keys: string | string[], names
   getArtifactService(sdk, namespace).delete(keys)
 export const getArtifactJson = <T = unknown>(sdk: Looker40SDK, key: string, namespace = ARTIFACT_NAMESPACE): Promise<T | null> =>
   getArtifactService(sdk, namespace).get<T>(key)
+export const loadUserEnvironmentState = (sdk: Looker40SDK, userId: string, namespace = ARTIFACT_NAMESPACE): Promise<UserEnvironmentState | null> =>
+  getArtifactService(sdk, namespace).getUserEnvironmentState(userId)
 export const loadUserEnvironmentId = (sdk: Looker40SDK, userId: string, namespace = ARTIFACT_NAMESPACE): Promise<string | null> =>
   getArtifactService(sdk, namespace).getUserEnvironmentId(userId)
-export const saveUserEnvironmentId = (sdk: Looker40SDK, userId: string, environmentId: string, namespace = ARTIFACT_NAMESPACE): Promise<void> =>
-  getArtifactService(sdk, namespace).saveUserEnvironmentId(userId, environmentId)
+export const saveUserEnvironmentId = (sdk: Looker40SDK, userId: string, environmentId: string, namespace = ARTIFACT_NAMESPACE, sourcesHash?: string): Promise<void> =>
+  getArtifactService(sdk, namespace).saveUserEnvironmentId(userId, environmentId, sourcesHash)
 export const clearUserEnvironmentId = (sdk: Looker40SDK, userId: string, namespace = ARTIFACT_NAMESPACE): Promise<void> =>
   getArtifactService(sdk, namespace).clearUserEnvironmentId(userId)
+export const clearAllUserConversations = (sdk: Looker40SDK, userId: string, namespace = ARTIFACT_NAMESPACE, extraConversationIds?: readonly string[]): Promise<void> =>
+  getArtifactService(sdk, namespace).clearAllConversations(userId, extraConversationIds)

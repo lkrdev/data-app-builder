@@ -253,20 +253,26 @@ function registerVisualPart06Tests(ctx) {
           bodyContainsQueuedPromptText: document.body.innerText.includes('Add a regional breakdown filter')
         };
 
-        // 5. Verify topbar Environment button & popover menu (Reset Environment & Stop Environment)
+        // 5. Verify topbar Environment button, menu descriptions, Stop Environment & guarded Type DELETE Reset Environment modal
         const envBtn = document.querySelector('[data-testid="topbar-environment-btn"]');
         const envBtnText = (envBtn?.textContent || '').trim();
         const hasRawEnvLabel = /Env\\s*\\[/i.test(document.querySelector('.dab-topbar')?.innerText || '');
+        const hasSyncBtnWhenUpToDate = Boolean(document.querySelector('[data-testid="topbar-env-sync-btn"]'));
 
         envBtn.click();
         await new Promise((r) => setTimeout(r, 60));
         const envMenu = document.querySelector('[data-testid="topbar-environment-menu"]');
+        const syncSkillsBtn = document.querySelector('[data-testid="env-sync-skills-btn"]');
         const resetBtn = document.querySelector('[data-testid="env-reset-btn"]');
         const stopEnvBtn = document.querySelector('[data-testid="env-stop-btn"]');
         const menuOpenCheck = {
           hasMenu: Boolean(envMenu),
+          hasSyncSkillsBtn: Boolean(syncSkillsBtn),
           hasResetBtn: Boolean(resetBtn),
-          hasStopEnvBtn: Boolean(stopEnvBtn)
+          hasStopEnvBtn: Boolean(stopEnvBtn),
+          allItemsHaveDesc: [syncSkillsBtn, stopEnvBtn, resetBtn].every((el) => Boolean(el?.querySelector('.dab-env-menu-item-desc')?.textContent?.trim())),
+          stopIsNeutral: Boolean(stopEnvBtn && !stopEnvBtn.classList.contains('dab-env-menu-item-danger')),
+          resetIsDanger: Boolean(resetBtn && resetBtn.classList.contains('dab-env-menu-item-danger'))
         };
 
         // Click Stop Environment -> closes menu and sets status to 'stopped' (neutral badge)
@@ -279,21 +285,49 @@ function registerVisualPart06Tests(ctx) {
           text: (envBtn?.textContent || '').trim()
         };
 
-        // Re-open menu and click Reset Environment -> sets status to 'active' (success badge) & shows reset notice
+        // Re-open menu and click Reset Environment... -> opens guarded Type DELETE modal (zero checkboxes)
+        window.__DELETED_DASHBOARDS__ = [];
+        window.__DELETED_LOOKS__ = [];
+        window.__DELETED_BOARDS__ = [];
         envBtn.click();
         await new Promise((r) => setTimeout(r, 60));
         document.querySelector('[data-testid="env-reset-btn"]').click();
-        await new Promise((r) => setTimeout(r, 120));
+        await new Promise((r) => setTimeout(r, 60));
+        const resetModal = document.querySelector('[data-testid="reset-env-modal"]');
+        const confirmInput = document.querySelector('[data-testid="reset-env-confirm-input"]');
+        const confirmBtn = document.querySelector('[data-testid="confirm-reset-env-btn"]');
+        const modalBeforeType = {
+          hasModal: Boolean(resetModal),
+          checkboxCount: resetModal ? resetModal.querySelectorAll('input[type="checkbox"]').length : -1,
+          confirmDisabledInitially: Boolean(confirmBtn?.disabled)
+        };
+        const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        inputSetter.call(confirmInput, 'DELETE');
+        confirmInput.dispatchEvent(new Event('input', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 40));
+        const confirmEnabledAfterDelete = Boolean(confirmBtn && !confirmBtn.disabled);
+        confirmBtn.click();
+        await new Promise((r) => setTimeout(r, 140));
         const afterResetEnv = {
           menuClosed: !document.querySelector('[data-testid="topbar-environment-menu"]'),
+          modalClosed: !document.querySelector('[data-testid="reset-env-modal"]'),
+          modalBeforeType,
+          confirmEnabledAfterDelete,
           status: window.__DAB_STUDIO__.environmentStatus,
           hasSuccessClass: envBtn.classList.contains('dab-badge-success'),
           hasResetNoticeAttr: envBtn.getAttribute('data-env-reset-notice') === 'true',
-          text: (envBtn?.textContent || '').trim()
+          text: (envBtn?.textContent || '').trim(),
+          allConversationsCount: window.__DAB_STUDIO__.allConversations.length,
+          pathname: window.__DAB_STUDIO__.location.pathname,
+          deletedLookerContentCount:
+            (window.__DELETED_DASHBOARDS__ || []).length +
+            (window.__DELETED_LOOKS__ || []).length +
+            (window.__DELETED_BOARDS__ || []).length
         };
 
         // 6. Verify right-pane Overview sidebar Active Step when busy without active embed, and neutral Ready copy when idle
         window.lkr_codemode_api_calls = [];
+        s.setMessages([{ role: 'user', text: 'Inspect order_items revenue' }]);
         s.setPublishedApp(null);
         s.setContentItems([]);
         s.setCurrentAppCode('');
@@ -328,6 +362,7 @@ function registerVisualPart06Tests(ctx) {
           afterQueuedInterject,
           envBtnText,
           hasRawEnvLabel,
+          hasSyncBtnWhenUpToDate,
           menuOpenCheck,
           afterStopEnv,
           afterResetEnv,
@@ -369,10 +404,15 @@ function registerVisualPart06Tests(ctx) {
       },
       envBtnText: 'Environment',
       hasRawEnvLabel: false,
+      hasSyncBtnWhenUpToDate: false,
       menuOpenCheck: {
         hasMenu: true,
+        hasSyncSkillsBtn: true,
         hasResetBtn: true,
-        hasStopEnvBtn: true
+        hasStopEnvBtn: true,
+        allItemsHaveDesc: true,
+        stopIsNeutral: true,
+        resetIsDanger: true
       },
       afterStopEnv: {
         menuClosed: true,
@@ -382,10 +422,20 @@ function registerVisualPart06Tests(ctx) {
       },
       afterResetEnv: {
         menuClosed: true,
+        modalClosed: true,
+        modalBeforeType: {
+          hasModal: true,
+          checkboxCount: 0,
+          confirmDisabledInitially: true
+        },
+        confirmEnabledAfterDelete: true,
         status: 'active',
         hasSuccessClass: true,
         hasResetNoticeAttr: true,
-        text: '✓ Environment Reset'
+        text: '✓ Environment Reset',
+        allConversationsCount: 0,
+        pathname: '/',
+        deletedLookerContentCount: 0
       },
       thinkingCheck: {
         hasOverviewBusyState: true,
@@ -399,7 +449,58 @@ function registerVisualPart06Tests(ctx) {
         hasHardcodedDataAppCopy: false
       }
     })
-  }, 15000)
+
+    // Issue #229: Verify topbar-env-sync-btn appears on sourcesHash drift, disables while busy, and syncs in-place
+    await ctx.chrome.send('Page.navigate', { url: `http://127.0.0.1:${ctx.port}/?scenario=skills_outdated` })
+    const syncDeadline = Date.now() + 8000
+    while (Date.now() < syncDeadline) {
+      const r = await ctx.chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="topbar-env-sync-btn"]'))`,
+        returnByValue: true
+      })
+      if (r.result?.value) break
+      await new Promise((r2) => setTimeout(r2, 60))
+    }
+    const syncRes = await ctx.chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const s = window.__DAB_STUDIO__;
+        s.setOauthToken('mock_oauth_token');
+        await new Promise((r) => setTimeout(r, 40));
+        const syncBtn = document.querySelector('[data-testid="topbar-env-sync-btn"]');
+        s.setBusyStatus('Running Looker query...');
+        await new Promise((r) => setTimeout(r, 40));
+        const disabledWhileBusy = Boolean(syncBtn?.disabled);
+        s.setBusyStatus(null);
+        await new Promise((r) => setTimeout(r, 40));
+        const enabledWhenIdle = Boolean(syncBtn && !syncBtn.disabled);
+        window.__SKILL_SYNC_CALLS__ = [];
+        syncBtn.click();
+        for (let i = 0; i < 40; i++) {
+          if (!document.querySelector('[data-testid="topbar-env-sync-btn"]')) break;
+          await new Promise((r) => setTimeout(r, 40));
+        }
+        const envBtn = document.querySelector('[data-testid="topbar-environment-btn"]');
+        return {
+          disabledWhileBusy,
+          enabledWhenIdle,
+          syncBtnGoneAfterSync: !document.querySelector('[data-testid="topbar-env-sync-btn"]'),
+          hasSyncNoticeAttr: envBtn?.getAttribute('data-env-sync-notice') === 'true',
+          envBtnTextAfterSync: (envBtn?.textContent || '').trim(),
+          syncCallCount: (window.__SKILL_SYNC_CALLS__ || []).length
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    })
+    expect(syncRes.result.value).toEqual({
+      disabledWhileBusy: true,
+      enabledWhenIdle: true,
+      syncBtnGoneAfterSync: true,
+      hasSyncNoticeAttr: true,
+      envBtnTextAfterSync: '✓ Skills Updated',
+      syncCallCount: 1
+    })
+  }, 20000)
 
   test('Issue #119: supports draggable split resizer, collapsible right artifact icon rail, clickable file/skill steps, and copy reasoning button', async () => {
     await ctx.chrome.send('Page.navigate', { url: `http://127.0.0.1:${ctx.port}/?scenario=data_app` })

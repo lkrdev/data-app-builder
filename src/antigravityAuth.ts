@@ -459,8 +459,15 @@ export function callInteractionsApi(
           }),
         })
       }
+      if (promptText.includes('[SKILL_SYNC:')) {
+        const marker = promptText.match(/reply with ((?:CHUNK_OK:\d+|SYNC_OK:[0-9a-f]+))/)?.[1] || 'SYNC_OK'
+        const mockWin = window as unknown as { __SKILL_SYNC_CALLS__?: Array<{ path: string; method: string; body?: Record<string, unknown> }>; __MOCK_LOOKER_EXTENSION__?: { environmentFiles?: Record<string, string> } }
+        ;(mockWin.__SKILL_SYNC_CALLS__ ||= []).push({ path, method, body })
+        return Promise.resolve({ id: 'int_mock_skill_sync', environment_id: String(body?.environment || ''), status: 'completed', output_text: marker })
+      }
       const isDirectStatelessModel =
         body?.store === false || (Boolean(body?.model) && !body?.agent)
+      const reusedEnvId = typeof body?.environment === 'string' ? body.environment.trim() : ''
       const userReqMatch = promptText.match(/User request:\s*([\s\S]*)$/i)
       const inferred = extractResolvedUseCase(undefined, userReqMatch ? userReqMatch[1].trim() : promptText)
       return Promise.resolve(Object.assign(
@@ -469,7 +476,7 @@ export function callInteractionsApi(
           status: 'completed',
           output_text: `<USE_CASE>${inferred}</USE_CASE>\nRouted turn via AGENTS.md to ${inferred}.`,
         },
-        isDirectStatelessModel ? null : { environment_id: `env_${inferred}_mock` }
+        isDirectStatelessModel ? null : { environment_id: reusedEnvId || `env_${inferred}_mock` }
       ))
     }
     headers['Authorization'] = `Bearer ${liveToken}`

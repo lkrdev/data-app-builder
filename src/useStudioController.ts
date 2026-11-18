@@ -334,6 +334,12 @@ export function useStudioController() {
     [handleResetNewApp]
   )
 
+  turn.onResetAppStateRef.current = () => handleResetNewApp(true, 'auto')
+  turn.onClearSandboxFileCacheRef.current = () => {
+    sandboxMarkdownCacheRef.current = {}
+    setSandboxMarkdownCache({})
+  }
+
   const syncContentItemViewer = useCallback(
     (item: StudioContentItem | null | undefined) => {
       if (!item) return

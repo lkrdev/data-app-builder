@@ -28,7 +28,7 @@ import { nextStudioConvId, useStudioTurnConcurrency } from './studioControllerCo
 
 export type HostDataWithMount = { mountType?: string; mountPoint?: string; hostUrl?: string; extensionId?: string }
 export interface QueuedPromptItem { id: string; text: string; images: PastedImage[]; mentions: StudioContextMention[] }
-export type StudioEnvironmentStatus = 'active' | 'resetting' | 'stopped'
+export type StudioEnvironmentStatus = 'active' | 'syncing' | 'resetting' | 'stopped'
 
 export const getErrorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err || ''))
 
@@ -384,6 +384,7 @@ export function useStudioAuthAndPrefs() {
 
   const [sharedEnvironmentId, setSharedEnvironmentId] = useState('')
   const sharedEnvIdRef = useRef<string>('')
+  const [envSourcesHash, setEnvSourcesHash] = useState<string | null>(null)
   const [agentSession, setAgentSessionState] = useState<AgentSession>({
     toolType: parsedRoute.mode,
     environmentId: 'env_app_isolated',
@@ -398,11 +399,28 @@ export function useStudioAuthAndPrefs() {
   const messagesRef = useRef<ChatMessage[]>(messages)
   messagesRef.current = messages
 
-  const syncSharedEnvironmentId = useCallback((envId?: string) => {
+  const syncSharedEnvironmentId = useCallback((envId?: string, sourcesHash?: string | null) => {
+    if (envId === '') {
+      sharedEnvIdRef.current = ''
+      setSharedEnvironmentId('')
+      setEnvSourcesHash(null)
+      setAgentSessionState((prev) => {
+        const updated = { ...prev, environmentId: '' }
+        agentSessionRef.current = updated
+        return updated
+      })
+      return
+    }
     const clean = normalizeEnvironmentId(envId)
     if (!clean) return
+    const prevEnv = sharedEnvIdRef.current
     sharedEnvIdRef.current = clean
     setSharedEnvironmentId(clean)
+    if (sourcesHash !== undefined) {
+      setEnvSourcesHash(sourcesHash && sourcesHash.trim() ? sourcesHash.trim() : null)
+    } else if (prevEnv && prevEnv !== clean) {
+      setEnvSourcesHash(null)
+    }
     setAgentSessionState((prev) => {
       const updated = { ...prev, environmentId: clean }
       agentSessionRef.current = updated
@@ -577,7 +595,7 @@ export function useStudioAuthAndPrefs() {
     sidebarCollapsed, setSidebarCollapsed, leftPaneWidth, setLeftPaneWidth, flushLeftPaneWidthSave,
     rightPaneCollapsed, setRightPaneCollapsed, busySendAction, setBusySendAction,
     resolvedUseCaseByIdRef, parsedRoute, selectedUseCase, setSelectedUseCase, explicitUseCaseRef,
-    sharedEnvironmentId, sharedEnvIdRef, syncSharedEnvironmentId,
+    sharedEnvironmentId, sharedEnvIdRef, envSourcesHash, syncSharedEnvironmentId,
     agentSession, agentSessionRef, messages, messagesRef,
     activeModeRef, setAgentSession, setMessages,
     activeConversationId, activeConversationIdRef, setActiveConversationId,

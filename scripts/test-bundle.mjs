@@ -48,6 +48,7 @@ assert.equal(cmParsed.path, '/lookml_models/thelook/explores/order_items')
 const antigravityTs = [
   'src/antigravity.ts',
   'src/antigravityEnv.ts',
+  'src/antigravitySkillSync.ts',
   'src/antigravityLoop.ts',
   'src/antigravityTypes.ts',
   'src/antigravityAuth.ts',

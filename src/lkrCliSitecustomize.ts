@@ -579,7 +579,7 @@ const SHA256_K = [
   0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ]
 
-function sha256Hex(input: string): string {
+export function sha256Hex(input: string): string {
   const bytes = Array.from(new TextEncoder().encode(input))
   const bitLen = bytes.length * 8
   bytes.push(0x80)
@@ -610,7 +610,7 @@ function sha256Hex(input: string): string {
   return [h0, h1, h2, h3, h4, h5, h6, h7].map((v) => (v >>> 0).toString(16).padStart(8, '0')).join('')
 }
 
-function canonicalJson(val: unknown): string {
+export function canonicalJson(val: unknown): string {
   if (val === null || val === undefined) return 'null'
   if (typeof val === 'boolean' || typeof val === 'number' || typeof val === 'string') return JSON.stringify(val)
   if (Array.isArray(val)) return `[${val.map(canonicalJson).join(',')}]`

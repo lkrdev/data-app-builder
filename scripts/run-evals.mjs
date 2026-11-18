@@ -58,6 +58,7 @@ const antigravityStepsTs = readFileSync(path.join(repoRoot, 'src/antigravityStep
 const antigravityTs = [
   'src/antigravity.ts',
   'src/antigravityEnv.ts',
+  'src/antigravitySkillSync.ts',
   'src/antigravityLoop.ts',
 ]
   .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))

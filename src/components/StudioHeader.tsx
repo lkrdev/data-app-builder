@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   AlertTriangle, Check, ChevronDown, ExternalLink, Folder, FolderOpen, Info, Lock, LogOut,
-  Maximize2, Minimize2, PanelRightOpen, Pencil, RotateCcw, Search, Server, Square, User,
+  Maximize2, Minimize2, PanelRightOpen, Pencil, RefreshCw, RotateCcw, Search, Server, Square, User,
 } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 
@@ -310,7 +310,8 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
 
 export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
-    themeMode, resolvedTheme, setThemeMode, environmentStatus, envResetNotice,
+    themeMode, resolvedTheme, setThemeMode, sharedEnvironmentId, environmentStatus, envResetNotice, envSyncNotice,
+    resetEnvModalOpen, setResetEnvModalOpen, hasInFlightTurns, envSkillsOutdated, handleSyncEnvironmentSkills,
     handleResetEnvironment, handleStopEnvironment, requirePermission, setRequirePermission,
     capabilities, canDeployLookml, isLookmlMode, isHealthCheckMode,
     loadingMetadata, folderTreeNodes, rootFolderIds, folderChildrenById,
@@ -334,7 +335,12 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const [advLoading, setAdvLoading] = useState(false)
   const folderPickerRef = useRef<HTMLDivElement | null>(null)
   const [envMenuOpen, setEnvMenuOpen] = useState(false)
+  const [resetConfirmText, setResetConfirmText] = useState('')
   const envMenuRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => { if (!resetEnvModalOpen) setResetConfirmText('') }, [resetEnvModalOpen])
+  const closeResetModal = () => { setResetConfirmText(''); setResetEnvModalOpen(false) }
+  const confirmResetEnv = () => { if (resetConfirmText.trim() !== 'DELETE') return; setResetConfirmText(''); void handleResetEnvironment() }
 
   useEffect(() => {
     const onDocMouseDown = (e: MouseEvent) => {
@@ -447,34 +453,97 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
         <StudioBrandAgentName ctl={ctl} />
         <div className="dab-env-menu-wrap" ref={envMenuRef}>
           <StudioBadge
-            tone={environmentStatus === 'stopped' ? 'neutral' : environmentStatus === 'resetting' ? 'warning' : 'success'}
-            testId="topbar-environment-btn" data-env-status={environmentStatus} data-env-reset-notice={envResetNotice ? 'true' : undefined}
+            tone={environmentStatus === 'stopped' ? 'neutral' : environmentStatus === 'resetting' || environmentStatus === 'syncing' ? 'warning' : 'success'}
+            testId="topbar-environment-btn" data-env-status={environmentStatus}
+            data-env-reset-notice={envResetNotice ? 'true' : undefined} data-env-sync-notice={envSyncNotice ? 'true' : undefined}
             onClick={() => setEnvMenuOpen((prev) => !prev)} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }}
-            title={environmentStatus === 'stopped' ? 'Antigravity sandbox environment stopped (click to reset or manage)' : environmentStatus === 'resetting' ? 'Resetting Antigravity sandbox environment...' : 'Antigravity sandbox environment active (click to reset or stop)'}
+            title={environmentStatus === 'stopped' ? 'Antigravity sandbox environment stopped (click to manage)' : environmentStatus === 'resetting' ? 'Resetting Antigravity sandbox environment...' : environmentStatus === 'syncing' ? 'Syncing Studio-managed skills into sandbox...' : 'Antigravity sandbox environment active (click to manage)'}
           >
             {environmentStatus === 'resetting' ? (
               <RotateCcw size={12} strokeWidth={1.75} className="dab-spin" aria-hidden="true" />
+            ) : environmentStatus === 'syncing' ? (
+              <RefreshCw size={12} strokeWidth={1.75} className="dab-spin" aria-hidden="true" />
             ) : (
-              <>
-                <span className={`dab-env-status-dot ${environmentStatus === 'stopped' ? 'stopped' : 'active'}`} aria-hidden="true" />
-                <Server size={12} strokeWidth={1.75} aria-hidden="true" />
-              </>
+              <><span className={`dab-env-status-dot ${environmentStatus === 'stopped' ? 'stopped' : 'active'}`} aria-hidden="true" /><Server size={12} strokeWidth={1.75} aria-hidden="true" /></>
             )}
-            <span>{environmentStatus === 'resetting' ? 'Resetting...' : environmentStatus === 'stopped' ? 'Environment (Stopped)' : envResetNotice ? '✓ Environment Reset' : 'Environment'}</span>
+            <span>{environmentStatus === 'resetting' ? 'Resetting...' : environmentStatus === 'syncing' ? 'Syncing Skills...' : environmentStatus === 'stopped' ? 'Environment (Stopped)' : envResetNotice ? '✓ Environment Reset' : envSyncNotice ? '✓ Skills Updated' : 'Environment'}</span>
             <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
           </StudioBadge>
 
+          {(envSkillsOutdated || environmentStatus === 'syncing') && (
+            <StudioButton
+              variant="secondary" testId="topbar-env-sync-btn" className="dab-btn-icon dab-env-sync-icon-btn"
+              disabled={hasInFlightTurns || environmentStatus === 'syncing'} onClick={() => void handleSyncEnvironmentSkills()}
+              title={environmentStatus === 'syncing' ? 'Updating Studio-managed skills in sandbox...' : hasInFlightTurns ? 'Wait for active turn to finish before updating skills' : 'Update Studio-managed skills in-place'}
+              aria-label="Update Studio-managed skills in-place"
+            >
+              <RefreshCw size={13} strokeWidth={1.75} className={environmentStatus === 'syncing' ? 'dab-spin' : undefined} aria-hidden="true" />
+            </StudioButton>
+          )}
+
           {envMenuOpen && (
             <div className="dab-env-popover-menu" data-testid="topbar-environment-menu" role="menu" aria-label="Environment actions">
-              <button type="button" role="menuitem" data-testid="env-reset-btn" className="dab-env-menu-item" onClick={() => { setEnvMenuOpen(false); void handleResetEnvironment() }}>
-                <RotateCcw size={13} strokeWidth={1.75} aria-hidden="true" /><span>Reset Environment</span>
+              <button
+                type="button" role="menuitem" data-testid="env-sync-skills-btn" className="dab-env-menu-item"
+                disabled={!sharedEnvironmentId || environmentStatus !== 'active' || hasInFlightTurns}
+                onClick={() => { setEnvMenuOpen(false); void handleSyncEnvironmentSkills() }}
+              >
+                <RefreshCw size={13} strokeWidth={1.75} className="dab-env-menu-item-icon" aria-hidden="true" />
+                <span className="dab-env-menu-item-body">
+                  <span className="dab-env-menu-item-title"><span>Update Managed Skills</span>{envSkillsOutdated && <StudioBadge tone="accent" pill>Update available</StudioBadge>}</span>
+                  <span className="dab-env-menu-item-desc">Overwrite &amp; prune Studio skills in-place; keeps conversations &amp; sandbox files.</span>
+                </span>
               </button>
-              <button type="button" role="menuitem" data-testid="env-stop-btn" className="dab-env-menu-item dab-env-menu-item-danger" onClick={() => { setEnvMenuOpen(false); handleStopEnvironment() }}>
-                <Square size={12} strokeWidth={2} aria-hidden="true" /><span>Stop Environment</span>
+              <button type="button" role="menuitem" data-testid="env-stop-btn" className="dab-env-menu-item" onClick={() => { setEnvMenuOpen(false); handleStopEnvironment() }}>
+                <Square size={12} strokeWidth={2} className="dab-env-menu-item-icon" aria-hidden="true" />
+                <span className="dab-env-menu-item-body">
+                  <span className="dab-env-menu-item-title">Stop Environment</span>
+                  <span className="dab-env-menu-item-desc">Cancel active turns and pause the sandbox until your next prompt.</span>
+                </span>
+              </button>
+              <button
+                type="button" role="menuitem" data-testid="env-reset-btn" className="dab-env-menu-item dab-env-menu-item-danger"
+                disabled={environmentStatus === 'resetting'}
+                onClick={() => { setEnvMenuOpen(false); setResetConfirmText(''); setResetEnvModalOpen(true) }}
+              >
+                <RotateCcw size={13} strokeWidth={1.75} className="dab-env-menu-item-icon" aria-hidden="true" />
+                <span className="dab-env-menu-item-body">
+                  <span className="dab-env-menu-item-title">Reset Environment...</span>
+                  <span className="dab-env-menu-item-desc">Delete all Studio conversations and provision a fresh sandbox (keeps Looker content).</span>
+                </span>
               </button>
             </div>
           )}
         </div>
+        <StudioModal
+          open={resetEnvModalOpen} onClose={closeResetModal} testId="reset-env-modal"
+          closeTestId="close-reset-env-modal" title="Reset Environment & Expire Conversations?" maxWidth={460}
+          footer={
+            <>
+              <StudioButton variant="secondary" testId="cancel-reset-env-btn" onClick={closeResetModal}>Cancel</StudioButton>
+              <StudioButton
+                variant="danger" testId="confirm-reset-env-btn"
+                disabled={resetConfirmText.trim() !== 'DELETE'} onClick={confirmResetEnv}
+              >
+                Reset Environment
+              </StudioButton>
+            </>
+          }
+        >
+          <div className="dab-modal-body" style={{ padding: 0 }}>
+            <p style={{ margin: 0 }}>Resetting provisions a fresh remote sandbox container and permanently expires and deletes <strong>all Studio conversations</strong> from your history.</p>
+            <div className="dab-modal-related-box">All published Looker <strong>Dashboards, Looks, Boards, and Data Apps</strong> remain untouched in Looker.</div>
+            <div className="dab-modal-row">
+              <label htmlFor="dab-reset-env-confirm-input">Type <code>DELETE</code> to confirm</label>
+              <input
+                id="dab-reset-env-confirm-input" type="text" data-testid="reset-env-confirm-input"
+                placeholder="Type DELETE to confirm" autoComplete="off" value={resetConfirmText}
+                onChange={(e) => setResetConfirmText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && resetConfirmText.trim() === 'DELETE') { e.preventDefault(); confirmResetEnv() } }}
+              />
+            </div>
+          </div>
+        </StudioModal>
         <ThemeModeSelect themeMode={themeMode} resolvedTheme={resolvedTheme} onChange={setThemeMode} />
       </div>
 
