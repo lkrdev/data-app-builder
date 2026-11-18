@@ -21,12 +21,12 @@ In **Looker Data App Studio**, Data Apps are never tested on a local preview ser
 
 `data-apps-sync` automates the full conversion on every upstream update (`npm run sync-upstream` and `.github/workflows/update-skills.yml`):
 1. **Unpacks & Understands Upstream (`.sh` + tarball)** in a temporary directory (`tempfile.TemporaryDirectory()`):
-   - Reads `latest-version.txt` and `versions/<VERSION>/install.sh` to extract `VERSION` (e.g. `1.2.0`) and the canonical CDN base (`https://www.gstatic.com/looker-data-apps/versions/<VERSION>`).
-   - Verifies exported runtime symbols in `runtime/data-app.js` (`LookerDataApp`, `DataApp`, `html`, `nothing`, `keyed`, `formatValue`, `formatAxisValue`, `escapeHtml`, `create*Col`).
+   - Reads `latest-version.txt` and `versions/<VERSION>/install.sh` to extract `VERSION` (e.g. `1.3.0`) and the canonical CDN base (`https://www.gstatic.com/looker-data-apps/versions/<VERSION>`).
+   - Verifies exported runtime symbols in `runtime/data-app.js` (`DataApp`, `LitElement`, `html`, `css`, `nothing`, `noChange`, `keyed`, `formatValue`, `formatAxisValue`, `escapeHtml`, `createNumericCol`, `createCurrencyCol`, `createPercentageCol`, `createBadgeCol` with `badgeClassMap`, and plain `{ field, headerName, width }` text column objects).
 2. **Strips Local-Only `.sh` Scripts & Preview Server**:
    - Discards `install.sh`, `version-install.sh`, `scripts/bootstrap.sh`, `scripts/configs-merger.sh`, `scripts/verify-install.py`, `Makefile`, `preview-server/`, `skills/data-app-previewer/`, `skills/toolkit-updater/`, `skills/data-app-publisher/`, `skills/data-app-upgrader/`, `check-credentials.py`, `explore-model.py`, `config.example.json`, `vendor/`, and `runtime/`.
 3. **Repackages into External Skill `skills/data-apps/`**:
-   - `skills/data-apps/VERSION`: Pinned upstream runtime version (`1.2.0`), synced to `DEFAULT_VERSION` in `src/antigravityPrompts.ts`.
+   - `skills/data-apps/VERSION`: Pinned upstream runtime version (`1.3.0`), synced to `DEFAULT_VERSION` in `src/antigravityPrompts.ts`.
    - `skills/data-apps/SKILL.md`: Studio's canonical Data Apps skill (byte-identical to `DATA_APP_GUIDE_MD` in `src/antigravityPrompts.ts`, mounted at `/workspace/skills/data-apps/SKILL.md` in the sandbox and used by evals).
    - `skills/data-apps/reference/LIT_DATA_APPS.md`: Component reference sanitized of local CLI references and forbidden dataset names, with Studio's Metric Selector & PoP KPI contract (`#15`).
    - `skills/data-apps/recipes/*.md`: Sanitized pattern recipes including Studio's layered dual-date `Promise.all` + `shareScale` (`linkedTo: 0`) `metric-switcher.md`.

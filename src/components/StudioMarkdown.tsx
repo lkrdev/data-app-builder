@@ -11,7 +11,7 @@ import {
 import { cleanLookmlProjectId } from '../antigravity'
 import {
   copyTextWithExtensionSdk, discoverAccessibleConnections, formatAccessibleConnectionsMarkdown,
-  normalizeCaEmbedPath, StudioContentItem, StudioContentItemType,
+  formatStudioContentItemTitle, normalizeCaEmbedPath, StudioContentItemType,
 } from '../lookerApi'
 import { StudioController } from '../useStudioController'
 export { copyTextWithExtensionSdk }
@@ -705,18 +705,20 @@ export function openContentLinkTargetInViewer(ctl: StudioController, target: InV
   ctl.setActiveViewerDocument?.(null)
   ctl.setRightPaneCollapsed(false)
   const dashGroup = ['dashboard', 'lookml_dashboard', 'data_app', 'data-investigator']
-  const existing = (ctl.contentItems || []).find(
+  const items = ctl.contentItemsRef?.current || ctl.contentItems || []
+  const existing = items.find(
     (it) =>
       it.id === target.id &&
       (it.contentType === target.contentType || (dashGroup.includes(target.contentType) && dashGroup.includes(it.contentType)))
   )
   const ct = existing ? existing.contentType : target.contentType
+  const isPlaceholder = (t?: string) => !t || formatStudioContentItemTitle(ct, target.id, t) === formatStudioContentItemTitle(ct, target.id)
   const upserted = ctl.upsertContentItem(
     Object.assign({}, existing, {
       id: target.id,
       contentType: ct,
-      title: target.title || existing?.title,
-      embedPath: existing?.embedPath || target.embedPath,
+      title: target.title || (existing?.title && !isPlaceholder(existing.title) ? existing.title : undefined),
+      embedPath: target.embedPath.includes('?') ? target.embedPath : existing?.embedPath || target.embedPath,
       dashboardId: ct === 'dashboard' ? target.id : existing?.dashboardId,
       lookmlDashboardId: ct === 'lookml_dashboard' ? target.id : existing?.lookmlDashboardId,
       lookId: ct === 'look' ? target.id : existing?.lookId,
@@ -726,6 +728,38 @@ export function openContentLinkTargetInViewer(ctl: StudioController, target: InV
     true
   )
   ctl.handleSelectContentTab?.(upserted.key)
+  const sdk = ctl.core40SDK
+  if (!target.title && isPlaceholder(existing?.title) && sdk) {
+    const originConvId = ctl.activeConversationIdRef?.current ?? ctl.activeConversationId
+    const rawCall =
+      (dashGroup.includes(ct) && typeof sdk.dashboard === 'function' && sdk.dashboard(target.id)) ||
+      (ct === 'look' && typeof sdk.look === 'function' && sdk.look(target.id)) ||
+      (ct === 'board' && typeof sdk.board === 'function' && sdk.board(target.id)) ||
+      null
+    if (rawCall) {
+      Promise.resolve(typeof sdk.ok === 'function' ? sdk.ok(rawCall) : rawCall)
+        .then((meta) => {
+          if ((ctl.activeConversationIdRef?.current ?? ctl.activeConversationId) !== originConvId) return
+          const fetchedTitle = typeof (meta as { title?: unknown } | null)?.title === 'string' ? (meta as { title: string }).title.trim() : ''
+          if (!fetchedTitle) return
+          if (ctl.contentItemsRef && typeof ctl.setContentItems === 'function') {
+            const live = ctl.contentItemsRef.current.find((it) => it.key === upserted.key)
+            if (!live || !isPlaceholder(live.title)) return
+            const nextItems = ctl.contentItemsRef.current.map((it) => (it.key === upserted.key ? Object.assign({}, it, { title: fetchedTitle }) : it))
+            ctl.setContentItems(nextItems)
+            ctl.setNativeContentState?.((prev) => (prev && prev.id === target.id && prev.contentType === ct ? Object.assign({}, prev, { title: fetchedTitle }) : prev))
+            ctl.setPublishedAppState?.((prev) => (prev && prev.dashboardId === target.id && isPlaceholder(prev.title) ? Object.assign({}, prev, { title: fetchedTitle }) : prev))
+            ctl.persistTabStateToConversation?.(nextItems, ctl.activeContentTabKeyRef?.current ?? ctl.activeContentTabKey ?? '')
+          } else {
+            const live = (ctl.contentItems || []).find((it) => it.key === upserted.key)
+            if (live && !isPlaceholder(live.title)) return
+            ctl.upsertContentItem({ id: target.id, contentType: ct, title: fetchedTitle, embedPath: upserted.embedPath, hidden: Boolean(live?.hidden) }, false)
+            ctl.persistTabStateToConversation?.(ctl.contentItems || [], ctl.activeContentTabKey ?? '')
+          }
+        })
+        .catch(() => {})
+    }
+  }
 }
 
 export function renderContentTabIcon(contentType: StudioContentItemType): React.ReactNode {

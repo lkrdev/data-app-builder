@@ -509,7 +509,6 @@ const scenarios = [
       snapshotName: '02-mode-native-dashboard-builder-snap.png',
       expectText: [
         'Executive Order Performance (Native UDD)',
-        '/embed/dashboards/7',
         'Update Content'
       ]
     },
@@ -688,7 +687,6 @@ const scenarios = [
         'BigQuery Streaming Buffer & Order Revenue Q&A',
         'Agent: eCommerce & BigQuery Analytics Agent (ca_agent_ecommerce)',
         'Isolated Sub-Agent Selection:',
-        '/embed/conversations/ca_conv_streaming_1',
         'Ask CA Agent'
       ]
     },

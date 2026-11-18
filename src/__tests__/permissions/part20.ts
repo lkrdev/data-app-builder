@@ -349,7 +349,8 @@ export function registerPermissionsPart20Tests(): void {
       expect(stdout).toContain('<DATA_APP_BUNDLE>')
       const healedDisk = readFileSync(posAppPath, 'utf8')
       expect(healedDisk).toContain("createCurrencyCol({ field: 'order_items.total_sale_price', headerName: 'Total Sales' })")
-      expect(healedDisk).toContain("createTextCol({ field: 'order_items.created_date', headerName: 'Date', width: 120 })")
+      expect(healedDisk).not.toContain('createTextCol')
+      expect(healedDisk).toContain("{ field: 'order_items.created_date', headerName: 'Date', width: 120 }")
     } finally {
       rmSync(workDir, { recursive: true, force: true })
     }

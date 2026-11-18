@@ -543,7 +543,7 @@ export function useStudioController() {
     copyThreadState, handleCopyThreadDebugTrace,
     sandboxMarkdownCache, sandboxMarkdownLoading, activeSandboxMarkdownModalPath,
     setActiveSandboxMarkdownModalPath, loadSandboxMarkdownFile, openViewerDocument,
-    handleSelectOverview, handleSelectContentTab, handleHideContentTab,
+    handleSelectOverview, handleSelectContentTab, handleHideContentTab, persistTabStateToConversation,
     handleResetNewApp, handleNewConversation, handleSelectConversation,
     handleToggleArchiveConversation, handleRequestDeleteConversation,
     handleCancelDeleteConversation, handleConfirmDeleteConversation, handleDeleteConversation,

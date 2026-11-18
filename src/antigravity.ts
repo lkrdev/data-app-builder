@@ -293,7 +293,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : lookmlProjectId
       ? `with \`this.lookerModel = '${lookmlProjectId}'\` and \`this.explore = '${primaryExplore || '<fact_explore>'}'\` (the primary Silver explore from conversation history) in \`constructor()\``
       : `setting \`this.lookerModel\` and \`this.explore\` in \`constructor()\``
-  const step3Directive = `3. Write and bundle the Lit Data App in ONE \`code_execution\` call importing from '/runtime/data-app.js' (${ctorHint}; never inspect \`/workspace/bundle_app.py\` or \`/runtime\`; Metric Selector Section 4: \`PERIOD_DEFAULTS = { date: 90, week: 53, month: 60, year: 10 }\` with \`Period\` \`Daily\`->\`'date'\`, no \`*_day\`; \`@container\` KPIs forbidding \`auto-fit\`/\`auto-fill\` (\`container-type: inline-size\`, \`repeat(4, minmax(0, 1fr))\`->\`820px\` \`repeat(2, minmax(0, 1fr))\`->\`420px\` \`1fr\`); 4-row PoP KPIs forbidding \`<app-kpi>\`, \`"ACTIVE METRIC"\`, Metric \`<app-select>\`, querying \`2 * this.periodCount\` (\`Math.min(5000, Math.max(500, 2 * this.periodCount + 10))\`), \`kpi-change\` before \`vs. prev\` (\`lower-better\`) + SVG; no \`Compare against\` \`<app-select>\` — \`--app-chart-1\`/\`--app-chart-2\` borders with click/\`shiftKey\`/\`contextmenu\` (\`Remove comparison\`), \`loadTrendData()\` (\`connectedCallback\`, \`onFiltersChanged\`/\`willUpdate\`, \`onRefresh\`, handlers — no \`updated()\`, \`trendRows = null\` idle) \`Promise.all([this.runQuery(...), this.runQuery(...)])\` into \`.data\` omitting \`.query\`, \`options.colors\`, \`formatAxisValue\` \`labels.formatter\`, \`opposite: true\` + \`yAxis.title.text\`, \`shareScale\` (\`linkedTo: 0\`), no \`"Longitudinal Trend"\`, \`⋮\` menu; \`Period\`/\`Window\` \`periodCount\` (\`customWindowOpen\`), \`!WINDOW_OPTIONS[this.period].includes(this.periodCount)\` pill + \`Custom window length\` \`type="number"\` popover via \`getEffectiveFilters\`; titleless \`<app-grid>\` + \`Dimensions\` \`selectedDimensions\` joining \`ago for\` (\`This Period\`/\`Last Period\`/\`Variance\`)) into \`${appFilePath}\`:\n   \`python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\\n...\\nEOF\``
+  const step3Directive = `3. Write and bundle the Lit Data App in ONE \`code_execution\` call importing \`DataApp\` from '/runtime/data-app.js' (use plain \`{ field, headerName, width }\` objects for text columns and \`createBadgeCol({ field, headerName, width, badgeClassMap })\`; ${ctorHint}; never inspect \`/workspace/bundle_app.py\` or \`/runtime\`; Metric Selector Section 4: \`PERIOD_DEFAULTS = { date: 90, week: 53, month: 60, year: 10 }\` with \`Period\` \`Daily\`->\`'date'\`, no \`*_day\`; \`@container\` KPIs forbidding \`auto-fit\`/\`auto-fill\` (\`container-type: inline-size\`, \`repeat(4, minmax(0, 1fr))\`->\`820px\` \`repeat(2, minmax(0, 1fr))\`->\`420px\` \`1fr\`); 4-row PoP KPIs forbidding \`<app-kpi>\`, \`"ACTIVE METRIC"\`, Metric \`<app-select>\`, querying \`2 * this.periodCount\` (\`Math.min(5000, Math.max(500, 2 * this.periodCount + 10))\`), \`kpi-change\` before \`vs. prev\` (\`lower-better\`) + SVG; no \`Compare against\` \`<app-select>\` — \`--app-chart-1\`/\`--app-chart-2\` borders with click/\`shiftKey\`/\`contextmenu\` (\`Remove comparison\`), \`loadTrendData()\` (\`connectedCallback\`, \`onFiltersChanged\`/\`willUpdate\`, \`onRefresh\`, handlers — no \`updated()\`, \`trendRows = null\` idle) \`Promise.all([this.runQuery(...), this.runQuery(...)])\` into \`.data\` omitting \`.query\`, \`options.colors\`, \`formatAxisValue\` \`labels.formatter\`, \`opposite: true\` + \`yAxis.title.text\`, \`shareScale\` (\`linkedTo: 0\`), no \`"Longitudinal Trend"\`, \`⋮\` menu; \`Period\`/\`Window\` \`periodCount\` (\`customWindowOpen\`), \`!WINDOW_OPTIONS[this.period].includes(this.periodCount)\` pill + \`Custom window length\` \`type="number"\` popover via \`getEffectiveFilters\`; titleless \`<app-grid>\` + \`Dimensions\` \`selectedDimensions\` joining \`ago for\` (\`This Period\`/\`Last Period\`/\`Variance\`)) into \`${appFilePath}\`:\n   \`python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\\n...\\nEOF\``
 
   const normalizedExistingNative: NativeContentState | null = existingNativeContent
     ? normalizeNativeContent({
@@ -561,14 +561,36 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     for (const candidatePath of candidates) {
       try {
         const fetchedJs = (await fetchEnvironmentFile({ extensionSDK, auth, environmentId: trackedEnvId, path: candidatePath })).trim()
-        if (fetchedJs && (fetchedJs.includes('LookerDataApp') || fetchedJs.includes('DataApp') || fetchedJs.includes('customElements.define'))) {
-          const prodCode = fetchedJs
+        if (fetchedJs && (fetchedJs.includes('DataApp') || fetchedJs.includes('customElements.define'))) {
+          let rewroteUnaliasedLda = false
+          let healedJs = fetchedJs.replace(
+            /import\s*\{([^}]*)\}\s*(from\s*['"](?:\.\/data-app\.js|\/runtime\/data-app\.js)['"])/g,
+            (_m, rawSpecs: string, fromTail: string) => {
+              const specs: string[] = []
+              for (const raw of rawSpecs.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, '').split(',')) {
+                const pts = raw.trim().split(/\s+/).filter(Boolean)
+                if (!pts.length || pts[0] === 'createTextCol') continue
+                if (pts[0] === 'LookerDataApp') {
+                  if (pts.length >= 3 && pts[1] === 'as') pts[0] = 'DataApp'
+                  else { pts[0] = 'DataApp'; rewroteUnaliasedLda = true }
+                }
+                const spec = pts.join(' ')
+                if (!specs.includes(spec)) specs.push(spec)
+              }
+              return specs.length ? `import { ${specs.join(', ')} } ${fromTail}` : `import ${fromTail.replace(/^from\s*/, '')}`
+            }
+          )
+          if ((rewroteUnaliasedLda || /\bextends\s+LookerDataApp\b/.test(healedJs)) && !/\bclass\s+LookerDataApp\b/.test(healedJs)) {
+            healedJs = healedJs.replace(/\bextends\s+LookerDataApp\b/g, 'extends DataApp')
+            if (rewroteUnaliasedLda) healedJs = healedJs.replace(/\bLookerDataApp\b/g, 'DataApp')
+          }
+          const prodCode = healedJs
             .replace(/((?:from|import)\s*['"])(?:\.\/data-app\.js|\/runtime\/data-app\.js)(['"])/g, '$1https://www.gstatic.com/looker-data-apps/versions/1.2.0/data-app.js$2')
             .replace(/((?:from|import)\s*['"])\/vendor\/([^'"]+)(['"])/g, '$1https://www.gstatic.com/looker-data-apps/versions/1.2.0/vendor/$2$3')
           bundle = {
             title: sanitizeConversationLabel(userPrompt) || 'Data App',
-            code: fetchedJs,
-            raw_code: fetchedJs,
+            code: healedJs,
+            raw_code: healedJs,
             prod_code: prodCode,
             widgets: [],
           }

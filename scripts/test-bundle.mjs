@@ -866,6 +866,21 @@ chmod +x "${fakeBinDir}/uv"
   const validCompareOut = execFileSync('python3', [bundlePyPath, '--stdin', 'Valid Compare App', path.join(workDir, 'valid_cmp_app.js')], { input: `import { DataApp, html } from '/runtime/data-app.js';\nexport class ValidCmp extends DataApp { constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; this.compareMetric = 'orders.return_count'; this.selectedDimensions = ['orders.status']; this.trendRows = null; } async loadTrendData() { await Promise.all(['orders.count', this.compareMetric].map((m, i) => this.runQuery({ fields: [i ? 'orders.returned_date' : 'orders.created_date', m] }))); } render() { const shareScale = true; return html\`<app-chart type="line" .data=\${this.trendRows} .options=\${{ yAxis: [{ title: { text: 'Orders' } }, { ...(shareScale ? { linkedTo: 0 } : {}), opposite: true }] }}></app-chart><app-chart type="bar" .query=\${{ fields: [...this.selectedDimensions, 'orders.count'] }}></app-chart><app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; } }\ncustomElements.define('valid-cmp', ValidCmp);\n`, encoding: 'utf8' })
   assert(validCompareOut.includes('<DATA_APP_BUNDLE>'), 'BUNDLE_APP_PY must accept dual Promise.all + runQuery + .data + linkedTo + opposite compareMetric apps')
 
+  // Issue #222: BUNDLE_APP_PY auto-heals LookerDataApp/createTextCol/badgeMap and rejects unknown /runtime/data-app.js imports
+  const healed222Path = path.join(workDir, 'healed_222.js')
+  const healed222Out = execFileSync('python3', [bundlePyPath, '--stdin', 'Healed 222 App', healed222Path], {
+    input: `import { LookerDataApp, html, createTextCol, createBadgeCol } from '/runtime/data-app.js';\nexport class Healed222 extends LookerDataApp { constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; } render() { const cols = [createTextCol('orders.id', 'ID', 110), createTextCol({ field: 'orders.city', headerName: 'City' }), createBadgeCol({ field: 'orders.status', headerName: 'Status', badgeMap: { Cancelled: { label: 'Cancelled', tone: 'danger' }, Complete: 'success' } })]; return html\`<app-grid .columnDefs=\${cols} .query=\${{ fields: ['orders.id', 'orders.city', 'orders.status', 'orders.count'] }}></app-grid>\`; } }\ncustomElements.define('healed-222', Healed222);\n`,
+    encoding: 'utf8',
+  })
+  assert(healed222Out.includes('<DATA_APP_BUNDLE>'), 'BUNDLE_APP_PY must heal LookerDataApp, createTextCol, and badgeMap')
+  const healed222Src = readFileSync(healed222Path, 'utf8')
+  assert(!healed222Src.includes('LookerDataApp') && !healed222Src.includes('createTextCol') && healed222Src.includes('badgeClassMap') && healed222Src.includes("'badge-red'") && healed222Src.includes("'badge-green'"), 'BUNDLE_APP_PY must rewrite healed symbols on disk')
+  assert.throws(
+    () => execFileSync('python3', [bundlePyPath, '--stdin', 'Bad Runtime Import', path.join(workDir, 'bad_rt_imp.js')], { input: `import { DataApp, html, unknownFakeExport } from '/runtime/data-app.js';\nexport class BadRt extends DataApp { constructor() { super(); this.lookerModel = 'ecom'; this.explore = 'orders'; } render() { return html\`<app-grid .query=\${{ fields: ['orders.count'] }}></app-grid>\`; } }\ncustomElements.define('bad-rt', BadRt);\n`, encoding: 'utf8', stdio: 'pipe' }),
+    /invalid-runtime-import/,
+    'BUNDLE_APP_PY must reject unknown /runtime/data-app.js named imports'
+  )
+
   const dashPreambleMatch = antigravityTs.match(/export const DASHBOARD_CODEMODE_PREAMBLE_PY = `([\s\S]*?)`\n\nexport function wrapDashboardCodeMode/)
   assert(dashPreambleMatch, 'Could not extract DASHBOARD_CODEMODE_PREAMBLE_PY')
   const dashPreamblePy = dashPreambleMatch[1].replace(/\\\\n/g, '\\n')
