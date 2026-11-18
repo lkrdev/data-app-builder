@@ -1,7 +1,72 @@
-import type { IDashboardElement, Looker40SDK } from '@looker/sdk'
+import type { IDashboard, IDashboardElement, Looker40SDK } from '@looker/sdk'
 
 import type { AntigravityActivityStep } from './antigravityTypes'
 import { rawLookerRequest } from './lookerTransport'
+
+export function isLooker404Error(err: unknown): boolean {
+  if (!err) return false
+  if (typeof err === 'object') {
+    const rec = err as { statusCode?: unknown; status?: unknown; error?: { statusCode?: unknown; status?: unknown } }
+    if (Number(rec.statusCode ?? rec.status ?? rec.error?.statusCode ?? rec.error?.status) === 404) return true
+  }
+  let msg = ''
+  try {
+    msg = err instanceof Error ? err.message : typeof err === 'string' ? err : JSON.stringify(err)
+  } catch {
+    msg = String(err)
+  }
+  return /\(404\b|\bstatus(?:\s*code)?\s*[:=]?\s*404\b|\/r\/err\/[^)\s]*\/404\/|^not found(?:\s*\(\[Docs\]\([^)]*\)\))?$/i.test(msg.trim())
+}
+
+function findDashboardExtensionElement(
+  elements?: IDashboardElement[] | null,
+  excludeId?: string,
+  preferredBareExtId?: string
+): IDashboardElement | undefined {
+  const dbElems = (elements || []).filter(
+    (e) => e.type === 'extension' && String(e.extension_id || '').startsWith('db::') && (!excludeId || String(e.id || '') !== excludeId)
+  )
+  const cleanPref = preferredBareExtId ? String(preferredBareExtId).replace(/^db::/, '') : ''
+  return (cleanPref && dbElems.find((e) => String(e.extension_id || '') === `db::${cleanPref}`)) || dbElems[0]
+}
+
+async function patchExistingDataAppElement(
+  sdk: Looker40SDK,
+  dashboardId: string,
+  initialElementId: string | undefined,
+  payload: Partial<IDashboardElement>,
+  preferredBareExtId?: string,
+  prefetchedDash?: IDashboard
+): Promise<{ elementId?: string; dash?: IDashboard }> {
+  if (initialElementId) {
+    try {
+      await sdk.ok(sdk.update_dashboard_element(initialElementId, payload))
+      return { elementId: initialElementId, dash: prefetchedDash }
+    } catch (err: unknown) {
+      if (!isLooker404Error(err)) throw err
+    }
+  }
+  let dash: IDashboard | undefined = prefetchedDash && !initialElementId ? prefetchedDash : undefined
+  if (!dash) {
+    try {
+      dash = await sdk.ok(sdk.dashboard(dashboardId))
+    } catch (err: unknown) {
+      if (isLooker404Error(err)) return { elementId: undefined, dash: undefined }
+      throw err
+    }
+  }
+  const liveEl = findDashboardExtensionElement(dash.dashboard_elements, initialElementId, preferredBareExtId)
+  if (liveEl?.id) {
+    const liveId = String(liveEl.id)
+    try {
+      await sdk.ok(sdk.update_dashboard_element(liveId, payload))
+      return { elementId: liveId, dash }
+    } catch (retryErr: unknown) {
+      if (!isLooker404Error(retryErr)) throw retryErr
+    }
+  }
+  return { elementId: undefined, dash }
+}
 
 export interface WidgetQueryEntry {
   widget_id: string
@@ -123,8 +188,7 @@ export async function loadExistingDashboardApp(
   dashboardId: string
 ): Promise<PublishedAppState & { code: string }> {
   const dash = await sdk.ok(sdk.dashboard(dashboardId))
-  const elements = dash.dashboard_elements || []
-  const extEl = elements.find(
+  const extEl = (dash.dashboard_elements || []).find(
     (e) => e.type === 'extension' && String(e.extension_id || '').startsWith('db::')
   )
   if (!extEl || !extEl.extension_id) {
@@ -169,29 +233,19 @@ export async function saveDashboardStudioMetadata(
   studioUpdate: StudioMetadataUpdate
 ): Promise<PublishedAppState> {
   const nextStudio = mergeStudioMetadata(existing.studio, studioUpdate)
-  let elementId = existing.elementId
-  if (!elementId) {
-    const dash = await sdk.ok(sdk.dashboard(existing.dashboardId))
-    const extEl = (dash.dashboard_elements || []).find((e) => e.type === 'extension')
-    if (extEl?.id) elementId = String(extEl.id)
-  }
-  if (elementId) {
-    const richContentJson = JSON.stringify({
-      data_app_queries_version: 1,
-      data_app_queries: existing.manifestQueries || [],
-      ...(nextStudio ? { data_app_studio: nextStudio } : {}),
-    })
-    await sdk.ok(
-      sdk.update_dashboard_element(elementId, {
-        rich_content_json: richContentJson,
-      } as Partial<IDashboardElement>)
-    )
-  }
-  return {
-    ...existing,
-    elementId,
-    studio: nextStudio,
-  }
+  const richContentJson = JSON.stringify({
+    data_app_queries_version: 1,
+    data_app_queries: existing.manifestQueries || [],
+    ...(nextStudio ? { data_app_studio: nextStudio } : {}),
+  })
+  const { elementId } = await patchExistingDataAppElement(
+    sdk,
+    existing.dashboardId,
+    existing.elementId,
+    { rich_content_json: richContentJson },
+    existing.extensionId
+  )
+  return Object.assign({}, existing, { elementId, studio: nextStudio })
 }
 
 export function canonicalQueryJson(query: WidgetQueryEntry['query']): string {
@@ -277,14 +331,12 @@ export async function upsertPublishedDataApp(
 
   let resolvedExtId = existing?.extensionId || ''
   let elementId = existing?.elementId
+  let prefetchedDash: IDashboard | undefined
   let lookupErr: unknown
   if (existing?.dashboardId && (!resolvedExtId || !elementId)) {
     try {
-      const dash = await sdk.ok(sdk.dashboard(existing.dashboardId))
-      const elems = dash.dashboard_elements || []
-      const extEl =
-        elems.find((e) => e.type === 'extension' && String(e.extension_id || '').startsWith('db::')) ||
-        elems.find((e) => e.type === 'extension')
+      prefetchedDash = await sdk.ok(sdk.dashboard(existing.dashboardId))
+      const extEl = findDashboardExtensionElement(prefetchedDash.dashboard_elements, undefined, existing.extensionId)
       if (!elementId && extEl?.id) elementId = String(extEl.id)
       if (!resolvedExtId && extEl?.extension_id) resolvedExtId = String(extEl.extension_id)
     } catch (err: unknown) {
@@ -299,36 +351,86 @@ export async function upsertPublishedDataApp(
 
   if (existing?.dashboardId && resolvedExtId) {
     const bareExistingId = String(resolvedExtId).replace(/^db::/, '')
-
-    const [extResp] = await Promise.all([
+    const elemPayload: Partial<IDashboardElement> = {
+      title,
+      title_hidden: true,
+      extension_id: `db::${bareExistingId}`,
+      rich_content_json: richContentJson,
+    }
+    const staleId = elementId
+    const [extResp, , patched] = await Promise.all([
       rawLookerRequest<{ id: string }>(
         sdk,
         'PATCH',
         `/data_app_extension/${encodeURIComponent(bareExistingId)}`,
         { dashboard_id: existing.dashboardId },
-        {
+        { label: title, description: `Data App: ${title}`, code: bundle.prod_code }
+      ).catch((extErr: unknown) => {
+        if (!isLooker404Error(extErr)) throw extErr
+        return rawLookerRequest<{ id: string }>(sdk, 'POST', '/data_app_extension', undefined, {
+          name: `data-app-${slug}-${Math.random().toString(16).slice(2, 10)}`,
           label: title,
           description: `Data App: ${title}`,
           code: bundle.prod_code,
-        }
-      ),
-      sdk.ok(
-        sdk.update_dashboard(existing.dashboardId, {
-          title,
         })
-      ),
-      elementId
-        ? sdk.ok(
-            sdk.update_dashboard_element(elementId, {
-              title,
-              title_hidden: true,
-              extension_id: `db::${bareExistingId}`,
-              rich_content_json: richContentJson,
-            } as Partial<IDashboardElement>)
-          )
-        : Promise.resolve(null),
+      }),
+      sdk.ok(sdk.update_dashboard(existing.dashboardId, { title })),
+      patchExistingDataAppElement(sdk, existing.dashboardId, elementId, elemPayload, bareExistingId, prefetchedDash),
     ])
     const bareId = String(extResp?.id || bareExistingId).replace(/^db::/, '')
+    elementId = patched.elementId
+
+    if (elementId && bareId !== bareExistingId) {
+      await sdk.ok(sdk.update_dashboard_element(elementId, { ...elemPayload, extension_id: `db::${bareId}` }))
+    } else if (!elementId) {
+      const createdEl = await rawLookerRequest<{ id?: string }>(sdk, 'POST', '/dashboard_elements', undefined, {
+        dashboard_id: existing.dashboardId,
+        type: 'extension',
+        extension_id: `db::${bareId}`,
+        title,
+        title_hidden: true,
+        rich_content_json: richContentJson,
+      })
+      const newElId = createdEl?.id ? String(createdEl.id) : undefined
+      elementId = newElId
+      const refreshed = await sdk.ok(sdk.dashboard(existing.dashboardId)).catch(() => patched.dash)
+      const layouts = refreshed?.dashboard_layouts || patched.dash?.dashboard_layouts || []
+      const activeLayout = layouts.find((l) => l.active) || layouts[0]
+      if (activeLayout?.id) {
+        const layoutId = String(activeLayout.id)
+        const otherElems = (refreshed?.dashboard_elements || []).filter(
+          (e) => e.id && String(e.id) !== newElId && String(e.id) !== staleId
+        )
+        if (otherElems.length === 0) {
+          if (activeLayout.type !== 'extension') {
+            await rawLookerRequest(sdk, 'PATCH', `/dashboard_layouts/${encodeURIComponent(layoutId)}`, undefined, {
+              type: 'extension',
+            }).catch(() => null)
+          }
+        } else if (newElId) {
+          const comps = activeLayout.dashboard_layout_components || []
+          const existingComp = comps.find((c) => String(c.dashboard_element_id || '') === newElId)
+          const nextRow = Math.max(
+            0,
+            ...comps
+              .filter((c) => String(c.dashboard_element_id || '') !== newElId)
+              .map((c) => Number(c.row || 0) + Number(c.height || 0))
+          )
+          const box = { dashboard_layout_id: layoutId, dashboard_element_id: newElId, row: nextRow, column: 0, width: 24, height: 16 }
+          if (existingComp?.id) {
+            await rawLookerRequest(
+              sdk,
+              'PATCH',
+              `/dashboard_layout_components/${encodeURIComponent(String(existingComp.id))}`,
+              undefined,
+              box
+            ).catch(() => null)
+          } else {
+            await rawLookerRequest(sdk, 'POST', '/dashboard_layout_components', undefined, box).catch(() => null)
+          }
+        }
+      }
+    }
 
     return {
       dashboardId: existing.dashboardId,

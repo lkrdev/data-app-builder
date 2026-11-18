@@ -689,11 +689,13 @@ export async function executeAntigravityPollingLoop(
         incompleteRound += 1
         await throwIfAborted(interaction.id)
         onStatus('Resuming incomplete turn...')
+        const runtimeHint =
+          "import { DataApp, html, css, nothing, keyed, formatValue, formatAxisValue, escapeHtml, createNumericCol, createCurrencyCol, createPercentageCol, createBadgeCol } from '/runtime/data-app.js', use plain { field, headerName, width } objects for text columns, and pass a single options object { field, headerName } to create*Col helpers (with badgeClassMap inside createBadgeCol)"
         const resumeText =
           interaction.status === 'completed' && attemptedBundleApp
-            ? `Your previous bundle_app.py run failed validation and did not emit <DATA_APP_BUNDLE>. Fix the reported error in your app.js (remember createTextCol/createNumericCol/createCurrencyCol/createPercentageCol/createBadgeCol take a single options object { field, headerName }) and re-run python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" until it exits 0.`
+            ? `Your previous bundle_app.py run failed validation and did not emit <DATA_APP_BUNDLE>. Fix the reported error in your app.js (${runtimeHint}) and re-run python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" until it exits 0.`
             : requiresDataAppBundle
-            ? 'You have not emitted <DATA_APP_BUNDLE> yet. Write the complete self-contained Lit Data App to /workspace/apps/<app-name>/app.js (remember createTextCol/createNumericCol/createCurrencyCol/createPercentageCol/createBadgeCol take a single options object { field, headerName }) and run python3 /workspace/bundle_app.py --app-dir /workspace/apps/<app-name> --stdin "<App Title>" in bash until it exits 0 and emits <DATA_APP_BUNDLE>.'
+            ? `You have not emitted <DATA_APP_BUNDLE> yet. Write the complete self-contained Lit Data App to /workspace/apps/<app-name>/app.js (${runtimeHint}) and run python3 /workspace/bundle_app.py --app-dir /workspace/apps/<app-name> --stdin "<App Title>" in bash until it exits 0 and emits <DATA_APP_BUNDLE>.`
             : 'Continue and complete the current request.'
         await postContinuation([{ type: 'text', text: resumeText }], requiresBashSandbox ? 'remote' : undefined, [], wrapUpSent ? [] : undefined)
         continue

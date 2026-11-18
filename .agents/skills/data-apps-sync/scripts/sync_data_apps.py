@@ -55,7 +55,7 @@ def unpack_and_repackage(source_dir: Path | None = None) -> dict:
         updated_prompts = re.sub(r'DEFAULT_VERSION = "[^"]+"', f'DEFAULT_VERSION = "{version}"', prompts_txt)
         if updated_prompts != prompts_txt:
             PROMPTS_TS.write_text(updated_prompts, encoding="utf-8")
-        guide_m = re.search(r"export const DATA_APP_GUIDE_MD = `([\s\S]*?)`\n", updated_prompts)
+        guide_m = re.search(r"export const DATA_APP_GUIDE_MD = `([\s\S]*?)(?<!\\)`\n", updated_prompts)
         if not guide_m:
             raise RuntimeError("Could not extract DATA_APP_GUIDE_MD from src/antigravityPrompts.ts")
         (EXTERNAL_SKILL_DIR / "SKILL.md").write_text(guide_m.group(1).replace("\\`", "`").replace("\\$", "$"), encoding="utf-8")

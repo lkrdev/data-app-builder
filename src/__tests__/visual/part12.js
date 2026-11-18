@@ -672,6 +672,62 @@ function registerVisualPart12Tests(ctx) {
       mentions: 0,
     })
   }, 20000)
+
+  test('Issue #222: inline .dab-md-link-group flow, compact stage toolbar without redundant (#id · embedPath) subtitle, and bare-link title backfill', async () => {
+    await ctx.chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
+    await ctx.chrome.send('Page.navigate', { url: `http://127.0.0.1:${ctx.port}/?scenario=dashboard` })
+    const readyDeadline = Date.now() + 8000
+    while (Date.now() < readyDeadline) {
+      const r = await ctx.chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="new-conversation-btn"]'))`,
+        returnByValue: true,
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 80))
+    }
+    const res222 = await ctx.chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const s = window.__DAB_STUDIO__;
+        s.core40SDK.look = async (id) => ({ id: String(id), title: 'Backfilled Cohort Look' });
+        s.setActiveConversationId('conv_222');
+        s.setRightPaneCollapsed(false);
+        s.upsertContentItem({ id: '42', title: 'Executive KPIs', contentType: 'dashboard', embedPath: '/embed/dashboards/42' }, true);
+        s.setMessages([
+          { role: 'user', text: 'Check Look 15' },
+          { role: 'assistant', text: 'Looker PATCH /api/4.0/dashboard_elements/99 failed (404): Not found ([Docs](https://docs.cloud.google.com/looker/docs/r/err/4.0/404)). Also inspect [/looks/15](/looks/15).' },
+        ]);
+        await new Promise((r) => setTimeout(r, 80));
+
+        const bar = document.querySelector('.dab-stage-compact-bar');
+        const barText = (bar?.textContent || '').replace(/\\s+/g, ' ').trim();
+        const linkGroup = document.querySelector('.dab-md-link-group');
+        const linkGroupDisplay = linkGroup ? getComputedStyle(linkGroup).display : '';
+        const lookLink = Array.from(document.querySelectorAll('[data-testid="chat-markdown-link"]')).find((el) => (el.textContent || '').includes('/looks/15'));
+        lookLink?.click();
+        await new Promise((r) => setTimeout(r, 80));
+        const lookTabText = (document.querySelector('[data-testid="studio-content-tab-look:15"]')?.textContent || '').trim();
+        const lookBarText = (document.querySelector('.dab-stage-compact-bar')?.textContent || '').replace(/\\s+/g, ' ').trim();
+        return {
+          hasCompactBar: Boolean(bar),
+          barHasEmbedPath: barText.includes('/embed/dashboards/42') || barText.includes('dashboard #42'),
+          linkGroupDisplay,
+          lookTabText,
+          lookBarHasTitle: lookBarText.includes('Backfilled Cohort Look'),
+          lookBarHasEmbedPath: lookBarText.includes('/embed/looks/15') || lookBarText.includes('look #15'),
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+    expect(res222.result.value).toEqual({
+      hasCompactBar: true,
+      barHasEmbedPath: false,
+      linkGroupDisplay: 'inline',
+      lookTabText: 'Backfilled Cohort Look',
+      lookBarHasTitle: true,
+      lookBarHasEmbedPath: false,
+    })
+  }, 20000)
 }
 
 module.exports = { registerVisualPart12Tests }

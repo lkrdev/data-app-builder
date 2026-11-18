@@ -133,7 +133,7 @@ export function classifyLooker404Error(
   const docUrl = String(parsed?.documentation_url || '')
   const isInlineExt = path.includes('/data_app_extension') || path.includes('/inline_extension')
   const isAlertPath = /\/(?:alerts|alert_details|alert_notifications)(?:\/|$|\?)/i.test(path)
-  const hasErrDoc = docUrl.includes('/r/err/')
+  const hasErrDoc = docUrl.includes('/r/err/') || text.includes('/r/err/')
 
   if (status === 404 && (/Sinatra::NotFound/i.test(text) || (isInlineExt && !hasErrDoc))) {
     return {
@@ -146,7 +146,7 @@ export function classifyLooker404Error(
         : `Endpoint "${path}" is unmounted or its feature flag is disabled on this Looker instance.`,
     }
   }
-  if ((status === 404 || status === 403) && (hasErrDoc || isAlertPath || /^not found$/i.test(message.trim()))) {
+  if ((status === 404 || status === 403) && (hasErrDoc || isAlertPath || /^not found(?:\s*\(\[Docs\]\([^)]*\)\))?$/i.test(message.trim()))) {
     return {
       kind: 'role_denied',
       status,

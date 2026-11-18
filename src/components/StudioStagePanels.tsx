@@ -569,12 +569,12 @@ export const StudioActiveModeStageHeader: React.FC<{
               <>
                 <StudioToolbar
                   testId="ca-preview-toolbar"
+                  className="dab-stage-compact-bar"
                   title={caConversation ? (
                     <>
                       {overviewCrumb}
                       <strong>{caConversation.title}</strong>{' '}
-                      <StudioBadge testId="ca-selected-agent-badge">Agent: {caConversation.agentName} ({caConversation.agentId})</StudioBadge>{' '}
-                      <span className="dab-muted">(Conversation <code>{caConversation.caConversationId}</code> · <code>{caConversation.embedPath}</code>)</span>
+                      <StudioBadge testId="ca-selected-agent-badge">Agent: {caConversation.agentName} ({caConversation.agentId})</StudioBadge>
                     </>
                   ) : idleToolbarText}
                   actions={
@@ -600,13 +600,14 @@ export const StudioActiveModeStageHeader: React.FC<{
               </>
             ) : (
               <StudioToolbar
+                className="dab-stage-compact-bar"
                 title={
                   allTabsHidden ? (
                     <span className="dab-muted">All tabs hidden — restore an item from the menu above</span>
                   ) : activeContentItem && activeContentItem.contentType !== 'data_app' && activeContentItem.contentType !== 'data-investigator' ? (
-                    <>{overviewCrumb}<strong>{activeContentItem.title}</strong> <span className="dab-muted">({activeContentItem.contentType} #{activeContentItem.id} · <code>{activeContentItem.embedPath}</code>)</span></>
+                    <>{overviewCrumb}<strong>{activeContentItem.title}</strong></>
                   ) : !activeContentItem && builderMode === 'dashboard' && nativeContent ? (
-                    <>{overviewCrumb}<strong>{nativeContent.title}</strong> <span className="dab-muted">({nativeContent.contentType} #{nativeContent.id} · <code>{nativeContent.embedPath}</code>)</span></>
+                    <>{overviewCrumb}<strong>{nativeContent.title}</strong></>
                   ) : publishedApp ? (
                     <>{overviewCrumb}<strong>{publishedApp.title}</strong></>
                   ) : idleToolbarText

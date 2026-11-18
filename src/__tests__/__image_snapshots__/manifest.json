@@ -6,7 +6,7 @@
     "snapshotName": "01-mode-data-app-and-permission-gate-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "dashboard",
@@ -190,6 +190,6 @@
     "snapshotName": "18-studio-dark-theme.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   }
 ]

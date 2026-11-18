@@ -8,6 +8,20 @@ def _is_time_field(field_name):
     return any(field_name.endswith(suf) for suf in TIME_SUFFIXES)
 
 
+def _as_rows(raw):
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw.strip()) if raw.strip() else []
+        except Exception:
+            return []
+    if isinstance(raw, dict):
+        for k in ("rows", "data"):
+            if isinstance(raw.get(k), list):
+                return [r for r in raw[k] if isinstance(r, dict)]
+        return [] if (not raw or any(k in raw for k in ("message", "error", "errors"))) else [raw]
+    return [r for r in raw if isinstance(r, dict)] if isinstance(raw, list) else []
+
+
 def resolve_source(target):
     """Resolve an Explore URL/query_id/slug, Look URL/id, Dashboard URL/id, or Conversation URL/id into normalized KDA targets."""
     if isinstance(target, dict):
@@ -245,8 +259,8 @@ def run_kda(model_name, explore_name, contribution_metric, dimensions, baseline_
 
     ctrl_raw = run_inline_query("json", {"model": model_name, "view": explore_name, "fields": fields, "filters": ctrl_f, "limit": "50000"})
     test_raw = run_inline_query("json", {"model": model_name, "view": explore_name, "fields": fields, "filters": test_f, "limit": "50000"})
-    ctrl_rows = json.loads(ctrl_raw) if isinstance(ctrl_raw, str) else (ctrl_raw or [])
-    test_rows = json.loads(test_raw) if isinstance(test_raw, str) else (test_raw or [])
+    ctrl_rows = _as_rows(ctrl_raw)
+    test_rows = _as_rows(test_raw)
     if not ctrl_rows or not test_rows:
         return {"status": "FAILED", "dimensions": dims, "drivers": [], "error": "Empty baseline or breach cohort"}
 
@@ -412,7 +426,7 @@ def drill_top_driver(model_name, explore_name, contribution_metric, pass1_result
             "fields": [sub_timeframe, contribution_metric],
             "filters": tf, "sorts": [f"{sub_timeframe} asc"], "limit": "50"
         })
-        trend_rows = json.loads(raw) if isinstance(raw, str) else (raw or [])
+        trend_rows = _as_rows(raw)
 
     # Automatic unit-economics check (count + contribution_metric + average/rate on same view)
     v_prefix = contribution_metric.split(".", 1)[0] + "."
@@ -428,8 +442,8 @@ def drill_top_driver(model_name, explore_name, contribution_metric, pass1_result
     cf, bf = dict(drill_base), dict(drill_base)
     cf.update(baseline_filters or {})
     bf.update(breach_filters or {})
-    ue_ctrl = json.loads(run_inline_query("json", {"model": model_name, "view": explore_name, "fields": ue_fields, "filters": cf, "limit": "1"}))
-    ue_test = json.loads(run_inline_query("json", {"model": model_name, "view": explore_name, "fields": ue_fields, "filters": bf, "limit": "1"}))
+    ue_ctrl = _as_rows(run_inline_query("json", {"model": model_name, "view": explore_name, "fields": ue_fields, "filters": cf, "limit": "1"}))
+    ue_test = _as_rows(run_inline_query("json", {"model": model_name, "view": explore_name, "fields": ue_fields, "filters": bf, "limit": "1"}))
 
     drv_str = " & ".join(top_drv["drivers"])
     arch = top_drv.get("archetype")

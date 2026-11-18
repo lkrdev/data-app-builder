@@ -451,7 +451,7 @@ export function createDeduplicatedLookerSdkProxy(
             const status = Number(code !== undefined ? code : 200)
             if ((rawResp && rawResp.ok === false) || status >= 400) {
               const b = rawResp ? rawResp.body : undefined
-              const errText = typeof b === 'string' ? b : JSON.stringify(b !== undefined ? b : rawResp)
+              const errText = formatLookerErrorDetail(b !== undefined ? b : rawResp)
               return { ok: false, error: new Error(`Looker ${method} ${path} failed (${status}): ${errText}`) }
             }
             return { ok: true, value: parseLookerRawBody(rawResp) }
@@ -498,17 +498,81 @@ export function resolveLookerExtensionSdk(sdk?: unknown, ...candidates: unknown[
   ].find(isLookerExtensionSdk)
 }
 
+function safeJsonText(val: unknown): string {
+  if (typeof val === 'string') return val.trim()
+  try {
+    return JSON.stringify(val) || ''
+  } catch {
+    return String(val)
+  }
+}
+
+export function formatLookerErrorDetail(rawBody: unknown): string {
+  if (rawBody == null) return ''
+  const unwrapped = rawBody instanceof Error ? rawBody.message : rawBody
+  const rawText = safeJsonText(unwrapped)
+  if (!rawText) return ''
+  let parsed: unknown = unwrapped
+  if (typeof unwrapped === 'string') {
+    if (!rawText.startsWith('{')) return rawText
+    try {
+      parsed = JSON.parse(rawText)
+    } catch {
+      return rawText
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return rawText
+  let obj = parsed as Record<string, unknown>
+  if (typeof obj.message === 'string' && obj.message.trim().startsWith('{')) {
+    try {
+      const inner = JSON.parse(obj.message.trim())
+      if (inner && typeof inner === 'object' && !Array.isArray(inner)) obj = inner as Record<string, unknown>
+    } catch { /* keep outer object */ }
+  }
+  const mainMsg =
+    typeof obj.message === 'string' ? obj.message.trim() : typeof obj.error === 'string' ? obj.error.trim() : ''
+  const errItems: string[] = []
+  if (Array.isArray(obj.errors)) {
+    for (const item of obj.errors) {
+      if (typeof item === 'string' && item.trim()) {
+        const s = item.trim()
+        if (s !== mainMsg && !errItems.includes(s)) errItems.push(s)
+      } else if (item && typeof item === 'object') {
+        const er = item as Record<string, unknown>
+        const em = typeof er.message === 'string' ? er.message.trim() : ''
+        const ef = typeof er.field === 'string' ? er.field.trim() : ''
+        const entry = ef && em && !em.toLowerCase().includes(ef.toLowerCase()) ? `${ef}: ${em}` : em || ef
+        if (entry && entry !== mainMsg && !errItems.includes(entry)) errItems.push(entry)
+      }
+    }
+  }
+  let docUrl = ''
+  if (typeof obj.documentation_url === 'string' && /^https?:\/\//i.test(obj.documentation_url.trim())) {
+    try {
+      const u = new URL(obj.documentation_url.trim())
+      if (u.protocol === 'http:' || u.protocol === 'https:') {
+        docUrl = u.href.replace(/[()[\]\s]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`)
+      }
+    } catch { /* ignore invalid URL */ }
+  }
+  const prose = mainMsg && errItems.length ? `${mainMsg}: ${errItems.join('; ')}` : mainMsg || errItems.join('; ')
+  if (!prose && !docUrl) return rawText
+  return docUrl ? (prose ? `${prose} ([Docs](${docUrl}))` : `[Docs](${docUrl})`) : prose
+}
+
 export function unwrapLookerRawResponse<T = unknown>(raw: unknown, method: string, path: string): T {
   if (!raw || typeof raw !== 'object') return (raw ?? null) as T
   const r = raw as RawLookerTransportResponse
   const status = Number(r.statusCode ?? r.status ?? 200)
   if (r.ok === false || (Number.isFinite(status) && status >= 400)) {
-    const errBody = typeof r.body === 'string' ? r.body : JSON.stringify(r.body !== undefined ? r.body : raw)
+    const rawErr = r.body !== undefined ? r.body : raw
+    const errBody = safeJsonText(rawErr)
+    const detail = formatLookerErrorDetail(rawErr)
     if (status === 404) {
       const diag = classifyLooker404Error(404, path, errBody)
-      throw new Error(`Looker ${method} ${path} failed (404 ${diag.kind}): ${diag.remediation} — ${errBody}`)
+      throw new Error(`Looker ${method} ${path} failed (404 ${diag.kind}): ${diag.remediation}${detail ? ` — ${detail}` : ''}`)
     }
-    throw new Error(`Looker ${method} ${path} failed (${status}): ${errBody}`)
+    throw new Error(`Looker ${method} ${path} failed (${status}): ${detail}`)
   }
   return parseLookerRawBody<T>(r)
 }
@@ -533,8 +597,15 @@ export function invokeLookerExtensionSdk<T = unknown>(
     if (res && typeof res === 'object' && 'ok' in res && ('value' in res || 'error' in res)) {
       const env = res as { ok?: boolean; value?: unknown; error?: unknown }
       if (env.ok === false) {
-        const e = env.error as { message?: unknown } | undefined
-        throw new Error(typeof e?.message === 'string' ? e.message : JSON.stringify(env.error))
+        const e = env.error as { message?: unknown; statusCode?: unknown; status?: unknown } | undefined
+        const rawErr = typeof e?.message === 'string' ? e.message : env.error
+        const detail = formatLookerErrorDetail(rawErr)
+        const st = Number(e?.statusCode ?? e?.status ?? (detail.match(/\/r\/err\/[^)\s]*\/(\d{3})\//)?.[1] || 0))
+        if (st === 404) {
+          const diag = classifyLooker404Error(404, path, safeJsonText(rawErr))
+          throw new Error(`Looker ${verb} ${path} failed (404 ${diag.kind}): ${diag.remediation}${detail ? ` — ${detail}` : ''}`)
+        }
+        throw new Error(st >= 400 && !detail.includes(`(${st}`) ? `Looker ${verb} ${path} failed (${st}): ${detail}` : detail)
       }
       return env.value as T
     }

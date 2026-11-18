@@ -536,6 +536,7 @@ function registerVisualPart01Tests(ctx) {
         const routeAfterSelect = window.__DAB_STUDIO__.history.location.pathname;
         const centeredGone = !document.querySelector('[data-testid="centered-empty-prompt"]');
         const bodyText = document.body ? document.body.innerText : '';
+        const restoredPreview = Boolean(document.querySelector('[data-testid="preview-reload-viewer-btn"]')) && bodyText.includes('Executive Order Performance (Native UDD)');
 
         // Also test legacy route redirect (/lookml/20261030_dev_branch -> /c/20261030_dev_branch)
         window.__DAB_STUDIO__.history.push('/lookml/20261030_dev_branch');
@@ -549,7 +550,7 @@ function registerVisualPart01Tests(ctx) {
           routeAfterSelect,
           centeredGone,
           restoredChatMsg: bodyText.includes('Created native Looker Dashboard #7'),
-          restoredPreview: bodyText.includes('/embed/dashboards/7'),
+          restoredPreview,
           redirectedLegacyRoute,
           lookmlUseCase
         };
