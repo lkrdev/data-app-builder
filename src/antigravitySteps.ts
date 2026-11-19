@@ -64,7 +64,7 @@ export function extractInteractionInputText(interaction: AntigravityInteractionP
     : ''
 }
 
-const NON_ROOT_MARKERS = ['[LKR_EXTENSION_BRIDGE_RESULT]', 'Continue and complete the current request.', 'You have not emitted <DATA_APP_BUNDLE> yet.', 'You have not emitted an artifact bundle tag yet.', 'Your previous bundle_app.py run failed', 'Max Tool Rounds (']
+const NON_ROOT_MARKERS = ['[LKR_EXTENSION_BRIDGE_RESULT]', '[DATA_APP_LOAD_VERIFICATION_FAILED]', 'Continue and complete the current request.', 'You have not emitted <DATA_APP_BUNDLE> yet.', 'You have not emitted an artifact bundle tag yet', 'Your previous bundle_app.py run failed', 'Max Tool Rounds (']
 
 export function isFreshUserTurnRoot(interaction: AntigravityInteractionPayload | null | undefined): boolean {
   if (!interaction || (Array.isArray(interaction.input) && interaction.input.some((it) => it && typeof it === 'object' && (it as { type?: string }).type === 'function_result'))) return false

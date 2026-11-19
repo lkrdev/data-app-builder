@@ -5,6 +5,7 @@ import {
   fetchEnvironmentFile,
   streamInteractionUntilActionOrDone,
 } from './antigravityAuth'
+import { hydrateDataAppBundleRef } from './antigravityEnv'
 import { wrapDashboardCodeMode } from './antigravityPrompts'
 import {
   extractAlertBundleFromInteraction,
@@ -41,7 +42,7 @@ import {
   LkrCodeMode,
   type LkrExtensionToolRequest,
 } from './lkrCliBridge'
-import { createDeduplicatedLookerSdkProxy } from './lookerApi'
+import { createDeduplicatedLookerSdkProxy, type DataAppBundle, verifyDataAppBundleLoadsInBrowser } from './lookerApi'
 import { extractLookmlBundleFromInteraction } from './lookmlArtifactHydration'
 import { wrapKdaCodeMode } from './lookmlSkills'
 
@@ -83,6 +84,8 @@ export interface ExecuteAntigravityPollingLoopResult {
   trackedEnvId?: string
   activitySteps: AntigravityActivityStep[]
   bridgePermissionError: string
+  verifiedBundle?: DataAppBundle | null
+  lastPreflightError?: string
   isDataAppBundleTurn: () => boolean
   pollWaitMs: number
   pollCount: number
@@ -263,8 +266,16 @@ export async function executeAntigravityPollingLoop(
     pollIdx = 0; prevStepCount = (interaction.steps || []).length; prevStatus = interaction.status
   }
 
-  let bridgePermissionError = ''
-  let batchPermErr = false
+  let bridgePermissionError = '', batchPermErr = false, preflightRound = 0, lastPreflightError = ''
+  let verifiedBundle: DataAppBundle | null = null
+  const verifiedProdCodes = new Set<string>()
+  const stripBundleTags = (s?: string) => (s ? s.replace(/<DATA_APP_BUNDLE>[\s\S]*?<\/DATA_APP_BUNDLE>/gi, '') : s)
+  const scrubBundleStep = (st: AntigravityInteractionStep): AntigravityInteractionStep => ({
+    ...st,
+    ...(typeof st.output === 'string' ? { output: stripBundleTags(st.output) } : {}),
+    ...(typeof st.text === 'string' ? { text: stripBundleTags(st.text) } : {}),
+    ...(typeof st.result === 'string' ? { result: stripBundleTags(st.result) } : {}),
+  })
   const trackedPermissionHandler = effectivePermissionHandler
     ? async (r: CodeModePermissionRequest) => {
         const d = await effectivePermissionHandler(r)
@@ -721,6 +732,30 @@ export async function executeAntigravityPollingLoop(
         continue
       }
 
+      const candidateBundle = !bridgePermissionError ? extractBundleFromInteraction(mergedSnap) : null
+      if (candidateBundle) {
+        const hydrated = (await hydrateDataAppBundleRef(candidateBundle, { extensionSDK, auth, environmentId: trackedEnvId })) || candidateBundle
+        const prodKey = String(hydrated.prod_code || hydrated.code || '')
+        if (prodKey && !verifiedProdCodes.has(prodKey)) {
+          onStatus('Verifying Data App loads cleanly...')
+          const pf = await verifyDataAppBundleLoadsInBrowser(hydrated, { signal })
+          await throwIfAborted(interaction.id)
+          if (pf.ok) {
+            verifiedProdCodes.add(prodKey); verifiedBundle = hydrated; lastPreflightError = ''
+          } else {
+            lastPreflightError = pf.errors.join('\n'); verifiedBundle = null
+            for (let i = 0; i < accumulatedSteps.length; i += 1) accumulatedSteps[i] = scrubBundleStep(accumulatedSteps[i])
+            interaction = { ...interaction, output_text: stripBundleTags(interaction.output_text), steps: (interaction.steps || []).map(scrubBundleStep), outputs: Array.isArray(interaction.outputs) ? interaction.outputs.map((o) => (o && typeof o === 'object' && typeof (o as { text?: string }).text === 'string' ? { ...o, text: stripBundleTags((o as { text: string }).text) } : o)) : interaction.outputs }
+            if (Boolean(interaction.id) && !wrapUpSent && preflightRound < 2) {
+              preflightRound += 1; onStatus('Data App failed load verification — auto-fixing app.js...')
+              const pfTools = !activeTools.some((t) => (t as { type?: string }).type === 'code_execution') ? [{ type: 'code_execution' }, ...activeTools] : undefined
+              await postContinuation([{ type: 'text', text: `[DATA_APP_LOAD_VERIFICATION_FAILED] Mounting your bundled Data App in the browser failed before turn completion:\n\n${lastPreflightError.slice(0, 1600)}\n\nFix the root cause in ${appDir}/app.js (DataApp only provides refreshAll, setCrossFilter, toggleCrossFilter, clearCrossFilter, clearCrossFilters, getEffectiveFilters, toggleDarkMode, renderThemeToggle, runQuery, mergeQueries — build filter bars with <app-select> or define helper methods on your subclass; Light DOM has no static styles/DataApp.styles), re-run python3 /workspace/bundle_app.py --app-dir ${appDir} "${hydrated.title || 'Data App'}" until it exits 0 and emits a new <DATA_APP_BUNDLE>, and reply with your updated summary.` }], 'remote', [], pfTools)
+              continue
+            }
+          }
+        } else if (prodKey) verifiedBundle = hydrated
+      }
+
       break
     }
   } finally {
@@ -729,41 +764,20 @@ export async function executeAntigravityPollingLoop(
     else activeInteractionsByEnv.set(envSlotKey, remaining)
   }
 
-  if (accumulatedSteps.length > 0 || incompleteRound > 0 || bridgeRound > 0 || actionRound > 0) {
+  if (accumulatedSteps.length > 0 || incompleteRound > 0 || bridgeRound > 0 || actionRound > 0 || preflightRound > 0) {
     accumulateInteractionUsage(interaction)
     interaction = {
       ...interaction,
       steps: [...accumulatedSteps, ...mergeSteps(interaction.steps)],
-      usage: {
-        ...(interaction.usage || {}),
-        input_tokens: accInputTokens,
-        output_tokens: accOutputTokens,
-        thought_tokens: accThoughtTokens,
-      },
+      usage: { ...(interaction.usage || {}), input_tokens: accInputTokens, output_tokens: accOutputTokens, thought_tokens: accThoughtTokens },
     }
   }
 
-  const activitySteps = extractInteractionActivitySteps({
-    ...interaction,
-    steps: attachEndpointLogs(interaction.steps),
-    status: 'completed',
-  }).map((s) => ({ ...s, status: 'done' as const }))
-  if (activitySteps.length > 0) {
-    onProgressSteps?.(activitySteps)
-  }
+  const activitySteps = extractInteractionActivitySteps({ ...interaction, steps: attachEndpointLogs(interaction.steps), status: 'completed' }).map((s) => ({ ...s, status: 'done' as const }))
+  if (activitySteps.length > 0) onProgressSteps?.(activitySteps)
 
   return {
-    interaction,
-    trackedEnvId,
-    activitySteps,
-    bridgePermissionError,
-    isDataAppBundleTurn,
-    pollWaitMs,
-    pollCount,
-    codemodeExecMs,
-    lookerHttpMs,
-    codemodeCalls,
-    lookerHttpCalls,
-    apiRetries,
+    interaction, trackedEnvId, activitySteps, bridgePermissionError, verifiedBundle, lastPreflightError,
+    isDataAppBundleTurn, pollWaitMs, pollCount, codemodeExecMs, lookerHttpMs, codemodeCalls, lookerHttpCalls, apiRetries,
   }
 }

@@ -1,3 +1,8 @@
+import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
 import React from 'react'
 
 import type { Looker40SDK } from '@looker/sdk'
@@ -5,8 +10,10 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 import {
   type AntigravityExtensionHostLike,
+  BUNDLE_APP_PY,
   extractBundleFromInteraction,
   extractCaSelectionFromInteraction,
+  isFreshUserTurnRoot,
   LkrCodeMode,
   runAntigravityTurn,
 } from '../../antigravity'
@@ -14,7 +21,7 @@ import {
   StudioCapabilitiesModal,
   StudioCapabilitiesTrigger,
 } from '../../components/StudioCapabilitiesGuide'
-import type { StudioContentItem } from '../../lookerApi'
+import type { DataAppBundle, StudioContentItem } from '../../lookerApi'
 import { materializeTurnBundles } from '../../studioControllerConcurrency'
 
 const asSdk = (mock: Record<string, unknown>): Looker40SDK => mock as unknown as Looker40SDK
@@ -252,5 +259,146 @@ export function registerPermissionsPart29Tests(): void {
     expect(modalHtml).toContain('Open-Ended Looker Studio Workspace')
     expect(modalHtml).toContain('data-testid="doc-ui-preview"')
     expect(modalHtml).not.toContain('use-case-guide-tab-')
+  })
+
+  test('108. Pre-completion Data App load verification: BUNDLE_APP_PY blocks hallucinated this.renderFilterBar() and runAntigravityTurn auto-heals failed browser load preflight before completing turn', async () => {
+    // 1. Layer 1: BUNDLE_APP_PY static unknown-data-app-method safety check
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dab-bundle-pf-'))
+    const scriptPath = path.join(tmpDir, 'bundle_app.py')
+    fs.writeFileSync(scriptPath, BUNDLE_APP_PY, 'utf8')
+    try {
+      const brokenJs = [
+        "import { DataApp, html } from '/runtime/data-app.js';",
+        'export class BrokenStickerApp extends DataApp {',
+        '  constructor() { super(); this.lookerModel = "thelook"; this.explore = "order_items"; }',
+        '  render() { return html`<div class="da-container">${this.renderFilterBar()}<app-kpi explore="order_items" query-field="order_items.total_sale_price" label="Sales" format="usd"></app-kpi></div>`; }',
+        '}',
+        "customElements.define('broken-sticker-app', BrokenStickerApp);",
+      ].join('\n')
+      const brokenPath = path.join(tmpDir, 'broken.js')
+      fs.writeFileSync(brokenPath, brokenJs, 'utf8')
+      let bundleErr = ''
+      try {
+        execFileSync('python3', [scriptPath, brokenPath, 'Broken App'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+      } catch (e: unknown) {
+        bundleErr = String((e as { stderr?: string }).stderr || (e as Error).message || '')
+      }
+      expect(bundleErr).toContain('unknown-data-app-method')
+      expect(bundleErr).toContain("Unknown DataApp method 'this.renderFilterBar()'")
+
+      const validJs = [
+        "import { DataApp, html } from '/runtime/data-app.js';",
+        'export class ValidStickerApp extends DataApp {',
+        '  constructor() { super(); this.lookerModel = "thelook"; this.explore = "order_items"; this._onPick = () => this.requestUpdate(); }',
+        '  renderFilterBar() { return html`<div class="da-filter-bar">${this.renderThemeToggle()}</div>`; }',
+        '  render() { const f = this.getEffectiveFilters(); return html`<div class="da-container">${this.renderFilterBar()}<app-kpi explore="order_items" query-field="order_items.total_sale_price" label="Sales" format="usd" .filters=${f}></app-kpi></div>`; }',
+        '}',
+        "customElements.define('valid-sticker-app', ValidStickerApp);",
+      ].join('\n')
+      const validPath = path.join(tmpDir, 'valid.js')
+      fs.writeFileSync(validPath, validJs, 'utf8')
+      const okOut = execFileSync('python3', [scriptPath, validPath, 'Valid App'], { encoding: 'utf8' })
+      expect(okOut).toContain('<DATA_APP_BUNDLE>')
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+
+    // 2. Layer 2: In-turn browser mount preflight catches runtime crash, scrubs broken bundle, sends [DATA_APP_LOAD_VERIFICATION_FAILED], and returns healed bundle
+    expect(
+      isFreshUserTurnRoot({
+        id: 'int_pf_hop',
+        input: [{ type: 'text', text: '[DATA_APP_LOAD_VERIFICATION_FAILED] Mounting your bundled Data App in the browser failed' }],
+      })
+    ).toBe(false)
+
+    const prevWin = (globalThis as { window?: unknown }).window
+    const preflightSeenTitles: string[] = []
+    ;(globalThis as { window?: unknown }).window = {
+      __MOCK_DATA_APP_PREFLIGHT__: async (b: DataAppBundle) => {
+        preflightSeenTitles.push(b.title)
+        if (String(b.prod_code || '').includes('this.renderFilterBar()')) {
+          return {
+            ok: false,
+            errors: ['TypeError: this.renderFilterBar is not a function\n    at StickerApp.render (blob:null/1:12:18)'],
+          }
+        }
+        return { ok: true, errors: [], height: 1420, htmlLen: 8400, tabsChecked: 3 }
+      },
+    }
+
+    const postedBodies: Array<{ previous_interaction_id?: string; tools?: Array<{ type?: string }>; input?: Array<{ text?: string }> }> = []
+    let hop = 0
+    try {
+      const res = await runAntigravityTurn({
+        sdk: asSdk({ ok: async <T>(p: T) => p }),
+        extensionSDK: asHost({
+          serverProxy: async (url: string, init?: { method?: string; body?: string }) => {
+            if (url.includes(':stream') || url.includes('alt=sse')) return { ok: false, status: 404, body: 'no sse' }
+            if (init?.method === 'POST' && url.includes('/interactions')) {
+              hop += 1
+              postedBodies.push(JSON.parse(String(init.body || '{}')))
+            }
+            if (hop === 1) {
+              return {
+                ok: true,
+                status: 200,
+                body: JSON.stringify({
+                  id: 'int_pf_1',
+                  environment_id: 'env_pf_776',
+                  status: 'completed',
+                  steps: [
+                    {
+                      type: 'code_execution_result',
+                      output:
+                        '<DATA_APP_BUNDLE>{"title":"Broken v1","raw_code":"this.renderFilterBar()","prod_code":"customElements.define(\'x-a\', class { render() { return this.renderFilterBar(); } });","widgets":[]}</DATA_APP_BUNDLE>',
+                    },
+                  ],
+                  output_text: 'Built Broken v1.',
+                }),
+              }
+            }
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_pf_2',
+                previous_interaction_id: 'int_pf_1',
+                environment_id: 'env_pf_776',
+                status: 'completed',
+                steps: [
+                  {
+                    type: 'code_execution_result',
+                    output:
+                      '<DATA_APP_BUNDLE>{"title":"Healed v2","raw_code":"renderFilterBar() {}","prod_code":"customElements.define(\'x-a\', class {});","widgets":[{"widget_id":"k1","title":"Sales","query":{"model":"thelook","view":"order_items","fields":["order_items.total_sale_price"]}}]}</DATA_APP_BUNDLE>',
+                  },
+                ],
+                output_text: 'Fixed renderFilterBar with <app-select> controls and re-bundled.',
+              }),
+            }
+          },
+        }),
+        userId: '3325',
+        conversationId: 'conv_pf_776',
+        auth: { mode: 'apikey', apiKey: 'k-3325' },
+        session: { environmentId: 'env_pf_776' },
+        selectedExplores: ['thelook::order_items'],
+        schemaMarkdown: '# Schema',
+        userPrompt: '/data-apps Build sticker command center',
+        rawUserPrompt: '/data-apps Build sticker command center',
+        onStatus: () => {},
+      })
+
+      expect(preflightSeenTitles).toEqual(['Broken v1', 'Healed v2'])
+      expect(postedBodies).toHaveLength(2)
+      expect(postedBodies[1]?.previous_interaction_id).toBe('int_pf_1')
+      expect(postedBodies[1]?.input?.[0]?.text || '').toContain('[DATA_APP_LOAD_VERIFICATION_FAILED]')
+      expect(postedBodies[1]?.input?.[0]?.text || '').toContain('TypeError: this.renderFilterBar is not a function')
+      expect((postedBodies[1]?.tools || []).some((t) => t.type === 'code_execution')).toBe(true)
+      expect(res.bundle?.title).toBe('Healed v2')
+      expect(res.assistantText).toContain('Fixed renderFilterBar')
+    } finally {
+      if (prevWin === undefined) delete (globalThis as { window?: unknown }).window
+      else (globalThis as { window?: unknown }).window = prevWin
+    }
   })
 }
