@@ -389,6 +389,202 @@ function registerVisualPart13Tests(ctx) {
       reloadedCodeMatches: true,
     })
   }, 25000)
+
+  test('Issue #233: renders 24x24 Option A RipperLogo & click-to-home button across Light/Dark themes and 390px mobile without nested buttons, horizontal jump, or topbar overflow', async () => {
+    const waitReady = async (expression) => {
+      const deadline = Date.now() + 8000
+      while (Date.now() < deadline) {
+        const r = await ctx.chrome.send('Runtime.evaluate', { expression, returnByValue: true })
+        if (r.result?.value) return
+        await new Promise((res) => setTimeout(res, 60))
+      }
+    }
+    await ctx.chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
+    await ctx.chrome.send('Page.navigate', { url: `http://127.0.0.1:${ctx.port}/?scenario=centered_empty_prompt` })
+    await waitReady(`Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="studio-brand-home-btn"]') && document.querySelector('[data-testid="conversation-item-conv_app_42"]'))`)
+
+    const desktopRes = await ctx.chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const homeBtn = document.querySelector('[data-testid="studio-brand-home-btn"]');
+        const logo = document.querySelector('[data-testid="studio-brand-logo"]');
+        const topbar = document.querySelector('.dab-topbar');
+        const logoRect = logo.getBoundingClientRect();
+        const lightColor = getComputedStyle(homeBtn).color;
+        const hasNestedButtons = Boolean(document.querySelector('.dab-topbar button button'));
+        const desktopNoOverflow = topbar.scrollWidth <= topbar.clientWidth + 1;
+        homeBtn.focus();
+        const editVisibleOnFocusWithin = getComputedStyle(document.querySelector('[data-testid="studio-edit-agent-name-btn"]')).visibility === 'visible';
+
+        window.__DAB_STUDIO__.setThemeMode('dark');
+        await new Promise((r) => setTimeout(r, 60));
+        const darkColor = getComputedStyle(homeBtn).color;
+        window.__DAB_STUDIO__.setThemeMode('light');
+        await new Promise((r) => setTimeout(r, 50));
+
+        // Open active conversation /c/conv_app_42 and seed sticky LookML skill to verify reset
+        document.querySelector('[data-testid="conversation-item-conv_app_42"]').click();
+        const convDeadline = Date.now() + 5000;
+        while (Date.now() < convDeadline) {
+          if (window.__DAB_STUDIO__.location.pathname === '/c/conv_app_42' && !window.__DAB_STUDIO__.isEmptyConversation) break;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        const pathInConv = window.__DAB_STUDIO__.location.pathname;
+        window.__DAB_STUDIO__.setActivatedLookmlSkills?.(['lookml-tests']);
+        await new Promise((r) => setTimeout(r, 30));
+
+        // Verify edit pencil enters rename without navigating, keeps 24x24 logo at 0px jump, and Escape restores focus
+        const idleLeft = document.querySelector('[data-testid="studio-brand-logo"]').getBoundingClientRect().left;
+        document.querySelector('[data-testid="studio-edit-agent-name-btn"]').click();
+        await new Promise((r) => setTimeout(r, 50));
+        const pathDuringEdit = window.__DAB_STUDIO__.location.pathname;
+        const editLogoRect = document.querySelector('[data-testid="studio-brand-logo"]').getBoundingClientRect();
+        const logoHorizontalJumpPx = Math.abs(editLogoRect.left - idleLeft);
+        const inputEl = document.querySelector('[data-testid="studio-agent-name-input"]');
+        inputEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 60));
+        const focusRestoredToHomeBtn = document.activeElement?.getAttribute('data-testid') === 'studio-brand-home-btn';
+
+        // Click brand home button -> navigates cleanly from /c/conv_app_42 to '/' (New Conversation) & clears sticky skills
+        document.querySelector('[data-testid="studio-brand-home-btn"]').click();
+        await new Promise((r) => setTimeout(r, 80));
+        const pathAfterHomeClick = window.__DAB_STUDIO__.location.pathname;
+        const emptyAfterHomeClick =
+          window.__DAB_STUDIO__.isEmptyConversation === true &&
+          window.__DAB_STUDIO__.messages.length === 0 &&
+          (window.__DAB_STUDIO__.activatedLookmlSkills || []).length === 0;
+
+        return {
+          logoWidth: Math.round(logoRect.width),
+          logoHeight: Math.round(logoRect.height),
+          viewBox: logo.getAttribute('viewBox'),
+          ariaHidden: logo.getAttribute('aria-hidden'),
+          hasNestedButtons,
+          desktopNoOverflow,
+          editVisibleOnFocusWithin,
+          themeColorsAdapted: lightColor !== darkColor,
+          pathInConv,
+          pathDuringEdit,
+          editLogoWidth: Math.round(editLogoRect.width),
+          zeroHorizontalJump: logoHorizontalJumpPx <= 0.5,
+          focusRestoredToHomeBtn,
+          pathAfterHomeClick,
+          emptyAfterHomeClick,
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+    if (desktopRes.exceptionDetails) {
+      throw new Error(desktopRes.exceptionDetails.exception?.description || desktopRes.exceptionDetails.text)
+    }
+    expect(desktopRes.result.value).toEqual({
+      logoWidth: 24,
+      logoHeight: 24,
+      viewBox: '6 8 84 80',
+      ariaHidden: 'true',
+      hasNestedButtons: false,
+      desktopNoOverflow: true,
+      editVisibleOnFocusWithin: true,
+      themeColorsAdapted: true,
+      pathInConv: '/c/conv_app_42',
+      pathDuringEdit: '/c/conv_app_42',
+      editLogoWidth: 24,
+      zeroHorizontalJump: true,
+      focusRestoredToHomeBtn: true,
+      pathAfterHomeClick: '/',
+      emptyAfterHomeClick: true,
+    })
+
+    // Configured /config -> clicking studio-brand-home-btn navigates to '/'; unconfigured /config (even with app disabled) stays gated on '/config'
+    await ctx.chrome.send('Page.navigate', { url: `http://127.0.0.1:${ctx.port}/?scenario=config_page` })
+    await waitReady(`Boolean(window.__DAB_STUDIO__?.location?.pathname === '/config' && document.querySelector('[data-testid="studio-brand-home-btn"]'))`)
+    const cfgHomeRes = await ctx.chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        document.querySelector('[data-testid="studio-brand-home-btn"]').click();
+        await new Promise((r) => setTimeout(r, 80));
+        return { pathAfterConfigHome: window.__DAB_STUDIO__.location.pathname, isEmptyConversation: window.__DAB_STUDIO__.isEmptyConversation };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+    expect(cfgHomeRes.result.value).toEqual({ pathAfterConfigHome: '/', isEmptyConversation: true })
+
+    await ctx.chrome.send('Page.navigate', { url: `http://127.0.0.1:${ctx.port}/?scenario=config_page&unconfigured=1` })
+    await waitReady(`Boolean(window.__DAB_STUDIO__?.location?.pathname === '/config' && document.querySelector('[data-testid="studio-brand-home-btn"]'))`)
+    const uncfgHomeRes = await ctx.chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        window.__DAB_STUDIO__.setDisabledModes?.(['app']);
+        await new Promise((r) => setTimeout(r, 40));
+        document.querySelector('[data-testid="studio-brand-home-btn"]').click();
+        await new Promise((r) => setTimeout(r, 80));
+        return window.__DAB_STUDIO__.location.pathname;
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+    expect(uncfgHomeRes.result.value).toBe('/config')
+
+    // Mobile 390x844: 40-char truncation + inline rename non-overlapping bounding rects + click-to-home
+    await ctx.chrome.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
+    await ctx.chrome.send('Page.navigate', { url: `http://127.0.0.1:${ctx.port}/?scenario=data_app` })
+    await waitReady(`Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="studio-brand-home-btn"]'))`)
+    const mobRes = await ctx.chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        await window.__DAB_STUDIO__.handleSaveAgentName('Maverick Enterprise Analytics Workspace!');
+        await new Promise((r) => setTimeout(r, 60));
+        const topbar = document.querySelector('.dab-topbar');
+        const logo = document.querySelector('[data-testid="studio-brand-logo"]');
+        const strong = document.querySelector('[data-testid="studio-agent-name-label"]');
+        const editBtn = document.querySelector('[data-testid="studio-edit-agent-name-btn"]');
+        const editBtnHidden = getComputedStyle(editBtn).display === 'none';
+        const st = getComputedStyle(strong);
+        const topbarRect = topbar.getBoundingClientRect();
+        const logoRect = logo.getBoundingClientRect();
+        const noViewportOverflow = document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1;
+        const singleRowTopbar = topbarRect.height <= 46;
+        const truncatedCleanly = st.overflow === 'hidden' && st.textOverflow === 'ellipsis' && st.whiteSpace === 'nowrap' && strong.scrollWidth > strong.clientWidth;
+
+        // Enter mobile inline rename mode and verify 0px logo jump & zero overlap with right-side controls
+        window.__DAB_STUDIO__.setEditingAgentName(true);
+        await new Promise((r) => setTimeout(r, 60));
+        const editLogoLeft = document.querySelector('[data-testid="studio-brand-logo"]').getBoundingClientRect().left;
+        const editorRight = document.querySelector('.dab-agent-name-editor').getBoundingClientRect().right;
+        const controlsLeft = document.querySelector('.dab-controls').getBoundingClientRect().left;
+        const mobileEditNoOverlap = Math.abs(editLogoLeft - logoRect.left) <= 0.5 && editorRight <= controlsLeft + 1 && document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1;
+        window.__DAB_STUDIO__.setEditingAgentName(false);
+        await new Promise((r) => setTimeout(r, 50));
+
+        document.querySelector('[data-testid="studio-brand-home-btn"]').click();
+        await new Promise((r) => setTimeout(r, 80));
+        return {
+          logoWidth: Math.round(logoRect.width),
+          logoHeight: Math.round(logoRect.height),
+          editBtnHidden,
+          noViewportOverflow,
+          singleRowTopbar,
+          truncatedCleanly,
+          mobileEditNoOverlap,
+          mobileHomeNavigated: window.__DAB_STUDIO__.location.pathname === '/' && window.__DAB_STUDIO__.isEmptyConversation === true,
+        };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+    await ctx.chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
+    if (mobRes.exceptionDetails) {
+      throw new Error(mobRes.exceptionDetails.exception?.description || mobRes.exceptionDetails.text)
+    }
+    expect(mobRes.result.value).toEqual({
+      logoWidth: 24,
+      logoHeight: 24,
+      editBtnHidden: true,
+      noViewportOverflow: true,
+      singleRowTopbar: true,
+      truncatedCleanly: true,
+      mobileEditNoOverlap: true,
+      mobileHomeNavigated: true,
+    })
+  }, 25000)
 }
 
 module.exports = { registerVisualPart13Tests }

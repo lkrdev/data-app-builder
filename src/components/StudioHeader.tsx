@@ -11,11 +11,10 @@ import {
   STUDIO_MAX_TOOL_ROUNDS_OPTIONS, STUDIO_MAX_TOTAL_TOKENS_OPTIONS, STUDIO_THINKING_LEVEL_OPTIONS, StudioThinkingLevel,
 } from '../antigravity'
 import { useLookerExtension } from '../contexts/LookerExtensionContext'
-import { copyTextWithExtensionSdk, LookerFolderNode, normalizeStudioAgentName } from '../lookerApi'
+import { copyTextWithExtensionSdk, LookerFolderNode, normalizeStudioAgentName, STUDIO_MODES } from '../lookerApi'
 import { ResolvedStudioTheme, StudioController, StudioThemeMode } from '../useStudioController'
-import { STUDIO_MODES } from './App'
 import {
-  StudioBadge, StudioButton, StudioCard, StudioModal,
+  RipperLogo, StudioBadge, StudioButton, StudioCard, StudioModal,
   StudioSelect, StudioSkeleton, ThemeModeIcon,
 } from './StudioDesignSystem'
 export * from './StudioDesignSystem'
@@ -52,30 +51,43 @@ export const RipperSurfLoader: React.FC<{
 export const StudioBrandAgentName: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const { agentName, handleSaveAgentName, editingAgentName: editing, setEditingAgentName: setEditing } = ctl
   const [draft, setDraft] = useState(agentName)
-  useEffect(() => { if (!editing) setDraft(agentName) }, [agentName, editing])
-  const commitName = (raw: string) => { setEditing(false); void handleSaveAgentName(raw) }
+  const homeBtnRef = useRef<HTMLButtonElement | null>(null)
+  const skipBlurRef = useRef(false)
+  useEffect(() => { if (!editing) setDraft(agentName); else skipBlurRef.current = false }, [agentName, editing])
+  const commitName = (raw: string, restoreFocus = false) => {
+    setEditing(false); void handleSaveAgentName(raw)
+    if (restoreFocus) setTimeout(() => homeBtnRef.current?.focus(), 0)
+  }
 
   return editing ? (
     <span className="dab-agent-name-editor">
+      <RipperLogo size={24} testId="studio-brand-logo" />
       <input
         type="text" data-testid="studio-agent-name-input" className="dab-agent-name-input" aria-label="Agent name"
         value={draft} autoFocus maxLength={40} onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') { e.preventDefault(); commitName(draft) }
-          else if (e.key === 'Escape') { e.preventDefault(); setDraft(agentName); setEditing(false) }
+          if (e.key === 'Enter') { e.preventDefault(); skipBlurRef.current = true; commitName(draft, true) }
+          else if (e.key === 'Escape') { e.preventDefault(); skipBlurRef.current = true; setDraft(agentName); setEditing(false); setTimeout(() => homeBtnRef.current?.focus(), 0) }
         }}
-        onBlur={() => commitName(draft)}
+        onBlur={() => { if (skipBlurRef.current) { skipBlurRef.current = false; return } commitName(draft) }}
       />
       <button
         type="button" data-testid="studio-save-agent-name-btn" className="dab-btn dab-btn-primary dab-btn-icon dab-agent-name-save-btn"
-        aria-label="Save agent name" title="Save agent name" onMouseDown={(e) => e.preventDefault()} onClick={() => commitName(draft)}
+        aria-label="Save agent name" title="Save agent name" onMouseDown={(e) => e.preventDefault()}
+        onClick={() => { skipBlurRef.current = true; commitName(draft, true) }}
       >
         <Check size={13} strokeWidth={2} aria-hidden="true" />
       </button>
     </span>
   ) : (
     <span className="dab-agent-name-brand">
-      <strong data-testid="studio-agent-name-label">{agentName}</strong>
+      <button
+        ref={homeBtnRef} type="button" data-testid="studio-brand-home-btn" className="dab-brand-home-btn"
+        onClick={() => ctl.handleNewConversation('auto')} title="New conversation (Home)" aria-label={`${agentName} — New conversation (Home)`}
+      >
+        <RipperLogo size={24} testId="studio-brand-logo" />
+        <strong data-testid="studio-agent-name-label">{agentName}</strong>
+      </button>
       <button
         type="button" data-testid="studio-edit-agent-name-btn" className="dab-btn dab-btn-secondary dab-btn-icon dab-agent-name-edit-btn"
         aria-label="Edit agent name" title="Edit agent name" onClick={() => { setDraft(agentName); setEditing(true) }}

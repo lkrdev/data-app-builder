@@ -1,6 +1,11 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import path from 'node:path'
 import { gunzipSync } from 'node:zlib'
 
+import React from 'react'
+
 import type { Looker40SDK } from '@looker/sdk'
+import { renderToStaticMarkup } from 'react-dom/server'
 
 import {
   type AntigravityExtensionHostLike,
@@ -19,6 +24,7 @@ import {
   sanitizeDataAppAssistantText,
   syncManagedSkillsIntoEnvironment,
 } from '../../antigravity'
+import { RipperLogo } from '../../components/StudioDesignSystem'
 import { canonicalJson, sha256Hex } from '../../lkrCliSitecustomize'
 import {
   clearAllUserConversations,
@@ -31,6 +37,7 @@ import {
   saveUserConversation,
   saveUserEnvironmentId,
 } from '../../lookerApi'
+import type { StudioController } from '../../useStudioController'
 
 const asSdk = (mock: Record<string, unknown>): Looker40SDK => mock as unknown as Looker40SDK
 const asHost = (mock: Record<string, unknown>): AntigravityExtensionHostLike => mock as unknown as AntigravityExtensionHostLike
@@ -597,5 +604,113 @@ export function registerPermissionsPart27Tests(): void {
     }
     expect(multiPosted[2]?.input?.[0]?.text || '').not.toContain('[WARM SANDBOX FAST PATH:')
     expect(multiPosted[2]?.input?.[0]?.text || '').toContain('LookML')
+  })
+
+  test('106. Issue #233: renders Option A RipperLogo with React 17-safe collision-free gradients, anchors StudioBrandAgentName home button without nested buttons, and enforces <= 800-line file cap', async () => {
+    const html1 = renderToStaticMarkup(React.createElement(RipperLogo))
+    const html2 = renderToStaticMarkup(React.createElement(RipperLogo))
+    const grad1A = html1.match(/<linearGradient id="([^"]+)"/)?.[1]
+    const grad2A = html2.match(/<linearGradient id="([^"]+)"/)?.[1]
+    expect(grad1A).toMatch(/^ripperLogo_\d+_a$/)
+    expect(grad2A).toMatch(/^ripperLogo_\d+_a$/)
+    expect(grad1A).not.toBe(grad2A)
+    expect(html1).toContain('data-testid="studio-brand-logo"')
+    expect(html1).toContain('class="dab-brand-logo"')
+    expect(html1).toContain('width="24"')
+    expect(html1).toContain('height="24"')
+    expect(html1).toContain('viewBox="6 8 84 80"')
+    expect(html1).toContain('aria-hidden="true"')
+    expect(html1).not.toMatch(/dab-ripper-(spin|ribbon|trough|board|spit)/)
+
+    const detHtml = renderToStaticMarkup(
+      React.createElement(RipperLogo, { size: 32, className: 'extra-mark', testId: 'det-logo', idPrefix: 'optA' })
+    )
+    const html3 = renderToStaticMarkup(React.createElement(RipperLogo))
+    const grad2Num = Number(grad2A?.match(/^ripperLogo_(\d+)_a$/)?.[1] || 0)
+    const grad3Num = Number(html3.match(/<linearGradient id="ripperLogo_(\d+)_a"/)?.[1] || 0)
+    expect(grad3Num).toBe(grad2Num + 1) // explicit idPrefix="optA" does not increment ripperLogoSeq
+    expect(detHtml).toContain('data-testid="det-logo"')
+    expect(detHtml).toContain('class="dab-brand-logo extra-mark"')
+    expect(detHtml).toContain('width="32" height="32"')
+    expect(detHtml).toContain('style="width:32px;height:32px"')
+    expect(detHtml).toContain('id="optA_a"')
+    expect(detHtml).toContain('id="optA_b"')
+    expect(detHtml).toContain('stroke="url(#optA_a)"')
+    expect(detHtml).toContain('stroke="url(#optA_b)"')
+    expect(detHtml).toContain('r="39" stroke="#0284c7" stroke-width="2.2" stroke-dasharray="90 150" opacity="0.38" transform="rotate(120 48 48)"')
+    expect(detHtml).toContain('r="33" stroke="#22d3ee" stroke-width="1.8" stroke-dasharray="55 155" opacity="0.32" transform="rotate(-155 48 48)"')
+    for (const d of [
+      'M13 62C12 36 27 16 50 16C66 16 78 26 76 40',
+      'M19 62C19 40 31 23 50 23C63 23 72 31 70 43C69 48 64 51 58 49',
+      'M25 61C26 44 36 30 50 30C60 30 66 36 64 44',
+      'M16 68C28 76 45 79 62 74C73 71 80 64 84 56',
+      'M33 63C40 50 54 43 67 41C64.5 52.5 55 62.5 40.5 66.8C36.5 67.8 32 65.5 33 63Z',
+    ]) {
+      expect(detHtml).toContain(`d="${d}"`)
+    }
+    expect(detHtml).toContain('transform="translate(3 -3) rotate(-18 48 56)"')
+    expect(detHtml).toContain('x1="37" y1="63" x2="64" y2="43"')
+    expect(detHtml).toContain('cx="75" cy="32" r="2.4" fill="#22d3ee"')
+    expect(detHtml).toContain('cx="80" cy="40" r="2" fill="#7dd3fc"')
+
+    // Splash RipperSurfLoader & StudioBrandAgentName render cleanly with zero nested buttons
+    const g = globalThis as Record<string, unknown>
+    const hadWindow = 'window' in g
+    const prevWindow = g.window
+    try {
+      if (!hadWindow) g.window = { addEventListener: () => {}, removeEventListener: () => {} }
+      const { RipperSurfLoader, StudioBrandAgentName } = await import('../../components/StudioHeader')
+      const loaderHtml = renderToStaticMarkup(React.createElement(RipperSurfLoader, { agentName: 'Ripper' }))
+      expect(loaderHtml).toContain('data-testid="ripper-surf-loader"')
+      expect(loaderHtml).toContain('data-testid="ripper-surf-loader-svg"')
+      expect(loaderHtml).toContain('id="rcGrad2A"')
+      expect(loaderHtml).toContain('id="rcGrad2B"')
+      expect(loaderHtml).toContain('class="dab-ripper-ribbon-1"')
+      expect(loaderHtml).toContain('class="dab-ripper-board-ride"')
+
+      const makeCtl = (editingAgentName: boolean): StudioController =>
+        ({
+          agentName: 'Ripper',
+          editingAgentName,
+          setEditingAgentName: () => {},
+          handleSaveAgentName: async () => {},
+          handleNewConversation: () => {},
+        }) as unknown as StudioController
+
+      const idleBrandHtml = renderToStaticMarkup(React.createElement(StudioBrandAgentName, { ctl: makeCtl(false) }))
+      expect(idleBrandHtml).toContain('data-testid="studio-brand-home-btn"')
+      expect(idleBrandHtml).toContain('aria-label="Ripper — New conversation (Home)"')
+      expect(idleBrandHtml).toContain('data-testid="studio-brand-logo"')
+      expect(idleBrandHtml).toContain('<strong data-testid="studio-agent-name-label">Ripper</strong>')
+      expect(idleBrandHtml).toContain('data-testid="studio-edit-agent-name-btn"')
+      expect(idleBrandHtml.match(/<\/?button\b/g)).toEqual(['<button', '</button', '<button', '</button'])
+
+      const editBrandHtml = renderToStaticMarkup(React.createElement(StudioBrandAgentName, { ctl: makeCtl(true) }))
+      expect(editBrandHtml).not.toContain('data-testid="studio-brand-home-btn"')
+      expect(editBrandHtml).toContain('data-testid="studio-brand-logo"')
+      expect(editBrandHtml).toContain('data-testid="studio-agent-name-input"')
+      expect(editBrandHtml).toContain('data-testid="studio-save-agent-name-btn"')
+      expect(editBrandHtml.indexOf('studio-brand-logo')).toBeLessThan(editBrandHtml.indexOf('studio-agent-name-input'))
+    } finally {
+      if (hadWindow) g.window = prevWindow
+      else delete g.window
+    }
+
+    // Verify zero React.useId() usage and <= 800-line cap across src/**
+    const repoRoot = path.resolve(__dirname, '../../..')
+    expect(readFileSync(path.join(repoRoot, 'src/components/StudioDesignSystem.tsx'), 'utf8')).not.toMatch(/\buseId\b/)
+    const walkSrc = (dir: string, acc: string[] = []): string[] => {
+      for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, ent.name)
+        if (ent.isDirectory()) walkSrc(full, acc)
+        else if (/\.(ts|tsx|js|jsx|css)$/.test(ent.name)) acc.push(full)
+      }
+      return acc
+    }
+    const overCap = walkSrc(path.join(repoRoot, 'src'))
+      .filter((f) => !f.endsWith('src/vendor/codemode.js') && !f.endsWith('src/sandboxSkillsBundle.ts'))
+      .map((f) => ({ file: path.relative(repoRoot, f), lines: readFileSync(f, 'utf8').replace(/\n$/, '').split('\n').length }))
+      .filter((x) => x.lines > 800)
+    expect(overCap).toEqual([])
   })
 }
