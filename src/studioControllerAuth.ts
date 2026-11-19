@@ -3,14 +3,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useHistory, useLocation } from 'react-router-dom'
 
 import {
-  AgentSession, ANTIGRAVITY_ALLOWED_MODELS, AntigravityModelOption,
-  clearStoredOAuthSession, DEFAULT_ANTIGRAVITY_MODEL,
-  DEFAULT_THINKING_LEVEL, ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig,
-  getInitialStoredOAuthSession, getInitialStoredOAuthToken, isHostOAuthWedged, listAvailableAntigravityModels,
+  AgentSession, ANTIGRAVITY_ALLOWED_MODELS, AntigravityAuth, AntigravityModelOption,
+  clearSessionConversationMessages, clearStoredOAuthSession, DEFAULT_ANTIGRAVITY_MODEL,
+  DEFAULT_THINKING_LEVEL, deleteSessionConversationMessages, ensureGeminiApiKeyUserAttribute, ExtensionAuthContextConfig,
+  getInitialStoredOAuthSession, getInitialStoredOAuthToken, getSessionConversationMessages, isHostOAuthWedged, listAvailableAntigravityModels,
   loadStoredOAuthSession, loadStoredThinkingLevel, loadStoredThinkingLevelByModel, loginWithGoogleOAuth, normalizeEnvironmentId,
   normalizeMaxToolRounds, normalizeMaxTotalTokens, normalizeThinkingLevel, parseValidOAuthSession, PastedImage, persistThinkingLevel,
   persistThinkingLevelByModel, readInitialThinkingLevel, readInitialThinkingLevelByModel, refreshOAuthSessionIfNeeded,
-  resetHostOAuthWedged, resolveLookerOAuthRedirectUri, STUDIO_OAUTH_REFRESH_INTERVAL_MS, STUDIO_OAUTH_STORAGE_KEY, StudioThinkingLevel,
+  resetHostOAuthWedged, resolveLookerOAuthRedirectUri, setSessionConversationMessages, STUDIO_OAUTH_REFRESH_INTERVAL_MS, STUDIO_OAUTH_STORAGE_KEY, StudioThinkingLevel,
 } from './antigravity'
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
 import { useLookerExtension } from './contexts/LookerExtensionContext'
@@ -448,13 +448,20 @@ export function useStudioAuthAndPrefs() {
     []
   )
 
-  const setMessages = useCallback(
-    (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
-      const next = typeof updater === 'function' ? updater(messagesRef.current) : updater
-      messagesRef.current = next
-      setMessagesState(next)
-    },
-    []
+  const [expiredConversationNotice, setExpiredConversationNotice] = useState<string | null>(null)
+  const selectEpochRef = useRef(0)
+
+  const getAuthCfg = useCallback(
+    (): AntigravityAuth => ({
+      mode: authMode,
+      oauthToken: oauthTokenRef.current || oauthToken,
+      getOAuthToken: () => oauthTokenRef.current,
+      clientId,
+      projectId,
+      apiKey,
+      onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true),
+    }),
+    [apiKey, authMode, clientId, oauthToken, oauthTokenRef, projectId, triggerSilentOAuthRefresh]
   )
 
   const [activeConversationId, setActiveConversationIdState] = useState<string>(
@@ -468,6 +475,38 @@ export function useStudioAuthAndPrefs() {
     setActiveConversationIdState(resolved)
   }, [])
 
+  const getConvMessages = useCallback((convId: string): ChatMessage[] => {
+    const cid = String(convId || '').trim()
+    return cid ? ((getSessionConversationMessages(cid) as ChatMessage[] | undefined) || []) : []
+  }, [])
+
+  const setConvMessages = useCallback((convId: string, msgs: ChatMessage[]): void => {
+    const cid = String(convId || '').trim()
+    if (cid) setSessionConversationMessages(cid, msgs)
+  }, [])
+
+  const deleteConvMessages = useCallback((convId: string): void => {
+    const cid = String(convId || '').trim()
+    if (cid) deleteSessionConversationMessages(cid)
+  }, [])
+
+  const clearAllConvMessages = useCallback((): void => {
+    clearSessionConversationMessages()
+  }, [])
+
+  const setMessages = useCallback(
+    (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
+      const next = typeof updater === 'function' ? updater(messagesRef.current) : updater
+      messagesRef.current = next
+      setMessagesState(next)
+      const cid = activeConversationIdRef.current
+      if (typeof updater === 'function' && cid && /^conv_/i.test(cid) && next.length > 0 && Boolean(getSessionConversationMessages(cid)?.length)) {
+        setSessionConversationMessages(cid, next)
+      }
+    },
+    []
+  )
+
   const concurrency = useStudioTurnConcurrency({
     mockExt: mockExt as Record<string, unknown> | undefined,
     activeConversationId,
@@ -479,14 +518,11 @@ export function useStudioAuthAndPrefs() {
   useEffect(() => {
     if (!isConfigured && !oauthToken && !apiKey) return
     let mounted = true
-    listAvailableAntigravityModels(extensionSDK, {
-      mode: authMode, oauthToken, getOAuthToken: () => oauthTokenRef.current,
-      clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true),
-    }).then((list) => {
+    listAvailableAntigravityModels(extensionSDK, getAuthCfg()).then((list) => {
       if (mounted && list.length > 0) setAvailableModels(list)
     })
     return () => { mounted = false }
-  }, [extensionSDK, isConfigured, authMode, oauthToken, oauthTokenRef, clientId, projectId, apiKey, triggerSilentOAuthRefresh])
+  }, [extensionSDK, getAuthCfg, isConfigured, oauthToken, apiKey])
 
   const handleSaveAuthSetup = async () => {
     const permErr = !capabilities.canConfigureExtension
@@ -599,6 +635,9 @@ export function useStudioAuthAndPrefs() {
     agentSession, agentSessionRef, messages, messagesRef,
     activeModeRef, setAgentSession, setMessages,
     activeConversationId, activeConversationIdRef, setActiveConversationId,
+    expiredConversationNotice, setExpiredConversationNotice,
+    selectEpochRef, getAuthCfg,
+    getConvMessages, setConvMessages, deleteConvMessages, clearAllConvMessages,
     ...concurrency,
   }
 }

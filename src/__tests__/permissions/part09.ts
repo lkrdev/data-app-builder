@@ -511,10 +511,6 @@ export function registerPermissionsPart09Tests(): void {
     const convWithMentionsAndCreated = {
       id: 'conv_app_42', type: 'app', label: 'Executive Revenue App',
       content: { dashboardId: '42', appArtifactId: 'obj_app_42' },
-      messages: [
-        { role: 'user' as const, text: 'Build a revenue app referencing @dashboard:22 and @look:15 [Referenced Looker Dashboard #22]' },
-        { role: 'assistant' as const, text: 'Created Executive Revenue App (#42) and Saved Look #19.' },
-      ],
       contentItems: [
         normalizeStudioContentItem({ id: '22', dashboardId: '22', contentType: 'dashboard', title: 'Tagged Dashboard #22', source: 'mention', createdInConversation: false }),
         normalizeStudioContentItem({ id: '15', lookId: '15', contentType: 'look', title: 'Tagged Look #15' }),

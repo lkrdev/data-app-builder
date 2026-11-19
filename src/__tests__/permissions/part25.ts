@@ -2,9 +2,11 @@ import type { Looker40SDK } from '@looker/sdk'
 
 import {
   callInteractionsApi,
+  getSessionConversationMessages,
   LkrCodeMode,
   refreshOAuthSessionIfNeeded,
   runAntigravityTurn,
+  setSessionConversationMessages,
   STUDIO_OAUTH_STORAGE_KEY,
 } from '../../antigravity'
 import { enqueueCodeModeExecution, yieldCodeModeExecution } from '../../lkrCliCodeModeHelpers'
@@ -341,7 +343,7 @@ export function registerPermissionsPart25Tests(): void {
       id: 'conv_concurrent_A',
       type: 'app',
       label: 'Conv A',
-      messages: [{ role: 'user', text: 'Prompt A' }, { role: 'assistant', text: 'Reply A' }],
+      turnInteractionIds: [['int_A_root', 'int_A_final']],
       updatedAt: '2026-11-18T01:00:00.000Z',
     })
     while (!releaseFirstConvPut) {
@@ -351,7 +353,7 @@ export function registerPermissionsPart25Tests(): void {
       id: 'conv_concurrent_B',
       type: 'dashboard',
       label: 'Conv B',
-      messages: [{ role: 'user', text: 'Prompt B' }, { role: 'assistant', text: 'Reply B' }],
+      turnInteractionIds: [['int_B_root', 'int_B_final']],
       updatedAt: '2026-11-18T01:00:01.000Z',
     })
     releaseFirstConvPut()
@@ -366,7 +368,6 @@ export function registerPermissionsPart25Tests(): void {
       id: 'conv_concurrent_A',
       type: 'app',
       label: 'Stale Background Turn A',
-      messages: [{ role: 'user', text: 'Prompt A' }, { role: 'assistant', text: 'Late reply' }],
       updatedAt: '2026-11-18T02:00:00.000Z',
     })
     expect(afterLateSave.some((c) => c.id === 'conv_concurrent_A')).toBe(false)
@@ -549,6 +550,7 @@ export function registerPermissionsPart25Tests(): void {
         )
       }) as typeof fetch
 
+      setSessionConversationMessages('conv_224_resume', [{ role: 'user', text: 'Build Order Pulse 224' }])
       const resumed = await resumeInFlightConversationTurn({
         sdk: mockPublishAndConvSdk,
         userId: '1',
@@ -570,9 +572,10 @@ export function registerPermissionsPart25Tests(): void {
           type: 'app',
           use_case: 'app',
           label: 'Order Pulse 224',
+          inFlight: true,
           interactionId: 'int_224_req_act',
+          turnInteractionIds: [['int_224_req_act', 'int_224_req_act']],
           environmentId: 'env_224',
-          messages: [{ role: 'user', text: 'Build Order Pulse 224' }],
           updatedAt: '2026-11-18T01:05:00.000Z',
         },
         requirePermission: true,
@@ -592,8 +595,11 @@ export function registerPermissionsPart25Tests(): void {
 
       expect(resumed.publishedApp?.dashboardId).toBe('2240')
       expect(resumed.conversation.interactionId).toBe('int_224_cont_1')
-      expect(resumed.conversation.messages).toHaveLength(2)
-      expect(resumed.conversation.messages?.[1]?.text).toContain('**Looker Dashboard:** [Open Order Pulse 224](/dashboards/2240)')
+      expect(resumed.conversation.inFlight).toBe(false)
+      expect(resumed.conversation.turnInteractionIds).toEqual([['int_224_req_act', 'int_224_cont_1']])
+      const sessionMsgs = getSessionConversationMessages('conv_224_resume')
+      expect(sessionMsgs).toHaveLength(2)
+      expect(sessionMsgs[1]?.text).toContain('**Looker Dashboard:** [Open Order Pulse 224](/dashboards/2240)')
       expect(resumed.conversation.contentItems?.some((it) => it.id === '2240' && it.contentType === 'data_app')).toBe(true)
       expect(readInFlightConvIds()).not.toContain('conv_224_resume')
     } finally {

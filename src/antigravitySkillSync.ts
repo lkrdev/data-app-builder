@@ -26,7 +26,7 @@ import {
 } from './antigravityTypes'
 import { BOOTSTRAP_LOOKML_PY } from './lkrCliBridge'
 import { canonicalJson, LKR_CLI_SITECUSTOMIZE_PY, sha256Hex } from './lkrCliSitecustomize'
-import { getArtifactNamespace, saveUserEnvironmentId } from './lookerApi'
+import { getArtifactNamespace, saveUserEnvironmentId } from './lookerArtifacts'
 import { KDA_SKILL_MD, KDA_TOOLKIT_PY } from './lookmlSkills'
 
 export const MANAGED_SOURCES_MANIFEST_PATH = '/workspace/.managed_sources_manifest.json'

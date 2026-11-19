@@ -157,3 +157,43 @@ export async function deleteLocalDraftScript(
     return next
   })
 }
+
+const SESSION_HEALTH_REPORTS_STORAGE_KEY = 'dab_session_health_reports_v1'
+const MAX_SESSION_HEALTH_REPORTS = 8
+
+export function loadTabSessionHealthReportJson(reportId: string): string | null {
+  const cleanId = String(reportId ?? '').trim()
+  if (!cleanId) return null
+  try {
+    const raw = typeof window !== 'undefined' ? window.sessionStorage?.getItem?.(SESSION_HEALTH_REPORTS_STORAGE_KEY) : null
+    if (!raw) return null
+    const map = JSON.parse(raw) as Record<string, string>
+    return map && typeof map[cleanId] === 'string' ? map[cleanId] : null
+  } catch {
+    return null
+  }
+}
+
+export function saveTabSessionHealthReportJson(reportId: string, payloadJson: string): void {
+  const cleanId = String(reportId ?? '').trim()
+  if (!cleanId || !payloadJson) return
+  try {
+    if (typeof window === 'undefined' || !window.sessionStorage?.setItem) return
+    const raw = window.sessionStorage.getItem?.(SESSION_HEALTH_REPORTS_STORAGE_KEY)
+    const prev = raw ? (JSON.parse(raw) as Record<string, string>) : {}
+    const entries = Object.entries(prev && typeof prev === 'object' ? prev : {}).filter(([k]) => k !== cleanId)
+    entries.push([cleanId, payloadJson])
+    const trimmed = Object.fromEntries(entries.slice(-MAX_SESSION_HEALTH_REPORTS))
+    window.sessionStorage.setItem(SESSION_HEALTH_REPORTS_STORAGE_KEY, JSON.stringify(trimmed))
+  } catch {
+    /* ignore quota or restricted iframe sessionStorage */
+  }
+}
+
+export function clearTabSessionHealthReports(): void {
+  try {
+    if (typeof window !== 'undefined') window.sessionStorage?.removeItem?.(SESSION_HEALTH_REPORTS_STORAGE_KEY)
+  } catch {
+    /* ignore */
+  }
+}

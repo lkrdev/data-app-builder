@@ -47,43 +47,46 @@ export function registerPermissionsPart21Tests(): void {
       id: 'conv_207',
       type: 'app',
       label: 'Mid-turn Refresh Test',
-      messages: [{ role: 'user', text: 'Build me an order overview' }],
+      inFlight: true,
+      interactionId: 'int_207_root_1',
+      turnInteractionIds: [['int_207_root_1', 'int_207_root_1']],
       updatedAt: '2026-11-13T05:00:00.000Z',
     })
     // Synchronous cache update before first put resolves
     const cachedImmediately = await svc.listConversations('1')
     expect(cachedImmediately).toHaveLength(1)
     expect(cachedImmediately[0].id).toBe('conv_207')
-    expect(cachedImmediately[0].messages).toHaveLength(1)
+    expect(cachedImmediately[0].inFlight).toBe(true)
+    expect(cachedImmediately[0].turnInteractionIds).toEqual([['int_207_root_1', 'int_207_root_1']])
 
-    // Second save with 2 messages + interactionId while first put is still in-flight
+    // Second save with 2 turn pairs + settled interactionId while first put is still in-flight
     const p2 = svc.saveConversation('1', {
       id: 'conv_207',
       type: 'app',
+      inFlight: false,
       interactionId: 'int_207_live',
-      messages: [
-        { role: 'user', text: 'Build me an order overview' },
-        { role: 'assistant', text: 'Completed order overview.', interactionId: 'int_207_live' },
+      turnInteractionIds: [
+        ['int_207_root_1', 'int_207_final_1'],
+        ['int_207_root_2', 'int_207_live'],
       ],
       updatedAt: '2026-11-13T05:00:05.000Z',
     })
     resolveFirstPut?.()
     await Promise.all([p1, p2])
 
-    // Even if a stale 1-message save runs after the 2-message save, prev.messages (length 2) is preserved
+    // Even if a stale 1-turn save runs after the 2-turn save, monotonic turnInteractionIds & interactionId are preserved
     const afterStaleSave = await svc.saveConversation('1', {
       id: 'conv_207',
       type: 'app',
-      interactionId: 'int_207_live',
-      messages: [{ role: 'user', text: 'Build me an order overview' }],
+      turnInteractionIds: [['int_207_root_1', 'int_207_root_1']],
       updatedAt: '2026-11-13T05:00:06.000Z',
     })
-    expect(afterStaleSave[0].messages).toHaveLength(2)
-    expect(afterStaleSave[0].messages?.[1]).toMatchObject({
-      role: 'assistant',
-      text: 'Completed order overview.',
-      interactionId: 'int_207_live',
-    })
+    expect(afterStaleSave[0].interactionId).toBe('int_207_live')
+    expect(afterStaleSave[0].inFlight).toBe(false)
+    expect(afterStaleSave[0].turnInteractionIds).toEqual([
+      ['int_207_root_1', 'int_207_final_1'],
+      ['int_207_root_2', 'int_207_live'],
+    ])
 
     // 2. recoverInFlightInteraction polls across in_progress -> completed and extracts text, activitySteps, and bundles
     expect(

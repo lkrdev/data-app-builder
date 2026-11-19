@@ -430,8 +430,13 @@ export function registerPermissionsPart27Tests(): void {
     const { sdk, store, deletedDashboards, deletedLooks, deletedBoards } = createInMemoryArtifactSdk()
     const svc = getArtifactService(sdk)
 
-    await svc.saveUserArtifact('1', { id: '42', type: 'app', title: 'Exec App', updatedAt: '2026-11-01T00:00:00Z', createdBy: '1' }, { id: '42', dashboardId: '42' })
-    await svc.saveUserArtifact('1', { id: '7', type: 'dashboard', title: 'Exec UDD', updatedAt: '2026-11-01T00:00:00Z', createdBy: '1' }, { id: '7', dashboardId: '7' })
+    const seedLegacy = (key: string, value: unknown) => {
+      store.set(key, { key, version: 1, value: JSON.stringify(value) })
+    }
+    seedLegacy('user_1_app_42', { id: '42', type: 'app', title: 'Exec App', updatedAt: '2026-11-01T00:00:00Z', createdBy: '1' })
+    seedLegacy('obj_app_42', { id: '42', dashboardId: '42' })
+    seedLegacy('user_1_dashboard_7', { id: '7', type: 'dashboard', title: 'Exec UDD', updatedAt: '2026-11-01T00:00:00Z', createdBy: '1' })
+    seedLegacy('obj_dashboard_7', { id: '7', dashboardId: '7' })
     await svc.saveUserConfig('1', { agentName: 'Maverick' })
     await saveUserConversation(sdk, '1', {
       id: 'conv_wipe_1',
@@ -439,7 +444,6 @@ export function registerPermissionsPart27Tests(): void {
       label: 'Exec App',
       content: { dashboardId: '42', appArtifactId: 'obj_app_42' },
       contentItems: [{ key: 'data_app:42', id: '42', contentType: 'data_app', title: 'Exec App', embedPath: '/embed/dashboards/42' }],
-      messages: [{ role: 'user', text: 'Build app' }],
     })
     await saveUserConversation(sdk, '1', {
       id: 'conv_wipe_2',
@@ -450,7 +454,6 @@ export function registerPermissionsPart27Tests(): void {
         { key: 'dashboard:7', id: '7', contentType: 'dashboard', title: 'Exec UDD', embedPath: '/embed/dashboards/7' },
         { key: 'look:301', id: '301', contentType: 'look', title: 'Margin Look', embedPath: '/embed/looks/301' },
       ],
-      messages: [{ role: 'user', text: 'Build dashboard' }],
     })
 
     expect((await loadUserConversations(sdk, '1')).length).toBe(2)

@@ -47,6 +47,7 @@ assert.equal(cmParsed.path, '/lookml_models/thelook/explores/order_items')
 
 const antigravityTs = [
   'src/antigravity.ts',
+  'src/antigravityConvStore.ts',
   'src/antigravityEnv.ts',
   'src/antigravitySkillSync.ts',
   'src/antigravityLoop.ts',
@@ -92,6 +93,7 @@ assert(
 const appTsx = [
   'src/components/App.tsx',
   'src/components/AlertInspectorPane.tsx',
+  'src/components/StudioConversationsSidebar.tsx',
   'src/components/StudioDesignSystem.tsx',
   'src/components/StudioHeader.tsx',
   'src/components/StudioWorkspace.tsx',
@@ -129,6 +131,7 @@ const lookerApiTs = [
   'src/lookerFolders.ts',
   'src/lookerPermissions.ts',
   'src/lookerDraftScripts.ts',
+  'src/lookerArtifactValidator.ts',
   'src/lookerArtifacts.ts',
   'src/lookerArtifactTypes.ts',
   'src/lookerArtifactService.ts',
@@ -141,8 +144,9 @@ assert(
   lookerApiTs.includes('data_app_studio') &&
     lookerApiTs.includes('formatExploreId') &&
     lookerApiTs.includes('parseExploreId') &&
-    !lookerApiTs.includes('sessionsByUser'),
-  'Dashboard rich_content_json must persist shared data_app_studio turn history and canonical model_id::explore_id explores without per-user isolation'
+    !lookerApiTs.includes('sessionsByUser') &&
+    !readFileSync(path.join(repoRoot, 'src/dataAppPublisher.ts'), 'utf8').includes('compactPersistedChatTurn'),
+  'Dashboard rich_content_json must persist shared data_app_studio pointers and canonical model_id::explore_id explores without turn history or per-user isolation'
 )
 assert(
   appTsx.includes('groupedExplores') &&
@@ -159,12 +163,11 @@ assert(
   antigravityTs.includes('<NATIVE_CONTENT_BUNDLE>') &&
     antigravityTs.includes('create_dashboard_filter') &&
     antigravityTs.includes('create_scheduled_plan') &&
-    lookerApiTs.includes('user_${safeUserId}_dashboard_${id}') &&
-    lookerApiTs.includes('obj_dashboard_${id}') &&
+    lookerApiTs.includes('loadNativeContentById') &&
     lookerApiTs.includes('/embed/looks/') &&
     lookerApiTs.includes('/boards/') &&
     appTsx.includes("builderMode === 'dashboard'"),
-  'Native Content Builder (/dashboard/:id?) must support UDDs/Looks/Boards/Schedules via CodeMode and index user_${userId}_dashboard_${id} + obj_dashboard_${id}'
+  'Native Content Builder (/dashboard/:id?) must support UDDs/Looks/Boards/Schedules via CodeMode and hydrate live Looker objects via loadNativeContentById'
 )
 const manifestLkml = readFileSync(path.join(repoRoot, 'manifest.lkml'), 'utf8')
 assert(
@@ -223,13 +226,15 @@ assert(
   'THREE_PILLAR_CODEMODE_PY must execute Pillar 1 (system__activity), Pillar 2 (all_project_files/get_file_content/validate_project), and Pillar 3 (create_sql_query + run_sql_query on JOBS_TIMELINE_BY_PROJECT & TABLE_STORAGE)'
 )
 assert(
-  healthCheckTs.includes('user_${cleanUser}_health_check_${cleanId}') &&
-    healthCheckTs.includes('obj_health_check_${cleanId}') &&
+  healthCheckTs.includes('saveHealthCheckArtifact') &&
+    healthCheckTs.includes('loadHealthCheckArtifact') &&
+    healthCheckTs.includes('saveTabSessionHealthReportJson') &&
+    !healthCheckTs.includes('saveUserArtifact') &&
     appTsx.includes("location.pathname === '/health-check'") &&
     appTsx.includes('TECHNICAL_DESIGN_DOCUMENT.md') &&
     appTsx.includes('Copy Markdown') &&
     appTsx.includes('Download Markdown'),
-  'Health Check mode (/health-check/:id?) must synthesize 7-section TECHNICAL_DESIGN_DOCUMENT.md with Copy/Download Markdown buttons and persist to user_${userId}_health_check_${id} + obj_health_check_${id}'
+  'Health Check mode (/health-check/:id?) must synthesize 7-section TECHNICAL_DESIGN_DOCUMENT.md with Copy/Download Markdown buttons and zero obj_health_check_* writes'
 )
 
 const hcPyMatch = healthCheckTs.match(/export const THREE_PILLAR_CODEMODE_PY = `([\s\S]*?)`;\n/)
@@ -278,13 +283,14 @@ assert.equal(promptCount, 1, 'allow_op must only prompt once across a Python loo
 assert.deepEqual(JSON.parse(loopOut), ['POST', 'POST', 'POST'])
 
 assert(
-  lookerApiTs.includes('saveUserArtifact') &&
+  lookerApiTs.includes('assertPointerOnlyArtifactWrite') &&
+    lookerApiTs.includes('ArtifactPayloadViolationError') &&
+    !lookerApiTs.includes('export async function saveUserArtifact') &&
+    !lookerApiTs.includes('prunePersistedMessages') &&
     lookerApiTs.includes('listUserArtifacts') &&
     lookerApiTs.includes('loadObjectArtifact') &&
-    lookerApiTs.includes('deleteUserArtifact') &&
-    lookerApiTs.includes('user_${') &&
-    lookerApiTs.includes('obj_${'),
-  'lookerApi.ts must implement dual-key user_${uid}_${type}_${id} + obj_${type}_${id} catalog helpers'
+    lookerApiTs.includes('deleteUserArtifact'),
+  'lookerApi.ts must enforce closed 3-key Pointers-Only writes via assertPointerOnlyArtifactWrite while keeping read-only/cleanup legacy helpers'
 )
 assert(
   appTsx.includes('STUDIO_MODES') &&
@@ -431,14 +437,15 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
     'order_items.total_sale_price',
   ])
 
-  // Verify Agentic LookML tool (BOOTSTRAP_LOOKML_PY, allowUpdateSession, vars, and artifact keys)
-  const lookmlToolTsx = ['src/lookmlTool.tsx', 'src/lkrCliBridge.ts']
+  // Verify Agentic LookML tool (BOOTSTRAP_LOOKML_PY, allowUpdateSession, vars, and Pointers-Only hydration)
+  const lookmlToolTsx = ['src/lookmlTool.tsx', 'src/lookmlArtifactHydration.ts', 'src/lkrCliBridge.ts']
     .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
     .join('\n')
   assert(
-    lookmlToolTsx.includes('user_${cleanUser}_lookml_${cleanId}') &&
-      lookmlToolTsx.includes('obj_lookml_${cleanId}'),
-    'lookmlTool.tsx must persist user_${userId}_lookml_${id} and obj_lookml_${id}'
+    lookmlToolTsx.includes('hydrateLookmlFileContent') &&
+      lookmlToolTsx.includes('loadLookmlSessionArtifact') &&
+      lookmlToolTsx.includes('/file/content'),
+    'lookmlArtifactHydration.ts must hydrate LookML on demand via /workspace/lookml/... and /projects/:id/file/content without writing obj_lookml_*'
   )
   assert(
     antigravityTs.includes("allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard'") &&
@@ -787,6 +794,12 @@ chmod +x "${fakeBinDir}/uv"
     /^my_proj_\d+$/.test(fallbackLookmlBundle.id) && fallbackLookmlBundle.id !== 'lookml-session',
     `Issue #155: BOOTSTRAP_LOOKML_PY fallback id must be <project_id>_<timestamp> (got "${fallbackLookmlBundle.id}")`
   )
+  const lookerArtifactTypesSrc = readFileSync(path.join(repoRoot, 'src/lookerArtifactTypes.ts'), 'utf8')
+  const userConvIfaceMatch = lookerArtifactTypesSrc.match(/export interface UserConversationEntry\s*\{([\s\S]*?)\n\}/)
+  assert(
+    userConvIfaceMatch && !/\bmessages\s*\??:/.test(userConvIfaceMatch[1]),
+    'UserConversationEntry must not declare a messages field'
+  )
   assert(
     !appTsx.includes('messagesByMode') &&
       !appTsx.includes('sessionsByMode') &&
@@ -794,8 +807,13 @@ chmod +x "${fakeBinDir}/uv"
       appTsx.includes('studio-content-tabs-more-btn') &&
       appTsx.includes('studio-content-tabs-more-menu') &&
       appTsx.includes('studio-content-tab-restore-') &&
-      rootAgentsMd.includes('## Looker Artifacts Lightweight-Only Rule') &&
+      appTsx.includes('conv-item-updated-') &&
+      appTsx.includes('conv-item-tags-') &&
+      appTsx.includes('expired-conversation-banner') &&
+      rootAgentsMd.includes('## Looker Artifacts Pointers-Only Invariant (Zero Exceptions)') &&
+      !rootAgentsMd.includes('## Looker Artifacts Lightweight-Only Rule') &&
       rootAgentsMd.includes('.agents/skills/studio-conversation-debugger/SKILL.md') &&
+      !antigravityTs.includes('Looker Artifacts Pointers-Only Invariant') &&
       !antigravityTs.includes('Looker Artifacts Lightweight-Only Rule') &&
       !antigravityTs.includes('studio-conversation-debugger') &&
       !antigravityTs.includes('data-apps-sync') &&
@@ -806,10 +824,11 @@ chmod +x "${fakeBinDir}/uv"
       convDebuggerSkillMd.includes('name: studio-conversation-debugger') &&
       convDebuggerSkillMd.includes('--oauth-account') &&
       convDebuggerScriptPy.includes('user_conversations:') &&
+      convDebuggerScriptPy.includes('pointers_only_ok') &&
       !/thelook|argolis_scratch|default_bigquery_connection|demowest|looker-private-demo/i.test(
         convDebuggerSkillMd + '\n' + convDebuggerScriptPy
       ),
-    'Issue #155: single continuous messages/session, close/restore tab ribbon testids, root-only Looker Artifacts Lightweight-Only Rule, and studio-conversation-debugger / data-apps-sync exclusion from sandbox skills must hold'
+    'Issues #155 & #230: Pointers-Only Looker Artifacts invariant (root AGENTS.md only), UserConversationEntry without messages, sidebar relative time/tags, expired-conversation-banner, and studio-conversation-debugger exclusion must hold'
   )
   if (statSync(distBundlePath, { throwIfNoEntry: false })) {
     const distBundleContent = readFileSync(distBundlePath, 'utf8')
@@ -818,8 +837,9 @@ chmod +x "${fakeBinDir}/uv"
         !distBundleContent.includes('data-apps-sync') &&
         !distBundleContent.includes('name: issue-authoring') &&
         !distBundleContent.includes('name: studio-design-system') &&
+        !distBundleContent.includes('Looker Artifacts Pointers-Only Invariant') &&
         !distBundleContent.includes('Looker Artifacts Lightweight-Only Rule'),
-      'Issue #155: dist/bundle.js must exclude repo-internal skills (studio-conversation-debugger, data-apps-sync, issue-authoring, studio-design-system) and root-only Looker Artifacts Lightweight-Only Rule'
+      'Issues #155 & #230: dist/bundle.js must exclude repo-internal skills (studio-conversation-debugger, data-apps-sync, issue-authoring, studio-design-system) and root-only Looker Artifacts Pointers-Only Invariant'
     )
   }
 

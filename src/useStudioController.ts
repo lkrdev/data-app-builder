@@ -3,18 +3,18 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AntigravityActivityStep, cleanLookmlProjectId, extractSkillNameFromPath,
   fetchConversationSandboxDebugMarkdown, fetchEnvironmentFile,
-  hydrateInteractionActivitySteps, normalizeEnvironmentId, normalizeSandboxFilePath,
-  resolveBuiltinWorkspaceFileContent,
+  hydrateInteractionActivitySteps, hydrateRemoteConversationMessages, normalizeEnvironmentId,
+  normalizeSandboxFilePath, resolveBuiltinWorkspaceFileContent,
 } from './antigravity'
 import { ChatMessage } from './components/App'
 import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
 import { loadHealthCheckArtifact } from './healthCheck'
 import {
-  archiveUserConversation, compactPersistedChatTurn, ConversationRecord, copyTextWithExtensionSdk,
+  archiveUserConversation, ConversationRecord, copyTextWithExtensionSdk,
   deleteLocalDraftScript, deleteUserConversation, getArtifactNamespace, getConvTargetId, getUseCaseLabel,
   hydrateConversationContentItems, isLookmlTargetAlreadyLoaded, isUserConversationDeleted, loadAlertArtifact,
   loadExistingDashboardApp, loadLocalDraftScript, loadScriptArtifact, normalizeStudioContentItem,
-  resolveConversationRelatedContent, saveUserConversation, searchGlobalContentV2,
+  readInFlightConvIds, resolveConversationRelatedContent, saveUserConversation, searchGlobalContentV2,
   STUDIO_OVERVIEW_TAB_KEY, StudioContentItem, studioModeToUseCase, StudioUseCase,
 } from './lookerApi'
 import { loadLookmlSessionArtifact } from './lookmlTool'
@@ -60,11 +60,11 @@ export function useStudioController() {
   const turn = useStudioTurn(auth, meta, loaders)
 
   const {
-    extensionSDK, core40SDK, history, location, isTileMount,
-    authMode, oauthToken, oauthTokenRef, clientId, projectId, apiKey, selectedModel, thinkingLevel,
+    extensionSDK, core40SDK, history, location, isTileMount, selectedModel, thinkingLevel,
     resolvedUseCaseByIdRef, parsedRoute, setSelectedUseCase, explicitUseCaseRef,
-    setRightPaneCollapsed, setSidebarCollapsed, triggerSilentOAuthRefresh,
+    setRightPaneCollapsed, setSidebarCollapsed,
     sharedEnvIdRef, agentSession, agentSessionRef, messages, setAgentSession, setMessages,
+    getAuthCfg, selectEpochRef, getConvMessages, setConvMessages, deleteConvMessages,
     busyStatus, activeConversationId, activeConversationIdRef, setActiveConversationId,
     liveActivitySteps, liveActivityStepsRef, inFlightTurnsRef, turnResumerRef, onTurnAbortedRef, abortConvTurn,
   } = auth
@@ -102,11 +102,9 @@ export function useStudioController() {
       { role: 'assistant' as const, text: reasonText || 'Stopped by user.' },
       partialSteps?.length ? { activitySteps: partialSteps } : null
     )
-    const nextMsgs = [...((conv.messages || []) as ChatMessage[]), stopMsg]
-    const updated = Object.assign({}, conv, {
-      messages: nextMsgs.map((m) => compactPersistedChatTurn(m, true)),
-      updatedAt: new Date().toISOString(),
-    })
+    const prior = getConvMessages(cid)
+    setConvMessages(cid, [...prior, stopMsg])
+    const updated = Object.assign({}, conv, { inFlight: false, updatedAt: new Date().toISOString() })
     setConversations((prev) => [updated, ...prev.filter((c) => c.id !== cid)], { optimisticEntry: null })
     if (uid) void saveUserConversation(core40SDK, uid, updated, ns).catch(() => {})
   }
@@ -156,10 +154,7 @@ export function useStudioController() {
       setHydratingInteractionIds((p) => ({ ...p, [cleanId]: true }))
       const p = hydrateInteractionActivitySteps({
         extensionSDK,
-        auth: {
-          mode: authMode, oauthToken: oauthTokenRef.current || oauthToken, getOAuthToken: () => oauthTokenRef.current,
-          clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true),
-        },
+        auth: getAuthCfg(),
         interactionId: cleanId, stopAtInteractionId,
       })
         .then((steps) => {
@@ -174,7 +169,7 @@ export function useStudioController() {
       inFlightHydrationsRef.current[cleanId] = p
       return p
     },
-    [activityStepsByInteractionIdRef, apiKey, authMode, clientId, extensionSDK, oauthToken, oauthTokenRef, projectId, setMessages, triggerSilentOAuthRefresh]
+    [activityStepsByInteractionIdRef, extensionSDK, getAuthCfg, setMessages]
   )
 
   const loadSandboxMarkdownFile = useCallback(
@@ -202,10 +197,7 @@ export function useStudioController() {
       setLoading(true)
       const reqPromise = fetchEnvironmentFile({
         extensionSDK,
-        auth: {
-          mode: authMode, oauthToken: oauthTokenRef.current || oauthToken, getOAuthToken: () => oauthTokenRef.current,
-          clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true),
-        },
+        auth: getAuthCfg(),
         environmentId: envId, path: normalizedPath,
       })
         .then(storeCache, (err: unknown) =>
@@ -215,7 +207,7 @@ export function useStudioController() {
       inFlightSandboxFilesRef.current[cacheKey] = reqPromise
       return reqPromise
     },
-    [agentSessionRef, apiKey, authMode, clientId, extensionSDK, oauthToken, oauthTokenRef, projectId, resolveLocalWorkspaceFile, sharedEnvIdRef, triggerSilentOAuthRefresh]
+    [agentSessionRef, extensionSDK, getAuthCfg, resolveLocalWorkspaceFile, sharedEnvIdRef]
   )
 
   const openViewerDocument = useCallback(
@@ -260,10 +252,7 @@ export function useStudioController() {
     const envId = normalizeEnvironmentId(sharedEnvIdRef.current) || normalizeEnvironmentId(activeConv?.environmentId) || normalizeEnvironmentId(agentSession?.environmentId) || ''
     return fetchConversationSandboxDebugMarkdown({
       extensionSDK,
-      auth: {
-        mode: authMode, oauthToken: oauthTokenRef.current || oauthToken, getOAuthToken: () => oauthTokenRef.current,
-        clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true),
-      },
+      auth: getAuthCfg(),
       conversationId: activeConversationId || activeConv?.id, label: activeConv?.label,
       useCase: activeConv?.use_case || auth.selectedUseCase, model: selectedModel, thinkingLevel,
       environmentId: envId, lastInteractionId: latestTurnId, messages,
@@ -279,13 +268,14 @@ export function useStudioController() {
       () => setCopyThreadState('idle')
     )
   }, [
-    activeConversationId, agentSession, apiKey, auth.selectedUseCase, authMode, busyStatus, clientId,
-    contentItems, conversations, extensionSDK, latestTurnInteractionRef, liveActivitySteps, liveActivityStepsRef, messages, oauthToken, oauthTokenRef, projectId, selectedModel,
-    sharedEnvIdRef, thinkingLevel, triggerSilentOAuthRefresh,
+    activeConversationId, agentSession, auth.selectedUseCase, busyStatus,
+    contentItems, conversations, extensionSDK, getAuthCfg, latestTurnInteractionRef, liveActivitySteps, liveActivityStepsRef, messages, selectedModel,
+    sharedEnvIdRef, thinkingLevel,
   ])
 
   const handleResetNewApp = useCallback(
     (_resetToDefaultRoute?: boolean | React.MouseEvent, presetUseCase?: StudioUseCase) => {
+      selectEpochRef.current += 1
       const nextUseCase: StudioUseCase = typeof presetUseCase === 'string' && presetUseCase ? presetUseCase : 'auto'
       const freshConvId = nextStudioConvId()
       hydratedConvRouteRef.current = ''
@@ -325,7 +315,7 @@ export function useStudioController() {
       setSelectedUseCase(nextUseCase)
       if (typeof window !== 'undefined' && window.innerWidth <= 768) setSidebarCollapsed(true)
     },
-    [explicitUseCaseRef, history, hydratedConvRouteRef, lastCaIdRef, lastHealthIdRef, lastLookmlIdRef, lastNativeIdRef, lastPublishedIdRef, lastScriptIdRef, location.pathname, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setCaConversation, setContentItems, setCurrentAppCode, setHealthReport, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMentionedItems, setMessages, setNativeContentState, setPastedImages, setPrompt, setPublishedAppState, setPublishedTileDash, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef]
+    [explicitUseCaseRef, history, hydratedConvRouteRef, lastCaIdRef, lastHealthIdRef, lastLookmlIdRef, lastNativeIdRef, lastPublishedIdRef, lastScriptIdRef, location.pathname, selectEpochRef, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setCaConversation, setContentItems, setCurrentAppCode, setHealthReport, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMentionedItems, setMessages, setNativeContentState, setPastedImages, setPrompt, setPublishedAppState, setPublishedTileDash, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef]
   )
 
   const handleNewConversation = useCallback(
@@ -363,7 +353,9 @@ export function useStudioController() {
       } else if (ct === 'lookml') {
         const targetProj = cleanLookmlProjectId(item.projectId) || cleanLookmlProjectId(item.id)
         if (targetProj && !isLookmlTargetAlreadyLoaded('lookml', targetProj, lookmlBundle?.id || lookmlBundle?.project_id ? { id: lookmlBundle.id, project_id: lookmlBundle.project_id } : null, item.sessionId) && lookmlBundle?.id !== item.id) {
-          void loadLookmlSessionArtifact(core40SDK, extensionSDK, targetProj, item.sessionId).then((l) => { setLookmlBundle(l.bundle); const vp = cleanLookmlProjectId(l.bundle?.project_id); if (vp) setLookmlProjectId(vp) }).catch(() => {})
+          void loadLookmlSessionArtifact(core40SDK, extensionSDK, targetProj, item.sessionId, {
+            auth: getAuthCfg(), environmentId: sharedEnvIdRef.current, lastInteractionId: agentSessionRef.current.lastInteractionId, explores: selectedExplores,
+          }).then((l) => { setLookmlBundle(l.bundle); const vp = cleanLookmlProjectId(l.bundle?.project_id); if (vp) setLookmlProjectId(vp) }).catch(() => {})
         }
       } else if (ct === 'script' && (!loadedScript || scriptId !== item.id)) {
         setLoadedScript(true); setScriptId(item.id)
@@ -377,7 +369,9 @@ export function useStudioController() {
       } else if (ct === 'alert' && alertBundle?.alert_id !== (item.alertId || item.id)) {
         void loadAlertArtifact(core40SDK, item.alertId || item.id, getArtifactNamespace(extensionSDK)).then((l) => { if (l) setAlertBundle(l) }).catch(() => {})
       } else if (ct === 'report' && healthReport?.id !== item.id) {
-        void loadHealthCheckArtifact(core40SDK, extensionSDK, item.id).then(setHealthReport).catch(() => {})
+        void loadHealthCheckArtifact(core40SDK, extensionSDK, item.id, {
+          auth: getAuthCfg(), environmentId: sharedEnvIdRef.current, lastInteractionId: agentSessionRef.current.lastInteractionId,
+        }).then(setHealthReport).catch(() => {})
       } else if (ct === 'conversational-analytics') {
         setCaConversation((prev) =>
           prev && prev.caConversationId === item.id
@@ -386,7 +380,7 @@ export function useStudioController() {
         )
       }
     },
-    [alertBundle?.alert_id, core40SDK, currentAppCode, extensionSDK, filtersJson, handleRunPython, healthReport?.id, loadedScript, lookmlBundle?.id, lookmlBundle?.project_id, scriptId, selectedExplores, selectedFolderId, setAlertBundle, setCaConversation, setCurrentAppCode, setHealthReport, setLoadedScript, setLookmlBundle, setLookmlProjectId, setNativeContentState, setPublishedAppState, setPublishedTileDash, setScriptCode, setScriptId, setScriptTitle]
+    [agentSessionRef, alertBundle?.alert_id, core40SDK, currentAppCode, extensionSDK, filtersJson, getAuthCfg, handleRunPython, healthReport?.id, loadedScript, lookmlBundle?.id, lookmlBundle?.project_id, scriptId, selectedExplores, selectedFolderId, setAlertBundle, setCaConversation, setCurrentAppCode, setHealthReport, setLoadedScript, setLookmlBundle, setLookmlProjectId, setNativeContentState, setPublishedAppState, setPublishedTileDash, setScriptCode, setScriptId, setScriptTitle, sharedEnvIdRef]
   )
 
   const persistTabStateToConversation = useCallback(
@@ -450,19 +444,20 @@ export function useStudioController() {
 
   const handleSelectConversation = useCallback(
     async (conv: ConversationRecord) => {
+      const myEpoch = ++selectEpochRef.current
       setActiveViewerDocument(null)
       if (typeof window !== 'undefined' && window.innerWidth <= 768) setSidebarCollapsed(true)
       const useCase = studioModeToUseCase(conv.type)
       const mode = normalizeCatalogMode(conv.type)
-      resolvedUseCaseByIdRef.current[conv.id] = useCase
-      explicitUseCaseRef.current = 'auto'
-      setSelectedUseCase(useCase)
-      setActiveConversationId(conv.id)
-      const targetPath = `/c/${encodeURIComponent(conv.id)}`
-      hydratedConvRouteRef.current = `${targetPath}:${conv.id}`
-      if (location.pathname !== targetPath) history.push(targetPath)
       const liveTurn = inFlightTurnsRef.current.get(conv.id)
       if (liveTurn) {
+        resolvedUseCaseByIdRef.current[conv.id] = useCase
+        explicitUseCaseRef.current = 'auto'
+        setSelectedUseCase(useCase)
+        setActiveConversationId(conv.id)
+        const targetPath = `/c/${encodeURIComponent(conv.id)}`
+        hydratedConvRouteRef.current = `${targetPath}:${conv.id}`
+        if (location.pathname !== targetPath) history.push(targetPath)
         const snap = liveTurn.snapshot
         setContentItems(snap.contentItems)
         setActiveContentTabKey(snap.activeContentTabKey)
@@ -490,6 +485,24 @@ export function useStudioController() {
         )
         return
       }
+      const hydrated = await hydrateRemoteConversationMessages({
+        extensionSDK, auth: getAuthCfg(), sdk: core40SDK, userId: userIdRef.current || userId,
+        conv, activeEnvironmentId: sharedEnvIdRef.current,
+      })
+      if (selectEpochRef.current !== myEpoch || inFlightTurnsRef.current.has(conv.id)) return
+      if (hydrated.expired) {
+        loaders.applyExpiredHydration(conv.id, hydrated.prunedIds, hydrated.deadEnvironmentId)
+        handleResetNewApp(true, 'auto')
+        return
+      }
+      if (hydrated.messages.length > 0) setConvMessages(conv.id, hydrated.messages)
+      resolvedUseCaseByIdRef.current[conv.id] = useCase
+      explicitUseCaseRef.current = 'auto'
+      setSelectedUseCase(useCase)
+      setActiveConversationId(conv.id)
+      const targetPath = `/c/${encodeURIComponent(conv.id)}`
+      hydratedConvRouteRef.current = `${targetPath}:${conv.id}`
+      if (location.pathname !== targetPath) history.push(targetPath)
       const initialItems = hydrateConversationContentItems(conv)
       setContentItems(initialItems)
       const initialVisible = initialItems.filter((it) => !it.hidden)
@@ -497,27 +510,6 @@ export function useStudioController() {
       const initialTabKey = savedTab ?? (initialVisible[initialVisible.length - 1]?.key || '')
       setActiveContentTabKey(initialTabKey)
       if (conv.explores?.length) setSelectedExplores(conv.explores)
-      const targetId = getConvTargetId(conv.content, conv.type)
-      if (targetId) {
-        resolvedUseCaseByIdRef.current[targetId] = useCase
-        setActiveObjectId(targetId)
-        await openArtifactByMode(conv.type, targetId, false)
-        if (activeConversationIdRef.current !== conv.id) return
-      } else {
-        setLoadedScript(false)
-        setPublishedTileDash(null)
-        setActiveObjectId('')
-        setPublishedAppState(null)
-        setNativeContentState(null)
-        if (mode === 'lookml') { setLookmlBundle(null); setLookmlProjectId('') }
-      }
-      if (initialTabKey && contentItemsRef.current.some((it) => it.key === initialTabKey && !it.hidden)) {
-        setActiveContentTabKey(initialTabKey)
-        syncContentItemViewer(contentItemsRef.current.find((it) => it.key === initialTabKey))
-      }
-      setActiveConversationId(conv.id)
-      if (conv.messages?.length) setMessages(mergeCachedActivitySteps(conv.messages as ChatMessage[]))
-      else if (!targetId) setMessages([])
       if (conv.interactionId || conv.environmentId || sharedEnvIdRef.current) {
         setAgentSession(
           {
@@ -528,9 +520,26 @@ export function useStudioController() {
           mode
         )
       }
+      const targetId = getConvTargetId(conv.content, conv.type)
+      if (targetId) {
+        resolvedUseCaseByIdRef.current[targetId] = useCase
+        setActiveObjectId(targetId)
+        await openArtifactByMode(conv.type, targetId, false)
+        if (selectEpochRef.current !== myEpoch || activeConversationIdRef.current !== conv.id) return
+      } else {
+        setLoadedScript(false); setPublishedTileDash(null); setActiveObjectId('')
+        setPublishedAppState(null); setNativeContentState(null)
+        if (mode === 'lookml') { setLookmlBundle(null); setLookmlProjectId('') }
+      }
+      if (initialTabKey && contentItemsRef.current.some((it) => it.key === initialTabKey && !it.hidden)) {
+        setActiveContentTabKey(initialTabKey)
+        syncContentItemViewer(contentItemsRef.current.find((it) => it.key === initialTabKey))
+      }
+      setActiveConversationId(conv.id)
+      if (hydrated.messages.length > 0) setMessages(mergeCachedActivitySteps(hydrated.messages))
+      else if (!targetId) setMessages([])
       if (
-        conv.messages?.length &&
-        conv.messages[conv.messages.length - 1]?.role === 'user' &&
+        (conv.inFlight || readInFlightConvIds().includes(conv.id)) &&
         conv.interactionId &&
         !recoveredInFlightIdsRef.current.has(conv.interactionId)
       ) {
@@ -538,7 +547,7 @@ export function useStudioController() {
         void turnResumerRef.current?.(conv)
       }
     },
-    [activeConversationIdRef, contentItemsRef, explicitUseCaseRef, history, hydratedConvRouteRef, inFlightTurnsRef, location.pathname, mergeCachedActivitySteps, openArtifactByMode, recoveredInFlightIdsRef, resolvedUseCaseByIdRef, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setContentItems, setCurrentAppCode, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMessages, setNativeContentState, setPublishedAppState, setPublishedTileDash, setScriptCode, setScriptId, setScriptTitle, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef, syncContentItemViewer, turnResumerRef]
+    [activeConversationIdRef, contentItemsRef, core40SDK, explicitUseCaseRef, extensionSDK, getAuthCfg, handleResetNewApp, history, hydratedConvRouteRef, inFlightTurnsRef, loaders, location.pathname, mergeCachedActivitySteps, openArtifactByMode, recoveredInFlightIdsRef, resolvedUseCaseByIdRef, selectEpochRef, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setContentItems, setConvMessages, setCurrentAppCode, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMessages, setNativeContentState, setPublishedAppState, setPublishedTileDash, setScriptCode, setScriptId, setScriptTitle, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef, syncContentItemViewer, turnResumerRef, userId, userIdRef]
   )
 
   const handleToggleArchiveConversation = (
@@ -623,6 +632,7 @@ export function useStudioController() {
       }
     }
 
+    deleteConvMessages(cleanId)
     setConversations((prev) => prev.filter((c) => c.id !== cleanId), { optimisticEntry: null })
     if (isDeletingActive) handleNewConversation()
     return deleteUserConversation(

@@ -4,6 +4,7 @@ import {
   callInteractionsApi,
   fetchEnvironmentFile,
 } from './antigravityAuth'
+import { pruneDeadEnvironmentConversations } from './antigravityConvStore'
 import {
   buildWorkspaceSources,
   CURRENT_MANAGED_SOURCES_HASH,
@@ -89,6 +90,7 @@ export * from './antigravitySteps'
 export * from './antigravityStarters'
 export * from './antigravityPrompts'
 export * from './antigravityEnv'
+export * from './antigravityConvStore'
 export * from './antigravityLoop'
 export * from './lookmlSkills'
 export {
@@ -148,6 +150,8 @@ export interface RunAntigravityTurnOptions {
   warmEnvironmentInBackground?: boolean
   schemaMarkdown: string
   userPrompt: string
+  rawUserPrompt?: string
+  rootInteractionId?: string
   images?: PastedImage[]
   existingAppCode?: string
   existingNativeContent?: NativeContentState | NativeContentBundle | null
@@ -179,6 +183,7 @@ export interface AntigravityTurnResult {
   assistantText: string
   rawOutputText?: string
   resolvedUseCase: ResolvedStudioUseCase
+  rootInteractionId?: string
   session: AgentSession
   telemetry: AntigravityTurnTelemetry
   activitySteps?: AntigravityActivityStep[]
@@ -222,7 +227,7 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
     model = DEFAULT_ANTIGRAVITY_MODEL, thinkingLevel = DEFAULT_THINKING_LEVEL, maxTotalTokens = DEFAULT_MAX_TOTAL_TOKENS, maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS, mode = 'data_app', useCase = 'auto',
     allowedModes, selectedExplores, folderId, toolMode = 'data_app', lookmlProjectId, activatedLookmlSkills,
     developableProjects, canDeploy, availableConnections: providedConnections, warmEnvironmentInBackground = false,
-    schemaMarkdown, userPrompt, images, existingAppCode, existingNativeContent,
+    schemaMarkdown, userPrompt, rawUserPrompt, rootInteractionId: providedRootId, images, existingAppCode, existingNativeContent,
     customSystemGuide, extraSources, priorMessages, requirePermission = true, approvedOperations, onPermissionRequest,
     onRequestWritePermission, onProgressSteps, pollScheduleMs = DEFAULT_POLL_SCHEDULE_MS, signal, resumeInteractionId, onInteractionCreated, onStatus,
   } = params
@@ -242,7 +247,7 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
   const primaryModel = firstParsed?.modelName || ''
   const primaryExplore = firstParsed?.exploreName || ''
 
-  const isNoOpTurn = isConversationalNoOpPrompt(userPrompt)
+  const isNoOpTurn = isConversationalNoOpPrompt(rawUserPrompt || userPrompt)
   const effectiveLookmlIntent =
     toolMode === 'lookml' || useCase === 'lookml' || (useCase === 'auto' && matchExplicitUseCaseRule(userPrompt, allowedModes) === 'lookml')
   const isAuditSkillActive =
@@ -386,7 +391,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const autoCanLookml =
     useCase === 'auto' && (!allowedModes || allowedModes.includes('lookml')) && Boolean(developableProjects?.length || canDeploy)
   const keepLookmlBridgeTool =
-    !isFreshConversation && Boolean(session.usedBridgeTool || session.toolType === 'lookml' || lookmlProjectId?.trim())
+    !isFreshConversation &&
+    Boolean(session.usedBridgeTool || ((session.toolType === 'lookml' || lookmlProjectId?.trim()) && Boolean(session.environmentId)))
   const activeTools = isLookmlOnboardingIntake || (isNoOpTurn && isFreshConversation)
     ? []
     : isNoOpTurn || (keepLookmlBridgeTool && (isDashboardMode || !requiresBashSandbox))
@@ -430,6 +436,19 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     effectiveThinkingLevel === 'low' ? '[THINKING LEVEL: LOW — Be concise and minimize exploratory steps]\n\n'
       : effectiveThinkingLevel === 'high' ? '[THINKING LEVEL: HIGH — Reason deeply and verify edge cases thoroughly]\n\n' : ''
 
+  const cleanRawPrompt = rawUserPrompt !== undefined ? rawUserPrompt : userPrompt
+  const wrappedUserRequest =
+    rawUserPrompt !== undefined && userPrompt !== rawUserPrompt
+      ? userPrompt.startsWith(rawUserPrompt)
+        ? `<USER_MESSAGE>${rawUserPrompt}</USER_MESSAGE>${userPrompt.slice(rawUserPrompt.length)}`
+        : (() => {
+            const idx = userPrompt.lastIndexOf(rawUserPrompt)
+            return idx >= 0
+              ? `${userPrompt.slice(0, idx)}<USER_MESSAGE>${rawUserPrompt}</USER_MESSAGE>${userPrompt.slice(idx + rawUserPrompt.length)}`
+              : `<USER_MESSAGE>${rawUserPrompt}</USER_MESSAGE>\n\n${userPrompt}`
+          })()
+      : `<USER_MESSAGE>${cleanRawPrompt}</USER_MESSAGE>`
+
   const buildInputItems = (fresh: boolean): Array<Record<string, unknown>> => {
     const historyDigest =
       fresh && priorMessages && priorMessages.length > 0
@@ -439,8 +458,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       {
         type: 'text',
         text: fresh
-          ? `${thinkingDirective}${systemGuide}${autoRoutingDirective}${historyDigest}\n\nUser request:\n${userPrompt}${uploadsSection}`
-          : `${thinkingDirective}${warmTurnDirective}${autoRoutingDirective ? `${autoRoutingDirective.trim()}\n\n` : ''}User request:\n${userPrompt}${uploadsSection}`,
+          ? `${thinkingDirective}${systemGuide}${autoRoutingDirective}${historyDigest}\n\nUser request:\n${wrappedUserRequest}${uploadsSection}`
+          : `${thinkingDirective}${warmTurnDirective}${autoRoutingDirective ? `${autoRoutingDirective.trim()}\n\n` : ''}User request:\n${wrappedUserRequest}${uploadsSection}`,
       },
       ...(images || [])
         .filter((img) => img.mimeType.startsWith('image/') || img.mimeType === 'application/pdf')
@@ -451,10 +470,13 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const activeModel = model || DEFAULT_ANTIGRAVITY_MODEL
   const resolvedMaxTokens = Number(maxTotalTokens) > 0 ? Number(maxTotalTokens) : DEFAULT_MAX_TOTAL_TOKENS
   const agentConfig = { type: 'antigravity', model: activeModel, max_total_tokens: String(resolvedMaxTokens) }
-  const baseAgentBody = { agent: 'antigravity-preview-09-2026', agent_config: agentConfig, background: true, tools: activeTools }
-  const buildFreshPayload = (): Record<string, unknown> => ({
+  const baseAgentBody = { agent: 'antigravity-preview-09-2026', agent_config: agentConfig, background: true, store: true, tools: activeTools }
+  const buildFreshPayload = (chainPreviousTurn = false): Record<string, unknown> => ({
     ...baseAgentBody,
     input: buildInputItems(true),
+    ...(chainPreviousTurn && !isFreshConversation && session.lastInteractionId
+      ? { previous_interaction_id: session.lastInteractionId }
+      : {}),
     environment: {
       type: 'remote',
       sources: buildWorkspaceSources({
@@ -465,9 +487,9 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   })
 
   let provisionedFreshManagedEnv = false
-  const provisionFreshEnvironmentInteraction = (): Promise<AntigravityInteractionPayload> =>
+  const provisionFreshEnvironmentInteraction = (chainPreviousTurn = false): Promise<AntigravityInteractionPayload> =>
     withCoalescedEnvProvision(userProvisionKey, async () => {
-      const created = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', buildFreshPayload())
+      const created = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', buildFreshPayload(chainPreviousTurn))
       provisionedFreshManagedEnv = true
       return { envId: normalizeEnvironmentId(created?.environment_id) || '', value: created }
     })
@@ -490,20 +512,12 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   if (signal?.aborted) await throwIfAborted()
 
   let initialInteraction: AntigravityInteractionPayload
-  let usedDirectStatelessModel = false
   if (cleanResumeId) {
     initialInteraction = await callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(cleanResumeId)}`, 'GET')
     const stepStr = JSON.stringify(initialInteraction.steps || [])
     if (stepStr.includes('run_looker_codemode') && !activeTools.some((t) => (t as { name?: string }).name === 'run_looker_codemode')) activeTools.push(LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL)
     if (stepStr.includes('lkr_cli_extension_bridge') && !activeTools.some((t) => (t as { name?: string }).name === 'lkr_cli_extension_bridge')) activeTools.push(LKR_CLI_BRIDGE_TOOL)
     if ((stepStr.includes('"code_execution"') || stepStr.includes('bundle_app.py')) && !activeTools.some((t) => (t as { type?: string }).type === 'code_execution')) activeTools.unshift({ type: 'code_execution' })
-  } else if (isLookmlOnboardingIntake || (isNoOpTurn && isFreshConversation)) {
-    usedDirectStatelessModel = true
-    initialInteraction = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
-      model: activeModel, store: false, background: false, tools: [],
-      generation_config: { thinking_level: 'low', max_output_tokens: 2048 },
-      input: buildInputItems(true),
-    })
   } else if (!requiresBashSandbox || activeEnvId) {
     try {
       initialInteraction = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
@@ -516,7 +530,11 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       if ((!requiresBashSandbox ? !activeEnvId : !isEnvironmentNotFoundError(err)) && isFreshConversation) throw err
       initialApiRetries += 1
       if (isEnvironmentNotFoundError(err) || requiresBashSandbox) {
+        const deadEnvId = activeEnvId
         activeEnvId = undefined
+        if (isEnvironmentNotFoundError(err) && deadEnvId && sdk && userId) {
+          void pruneDeadEnvironmentConversations({ sdk, extensionSDK, userId, deadEnvironmentId: deadEnvId, excludeConversationId: rawConversationId || session.conversationId }).catch(() => {})
+        }
         onStatus('Resumed sandbox expired; provisioning fresh sandbox with app state...')
         initialInteraction = await provisionFreshEnvironmentInteraction()
       } else {
@@ -528,7 +546,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       }
     }
   } else {
-    initialInteraction = await provisionFreshEnvironmentInteraction()
+    initialInteraction = await provisionFreshEnvironmentInteraction(!isFreshConversation && !initialEnvId)
   }
   if (initialInteraction.id) onInteractionCreated?.(initialInteraction.id)
   await throwIfAborted(initialInteraction.id)
@@ -569,7 +587,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     pollScheduleMs, signal, throwIfAborted, onInteractionCreated, onProgressSteps, onStatus,
     effectivePermissionHandler, requirePermission, approvedOperations, conversationId, rawConversationId,
     defaultCodeModeVars, isKdaSkillActive, isDashboardMode, toolMode, mode, useCase, effectiveLookmlIntent,
-    isNoOpTurn, isDataInvestigatorTurn, userPrompt, activatedLookmlSkills, usedDirectStatelessModel,
+    isNoOpTurn, isDataInvestigatorTurn, userPrompt, activatedLookmlSkills,
     requiresBashSandbox, appDir, initialLookerHttpMs, initialLookerHttpCalls, initialApiRetries,
   })
   const {
@@ -623,7 +641,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         .replace(/((?:from|import)\s*['"])\/vendor\/([^'"]+)(['"])/g, '$1https://www.gstatic.com/looker-data-apps/versions/1.3.0/vendor/$2$3')
       const jsdocTitle = healedJs.match(/@title\s+([^\r\n*]+)/i)?.[1]?.trim()
       return {
-        title: refBundleTitle || jsdocTitle || sanitizeConversationLabel(userPrompt) || 'Data App',
+        title: refBundleTitle || jsdocTitle || sanitizeConversationLabel(cleanRawPrompt) || 'Data App',
         code: healedJs,
         raw_code: healedJs,
         prod_code: prodCode,
@@ -742,6 +760,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     alertBundle,
     tddMarkdown,
     resolvedUseCase,
+    rootInteractionId: providedRootId || initialInteraction.id,
     rawOutputText: rawText,
     assistantText: finalAssistantText,
     ...(bridgePermissionError && (bundle || nativeBundle || lookmlBundle || alertBundle) ? { permissionError: bridgePermissionError } : {}),
@@ -749,7 +768,6 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       environmentId: finalEnvId,
       lastInteractionId:
         interaction.status === 'cancelled' && session.lastInteractionId ? session.lastInteractionId : interaction.id,
-      ...(usedDirectStatelessModel ? { statelessTurn: true } : {}),
       ...(session.usedBridgeTool ||
       activeTools.some((t) => (t as { name?: string }).name === 'lkr_cli_extension_bridge')
         ? { usedBridgeTool: true }

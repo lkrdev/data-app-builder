@@ -63,6 +63,36 @@ export function extractInteractionOutputText(interaction: AntigravityInteraction
   return 'Completed.'
 }
 
+export function extractInteractionInputText(interaction: AntigravityInteractionPayload | null | undefined): string {
+  if (!interaction) return ''
+  if (typeof interaction.input === 'string') return interaction.input
+  return Array.isArray(interaction.input)
+    ? interaction.input.map((it) => (typeof it === 'string' ? it : it && typeof it === 'object' && typeof (it as { text?: unknown }).text === 'string' ? String((it as { text: string }).text) : '')).filter(Boolean).join('\n')
+    : ''
+}
+
+const NON_ROOT_MARKERS = ['[LKR_EXTENSION_BRIDGE_RESULT]', 'Continue and complete the current request.', 'You have not emitted <DATA_APP_BUNDLE> yet.', 'Your previous bundle_app.py run failed', 'Max Tool Rounds (']
+
+export function isFreshUserTurnRoot(interaction: AntigravityInteractionPayload | null | undefined): boolean {
+  if (!interaction || (Array.isArray(interaction.input) && interaction.input.some((it) => it && typeof it === 'object' && (it as { type?: string }).type === 'function_result'))) return false
+  const txt = extractInteractionInputText(interaction).trim()
+  if (!txt || txt.includes('[PREWARM:') || txt.includes('[SKILL_SYNC:')) return false
+  return /<USER_MESSAGE>[\s\S]*?<\/USER_MESSAGE>/.test(txt) || NON_ROOT_MARKERS.every((m) => !txt.includes(m))
+}
+
+export function extractRawUserPromptFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): string {
+  const txt = extractInteractionInputText(interaction)
+  if (!txt) return ''
+  const tagged = Array.from(txt.matchAll(/<USER_MESSAGE>([\s\S]*?)<\/USER_MESSAGE>/g))
+  if (tagged.length > 0) return tagged[tagged.length - 1][1].trim()
+  const parts = txt.split(/User request:\s*/i)
+  return (parts.length > 1 ? parts[parts.length - 1] : txt)
+    .replace(/\n\nAttached files in \/workspace\/uploads:[\s\S]*$/i, '')
+    .replace(/\n\n### (?:Referenced|Hydrated) [\s\S]*$/i, '')
+    .replace(/^\[THINKING LEVEL:[^\]]*\]\s*/i, '')
+    .trim()
+}
+
 export function extractBundleFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): DataAppBundle | null {
   const hit = parseTaggedJsonObjects(collectInteractionTextCandidates(interaction), /<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g)
     .reverse()
@@ -407,39 +437,18 @@ export function sanitizeActivityThought(raw: unknown): string {
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1)
 }
 
-function buildExecStepContent(
-  code: string,
-  stepObj: Record<string, unknown> | undefined,
-  pairedResultObj: Record<string, unknown> | undefined
-): string | undefined {
+function buildExecStepContent(code: string, stepObj?: Record<string, unknown>, pairedResultObj?: Record<string, unknown>): string | undefined {
   const strip = (s: string) => String(s || '').replace(BUNDLE_ENVELOPE_STRIP_RE, '').trim()
   const cleanCode = strip(code)
-  const epLogs = [
-    ...(Array.isArray(stepObj?.endpoint_logs) ? (stepObj.endpoint_logs as string[]) : []),
-    ...(Array.isArray(pairedResultObj?.endpoint_logs) ? (pairedResultObj.endpoint_logs as string[]) : []),
-  ].filter(Boolean)
-  const execRes = stepObj?.code_execution_result && typeof stepObj.code_execution_result === 'object'
-    ? (stepObj.code_execution_result as Record<string, unknown>)
-    : undefined
-  const outParts: string[] = []
-  const seenOut = new Set<string>()
-  ;[
-    stepObj?.stdout, execRes?.stdout, stepObj?.stderr, execRes?.stderr,
-    stepObj?.output, execRes?.output, pairedResultObj?.stdout, pairedResultObj?.stderr,
-    pairedResultObj?.output, pairedResultObj?.result,
-  ].forEach((val) => {
+  const epLogs = [...(Array.isArray(stepObj?.endpoint_logs) ? (stepObj.endpoint_logs as string[]) : []), ...(Array.isArray(pairedResultObj?.endpoint_logs) ? (pairedResultObj.endpoint_logs as string[]) : [])].filter(Boolean)
+  const execRes = stepObj?.code_execution_result && typeof stepObj.code_execution_result === 'object' ? (stepObj.code_execution_result as Record<string, unknown>) : undefined
+  const outParts: string[] = [], seenOut = new Set<string>()
+  ;[stepObj?.stdout, execRes?.stdout, stepObj?.stderr, execRes?.stderr, stepObj?.output, execRes?.output, pairedResultObj?.stdout, pairedResultObj?.stderr, pairedResultObj?.output, pairedResultObj?.result].forEach((val) => {
     if (val === undefined || val === null) return
     const stripped = strip(typeof val === 'string' ? val : JSON.stringify(val, null, 2))
-    if (stripped && stripped !== cleanCode && !seenOut.has(stripped)) {
-      seenOut.add(stripped)
-      outParts.push(stripped)
-    }
+    if (stripped && stripped !== cleanCode && !seenOut.has(stripped)) { seenOut.add(stripped); outParts.push(stripped) }
   })
-  const sections = [
-    cleanCode,
-    epLogs.length ? `# Looker API Telemetry\n${Array.from(new Set(epLogs)).map((l) => `# ${l}`).join('\n')}` : '',
-    outParts.length ? `# Output\n${outParts.join('\n')}` : '',
-  ].filter(Boolean)
+  const sections = [cleanCode, epLogs.length ? `# Looker API Telemetry\n${Array.from(new Set(epLogs)).map((l) => `# ${l}`).join('\n')}` : '', outParts.length ? `# Output\n${outParts.join('\n')}` : ''].filter(Boolean)
   return sections.length ? sections.join('\n\n') : undefined
 }
 const FILE_PATH_KEYS = ['path', 'file_path', 'filename', 'file', 'filepath', 'uri', 'target', 'Path', 'FilePath', 'TargetFile', 'AbsolutePath', 'name', 'query', 'input'] as const
@@ -729,20 +738,15 @@ export function formatThinkingTraceMarkdown(
 }
 
 export interface ConversationThreadTurnLike {
-  role: 'user' | 'assistant' | 'error'
-  text: string
-  interactionId?: string
-  dashboardId?: string
-  activitySteps?: AntigravityActivityStep[]
-  thinkingDurationSec?: number
+  role: 'user' | 'assistant' | 'error'; text: string; interactionId?: string; dashboardId?: string
+  activitySteps?: AntigravityActivityStep[]; thinkingDurationSec?: number
 }
 
 export function formatConversationThreadMarkdown(
   messages: ReadonlyArray<ConversationThreadTurnLike>,
   opts?: { title?: string; agentName?: string; conversationId?: string; liveActivitySteps?: AntigravityActivityStep[]; busyStatus?: string | null }
 ): string {
-  const safeMsgs = Array.isArray(messages) ? messages : []
-  const liveSteps = Array.isArray(opts?.liveActivitySteps) ? opts.liveActivitySteps : []
+  const safeMsgs = Array.isArray(messages) ? messages : [], liveSteps = Array.isArray(opts?.liveActivitySteps) ? opts.liveActivitySteps : []
   const authorLabel = opts?.agentName?.trim() || 'Assistant'
   const lines: string[] = [opts?.title?.trim() ? `### Thread: ${opts.title.trim()}` : '### Thread Messages']
   if (opts?.conversationId?.trim()) lines.push(`- Conversation ID: \`${opts.conversationId.trim()}\``)
@@ -751,7 +755,7 @@ export function formatConversationThreadMarkdown(
     const roleHeader = m.role === 'user' ? 'User' : m.role === 'error' ? 'Error' : authorLabel
     const metaBits = [m.interactionId ? `interaction: \`${m.interactionId}\`` : '', m.dashboardId ? `dashboard: \`#${m.dashboardId}\`` : ''].filter(Boolean).join(' · ')
     lines.push('', `#### Message ${idx + 1} — ${roleHeader}${metaBits ? ` (${metaBits})` : ''}`)
-    if (m.activitySteps && m.activitySteps.length > 0) lines.push('', formatThinkingTraceMarkdown(m.activitySteps, { thinkingDurationSec: m.thinkingDurationSec }))
+    if (m.activitySteps?.length) lines.push('', formatThinkingTraceMarkdown(m.activitySteps, { thinkingDurationSec: m.thinkingDurationSec }))
     if (m.text?.trim()) lines.push('', m.text.trim())
   })
   if (liveSteps.length > 0 || opts?.busyStatus) {
@@ -765,10 +769,9 @@ export function summarizeProgress(interaction: AntigravityInteractionPayload | n
   const lastTitle = extractInteractionActivitySteps(interaction).pop()?.title
   if (lastTitle) return lastTitle
   const last = (interaction?.steps || []).slice(-1)[0]
-  if (last?.type === 'function_call') {
-    return sanitizeActivityThought(parseStepArguments(last.arguments ?? last.args).thought) || `Running tool: ${last.name || 'sandbox command'}...`
-  }
-  return 'Thinking...'
+  return last?.type === 'function_call'
+    ? sanitizeActivityThought(parseStepArguments(last.arguments ?? last.args).thought) || `Running tool: ${last.name || 'sandbox command'}...`
+    : 'Thinking...'
 }
 
 export function extractInteractionTelemetry(

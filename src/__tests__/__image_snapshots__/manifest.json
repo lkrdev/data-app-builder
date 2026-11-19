@@ -6,7 +6,7 @@
     "snapshotName": "01-mode-data-app-and-permission-gate-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "dashboard",
@@ -15,7 +15,7 @@
     "snapshotName": "02-mode-native-dashboard-builder-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "lookml",
@@ -24,7 +24,7 @@
     "snapshotName": "03-mode-agentic-lookml-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "health_check",
@@ -33,7 +33,7 @@
     "snapshotName": "04-mode-3-pillar-health-check-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "python_tile_studio",
@@ -60,7 +60,7 @@
     "snapshotName": "07-dashboard-tile-mount-edit-mode-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": true
+    "changedInGit": false
   },
   {
     "id": "config_page",
@@ -83,7 +83,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "explore_dropdown_scrolled",
@@ -97,7 +97,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "chatbar_lookml_skills",
@@ -122,7 +122,7 @@
     "height": 276,
     "clipSelector": ".dab-composer",
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "chatbar_busy_running",
@@ -130,13 +130,13 @@
     "title": "13. Chat Bar State — Busy / Running Spinner Banner",
     "snapshotName": "13-chatbar-state-busy-running-snap.png",
     "width": 427,
-    "height": 560,
+    "height": 522,
     "clipSelector": [
       ".dab-status-banner",
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "chatbar_error_banner",
@@ -150,7 +150,7 @@
       ".dab-composer"
     ],
     "clipMargin": 24,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "python_tile_scheduler_modal",
@@ -170,7 +170,7 @@
     "snapshotName": "16-mode-conversational-analytics-snap.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   },
   {
     "id": "centered_empty_prompt",
@@ -190,6 +190,6 @@
     "snapshotName": "18-studio-dark-theme.png",
     "width": 1440,
     "height": 900,
-    "changedInGit": false
+    "changedInGit": true
   }
 ]

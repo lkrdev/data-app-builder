@@ -105,23 +105,26 @@ export interface TurnCrudItem {
   action: 'created' | 'updated' | 'deleted'
 }
 
-export interface PersistedChatTurn {
+export interface ChatTurnMessage {
   role: 'user' | 'assistant' | 'error'
   text: string
   interactionId?: string
+  stopAtInteractionId?: string
   dashboardId?: string
   widgetCount?: number
   activitySteps?: AntigravityActivityStep[]
   thinkingDurationSec?: number
   crudItems?: TurnCrudItem[]
+  images?: string[]
 }
+
+export type PersistedChatTurn = ChatTurnMessage
 
 export interface DashboardStudioMetadata {
   explores?: string[] // canonical "model_id::explore_id" IDs
   lastInteractionId?: string
   environmentId?: string
   updatedAt?: string
-  messages?: PersistedChatTurn[]
   // Legacy single-explore / per-user fallback fields
   modelName?: string
   exploreName?: string
@@ -132,7 +135,6 @@ export interface StudioMetadataUpdate {
   explores?: string[]
   lastInteractionId?: string
   environmentId?: string
-  messages?: PersistedChatTurn[]
 }
 
 export interface PublishedAppState {
@@ -152,34 +154,18 @@ export interface PublishedAppState {
   }>
 }
 
-export function compactPersistedChatTurn(m: PersistedChatTurn, includeThinkingDuration = false): PersistedChatTurn {
-  const out: PersistedChatTurn = { role: m.role, text: m.text }
-  if (m.interactionId) out.interactionId = m.interactionId
-  if (m.dashboardId) out.dashboardId = m.dashboardId
-  if (m.widgetCount !== undefined) out.widgetCount = m.widgetCount
-  if (includeThinkingDuration && m.thinkingDurationSec !== undefined) out.thinkingDurationSec = m.thinkingDurationSec
-  if (m.crudItems?.length) out.crudItems = m.crudItems
-  return out
-}
-
-// ponytail: store shared dashboard chat history + interaction pointer inside dashboard_element.rich_content_json
-// (up to 500 text turns) instead of Looker Artifact API or per-user partitioning so anyone opening the dashboard sees full history.
+// ponytail: persist pointers-only studio metadata (explores + lastInteractionId + environmentId) inside
+// dashboard_element.rich_content_json; full chat transcripts live exclusively in Antigravity Interactions API.
 export function mergeStudioMetadata(
   prev: DashboardStudioMetadata | undefined,
   update?: StudioMetadataUpdate
 ): DashboardStudioMetadata | undefined {
   if (!update) return prev
-  const compactMessages = (update.messages ?? prev?.messages ?? [])
-    .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .slice(-500)
-    .map((m) => compactPersistedChatTurn(m))
-
   return {
     explores: update.explores ?? prev?.explores ?? [],
     lastInteractionId: update.lastInteractionId || prev?.lastInteractionId,
     environmentId: update.environmentId || prev?.environmentId,
     updatedAt: new Date().toISOString(),
-    messages: compactMessages,
   }
 }
 

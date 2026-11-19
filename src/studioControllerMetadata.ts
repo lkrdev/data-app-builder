@@ -5,8 +5,8 @@ import useSWR from 'swr'
 
 import {
   AntigravityActivityStep, buildDynamicStarterPrompts, discoverStarterExploreContext,
-  generateDynamicStarterPrompts, getCachedStarterPrompts, PastedImage,
-  resolveTargetExploreFromModels, StarterPromptItem,
+  generateDynamicStarterPrompts, getCachedStarterPrompts, normalizeEnvironmentId, PastedImage,
+  pruneDeadEnvironmentConversations, resolveTargetExploreFromModels, StarterPromptItem,
 } from './antigravity'
 import { ChatMessage, StudioMode } from './components/App'
 import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
@@ -34,7 +34,7 @@ export interface StudioViewerDocument {
 export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   const {
     extensionSDK, core40SDK, history, location, isTileMount, mockExt, disabledModes,
-    setAgentName, setAppInitializing, setCapabilities, setMessages,
+    setAgentName, setAppInitializing, setCapabilities, setMessages, setExpiredConversationNotice,
     selectedUseCase, setSelectedUseCase, explicitUseCaseRef, parsedRoute,
     resolvedUseCaseByIdRef, allowedUseCases, availableModels,
     oauthAccessToken, oauthTokenRef, clientId, projectId, apiKey, selectedModel, triggerSilentOAuthRefresh,
@@ -139,7 +139,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   const artifactNamespace = getArtifactNamespace(extensionSDK)
   const artifactService = useMemo(() => getArtifactService(core40SDK, artifactNamespace), [core40SDK, artifactNamespace])
   const { data: swrUserArtifacts } = useSWR<UserArtifactIndex[]>(
-    !isTileMount && userId ? ['artifact:user_list', artifactNamespace, userId, 'all'] : null,
+    !isTileMount && !loadingMetadata && userId ? ['artifact:user_list', artifactNamespace, userId, 'all'] : null,
     () => artifactService.listUserArtifacts(userId),
     { revalidateOnFocus: false }
   )
@@ -360,6 +360,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     if (selectedFolderId) void hydrateFolderAncestors(selectedFolderId)
   }, [selectedFolderId, hydrateFolderAncestors])
 
+  const initialRouteRef = useRef({ pathname: location.pathname, convId: parsedRoute.conversationId, objId: parsedRoute.objectId })
   useEffect(() => {
     let mounted = true
     Promise.all([fetchInitialLookerMetadata(core40SDK), loadStoredSelectedFolderId(extensionSDK)])
@@ -376,14 +377,44 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
           setHealthScope((prev) => (prev === 'all' || prev === 'bq' ? 'looker' : prev))
         }
         const extMock = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
-        const [cfg, envState] = await Promise.all([
+        const ns = getArtifactNamespace(extensionSDK)
+        const [cfg, envState, rawConvs] = await Promise.all([
           artifactService.getUserConfig(resolvedUserId).catch(() => null),
-          loadUserEnvironmentState(core40SDK, resolvedUserId, getArtifactNamespace(extensionSDK)).catch(() => null),
+          loadUserEnvironmentState(core40SDK, resolvedUserId, ns).catch(() => null),
+          artifactService.listConversations(resolvedUserId).catch(() => [] as UserConversationEntry[]),
         ])
+        const resolvedEnvId = normalizeEnvironmentId(envState?.environmentId)
+        let loadedConvs = rawConvs
+        if (resolvedEnvId) {
+          const expiredIds = await pruneDeadEnvironmentConversations({
+            sdk: core40SDK,
+            extensionSDK,
+            userId: resolvedUserId,
+            namespace: ns,
+            activeEnvironmentId: resolvedEnvId,
+            conversations: rawConvs,
+          })
+          if (expiredIds.length > 0) {
+            const expiredSet = new Set(expiredIds)
+            loadedConvs = rawConvs.filter((c) => !expiredSet.has(c.id))
+            const init = initialRouteRef.current
+            const initSeg = decodeURIComponent(init.pathname.replace(/^\/c\//, '').replace(/^\/+|\/+$/g, ''))
+            const initTarget = init.convId || init.objId || initSeg
+            if (mounted && initTarget && expiredSet.has(initTarget)) {
+              setExpiredConversationNotice('This conversation expired because its sandbox environment was reset or expired.')
+              if (init.pathname !== '/') history.replace('/')
+            }
+          }
+        }
         if (mounted) {
           const hasStoredCustom = Boolean(cfg?.updatedAt || (cfg?.agentName && cfg.agentName !== DEFAULT_STUDIO_AGENT_NAME))
           setAgentName(hasStoredCustom ? normalizeStudioAgentName(cfg?.agentName) : normalizeStudioAgentName(extMock?.initialAgentName || cfg?.agentName))
           if (envState?.environmentId) syncSharedEnvironmentId(envState.environmentId, envState.sourcesHash ?? null)
+          const loadedIds = new Set(loadedConvs.map((c) => c.id))
+          const missingOpt = optimisticConvsRef.current.filter((c) => !loadedIds.has(c.id))
+          const nextConvs = missingOpt.length > 0 ? [...missingOpt, ...loadedConvs] : loadedConvs
+          conversationsRef.current = nextConvs
+          void mutateConversations(nextConvs, { revalidate: false })
         }
         listLocalDraftScripts(extensionSDK).then((items) => { if (mounted) setSavedScripts(items) }).catch(() => {})
         setAllModels(
@@ -410,14 +441,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
         if (!extMock?.forceFolderSkeleton) setLoadingMetadata(false)
         void hydrateFolderAncestors(targetInitialFolder, initialRootIds)
         void loadFolderChildren(targetInitialFolder, initialRootIds).catch(() => {})
-        void artifactService.listUserArtifacts(resolvedUserId).catch(() => {})
         fetchPreloadedContentSummary(core40SDK).then((items) => { if (mounted) setPreloadedContent(items) }).catch(() => {})
-        void artifactService.listConversations(resolvedUserId).then((loadedConvs) => {
-          if (!mounted) return
-          const loadedIds = new Set(loadedConvs.map((c) => c.id))
-          const missingOpt = optimisticConvsRef.current.filter((c) => !loadedIds.has(c.id))
-          void mutateConversations(missingOpt.length > 0 ? [...missingOpt, ...loadedConvs] : loadedConvs, { revalidate: false })
-        }).catch(() => {})
       })
       .catch((err: unknown) => {
         const extMock = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
@@ -429,7 +453,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
         if (mounted && !extMock?.forceAppInitializing) setAppInitializing(false)
       })
     return () => { mounted = false }
-  }, [artifactService, core40SDK, extensionSDK, syncSharedEnvironmentId, hydrateFolderAncestors, loadFolderChildren, mutateConversations, setAgentName, setAppInitializing, setCapabilities, setMessages])
+  }, [artifactService, core40SDK, extensionSDK, history, syncSharedEnvironmentId, hydrateFolderAncestors, loadFolderChildren, mutateConversations, setAgentName, setAppInitializing, setCapabilities, setExpiredConversationNotice, setMessages])
 
   useEffect(() => {
     let mounted = true

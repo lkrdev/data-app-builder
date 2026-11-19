@@ -12,8 +12,8 @@ import {
   LOOKER_DASHBOARD_SKILL_MD, mergeInteractionSseEvent, runAntigravityTurn, sanitizeActivityThought,
 } from '../../antigravity'
 import {
-  clearArtifactServiceCache, clearLookerMetadataCache, hydrateConversationContentItems, loadUserConversations,
-  saveUserConversation,
+  ArtifactPayloadViolationError, clearArtifactServiceCache, clearLookerMetadataCache, getArtifactService,
+  hydrateConversationContentItems, loadUserConversations, saveUserConversation,
 } from '../../lookerApi'
 
 interface MockInteractionPostBody {
@@ -359,19 +359,43 @@ export function registerPermissionsPart13Tests(): void {
     }
   })
 
-  test('70. Issue #172: prunePersistedMessages preserves compact crudItems on mutating turns and omits crudItems on chat-only turns', async () => {
+  test('70. Issue #172 & #230: strips legacy messages on load, rejects messages on put, and clearing last tab persists contentItems: []', async () => {
+    clearArtifactServiceCache()
     const store = new Map<string, string>()
+    store.set(
+      'user_conversations:u172',
+      JSON.stringify([
+        {
+          id: 'conv_crud_172',
+          type: 'app',
+          label: 'Legacy CRUD Turn Persistence',
+          updatedAt: '2026-11-10T19:00:00Z',
+          messages: [
+            { role: 'user', text: 'Create app' },
+            {
+              role: 'assistant',
+              text: 'Created app #42.',
+              dashboardId: '42',
+              activitySteps: [{ id: 's1', kind: 'thought', title: 'Thinking', status: 'done' }],
+              crudItems: [{ key: 'data_app:42', id: '42', title: 'Exec App', contentType: 'data_app', embedPath: '/embed/dashboards/42', action: 'created' }],
+            },
+          ],
+        },
+      ])
+    )
     const mockSdk = {
       authSession: {
         transport: {
-          rawRequest: async (method: string, path: string, _q?: unknown, body?: unknown) => {
-            if (method === 'GET' && path.includes('/artifacts/')) {
-              const key = decodeURIComponent(path.split('/artifacts/')[1]?.split('/').pop() || '')
+          rawRequest: async (method: string, reqPath: string, _q?: unknown, body?: unknown) => {
+            if (method === 'GET' && reqPath.includes('/artifacts/')) {
+              const qpKey = (_q as { key?: string } | undefined)?.key
+              const key = decodeURIComponent(qpKey || reqPath.split('/artifacts/')[1]?.split('/').pop() || '')
               const val = store.get(key)
               return val ? { ok: true, statusCode: 200, body: [{ key, value: val, version: 1 }] } : { ok: false, statusCode: 404, body: { message: 'Not Found' } }
             }
-            if (method === 'PUT' && path.includes('/artifacts/')) {
-              const rows = Array.isArray(body) ? body : [body]
+            if (method === 'PUT' && reqPath.includes('/artifacts/')) {
+              const parsed = typeof body === 'string' ? JSON.parse(body) : body
+              const rows = Array.isArray(parsed) ? parsed : [parsed]
               rows.forEach((r: { key?: string; value?: string }) => { if (r?.key && typeof r.value === 'string') store.set(r.key, r.value) })
               return { ok: true, statusCode: 200, body: rows }
             }
@@ -381,31 +405,19 @@ export function registerPermissionsPart13Tests(): void {
       },
     } as unknown as Parameters<typeof saveUserConversation>[0]
 
-    await saveUserConversation(mockSdk, 'u172', {
-      id: 'conv_crud_172',
-      type: 'app',
-      label: 'CRUD Turn Persistence',
-      updatedAt: '2026-11-10T19:00:00Z',
-      messages: [
-        { role: 'user', text: 'Create app' },
-        {
-          role: 'assistant',
-          text: 'Created app #42.',
-          dashboardId: '42',
-          activitySteps: [{ id: 's1', kind: 'thought', title: 'Thinking', status: 'done' }],
-          crudItems: [{ key: 'data_app:42', id: '42', title: 'Exec App', contentType: 'data_app', embedPath: '/embed/dashboards/42', action: 'created' }],
-        },
-        { role: 'user', text: 'Explain KPIs' },
-        { role: 'assistant', text: 'KPIs use net revenue.', crudItems: [] },
-      ],
-    })
     const loaded = await loadUserConversations(mockSdk, 'u172')
     const conv = loaded.find((c) => c.id === 'conv_crud_172')
-    expect(conv?.messages?.[1]?.crudItems).toEqual([
-      { key: 'data_app:42', id: '42', title: 'Exec App', contentType: 'data_app', embedPath: '/embed/dashboards/42', action: 'created' },
-    ])
-    expect(conv?.messages?.[1]?.activitySteps).toBeUndefined()
-    expect('crudItems' in (conv?.messages?.[3] || {})).toBe(false)
+    expect(conv).toBeDefined()
+    expect('messages' in (conv || {})).toBe(false)
+
+    await expect(
+      getArtifactService(mockSdk).put([
+        {
+          key: 'user_conversations:u172',
+          value: [{ id: 'conv_crud_172', type: 'app', label: 'Bad', updatedAt: '2026-11-10T19:00:00Z', messages: [] }],
+        },
+      ])
+    ).rejects.toThrow(ArtifactPayloadViolationError)
 
     // Deleting the last remaining tab persists contentItems: [] without resurrecting prev.contentItems or conv.content
     await saveUserConversation(mockSdk, 'u172', {
@@ -420,15 +432,12 @@ export function registerPermissionsPart13Tests(): void {
       type: 'app',
       contentItems: [],
       activeContentTabKey: '',
-      messages: [
-        { role: 'user', text: 'Delete dashboard 42' },
-        { role: 'assistant', text: 'Deleted.', crudItems: [{ key: 'data_app:42', id: '42', title: 'Exec App', contentType: 'data_app', action: 'deleted' }] },
-      ],
     })
     const afterDelConv = afterDelList.find((c) => c.id === 'conv_crud_172')!
     expect(afterDelConv.contentItems).toEqual([])
     expect(afterDelConv.activeContentTabKey).toBe('')
     expect(hydrateConversationContentItems(afterDelConv)).toEqual([])
+    expect(store.get('user_conversations:u172') || '').not.toContain('"messages"')
   })
 
 }

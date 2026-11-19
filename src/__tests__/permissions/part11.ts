@@ -248,16 +248,18 @@ export function registerPermissionsPart11Tests(): void {
       onStatus: () => {},
     })
     expect(postedBodies).toHaveLength(1)
-    expect(postedBodies[0].model).toBe(DEFAULT_ANTIGRAVITY_MODEL)
-    expect(postedBodies[0].store).toBe(false)
-    expect(postedBodies[0].background).toBe(false)
+    expect((postedBodies[0] as Record<string, unknown>).agent).toBe('antigravity-preview-09-2026')
+    expect(postedBodies[0].agent_config).toEqual(expect.objectContaining({ type: 'antigravity', model: DEFAULT_ANTIGRAVITY_MODEL }))
+    expect(postedBodies[0].store).toBe(true)
+    expect(postedBodies[0].background).toBe(true)
     expect(postedBodies[0].tools).toEqual([])
     expect(postedBodies[0].environment).toBeUndefined()
-    expect(postedBodies[0].generation_config).toEqual({ thinking_level: 'low', max_output_tokens: 2048 })
     expect(postedBodies[0].input?.[0]?.text?.startsWith('[THINKING LEVEL: LOW')).toBe(true)
     expect(postedBodies[0].input?.[0]?.text).toContain('`bq_warehouse` (bigquery_standard_sql · corp_dw · analytics)')
+    expect(postedBodies[0].input?.[0]?.text).toContain('<USER_MESSAGE>I need to create a new project</USER_MESSAGE>')
     expect(t1Res.resolvedUseCase).toBe('lookml')
-    expect(t1Res.session.statelessTurn).toBe(true)
+    expect(t1Res.rootInteractionId).toBe('int_157_t1')
+    expect(t1Res.session.statelessTurn).toBeUndefined()
 
     const t2Res = await runAntigravityTurn({
       sdk: adminSdk,
@@ -279,10 +281,10 @@ export function registerPermissionsPart11Tests(): void {
     })
     expect(postedBodies).toHaveLength(2)
     expect(postedBodies[1].environment).toBeUndefined()
-    expect(postedBodies[1].previous_interaction_id).toBeUndefined()
+    expect(postedBodies[1].previous_interaction_id).toBe('int_157_t1')
+    expect(postedBodies[1].store).toBe(true)
     expect(postedBodies[1].tools).toEqual([LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL])
     expect(postedBodies[1].input?.[0]?.text?.startsWith('[THINKING LEVEL: LOW')).toBe(true)
-    expect(postedBodies[1].input?.[0]?.text).toContain('Prior conversation context:')
 
     const t3Res = await runAntigravityTurn({
       sdk: adminSdk,

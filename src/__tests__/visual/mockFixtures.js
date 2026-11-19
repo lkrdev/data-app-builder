@@ -90,11 +90,7 @@ function buildMockFixturesScript(scenario) {
           title: 'Executive Revenue App',
           dashboardId: '42',
           extensionId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-          explores: ['thelook::order_items'],
-          messages: [
-            { role: 'user', text: 'Build an Executive Revenue Data App on order_items with Total Revenue, Total Orders, Avg Order Value KPIs and a Monthly Revenue trend chart.' },
-            { role: 'assistant', text: 'Built and published Executive Revenue App (Dashboard #42) with 3 KPI cards and a Highcharts monthly trend chart.', dashboardId: '42', widgetCount: 4, crudItems: [{ key: 'data_app:42', id: '42', title: 'Executive Revenue App', contentType: 'data_app', embedPath: '/embed/dashboards/42', action: 'created' }] }
-          ]
+          explores: ['thelook::order_items']
         },
         obj_dashboard_7: {
           id: '7',
@@ -106,11 +102,7 @@ function buildMockFixturesScript(scenario) {
           explores: ['thelook::order_items'],
           studio: {
             explores: ['thelook::order_items'],
-            lastInteractionId: 'v1_native_7',
-            messages: [
-              { role: 'user', text: 'Create a native Looker UDD on order_items with a Total Revenue & Orders KPI, a Revenue by Status column chart, and an Order Status filter.' },
-              { role: 'assistant', text: 'Created native Looker Dashboard #7 ("Executive Order Performance") with KPI tile #55 ($14,011,848.92 across 303,454 orders), column chart #56, and Order Status filter #22.', dashboardId: '7', widgetCount: 2 }
-            ]
+            lastInteractionId: 'v1_native_7'
           }
         },
         obj_lookml_20261030_dev_branch: {
@@ -148,11 +140,7 @@ function buildMockFixturesScript(scenario) {
           },
           studio: {
             explores: ['thelook::order_items'],
-            lastInteractionId: 'v1_lookml_1',
-            messages: [
-              { role: 'user', text: 'Add total_revenue and gross_margin measures to orders refinement, curate field descriptions, add a LookML data test, and verify SQL vs Explore parity.' },
-              { role: 'assistant', text: 'Used active user dev mode workspace, updated bronze/orders.refinement.lkml, added tests/bronze/orders.test.lkml, verified 0 LookML validation errors, and confirmed 12/12 row parity.' }
-            ]
+            lastInteractionId: 'v1_lookml_1'
           }
         },
         obj_health_check_demo: {
@@ -186,10 +174,6 @@ function buildMockFixturesScript(scenario) {
             '- Partition \`looker-private-demo.thelook.events\` and \`order_items\` by \`DATE(created_at)\` and cluster by \`status, user_id\`.'
           ].join('\\n'),
           telemetry: {},
-          messages: [
-            { role: 'user', text: 'Run a full 3-pillar Looker & BigQuery health check on thelook_event.' },
-            { role: 'assistant', text: 'Completed 3-Pillar Health Check for thelook_event (Overall Score: 70% B-, Transcriber: 2.86/4.00). Synthesized 7-section TECHNICAL_DESIGN_DOCUMENT.md.' }
-          ],
           updatedAt: '2026-10-30T23:37:00Z',
           createdBy: '1'
         },
@@ -199,11 +183,7 @@ function buildMockFixturesScript(scenario) {
           code: 'return [\\n  {"model": "thelook", "label": "eCommerce", "mode": mode, "visible_explores": 11, "first_explore": "order_items", "filter_status": dashboard_filters.get("status", "Complete")},\\n  {"model": "agentic_thelook", "label": "Agentic Thelook", "mode": mode, "visible_explores": 24, "first_explore": "order_shards", "filter_status": dashboard_filters.get("status", "Complete")}\\n]',
           dashboardId: '8',
           elementId: '57',
-          updatedAt: '2026-10-30T23:36:00Z',
-          messages: [
-            { role: 'user', text: 'Write a CodeMode script summarizing LookML models and active dashboard filters.' },
-            { role: 'assistant', text: 'Published Dashboard #8 (load_configuration="wait", layout="extension") and bound tile_element_57 -> demo1.' }
-          ]
+          updatedAt: '2026-10-30T23:36:00Z'
         },
         tile_element_57: {
           scriptId: 'demo1',
@@ -238,37 +218,35 @@ function buildMockFixturesScript(scenario) {
             id: 'conv_app_42',
             type: 'app',
             interactionId: 'v1_app_42',
+            turnInteractionIds: [['v1_app_42_r', 'v1_app_42']],
             environmentId: 'env_42',
+            tags: ['Data App', 'order_items'],
             content: { dashboardId: '42', appArtifactId: 'obj_app_42' },
             label: 'Executive Revenue App',
             createdAt: '2026-10-30T23:00:00Z',
             updatedAt: '2026-10-30T23:40:00Z',
-            explores: ['thelook::order_items'],
-            messages: [
-              { role: 'user', text: 'Build an Executive Revenue Data App on order_items with Total Revenue, Total Orders, Avg Order Value KPIs and a Monthly Revenue trend chart.' },
-              { role: 'assistant', text: 'Built and published Executive Revenue App (Dashboard #42) with 3 KPI cards and a Highcharts monthly trend chart.', dashboardId: '42', widgetCount: 4, crudItems: [{ key: 'data_app:42', id: '42', title: 'Executive Revenue App', contentType: 'data_app', embedPath: '/embed/dashboards/42', action: 'created' }] }
-            ]
+            explores: ['thelook::order_items']
           },
           {
             id: 'conv_dashboard_7',
             type: 'dashboard',
             interactionId: 'v1_native_7',
-            environmentId: 'env_dashboard_7',
+            turnInteractionIds: [['v1_native_7_r', 'v1_native_7']],
+            environmentId: 'env_42',
+            tags: ['Dashboard', 'order_items'],
             content: { dashboardId: '7', contentType: 'dashboard', embedPath: '/embed/dashboards/7' },
             label: 'Executive Order Performance (Native UDD)',
             createdAt: '2026-10-30T22:50:00Z',
             updatedAt: '2026-10-30T23:39:00Z',
-            explores: ['thelook::order_items'],
-            messages: [
-              { role: 'user', text: 'Create a native Looker UDD on order_items with a Total Revenue & Orders KPI, a Revenue by Status column chart, and an Order Status filter.' },
-              { role: 'assistant', text: 'Created native Looker Dashboard #7 ("Executive Order Performance") with KPI tile #55 ($14,011,848.92 across 303,454 orders), column chart #56, and Order Status filter #22.', dashboardId: '7', widgetCount: 2 }
-            ]
+            explores: ['thelook::order_items']
           },
           {
             id: 'conv_lookml_20261030_dev_branch',
             type: 'lookml',
             interactionId: 'v1_lookml_1',
-            environmentId: 'env_lookml_20261030_dev_branch',
+            turnInteractionIds: [['v1_lookml_1_r', 'v1_lookml_1']],
+            environmentId: 'env_42',
+            tags: ['LookML', 'deploytobarerepo_temp'],
             content: { sessionId: '20261030_dev_branch', projectId: 'deploytobarerepo_temp', branch: 'user dev mode' },
             label: 'Add total_revenue & gross_margin to order_items',
             createdAt: '2026-10-30T22:40:00Z',
@@ -279,7 +257,9 @@ function buildMockFixturesScript(scenario) {
             id: 'conv_health_demo',
             type: 'health-check',
             interactionId: 'v1_health_demo',
-            environmentId: 'env_health_demo',
+            turnInteractionIds: [['v1_health_demo_r', 'v1_health_demo']],
+            environmentId: 'env_42',
+            tags: ['Health Check', 'thelook_event'],
             content: { reportId: 'demo', projectId: 'thelook_event', overallScore: 70 },
             label: '3-Pillar Health Check — thelook_event (70%)',
             createdAt: '2026-10-30T22:30:00Z',
@@ -289,13 +269,29 @@ function buildMockFixturesScript(scenario) {
             id: 'conv_tile_demo1',
             type: 'tile',
             interactionId: 'v1_tile_demo1',
-            environmentId: 'env_tile_isolated',
+            turnInteractionIds: [['v1_tile_demo1_r', 'v1_tile_demo1']],
+            environmentId: 'env_42',
+            tags: ['Script', 'Dashboard #8'],
             content: { scriptId: 'demo1', dashboardId: '8', elementId: '57' },
             label: 'Looker Explore & Filter Summary',
             createdAt: '2026-10-30T22:20:00Z',
             updatedAt: '2026-10-30T23:36:00Z'
           }
-        ]
+        ].concat(
+          scenario === 'expired_conv' || window.location.search.includes('includeExpired=1')
+            ? [{
+                id: 'conv_expired_old',
+                type: 'app',
+                interactionId: 'v1_expired_old',
+                turnInteractionIds: [['v1_expired_old', 'v1_expired_old']],
+                environmentId: 'env_old_expired',
+                tags: ['Data App', 'expired'],
+                label: 'Legacy Expired Sandbox Thread',
+                createdAt: '2026-10-25T10:00:00Z',
+                updatedAt: '2026-10-25T10:05:00Z'
+              }]
+            : []
+        )
       };
 
       const routeMap = {
@@ -319,7 +315,8 @@ function buildMockFixturesScript(scenario) {
         centered_empty_prompt: '/',
         studio_dark_theme: '/c/conv_app_42',
         ripper_surf_loader: '/c/conv_app_42',
-        skills_outdated: '/c/conv_app_42'
+        skills_outdated: '/c/conv_app_42',
+        expired_conv: '/c/conv_expired_old'
       };
 
       try {
@@ -720,7 +717,7 @@ function buildMockFixturesScript(scenario) {
               id: '101', type: 'extension', extension_id: 'db::a1b2c3d4-e5f6-7890-abcd-ef1234567890',
               rich_content_json: JSON.stringify({
                 queries: { 'da-kpi-rev': 'q1', 'da-kpi-orders': 'q2', 'da-chart-trend': 'q3' },
-                data_app_studio: { explores: ['thelook::order_items'], lastInteractionId: 'v1_app_42', environmentId: 'env_42', messages: artifactObjects.obj_app_42.messages }
+                data_app_studio: { explores: ['thelook::order_items'], lastInteractionId: 'v1_app_42', environmentId: 'env_42' }
               })
             }],
             dashboard_layouts: [{ id: '201', type: 'extension', active: true }]

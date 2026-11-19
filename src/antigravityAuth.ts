@@ -395,15 +395,27 @@ export function callInteractionsApi(
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (auth.mode === 'oauth') {
+    if (typeof window !== 'undefined' && window.__MOCK_LOOKER_EXTENSION__ && method === 'GET' && /^interactions\//i.test(path)) {
+      const reqId = decodeURIComponent(path.replace(/^interactions\//i, '').split('?')[0] || '').trim()
+      const mockWin = window as unknown as { __INTERACTION_CALLS__?: Array<{ url: string; path: string; method: string; id?: string }> }
+      ;(mockWin.__INTERACTION_CALLS__ ||= []).push({ url, path, method, id: reqId })
+      const mockInteractions = (window.__MOCK_LOOKER_EXTENSION__ as { mockInteractions?: Record<string, AntigravityInteractionPayload & { __mockError?: unknown }> }).mockInteractions
+      const hit = mockInteractions ? mockInteractions[reqId] : undefined
+      if (hit && hit.__mockError) {
+        const errMsg = typeof hit.__mockError === 'string' ? hit.__mockError : JSON.stringify(hit.__mockError)
+        return Promise.reject(new Error(errMsg))
+      }
+      if (hit) return Promise.resolve(hit)
+      return Promise.resolve({ id: reqId || 'int_mock_get', status: 'completed', output_text: 'Mock sandbox interaction trace.' })
+    }
     const liveToken = resolveAuthOAuthToken(auth)
     if (!liveToken) return Promise.reject(new Error('Please sign in with Google OAuth first.'))
     if (typeof window !== 'undefined' && window.__MOCK_LOOKER_EXTENSION__) {
-      const mockInteractions = (window.__MOCK_LOOKER_EXTENSION__ as { mockInteractions?: Record<string, AntigravityInteractionPayload> }).mockInteractions
-      if (method === 'GET' && /^interactions\//i.test(path)) {
-        const reqId = decodeURIComponent(path.replace(/^interactions\//i, '').split('?')[0] || '').trim()
-        if (mockInteractions && mockInteractions[reqId]) return Promise.resolve(mockInteractions[reqId])
-        return Promise.resolve({ id: reqId || 'int_mock_get', status: 'completed', output_text: 'Mock sandbox interaction trace.' })
+      const mockWin = window as unknown as {
+        __INTERACTION_CALLS__?: Array<{ path: string; method: string; id?: string }>
+        __SKILL_SYNC_CALLS__?: Array<{ path: string; method: string; body?: Record<string, unknown> }>
       }
+      ;(mockWin.__INTERACTION_CALLS__ ||= []).push({ path, method })
       if (/:cancel$/i.test(path)) return Promise.resolve({ id: path.replace(/^interactions\//i, '').replace(/:cancel$/i, ''), status: 'cancelled' })
       const inputArr = Array.isArray(body?.input) ? (body?.input as Array<{ text?: string }>) : []
       const promptText = String(inputArr[0]?.text || '')
@@ -414,68 +426,41 @@ export function callInteractionsApi(
         const ucMatch = promptText.match(/Active useCase:\s*([^\r\n]+)/i)?.[1]?.trim() || 'auto'
         const permittedMatch = promptText.match(/Permitted use cases:\s*([^\r\n]+)/i)?.[1]?.split(',').map((s) => s.trim() as StudioUseCase).filter(Boolean)
         const targetMatch = promptText.match(/Target explore:\s*([^\s(\r\n]+)(?:\s*\(([^)\r\n]+)\))?/i)
-        const expKey = targetMatch?.[1]?.trim()
-        const expLabel = targetMatch?.[2]?.trim()
+        const expKey = targetMatch?.[1]?.trim(), expLabel = targetMatch?.[2]?.trim()
         const parseFieldLine = (prefix: string): StarterExploreFieldSummary[] => {
           const line = promptText.match(new RegExp(`${prefix}:\\s*([^\\r\\n]+)`, 'i'))?.[1]?.trim()
           if (!line) return []
-          return line
-            .split(',')
-            .map((part) => {
-              const m = part.trim().match(/^([^\s(]+)(?:\s*\(([^)]+)\))?$/)
-              return m ? { name: m[1].trim(), label: (m[2] || m[1]).trim() } : null
-            })
-            .filter((x): x is StarterExploreFieldSummary => Boolean(x))
+          return line.split(',').map((part) => {
+            const m = part.trim().match(/^([^\s(]+)(?:\s*\(([^)]+)\))?$/)
+            return m ? { name: m[1].trim(), label: (m[2] || m[1]).trim() } : null
+          }).filter((x): x is StarterExploreFieldSummary => Boolean(x))
         }
         const [mName = '', eName = ''] = expKey && expKey !== 'none' ? (expKey.includes('::') ? expKey.split('::') : expKey.split('/')) : ['', '']
         const mockPrompts = buildDynamicStarterPrompts({
-          useCase: ucMatch,
-          selectedExplores: expKey && expKey !== 'none' ? [expKey] : [],
-          permittedUseCases: permittedMatch,
-          exploreContext:
-            expKey && expKey !== 'none'
-              ? {
-                  modelName: mName,
-                  modelLabel: mName,
-                  exploreName: eName || expKey,
-                  exploreLabel: expLabel || eName || expKey,
-                  exploreKey: expKey,
-                  measures: parseFieldLine('Top measures'),
-                  dimensions: parseFieldLine('Top dimensions'),
-                }
-              : null,
+          useCase: ucMatch, selectedExplores: expKey && expKey !== 'none' ? [expKey] : [], permittedUseCases: permittedMatch,
+          exploreContext: expKey && expKey !== 'none'
+            ? { modelName: mName, modelLabel: mName, exploreName: eName || expKey, exploreLabel: expLabel || eName || expKey, exploreKey: expKey, measures: parseFieldLine('Top measures'), dimensions: parseFieldLine('Top dimensions') }
+            : null,
         })
         return Promise.resolve({ id: 'int_mock_starter_prompts', status: 'completed', output_text: `<STARTER_PROMPTS>${JSON.stringify(mockPrompts)}</STARTER_PROMPTS>` })
       }
       if (promptText.includes('[CA_AGENT_SELECTION_REQUEST]')) {
-        const idMatch = promptText.match(/"agent_id"\s*:\s*"([^"]+)"/)
-        const selectedId = idMatch?.[1] || 'ad69f74cd9e2494090e9e9e9c50190c8'
-        return Promise.resolve({
-          id: 'int_mock_ca_selection',
-          status: 'completed',
-          output_text: JSON.stringify({
-            agent_id: selectedId,
-            rationale: 'Selected Looker CA agent via direct model stateless routing.',
-          }),
-        })
+        const selectedId = promptText.match(/"agent_id"\s*:\s*"([^"]+)"/)?.[1] || 'ad69f74cd9e2494090e9e9e9c50190c8'
+        return Promise.resolve({ id: 'int_mock_ca_selection', status: 'completed', output_text: JSON.stringify({ agent_id: selectedId, rationale: 'Selected Looker CA agent via direct model stateless routing.' }) })
       }
       if (promptText.includes('[SKILL_SYNC:')) {
         const marker = promptText.match(/reply with ((?:CHUNK_OK:\d+|SYNC_OK:[0-9a-f]+))/)?.[1] || 'SYNC_OK'
-        const mockWin = window as unknown as { __SKILL_SYNC_CALLS__?: Array<{ path: string; method: string; body?: Record<string, unknown> }>; __MOCK_LOOKER_EXTENSION__?: { environmentFiles?: Record<string, string> } }
         ;(mockWin.__SKILL_SYNC_CALLS__ ||= []).push({ path, method, body })
         return Promise.resolve({ id: 'int_mock_skill_sync', environment_id: String(body?.environment || ''), status: 'completed', output_text: marker })
       }
-      const isDirectStatelessModel =
-        body?.store === false || (Boolean(body?.model) && !body?.agent)
+      const isDirectStatelessModel = body?.store === false || (Boolean(body?.model) && !body?.agent)
       const reusedEnvId = typeof body?.environment === 'string' ? body.environment.trim() : ''
+      const taggedUserMsg = promptText.match(/<USER_MESSAGE>([\s\S]*?)<\/USER_MESSAGE>/i)?.[1]
       const userReqMatch = promptText.match(/User request:\s*([\s\S]*)$/i)
-      const inferred = extractResolvedUseCase(undefined, userReqMatch ? userReqMatch[1].trim() : promptText)
+      const rawInferredPrompt = taggedUserMsg ? taggedUserMsg.trim() : userReqMatch ? userReqMatch[1].trim() : promptText
+      const inferred = extractResolvedUseCase(undefined, rawInferredPrompt)
       return Promise.resolve(Object.assign(
-        {
-          id: `int_mock_${Date.now().toString(36).slice(-5)}`,
-          status: 'completed',
-          output_text: `<USE_CASE>${inferred}</USE_CASE>\nRouted turn via AGENTS.md to ${inferred}.`,
-        },
+        { id: `int_mock_${Date.now().toString(36).slice(-5)}`, status: 'completed', output_text: `<USE_CASE>${inferred}</USE_CASE>\nRouted turn via AGENTS.md to ${inferred}.` },
         isDirectStatelessModel ? null : { environment_id: reusedEnvId || `env_${inferred}_mock` }
       ))
     }
