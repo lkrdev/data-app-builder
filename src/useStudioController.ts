@@ -3,8 +3,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AntigravityActivityStep, cleanLookmlProjectId, extractSkillNameFromPath,
   fetchConversationSandboxDebugMarkdown, fetchEnvironmentFile,
-  hydrateInteractionActivitySteps, hydrateRemoteConversationMessages, normalizeEnvironmentId,
-  normalizeSandboxFilePath, resolveBuiltinWorkspaceFileContent,
+  hydrateInteractionActivitySteps, hydrateRemoteConversationMessages, type HydrateRemoteConversationResult,
+  normalizeEnvironmentId, normalizeSandboxFilePath, resolveBuiltinWorkspaceFileContent,
 } from './antigravity'
 import { ChatMessage } from './components/App'
 import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
@@ -66,6 +66,7 @@ export function useStudioController() {
     getAuthCfg, selectEpochRef, getConvMessages, setConvMessages, deleteConvMessages,
     busyStatus, activeConversationId, activeConversationIdRef, setActiveConversationId,
     liveActivitySteps, liveActivityStepsRef, inFlightTurnsRef, turnResumerRef, onTurnAbortedRef, abortConvTurn,
+    resetOAuthOnUnauthorized,
   } = auth
   const {
     userId, userIdRef, setSelectedExplores, selectedExplores, setMentionedItems,
@@ -321,6 +322,7 @@ export function useStudioController() {
     [handleResetNewApp]
   )
 
+  loaders.onResetAppStateRef.current = () => handleResetNewApp(true)
   turn.onResetAppStateRef.current = () => handleResetNewApp(true)
   turn.onClearSandboxFileCacheRef.current = () => {
     sandboxMarkdownCacheRef.current = {}
@@ -348,8 +350,9 @@ export function useStudioController() {
           void loadExistingDashboardApp(core40SDK, dashId).then((l) => { setCurrentAppCode(l.code); setPublishedAppState(l) }).catch(() => {})
         }
       } else if (ct === 'lookml') {
+        const deferSandbox = !loaders.canHydrateNow() && Boolean(agentSessionRef.current.lastInteractionId)
         const targetProj = cleanLookmlProjectId(item.projectId) || cleanLookmlProjectId(item.id)
-        if (targetProj && !isLookmlTargetAlreadyLoaded('lookml', targetProj, lookmlBundle?.id || lookmlBundle?.project_id ? { id: lookmlBundle.id, project_id: lookmlBundle.project_id } : null, item.sessionId) && lookmlBundle?.id !== item.id) {
+        if (!deferSandbox && targetProj && !isLookmlTargetAlreadyLoaded('lookml', targetProj, lookmlBundle?.id || lookmlBundle?.project_id ? { id: lookmlBundle.id, project_id: lookmlBundle.project_id } : null, item.sessionId) && lookmlBundle?.id !== item.id) {
           void loadLookmlSessionArtifact(core40SDK, extensionSDK, targetProj, item.sessionId, {
             auth: getAuthCfg(), environmentId: sharedEnvIdRef.current, lastInteractionId: agentSessionRef.current.lastInteractionId, explores: selectedExplores,
           }).then((l) => { setLookmlBundle(l.bundle); const vp = cleanLookmlProjectId(l.bundle?.project_id); if (vp) setLookmlProjectId(vp) }).catch(() => {})
@@ -366,8 +369,9 @@ export function useStudioController() {
       } else if (ct === 'alert' && alertBundle?.alert_id !== (item.alertId || item.id)) {
         void loadAlertArtifact(core40SDK, item.alertId || item.id, getArtifactNamespace(extensionSDK)).then((l) => { if (l) setAlertBundle(l) }).catch(() => {})
       } else if (ct === 'report' && healthReport?.id !== item.id) {
+        const deferSandbox = !loaders.canHydrateNow() && Boolean(agentSessionRef.current.lastInteractionId)
         void loadHealthCheckArtifact(core40SDK, extensionSDK, item.id, {
-          auth: getAuthCfg(), environmentId: sharedEnvIdRef.current, lastInteractionId: agentSessionRef.current.lastInteractionId,
+          auth: getAuthCfg(), environmentId: sharedEnvIdRef.current, lastInteractionId: deferSandbox ? undefined : agentSessionRef.current.lastInteractionId, rerunIfMissing: !deferSandbox,
         }).then(setHealthReport).catch(() => {})
       } else if (ct === 'conversational-analytics') {
         setCaConversation((prev) =>
@@ -377,7 +381,7 @@ export function useStudioController() {
         )
       }
     },
-    [agentSessionRef, alertBundle?.alert_id, core40SDK, currentAppCode, extensionSDK, filtersJson, getAuthCfg, handleRunPython, healthReport?.id, loadedScript, lookmlBundle?.id, lookmlBundle?.project_id, scriptId, selectedExplores, selectedFolderId, setAlertBundle, setCaConversation, setCurrentAppCode, setHealthReport, setLoadedScript, setLookmlBundle, setLookmlProjectId, setNativeContentState, setPublishedAppState, setPublishedTileDash, setScriptCode, setScriptId, setScriptTitle, sharedEnvIdRef]
+    [agentSessionRef, alertBundle?.alert_id, core40SDK, currentAppCode, extensionSDK, filtersJson, getAuthCfg, handleRunPython, healthReport?.id, loadedScript, loaders, lookmlBundle?.id, lookmlBundle?.project_id, scriptId, selectedExplores, selectedFolderId, setAlertBundle, setCaConversation, setCurrentAppCode, setHealthReport, setLoadedScript, setLookmlBundle, setLookmlProjectId, setNativeContentState, setPublishedAppState, setPublishedTileDash, setScriptCode, setScriptId, setScriptTitle, sharedEnvIdRef]
   )
 
   const persistTabStateToConversation = useCallback(
@@ -478,6 +482,9 @@ export function useStudioController() {
       const hydrated = await hydrateRemoteConversationMessages({
         extensionSDK, auth: getAuthCfg(), sdk: core40SDK, userId: userIdRef.current || userId,
         conv, activeEnvironmentId: sharedEnvIdRef.current,
+      }).catch((err: unknown): HydrateRemoteConversationResult => {
+        resetOAuthOnUnauthorized(err)
+        return { expired: false, messages: [], prunedIds: [] }
       })
       if (selectEpochRef.current !== myEpoch || inFlightTurnsRef.current.has(conv.id)) return
       if (hydrated.expired) {
@@ -485,7 +492,12 @@ export function useStudioController() {
         handleResetNewApp(true)
         return
       }
-      if (hydrated.messages.length > 0) setConvMessages(conv.id, hydrated.messages)
+      if (hydrated.messages.length > 0) {
+        setConvMessages(conv.id, hydrated.messages)
+        setMessages(mergeCachedActivitySteps(hydrated.messages))
+      } else if (activeConversationIdRef.current !== conv.id) {
+        setMessages([])
+      }
       setActiveConversationId(conv.id)
       const targetPath = `/c/${encodeURIComponent(conv.id)}`
       hydratedConvRouteRef.current = `${targetPath}:${conv.id}`
@@ -519,9 +531,11 @@ export function useStudioController() {
         syncContentItemViewer(contentItemsRef.current.find((it) => it.key === initialTabKey))
       }
       setActiveConversationId(conv.id)
-      if (hydrated.messages.length > 0) setMessages(mergeCachedActivitySteps(hydrated.messages))
-      else if (!targetId) setMessages([])
+      const latestMsgs = hydrated.messages.length > 0 ? hydrated.messages : getConvMessages(conv.id)
+      if (latestMsgs.length > 0) setMessages(mergeCachedActivitySteps(latestMsgs))
+      else if (!targetId || (!loaders.canHydrateNow() && Boolean(conv.turnInteractionIds?.length || conv.interactionId))) setMessages([])
       if (
+        loaders.isAuthNow() &&
         (conv.inFlight || readInFlightConvIds().includes(conv.id)) &&
         conv.interactionId &&
         !recoveredInFlightIdsRef.current.has(conv.interactionId)
@@ -530,7 +544,7 @@ export function useStudioController() {
         void turnResumerRef.current?.(conv)
       }
     },
-    [activeConversationIdRef, contentItemsRef, core40SDK, extensionSDK, getAuthCfg, handleResetNewApp, history, hydratedConvRouteRef, inFlightTurnsRef, loaders, location.pathname, mergeCachedActivitySteps, openArtifactByMode, recoveredInFlightIdsRef, selectEpochRef, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setContentItems, setConvMessages, setCurrentAppCode, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMessages, setNativeContentState, setPublishedAppState, setPublishedTileDash, setScriptCode, setScriptId, setScriptTitle, setSelectedExplores, setSidebarCollapsed, sharedEnvIdRef, syncContentItemViewer, turnResumerRef, userId, userIdRef]
+    [activeConversationIdRef, contentItemsRef, core40SDK, extensionSDK, getAuthCfg, getConvMessages, handleResetNewApp, history, hydratedConvRouteRef, inFlightTurnsRef, loaders, location.pathname, mergeCachedActivitySteps, openArtifactByMode, recoveredInFlightIdsRef, resetOAuthOnUnauthorized, selectEpochRef, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setContentItems, setConvMessages, setCurrentAppCode, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMessages, setNativeContentState, setPublishedAppState, setPublishedTileDash, setScriptCode, setScriptId, setScriptTitle, setSelectedExplores, setSidebarCollapsed, sharedEnvIdRef, syncContentItemViewer, turnResumerRef, userId, userIdRef]
   )
 
   const handleToggleArchiveConversation = (
@@ -636,7 +650,8 @@ export function useStudioController() {
 
   const isEmptyConversation =
     !isTileMount && location.pathname !== '/config' &&
-    !parsedRoute.objectId && messages.length === 0 && !publishedApp && !nativeContent &&
+    !parsedRoute.objectId && !conversations.some((c) => c.id === activeConversationId) &&
+    messages.length === 0 && !publishedApp && !nativeContent &&
     contentItems.length === 0 &&
     !lookmlBundle && !healthReport && !caConversation && !loadedScript && !busyStatus &&
     liveActivitySteps.length === 0

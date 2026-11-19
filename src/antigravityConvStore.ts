@@ -282,7 +282,9 @@ export async function hydrateRemoteConversationMessages(
   }
 
   const canFetch = Boolean(
-    (typeof window !== 'undefined' && window.__MOCK_LOOKER_EXTENSION__) ||
+    (typeof window !== 'undefined' &&
+      window.__MOCK_LOOKER_EXTENSION__ &&
+      !window.__MOCK_LOOKER_EXTENSION__.requireAuthForHydration) ||
       (auth &&
         (auth.mode === 'apikey'
           ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy)

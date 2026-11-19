@@ -5,7 +5,7 @@ Provides the React context and provider components bridging Looker's `@looker/ex
 
 ## Interface
 - `[LookerExtensionContext.tsx:LookerExtensionContextState]` — Interface defining the extension context shape (`extensionSDK`, `core40SDK`, `tileHostData?`, `tileSDK?`, `lookerHostData?`).
-- `[LookerExtensionContext.tsx:MockLookerExtensionContextValue]` — Interface extending `LookerExtensionContextState` with optional mock/test configuration fields and `setTileHostData` dispatcher.
+- `[LookerExtensionContext.tsx:MockLookerExtensionContextValue]` — Interface extending `LookerExtensionContextState` with optional mock/test configuration fields (including `requireAuthForHydration?: boolean` for unauthenticated remote-turn hydration gating) and `setTileHostData` dispatcher.
 - `[LookerExtensionContext.tsx:Window]` — Global `Window` interface augmentation declaring optional `__MOCK_LOOKER_EXTENSION__`, `__LOOKER_EMBED_STATE__`, `__DAB_STUDIO__`, `__LAST_COPIED_THINKING_TRACE__`, and `lkr_codemode_api_calls` (`LkrCodeModeApiCallEntry[]`) fields.
 - `[LookerExtensionContext.tsx:LookerExtensionContext]` — React context (`Context<LookerExtensionContextState | undefined>`, defaulting to `undefined`).
 - `[LookerExtensionContext.tsx:MockLookerExtensionProvider]` — `React.FC<{ value: MockLookerExtensionContextValue; children: ReactNode }>` provider component for mock/test extension state.

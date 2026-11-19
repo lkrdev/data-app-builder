@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 
 import {
-  cleanLookmlProjectId, generateConversationLabel, hydrateRemoteConversationMessages,
+  cleanLookmlProjectId, computeIsAuthenticated, generateConversationLabel, hydrateRemoteConversationMessages,
   LkrCodeMode, normalizeEnvironmentId, PastedImage, recoverInFlightInteraction, runAntigravityTurn,
   synthesizeCaConversationMessages,
 } from './antigravity'
@@ -50,7 +50,10 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     scriptMode, publishedTileDash, setPublishedTileDash, loadedScript, setLoadedScript, lastScriptIdRef, currentAppCode, setCurrentAppCode,
     hydratedConvRouteRef, activityStepsByInteractionIdRef, mergeCachedActivitySteps, codeModePermOptsRef,
   } = meta
-  const recoveredInFlightIdsRef = useRef<Set<string>>(new Set())
+  const recoveredInFlightIdsRef = useRef<Set<string>>(new Set()), hydratingConvIdRef = useRef<string>(''), onResetAppStateRef = useRef<(() => void) | null>(null)
+  const isAuthNow = useCallback(() => computeIsAuthenticated(authMode, oauthTokenRef.current, auth.apiKey), [auth.apiKey, authMode, oauthTokenRef])
+  const canHydrateRemote = auth.isAuthenticated || Boolean(mockExt && !mockExt.requireAuthForHydration)
+  const canHydrateNow = useCallback(() => isAuthNow() || Boolean(mockExt && !mockExt.requireAuthForHydration), [isAuthNow, mockExt])
 
   const runWithBusy = useCallback((statusText: string, errPrefix: string, fn: () => Promise<unknown>, targetConvId?: string) => {
     const loadConvId = targetConvId || activeConversationIdRef.current
@@ -95,12 +98,13 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       environmentId: sharedEnvIdRef.current || matchedConv?.environmentId || opts.environmentId || opts.studio?.environmentId || opts.studio?.lastSession?.environmentId || opts.defaultEnvId,
       conversationId: opts.convId || matchedConv?.id || activeConversationIdRef.current || opts.id, explores,
     })
+    const deferToSignIn = Boolean(matchedConv?.turnInteractionIds?.length || matchedConv?.interactionId) && (!canHydrateNow() || hydratingConvIdRef.current === matchedConv?.id)
     if (msgs?.length) setMessages(mergeCachedActivitySteps(msgs))
     else if (!(matchedConv && activeConversationIdRef.current === matchedConv.id && auth.messagesRef.current.some((m) => m.role === 'user'))) {
-      setMessages([{ role: 'assistant', text: opts.fallbackText, ...(opts.dashboardId ? { dashboardId: opts.dashboardId } : {}) }])
+      setMessages(deferToSignIn ? [] : [{ role: 'assistant', text: opts.fallbackText, ...(opts.dashboardId ? { dashboardId: opts.dashboardId } : {}) }])
     }
     if (opts.pushRoute && location.pathname !== opts.route) history.replace(opts.route)
-  }, [activeConversationIdRef, auth.messagesRef, conversationsRef, getConvMessages, history, location.pathname, mergeCachedActivitySteps, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setAgentSession, setMessages, setSelectedExplores, sharedEnvIdRef, upsertContentItem])
+  }, [activeConversationIdRef, auth.messagesRef, canHydrateNow, conversationsRef, getConvMessages, history, location.pathname, mergeCachedActivitySteps, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setAgentSession, setMessages, setSelectedExplores, sharedEnvIdRef, upsertContentItem])
 
   const persistConversationAndLabel = useCallback(
     (opts: {
@@ -134,8 +138,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       }
       if (isFg) setActiveConversationId(opts.id)
       return saveUserConversation(core40SDK, userId, { ...baseConv, ...(opts.label ? { label: opts.label } : {}), updatedAt: new Date().toISOString() }, namespace)
-        .then((list) => { if (!isUserConversationDeleted(core40SDK, userId, opts.id, namespace)) setConversations(list, { optimisticEntry: null }) })
-        .catch(() => {})
+        .then((list) => { if (!isUserConversationDeleted(core40SDK, userId, opts.id, namespace)) setConversations(list, { optimisticEntry: null }) }, () => {})
         .then(() => {
           if (!opts.isFirstTurn || !opts.userPrompt || !opts.assistantText || isUserConversationDeleted(core40SDK, userId, opts.id, namespace)) return
           void generateConversationLabel({ extensionSDK, auth: getAuthCfg(), environmentId: opts.environmentId, userPrompt: opts.userPrompt, assistantText: opts.assistantText, model: selectedModel })
@@ -146,10 +149,8 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
               if (targetArtifactId) convLabelsRef.current[targetArtifactId] = label
               setCaConversation((prev) => (prev && (prev.id === opts.id || prev.id === targetArtifactId) ? { ...prev, label } : prev))
               return saveUserConversation(core40SDK, userId, { id: opts.id, type: opts.type, label, updatedAt: new Date().toISOString() }, namespace)
-                .then((list) => { if (!isUserConversationDeleted(core40SDK, userId, opts.id, namespace)) setConversations(list, { optimisticEntry: null }) })
-                .catch(() => {})
-            })
-            .catch(() => {})
+                .then((list) => { if (!isUserConversationDeleted(core40SDK, userId, opts.id, namespace)) setConversations(list, { optimisticEntry: null }) }, () => {})
+            }, () => {})
         })
     },
     [activeContentTabKeyRef, activeConversationIdRef, activityStepsByInteractionIdRef, contentItemsRef, convLabelsRef, core40SDK, extensionSDK, getAuthCfg, hydratedConvRouteRef, selectedModel, setActiveConversationId, setCaConversation, setConvMessages, setConversations, userId]
@@ -203,51 +204,53 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     const id = rawId.trim()
     if (!id) return Promise.resolve()
     const loadConvId = activeConversationIdRef.current
-    const matchedConv = conversations.find((c) => c.id === loadConvId || getConvTargetId(c.content, c.type) === id)
+    const matchedConv = conversationsRef.current.find((c) => c.id === loadConvId || getConvTargetId(c.content, c.type) === id)
+    const deferSandbox = !canHydrateNow() && Boolean(matchedConv?.turnInteractionIds?.length || matchedConv?.interactionId)
     lastHealthIdRef.current = id
     return runWithBusy(`Loading Health Check report "${id}"...`, `Could not load Health Check "${id}"`, () =>
       loadHealthCheckArtifact(core40SDK, extensionSDK, id, {
         auth: getAuthCfg(), environmentId: matchedConv?.environmentId || sharedEnvIdRef.current,
-        lastInteractionId: matchedConv?.interactionId, projectId: String(matchedConv?.content?.projectId || '') || undefined,
+        lastInteractionId: deferSandbox ? undefined : matchedConv?.interactionId, projectId: String(matchedConv?.content?.projectId || '') || undefined, rerunIfMissing: !deferSandbox,
       }).then((loaded) => {
         if (activeConversationIdRef.current !== loadConvId) return
-        lastHealthIdRef.current = loaded.id
-        setHealthReport(loaded)
+        lastHealthIdRef.current = loaded.id; setHealthReport(loaded)
         upsertContentItem({ id: String(loaded.id), reportId: String(loaded.id), contentType: 'report', title: loaded.title, embedPath: `/health-check/${encodeURIComponent(String(loaded.id))}`, updatedAt: loaded.updatedAt })
         hydrateLoadedArtifact({
-          mode: 'health', id: loaded.id, route: `/c/${encodeURIComponent(loaded.id)}`,
-          pushRoute, convTypes: ['health', 'health-check', 'health_check'], studio: loaded, defaultEnvId: `env_health_${loaded.id}`,
-          fallbackText: `Loaded "${loaded.title}" (Health Score: ${loaded.scores.overallScore}%, Transcriber: ${loaded.scores.transcriberScore}/4.00).`,
+          mode: 'health', id: loaded.id, route: `/c/${encodeURIComponent(loaded.id)}`, pushRoute, convTypes: ['health', 'health-check', 'health_check'], studio: loaded,
+          defaultEnvId: `env_health_${loaded.id}`, fallbackText: `Loaded "${loaded.title}" (Health Score: ${loaded.scores.overallScore}%, Transcriber: ${loaded.scores.transcriberScore}/4.00).`,
         })
+      }, (err: unknown) => {
+        if (deferSandbox) { lastHealthIdRef.current = `deferred:${id}`; if (activeConversationIdRef.current === loadConvId) setHealthReport((prev) => (prev?.id === id ? prev : null)); return }
+        throw err
       }), loadConvId)
-  }, [activeConversationIdRef, conversations, core40SDK, extensionSDK, getAuthCfg, hydrateLoadedArtifact, lastHealthIdRef, runWithBusy, setHealthReport, sharedEnvIdRef, upsertContentItem])
+  }, [activeConversationIdRef, canHydrateNow, conversationsRef, core40SDK, extensionSDK, getAuthCfg, hydrateLoadedArtifact, lastHealthIdRef, runWithBusy, setHealthReport, sharedEnvIdRef, upsertContentItem])
 
   const loadLookmlSessionById = useCallback((rawId: string, pushRoute = true) => {
     const id = cleanLookmlProjectId(rawId)
     if (!id) return Promise.resolve()
     const loadConvId = activeConversationIdRef.current
-    const matchedConv = conversations.find((c) => c.type === 'lookml' && (c.id === loadConvId || getConvTargetId(c.content, c.type) === id))
+    const matchedConv = conversationsRef.current.find((c) => c.type === 'lookml' && (c.id === loadConvId || getConvTargetId(c.content, c.type) === id || c.content?.sessionId === id))
+    if (!canHydrateNow() && Boolean(matchedConv?.turnInteractionIds?.length || matchedConv?.interactionId)) {
+      lastLookmlIdRef.current = ''; setLookmlBundle((prev) => (cleanLookmlProjectId(prev?.project_id || prev?.id) === id ? prev : null)); setLookmlProjectId(id)
+      return Promise.resolve()
+    }
     lastLookmlIdRef.current = id
     return runWithBusy(`Loading LookML session "${id}"...`, `Could not load LookML session "${id}"`, () =>
       loadLookmlSessionArtifact(core40SDK, extensionSDK, id, matchedConv?.content?.sessionId, {
-        auth: getAuthCfg(), environmentId: matchedConv?.environmentId || sharedEnvIdRef.current,
-        lastInteractionId: matchedConv?.interactionId, explores: matchedConv?.explores,
+        auth: getAuthCfg(), environmentId: matchedConv?.environmentId || sharedEnvIdRef.current, lastInteractionId: matchedConv?.interactionId, explores: matchedConv?.explores,
       }).then((loaded) => {
         if (activeConversationIdRef.current !== loadConvId) return
-        const validProj = cleanLookmlProjectId(loaded.bundle?.project_id)
-        const canonProj = validProj || cleanLookmlProjectId(loaded.id) || id
-        lastLookmlIdRef.current = canonProj
-        setLookmlBundle(loaded.bundle)
+        const validProj = cleanLookmlProjectId(loaded.bundle?.project_id), canonProj = validProj || cleanLookmlProjectId(loaded.id) || id
+        lastLookmlIdRef.current = canonProj; setLookmlBundle(loaded.bundle)
         if (validProj) setLookmlProjectId(validProj)
         setSelectedExplores(loaded.studio?.explores?.filter(Boolean) || [])
         upsertContentItem({ id: canonProj, sessionId: String(loaded.id), projectId: canonProj, contentType: 'lookml', title: `LookML: ${canonProj}`, embedPath: `/lookml/${encodeURIComponent(canonProj)}`, updatedAt: loaded.updatedAt })
         hydrateLoadedArtifact({
-          mode: 'lookml', id: loaded.id, route: `/c/${encodeURIComponent(loaded.id)}`,
-          pushRoute, convTypes: ['lookml'], studio: loaded.studio, defaultEnvId: `env_lookml_${loaded.id}`,
-          fallbackText: `Loaded LookML session "${loaded.title}" (${loaded.bundle?.files?.length || 0} .lkml files).`,
+          mode: 'lookml', id: loaded.id, route: `/c/${encodeURIComponent(loaded.id)}`, pushRoute, convTypes: ['lookml'], studio: loaded.studio,
+          defaultEnvId: `env_lookml_${loaded.id}`, fallbackText: `Loaded LookML session "${loaded.title}" (${loaded.bundle?.files?.length || 0} .lkml files).`,
         })
       }), loadConvId)
-  }, [activeConversationIdRef, conversations, core40SDK, extensionSDK, getAuthCfg, hydrateLoadedArtifact, lastLookmlIdRef, runWithBusy, setLookmlBundle, setLookmlProjectId, setSelectedExplores, sharedEnvIdRef, upsertContentItem])
+  }, [activeConversationIdRef, canHydrateNow, conversationsRef, core40SDK, extensionSDK, getAuthCfg, hydrateLoadedArtifact, lastLookmlIdRef, runWithBusy, setLookmlBundle, setLookmlProjectId, setSelectedExplores, sharedEnvIdRef, upsertContentItem])
 
   const handleRunPython = useCallback((
     codeToRun = scriptCode, rawFilters = filtersJson,
@@ -596,16 +599,38 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     [extensionSDK, loadCaConversationById, loadDashboardById, loadHealthCheckById, loadLookmlSessionById, loadNativeById, loadScriptById]
   )
 
-  const applyExpiredHydration = useCallback(
-    (convId: string, prunedIds: string[], deadEnvironmentId?: string): void => {
-      const pruneSet = new Set(prunedIds.length ? prunedIds : [convId])
-      pruneSet.forEach((pid) => deleteConvMessages(pid))
-      setConversations((prev) => prev.filter((c) => !pruneSet.has(c.id)), { optimisticEntry: null })
-      if (deadEnvironmentId && normalizeEnvironmentId(sharedEnvIdRef.current) === deadEnvironmentId) syncSharedEnvironmentId('')
-      setExpiredConversationNotice('This conversation expired because its sandbox environment was reset or expired.')
-    },
-    [deleteConvMessages, setConversations, setExpiredConversationNotice, sharedEnvIdRef, syncSharedEnvironmentId]
-  )
+  const applyExpiredHydration = useCallback((convId: string, prunedIds: string[], deadEnvironmentId?: string): void => {
+    const pruneSet = new Set(prunedIds.length ? prunedIds : [convId])
+    pruneSet.forEach((pid) => deleteConvMessages(pid))
+    setConversations((prev) => prev.filter((c) => !pruneSet.has(c.id)), { optimisticEntry: null })
+    if (deadEnvironmentId && normalizeEnvironmentId(sharedEnvIdRef.current) === deadEnvironmentId) syncSharedEnvironmentId('')
+    setExpiredConversationNotice('This conversation expired because its sandbox environment was reset or expired.')
+  }, [deleteConvMessages, setConversations, setExpiredConversationNotice, sharedEnvIdRef, syncSharedEnvironmentId])
+
+  const hydrateConvRemoteTurns = useCallback((conv: UserConversationEntry): void => {
+    if (canHydrateNow()) hydratingConvIdRef.current = conv.id
+    const epochAtStart = auth.selectEpochRef.current
+    void hydrateRemoteConversationMessages({
+      extensionSDK, auth: getAuthCfg(), sdk: core40SDK, userId, conv, activeEnvironmentId: sharedEnvIdRef.current,
+    }).then((res) => {
+      if (inFlightTurnsRef.current.has(conv.id)) { if (hydratingConvIdRef.current === conv.id) hydratingConvIdRef.current = ''; return }
+      if (res.expired) {
+        if (hydratingConvIdRef.current === conv.id) hydratingConvIdRef.current = ''
+        applyExpiredHydration(conv.id, res.prunedIds, res.deadEnvironmentId)
+        if (activeConversationIdRef.current === conv.id && auth.selectEpochRef.current === epochAtStart) onResetAppStateRef.current?.()
+        return
+      }
+      if (res.messages.length > 0) {
+        if (hydratingConvIdRef.current === conv.id) hydratingConvIdRef.current = ''
+        if (!isUserConversationDeleted(core40SDK, userId, conv.id, getArtifactNamespace(extensionSDK))) setConvMessages(conv.id, res.messages)
+        if (activeConversationIdRef.current === conv.id && auth.selectEpochRef.current === epochAtStart) setMessages(mergeCachedActivitySteps(res.messages))
+      }
+    }).catch((err: unknown) => {
+      if (hydratingConvIdRef.current === conv.id) hydratingConvIdRef.current = ''
+      resetOAuthOnUnauthorized(err)
+      if (!canHydrateNow() && activeConversationIdRef.current === conv.id && getConvMessages(conv.id).length === 0 && !inFlightTurnsRef.current.has(conv.id)) setMessages([])
+    })
+  }, [activeConversationIdRef, applyExpiredHydration, auth.selectEpochRef, canHydrateNow, core40SDK, extensionSDK, getAuthCfg, getConvMessages, inFlightTurnsRef, mergeCachedActivitySteps, resetOAuthOnUnauthorized, setConvMessages, setMessages, sharedEnvIdRef, userId])
 
   useEffect(() => {
     if (isTileMount || location.pathname === '/config') return
@@ -642,21 +667,20 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         return
       }
     }
-    const routeConvId = parsedRoute.conversationId
-    const id = parsedRoute.objectId
-    const convMatch = conversations.find((c) => c.id === routeConvId || c.id === id)
-    if (turnResumerRef.current && (allInFlightIds.length > 0 || conversations.some((c) => c.inFlight))) {
+    const routeConvId = parsedRoute.conversationId, id = parsedRoute.objectId
+    const routeKind = inferRouteArtifactKind(location.pathname, routeConvId || id)
+    const convMatch = conversations.find((c) => c.id === routeConvId || c.id === id) ||
+      (id && !/^conv_/i.test(routeConvId || id) ? conversations.find((c) => (getConvTargetId(c.content, c.type) === id || (c.type === 'lookml' && c.content?.sessionId === id)) && (!routeKind || normalizeCatalogMode(c.type) === normalizeCatalogMode(routeKind))) : undefined)
+    if (isAuthNow() && turnResumerRef.current && (allInFlightIds.length > 0 || conversations.some((c) => c.inFlight))) {
       for (const bgConv of conversations) {
         if (bgConv.id === convMatch?.id || inFlightTurnsRef.current.has(bgConv.id)) continue
         if (isConvInterrupted(bgConv) && bgConv.interactionId && !recoveredInFlightIdsRef.current.has(bgConv.interactionId)) {
-          recoveredInFlightIdsRef.current.add(bgConv.interactionId)
-          void turnResumerRef.current(bgConv)
+          recoveredInFlightIdsRef.current.add(bgConv.interactionId); void turnResumerRef.current(bgConv)
         }
       }
     }
-    if (routeConvId && (convMatch || /^conv_/i.test(routeConvId)) && routeConvId !== activeConversationIdRef.current) {
-      setActiveConversationId(routeConvId)
-    }
+    const boundConvId = convMatch?.id || routeConvId
+    if (boundConvId && (convMatch || /^conv_/i.test(boundConvId)) && boundConvId !== activeConversationIdRef.current) setActiveConversationId(boundConvId)
     if (!id) return
     const wasConvHydrated = Boolean(convMatch && hydratedConvRouteRef.current === `${location.pathname}:${convMatch.id}`)
     if (convMatch) {
@@ -687,22 +711,10 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         if (cachedMsgs.length > 0) {
           setMessages(mergeCachedActivitySteps(cachedMsgs))
         } else {
-          void hydrateRemoteConversationMessages({
-            extensionSDK, auth: getAuthCfg(), sdk: core40SDK, userId, conv: convMatch, activeEnvironmentId: sharedEnvIdRef.current,
-          }).then((res) => {
-            if (inFlightTurnsRef.current.has(convMatch.id)) return
-            if (res.expired) {
-              applyExpiredHydration(convMatch.id, res.prunedIds, res.deadEnvironmentId)
-              if (activeConversationIdRef.current === convMatch.id) { setMessages([]); setContentItems([]); setActiveContentTabKey(''); setActiveConversationId(nextStudioConvId()); history.replace('/') }
-              return
-            }
-            if (res.messages.length > 0) {
-              setConvMessages(convMatch.id, res.messages)
-              if (activeConversationIdRef.current === convMatch.id && !inFlightTurnsRef.current.has(convMatch.id)) setMessages(mergeCachedActivitySteps(res.messages))
-            }
-          }).catch(() => {})
+          if (!mockExt?.initialMessages?.length && !mockExt?.initialError && messages.length > 0) setMessages([])
+          hydrateConvRemoteTurns(convMatch)
         }
-        if (isConvInterrupted(convMatch) && convMatch.interactionId && !recoveredInFlightIdsRef.current.has(convMatch.interactionId)) {
+        if ((turnResumerRef.current ? isAuthNow() : canHydrateRemote) && isConvInterrupted(convMatch) && convMatch.interactionId && !recoveredInFlightIdsRef.current.has(convMatch.interactionId)) {
           recoveredInFlightIdsRef.current.add(convMatch.interactionId)
           if (turnResumerRef.current) {
             void turnResumerRef.current(convMatch)
@@ -726,7 +738,6 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
         }
       }
     }
-    const routeKind = inferRouteArtifactKind(location.pathname, routeConvId || id)
     const convTargetId = getConvTargetId(convMatch?.content, convMatch?.type)
     const isPureConvId = /^conv_/i.test(routeConvId || id) && !routeKind
     const targetArtifactId = convTargetId || (!isPureConvId ? id : '')
@@ -746,32 +757,39 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     const loadedPair: [string | undefined, string] = resolvedRouteType === 'conversational-analytics'
       ? [caConversation?.caConversationId, lastCaIdRef.current]
       : targetMode === 'lookml' ? [lookmlBundle?.project_id || lookmlBundle?.id, lastLookmlIdRef.current]
-      : targetMode === 'health' ? [healthReport?.id, lastHealthIdRef.current]
+      : targetMode === 'health' ? [healthReport?.id, !canHydrateRemote && lastHealthIdRef.current === `deferred:${targetArtifactId}` ? targetArtifactId : lastHealthIdRef.current]
       : targetMode === 'dashboard' ? [nativeContent?.id, lastNativeIdRef.current]
       : targetMode === 'tile' ? [loadedScript ? (wasConvHydrated ? targetArtifactId : scriptId) : undefined, lastScriptIdRef.current]
       : [publishedApp?.dashboardId, lastPublishedIdRef.current]
-    if (
-      targetArtifactId !== loadedPair[0] && targetArtifactId !== loadedPair[1] &&
-      !isLookmlTargetAlreadyLoaded(targetMode, targetArtifactId, lookmlBundle?.id || lookmlBundle?.project_id ? { id: lookmlBundle.id, project_id: lookmlBundle.project_id } : null, convMatch?.content?.sessionId)
-    ) {
+    if (targetArtifactId !== loadedPair[0] && targetArtifactId !== loadedPair[1] && !isLookmlTargetAlreadyLoaded(targetMode, targetArtifactId, lookmlBundle?.id || lookmlBundle?.project_id ? { id: lookmlBundle.id, project_id: lookmlBundle.project_id } : null, convMatch?.content?.sessionId)) {
       void openArtifactByMode(resolvedRouteType || 'auto', targetArtifactId, false)
     }
   }, [
-    isTileMount, location.pathname, parsedRoute.conversationId, parsedRoute.isLegacyRoute, parsedRoute.objectId,
-    publishedApp?.dashboardId, nativeContent?.id, lookmlBundle?.id, lookmlBundle?.project_id, healthReport?.id, caConversation?.caConversationId,
-    loadedScript, scriptId, openArtifactByMode, conversations, catalogItems, savedScripts, messages, busyStatus, mockExt?.initialBusyStatus, activeConversationId, activeConversationIdRef,
-    activeObjectId, agentSession.lastInteractionId, applyExpiredHydration, core40SDK, extensionSDK, getAuthCfg, getConvMessages, history, hydratedConvRouteRef,
-    inFlightTurnsRef, lastCaIdRef, lastHealthIdRef, lastLookmlIdRef, lastNativeIdRef, lastPublishedIdRef, lastScriptIdRef, mergeCachedActivitySteps,
-    setActiveContentTabKey, setActiveConversationId, setAgentSession, setBusyStatus, setContentItems, setConvMessages, setMessages,
-    setSelectedExplores, sharedEnvIdRef, turnResumerRef, userId,
+    isTileMount, location.pathname, parsedRoute.conversationId, parsedRoute.isLegacyRoute, parsedRoute.objectId, publishedApp?.dashboardId, nativeContent?.id,
+    lookmlBundle?.id, lookmlBundle?.project_id, healthReport?.id, caConversation?.caConversationId, loadedScript, scriptId, openArtifactByMode, conversations,
+    catalogItems, savedScripts, messages, busyStatus, mockExt?.initialBusyStatus, mockExt?.initialError, mockExt?.initialMessages, activeConversationId,
+    activeConversationIdRef, activeObjectId, agentSession.lastInteractionId, auth.isAuthenticated, canHydrateRemote, core40SDK, extensionSDK, getAuthCfg, getConvMessages, history,
+    hydrateConvRemoteTurns, hydratedConvRouteRef, inFlightTurnsRef, isAuthNow, lastCaIdRef, lastHealthIdRef, lastLookmlIdRef, lastNativeIdRef, lastPublishedIdRef,
+    lastScriptIdRef, mergeCachedActivitySteps, setActiveContentTabKey, setActiveConversationId, setAgentSession, setBusyStatus, setContentItems, setConvMessages,
+    setMessages, setSelectedExplores, sharedEnvIdRef, turnResumerRef, userId,
   ])
 
+  useEffect(() => {
+    if (!canHydrateRemote) { hydratingConvIdRef.current = ''; return }
+    const activeId = activeConversationIdRef.current || activeConversationId
+    if (hydratingConvIdRef.current && hydratingConvIdRef.current !== activeId) hydratingConvIdRef.current = ''
+    if (isTileMount) return
+    const conv = conversations.find((c) => c.id === activeId)
+    if (!conv || !(conv.turnInteractionIds?.length || conv.interactionId)) return
+    const willResume = Boolean(isAuthNow() && turnResumerRef.current && (conv.inFlight || readInFlightConvIds().includes(conv.id)) && conv.interactionId && !recoveredInFlightIdsRef.current.has(conv.interactionId))
+    if (willResume && conv.interactionId) { recoveredInFlightIdsRef.current.add(conv.interactionId); void turnResumerRef.current?.(conv) }
+    else if (getConvMessages(conv.id).length === 0 && !inFlightTurnsRef.current.has(conv.id) && hydratingConvIdRef.current !== conv.id) hydrateConvRemoteTurns(conv)
+  }, [activeConversationId, activeConversationIdRef, auth.isAuthenticated, canHydrateRemote, conversations, getConvMessages, hydrateConvRemoteTurns, inFlightTurnsRef, isAuthNow, isTileMount, turnResumerRef])
+
   return {
-    recoveredInFlightIdsRef, applyExpiredHydration,
-    persistConversationAndLabel, openArtifactByMode,
+    recoveredInFlightIdsRef, onResetAppStateRef, isAuthNow, canHydrateNow, applyExpiredHydration, persistConversationAndLabel, openArtifactByMode,
     loadNativeById, loadLookmlSessionById, loadCaConversationById, loadScriptById, loadAlertById,
-    handleRunPython, handleSaveScript, handlePublishTileDashboard,
-    handleRunHealthCheck, handleRunConversationalAnalytics,
+    handleRunPython, handleSaveScript, handlePublishTileDashboard, handleRunHealthCheck, handleRunConversationalAnalytics,
   }
 }
 

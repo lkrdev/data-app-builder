@@ -277,6 +277,7 @@ ${buildMockFixturesScript(scenario)}
             : null,
         openSchedulerModal: scenario === 'python_tile_scheduler_modal',
         forceAppInitializing: scenario === 'ripper_surf_loader',
+        requireAuthForHydration: window.location.search.includes('requireAuthForHydration=1'),
         mockInteractions: Object.assign({}, ${JSON.stringify(MOCK_SEEDED_INTERACTIONS)}, {
           v1_lookml_1: Object.assign({}, ${JSON.stringify(MOCK_SEEDED_INTERACTIONS.v1_lookml_1)}, {
             steps: [{ type: 'code_execution', output: '<LOOKML_BUNDLE>' + JSON.stringify(artifactObjects.obj_lookml_20261030_dev_branch.bundle) + '</LOOKML_BUNDLE>' }]

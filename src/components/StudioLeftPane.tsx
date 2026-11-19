@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   BookOpen, Brain, Bug, Check, ChevronDown, ChevronUp, Code2, Copy, FileText,
-  Loader2, Terminal, Wrench,
+  Loader2, Lock, Terminal, Wrench,
 } from 'lucide-react'
 
 import {
@@ -12,10 +12,10 @@ import {
 } from '../antigravity'
 import { copyTextWithExtensionSdk, normalizeStudioAgentName } from '../lookerApi'
 import { LookmlBundle } from '../lookmlTool'
-import { StudioController } from '../useStudioController'
+import type { StudioController } from '../useStudioController'
 import { SandboxMarkdownPreviewModal, StarterPromptButtons } from './StudioCapabilitiesGuide'
 import { StudioComposer } from './StudioComposer'
-import { StudioBadge, StudioButton, StudioSkeleton } from './StudioDesignSystem'
+import { StudioBadge, StudioButton, StudioCard, StudioSkeleton } from './StudioDesignSystem'
 import {
   fetchAvailableLookerConnectionsMarkdown, InViewerLookerLinkTarget,
   openContentLinkTargetInViewer, openOrCopyMarkdownLink,
@@ -383,45 +383,70 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
     )
   }
 
-  const activeConvLabel = conversations.find((c) => c.id === activeConversationId)?.label
+  const activeConv =
+    conversations.find((c) => c.id === activeConversationId) ||
+    ctl.allConversations?.find((c) => c.id === activeConversationId)
+  const activeConvLabel = activeConv?.label
   const showThreadCopyBtn = messages.length > 0 || Boolean(liveActivitySteps && liveActivitySteps.length > 0)
+  const needsSignInToHydrate = Boolean(!ctl.isAuthenticated && activeConv && messages.length === 0)
 
   return (
     <aside className="dab-left-pane" ref={leftPaneRef}>
-      {showThreadCopyBtn && (
+      {(showThreadCopyBtn || needsSignInToHydrate) && (
         <div className="dab-left-pane-header" data-testid="left-pane-header">
           <span className="dab-left-pane-title" title={activeConvLabel || 'Conversation'}>{activeConvLabel || 'Conversation'}</span>
-          <button
-            type="button"
-            data-testid="copy-thread-trace-btn"
-            data-copied={copyThreadState === 'copied' ? 'true' : 'false'}
-            data-loading={copyThreadState === 'loading' ? 'true' : 'false'}
-            className="dab-btn dab-btn-secondary dab-thread-copy-btn"
-            title="Copy full conversation & sandbox debug trace to clipboard"
-            aria-label="Copy Thread"
-            disabled={copyThreadState === 'loading'}
-            onClick={() => void handleCopyThreadDebugTrace()}
-          >
-            {copyThreadState === 'loading' ? (
-              <Loader2 size={13} strokeWidth={2} className="dab-spin" aria-hidden="true" />
-            ) : copyThreadState === 'copied' ? (
-              <Check size={13} strokeWidth={2} aria-hidden="true" />
-            ) : (
-              <Bug size={13} strokeWidth={1.75} aria-hidden="true" />
-            )}
-            <span>{copyThreadState === 'loading' ? 'Copying…' : copyThreadState === 'copied' ? 'Copied' : 'Copy Thread'}</span>
-          </button>
+          {showThreadCopyBtn && (
+            <button
+              type="button"
+              data-testid="copy-thread-trace-btn"
+              data-copied={copyThreadState === 'copied' ? 'true' : 'false'}
+              data-loading={copyThreadState === 'loading' ? 'true' : 'false'}
+              className="dab-btn dab-btn-secondary dab-thread-copy-btn"
+              title="Copy full conversation & sandbox debug trace to clipboard"
+              aria-label="Copy Thread"
+              disabled={copyThreadState === 'loading'}
+              onClick={() => void handleCopyThreadDebugTrace()}
+            >
+              {copyThreadState === 'loading' ? (
+                <Loader2 size={13} strokeWidth={2} className="dab-spin" aria-hidden="true" />
+              ) : copyThreadState === 'copied' ? (
+                <Check size={13} strokeWidth={2} aria-hidden="true" />
+              ) : (
+                <Bug size={13} strokeWidth={1.75} aria-hidden="true" />
+              )}
+              <span>{copyThreadState === 'loading' ? 'Copying…' : copyThreadState === 'copied' ? 'Copied' : 'Copy Thread'}</span>
+            </button>
+          )}
         </div>
       )}
       <div className="dab-chat-log" ref={chatLogRef}>
         {messages.length === 0 && (
-          <div className="dab-empty-chat">
-            <p><strong>Ask {agentName} to build, analyze, or automate across Looker</strong></p>
-            <p className="dab-muted">
-              {selectedExplores.length > 0 ? <>Exploring <code>{selectedExplores.join(', ')}</code> — pick a starter prompt below or describe what you want to build.</> : 'Pick a starter prompt below or describe what you want to build, analyze, or automate.'}
-            </p>
-            <StarterPromptButtons prompts={starterPrompts} loading={starterPromptsLoading} onSelect={setPrompt} disabled={!!busyStatus} />
-          </div>
+          needsSignInToHydrate ? (
+            <StudioCard testId="conv-signin-gate" className="dab-conv-signin-gate">
+              <span className="dab-conv-signin-icon" aria-hidden="true">
+                <Lock size={16} strokeWidth={1.75} aria-hidden="true" />
+              </span>
+              <strong className="dab-conv-signin-title">Sign in to view conversation</strong>
+              <p className="dab-conv-signin-desc">
+                Conversation messages live in your remote sandbox. Sign in to load the thread and continue chatting.
+              </p>
+              <StudioButton
+                variant="primary"
+                testId="conv-signin-btn"
+                onClick={() => (ctl.authMode === 'oauth' && ctl.clientId?.trim() ? void ctl.handleOAuthLogin() : ctl.history?.push('/config'))}
+              >
+                {ctl.oauthSigningIn ? 'Signing in…' : 'Sign In to See Conversation'}
+              </StudioButton>
+            </StudioCard>
+          ) : (
+            <div className="dab-empty-chat">
+              <p><strong>Ask {agentName} to build, analyze, or automate across Looker</strong></p>
+              <p className="dab-muted">
+                {selectedExplores.length > 0 ? <>Exploring <code>{selectedExplores.join(', ')}</code> — pick a starter prompt below or describe what you want to build.</> : 'Pick a starter prompt below or describe what you want to build, analyze, or automate.'}
+              </p>
+              <StarterPromptButtons prompts={starterPrompts} loading={starterPromptsLoading} onSelect={setPrompt} disabled={!!busyStatus} />
+            </div>
+          )
         )}
 
         {messages.map((m, idx) => {
