@@ -101,7 +101,7 @@ Right-pane preview toolbar with a responsive wrapping title/badge group (`.dab-d
 - **Props**: `title?: React.ReactNode`, `badges?: React.ReactNode`, `actions?: React.ReactNode`, `testId?: string`, `titleBlockTestId?: string`, `className?: string`, `children?: React.ReactNode`.
 
 ### `<StudioCard>` & `<StudioSkeleton>`
-- `<StudioCard testId="...">`: Theme-aware surface container (`.dab-ds-card`). **Props**: `testId?: string` plus `React.HTMLAttributes<HTMLDivElement>`.
+- `<StudioCard testId="...">`: Theme-aware surface container (`.dab-ds-card`), including the centered signed-out conversation gate `<StudioCard testId="conv-signin-gate" className="dab-conv-signin-gate">` + `<StudioButton variant="primary" testId="conv-signin-btn">` in `StudioLeftPane.tsx`. **Props**: `testId?: string` plus `React.HTMLAttributes<HTMLDivElement>`.
 - `<StudioSkeleton width={190} height={28} testId="..." />`: Shimmer placeholder (`.dab-skeleton`) preventing layout shift during async loads. **Props**: `width?: number | string`, `height?: number | string`, `testId?: string`, `className?: string`, `style?: React.CSSProperties`, `ariaLabel?: string` (omits `aria-hidden="true"` when `ariaLabel` is set).
 
 ### `<StudioDocPreview>`

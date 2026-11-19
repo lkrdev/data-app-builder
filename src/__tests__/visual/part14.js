@@ -285,6 +285,8 @@ function registerVisualPart14Tests(ctx) {
   }, 20000)
 
   test('Issue #239: renders centered Sign In to See Conversation gate on signed-out conversations with 0 pre-auth GETs across Light/Dark themes and auto-hydrates turns in-place upon sign-in', async () => {
+    if (ctx.chrome) ctx.chrome.close()
+    ctx.chrome = await ctx.startHeadlessChrome()
     await ctx.chrome.send('Emulation.setDeviceMetricsOverride', {
       width: 1440,
       height: 900,
