@@ -1,14 +1,18 @@
 import type { Looker40SDK } from '@looker/sdk'
 
 import {
-  ARTIFACT_NAMESPACE, type ArtifactRowLike, formatObjectArtifactKey, formatUserArtifactKey,
-  formatUserConversationsKey, formatUserEnvArtifactKey, matchesArtifactType, normalizeArtifactNamespace,
-  normalizeConversationsArray, normalizeStudioAgentName, parseArtifactValue, parseUserIndexRow,
-  prunePersistedContentItem, prunePersistedMessages, readSwrCache, resolveConversationRelatedContent,
-  type SavedScript, type SaveUserArtifactParams, type SharedArtifactPayload, STUDIO_TOOL_MODES, type StudioToolMode,
-  type TileScriptBinding, type UserArtifactIndexEntry, type UserConversationEntry, type UserEnvironmentState,
-  type UserStudioConfig, userStudioConfigArtifactKey, writeSwrCache,
+  ALLOWED_USER_CONVERSATION_FIELDS, ARTIFACT_NAMESPACE, type ArtifactRowLike,
+  assertPointerOnlyArtifactWrite, compactConversationEntryToBudget, evictConversationsToByteBudget,
+  FORBIDDEN_ARTIFACT_PROPERTY_NAMES, formatObjectArtifactKey, formatUserArtifactKey, formatUserConversationsKey,
+  formatUserEnvArtifactKey, matchesArtifactType, MAX_USER_ENV_ARTIFACT_BYTES, mergeTurnInteractionIds,
+  normalizeArtifactNamespace, normalizeConversationLabel, normalizeConversationsArray, normalizeConversationTags,
+  normalizeStudioAgentName, parseArtifactValue, parseUserIndexRow, prunePersistedContentItem, readSwrCache,
+  resolveConversationRelatedContent, type SavedScript, type SharedArtifactPayload, SOFT_USER_CONVERSATIONS_EVICT_BYTES,
+  STUDIO_TOOL_MODES, type StudioToolMode, type TileScriptBinding, type UserArtifactIndexEntry,
+  type UserConversationEntry, type UserEnvironmentState, type UserStudioConfig, userStudioConfigArtifactKey,
+  utf8ByteLength, writeSwrCache,
 } from './lookerArtifactTypes'
+export { ArtifactPayloadViolationError, assertPointerOnlyArtifactWrite } from './lookerArtifactTypes'
 import { rawLookerRequest } from './lookerTransport'
 
 // ponytail: Unified ArtifactService tracks `versionByKey` in memory so repeat saves skip redundant
@@ -95,7 +99,6 @@ export class ArtifactService {
   private syncInPlaceCachesOnWrite(key: string, parsedVal: unknown): void {
     this.valueByKey.set(key, parsedVal)
     writeSwrCache(['artifact:obj', this.namespace, key], parsedVal)
-    const parsedObj = parsedVal && typeof parsedVal === 'object' ? (parsedVal as Record<string, unknown>) : undefined
 
     const convMatch = key.match(/^user_conversations:(.+)$/)
     if (convMatch) {
@@ -106,88 +109,24 @@ export class ArtifactService {
       for (const c of normalizeConversationsArray(parsedVal)) {
         if (deletedSet?.has(c.id)) continue
         const p = prevList?.find((x) => x.id === c.id)
-        const keepMsgs = Boolean(p?.messages && (!c.messages || (p.messages.length > c.messages.length && c.messages[c.messages.length - 1]?.role === 'user')))
-        const keepItems = Boolean(p?.contentItems?.length && (!c.contentItems || p.contentItems.length > c.contentItems.length))
-        const pNewer = Boolean(p && String(p.updatedAt || '') >= String(c.updatedAt || ''))
+        const keepItems = Boolean(p?.contentItems?.length && c.contentItems === undefined)
+        const pNewer = Boolean(p && String(p.updatedAt || '') > String(c.updatedAt || ''))
+        const mergedTurns = p ? mergeTurnInteractionIds(p.turnInteractionIds, c.turnInteractionIds) : c.turnInteractionIds
+        const mergedInFlight = pNewer ? p?.inFlight : c.inFlight
         byId.set(c.id, p ? {
           ...(pNewer ? c : p), ...(pNewer ? p : c),
-          ...(keepMsgs ? { messages: p.messages } : {}),
           ...(keepItems ? { contentItems: p.contentItems } : {}),
+          ...(mergedTurns?.length ? { turnInteractionIds: mergedTurns } : {}),
           ...(p.interactionId || c.interactionId ? { interactionId: (pNewer ? p.interactionId : c.interactionId) || p.interactionId || c.interactionId } : {}),
           ...(p.environmentId || c.environmentId ? { environmentId: (pNewer ? p.environmentId : c.environmentId) || p.environmentId || c.environmentId } : {}),
+          ...(mergedInFlight !== undefined ? { inFlight: mergedInFlight } : {}),
         } : c)
       }
       for (const p of prevList || []) if (!byId.has(p.id) && !deletedSet?.has(p.id)) byId.set(p.id, p)
-      const normalized = Array.from(byId.values()).sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+      const sorted = Array.from(byId.values()).sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+      const normalized = evictConversationsToByteBudget(sorted, SOFT_USER_CONVERSATIONS_EVICT_BYTES)
       this.conversationsCache.set(uid, normalized)
       writeSwrCache(['artifact:conversations', this.namespace, uid], normalized)
-      return
-    }
-
-    const userKeyMatch = key.match(
-      /^user_([^_]+)_(app|data_app|data-investigator|data_investigator|lookml|tile|script|alert|health|health_check|dashboard|conversational-analytics)_(.+)$/
-    )
-    if (userKeyMatch) {
-      const uid = userKeyMatch[1]
-      const rawType = userKeyMatch[2] as StudioToolMode
-      const id = userKeyMatch[3]
-      const entry = parseUserIndexRow({ key, value: parsedVal }, uid) || {
-        ...(parsedObj || {}),
-        id: String(parsedObj?.id || id),
-        type: (parsedObj?.type || parsedObj?.contentType || rawType) as StudioToolMode,
-        title: String(parsedObj?.title || parsedObj?.label || id),
-        updatedAt: String(parsedObj?.updatedAt || new Date().toISOString()),
-        createdBy: String(parsedObj?.createdBy || uid),
-      }
-      const prevAll =
-        this.userListCache.get(uid) ??
-        readSwrCache<UserArtifactIndexEntry[]>(['artifact:user_list', this.namespace, uid, 'all']) ??
-        readSwrCache<UserArtifactIndexEntry[]>(['artifact:user_list', this.namespace, uid, undefined])
-      const nextAll = [
-        entry,
-        ...(prevAll || []).filter((e) => !(e.id === entry.id && matchesArtifactType(e.type, entry.type))),
-      ].sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
-      this.userListCache.set(uid, nextAll)
-      writeSwrCache(['artifact:user_list', this.namespace, uid, 'all'], nextAll)
-      writeSwrCache(['artifact:user_list', this.namespace, uid, undefined], nextAll)
-      writeSwrCache(['artifact:user_list', this.namespace, uid, entry.type], nextAll.filter((e) => matchesArtifactType(e.type, entry.type)))
-      if (rawType !== entry.type) {
-        writeSwrCache(['artifact:user_list', this.namespace, uid, rawType], nextAll.filter((e) => matchesArtifactType(e.type, rawType)))
-      }
-      if (rawType === 'script' || entry.type === 'script') {
-        const scriptEntry: SavedScript = {
-          id: entry.id,
-          title: entry.title,
-          code: String(parsedObj?.code || ''),
-          updatedAt: entry.updatedAt,
-          ...(parsedObj?.dashboardId ? { dashboardId: String(parsedObj.dashboardId) } : {}),
-          ...(parsedObj?.elementId ? { elementId: String(parsedObj.elementId) } : {}),
-        }
-        this.updateScriptsCache(uid, (prev) => [scriptEntry, ...prev.filter((s) => s.id !== scriptEntry.id)])
-      }
-      return
-    }
-
-    const objScriptMatch = key.match(/^obj_script_(.+)$/)
-    if (objScriptMatch && parsedObj) {
-      const id = String(parsedObj.id || objScriptMatch[1])
-      const scriptEntry: SavedScript = {
-        ...(parsedObj as Partial<SavedScript>),
-        id,
-        title: String(parsedObj.title || id),
-        code: String(parsedObj.code || ''),
-        updatedAt: String(parsedObj.updatedAt || new Date().toISOString()),
-      }
-      this.updateScriptsCache(undefined, (prev) => [scriptEntry, ...prev.filter((s) => s.id !== id)])
-      return
-    }
-
-    const tileMatch = key.match(/^tile_element_(.+)$/)
-    if (tileMatch) {
-      const elId = tileMatch[1]
-      const binding = (parsedVal || null) as TileScriptBinding | null
-      this.tileScriptCache.set(elId, binding)
-      writeSwrCache(['artifact:tile_script', this.namespace, elId], binding)
     }
   }
 
@@ -275,6 +214,7 @@ export class ArtifactService {
 
   async put(items: Array<{ key: string; value: unknown }>): Promise<void> {
     if (items.length === 0) return
+    for (const item of items) assertPointerOnlyArtifactWrite(item.key, item.value)
     const uncachedKeys = items.map((i) => i.key).filter((k) => !this.versionByKey.has(k) && !this.knownMissingKeys.has(k))
     if (uncachedKeys.length > 0) await this.fetchVersionsForKeys(uncachedKeys)
 
@@ -372,7 +312,7 @@ export class ArtifactService {
       const effectiveHash = rawHash.length <= 64 ? rawHash : ''
       const updatedAt = new Date().toISOString()
       let payload: UserEnvironmentState = { environmentId: envId, ...(effectiveHash ? { sourcesHash: effectiveHash } : {}), updatedAt }
-      if (new TextEncoder().encode(JSON.stringify(payload)).length > 512) payload = { environmentId: envId.slice(0, 256), updatedAt }
+      if (utf8ByteLength(JSON.stringify(payload)) > MAX_USER_ENV_ARTIFACT_BYTES) payload = { environmentId: envId.slice(0, 256), updatedAt }
       await this.put([{ key: formatUserEnvArtifactKey(userId), value: payload }])
     })
   }
@@ -389,13 +329,31 @@ export class ArtifactService {
     return {
       userId: uid,
       agentName: normalizeStudioAgentName(typeof stored === 'string' ? stored : obj?.agentName),
+      ...(typeof obj?.themeMode === 'string' ? { themeMode: obj.themeMode } : {}),
+      ...(typeof obj?.requirePermission === 'boolean' ? { requirePermission: obj.requirePermission } : {}),
+      ...(typeof obj?.busySendAction === 'string' ? { busySendAction: obj.busySendAction } : {}),
+      ...(typeof obj?.maxToolRounds === 'number' ? { maxToolRounds: obj.maxToolRounds } : {}),
+      ...(typeof obj?.selectedFolderId === 'string' ? { selectedFolderId: obj.selectedFolderId } : {}),
       updatedAt: typeof obj?.updatedAt === 'string' ? obj.updatedAt : '',
     }
   }
 
-  async saveUserConfig(userId: string, patch: Partial<Pick<UserStudioConfig, 'agentName'>>): Promise<UserStudioConfig> {
+  async saveUserConfig(
+    userId: string,
+    patch: Partial<Omit<UserStudioConfig, 'userId' | 'updatedAt'>>
+  ): Promise<UserStudioConfig> {
     const uid = String(userId || '').trim() || '1'
-    const nextConfig: UserStudioConfig = { userId: uid, agentName: normalizeStudioAgentName(patch.agentName), updatedAt: new Date().toISOString() }
+    const prev = await this.getUserConfig(uid).catch(() => null)
+    const nextConfig: UserStudioConfig = {
+      userId: uid,
+      agentName: normalizeStudioAgentName(patch.agentName ?? prev?.agentName),
+      ...(patch.themeMode !== undefined ? { themeMode: patch.themeMode } : prev?.themeMode !== undefined ? { themeMode: prev.themeMode } : {}),
+      ...(patch.requirePermission !== undefined ? { requirePermission: patch.requirePermission } : prev?.requirePermission !== undefined ? { requirePermission: prev.requirePermission } : {}),
+      ...(patch.busySendAction !== undefined ? { busySendAction: patch.busySendAction } : prev?.busySendAction !== undefined ? { busySendAction: prev.busySendAction } : {}),
+      ...(patch.maxToolRounds !== undefined ? { maxToolRounds: patch.maxToolRounds } : prev?.maxToolRounds !== undefined ? { maxToolRounds: prev.maxToolRounds } : {}),
+      ...(patch.selectedFolderId !== undefined ? { selectedFolderId: patch.selectedFolderId } : prev?.selectedFolderId !== undefined ? { selectedFolderId: prev.selectedFolderId } : {}),
+      updatedAt: new Date().toISOString(),
+    }
     await this.put([{ key: userStudioConfigArtifactKey(uid), value: nextConfig }])
     return nextConfig
   }
@@ -450,36 +408,86 @@ export class ArtifactService {
     const uid = String(userId || '1').trim()
     const cleanId = String(entry.id || '').trim()
     if (!cleanId) return []
+    const convKey = formatUserConversationsKey(uid)
+    const entryRec = entry as Record<string, unknown>
+    for (const k of Object.keys(entryRec)) {
+      if (entryRec[k] === undefined || k === 'title') continue
+      if (FORBIDDEN_ARTIFACT_PROPERTY_NAMES.has(k) || !ALLOWED_USER_CONVERSATION_FIELDS.has(k)) {
+        assertPointerOnlyArtifactWrite(convKey, [entry])
+      }
+    }
     const now = new Date().toISOString()
     if (!this.conversationsCache.has(uid)) await this.listConversations(uid)
     if (this.isConversationDeleted(uid, cleanId)) return this.conversationsCache.get(uid) || []
     const existing = this.conversationsCache.get(uid) || []
     const prev = existing.find((c) => c.id === cleanId)
-    let mergedContentItems = entry.contentItems
+    const prevNewer = Boolean(entry.updatedAt && prev?.updatedAt && entry.updatedAt < prev.updatedAt)
+    let mergedContentItems = prevNewer && prev?.contentItems ? prev.contentItems : entry.contentItems
     if (mergedContentItems === undefined && prev?.contentItems?.length) mergedContentItems = prev.contentItems
-    const rawMessages =
-      entry.messages && prev?.messages && prev.messages.length > entry.messages.length && entry.messages[entry.messages.length - 1]?.role === 'user'
-        ? prev.messages
-        : (entry.messages ?? prev?.messages)
-    const mergedMessages = prunePersistedMessages(rawMessages)
+    const prunedItems = mergedContentItems ? mergedContentItems.map((it) => prunePersistedContentItem(it)) : undefined
+    const mergedType = String((prevNewer ? prev?.type : entry.type) || entry.type || prev?.type || 'app')
+    const mergedExplores = ((prevNewer ? prev?.explores : entry.explores) ?? prev?.explores)?.slice(0, 16)
+    const mergedTurns = mergeTurnInteractionIds(prev?.turnInteractionIds, entry.turnInteractionIds)
+    const latestTurnFinalId = mergedTurns && mergedTurns.length > 0 ? mergedTurns[mergedTurns.length - 1][1] : undefined
+    const mergedInteractionId = latestTurnFinalId || (prevNewer ? prev?.interactionId : entry.interactionId) || prev?.interactionId
+    const nextInFlight = prevNewer && prev?.inFlight !== undefined ? prev.inFlight : entry.inFlight !== undefined ? entry.inFlight : prev?.inFlight
+    const mergedTags = normalizeConversationTags(
+      (prevNewer ? prev?.tags : entry.tags) ?? prev?.tags,
+      mergedExplores,
+      prunedItems?.map((it) => it.contentType),
+      mergedType
+    )
+    const rawMergedContent = prev?.content || entry.content
+      ? (prevNewer ? { ...entry.content, ...prev?.content } : { ...prev?.content, ...entry.content })
+      : undefined
+    const mergedCaId = entry.caConversationId ?? prev?.caConversationId ?? (typeof rawMergedContent?.caConversationId === 'string' ? rawMergedContent.caConversationId : undefined)
+    const nextTabKey = !prevNewer && entry.activeContentTabKey !== undefined ? entry.activeContentTabKey : prev?.activeContentTabKey
     const merged: UserConversationEntry = {
-      ...prev,
-      ...entry,
-      ...(prev?.content || entry.content ? { content: { ...prev?.content, ...entry.content } } : {}),
-      ...(mergedContentItems ? { contentItems: mergedContentItems.map((it) => prunePersistedContentItem(it)) } : {}),
-      ...(entry.activeContentTabKey !== undefined || prev?.activeContentTabKey ? { activeContentTabKey: entry.activeContentTabKey ?? prev?.activeContentTabKey } : {}),
-      ...(mergedMessages !== undefined ? { messages: mergedMessages } : {}),
+      ...(prev ? Object.fromEntries(Object.entries(prev).filter(([k]) => ALLOWED_USER_CONVERSATION_FIELDS.has(k) && k !== 'inFlight')) : {}),
+      ...(!prevNewer ? Object.fromEntries(Object.entries(entryRec).filter(([k]) => ALLOWED_USER_CONVERSATION_FIELDS.has(k) && k !== 'inFlight' && k !== 'contentItems')) : {}),
+      ...(rawMergedContent ? { content: rawMergedContent } : {}),
+      ...(prunedItems !== undefined ? { contentItems: prunedItems } : {}),
+      ...(nextTabKey !== undefined ? { activeContentTabKey: nextTabKey } : {}),
+      ...(mergedExplores ? { explores: mergedExplores } : {}),
+      ...(mergedTurns?.length ? { turnInteractionIds: mergedTurns } : {}),
+      ...(mergedInteractionId ? { interactionId: mergedInteractionId } : {}),
+      ...(mergedCaId ? { caConversationId: mergedCaId } : {}),
+      ...(nextInFlight !== undefined ? { inFlight: Boolean(nextInFlight) } : {}),
+      ...(mergedTags?.length ? { tags: mergedTags } : {}),
       id: cleanId,
-      type: entry.type || prev?.type || 'app',
-      label: String(entry.label || prev?.label || (entry as { title?: string }).title || cleanId),
+      type: mergedType,
+      label: normalizeConversationLabel((prevNewer ? prev?.label : entry.label) || prev?.label || (entry as { title?: string }).title, cleanId),
       createdAt: prev?.createdAt || entry.createdAt || now,
-      updatedAt: entry.updatedAt || now,
+      updatedAt: prevNewer && prev?.updatedAt ? prev.updatedAt : entry.updatedAt || now,
     }
-    const nextList = [merged, ...existing.filter((c) => c.id !== cleanId)].sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+    if (!mergedTags?.length) delete merged.tags
+    if (!mergedTurns?.length) delete merged.turnInteractionIds
+    const compacted = compactConversationEntryToBudget(merged)
+    const sortedList = [compacted, ...existing.filter((c) => c.id !== cleanId)].sort((a, b) =>
+      String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))
+    )
+    const nextList = evictConversationsToByteBudget(sortedList, SOFT_USER_CONVERSATIONS_EVICT_BYTES, cleanId)
+    assertPointerOnlyArtifactWrite(convKey, nextList)
     this.conversationsCache.set(uid, nextList)
     writeSwrCache(['artifact:conversations', this.namespace, uid], nextList)
     await this.enqueueConversationsPut(uid)
     return this.conversationsCache.get(uid) || nextList
+  }
+
+  async pruneConversationsByIds(userId: string, idsToPrune: ReadonlyArray<string>): Promise<UserConversationEntry[]> {
+    const uid = String(userId || '1').trim()
+    const pruneSet = new Set(idsToPrune.map((id) => String(id || '').trim()).filter(Boolean))
+    if (pruneSet.size === 0) return this.listConversations(uid)
+    let deletedSet = this.deletedConvIdsByUser.get(uid)
+    if (!deletedSet) { deletedSet = new Set(); this.deletedConvIdsByUser.set(uid, deletedSet) }
+    pruneSet.forEach((id) => deletedSet!.add(id))
+    const existing = this.conversationsCache.has(uid) ? this.conversationsCache.get(uid)! : await this.listConversations(uid)
+    const next = existing.filter((c) => !pruneSet.has(c.id))
+    if (next.length === existing.length) return existing
+    this.conversationsCache.set(uid, next)
+    writeSwrCache(['artifact:conversations', this.namespace, uid], next)
+    await this.enqueueConversationsPut(uid)
+    return this.conversationsCache.get(uid) || next
   }
 
   async archiveConversation(userId: string, conversationId: string, archived = true): Promise<UserConversationEntry[]> {
@@ -622,50 +630,11 @@ export class ArtifactService {
     return parseArtifactValue<T>(hit.value)
   }
 
-  async saveUserArtifact(
-    userIdOrParams: string | SaveUserArtifactParams,
-    indexEntry?: UserArtifactIndexEntry,
-    objectPayload?: Record<string, unknown>
-  ): Promise<SharedArtifactPayload> {
-    if (typeof userIdOrParams === 'object' && userIdOrParams !== null) {
-      const { sdk: _sdk, userId: rawUid, namespace: _ns, content, objectPayload: explicitObj, ...rest } = userIdOrParams
-      const uid = String(rawUid || '1').trim()
-      const id = String(rest.id || '').trim()
-      const type = (rest.type || 'app') as StudioToolMode
-      const entry: UserArtifactIndexEntry = {
-        ...rest, id, type,
-        title: String(rest.title || rest.label || id),
-        updatedAt: String(rest.updatedAt || new Date().toISOString()),
-        createdBy: String(rest.createdBy || uid),
-      }
-      return this.saveUserArtifact(uid, entry, explicitObj ?? content)
-    }
-
-    const uid = String(userIdOrParams || '1').trim()
-    const entry = indexEntry!
-    const items = [
-      { key: formatUserArtifactKey(uid, entry.type, entry.id), value: entry },
-      ...(objectPayload ? [{ key: formatObjectArtifactKey(entry.type, entry.id), value: objectPayload }] : []),
-    ]
-    await this.put(items)
-    return (objectPayload || entry) as SharedArtifactPayload
-  }
-
   async deleteUserArtifact(userId: string, type: StudioToolMode, id: string, deleteSharedPayload = false): Promise<void> {
     const uid = String(userId || '1').trim()
     const keys = [formatUserArtifactKey(uid, type, id)]
     if (deleteSharedPayload) keys.push(formatObjectArtifactKey(type, id))
     await this.delete(keys)
-  }
-
-  async saveScript(userId: string, script: SavedScript): Promise<SavedScript> {
-    const payload: SavedScript = { ...script, updatedAt: script.updatedAt || new Date().toISOString() }
-    const uid = String(userId || '1').trim()
-    await this.put([
-      { key: `user_${uid}_script_${payload.id}`, value: { ...payload, messages: undefined } },
-      { key: `obj_script_${payload.id}`, value: payload },
-    ])
-    return payload
   }
 
   async loadScript(scriptId: string): Promise<SavedScript | null> {
@@ -680,20 +649,18 @@ export class ArtifactService {
     const cacheKey = userId ? String(userId).trim() : '*'
     const cached = this.scriptsCache.get(cacheKey)
     if (cached) return cached
-
     const patterns = userId ? [`user_${String(userId).trim()}_script_%`, 'obj_script_%'] : ['obj_script_%']
     const byId = new Map<string, SavedScript>()
     for (const pattern of patterns) {
       try {
-        const rows = await this.search(pattern)
-        for (const r of rows || []) {
+        for (const r of (await this.search(pattern)) || []) {
           if (!r?.value) continue
           try {
             const parsed = parseArtifactValue<SavedScript>(r.value)
             if (parsed?.id && !byId.has(parsed.id)) byId.set(parsed.id, parsed)
-          } catch { /* Ignore malformed script row */ }
+          } catch { /* ignore */ }
         }
-      } catch { /* Ignore search error for pattern */ }
+      } catch { /* ignore */ }
       if (byId.size > 0 && userId) break
     }
     const sorted = Array.from(byId.values()).sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
@@ -707,20 +674,6 @@ export class ArtifactService {
     const cleanId = String(scriptId || '').trim().replace(/^obj_script_/, '')
     if (!cleanId) return
     await this.delete([`user_${uid}_script_${cleanId}`, `obj_script_${cleanId}`])
-  }
-
-  async bindTileScript(elementId: string, binding: TileScriptBinding): Promise<TileScriptBinding> {
-    const cleanElId = String(elementId || '').trim()
-    const saved: TileScriptBinding = {
-      scriptId: binding.scriptId,
-      code: binding.code,
-      ...(binding.title ? { title: binding.title } : {}),
-      updatedAt: new Date().toISOString(),
-    }
-    await this.put([{ key: `tile_element_${String(elementId).trim()}`, value: saved }])
-    this.tileScriptCache.set(cleanElId, saved)
-    writeSwrCache(['artifact:tile_script', this.namespace, cleanElId], saved)
-    return saved
   }
 
   async loadTileScript(elementId: string): Promise<TileScriptBinding | null> {
@@ -794,3 +747,17 @@ export const clearUserEnvironmentId = (sdk: Looker40SDK, userId: string, namespa
   getArtifactService(sdk, namespace).clearUserEnvironmentId(userId)
 export const clearAllUserConversations = (sdk: Looker40SDK, userId: string, namespace = ARTIFACT_NAMESPACE, extraConversationIds?: readonly string[]): Promise<void> =>
   getArtifactService(sdk, namespace).clearAllConversations(userId, extraConversationIds)
+export const pruneUserConversations = (sdk: Looker40SDK, userId: string, idsToPrune: ReadonlyArray<string>, namespace = ARTIFACT_NAMESPACE): Promise<UserConversationEntry[]> =>
+  getArtifactService(sdk, namespace).pruneConversationsByIds(userId, idsToPrune)
+export const loadUserStudioConfig = (sdk: Looker40SDK, userId: string, namespace = ARTIFACT_NAMESPACE): Promise<UserStudioConfig> =>
+  getArtifactService(sdk, namespace).getUserConfig(userId)
+export const saveUserStudioConfig = (
+  sdk: Looker40SDK,
+  userId: string,
+  patchOrAgentName: string | Partial<Omit<UserStudioConfig, 'userId' | 'updatedAt'>>,
+  namespace = ARTIFACT_NAMESPACE
+): Promise<UserStudioConfig> =>
+  getArtifactService(sdk, namespace).saveUserConfig(
+    userId,
+    typeof patchOrAgentName === 'string' ? { agentName: patchOrAgentName } : patchOrAgentName
+  )

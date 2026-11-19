@@ -3,8 +3,12 @@ import type { ILookmlModel, Looker40SDK } from '@looker/sdk'
 import { mutate, SWRConfig, unstable_serialize } from 'swr'
 
 import { callInteractionsApi } from './antigravityAuth'
-import { AntigravityAuth, DEFAULT_ANTIGRAVITY_MODEL } from './antigravityTypes'
-import { loadSingleConversationArtifact, type UserConversationEntry } from './lookerArtifacts'
+import { AntigravityAuth, DEFAULT_ANTIGRAVITY_MODEL, extractNonThoughtText, stripControlTags } from './antigravityTypes'
+import {
+  getSessionConversationMessages,
+  loadSingleConversationArtifact,
+  type UserConversationEntry,
+} from './lookerArtifacts'
 import { extractResolvedUseCase, ResolvedStudioUseCase, StudioUseCase } from './lookerPermissions'
 import {
   coalesceLookerMetadataRequest,
@@ -586,13 +590,17 @@ async function fetchLookerEntityRecord(
 
 export async function hydrateMentionedContext(params: {
   sdk: Looker40SDK
+  extensionSDK?: Partial<ExtensionSDK>
+  auth?: AntigravityAuth
+  userId?: string
+  activeEnvironmentId?: string
   mentions: StudioContextMention[]
   conversations?: UserConversationEntry[]
   selectedExplores?: string[]
   useCase?: string
   anchorDate?: string
 }): Promise<HydratedMentionedContext> {
-  const { sdk, mentions, conversations = [], selectedExplores = [], useCase, anchorDate } = params
+  const { sdk, extensionSDK, auth, userId, mentions, conversations = [], selectedExplores = [], useCase, anchorDate } = params
   const fixedDates = useCase === 'data-investigator' || useCase === 'data_investigator'
   const exploresSet = new Set<string>(selectedExplores.filter(Boolean))
   const extraSources: Array<{ type: 'inline'; content: string; target: string }> = []
@@ -701,7 +709,7 @@ export async function hydrateMentionedContext(params: {
         conversations.find((c) => c.id === convId || c.label === mention.title) || null
       if (!conv) {
         try {
-          conv = await loadSingleConversationArtifact(sdk, convId)
+          conv = await loadSingleConversationArtifact(sdk, convId, userId)
         } catch {
           conv = null
         }
@@ -712,7 +720,27 @@ export async function hydrateMentionedContext(params: {
         }
         const safeId = sanitizeContextFilename(conv.id || convId)
         const targetPath = `/workspace/context/conversation_${safeId}.md`
-        const turnLines = (conv.messages || []).map(
+        let hydratedTurns = getSessionConversationMessages(conv.id) || []
+        if (hydratedTurns.length === 0 && (auth || (typeof window !== 'undefined' && window.__MOCK_LOOKER_EXTENSION__))) {
+          const pairs: Array<[string, string]> = conv.turnInteractionIds?.length
+            ? conv.turnInteractionIds
+            : conv.interactionId
+            ? [[conv.interactionId, conv.interactionId]]
+            : []
+          const effAuth = auth || { mode: 'apikey' as const }
+          const fetched = await Promise.all(
+            pairs.map(async ([rId, fId]) => {
+              const r = await callInteractionsApi(extensionSDK, effAuth, `interactions/${encodeURIComponent(rId)}`, 'GET').catch(() => null)
+              const f = fId === rId ? r : await callInteractionsApi(extensionSDK, effAuth, `interactions/${encodeURIComponent(fId)}`, 'GET').catch(() => null)
+              const rawIn = extractNonThoughtText(r?.input)
+              const u = (rawIn.match(/<USER_MESSAGE>([\s\S]*?)<\/USER_MESSAGE>/i)?.[1] ?? rawIn).trim()
+              const a = stripControlTags(String(f?.output_text || extractNonThoughtText(f?.outputs) || '')).trim()
+              return [u ? { role: 'user' as const, text: u } : null, a ? { role: 'assistant' as const, text: a } : null]
+            })
+          )
+          hydratedTurns = fetched.flat().filter((m): m is { role: 'user' | 'assistant'; text: string } => Boolean(m))
+        }
+        const turnLines = hydratedTurns.map(
           (m) => `### ${String(m.role || 'user').toUpperCase()}\n${String(m.text || '')}`
         )
         const mdContent = [

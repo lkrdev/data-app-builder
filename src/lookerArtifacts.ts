@@ -10,8 +10,6 @@ import {
 import {
   getArtifactJson,
   getArtifactService,
-  putArtifacts,
-  searchArtifactsRaw,
 } from './lookerArtifactService'
 import {
   ARTIFACT_NAMESPACE,
@@ -19,7 +17,6 @@ import {
   formatStudioContentItemTitle,
   getArtifactNamespace,
   type SavedScript,
-  type SaveUserArtifactParams,
   type SharedArtifactPayload,
   STUDIO_TOOL_MODES,
   type StudioContentItem,
@@ -154,11 +151,18 @@ export function normalizeNativeContent(
   }
 }
 
-// ponytail: batch both user_${userId}_dashboard_${id} and obj_dashboard_${id} into one putArtifacts call
+const sessionNativeContentCache = new Map<string, NativeContentState>()
+const sessionAlertBundleCache = new Map<string, AlertInspectorBundle>()
+
+export function clearSessionAlertCache(): void {
+  sessionAlertBundleCache.clear()
+  sessionNativeContentCache.clear()
+}
+
 export async function saveNativeContentArtifact(
-  sdk: Looker40SDK,
-  extensionSDK: ArtifactExtensionHostLike,
-  userId: string,
+  _sdk: Looker40SDK,
+  _extensionSDK: ArtifactExtensionHostLike,
+  _userId: string,
   bundle: NativeContentBundle,
   folderId: string,
   existing?: NativeContentState | null,
@@ -171,46 +175,7 @@ export async function saveNativeContentArtifact(
     { ...existing, ...bundle, id, studio: nextStudio },
     folderId
   )
-  const updatedAt = nextStudio?.updatedAt || new Date().toISOString()
-  const namespace = getArtifactNamespace(extensionSDK)
-  const safeUserId = String(userId || '1').trim()
-  const userKey = `user_${safeUserId}_dashboard_${id}`
-  const objKey = `obj_dashboard_${id}`
-
-  const userIndexPayload = {
-    id,
-    type: 'dashboard',
-    contentType: merged.contentType,
-    title: merged.title,
-    updatedAt,
-    createdBy: safeUserId,
-    targetId: id,
-    embedPath: merged.embedPath,
-    folderId: merged.folderId,
-    explores: nextStudio?.explores || bundle.explores || [],
-    lastInteractionId: nextStudio?.lastInteractionId,
-    environmentId: nextStudio?.environmentId,
-  }
-  const { messages: _messages, ...lightStudio } = merged.studio || {}
-  const objPayload = {
-    ...merged,
-    studio: merged.studio ? lightStudio : undefined,
-    type: 'dashboard',
-  }
-
-  try {
-    await putArtifacts(
-      sdk,
-      [
-        { key: userKey, value: userIndexPayload },
-        { key: objKey, value: objPayload },
-      ],
-      namespace
-    )
-  } catch {
-    // Non-fatal outside an extension host
-  }
-
+  sessionNativeContentCache.set(id, merged)
   return merged
 }
 
@@ -222,14 +187,8 @@ export async function loadNativeContentById(
   const prefixMatch = rawId.trim().match(/^(dashboard|lookml_dashboard|look|board):(.+)$/i)
   const explicitType = prefixMatch ? (prefixMatch[1].toLowerCase() as NativeContentType) : undefined
   const cleanId = (prefixMatch ? prefixMatch[2] : rawId).trim()
-  const stored = await getArtifactJson<RawNativeContentInput>(
-    sdk,
-    `obj_dashboard_${cleanId}`,
-    getArtifactNamespace(extensionSDK)
-  )
-  if (stored?.id) {
-    return normalizeNativeContent(stored, '1', explicitType)
-  }
+  const cached = sessionNativeContentCache.get(cleanId)
+  if (cached && (!explicitType || cached.contentType === explicitType)) return cached
 
   type RawContentItem = Partial<IDashboard> & {
     id?: string | number
@@ -241,65 +200,48 @@ export async function loadNativeContentById(
 
   const cType: NativeContentType =
     explicitType || (cleanId.includes('::') ? 'lookml_dashboard' : 'dashboard')
-  const item: RawContentItem =
-    cType === 'look'
-      ? await rawLookerRequest<RawContentItem>(sdk, 'GET', `/looks/${encodeURIComponent(cleanId)}`)
-      : cType === 'board'
-      ? await rawLookerRequest<RawContentItem>(sdk, 'GET', `/boards/${encodeURIComponent(cleanId)}`)
-      : await sdk.ok(sdk.dashboard(cleanId))
-  const id = String(item.id || cleanId)
-  const finalType: NativeContentType =
-    explicitType || (id.includes('::') ? 'lookml_dashboard' : cType)
-  return normalizeNativeContent(
-    {
-      id,
-      contentType: finalType,
-      title: item.title || `${finalType} #${id}`,
-      folderId: String(item.folder?.id || item.folder_id || '1'),
-      tileCount: item.dashboard_elements?.length,
-      filterCount: item.dashboard_filters?.length,
-      lookmlDashboardId:
-        finalType === 'lookml_dashboard'
-          ? id
-          : item.lookml_link_id
-          ? String(item.lookml_link_id)
-          : undefined,
-    },
-    '1',
-    finalType
-  )
-}
-
-export async function listUserDashboardArtifacts(
-  sdk: Looker40SDK,
-  extensionSDK: ArtifactExtensionHostLike,
-  userId: string
-): Promise<Array<{ id: string; title: string; contentType: NativeContentType; embedPath: string }>> {
   try {
-    const items = await searchArtifactsRaw(
-      sdk,
-      getArtifactNamespace(extensionSDK),
-      `user_${String(userId || '1').trim()}_dashboard_%`
+    const item: RawContentItem =
+      cType === 'look'
+        ? await rawLookerRequest<RawContentItem>(sdk, 'GET', `/looks/${encodeURIComponent(cleanId)}`)
+        : cType === 'board'
+        ? await rawLookerRequest<RawContentItem>(sdk, 'GET', `/boards/${encodeURIComponent(cleanId)}`)
+        : await sdk.ok(sdk.dashboard(cleanId))
+    const id = String(item.id || cleanId)
+    const finalType: NativeContentType =
+      explicitType || (id.includes('::') ? 'lookml_dashboard' : cType)
+    const activeLayout = item.dashboard_layouts?.find((l) => l.active) || item.dashboard_layouts?.[0]
+    const hydrated = normalizeNativeContent(
+      {
+        id,
+        contentType: finalType,
+        title: item.title || `${finalType} #${id}`,
+        folderId: String(item.folder?.id || item.folder_id || '1'),
+        tileCount: item.dashboard_elements?.length,
+        filterCount: item.dashboard_filters?.length,
+        layoutId: activeLayout?.id ? String(activeLayout.id) : undefined,
+        elementIds: item.dashboard_elements?.map((el) => String(el.id || '')).filter(Boolean),
+        filterNames: item.dashboard_filters?.map((f) => String(f.name || f.title || '')).filter(Boolean),
+        lookmlDashboardId:
+          finalType === 'lookml_dashboard'
+            ? id
+            : item.lookml_link_id
+            ? String(item.lookml_link_id)
+            : undefined,
+      },
+      '1',
+      finalType
     )
-    return items.flatMap((item) => {
-      try {
-        const p = typeof item.value === 'string' ? JSON.parse(item.value) : item.value
-        if (!p?.id) return []
-        const cType: NativeContentType = p.contentType || 'dashboard'
-        return [
-          {
-            id: String(p.id),
-            title: String(p.title || `#${p.id}`),
-            contentType: cType,
-            embedPath: resolveNativeEmbedPath(cType, String(p.id), p.embedPath),
-          },
-        ]
-      } catch {
-        return []
-      }
-    })
-  } catch {
-    return []
+    sessionNativeContentCache.set(cleanId, hydrated)
+    return hydrated
+  } catch (liveErr) {
+    const stored = await getArtifactJson<RawNativeContentInput>(
+      sdk,
+      `obj_dashboard_${cleanId}`,
+      getArtifactNamespace(extensionSDK)
+    )
+    if (stored?.id) return normalizeNativeContent(stored, '1', explicitType)
+    throw liveErr
   }
 }
 
@@ -336,8 +278,6 @@ async function patchDashboardElementVerified(sdk: Looker40SDK, cleanElId: string
   return updated
 }
 
-export const saveScriptArtifact = (sdk: Looker40SDK, userId: string, script: SavedScript, namespace = ARTIFACT_NAMESPACE): Promise<SavedScript> =>
-  getArtifactService(sdk, namespace).saveScript(userId, script)
 export const loadScriptArtifact = (sdk: Looker40SDK, scriptId: string, namespace = ARTIFACT_NAMESPACE): Promise<SavedScript | null> =>
   getArtifactService(sdk, namespace).loadScript(scriptId)
 export const loadSingleScriptArtifact = loadScriptArtifact
@@ -346,9 +286,6 @@ export const listSavedScripts = (sdk: Looker40SDK, userId?: string, namespace = 
 export const loadSavedScriptsList = listSavedScripts
 export const deleteScriptArtifact = (sdk: Looker40SDK, userId: string, scriptId: string, namespace = ARTIFACT_NAMESPACE): Promise<void> =>
   getArtifactService(sdk, namespace).deleteScript(userId, scriptId)
-export const bindTileScriptArtifact = (sdk: Looker40SDK, elementId: string, binding: TileScriptBinding, namespace = ARTIFACT_NAMESPACE): Promise<TileScriptBinding> =>
-  getArtifactService(sdk, namespace).bindTileScript(elementId, binding)
-export const bindScriptToTileArtifact = bindTileScriptArtifact
 export const loadTileScriptArtifact = (sdk: Looker40SDK, elementId: string, namespace = ARTIFACT_NAMESPACE): Promise<TileScriptBinding | null> =>
   getArtifactService(sdk, namespace).loadTileScript(elementId)
 
@@ -446,34 +383,6 @@ export async function publishScriptDashboard(
   return { dashboardId: dashId, elementId, extensionId: extId }
 }
 
-// ponytail: two-tier artifact store — compact (<1 KB) per-user index key (user_${userId}_${type}_${id})
-// for fast search_artifacts listing + shared payload key (obj_${type}_${id}) reusing ArtifactService.
-export async function saveUserArtifact(
-  sdkOrParams: Looker40SDK | SaveUserArtifactParams,
-  userId?: string,
-  indexEntry?: UserArtifactIndexEntry,
-  objectPayload?: Record<string, unknown>,
-  namespace = ARTIFACT_NAMESPACE
-): Promise<SharedArtifactPayload> {
-  if (
-    sdkOrParams &&
-    typeof sdkOrParams === 'object' &&
-    'sdk' in sdkOrParams &&
-    'userId' in sdkOrParams &&
-    'id' in sdkOrParams
-  ) {
-    const params = sdkOrParams as SaveUserArtifactParams
-    return getArtifactService(params.sdk!, params.namespace || ARTIFACT_NAMESPACE).saveUserArtifact(
-      params
-    )
-  }
-  return getArtifactService(sdkOrParams as Looker40SDK, namespace).saveUserArtifact(
-    String(userId || '1'),
-    indexEntry!,
-    objectPayload
-  )
-}
-
 export async function listUserArtifacts(
   sdk: Looker40SDK,
   userId: string,
@@ -536,10 +445,10 @@ export async function deleteUserConversation(
 export const deleteConversationArtifact = deleteUserConversation
 
 export async function saveAlertArtifact(
-  sdk: Looker40SDK,
-  userId: string,
+  _sdk: Looker40SDK,
+  _userId: string,
   bundle: AlertInspectorBundle,
-  namespace = ARTIFACT_NAMESPACE
+  _namespace = ARTIFACT_NAMESPACE
 ): Promise<AlertInspectorBundle> {
   const alertId = String(bundle.alert_id || bundle.id || '').trim().replace(/^obj_alert_/, '')
   const now = new Date().toISOString()
@@ -550,34 +459,87 @@ export async function saveAlertArtifact(
     alert_history_items: (bundle.alert_history_items || []).slice(0, 10),
     updated_at: now,
   }
-  await saveUserArtifact(
-    sdk,
-    userId,
-    {
-      id: alertId,
-      type: 'alert',
-      title: String(bundle.custom_title || bundle.title || `Alert #${alertId}`),
-      targetId: bundle.dashboard_id ? String(bundle.dashboard_id) : alertId,
-      updatedAt: now,
-      createdBy: String(userId || '1'),
-    },
-    compact as unknown as Record<string, unknown>,
-    namespace
-  )
+  if (alertId) sessionAlertBundleCache.set(alertId, compact)
   return compact
 }
 
-export const loadAlertArtifact = (
+export async function loadAlertArtifact(
   sdk: Looker40SDK,
   alertId: string,
   namespace = ARTIFACT_NAMESPACE
-): Promise<AlertInspectorBundle | null> =>
-  loadObjectArtifact<AlertInspectorBundle>(
-    sdk,
-    'alert',
-    String(alertId || '').trim().replace(/^obj_alert_/, ''),
-    namespace
-  )
+): Promise<AlertInspectorBundle | null> {
+  const cleanId = String(alertId || '').trim().replace(/^obj_alert_/, '')
+  if (!cleanId) return null
+  const cached = sessionAlertBundleCache.get(cleanId)
+  const sdkWithAlert = sdk as Partial<Looker40SDK>
+  if (typeof sdkWithAlert.get_alert === 'function') {
+    try {
+      const [rawAlert, rawDetails] = await Promise.all([
+        sdk.ok(sdkWithAlert.get_alert(cleanId)),
+        rawLookerRequest<unknown>(sdk, 'POST', '/alert_details', undefined, { alert_ids: [cleanId] }).catch(() => null),
+      ])
+      const alertRec = (rawAlert || {}) as unknown as Record<string, unknown>
+      const detailsArr = Array.isArray(rawDetails)
+        ? rawDetails
+        : Array.isArray((rawDetails as { items?: unknown[]; alerts?: unknown[] } | null)?.items)
+        ? (rawDetails as { items: unknown[] }).items
+        : Array.isArray((rawDetails as { alerts?: unknown[] } | null)?.alerts)
+        ? (rawDetails as { alerts: unknown[] }).alerts
+        : []
+      const detailRec = (detailsArr.find(
+        (d) => d && typeof d === 'object' && String((d as Record<string, unknown>).alert_id ?? (d as Record<string, unknown>).id ?? '') === cleanId
+      ) || detailsArr[0] || {}) as Record<string, unknown>
+      const directHistoryArr =
+        detailsArr.length > 0 && detailsArr[0] && typeof detailsArr[0] === 'object' && ('triggered_at' in (detailsArr[0] as object) || 'alert_sync_id' in (detailsArr[0] as object))
+          ? detailsArr
+          : undefined
+      const historyRaw = detailRec.alert_history_items ?? detailRec.history ?? directHistoryArr ?? alertRec.alert_history_items ?? cached?.alert_history_items
+      const appliedRaw = alertRec.applied_dashboard_filters ?? detailRec.applied_dashboard_filters ?? cached?.applied_dashboard_filters
+      const destRaw = alertRec.destinations ?? detailRec.destinations ?? cached?.destinations
+      const fieldObj = (alertRec.field ?? detailRec.field ?? cached?.field) as AlertInspectorBundle['field'] | undefined
+      const dashElId = alertRec.dashboard_element_id ?? detailRec.dashboard_element_id ?? cached?.dashboard_element_id
+      let dashId = alertRec.dashboard_id ?? detailRec.dashboard_id ?? cached?.dashboard_id
+      if ((dashId === undefined || dashId === null || dashId === '') && dashElId) {
+        dashId = (await getDashboardElementSafe(sdk, String(dashElId)))?.dashboard_id ?? dashId
+      }
+      const liveBundle: AlertInspectorBundle = {
+        ...(cached || {}),
+        id: cleanId,
+        alert_id: cleanId,
+        title: String(alertRec.custom_title || detailRec.title || alertRec.title || cached?.title || `Alert #${cleanId}`),
+        custom_title: (alertRec.custom_title ?? detailRec.custom_title ?? cached?.custom_title ?? null) as string | null,
+        description: (alertRec.description ?? detailRec.description ?? cached?.description ?? null) as string | null,
+        dashboard_id: (dashId ?? null) as string | number | null,
+        dashboard_name: (detailRec.dashboard_name ?? alertRec.dashboard_name ?? cached?.dashboard_name ?? null) as string | null,
+        lookml_dashboard_id: (alertRec.lookml_dashboard_id ?? detailRec.lookml_dashboard_id ?? cached?.lookml_dashboard_id ?? null) as string | null,
+        lookml_link_id: (alertRec.lookml_link_id ?? detailRec.lookml_link_id ?? cached?.lookml_link_id ?? null) as string | null,
+        dashboard_element_id: (dashElId ?? null) as string | number | null,
+        owner_id: (alertRec.owner_id ?? detailRec.owner_id ?? cached?.owner_id) as string | number | undefined,
+        owner_display_name: (alertRec.owner_display_name ?? detailRec.owner_display_name ?? cached?.owner_display_name ?? null) as string | null,
+        cron: String(alertRec.cron ?? detailRec.cron ?? cached?.cron ?? ''),
+        comparison_type: String(alertRec.comparison_type ?? detailRec.comparison_type ?? cached?.comparison_type ?? ''),
+        threshold: typeof (alertRec.threshold ?? detailRec.threshold) === 'number' ? Number(alertRec.threshold ?? detailRec.threshold) : cached?.threshold,
+        field: fieldObj,
+        applied_dashboard_filters: Array.isArray(appliedRaw) ? (appliedRaw as AlertInspectorBundle['applied_dashboard_filters']) : null,
+        destinations: Array.isArray(destRaw) ? (destRaw as AlertInspectorBundle['destinations']) : null,
+        is_disabled: (alertRec.is_disabled ?? detailRec.is_disabled ?? cached?.is_disabled ?? null) as boolean | null,
+        disabled_reason: (alertRec.disabled_reason ?? detailRec.disabled_reason ?? cached?.disabled_reason ?? null) as string | null,
+        is_public: (alertRec.is_public ?? detailRec.is_public ?? cached?.is_public ?? null) as boolean | null,
+        followed: (alertRec.followed ?? detailRec.followed ?? cached?.followed ?? null) as boolean | null,
+        followable: (alertRec.followable ?? detailRec.followable ?? cached?.followable ?? null) as boolean | null,
+        error: (detailRec.error ?? alertRec.error ?? cached?.error ?? null) as string | null,
+        alert_history_items: Array.isArray(historyRaw) ? (historyRaw as NonNullable<AlertInspectorBundle['alert_history_items']>).slice(0, 10) : null,
+        updated_at: String(detailRec.updated_at ?? alertRec.updated_at ?? cached?.updated_at ?? new Date().toISOString()),
+      }
+      sessionAlertBundleCache.set(cleanId, liveBundle)
+      return liveBundle
+    } catch {
+      if (cached) return cached
+    }
+  }
+  if (cached) return cached
+  return loadObjectArtifact<AlertInspectorBundle>(sdk, 'alert', cleanId, namespace)
+}
 
 export interface DeletedLookerResource {
   kind: 'dashboards' | 'looks' | 'boards'

@@ -1,121 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react'
 
 import type { ExtensionSDK } from '@looker/extension-sdk'
-import type { Looker40SDK } from '@looker/sdk'
 import { ExternalLink, FolderOpen, Lock, MoreVertical } from 'lucide-react'
 
 import { LOOKER_PROJECT_ONBOARDING_SKILL_MD } from './antigravityPrompts'
-import {
-  type AntigravityInteractionPayload,
-  cleanLookmlProjectId,
-  collectInteractionTextCandidates,
-  parseTaggedJsonObjects,
-} from './antigravityTypes'
+import { cleanLookmlProjectId } from './antigravityTypes'
 import { StudioBadge, StudioButton, StudioCard, StudioModal } from './components/StudioDesignSystem'
 import { LKR_DEV_CLI_SPEC } from './lkrCliBridge'
 import {
   type AccessibleLookerConnection,
   copyTextWithExtensionSdk,
   formatAccessibleConnectionsMarkdown,
-  getArtifactNamespace,
-  getArtifactService,
-  PersistedChatTurn,
-  saveUserArtifact,
 } from './lookerApi'
-import {
-  extractSlashSkillIds,
-  type LookmlFileChange,
-  parseLookmlFileDisplay,
-} from './lookmlSkills'
+import type { LookmlBundle } from './lookmlArtifactHydration'
+import { extractSlashSkillIds, parseLookmlFileDisplay } from './lookmlSkills'
 export { getArtifactNamespace } from './lookerApi'
 export * from './lkrCliBridge'
+export * from './lookmlArtifactHydration'
 export * from './lookmlSkills'
-
-export interface LookmlTestResult {
-  test_name: string
-  model_name?: string
-  file_id?: string
-  success: boolean
-  errors?: Array<{ message?: string }>
-}
-
-export interface LookmlParityQuery {
-  query_index?: number
-  label?: string
-  sql_slug?: string
-  sql_runner_url?: string
-  explore_slug?: string
-  explore_url?: string
-  parity_status?: string
-  mismatches?: string[]
-}
-
-export interface LookmlBundle {
-  id: string
-  title: string
-  project_id: string
-  model_name?: string
-  branch_name?: string
-  files: LookmlFileChange[]
-  validation?: {
-    passed: boolean
-    error_count?: number
-    errors?: Array<{ message: string; file_path?: string; line_number?: number; severity?: string }>
-  }
-  tests?: LookmlTestResult[]
-  queries?: LookmlParityQuery[]
-  summary_markdown?: string
-}
-
-export interface LookmlSessionIndex {
-  id: string
-  type: 'lookml'
-  title: string
-  updatedAt: string
-  createdBy: string
-  targetId: string
-  branchName?: string
-  explores?: string[]
-  lastInteractionId?: string
-  environmentId?: string
-}
-
-export interface LookmlArtifactPayload {
-  id: string
-  type: 'lookml'
-  title: string
-  updatedAt: string
-  createdBy: string
-  bundle: LookmlBundle
-  studio?: {
-    explores?: string[]
-    lastInteractionId?: string
-    environmentId?: string
-    messages?: PersistedChatTurn[]
-  }
-}
-
-export type LookmlInteractionLike = AntigravityInteractionPayload
-
-export function extractLookmlBundleFromInteraction(
-  interaction?: LookmlInteractionLike | null
-): LookmlBundle | null {
-  const hit = parseTaggedJsonObjects(collectInteractionTextCandidates(interaction), /<LOOKML_BUNDLE>([\s\S]*?)<\/LOOKML_BUNDLE>/g).find((p) =>
-    Boolean(cleanLookmlProjectId(p.project_id) || cleanLookmlProjectId(p.model_name) || (Array.isArray(p.files) && p.files.length > 0) || p.__bundle_ref__ || (typeof p.summary_markdown === 'string' && p.summary_markdown.trim()))
-  )
-  if (!hit) return null
-  const bundle = Object.assign({}, hit) as unknown as LookmlBundle
-  bundle.project_id = (cleanLookmlProjectId(bundle.project_id) || '') as string
-  bundle.id = (cleanLookmlProjectId(bundle.id) || '') as string
-  // ponytail: synthesize unified diff for newly created files on client so sandbox stdout omits duplicate content
-  for (const f of bundle.files || []) {
-    if (!f.diff && f.content) {
-      const lines = f.content.replace(/\r?\n$/, '').split('\n')
-      f.diff = `--- a/${f.path}\n+++ b/${f.path}\n@@ -0,0 +1,${lines.length} @@\n${lines.map((l) => `+${l}`).join('\n')}\n`
-    }
-  }
-  return bundle
-}
 
 export function buildLookmlSystemGuide(params: {
   selectedExplores: string[]
@@ -204,129 +106,6 @@ export function buildLookmlSystemGuide(params: {
     `${isWorkflowSkill ? '3' : '5'}. **Emit \`<LOOKML_BUNDLE>\` & Clickable Links**:`,
     `   Run \`python3 /workspace/bootstrap_lookml.py bundle /workspace/data/$RUN_ID\` (or \`/workspace/lookml_result.json\`), include the printed \`<LOOKML_BUNDLE>...</LOOKML_BUNDLE>\` tag, and end every turn that creates or updates LookML project files with \`[Open <project_name> in Looker IDE](/projects/<project_name>)\` (and end every turn that creates or updates a Looker dashboard with \`[Open <Dashboard Title>](/dashboards/<id>)\`).`,
   ].join('\n')
-}
-
-export function resolveLookmlCanonicalProjectId(bundle?: Partial<LookmlBundle> | null): string {
-  return cleanLookmlProjectId(bundle?.project_id) || cleanLookmlProjectId(bundle?.model_name) || cleanLookmlProjectId(bundle?.id)
-}
-
-export function mergeLookmlFiles(prevFiles: LookmlFileChange[] = [], nextFiles: LookmlFileChange[] = []): LookmlFileChange[] {
-  const byPath = new Map<string, LookmlFileChange>()
-  prevFiles.forEach((f) => { if (f?.path) byPath.set(f.path, f) })
-  nextFiles.forEach((f) => {
-    if (!f?.path) return
-    const prev = byPath.get(f.path)
-    byPath.set(f.path, Object.assign({}, prev, f, {
-      content: f.content !== undefined ? f.content : prev?.content,
-      diff: f.diff !== undefined ? f.diff : prev?.diff,
-    }))
-  })
-  return Array.from(byPath.values())
-}
-
-export function extractLookmlDashboardsFromBundle(bundle?: LookmlBundle | null) {
-  const files = bundle?.files || []
-  const model = cleanLookmlProjectId(bundle?.model_name) || cleanLookmlProjectId(files.map((f) => f.path?.match(/(?:^|\/)([^/]+)\.model\.lkml$/i)?.[1]).find(Boolean)) || cleanLookmlProjectId(bundle?.project_id) || cleanLookmlProjectId(bundle?.id)
-  if (!model) return []
-  const seen = new Set<string>()
-  return files.flatMap((f) => {
-    if (!f?.path || f.action === 'deleted' || !/\.dashboard\.l(?:ook)?ml$/i.test(f.path)) return []
-    const raw = f.content || (f.diff || '').replace(/^[^+\n].*$/gm, '').replace(/^\+(?!\+\+)/gm, '')
-    const slug = (raw.match(/^\s*-\s*dashboard:\s*["']?([^\s"'#]+)/m)?.[1] || f.path.split('/').pop()!.replace(/\.dashboard\.l(?:ook)?ml$/i, '')).trim()
-    const id = `${model}::${slug}`
-    if (!slug || seen.has(id)) return []
-    seen.add(id)
-    const tm = raw.match(/^\s*title:\s*(?:"([^"\n]+)"|'([^'\n]+)'|([^\n#]+))/m)
-    const title = (tm?.[1] || tm?.[2] || tm?.[3] || '').trim() || slug.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-    return [{ slug, title, model, id, embedPath: `/embed/dashboards/${id}` }]
-  })
-}
-
-export function getLookmlArtifactKeys(userId: string, id: string) {
-  const cleanUser = String(userId || 'anon').trim()
-  const cleanId = (cleanLookmlProjectId(id) || 'project').replace(/[^a-zA-Z0-9_-]/g, '_')
-  return { id: cleanId, userKey: `user_${cleanUser}_lookml_${cleanId}`, objKey: `obj_lookml_${cleanId}` }
-}
-
-// ponytail: persist 1x per-project Looker Artifacts (`obj_lookml_${projectId}`) merging `files[]` in place
-export function saveLookmlSessionArtifact(params: {
-  sdk: Looker40SDK
-  extensionSDK?: Partial<ExtensionSDK>
-  userId: string
-  bundle: LookmlBundle
-  studio: { explores?: string[]; lastInteractionId?: string; environmentId?: string; messages?: PersistedChatTurn[] }
-}) {
-  const { sdk, extensionSDK, userId, bundle, studio } = params
-  const namespace = getArtifactNamespace(extensionSDK)
-  const rawId = resolveLookmlCanonicalProjectId(bundle)
-  const { id, userKey, objKey } = getLookmlArtifactKeys(userId, rawId)
-  return getArtifactService(sdk, namespace)
-    .get<LookmlArtifactPayload>(objKey)
-    .catch((): null => null)
-    .then((existing) => {
-      const updatedAt = new Date().toISOString()
-      const validProj = cleanLookmlProjectId(bundle.project_id) || cleanLookmlProjectId(existing?.bundle?.project_id) || rawId || id
-      const title = `LookML: ${validProj}`
-      const explores = studio.explores || existing?.studio?.explores || []
-      const mergedBundle: LookmlBundle = Object.assign({}, existing?.bundle, bundle, {
-        id,
-        project_id: validProj,
-        title: bundle.title || existing?.bundle?.title || title,
-        files: mergeLookmlFiles(existing?.bundle?.files, bundle.files),
-      })
-      const index: LookmlSessionIndex = {
-        id, type: 'lookml', title, updatedAt, createdBy: String(userId),
-        targetId: mergedBundle.project_id || id, branchName: mergedBundle.branch_name,
-        explores, lastInteractionId: studio.lastInteractionId, environmentId: studio.environmentId,
-      }
-      const payload: LookmlArtifactPayload = {
-        id, type: 'lookml', title, updatedAt, createdBy: String(userId),
-        bundle: mergedBundle,
-        studio: { explores, lastInteractionId: studio.lastInteractionId, environmentId: studio.environmentId },
-      }
-      return saveUserArtifact(Object.assign({}, index, { sdk, userId, content: payload, namespace })).then(() => ({
-        id, userKey, objKey, index, payload,
-      }))
-    })
-}
-
-export function loadLookmlSessionArtifact(
-  sdk: Looker40SDK,
-  extensionSDK: Partial<ExtensionSDK> | undefined,
-  rawId: string,
-  fallbackSessionId?: string
-): Promise<LookmlArtifactPayload> {
-  const svc = getArtifactService(sdk, getArtifactNamespace(extensionSDK))
-  const cleanId = rawId.trim().replace(/^obj_lookml_/, '')
-  const cleanFb = String(fallbackSessionId || '').trim().replace(/^obj_lookml_/, '')
-  const tsBase = cleanId.match(/^(.+)_[0-9a-z]{6,}$/i)?.[1] || ''
-  const candidates = [cleanId, cleanFb, tsBase].filter((v, idx, arr) => v && arr.indexOf(v) === idx)
-  let chain: Promise<LookmlArtifactPayload | null> = Promise.resolve(null)
-  candidates.forEach((cid) => {
-    chain = chain.then((hit) => hit || svc.get<LookmlArtifactPayload>(`obj_lookml_${cid}`).catch((): null => null))
-  })
-  const sanitizeLoaded = (p: LookmlArtifactPayload): LookmlArtifactPayload =>
-    Object.assign({}, p, {
-      project_id: cleanLookmlProjectId(p.project_id) || undefined,
-      bundle: p.bundle ? Object.assign({}, p.bundle, { project_id: cleanLookmlProjectId(p.bundle.project_id) || undefined, id: cleanLookmlProjectId(p.bundle.id) || undefined }) : p.bundle,
-    })
-  return chain.then((hit) => {
-    if (hit) return sanitizeLoaded(hit)
-    return svc
-      .search(`obj_lookml_${cleanId}_%`)
-      .then((rows) => {
-        const parsed = (rows || [])
-          .map((r) => (typeof r?.value === 'string' ? (JSON.parse(r.value) as LookmlArtifactPayload) : (r?.value as LookmlArtifactPayload | undefined)))
-          .filter((p): p is LookmlArtifactPayload => Boolean(p?.bundle))
-          .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
-        return parsed[0] || svc.loadObjectArtifact<LookmlArtifactPayload>('lookml', cleanId)
-      })
-      .catch((): null => null)
-      .then((fallbackHit) => {
-        if (!fallbackHit) throw new Error(`LookML session artifact "obj_lookml_${cleanId}" not found.`)
-        return sanitizeLoaded(fallbackHit)
-      })
-  })
 }
 
 export function renderLineNumberedPre(raw: string, diffMode = false, testId?: string): React.ReactElement {

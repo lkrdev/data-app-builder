@@ -585,6 +585,15 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 .dab-alert-list {margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:12.5px}
 .dab-alert-banner-card {border-color:var(--dab-danger-border,#fca5a5);background:var(--dab-danger-bg,#fef2f2)}
 .dab-conv-running-indicator {color:var(--dab-accent);flex-shrink:0}
+.dab-conv-item {min-width:0}
+.dab-conv-item-meta {display:flex;align-items:center;justify-content:space-between;gap:4px;flex-wrap:wrap;min-width:0;margin-top:1px}
+.dab-conv-updated {font-size:10.5px;color:var(--dab-text-muted,#64748b);white-space:nowrap;flex-shrink:0}
+.dab-conv-tags {display:flex;align-items:center;flex-wrap:wrap;gap:3px;min-width:0;max-width:100%}
+.dab-conv-tag-pill {display:inline-block;max-width:110px;padding:1px 5px;border-radius:999px;border:1px solid var(--dab-border,#e2e8f0);background:var(--dab-surface-subtle,#f1f5f9);color:var(--dab-text-secondary,#475569);font-size:10px;font-weight:500;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dab-conv-item.active .dab-conv-tag-pill {background:var(--dab-surface,#ffffff);border-color:var(--dab-accent-border,#bfdbfe);color:var(--dab-accent-text,#1d4ed8)}
+.dab-expired-conv-banner {display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:7px 14px;background:var(--dab-warning-bg,#fef3c7);color:var(--dab-warning-text,#92400e);border-bottom:1px solid var(--dab-warning-border,#fde68a);font-size:12px;flex-shrink:0;min-width:0}
+.dab-expired-conv-banner-text {display:inline-flex;align-items:center;gap:7px;min-width:0;flex:1 1 240px}
+.dab-expired-conv-dismiss {height:24px;min-height:24px;padding:0 8px;font-size:11px;gap:4px}
 .dab-background-perm-notice {display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:8px 12px;border-top:1px solid var(--dab-border);border-bottom:1px solid var(--dab-border);background:var(--dab-surface-muted);font-size:12px}
 .dab-background-perm-info {display:flex;align-items:center;gap:6px;min-width:0;flex:1 1 200px}
 .dab-background-perm-text {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dab-text)}

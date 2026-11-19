@@ -20,12 +20,13 @@ import {
   StudioMarkdown,
 } from '../../components/StudioWorkspace'
 import {
-  clearArtifactServiceCache, ConversationRecord, hydrateConversationContentItems, normalizeStudioContentItem,
-  saveNativeContentArtifact, saveUserConversation, upsertStudioContentItem,
+  ArtifactPayloadViolationError, clearArtifactServiceCache, ConversationRecord, getArtifactService,
+  hydrateConversationContentItems, normalizeStudioContentItem, saveNativeContentArtifact,
+  saveUserConversation, upsertStudioContentItem,
 } from '../../lookerApi'
 import {
-  extractLookmlDashboardsFromBundle, loadLookmlSessionArtifact, LookmlPreviewPane, mergeLookmlFiles,
-  resolveLookmlCanonicalProjectId, saveLookmlSessionArtifact,
+  extractLookmlDashboardsFromBundle, hydrateLookmlFileContentOnDemand, loadLookmlSessionArtifact,
+  LookmlPreviewPane, mergeLookmlFiles, resolveLookmlCanonicalProjectId, saveLookmlSessionArtifact,
 } from '../../lookmlTool'
 
 interface MockInteractionPostBody {
@@ -178,7 +179,8 @@ export function registerPermissionsPart12Tests(): void {
       }).kind
     ).toBe('preload')
 
-    // 3. Lightweight Looker Artifacts pruning: strip activitySteps, images, rawCode from user_conversations:1 and omit studio.messages from obj_lookml_* & obj_dashboard_*
+    // 3. Pointers-Only Looker Artifacts invariant: strip rawCode from user_conversations:1, reject messages, and make zero obj_* writes
+    clearArtifactServiceCache()
     const rawArtifactStore = new Map<string, string>()
     const mockSdk = asSdk({
       ok: async <T>(p: T) => p,
@@ -195,9 +197,11 @@ export function registerPermissionsPart12Tests(): void {
     await saveUserConversation(mockSdk, '1', {
       id: 'conv_1762720000',
       type: 'app',
-      label: 'Lightweight Pruning Test',
+      label: 'Pointers Only Test',
       interactionId: 'int_155',
       environmentId: 'env_155',
+      tags: ['orders', 'data_app'],
+      turnInteractionIds: [['int_155_root', 'int_155']],
       activeContentTabKey: 'data_app:42',
       contentItems: [
         {
@@ -212,35 +216,27 @@ export function registerPermissionsPart12Tests(): void {
           hidden: true,
         },
       ],
-      messages: [
-        {
-          role: 'user',
-          text: 'Build app from screenshot',
-          images: ['data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA'],
-        } as unknown as ConversationRecord['messages'] extends Array<infer M> ? M : never,
-        {
-          role: 'assistant',
-          text: 'Published Data App #42.',
-          interactionId: 'int_155',
-          dashboardId: '42',
-          thinkingDurationSec: 4,
-          activitySteps: [{ id: 's1', kind: 'code', title: 'Bundled app', status: 'done', content: 'huge trace' }],
-        },
-      ],
       updatedAt: '2026-11-09T20:00:00Z',
     })
 
+    await expect(
+      getArtifactService(mockSdk).put([
+        {
+          key: 'user_conversations:1',
+          value: [{ id: 'conv_bad', type: 'app', label: 'Bad', updatedAt: '2026-11-09T20:00:00Z', messages: [] }],
+        },
+      ])
+    ).rejects.toThrow(ArtifactPayloadViolationError)
+
     const persistedConvsJson = rawArtifactStore.get('user_conversations:1') || '[]'
     expect(persistedConvsJson).not.toContain('HugeMultiMegabyteApp')
-    expect(persistedConvsJson).not.toContain('data:image/png;base64')
+    expect(persistedConvsJson).not.toContain('"messages"')
     expect(persistedConvsJson).not.toContain('activitySteps')
     const reloadedConvs = JSON.parse(persistedConvsJson) as ConversationRecord[]
     expect(reloadedConvs[0]?.contentItems?.[0]?.hidden).toBe(true)
     expect(reloadedConvs[0]?.contentItems?.[0]?.rawCode).toBeUndefined()
-    expect(reloadedConvs[0]?.messages).toEqual([
-      { role: 'user', text: 'Build app from screenshot' },
-      { role: 'assistant', text: 'Published Data App #42.', interactionId: 'int_155', dashboardId: '42', thinkingDurationSec: 4 },
-    ])
+    expect(reloadedConvs[0]?.tags).toEqual(['orders', 'data_app'])
+    expect(reloadedConvs[0]?.turnInteractionIds).toEqual([['int_155_root', 'int_155']])
 
     await saveLookmlSessionArtifact({
       sdk: mockSdk,
@@ -258,14 +254,11 @@ export function registerPermissionsPart12Tests(): void {
         explores: ['ecom::orders'],
         lastInteractionId: 'int_lml_1',
         environmentId: 'env_155',
-        messages: [{ role: 'user', text: 'Should not duplicate in obj_lookml' }],
       },
     })
     const loadedLookmlObj = await loadLookmlSessionArtifact(mockSdk, undefined, 'ecom_1762720001')
     expect(loadedLookmlObj.id).toBe('ecom')
-    expect(loadedLookmlObj.studio?.messages).toBeUndefined()
-    expect(rawArtifactStore.get('obj_lookml_ecom')).toBeDefined()
-    expect(rawArtifactStore.get('obj_lookml_ecom')).not.toContain('Should not duplicate in obj_lookml')
+    expect(rawArtifactStore.get('obj_lookml_ecom')).toBeUndefined()
 
     await saveNativeContentArtifact(
       mockSdk,
@@ -278,17 +271,16 @@ export function registerPermissionsPart12Tests(): void {
         explores: ['ecom::orders'],
         lastInteractionId: 'int_dash_1',
         environmentId: 'env_155',
-        messages: [{ role: 'user', text: 'Should not duplicate in obj_dashboard' }],
       }
     )
-    expect(rawArtifactStore.get('obj_dashboard_34')).not.toContain('Should not duplicate in obj_dashboard')
+    expect(rawArtifactStore.get('obj_dashboard_34')).toBeUndefined()
 
     // 4. Root-only AGENTS.md rule & studio-conversation-debugger / data-apps-sync excluded from sandbox bundle
     const repoRoot = path.resolve(__dirname, '../../..')
     const rootAgents = readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8')
-    expect(rootAgents).toContain('## Looker Artifacts Lightweight-Only Rule')
+    expect(rootAgents).toContain('## Looker Artifacts Pointers-Only Invariant (Zero Exceptions)')
     expect(rootAgents).toContain('.agents/skills/data-apps-sync/SKILL.md')
-    expect(AGENTS_MD).not.toContain('Looker Artifacts Lightweight-Only Rule')
+    expect(AGENTS_MD).not.toContain('Looker Artifacts Pointers-Only Invariant')
     expect(BOOTSTRAP_LOOKML_PY).not.toContain('"lookml-session"')
     expect(
       Object.keys(SANDBOX_AGENT_SKILL_FILES).some((k) => k.includes('studio-conversation-debugger') || k.includes('data-apps-sync'))
@@ -449,6 +441,16 @@ export function registerPermissionsPart12Tests(): void {
     )
     const sdk166 = asSdk({
       ok: async <T>(p: T) => p,
+      authSession: {
+        transport: {
+          rawRequest: async (_method: string, reqPath: string, qp?: Record<string, unknown>) => {
+            if (reqPath.includes('/projects/bryan_test2/file/content')) {
+              return { statusCode: 200, ok: true, body: `file_content_for_${String(qp?.file_id || '')}` }
+            }
+            return { statusCode: 404, ok: false, body: { message: 'Not Found' } }
+          },
+        },
+      },
       artifact: async ({ key }: { key: string }) => {
         const hit = store166.get(key)
         return hit ? [{ key, version: 1, value: hit }] : []
@@ -487,11 +489,17 @@ export function registerPermissionsPart12Tests(): void {
       studio: { explores: ['bryan_test2::orders'] },
     })
     expect(savedT2.id).toBe('bryan_test2')
-    expect(savedT2.objKey).toBe('obj_lookml_bryan_test2')
+    expect(store166.has('obj_lookml_bryan_test2')).toBe(false)
     expect(savedT2.payload.bundle.files.map((f) => f.path)).toEqual([
       'bryan_test2.model.lkml',
       'bronze/orders.refinement.lkml',
     ])
+    const onDemandBody = await hydrateLookmlFileContentOnDemand({
+      sdk: sdk166,
+      projectId: 'bryan_test2',
+      filePath: 'bronze/orders.refinement.lkml',
+    })
+    expect(onDemandBody).toBe('file_content_for_bronze/orders.refinement.lkml')
     const legacyLoaded = await loadLookmlSessionArtifact(sdk166, undefined, 'legacy_proj')
     expect(legacyLoaded.bundle.project_id).toBe('legacy_proj')
 

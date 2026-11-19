@@ -238,6 +238,11 @@ export function isEnvironmentNotFoundError(err: unknown): boolean {
   return status === 404 || /\b404\b|environment.*not[\s_-]*found|requested entity was not found/i.test(String(e?.message || err || ''))
 }
 
+export const stripControlTags = (rawText: string): string =>
+  String(rawText || '')
+    .replace(/<(USE_CASE|CA_AGENT_SELECTION|DATA_APP_BUNDLE|NATIVE_CONTENT_BUNDLE|LOOKML_BUNDLE|ALERT_BUNDLE|HEALTH_CHECK_TDD|LKR_EXTENSION_TOOL_REQUEST)>[\s\S]*?<\/\1>/gi, '')
+    .trim()
+
 export type CodeModePermissionDecision =
   | 'allow_once'
   | 'allow_op'

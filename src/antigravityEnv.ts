@@ -5,6 +5,7 @@ import {
   fetchEnvironmentFile,
   normalizeSandboxFilePath,
 } from './antigravityAuth'
+import { pruneDeadEnvironmentConversations } from './antigravityConvStore'
 import {
   buildManagedWorkspaceSources,
   CURRENT_MANAGED_SOURCES_HASH,
@@ -16,18 +17,22 @@ export * from './antigravitySkillSync'
 import {
   BUILTIN_WORKSPACE_FILES,
   type ConversationThreadTurnLike,
+  extractAlertBundleFromInteraction,
   extractBundleFromInteraction,
   extractInteractionActivitySteps,
   extractInteractionOutputText,
   extractNativeContentFromInteraction,
   extractNonThoughtText,
+  extractRawUserPromptFromInteraction,
   extractTddFromInteraction,
   extractThoughtText,
   formatConversationThreadMarkdown,
+  isFreshUserTurnRoot,
   parseStepArguments,
 } from './antigravitySteps'
 import {
   type AgentSession,
+  type AlertInspectorBundle,
   type AntigravityActivityStep,
   type AntigravityAuth,
   type AntigravityExtensionHostLike,
@@ -41,15 +46,19 @@ import {
   isEnvironmentNotFoundError,
   normalizeEnvironmentId,
   resolveUserProvisionKey,
+  stripControlTags,
 } from './antigravityTypes'
-import type { DataAppBundle, NativeContentBundle } from './lookerApi'
+export { stripControlTags } from './antigravityTypes'
 import {
   BOOTSTRAP_SANDBOX_SH,
-  extractLookmlBundleFromInteraction,
   LKR_DEV_CLI_SPEC,
   LkrCodeMode,
+} from './lkrCliBridge'
+import type { DataAppBundle, NativeContentBundle } from './lookerApi'
+import {
+  extractLookmlBundleFromInteraction,
   type LookmlBundle,
-} from './lookmlTool'
+} from './lookmlArtifactHydration'
 
 export const toSafeConversationId = (rawId?: string, session?: AgentSession): string =>
   String(rawId || session?.conversationId || session?.objectId || 'current')
@@ -198,9 +207,10 @@ export function prewarmOrWakeAntigravityEnvironment(params: {
 
     return coalesceStep.then(() => {
       if (!activeEnvId) return provisionFresh()
-      return callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', { ...prewarmBase, environment: activeEnvId }).then(
+      const currentEnvId = activeEnvId
+      return callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', { ...prewarmBase, environment: currentEnvId }).then<{ session: AgentSession; status: 'woken' | 'prelaunched' | 'standby' }>(
         (woken) => {
-          const resolvedEnvId = normalizeEnvironmentId(woken?.environment_id) || activeEnvId!
+          const resolvedEnvId = normalizeEnvironmentId(woken?.environment_id) || currentEnvId
           return persistEnv(resolvedEnvId).then(() => ({
             session: { ...existingSession, environmentId: resolvedEnvId, explores: selectedExplores, toolType },
             status: 'woken' as const,
@@ -208,9 +218,12 @@ export function prewarmOrWakeAntigravityEnvironment(params: {
         },
         (err) => {
           if (!isEnvironmentNotFoundError(err)) {
-            return { session: { ...existingSession, environmentId: activeEnvId, explores: selectedExplores, toolType }, status: 'woken' as const }
+            return { session: { ...existingSession, environmentId: currentEnvId, explores: selectedExplores, toolType }, status: 'woken' as const }
           }
           activeEnvId = undefined
+          if (sdk && userId) {
+            void pruneDeadEnvironmentConversations({ sdk, extensionSDK, userId, deadEnvironmentId: currentEnvId, excludeConversationId: existingSession?.conversationId }).catch(() => {})
+          }
           return provisionFresh()
         }
       )
@@ -233,12 +246,38 @@ export function prewarmOrWakeAntigravityEnvironment(params: {
         }))
       },
       (err) => {
-        if (isEnvironmentNotFoundError(err)) activeEnvId = undefined
+        if (isEnvironmentNotFoundError(err)) {
+          const deadEnvId = activeEnvId
+          activeEnvId = undefined
+          if (deadEnvId && sdk && userId) {
+            void pruneDeadEnvironmentConversations({ sdk, extensionSDK, userId, deadEnvironmentId: deadEnvId, excludeConversationId: existingSession?.conversationId }).catch(() => {})
+          }
+        }
         return step2WakeOrProvision()
       }
     )
   }
   return step2WakeOrProvision()
+}
+
+function mergeChronologicalInteractionSteps(chronological: ReadonlyArray<AntigravityInteractionPayload>): AntigravityInteractionStep[] {
+  const mergedSteps: AntigravityInteractionStep[] = []
+  chronological.forEach((inter) => {
+    if (Array.isArray(inter.input)) {
+      inter.input.forEach((it) => {
+        if (
+          it &&
+          typeof it === 'object' &&
+          (it as { type?: string }).type === 'function_result' &&
+          !(inter.steps?.[0]?.type === 'function_result' && inter.steps[0].call_id === (it as { call_id?: string }).call_id)
+        ) {
+          mergedSteps.push(it as AntigravityInteractionStep)
+        }
+      })
+    }
+    if (Array.isArray(inter.steps)) mergedSteps.push(...inter.steps)
+  })
+  return mergedSteps
 }
 
 export function hydrateInteractionActivitySteps(opts: {
@@ -251,7 +290,10 @@ export function hydrateInteractionActivitySteps(opts: {
   const { extensionSDK, auth, maxHops = 105 } = opts
   const startId = String(opts.interactionId || '').trim()
   const stopId = String(opts.stopAtInteractionId || '').trim()
-  const canFetch = Boolean(auth && (auth.mode === 'apikey' ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy) : Boolean((auth.getOAuthToken?.() || auth.oauthToken || '').trim())))
+  const canFetch = Boolean(
+    (typeof window !== 'undefined' && window.__MOCK_LOOKER_EXTENSION__) ||
+      (auth && (auth.mode === 'apikey' ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy) : Boolean((auth.getOAuthToken?.() || auth.oauthToken || '').trim())))
+  )
   if (!startId || !canFetch) return Promise.resolve([])
   const chainNewestFirst: AntigravityInteractionPayload[] = []
   const seen = new Set<string>()
@@ -263,17 +305,7 @@ export function hydrateInteractionActivitySteps(opts: {
         const rawInput = JSON.stringify(fetched.input ?? '')
         if (rawInput.includes('[PREWARM:')) return
         chainNewestFirst.push({ ...fetched, id: fetched.id || currId })
-        const isFreshUserTurnRoot =
-          !stopId &&
-          Array.isArray(fetched.input) &&
-          fetched.input.some((it) => it && typeof it === 'object' && (it as { type?: string }).type === 'text') &&
-          !rawInput.includes('[LKR_EXTENSION_BRIDGE_RESULT]') &&
-          !rawInput.includes('Continue and complete the current request.') &&
-          !rawInput.includes('You have not emitted <DATA_APP_BUNDLE> yet.') &&
-          !rawInput.includes('Your previous bundle_app.py run failed') &&
-          !rawInput.includes('Max Tool Rounds (') &&
-          !fetched.input.some((it) => it && typeof it === 'object' && (it as { type?: string }).type === 'function_result')
-        if (isFreshUserTurnRoot) return
+        if (!stopId && isFreshUserTurnRoot(fetched)) return
         return walk(typeof fetched.previous_interaction_id === 'string' ? fetched.previous_interaction_id.trim() : '')
       },
       () => {}
@@ -282,22 +314,7 @@ export function hydrateInteractionActivitySteps(opts: {
   return walk(startId).then(() => {
     if (!chainNewestFirst.length) return []
     const chronological = chainNewestFirst.slice().reverse()
-    const mergedSteps: AntigravityInteractionStep[] = []
-    chronological.forEach((inter) => {
-      if (Array.isArray(inter.input)) {
-        inter.input.forEach((it) => {
-          if (
-            it &&
-            typeof it === 'object' &&
-            (it as { type?: string }).type === 'function_result' &&
-            !(inter.steps?.[0]?.type === 'function_result' && inter.steps[0].call_id === (it as { call_id?: string }).call_id)
-          ) {
-            mergedSteps.push(it as AntigravityInteractionStep)
-          }
-        })
-      }
-      if (Array.isArray(inter.steps)) mergedSteps.push(...inter.steps)
-    })
+    const mergedSteps = mergeChronologicalInteractionSteps(chronological)
     const latest = chronological[chronological.length - 1]
     return extractInteractionActivitySteps({ ...latest, id: startId, status: 'completed', steps: mergedSteps }).map((s) => ({
       ...s,
@@ -309,11 +326,6 @@ export function hydrateInteractionActivitySteps(opts: {
 export type StudioBundlePayload = DataAppBundle
 export type LookerNativeContentBundle = NativeContentBundle
 export type LookmlSessionBundle = LookmlBundle
-
-export const stripControlTags = (rawText: string): string =>
-  String(rawText || '')
-    .replace(/<(USE_CASE|CA_AGENT_SELECTION|DATA_APP_BUNDLE|NATIVE_CONTENT_BUNDLE|LOOKML_BUNDLE|ALERT_BUNDLE|HEALTH_CHECK_TDD|LKR_EXTENSION_TOOL_REQUEST)>[\s\S]*?<\/\1>/gi, '')
-    .trim()
 
 // ponytail: strip workspace file:// and .js links/references from Data App summaries so chat output focuses on the app and dashboard link
 export const sanitizeDataAppAssistantText = (rawText: string): string =>
@@ -351,19 +363,27 @@ export async function recoverInFlightInteraction(opts: {
   interactionId: string
   maxPollAttempts?: number
   pollIntervalMs?: number
+  maxBacktrackHops?: number
 }): Promise<{
   text: string
+  userPrompt: string
+  rootInteractionId: string
   interactionId: string
+  environmentId?: string
   status: string
   activitySteps: AntigravityActivityStep[]
   bundle: StudioBundlePayload | null
   nativeContent: LookerNativeContentBundle | null
   lookmlBundle: LookmlSessionBundle | null
+  alertBundle: AlertInspectorBundle | null
   tddMarkdown: string | null
 } | null> {
-  const { extensionSDK, auth, maxPollAttempts = 60, pollIntervalMs = 2000 } = opts
+  const { extensionSDK, auth, maxPollAttempts = 60, pollIntervalMs = 2000, maxBacktrackHops = 25 } = opts
   const cleanId = String(opts.interactionId || '').trim()
-  const canFetch = Boolean(auth && (auth.mode === 'apikey' ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy) : Boolean((auth.getOAuthToken?.() || auth.oauthToken || '').trim())))
+  const canFetch = Boolean(
+    (typeof window !== 'undefined' && window.__MOCK_LOOKER_EXTENSION__) ||
+      (auth && (auth.mode === 'apikey' ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy) : Boolean((auth.getOAuthToken?.() || auth.oauthToken || '').trim())))
+  )
   if (!cleanId || !canFetch) return null
   let fetched = await callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(cleanId)}`, 'GET')
   for (
@@ -374,24 +394,53 @@ export async function recoverInFlightInteraction(opts: {
     if (pollIntervalMs > 0) await new Promise((r) => setTimeout(r, pollIntervalMs))
     fetched = await callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(cleanId)}`, 'GET')
   }
-  const recoveredBundle = await hydrateDataAppBundleRef(extractBundleFromInteraction(fetched), {
+  const chainNewestFirst: AntigravityInteractionPayload[] = [{ ...fetched, id: fetched.id || cleanId }]
+  const seen = new Set<string>([fetched.id || cleanId])
+  let rootInter: AntigravityInteractionPayload = chainNewestFirst[0]
+  while (!isFreshUserTurnRoot(rootInter) && seen.size < maxBacktrackHops) {
+    const prevId = typeof rootInter.previous_interaction_id === 'string' ? rootInter.previous_interaction_id.trim() : ''
+    if (!prevId || seen.has(prevId)) break
+    seen.add(prevId)
+    try {
+      const prev = await callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(prevId)}`, 'GET')
+      if (JSON.stringify(prev.input ?? '').includes('[PREWARM:')) break
+      const normPrev = { ...prev, id: prev.id || prevId }
+      chainNewestFirst.push(normPrev)
+      rootInter = normPrev
+    } catch {
+      break
+    }
+  }
+  const mergedSteps = mergeChronologicalInteractionSteps(chainNewestFirst.slice().reverse())
+  const mergedPayload: AntigravityInteractionPayload = {
+    ...fetched,
+    id: fetched.id || cleanId,
+    status: 'completed',
+    steps: mergedSteps.length > 0 ? mergedSteps : fetched.steps,
+  }
+  const resolvedEnvId = normalizeEnvironmentId(fetched.environment_id || rootInter.environment_id)
+  const recoveredBundle = await hydrateDataAppBundleRef(extractBundleFromInteraction(mergedPayload), {
     extensionSDK,
     auth,
-    environmentId: normalizeEnvironmentId(fetched.environment_id),
+    environmentId: resolvedEnvId,
   })
   const strippedText = stripControlTags(extractInteractionOutputText(fetched))
   return {
     text: recoveredBundle ? sanitizeDataAppAssistantText(strippedText) : strippedText,
+    userPrompt: extractRawUserPromptFromInteraction(rootInter),
+    rootInteractionId: rootInter.id || fetched.id || cleanId,
     interactionId: fetched.id || cleanId,
+    environmentId: resolvedEnvId,
     status: String(fetched.status || 'completed'),
-    activitySteps: extractInteractionActivitySteps({ ...fetched, id: fetched.id || cleanId, status: 'completed' }).map((s) => ({
+    activitySteps: extractInteractionActivitySteps(mergedPayload).map((s) => ({
       ...s,
       status: 'done' as const,
     })),
     bundle: recoveredBundle,
-    nativeContent: extractNativeContentFromInteraction(fetched),
-    lookmlBundle: extractLookmlBundleFromInteraction(fetched),
-    tddMarkdown: extractTddFromInteraction(fetched),
+    nativeContent: extractNativeContentFromInteraction(mergedPayload),
+    lookmlBundle: extractLookmlBundleFromInteraction(mergedPayload),
+    alertBundle: extractAlertBundleFromInteraction(mergedPayload),
+    tddMarkdown: extractTddFromInteraction(mergedPayload),
   }
 }
 

@@ -1,11 +1,12 @@
 import React from 'react'
 
 import { ExtensionProvider } from '@looker/extension-sdk-react'
+import { AlertTriangle, X } from 'lucide-react'
 import { MemoryRouter } from 'react-router-dom'
 import { SWRConfig } from 'swr'
 
 import { LookerExtensionProvider, MockLookerExtensionProvider } from '../contexts/LookerExtensionContext'
-import { parseStudioRoute, type PersistedChatTurn, STUDIO_MODES, type StudioMode } from '../lookerApi'
+import { type ChatTurnMessage, parseStudioRoute, STUDIO_MODES, type StudioMode } from '../lookerApi'
 import { useStudioController } from '../useStudioController'
 import { PythonTile } from './PythonTile'
 import { ConfigSetupView, RipperSurfLoader, StudioTopbar } from './StudioHeader'
@@ -17,7 +18,7 @@ export type { StudioMode }
 
 const PythonTileMount: React.FC = () => <PythonTile />
 
-export interface ChatMessage extends PersistedChatTurn { images?: string[] }
+export interface ChatMessage extends ChatTurnMessage { images?: string[] }
 
 const StudioMain: React.FC = () => {
   const ctl = useStudioController()
@@ -91,6 +92,24 @@ const StudioMain: React.FC = () => {
       }}
     >
       <StudioTopbar ctl={ctl} />
+      {ctl.expiredConversationNotice && (
+        <div className="dab-expired-conv-banner" data-testid="expired-conversation-banner" role="status">
+          <span className="dab-expired-conv-banner-text">
+            <AlertTriangle size={14} strokeWidth={1.75} aria-hidden="true" style={{ flexShrink: 0 }} />
+            <span>{ctl.expiredConversationNotice}</span>
+          </span>
+          <button
+            type="button"
+            className="dab-btn-secondary dab-expired-conv-dismiss"
+            data-testid="dismiss-expired-conversation-banner"
+            onClick={() => ctl.setExpiredConversationNotice(null)}
+            aria-label="Dismiss expired conversation notice"
+          >
+            <X size={13} strokeWidth={2} aria-hidden="true" />
+            <span>Dismiss</span>
+          </button>
+        </div>
+      )}
       <div
         className={`dab-workspace dab-workspace-with-sidebar ${ctl.sidebarCollapsed ? 'dab-workspace-sidebar-collapsed' : ''} ${ctl.rightPaneCollapsed ? 'dab-workspace-right-collapsed' : ''} ${ctl.isEmptyConversation ? 'dab-workspace-empty' : ''}`}
         style={{ '--dab-left-pane-width': `${ctl.leftPaneWidth}px` } as React.CSSProperties}

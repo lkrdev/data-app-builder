@@ -559,6 +559,7 @@ export function registerPermissionsPart20Tests(): void {
     const wsSrc = [
       readFileSync(path.join(repoRoot, 'src/components/StudioComposer.tsx'), 'utf8'),
       readFileSync(path.join(repoRoot, 'src/components/StudioUseCaseGuides.tsx'), 'utf8'),
+      readFileSync(path.join(repoRoot, 'src/components/StudioConversationsSidebar.tsx'), 'utf8'),
     ].join('\n')
     expect(wsSrc).toContain('value: thinkingLevelByModel?.[m.id] || defaultThinkingLevel || thinkingLevel')
     expect(wsSrc).toContain('onChange: (lvl) => setModelThinkingLevel(m.id, lvl as StudioThinkingLevel)')

@@ -1,14 +1,14 @@
 ---
 name: studio-conversation-debugger
 description: >
-  Internal developer skill for inspecting Looker Data App Studio conversation state (`user_conversations:${me.id}`,
-  `user_env:${me.id}`, `contentItems`, `hidden` tabs, and `obj_*` Looker Artifacts byte sizes) on a live Looker
-  instance via `lkr --oauth-account=<account> code-mode sandbox`.
+  Internal developer skill for inspecting Looker Data App Studio conversation pointers and auditing the closed
+  3-key Pointers-Only Looker Artifacts schema (`user_env:${me.id}`, `user_config:${me.id}`, `user_conversations:${me.id}`)
+  on a live Looker instance via `lkr --oauth-account=<account> code-mode sandbox`.
 ---
 
 # Studio Conversation & Artifacts Debugger (`studio-conversation-debugger`)
 
-Use this **repository-internal** skill (never bundled into `SANDBOX_AGENT_SKILL_FILES` or customer sandboxes) when debugging a live Studio conversation (`conv_<id>`), verifying `contentItems` / `hidden` tab persistence, or auditing `user_conversations:${me.id}` and `obj_*` Looker Artifacts payload sizes.
+Use this **repository-internal** skill (never bundled into `SANDBOX_AGENT_SKILL_FILES` or customer sandboxes) when debugging a live Studio conversation (`conv_<id>`), verifying `turnInteractionIds` / `contentItems` (`hidden`) pointer persistence, or auditing the closed 3-key Pointers-Only Looker Artifacts schema (`user_env:${me.id}`, `user_config:${me.id}`, `user_conversations:${me.id}`).
 
 ## 1. Mandatory `--oauth-account` Selection Rule (Zero Hardcoded Accounts)
 
@@ -22,11 +22,11 @@ Use this **repository-internal** skill (never bundled into `SANDBOX_AGENT_SKILL_
 Once the user provides `<account>`, run `scripts/inspect_conversation.py` inside `lkr --oauth-account=<account> code-mode sandbox`:
 
 ```bash
-# List all conversations for the authenticated Looker user (with byte sizes, tab counts, and bloat audit):
+# Audit all 3 per-user keys (`user_env:<uid>`, `user_config:<uid>`, `user_conversations:<uid>`) and scan for legacy artifacts:
 lkr --oauth-account="<account>" code-mode sandbox \
   --file=.agents/skills/studio-conversation-debugger/scripts/inspect_conversation.py
 
-# Inspect a specific immutable conversation (`conv_<id>`) and its linked `obj_*` artifacts:
+# Inspect a specific immutable conversation (`conv_<id>`) and verify zero legacy `obj_*`/`tile_element_*` artifacts:
 lkr --oauth-account="<account>" code-mode sandbox \
   --file=.agents/skills/studio-conversation-debugger/scripts/inspect_conversation.py \
   --var conversation_id="<conv_id>"
@@ -41,6 +41,6 @@ lkr --oauth-account="<account>" code-mode sandbox \
 
 ## 3. What `inspect_conversation.py` Audits
 
-- **Identity & Sandbox Container**: Resolves `me("id,display_name,email")` (or uses `--var user_id`) and reads `user_env:<uid>` (`environmentId`).
-- **Lightweight `user_conversations:<uid>` Check**: Reports total serialized byte size, conversation count, immutable `conv_` ID compliance, visible vs. `hidden` `contentItems` tabs, `activeContentTabKey`, `interactionId`, and flags any forbidden bloat keys (`activitySteps`, `images`, `contentItems[].rawCode`).
-- **Linked `obj_*` Artifact Hygiene**: When `conversation_id` is provided, fetches referenced `obj_lookml_*`, `obj_app_*`, `obj_dashboard_*`, `obj_script_*`, `obj_health_check_*`, and `obj_ca_*` keys and verifies that duplicate `studio.messages` arrays are absent.
+- **Closed 3-Key Schema & Byte Budgets**: Resolves `me("id,display_name,email")` (or uses `--var user_id`) and audits `user_env:<uid>` (`<= 512 B`), `user_config:<uid>` (`<= 1,024 B`), and `user_conversations:<uid>` (`<= 65,536 B` total, `<= 4,096 B` per conversation pointer).
+- **Recursive Forbidden-Field Check**: Flags any forbidden payload keys anywhere in stored values (`messages`, `text`, `activitySteps`, `images`, `rawCode`, `prod_code`, `raw_code`, `code`, `files`, `tddMarkdown`, `telemetry`, `elements`, `alert_history_items`, `queryCache`, `filterCache`) as well as unknown top-level conversation fields.
+- **Legacy Non-Pointer Key Detection**: Scans for leftover legacy `obj_*`, `tile_element_*`, or `user_<uid>_*` keys in the namespace so retired non-pointer artifacts are surfaced immediately.

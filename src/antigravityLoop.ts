@@ -31,17 +31,17 @@ import {
   normalizeMaxToolRounds,
   resolveAdaptivePollScheduleMs,
 } from './antigravityTypes'
-import { createDeduplicatedLookerSdkProxy, type StudioUseCase } from './lookerApi'
-import { wrapKdaCodeMode } from './lookmlSkills'
 import {
   classifyLookerOperation,
   computeLkrExtensionCacheKey,
   executeLkrExtensionToolRequest,
   extractLkrExtensionToolRequests,
-  extractLookmlBundleFromInteraction,
   LkrCodeMode,
   type LkrExtensionToolRequest,
-} from './lookmlTool'
+} from './lkrCliBridge'
+import { createDeduplicatedLookerSdkProxy, type StudioUseCase } from './lookerApi'
+import { extractLookmlBundleFromInteraction } from './lookmlArtifactHydration'
+import { wrapKdaCodeMode } from './lookmlSkills'
 
 export interface ExecuteAntigravityPollingLoopOptions {
   sdk: Looker40SDK
@@ -74,7 +74,6 @@ export interface ExecuteAntigravityPollingLoopOptions {
   isDataInvestigatorTurn: boolean
   userPrompt: string
   activatedLookmlSkills?: string[]
-  usedDirectStatelessModel: boolean
   requiresBashSandbox: boolean
   appDir: string
   initialLookerHttpMs: number
@@ -105,7 +104,7 @@ export async function executeAntigravityPollingLoop(
     throwIfAborted, onInteractionCreated, onProgressSteps, onStatus, effectivePermissionHandler,
     requirePermission, approvedOperations, conversationId, rawConversationId, defaultCodeModeVars,
     isKdaSkillActive, isDashboardMode, toolMode, mode, useCase, effectiveLookmlIntent, isNoOpTurn,
-    isDataInvestigatorTurn, userPrompt, activatedLookmlSkills, usedDirectStatelessModel,
+    isDataInvestigatorTurn, userPrompt, activatedLookmlSkills,
     requiresBashSandbox, appDir,
   } = opts
 
@@ -253,7 +252,7 @@ export async function executeAntigravityPollingLoop(
     const resumeEnv = interaction.environment_id || trackedEnvId || envFallback
     interaction = await callInteractionsApi(
       extensionSDK, auth, 'interactions', 'POST',
-      Object.assign({ agent: 'antigravity-preview-09-2026', agent_config: agentConfig, background: true, previous_interaction_id: interaction.id, tools: toolsOverride ?? activeTools, input }, resumeEnv ? { environment: resumeEnv } : null)
+      Object.assign({ agent: 'antigravity-preview-09-2026', agent_config: agentConfig, background: true, store: true, previous_interaction_id: interaction.id, tools: toolsOverride ?? activeTools, input }, resumeEnv ? { environment: resumeEnv } : null)
     )
     if (
       extraSteps.length > 0 &&
@@ -683,7 +682,6 @@ export async function executeAntigravityPollingLoop(
         [...accumulatedSteps, ...(interaction.steps || [])].some((s) => JSON.stringify(s).includes('bundle_app.py'))
 
       if (
-        !usedDirectStatelessModel &&
         Boolean(interaction.id) &&
         !hasFinalBundle &&
         !bridgePermissionError &&

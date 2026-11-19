@@ -1,8 +1,19 @@
 import type { ExtensionSDK } from '@looker/extension-sdk';
 import type { Looker40SDK } from '@looker/sdk';
 
-import { LkrCodeMode } from './antigravity';
-import { getArtifactNamespace, loadObjectArtifact, PersistedChatTurn, saveUserArtifact } from './lookerApi';
+import {
+  type AntigravityAuth,
+  callInteractionsApi,
+  extractTddFromInteraction,
+  LkrCodeMode,
+} from './antigravity';
+import {
+  clearTabSessionHealthReports,
+  getArtifactNamespace,
+  loadObjectArtifact,
+  loadTabSessionHealthReportJson,
+  saveTabSessionHealthReportJson,
+} from './lookerApi';
 export { getArtifactNamespace } from './lookerApi';
 
 export interface PillarBreakdown {
@@ -46,11 +57,20 @@ export interface HealthCheckReportPayload {
   scores: PillarBreakdown;
   tddMarkdown: string;
   telemetry: HealthCheckTelemetry;
-  messages?: PersistedChatTurn[];
   lastInteractionId?: string;
   environmentId?: string;
   updatedAt: string;
   createdBy: string;
+}
+
+export interface LoadHealthCheckOptions {
+  auth?: AntigravityAuth;
+  lastInteractionId?: string;
+  environmentId?: string;
+  projectId?: string;
+  healthScope?: 'all' | 'looker' | 'bq';
+  customFocus?: string;
+  rerunIfMissing?: boolean;
 }
 
 // ponytail: execute all 3 pillars in a single Monty WASM round-trip via LkrCodeMode.runPythonCode
@@ -619,8 +639,15 @@ export function synthesizeHealthCheckTdd(
   return { title, scores, markdown };
 }
 
+const sessionHealthReportsById = new Map<string, HealthCheckReportPayload>();
+
+export function clearHealthCheckSessionCache(): void {
+  sessionHealthReportsById.clear();
+  clearTabSessionHealthReports();
+}
+
 export async function saveHealthCheckArtifact(
-  sdk: Looker40SDK,
+  _sdk: Looker40SDK,
   extensionSDK: Partial<ExtensionSDK> | undefined,
   userId: string,
   report: HealthCheckReportPayload
@@ -628,41 +655,72 @@ export async function saveHealthCheckArtifact(
   const namespace = getArtifactNamespace(extensionSDK);
   const cleanId = report.id.trim().replace(/[^a-zA-Z0-9_-]/g, '') || 'demo';
   const cleanUser = String(userId || '1').trim();
-  const userKey = `user_${cleanUser}_health_check_${cleanId}`;
-  const objKey = `obj_health_check_${cleanId}`;
-  await saveUserArtifact({
-    sdk,
-    userId: cleanUser,
-    type: 'health_check',
-    id: cleanId,
-    title: report.title,
-    targetId: cleanId,
-    explores: [report.projectId],
-    healthScore: report.scores.overallScore,
-    transcriberScore: report.scores.transcriberScore,
-    lastInteractionId: report.lastInteractionId,
-    environmentId: report.environmentId,
-    content: { ...report, id: cleanId },
-    namespace,
-  });
-  return { userKey, objKey, namespace };
+  const cached: HealthCheckReportPayload = { ...report, id: cleanId, telemetry: {} };
+  sessionHealthReportsById.set(cleanId, { ...report, id: cleanId });
+  saveTabSessionHealthReportJson(cleanId, JSON.stringify(cached));
+  return { userKey: `user_${cleanUser}_health_check_${cleanId}`, objKey: `obj_health_check_${cleanId}`, namespace };
 }
 
 export async function loadHealthCheckArtifact(
   sdk: Looker40SDK,
   extensionSDK: Partial<ExtensionSDK> | undefined,
-  id: string
+  id: string,
+  opts?: LoadHealthCheckOptions
 ): Promise<HealthCheckReportPayload> {
   const namespace = getArtifactNamespace(extensionSDK);
-  const cleanId = id
-    .trim()
-    .replace(/^obj_health_check_/, '')
-    .replace(/^user_[^_]+_health_check_/, '');
-  const found = await loadObjectArtifact<HealthCheckReportPayload>(sdk, 'health_check', cleanId, namespace);
-  if (!found) {
-    throw new Error(`Health Check artifact "obj_health_check_${cleanId}" not found in namespace "${namespace}".`);
+  const cleanId = id.trim().replace(/^obj_health_check_/, '').replace(/^user_[^_]+_health_check_/, '');
+  const mem = sessionHealthReportsById.get(cleanId);
+  if (mem) return mem;
+  const tabRaw = loadTabSessionHealthReportJson(cleanId);
+  if (tabRaw) {
+    try {
+      const parsed = JSON.parse(tabRaw) as HealthCheckReportPayload;
+      if (parsed?.tddMarkdown) { sessionHealthReportsById.set(cleanId, parsed); return parsed; }
+    } catch { /* ignore */ }
   }
-  return found;
+  if (opts?.lastInteractionId && opts?.auth) {
+    const inter = await callInteractionsApi(extensionSDK, opts.auth, `interactions/${encodeURIComponent(opts.lastInteractionId)}`, 'GET').catch(() => null);
+    const tdd = extractTddFromInteraction(inter);
+    if (tdd) {
+      const projMatch = tdd.match(/\*\*Project:?\*\*:?\s*`([^`]+)`/i)?.[1]?.trim();
+      const connMatch = tdd.match(/\*\*BigQuery Connection:?\*\*:?\s*`([^`]+)`/i)?.[1]?.trim();
+      const overallMatch = tdd.match(/\*\*Overall (?:Instance )?Health Score:?\*\*:?\s*\*\*(\d+)%(?:\s*\(([^)]+)\))?\*\*/i);
+      const transMatch = tdd.match(/\*\*(?:Composite )?Transcriber (?:Maturity|Score):?\*\*:?\s*\*\*([0-9.]+)\s*\/\s*4\.00(?:\s*\(([^)]+)\))?\*\*/i);
+      const p1Score = Number(tdd.match(/\|\s*\*\*Pillar 1:[^|]*\|\s*\*\*(\d+)%\*\*/i)?.[1] ?? 0);
+      const p2Score = Number(tdd.match(/\|\s*\*\*Pillar 2:[^|]*\|\s*\*\*(\d+)%\*\*/i)?.[1] ?? 0);
+      const p3Score = Number(tdd.match(/\|\s*\*\*Pillar 3:[^|]*\|\s*\*\*(\d+)%\*\*/i)?.[1] ?? 0);
+      const tblOverall = tdd.match(/\|\s*\*\*Overall Instance Health Score\*\*[^|]*\|\s*\*\*(\d+)%\*\*/i)?.[1];
+      const overallScore = Number(overallMatch?.[1] ?? tblOverall ?? Math.round((p1Score + p2Score + p3Score) / 3));
+      const rawGrade = (overallMatch?.[2] || tdd.match(/\*\*Grade:\s*([ABCDF])\*\*/i)?.[1] || '').replace(/^grade[:\s]*/i, '').trim().charAt(0).toUpperCase();
+      const grade: PillarBreakdown['grade'] =
+        rawGrade === 'A' || rawGrade === 'B' || rawGrade === 'C' || rawGrade === 'D' || rawGrade === 'F'
+          ? rawGrade
+          : overallScore >= 90 ? 'A' : overallScore >= 80 ? 'B' : overallScore >= 70 ? 'C' : overallScore >= 60 ? 'D' : 'F';
+      const transcriberScore = Number(transMatch?.[1] ?? Number(((p2Score / 100) * 4).toFixed(2)));
+      const transcriberClass = (transMatch?.[2] || '').trim() || (transcriberScore >= 3.5 ? 'Class A Exemplary' : transcriberScore >= 2.5 ? 'Class B Production' : 'Class C Remediation');
+      const projectId = projMatch || opts.projectId || cleanId;
+      const fromInter: HealthCheckReportPayload = {
+        id: cleanId, type: 'health_check', title: `3-Pillar Health Check: ${projectId} (${overallScore}% · Grade ${grade})`,
+        projectId, connectionName: connMatch || '',
+        scores: { pillar1Score: p1Score, pillar2Score: p2Score, pillar3Score: p3Score, overallScore, grade, transcriberScore, transcriberClass },
+        tddMarkdown: tdd, telemetry: {}, lastInteractionId: opts.lastInteractionId,
+        environmentId: opts.environmentId, updatedAt: new Date().toISOString(), createdBy: '1',
+      };
+      sessionHealthReportsById.set(cleanId, fromInter);
+      return fromInter;
+    }
+  }
+  const found = await loadObjectArtifact<HealthCheckReportPayload>(sdk, 'health_check', cleanId, namespace).catch(() => null);
+  if (found) { sessionHealthReportsById.set(cleanId, found); return found; }
+  const sdkRec = sdk as unknown as { me?: unknown; run_inline_query?: unknown; authSession?: { transport?: { rawRequest?: unknown } } };
+  const canRerun = opts?.rerunIfMissing !== false && Boolean(opts?.rerunIfMissing || typeof sdkRec?.me === 'function' || typeof sdkRec?.run_inline_query === 'function' || typeof sdkRec?.authSession?.transport?.rawRequest === 'function');
+  if (canRerun) {
+    const rerun = await runThreePillarHealthCheckViaCodeMode({
+      sdk, extensionSDK, reportId: cleanId, targetProject: opts?.projectId, healthScope: opts?.healthScope, customFocus: opts?.customFocus,
+    });
+    return rerun.report;
+  }
+  throw new Error(`Health Check artifact "obj_health_check_${cleanId}" not found in namespace "${namespace}".`);
 }
 
 export async function runThreePillarHealthCheckViaCodeMode(params: {
@@ -672,7 +730,6 @@ export async function runThreePillarHealthCheckViaCodeMode(params: {
   targetProject?: string;
   healthScope?: 'all' | 'looker' | 'bq';
   customFocus?: string;
-  messages?: PersistedChatTurn[];
   conversationId?: string;
   signal?: AbortSignal;
   onStatus?: (msg: string) => void;
@@ -681,56 +738,25 @@ export async function runThreePillarHealthCheckViaCodeMode(params: {
   userKey: string;
   objKey: string;
 }> {
-  const {
-    sdk,
-    extensionSDK,
-    reportId,
-    targetProject,
-    healthScope = 'all',
-    customFocus,
-    messages,
-    conversationId,
-    signal,
-    onStatus,
-  } = params;
-  onStatus?.(
-    'Running 3-Pillar Health Check in LkrCodeMode (System Activity + LookML + BigQuery INFORMATION_SCHEMA)...'
-  );
+  const { sdk, extensionSDK, reportId, targetProject, healthScope = 'all', customFocus, conversationId, signal, onStatus } = params;
+  onStatus?.('Running 3-Pillar Health Check in LkrCodeMode (System Activity + LookML + BigQuery INFORMATION_SCHEMA)...');
   const rawJson = await LkrCodeMode.runPythonCode({
-    code: THREE_PILLAR_CODEMODE_PY,
-    sdk,
-    extensionSDK,
-    conversationId,
-    signal,
-    vars: {
-      target_project: targetProject || '',
-      health_scope: healthScope,
-    },
+    code: THREE_PILLAR_CODEMODE_PY, sdk, extensionSDK, conversationId, signal,
+    vars: { target_project: targetProject || '', health_scope: healthScope },
   });
+  if (typeof rawJson === 'string' && rawJson.trim().startsWith('Error:')) {
+    throw new Error(rawJson.trim());
+  }
   const telemetry = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson || {};
   const userId = String(telemetry?.user?.id || '1');
-  const id =
-    (reportId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '') ||
-    `hc_${Date.now().toString(36)}`;
+  const id = (reportId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '') || `hc_${Date.now().toString(36)}`;
   const { title, scores, markdown } = synthesizeHealthCheckTdd(telemetry, customFocus);
-
   const report: HealthCheckReportPayload = {
-    id,
-    type: 'health_check',
-    title,
+    id, type: 'health_check', title,
     projectId: String(telemetry?.pillar2?.project_id || targetProject || 'thelook_event'),
-    connectionName: String(
-      telemetry?.pillar3?.connection_name || 'default_bigquery_connection'
-    ),
-    scores,
-    tddMarkdown: markdown,
-    telemetry,
-    messages: messages || [],
-    updatedAt: new Date().toISOString(),
-    createdBy: userId,
+    connectionName: String(telemetry?.pillar3?.connection_name || 'default_bigquery_connection'),
+    scores, tddMarkdown: markdown, telemetry: {}, updatedAt: new Date().toISOString(), createdBy: userId,
   };
-
-  onStatus?.(`Saving Health Check report to user_${userId}_health_check_${id} & obj_health_check_${id}...`);
   const { userKey, objKey } = await saveHealthCheckArtifact(sdk, extensionSDK, userId, report);
   return { report, userKey, objKey };
 }

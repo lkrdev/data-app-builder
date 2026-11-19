@@ -57,6 +57,7 @@ const antigravityPromptsTs = [
 const antigravityStepsTs = readFileSync(path.join(repoRoot, 'src/antigravitySteps.ts'), 'utf8')
 const antigravityTs = [
   'src/antigravity.ts',
+  'src/antigravityConvStore.ts',
   'src/antigravityEnv.ts',
   'src/antigravitySkillSync.ts',
   'src/antigravityLoop.ts',
@@ -592,7 +593,9 @@ async function eval07AgenticLookmlOnboarding() {
     assert(hasProjectLink, 'Expected /projects/<project_name> link in onboarding summary')
 
     const onboardingSkillMd = readFileSync(path.join(repoRoot, 'skills/looker-project-onboarding/SKILL.md'), 'utf8')
-    const lookmlToolTsx = readFileSync(path.join(repoRoot, 'src/lookmlTool.tsx'), 'utf8')
+    const lookmlToolTsx = ['src/lookmlTool.tsx', 'src/lookmlArtifactHydration.ts']
+      .map((p) => readFileSync(path.join(repoRoot, p), 'utf8'))
+      .join('\n')
     const zeroSdkDotGlobals =
       !/\bsdk\.(?:all_connections|all_lookml_models|connection_schemas|connection_tables)\b/.test(onboardingSkillMd) &&
       !/\bsdk\.(?:all_connections|all_lookml_models|connection_schemas|connection_tables)\b/.test(lookmlToolTsx)
@@ -928,6 +931,31 @@ async function eval11AlertsTriageAndActions() {
   const store = new Map()
   const mockArtifactSdk = {
     ok: async (p) => p,
+    get_alert: async (id) => ({
+      id,
+      custom_title: 'Executive Margin Alert',
+      dashboard_id: '42',
+      cron: '0 9 * * *',
+      comparison_type: 'LESS_THAN',
+      threshold: 0.42,
+      field: { title: 'Gross Margin %', name: 'order_items.gross_margin_pct' },
+      applied_dashboard_filters: [{ filter_title: 'Region', field_name: 'users.region', filter_value: 'North America' }],
+      destinations: [{ destination_type: 'EMAIL', email_address: 'bryan@example.com' }],
+    }),
+    authSession: {
+      transport: {
+        rawRequest: async (_method, endpoint) => {
+          if (String(endpoint).includes('/alert_details')) {
+            return {
+              ok: true,
+              statusCode: 200,
+              body: [{ id: '206', dashboard_id: '42', dashboard_name: 'Executive Pulse', alert_history_items: [{ outcome: 'succeeded', alert_condition_met: false }] }],
+            }
+          }
+          return { ok: true, statusCode: 200, body: [] }
+        },
+      },
+    },
     artifact: async ({ key }) =>
       String(key).split(',').filter((k) => store.has(k)).map((k, idx) => ({ key: k, version: idx + 1, value: JSON.stringify(store.get(k)) })),
     update_artifacts: async (_ns, body) => {
@@ -940,9 +968,10 @@ async function eval11AlertsTriageAndActions() {
       'Cloned alert #206.\n<ALERT_BUNDLE>{"alert_id":"206","title":"Executive Margin Alert","dashboard_id":"42","dashboard_name":"Executive Pulse","cron":"0 9 * * *","comparison_type":"LESS_THAN","threshold":0.42,"field":{"title":"Gross Margin %","name":"order_items.gross_margin_pct"},"applied_dashboard_filters":[{"filter_title":"Region","field_name":"users.region","filter_value":"North America"}],"destinations":[{"destination_type":"EMAIL","email_address":"bryan@example.com"}],"alert_history_items":[{"outcome":"succeeded","alert_condition_met":false}]}</ALERT_BUNDLE>',
   })
   await saveAlertArtifact(mockArtifactSdk, '7', extracted)
-  const loaded = await loadAlertArtifact(mockArtifactSdk, '206')
+  const loaded = await loadAlertArtifact({ ...mockArtifactSdk }, '206')
   const filterUrl = buildAlertDashboardFilterUrl(loaded)
   const outputRubricOk =
+    store.size === 0 &&
     Boolean(loaded && loaded.alert_id === '206') &&
     filterUrl === '/embed/dashboards/42?Region=North+America'
 

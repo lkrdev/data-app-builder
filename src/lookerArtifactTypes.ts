@@ -1,5 +1,5 @@
 import type { ExtensionSDK } from '@looker/extension-sdk'
-import type { IArtifact, Looker40SDK } from '@looker/sdk'
+import type { IArtifact } from '@looker/sdk'
 import { mutate, SWRConfig, unstable_serialize } from 'swr'
 
 import { type AlertInspectorBundle, cleanLookmlProjectId } from './antigravityTypes'
@@ -9,17 +9,33 @@ import {
   normalizeCaEmbedPath,
 } from './conversationalAnalytics'
 import {
-  compactPersistedChatTurn,
-  PersistedChatTurn,
   type StudioContentItemType,
   type TurnCrudItem,
 } from './dataAppPublisher'
 export type { StudioContentItemType, TurnCrudItem }
+import {
+  ALLOWED_USER_CONVERSATION_FIELDS,
+  compactConversationEntryToBudget,
+  normalizeConversationLabel,
+  normalizeConversationTags,
+  normalizeTurnInteractionIds,
+  stripForbiddenArtifactFieldsDeep,
+} from './lookerArtifactValidator'
+export * from './lookerArtifactValidator'
 
 export const ARTIFACT_NAMESPACE = 'data_app_builder::data_app_builder'
 export const DEFAULT_STUDIO_AGENT_NAME = 'Ripper'
 
-export interface UserStudioConfig { userId: string; agentName: string; updatedAt: string }
+export interface UserStudioConfig {
+  userId: string
+  agentName: string
+  themeMode?: string
+  requirePermission?: boolean
+  busySendAction?: string
+  maxToolRounds?: number
+  selectedFolderId?: string
+  updatedAt: string
+}
 export interface UserEnvironmentState { environmentId: string; sourcesHash?: string; updatedAt?: string }
 export const normalizeStudioAgentName = (raw?: string | null): string => String(raw ?? '').trim() || DEFAULT_STUDIO_AGENT_NAME
 export const userStudioConfigArtifactKey = (userId: string): string => `user_config:${String(userId || '').trim() || '1'}`
@@ -89,26 +105,13 @@ export type UserArtifactIndex = UserArtifactIndexEntry
 export interface SharedArtifactPayload extends UserArtifactIndexEntry {
   code?: string
   content?: unknown
-  messages?: PersistedChatTurn[]
   meta?: Record<string, unknown>
-}
-
-export interface SaveUserArtifactParams extends Partial<UserArtifactIndexEntry> {
-  sdk?: Looker40SDK
-  userId: string
-  id: string
-  type: StudioToolMode
-  title?: string
-  content?: Record<string, unknown>
-  objectPayload?: Record<string, unknown>
-  namespace?: string
 }
 
 export interface SavedScript {
   id: string
   title: string
   code: string
-  messages?: PersistedChatTurn[]
   updatedAt: string
   dashboardId?: string
   elementId?: string
@@ -293,7 +296,18 @@ export interface UserConversationContent {
   scheduleId?: string
   reportId?: string
   sessionId?: string
+  projectId?: string
+  modelName?: string
+  branch?: string
+  overallScore?: number
+  elementId?: string
   caConversationId?: string
+  agentId?: string
+  agentName?: string
+  routingRationale?: string
+  initialQuestion?: string
+  title?: string
+  folderId?: string
   id?: string
   contentType?: string
   embedPath?: string
@@ -306,13 +320,16 @@ export interface UserConversationEntry {
   use_case?: string
   objectId?: string
   label: string
+  tags?: string[]
   archived?: boolean
   interactionId?: string
+  inFlight?: boolean
+  turnInteractionIds?: Array<[string, string]>
+  caConversationId?: string
   environmentId?: string
   content?: UserConversationContent
   contentItems?: StudioContentItem[]
   activeContentTabKey?: string
-  messages?: PersistedChatTurn[]
   explores?: string[]
   createdAt?: string
   updatedAt: string
@@ -321,8 +338,7 @@ export interface UserConversationEntry {
 export function hydrateConversationContentItems(conv: Partial<UserConversationEntry>): StudioContentItem[] {
   const isDefaultLookml = (it?: Partial<StudioContentItem> | null) =>
     Boolean(it && it.contentType === 'lookml' && (it.key === 'lookml:default' || !cleanLookmlProjectId(it.projectId || it.id)))
-  const hadDeletedTurn = Boolean(conv.messages?.some((m) => m.crudItems?.some((x) => x.action === 'deleted')))
-  if (Array.isArray(conv.contentItems) && (conv.contentItems.length > 0 || hadDeletedTurn)) {
+  if (Array.isArray(conv.contentItems) && (conv.contentItems.length > 0 || conv.activeContentTabKey === '')) {
     return conv.contentItems
       .filter((it): it is StudioContentItem => Boolean(it && it.id && it.contentType) && !isDefaultLookml(it))
       .map((it) => normalizeStudioContentItem(it))
@@ -336,8 +352,8 @@ export function hydrateConversationContentItems(conv: Partial<UserConversationEn
     items.splice(0, items.length, ...upsertStudioContentItem(items, item).items)
   }
 
-  if (rawType === 'conversational-analytics' || rawType === 'ca' || c.caConversationId) {
-    const caId = String(c.caConversationId || c.id || conv.objectId || '').trim()
+  if (rawType === 'conversational-analytics' || rawType === 'ca' || conv.caConversationId || c.caConversationId) {
+    const caId = String(conv.caConversationId || c.caConversationId || c.id || conv.objectId || '').trim()
     if (caId) pushItem({ id: caId, contentType: 'conversational-analytics', title: fallbackTitle, embedPath: c.embedPath, updatedAt: conv.updatedAt })
     return items
   }
@@ -424,14 +440,11 @@ export function resolveConversationRelatedContent(
     s.replace(/^conv_(?:app|data_app|data-investigator|data_investigator|dashboard|tile|script|health_check|health-check|health|lookml|ca|conversational-analytics)_/, '').replace(/^obj_script_/, '').trim()
   const uniq = (...vals: Array<string | undefined | false>) => Array.from(new Set(vals.filter((v): v is string => Boolean(v))))
 
-  const mentionedIds = new Set<string>()
-  for (const msg of conv.messages || []) {
-    const text = String((msg as { text?: unknown })?.text || '')
-    for (const m of text.matchAll(/@(?:dashboard|look|conversation|explore):([^\s,)]+)|\[Referenced Looker (?:Dashboard|Look|Conversation) #?([^\s\]]+)/gi)) {
-      const id = (m[1] || m[2] || '').trim()
-      if (id) mentionedIds.add(id)
-    }
-  }
+  const hasExplicitContentItems = Array.isArray(conv.contentItems) && conv.contentItems.length > 0
+  const hasAnyExplicitCreatedItem = Boolean(
+    hasExplicitContentItems &&
+      (conv.contentItems || []).some((it) => it?.createdInConversation === true || it?.source === 'created')
+  )
 
   const buildRelatedLinks = (itemList: string[]): Array<{ label: string; path: string; itemText: string }> =>
     itemList.flatMap((itemText) => {
@@ -442,8 +455,6 @@ export function resolveConversationRelatedContent(
       const ca = itemText.match(/CA conversation artifact \(obj_ca_([^)]+)\)/)?.[1]
       return ca ? [{ label: `CA Conversation ${ca}`, path: `/embed/conversations/${encodeURIComponent(ca)}`, itemText }] : []
     })
-
-  const hasExplicitContentItems = Array.isArray(conv.contentItems) && conv.contentItems.length > 0
 
   const enrichWithContentItems = (base: ConversationRelatedContentInfo): ConversationRelatedContentInfo => {
     if (!hasExplicitContentItems) {
@@ -462,7 +473,7 @@ export function resolveConversationRelatedContent(
       const targetId = String(item.dashboardId || item.lookId || item.lookmlDashboardId || itemId).trim()
       if (!itemId && !targetId) continue
       const isCreated = rawItem.createdInConversation === true || rawItem.source === 'created'
-      if (!isCreated && itemId !== base.objectId && targetId !== base.objectId && (mentionedIds.has(itemId) || (targetId && mentionedIds.has(targetId)))) continue
+      if (!isCreated && hasAnyExplicitCreatedItem && itemId !== base.objectId && targetId !== base.objectId) continue
       if ((rawType === 'conversational-analytics' || rawType === 'ca') && !isCreated && ['dashboard', 'data_app', 'data-investigator', 'look'].includes(item.contentType)) continue
       if (item.contentType === 'dashboard') {
         const dId = String(item.dashboardId || itemId).trim()
@@ -657,11 +668,7 @@ export function parseArtifactValue<T = unknown>(raw: unknown): T {
 
 export function prunePersistedContentItem(raw: StudioContentItem): StudioContentItem {
   const { rawCode: _rawCode, ...compact } = normalizeStudioContentItem(raw)
-  return compact
-}
-
-export function prunePersistedMessages(messages?: PersistedChatTurn[]): PersistedChatTurn[] | undefined {
-  return Array.isArray(messages) ? messages.map((m) => compactPersistedChatTurn(m, true)) : undefined
+  return stripForbiddenArtifactFieldsDeep(compact)
 }
 
 export function normalizeConversationsArray(raw: unknown): UserConversationEntry[] {
@@ -677,14 +684,43 @@ export function normalizeConversationsArray(raw: unknown): UserConversationEntry
       (c): c is Partial<UserConversationEntry> & { id: string; title?: string } =>
         Boolean(c && typeof c === 'object' && 'id' in c && (c as { id?: unknown }).id)
     )
-    .map((c) => ({
-      ...c,
-      id: String(c.id),
-      type: c.type || 'app',
-      label: String(c.label || c.title || c.id),
-      updatedAt: String(c.updatedAt || c.createdAt || ''),
-      ...(c.activeContentTabKey === 'lookml:default' ? { activeContentTabKey: undefined } : {}),
-    }))
+    .map((c) => {
+      const rec = c as Record<string, unknown>
+      const out: Record<string, unknown> = {}
+      for (const k of Object.keys(rec)) {
+        if (rec[k] !== undefined && ALLOWED_USER_CONVERSATION_FIELDS.has(k)) {
+          out[k] = k === 'content' ? stripForbiddenArtifactFieldsDeep(rec[k]) : rec[k]
+        }
+      }
+      const id = String(c.id)
+      const type = String(c.type || 'app')
+      const contentItems = Array.isArray(c.contentItems)
+        ? c.contentItems.map((it) => prunePersistedContentItem(it))
+        : undefined
+      const explores = Array.isArray(c.explores) ? c.explores.map(String).filter(Boolean) : undefined
+      const tags = normalizeConversationTags(
+        c.tags,
+        explores,
+        contentItems?.map((it) => it.contentType),
+        type
+      )
+      const turnIds = normalizeTurnInteractionIds(c.turnInteractionIds)
+      const normalized: UserConversationEntry = {
+        ...(out as Partial<UserConversationEntry>),
+        id,
+        type,
+        label: normalizeConversationLabel(c.label || c.title, id),
+        updatedAt: String(c.updatedAt || c.createdAt || ''),
+      }
+      if (contentItems !== undefined) normalized.contentItems = contentItems
+      if (explores !== undefined) normalized.explores = explores
+      if (tags) normalized.tags = tags
+      else delete normalized.tags
+      if (turnIds.length > 0) normalized.turnInteractionIds = turnIds
+      else delete normalized.turnInteractionIds
+      if (normalized.activeContentTabKey === 'lookml:default') delete normalized.activeContentTabKey
+      return compactConversationEntryToBudget(normalized)
+    })
     .sort((a: UserConversationEntry, b: UserConversationEntry) =>
       String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))
     )

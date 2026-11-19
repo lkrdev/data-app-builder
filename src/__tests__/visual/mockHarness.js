@@ -3,6 +3,7 @@ const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs'
 const path = require('node:path')
 
 const { SAMPLE_PASTED_IMAGE_DATA_URL, buildMockFixturesScript } = require('./mockFixtures')
+const { MOCK_SEEDED_INTERACTIONS } = require('./mockInteractionFixtures')
 const { MANAGED_SOURCES_FILE_HASHES, MANAGED_SOURCES_MANIFEST_JSON } = require('../../antigravitySkillSync')
 
 const repoRoot = path.resolve(__dirname, '../../..')
@@ -177,6 +178,7 @@ ${buildMockFixturesScript(scenario)}
             if (window.__MOCK_INTERACTION_DELAY_MS__) {
               await new Promise((r) => setTimeout(r, window.__MOCK_INTERACTION_DELAY_MS__));
             }
+            if (hit && hit.__mockError) return hit.__mockError;
             if (hit) return { ok: true, status: 200, body: JSON.stringify(hit) };
           }
           const inputText = (body && body.input && body.input[0] && body.input[0].text) || '';
@@ -262,6 +264,14 @@ ${buildMockFixturesScript(scenario)}
             : null,
         openSchedulerModal: scenario === 'python_tile_scheduler_modal',
         forceAppInitializing: scenario === 'ripper_surf_loader',
+        mockInteractions: Object.assign({}, ${JSON.stringify(MOCK_SEEDED_INTERACTIONS)}, {
+          v1_lookml_1: Object.assign({}, ${JSON.stringify(MOCK_SEEDED_INTERACTIONS.v1_lookml_1)}, {
+            steps: [{ type: 'code_execution', output: '<LOOKML_BUNDLE>' + JSON.stringify(artifactObjects.obj_lookml_20261030_dev_branch.bundle) + '</LOOKML_BUNDLE>' }]
+          }),
+          v1_health_demo: Object.assign({}, ${JSON.stringify(MOCK_SEEDED_INTERACTIONS.v1_health_demo)}, {
+            steps: [{ type: 'code_execution', output: '<HEALTH_CHECK_TDD>' + artifactObjects.obj_health_check_demo.tddMarkdown + '</HEALTH_CHECK_TDD>' }]
+          })
+        }),
         environmentFiles: {
           '/workspace/.managed_sources_manifest.json': scenario === 'skills_outdated'
             ? ${JSON.stringify(JSON.stringify({ sourcesHash: '000000000000dead', files: { ...MANAGED_SOURCES_FILE_HASHES, '/workspace/AGENTS.md': '000000000000dead', '/workspace/skills/legacy-removed/SKILL.md': '111111111111beef' } }))}

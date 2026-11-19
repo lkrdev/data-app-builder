@@ -503,7 +503,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                   data-testid="completed-thinking-block"
                   onToggle={(e) => {
                     if ((e.currentTarget as HTMLDetailsElement).open && !hasSteps && m.interactionId) {
-                      void hydrateMessageActivitySteps?.(m.interactionId, prevAssistantInteractionId)
+                      void hydrateMessageActivitySteps?.(m.interactionId, m.stopAtInteractionId || prevAssistantInteractionId)
                     }
                   }}
                 >
@@ -520,7 +520,7 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
                       m.activitySteps || [],
                       { thinkingDurationSec: m.thinkingDurationSec ?? 1, userPrompt: prevUserMsg, assistantText: m.text },
                       m.interactionId,
-                      prevAssistantInteractionId
+                      m.stopAtInteractionId || prevAssistantInteractionId
                     )}
                   </summary>
                   {hasSteps ? (

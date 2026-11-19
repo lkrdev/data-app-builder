@@ -5,15 +5,17 @@ import type { Looker40SDK } from '@looker/sdk'
 
 import {
   AntigravityActivityStep, AntigravityAuth, AntigravityTurnResult, cleanLookmlProjectId,
-  CodeModePermissionDecision, CodeModePermissionRequest, runAntigravityTurn, sanitizeConversationLabel,
+  CodeModePermissionDecision, CodeModePermissionRequest, getSessionConversationMessages,
+  hydrateRemoteConversationMessages, recoverInFlightInteraction, runAntigravityTurn,
+  sanitizeConversationLabel, setSessionConversationMessages,
 } from './antigravity'
 import type { ChatMessage } from './components/App'
 import {
-  addInFlightConvId, type AlertInspectorBundle, buildDenseExploreSchema, clearInFlightConvId, compactPersistedChatTurn,
+  addInFlightConvId, type AlertInspectorBundle, buildDenseExploreSchema, clearInFlightConvId,
   extractExploreIdsFromCode, extractResolvedUseCase, formatExploreId, getArtifactNamespace,
-  hydrateConversationContentItems, hydrateMentionedContext, NativeContentState, parseExploreId,
-  PublishedAppState, removeInFlightConvId, ResolvedStudioUseCase, saveAlertArtifact,
-  saveNativeContentArtifact, saveUserArtifact, saveUserConversation, StudioContentItem,
+  hydrateConversationContentItems, hydrateMentionedContext, mergeTurnInteractionIds, NativeContentState,
+  normalizeConversationTags, parseExploreId, PublishedAppState, removeInFlightConvId, ResolvedStudioUseCase,
+  saveAlertArtifact, saveNativeContentArtifact, saveUserConversation, StudioContentItem,
   StudioContentItemType, StudioContextMention, studioModeToUseCase, StudioUseCase,
   toTurnCrudItem, TurnCrudItem, upsertPublishedDataApp, upsertStudioContentItem, UserConversationEntry,
 } from './lookerApi'
@@ -67,7 +69,8 @@ export function upsertLocalTurnContentItem(
 
 export async function prepareTurnMentionsAndContext(opts: {
   effectivePrompt: string; mentionsToHydrate: StudioContextMention[]; resumeConv?: UserConversationEntry
-  core40SDK: Looker40SDK; conversations: UserConversationEntry[]; snapExplores: string[]
+  core40SDK: Looker40SDK; extensionSDK?: Partial<ExtensionSDK>; auth?: AntigravityAuth; userId?: string; activeEnvironmentId?: string
+  conversations: UserConversationEntry[]; snapExplores: string[]
   turnTargetUseCase: StudioUseCase; initialSchemaMarkdown: string
   onMentionItem: (raw: Partial<StudioContentItem> & { id: string; contentType: StudioContentItemType }) => void
   onHydratingStatus: () => void
@@ -75,7 +78,7 @@ export async function prepareTurnMentionsAndContext(opts: {
   explores: string[]; schemaMarkdown: string; exploresChanged: boolean
   extraSources?: Array<{ type: 'inline'; content: string; target: string }>; promptWithContext: string
 }> {
-  const { effectivePrompt, mentionsToHydrate, resumeConv, core40SDK, conversations, snapExplores, turnTargetUseCase, initialSchemaMarkdown, onMentionItem, onHydratingStatus } = opts
+  const { effectivePrompt, mentionsToHydrate, resumeConv, core40SDK, extensionSDK, auth, userId, activeEnvironmentId, conversations, snapExplores, turnTargetUseCase, initialSchemaMarkdown, onMentionItem, onHydratingStatus } = opts
   if (resumeConv || mentionsToHydrate.length === 0) {
     return { explores: snapExplores, schemaMarkdown: initialSchemaMarkdown, exploresChanged: false, promptWithContext: effectivePrompt }
   }
@@ -89,7 +92,7 @@ export async function prepareTurnMentionsAndContext(opts: {
     }
   })
   onHydratingStatus()
-  const hydrated = await hydrateMentionedContext({ sdk: core40SDK, mentions: mentionsToHydrate, conversations, selectedExplores: snapExplores, useCase: turnTargetUseCase })
+  const hydrated = await hydrateMentionedContext({ sdk: core40SDK, extensionSDK, auth, userId, activeEnvironmentId, mentions: mentionsToHydrate, conversations, selectedExplores: snapExplores, useCase: turnTargetUseCase })
   let explores = snapExplores, schemaMarkdown = initialSchemaMarkdown, exploresChanged = false
   if (hydrated.explores.length > 0) {
     explores = hydrated.explores
@@ -670,9 +673,6 @@ export async function materializeTurnBundles(params: MaterializeTurnBundlesParam
     if (upserted.dashboardId) {
       publishedDataAppDashboardLink = { title: upserted.title || result.bundle.title || 'Data App Dashboard', path: `/dashboards/${encodeURIComponent(String(upserted.dashboardId))}` }
     }
-    const appEntryBase = { id: upserted.dashboardId, type: appUseCase, title: upserted.title, explores: effectiveExplores, updatedAt: new Date().toISOString(), createdBy: userId }
-    await saveUserArtifact(sdk, userId, appEntryBase, Object.assign({}, appEntryBase, { dashboardId: upserted.dashboardId, extensionId: upserted.extensionId }), ns).catch(() => {})
-    if (signal?.aborted) return Object.assign(baseOut(), { aborted: true })
     convType = appUseCase; convTitle = upserted.title
     convContent = Object.assign({}, convContent, { dashboardId: upserted.dashboardId, appArtifactId: `obj_app_${upserted.dashboardId}`, extensionId: upserted.extensionId })
   }
@@ -699,9 +699,19 @@ export async function resumeInFlightConversationTurn(params: ResumeConversationT
   } = params
   const interactionId = String(conv.interactionId || '').trim()
   if (!interactionId) throw new Error(`Conversation "${conv.id}" has no persisted interactionId to resume`)
-  const baseMsgs = (conv.messages || []) as ChatMessage[]
-  const userPrompt = [...baseMsgs].reverse().find((m) => m.role === 'user')?.text || conv.label || 'Continue request'
-  const priorMsgs = baseMsgs.length > 1 ? baseMsgs.slice(0, -1) : []
+  let baseMsgs = (getSessionConversationMessages(conv.id) || []) as ChatMessage[]
+  if (!baseMsgs.length && conv.turnInteractionIds?.length) {
+    const hydrated = await hydrateRemoteConversationMessages({
+      extensionSDK, auth, sdk, userId, conv: Object.assign({}, conv, { interactionId: undefined }), activeEnvironmentId: conv.environmentId,
+    }).catch(() => null)
+    if (hydrated?.messages.length) baseMsgs = hydrated.messages as ChatMessage[]
+  }
+  const lastIsUser = baseMsgs[baseMsgs.length - 1]?.role === 'user'
+  const rec = lastIsUser ? null : await recoverInFlightInteraction({ extensionSDK, auth, interactionId }).catch(() => null)
+  const rootId = rec?.rootInteractionId || (!lastIsUser ? interactionId : conv.turnInteractionIds?.slice(-1)[0]?.[0] || interactionId)
+  const userPrompt = rec?.userPrompt || (lastIsUser ? baseMsgs[baseMsgs.length - 1]?.text : '') || conv.label || 'Continue request'
+  const priorMsgs = lastIsUser ? baseMsgs.slice(0, -1) : baseMsgs
+  const msgsWithUser: ChatMessage[] = lastIsUser ? baseMsgs : [...priorMsgs, { role: 'user', text: userPrompt }]
   const explores = conv.explores || []
   const convUseCase = (conv.use_case as StudioUseCase) || studioModeToUseCase(conv.type)
   const existingPublishedApp: PublishedAppState | null =
@@ -721,7 +731,8 @@ export async function resumeInFlightConversationTurn(params: ResumeConversationT
       model, thinkingLevel, maxTotalTokens, maxToolRounds,
       mode: convUseCase === 'dashboard' ? 'dashboard' : 'data_app', useCase: convUseCase, allowedModes,
       selectedExplores: explores, folderId, toolMode: convUseCase === 'lookml' ? 'lookml' : 'data_app',
-      lookmlProjectId: String(conv.content?.projectId || ''), existingNativeContent, schemaMarkdown: '', userPrompt, priorMessages: priorMsgs,
+      lookmlProjectId: String(conv.content?.projectId || ''), existingNativeContent, schemaMarkdown: '',
+      userPrompt, rawUserPrompt: userPrompt, priorMessages: priorMsgs,
       requirePermission, approvedOperations, onPermissionRequest, onProgressSteps, pollScheduleMs, signal,
       resumeInteractionId: interactionId, onStatus,
     })
@@ -734,9 +745,9 @@ export async function resumeInFlightConversationTurn(params: ResumeConversationT
     })
     const ns = getArtifactNamespace(extensionSDK)
     const nextMsgs: ChatMessage[] = mat.permissionDenied
-      ? [...baseMsgs, { role: 'error', text: mat.permissionDenied }]
+      ? [...msgsWithUser, { role: 'error', text: mat.permissionDenied }]
       : [
-          ...baseMsgs,
+          ...msgsWithUser,
           Object.assign(
             {
               role: 'assistant' as const,
@@ -753,17 +764,29 @@ export async function resumeInFlightConversationTurn(params: ResumeConversationT
             result.thinkingDurationSec ? { thinkingDurationSec: result.thinkingDurationSec } : null
           ),
         ]
+    setSessionConversationMessages(conv.id, nextMsgs)
+    const tags = normalizeConversationTags(
+      conv.tags, mat.effectiveExplores, itemState.items.map((i) => i.contentType), mat.convType
+    )
+    const turnInteractionIds = mergeTurnInteractionIds(
+      conv.turnInteractionIds,
+      result.session.lastInteractionId ? [[rootId, result.session.lastInteractionId]] : undefined
+    )
+    const hasDeletedCrud = mat.crudItems.some((c) => c.action === 'deleted')
     const updatedConv: UserConversationEntry = Object.assign(
       {}, conv,
       {
         id: conv.id, type: mat.convType, use_case: mat.convType,
         label: conv.label || mat.convTitle || sanitizeConversationLabel('', userPrompt),
-        interactionId: result.session.lastInteractionId, environmentId: result.session.environmentId || conv.environmentId,
-        explores: mat.effectiveExplores, messages: nextMsgs.map((m) => compactPersistedChatTurn(m, true)), updatedAt: new Date().toISOString(),
+        inFlight: false, interactionId: result.session.lastInteractionId,
+        environmentId: result.session.environmentId || conv.environmentId,
+        explores: mat.effectiveExplores, updatedAt: new Date().toISOString(),
       },
+      tags?.length ? { tags } : null,
+      turnInteractionIds?.length ? { turnInteractionIds } : null,
       mat.convContent ? { content: mat.convContent } : null,
-      itemState.items.length > 0 ? { contentItems: itemState.items } : null,
-      itemState.activeKey ? { activeContentTabKey: itemState.activeKey } : null
+      itemState.items.length > 0 || hasDeletedCrud ? { contentItems: itemState.items } : null,
+      itemState.activeKey || hasDeletedCrud || conv.activeContentTabKey !== undefined ? { activeContentTabKey: itemState.activeKey } : null
     )
     if (userId) await saveUserConversation(sdk, userId, updatedConv, ns).catch(() => {})
     return { result, conversation: updatedConv, publishedApp: mat.publishedApp }

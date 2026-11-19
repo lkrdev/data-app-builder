@@ -7,10 +7,10 @@ import {
 } from '../../antigravity'
 import { getStarterPromptsForUseCase, STARTER_PROMPTS_BY_USE_CASE } from '../../components/StudioWorkspace'
 import {
-  ARTIFACT_NAMESPACE, ArtifactService, clearArtifactServiceCache, clearLookerMetadataCache,
-  ConversationRecord, deleteUserArtifact, deleteUserConversation, getArtifactService,
-  getUseCaseLabel, listUserArtifacts, loadUserConversations, parseStudioRoute,
-  readSwrCache, saveUserArtifact, saveUserConversation, STUDIO_MODES,
+  ARTIFACT_NAMESPACE, ArtifactPayloadViolationError, ArtifactService, clearArtifactServiceCache,
+  clearLookerMetadataCache, ConversationRecord, deleteUserArtifact, deleteUserConversation,
+  getArtifactService, getUseCaseLabel, listUserArtifacts, loadUserConversations, parseStudioRoute,
+  readSwrCache, saveUserConversation, saveUserEnvironmentId, saveUserStudioConfig, STUDIO_MODES,
   STUDIO_USE_CASE_OPTIONS, UserArtifactIndexItem,
 } from '../../lookerApi'
 
@@ -168,41 +168,24 @@ export function registerPermissionsPart04Tests(): void {
     expect(svc).toBeInstanceOf(ArtifactService)
     expect(getArtifactService(mockSdk, ARTIFACT_NAMESPACE)).toBe(svc)
 
-    // 1. Initial saveUserArtifact fetches missing versions once; subsequent updates use cached versionByKey with 0 sdk.artifact calls
-    await saveUserArtifact(
-      mockSdk,
-      '7',
-      {
-        id: '42',
-        type: 'app',
-        title: 'Revenue App v1',
-        updatedAt: '2026-11-01T10:00:00Z',
-        createdBy: '7',
-      },
-      { id: '42', type: 'app', title: 'Revenue App v1', code: 'v1' }
-    )
-    expect(svc.getCachedVersion('user_7_app_42')).toBe(1)
-    expect(svc.getCachedVersion('obj_app_42')).toBe(1)
-    const getCountAfterFirstArtifactSave = artifactGetCount
-    const updateCountAfterFirstArtifactSave = updateArtifactsCount
+    // 1. Initial allowed-key saves fetch missing versions once; subsequent updates use cached versionByKey with 0 sdk.artifact calls
+    await expect(
+      svc.put([{ key: 'obj_app_42', value: { id: '42', title: 'Forbidden Object Key' } }])
+    ).rejects.toThrow(ArtifactPayloadViolationError)
 
-    await saveUserArtifact(
-      mockSdk,
-      '7',
-      {
-        id: '42',
-        type: 'app',
-        title: 'Revenue App v2',
-        updatedAt: '2026-11-01T10:05:00Z',
-        createdBy: '7',
-      },
-      { id: '42', type: 'app', title: 'Revenue App v2', code: 'v2' }
-    )
-    // Subsequent save to existing keys makes 0 sdk.artifact GET calls and 1 sdk.update_artifacts call
-    expect(artifactGetCount - getCountAfterFirstArtifactSave).toBe(0)
-    expect(updateArtifactsCount - updateCountAfterFirstArtifactSave).toBe(1)
-    expect(svc.getCachedVersion('user_7_app_42')).toBe(2)
-    expect(svc.getCachedVersion('obj_app_42')).toBe(2)
+    await saveUserEnvironmentId(mockSdk, '7', 'env_7_initial', ARTIFACT_NAMESPACE, 'hash_v1')
+    expect(svc.getCachedVersion('user_env:7')).toBe(1)
+    const getCountAfterFirstEnvSave = artifactGetCount
+    const updateCountAfterFirstEnvSave = updateArtifactsCount
+
+    await saveUserEnvironmentId(mockSdk, '7', 'env_7_next', ARTIFACT_NAMESPACE, 'hash_v2')
+    // Subsequent save to existing key makes 0 sdk.artifact GET calls and 1 sdk.update_artifacts call
+    expect(artifactGetCount - getCountAfterFirstEnvSave).toBe(0)
+    expect(updateArtifactsCount - updateCountAfterFirstEnvSave).toBe(1)
+    expect(svc.getCachedVersion('user_env:7')).toBe(2)
+
+    await saveUserStudioConfig(mockSdk, '7', { agentName: 'Atlas' })
+    expect(svc.getCachedVersion('user_config:7')).toBe(1)
 
     // Repeated saveUserConversation calls also make 0 sdk.artifact GET calls on subsequent saves
     await saveUserConversation(mockSdk, '7', {
@@ -228,40 +211,56 @@ export function registerPermissionsPart04Tests(): void {
     simulateVersionConflictOnce = true
     const getCountBeforeConflict = artifactGetCount
     const updateCountBeforeConflict = updateArtifactsCount
-    await svc.put([{ key: 'obj_app_42', value: { id: '42', title: 'Revenue App v3' } }])
+    await svc.put([{ key: 'user_config:7', value: { agentName: 'Atlas v2' } }])
     expect(artifactGetCount - getCountBeforeConflict).toBe(1)
     expect(updateArtifactsCount - updateCountBeforeConflict).toBe(2)
-    expect(svc.getCachedVersion('obj_app_42')).toBe(8)
+    expect(svc.getCachedVersion('user_config:7')).toBe(7)
 
-    // 3. Saving and deleting artifacts/conversations updates SWR cache & list in-place without extra sdk.search_artifacts calls
-    expect(searchArtifactsCount).toBe(0)
-    const cachedArtifactsAfterSave = await listUserArtifacts(mockSdk, '7')
-    expect(searchArtifactsCount).toBe(0)
-    expect(cachedArtifactsAfterSave.map((a) => `${a.id}:${a.title}`)).toEqual([
-      '42:Revenue App v2',
-    ])
-    expect(
-      readSwrCache<UserArtifactIndexItem[]>(['artifact:user_list', ARTIFACT_NAMESPACE, '7', 'all'])?.map(
-        (a) => a.title
-      )
-    ).toEqual(['Revenue App v2'])
-
-    await saveUserArtifact(mockSdk, '7', {
-      id: '99',
-      type: 'dashboard',
-      title: 'Executive UDD #99',
-      updatedAt: '2026-11-01T10:10:00Z',
-      createdBy: '7',
+    // 3. Legacy read-only listUserArtifacts + deleteUserArtifact cleanup updates SWR cache without extra sdk.search_artifacts calls
+    store.set('user_7_app_42', {
+      key: 'user_7_app_42',
+      version: 1,
+      value: JSON.stringify({
+        id: '42',
+        type: 'app',
+        title: 'Revenue App v2',
+        updatedAt: '2026-11-01T10:05:00Z',
+        createdBy: '7',
+      }),
+    })
+    store.set('obj_app_42', {
+      key: 'obj_app_42',
+      version: 1,
+      value: JSON.stringify({ id: '42', type: 'app', title: 'Revenue App v2' }),
+    })
+    store.set('user_7_dashboard_99', {
+      key: 'user_7_dashboard_99',
+      version: 1,
+      value: JSON.stringify({
+        id: '99',
+        type: 'dashboard',
+        title: 'Executive UDD #99',
+        updatedAt: '2026-11-01T10:10:00Z',
+        createdBy: '7',
+      }),
     })
     expect(searchArtifactsCount).toBe(0)
+    const cachedArtifactsAfterLoad = await listUserArtifacts(mockSdk, '7')
+    expect(searchArtifactsCount).toBe(1)
+    expect(cachedArtifactsAfterLoad.map((a) => `${a.id}:${a.title}`)).toEqual([
+      '99:Executive UDD #99',
+      '42:Revenue App v2',
+    ])
+    // Second listUserArtifacts call hits SWR cache with 0 extra sdk.search_artifacts calls
     expect((await listUserArtifacts(mockSdk, '7')).map((a) => a.id)).toEqual(['99', '42'])
+    expect(searchArtifactsCount).toBe(1)
     expect(
       readSwrCache<UserArtifactIndexItem[]>(['artifact:user_list', ARTIFACT_NAMESPACE, '7', 'all'])?.map((a) => a.id)
     ).toEqual(['99', '42'])
 
     await deleteUserArtifact(mockSdk, '7', 'app', '42', true)
     expect(deleteArtifactCount).toBe(1)
-    expect(searchArtifactsCount).toBe(0)
+    expect(searchArtifactsCount).toBe(1)
     expect(svc.getCachedVersion('user_7_app_42')).toBeUndefined()
     expect(svc.getCachedVersion('obj_app_42')).toBeUndefined()
     expect((await listUserArtifacts(mockSdk, '7')).map((a) => a.id)).toEqual(['99'])
@@ -272,7 +271,7 @@ export function registerPermissionsPart04Tests(): void {
     await deleteUserConversation(mockSdk, '7', 'conv_42')
     expect(await loadUserConversations(mockSdk, '7')).toEqual([])
     expect(readSwrCache<ConversationRecord[]>(['artifact:conversations', ARTIFACT_NAMESPACE, '7'])).toEqual([])
-    expect(searchArtifactsCount).toBe(0)
+    expect(searchArtifactsCount).toBe(1)
   })
 
   test('21. requires thought on RUN_LOOKER_CODEMODE_TOOL & LKR_CLI_BRIDGE_TOOL, extracts structured activity steps, and surfaces thought in onStatus, onProgressSteps, and write-permission requests (Issue #56)', async () => {

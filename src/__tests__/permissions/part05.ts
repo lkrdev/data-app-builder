@@ -13,7 +13,7 @@ import {
 import {
   archiveUserConversation, buildRootLookerFolders, clearArtifactServiceCache, clearLookerMetadataCache,
   deleteUserConversation, fetchFolderChildren, fetchFolderWithAncestors, fetchInitialLookerMetadata,
-  loadUserConversations, resolveConversationRelatedContent, saveUserArtifact, saveUserConversation,
+  loadUserConversations, resolveConversationRelatedContent, saveUserConversation,
   searchLookerFolders,
 } from '../../lookerApi'
 
@@ -407,23 +407,26 @@ export function registerPermissionsPart05Tests(): void {
       sharedObjectKeys: expect.arrayContaining(['obj_ca_c1']),
     })
 
-    // 2. Seed two conversations + user index artifacts + shared obj artifacts
-    await saveUserArtifact({
-      sdk: mockSdk,
-      userId: '1',
+    // 2. Seed two conversations + legacy user index artifacts + legacy shared obj artifacts
+    const seedLegacy = (key: string, value: unknown) => {
+      store.set(key, { key, version: 1, value: JSON.stringify(value) })
+    }
+    seedLegacy('user_1_app_42', {
       id: '42',
       type: 'app',
       title: 'Executive Revenue App',
-      objectPayload: { id: '42', type: 'app', title: 'Executive Revenue App', code: 'export default 1' },
+      updatedAt: '2026-11-01T10:00:00Z',
+      createdBy: '1',
     })
-    await saveUserArtifact({
-      sdk: mockSdk,
-      userId: '1',
+    seedLegacy('obj_app_42', { id: '42', type: 'app', title: 'Executive Revenue App', code: 'export default 1' })
+    seedLegacy('user_1_dashboard_7', {
       id: '7',
       type: 'dashboard',
       title: 'Quarterly UDD',
-      objectPayload: { id: '7', type: 'dashboard', title: 'Quarterly UDD' },
+      updatedAt: '2026-11-01T11:00:00Z',
+      createdBy: '1',
     })
+    seedLegacy('obj_dashboard_7', { id: '7', type: 'dashboard', title: 'Quarterly UDD' })
     await saveUserConversation(mockSdk, '1', {
       id: 'conv_app_42',
       type: 'app',
