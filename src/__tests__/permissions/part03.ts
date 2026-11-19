@@ -551,7 +551,6 @@ export function registerPermissionsPart03Tests(): void {
 
     // 2. Load Data App Dashboard #42 via connection.loadDashboard
     const tApp42 = resolveLookerEmbedTarget({
-      builderMode: 'data_app',
       publishedApp: { dashboardId: '42' },
       nonce: 1,
     })
@@ -563,7 +562,6 @@ export function registerPermissionsPart03Tests(): void {
 
     // 3. Warm-turn update on same Dashboard #42 bounces through /preload (pushHistory: false) then loadDashboard('42')
     const tApp42Warm = resolveLookerEmbedTarget({
-      builderMode: 'data_app',
       publishedApp: { dashboardId: '42' },
       nonce: 2,
     })
@@ -578,8 +576,7 @@ export function registerPermissionsPart03Tests(): void {
 
     // 4. Switch to Saved Look #15 via connection.loadLook
     const tLook15 = resolveLookerEmbedTarget({
-      builderMode: 'dashboard',
-      nativeContent: {
+      activeContentItem: {
         id: '15',
         lookId: '15',
         contentType: 'look',
@@ -594,8 +591,7 @@ export function registerPermissionsPart03Tests(): void {
 
     // 5. Switch to LookML Dashboard via connection.loadDashboard
     const tLookmlDash = resolveLookerEmbedTarget({
-      builderMode: 'dashboard',
-      nativeContent: {
+      activeContentItem: {
         id: 'thelook::executive_pulse',
         lookmlDashboardId: 'thelook::executive_pulse',
         contentType: 'lookml_dashboard',
@@ -609,7 +605,7 @@ export function registerPermissionsPart03Tests(): void {
 
     // 6. Switch to Conversational Analytics via connection.loadUrl
     const tCa = resolveLookerEmbedTarget({
-      isCaMode: true,
+      activePaneKind: 'ca',
       caConversation: {
         caConversationId: 'ca_conv_streaming_1',
         embedPath: '/embed/conversations/ca_conv_streaming_1?agent_id=ca_agent_ecommerce',

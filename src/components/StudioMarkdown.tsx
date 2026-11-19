@@ -424,20 +424,29 @@ export function normalizeLookerEmbedUrl(rawUrl: string, hostUrl?: string): strin
 }
 
 export function resolveLookerEmbedTarget(opts: {
-  isEmptyConversation?: boolean; isHealthCheckMode?: boolean; isLookmlMode?: boolean; isTileMode?: boolean; isCaMode?: boolean
-  builderMode?: 'data_app' | 'dashboard'; activeContentItem?: StudioContentItem | null
+  isEmptyConversation?: boolean
+  activePaneKind?: 'script' | 'alert' | 'report' | 'lookml' | 'ca' | 'embed' | 'empty_hidden'
+  activeContentItem?: StudioContentItem | null
   caConversation?: { caConversationId: string; embedPath: string } | null
   nativeContent?: { id: string; contentType: string; embedPath: string; dashboardId?: string; lookId?: string; lookmlDashboardId?: string } | null
   publishedApp?: { dashboardId: string } | null; alertPreviewUrl?: string; hostUrl?: string; nonce?: number
 }): LookerEmbedTarget {
   const nonce = opts.nonce || 0
   const preload: LookerEmbedTarget = { kind: 'preload', target: '/preload', previewMode: 'preload', previewObjectId: '', nonce }
-  if (opts.isEmptyConversation || opts.isHealthCheckMode || opts.isLookmlMode || opts.isTileMode) return preload
+  if (
+    opts.isEmptyConversation ||
+    opts.activePaneKind === 'report' ||
+    opts.activePaneKind === 'lookml' ||
+    opts.activePaneKind === 'script' ||
+    opts.activePaneKind === 'empty_hidden'
+  ) {
+    return preload
+  }
 
   const item =
     opts.activeContentItem?.id && opts.activeContentItem?.contentType
       ? opts.activeContentItem
-      : opts.builderMode === 'dashboard' && opts.nativeContent
+      : !opts.publishedApp && opts.nativeContent
       ? (opts.nativeContent as Partial<StudioContentItem> & { id: string; contentType: string })
       : null
   if (item) {
@@ -490,7 +499,7 @@ export function resolveLookerEmbedTarget(opts: {
     }
   }
 
-  if ((opts.isCaMode || opts.caConversation) && opts.caConversation?.embedPath) {
+  if ((opts.activePaneKind === 'ca' || opts.caConversation) && opts.caConversation?.embedPath) {
     return {
       kind: 'url',
       target: normalizeLookerEmbedUrl(opts.caConversation.embedPath, opts.hostUrl),
@@ -499,7 +508,6 @@ export function resolveLookerEmbedTarget(opts: {
       nonce,
     }
   }
-  if (opts.builderMode === 'dashboard') return preload
   if (opts.publishedApp?.dashboardId) {
     const id = String(opts.publishedApp.dashboardId)
     return { kind: 'dashboard', target: id, previewMode: 'data_app', previewObjectId: id, nonce }

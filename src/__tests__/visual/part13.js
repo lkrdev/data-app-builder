@@ -86,13 +86,13 @@ function registerVisualPart13Tests(ctx) {
                 id: 'int_224_alpha',
                 environment_id: 'env_224',
                 status: 'completed',
-                output_text: '<USE_CASE>app</USE_CASE>\\nBuilt Alpha App.\\n<DATA_APP_BUNDLE>' + appBundle + '</DATA_APP_BUNDLE>',
+                output_text: 'Built Alpha App.\\n<DATA_APP_BUNDLE>' + appBundle + '</DATA_APP_BUNDLE>',
               }),
             };
           }
           const body = init && init.body ? JSON.parse(init.body) : {};
           const inputText = (body.input && body.input[0] && body.input[0].text) || '';
-          if (inputText.includes('[CONVERSATION_LABEL_REQUEST]')) {
+          if (inputText.trimStart().startsWith('[CONVERSATION_LABEL_REQUEST]')) {
             const lbl = inputText.includes('Alpha') ? 'Alpha App' : 'Beta Chat';
             return { ok: true, status: 200, body: JSON.stringify({ id: 'int_lbl_224', status: 'completed', output_text: lbl }) };
           }
@@ -115,7 +115,7 @@ function registerVisualPart13Tests(ctx) {
                 id: 'int_224_beta',
                 environment_id: 'env_224',
                 status: 'completed',
-                output_text: '<USE_CASE>tile</USE_CASE>\\nBeta revenue is $1.2M.',
+                output_text: 'Beta revenue is $1.2M.',
               }),
             };
           }

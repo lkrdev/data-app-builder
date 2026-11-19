@@ -227,9 +227,9 @@ export function registerPermissionsPart24Tests(): void {
     expect(rangeReplaced.removedPills.map((p) => p.tokenId)).toEqual(['dashboard:902'])
     expect(rangeReplaced.prompt).toBe('Analfor  ')
 
-    // 4. Static guardrails: StudioComposer + StudioUseCaseGuides preserve contentEditable accessibility & preventDefault on menu options
+    // 4. Static guardrails: StudioComposer + StudioCapabilitiesGuide preserve contentEditable accessibility & preventDefault on menu options
     const composerSrc = readFileSync(path.resolve(__dirname, '../../components/StudioComposer.tsx'), 'utf8')
-    const guidesSrc = readFileSync(path.resolve(__dirname, '../../components/StudioUseCaseGuides.tsx'), 'utf8')
+    const guidesSrc = readFileSync(path.resolve(__dirname, '../../components/StudioCapabilitiesGuide.tsx'), 'utf8')
     const tokensSrc = readFileSync(path.resolve(__dirname, '../../components/StudioComposerTokens.tsx'), 'utf8')
     expect(composerSrc).toContain('role="textbox"')
     expect(composerSrc).toContain('aria-multiline="true"')

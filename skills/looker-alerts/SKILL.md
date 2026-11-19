@@ -7,7 +7,7 @@ description: Triage, inspect, create, update, move, and manage Looker alerts usi
 
 Use this skill whenever the user asks about Looker alerts — troubleshooting failing alerts, verifying alert data/filters, tuning noisy alert frequencies or thresholds, diagnosing missing mobile/Slack/email notifications, moving alerts to a new dashboard tile, or creating and editing alerts in **Ripper**.
 
-Always route alert prompts to `<USE_CASE>tile</USE_CASE>` and execute Looker SDK calls via `run_looker_codemode`.
+Execute Looker SDK calls via `run_looker_codemode`.
 
 ---
 

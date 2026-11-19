@@ -9,7 +9,7 @@ import {
 import {
   fetchConversationSandboxDebugMarkdown, formatConversationThreadMarkdown,
   handleFileInputSelection, handleImageClipboardPaste,
-  STUDIO_THINKING_LEVEL_OPTIONS, StudioThinkingLevel, StudioUseCase,
+  STUDIO_THINKING_LEVEL_OPTIONS, StudioThinkingLevel,
 } from '../antigravity'
 import {
   formatExploreId, normalizeStudioAgentName, StudioContextCategory, StudioContextMention,
@@ -17,6 +17,10 @@ import {
 import { LookmlSkillCatalogEntry, STUDIO_SLASH_SKILLS } from '../lookmlTool'
 export { fetchConversationSandboxDebugMarkdown, formatConversationThreadMarkdown }
 import { StudioController } from '../useStudioController'
+import {
+  ComposerAutocompleteMenus, renderMentionCategoryIcon,
+  StudioCapabilitiesModal, StudioCapabilitiesTrigger,
+} from './StudioCapabilitiesGuide'
 import {
   appendScopedPrefixToSegments, applyComposerBackspaceOrDelete, attachComposerElementCompat,
   buildGroupedExplores, buildMentionOptions, collectPillKeySet, ComposerHydrationContext,
@@ -27,23 +31,18 @@ import {
   splicePillIntoSegments, stepComposerArrowAcrossPill,
 } from './StudioComposerTokens'
 import { StudioButton, StudioSelect } from './StudioDesignSystem'
-import {
-  ComposerAutocompleteMenus, renderMentionCategoryIcon,
-  UseCaseInfoModal, UseCaseInfoTrigger,
-} from './StudioUseCaseGuides'
 
 export const StudioComposer: React.FC<{ ctl: StudioController; disabled?: boolean }> = ({ ctl, disabled = false }) => {
   const {
     core40SDK, agentName: rawAgentName, models, selectedExplores, setSelectedExplores,
     preloadedContent, mentionedItems, setMentionedItems, searchGlobalContentV2,
-    allConversations, conversations, activeMode, builderMode, isLookmlMode,
-    isHealthCheckMode, isCaMode, caConversation, selectedUseCase, selectedModel,
+    allConversations, conversations, selectedModel,
     setSelectedModel, thinkingLevel, thinkingLevelByModel, setModelThinkingLevel, defaultThinkingLevel, availableModels, busyStatus,
     activatedLookmlSkills, setActivatedLookmlSkills, pastedImages, setPastedImages,
     prompt, setPrompt, handleSendPrompt, queuedPrompts, busySendAction, setBusySendAction,
     handleStopTurn, handleQueuePrompt, handleRemoveQueuedPrompt, handleInterjectPrompt,
     isAuthenticated, authMode, clientId, oauthSigningIn, handleOAuthLogin, history,
-    lookmlBundle, nativeContent, infoModalUseCase, setInfoModalUseCase,
+    capabilitiesModalOpen, setCapabilitiesModalOpen,
     folderTreeNodes, selectedFolderId, requirePermission, setRequirePermission,
     setFolderModalOpen, setEditingAgentName, contentItems = [],
     messages, liveActivitySteps, copyThreadState, handleCopyThreadDebugTrace, activeConversationId,
@@ -334,25 +333,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController; disabled?: boolea
     commitEditorSegments(res.segments, res.prompt, res.cursorPos, { renderDom: true, focusDom: true })
   }
 
-  const activeGuideUseCase: StudioUseCase =
-    isCaMode || caConversation ? 'conversational-analytics'
-      : isHealthCheckMode ? 'health-check'
-      : isLookmlMode ? 'lookml'
-      : activeMode === 'tile' ? 'tile'
-      : builderMode === 'dashboard' ? 'dashboard'
-      : selectedUseCase || 'auto'
-
-  const placeholderText = isHealthCheckMode
-    ? 'Optional custom focus for 3-Pillar Looker & BigQuery Health Check...'
-    : isCaMode || selectedUseCase === 'conversational-analytics'
-    ? 'Ask a natural-language data question for Looker Conversational Analytics...'
-    : isLookmlMode
-    ? 'Describe LookML changes, SQL query to model, or field descriptions/tests to run in your active dev mode...'
-    : activeMode === 'tile'
-    ? 'Describe the Script to generate or update (or paste a screenshot)...'
-    : builderMode === 'dashboard'
-    ? 'Describe a Looker UDD, Look, Board, or Schedule to create or update (type @ to mention context)...'
-    : `Ask ${normalizeStudioAgentName(rawAgentName)} what you want to build, analyze, or automate (type @ to mention Explores, Dashboards, Looks, or Conversations)...`
+  const placeholderText = `Ask ${normalizeStudioAgentName(rawAgentName)} what you want to build, analyze, or automate (type / for skills or @ to mention Explores, Dashboards, Looks, or Conversations)...`
 
   const insertEditorPlainText = (text: string) => {
     if (!editorRef.current) return
@@ -396,7 +377,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController; disabled?: boolea
         }
       }}
     >
-      <UseCaseInfoModal activeUseCase={infoModalUseCase} onSelectUseCase={setInfoModalUseCase} onClose={() => setInfoModalUseCase(null)} />
+      <StudioCapabilitiesModal open={capabilitiesModalOpen} onClose={() => setCapabilitiesModalOpen(false)} />
 
       {contextChips.length > 0 && (
         <div className="dab-composer-context-chips" data-testid="composer-context-chips" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -700,7 +681,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController; disabled?: boolea
           }))}
         />
 
-        <UseCaseInfoTrigger useCase={activeGuideUseCase} onOpen={setInfoModalUseCase} />
+        <StudioCapabilitiesTrigger onOpen={() => setCapabilitiesModalOpen(true)} />
 
         <div className="dab-composer-send-group" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginLeft: 'auto' }}>
           {!isAuthenticated && !busyStatus && (
@@ -754,12 +735,7 @@ export const StudioComposer: React.FC<{ ctl: StudioController; disabled?: boolea
             </>
           ) : (
             <StudioButton variant="gemini" testId="studio-send-btn" onClick={handleSendPrompt} disabled={!isAuthenticated || ctl.environmentStatus === 'resetting' || ctl.environmentStatus === 'syncing' || (!prompt.trim() && pastedImages.length === 0)}>
-              {isCaMode || selectedUseCase === 'conversational-analytics'
-                ? (caConversation ? 'Ask CA Agent' : 'Route & Start CA Chat')
-                : isLookmlMode ? (lookmlBundle ? 'Update LookML' : 'Run Agentic LookML')
-                : activeMode === 'tile' ? 'Ask AI'
-                : builderMode === 'dashboard' ? (nativeContent ? 'Update Content' : 'Create / Update Content')
-                : 'Send Message'}
+              Send Message
             </StudioButton>
           )}
         </div>

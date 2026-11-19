@@ -36,7 +36,6 @@ ALLOWED_CONV_FIELDS = {
     "id",
     "objectId",
     "type",
-    "use_case",
     "label",
     "tags",
     "archived",
@@ -136,7 +135,6 @@ def _audit_conversation(conv: dict, active_env_id: str) -> dict:
         "immutable_conv_prefix": cid.startswith("conv_"),
         "byte_size": entry_bytes,
         "type": conv.get("type"),
-        "use_case": conv.get("use_case"),
         "label": conv.get("label"),
         "tags": tags,
         "archived": bool(conv.get("archived", False)),
@@ -259,7 +257,7 @@ def main():
     }
 
     if target_conv_id:
-        matched = next((c for c in conv_list if str(c.get("id") or "") == target_conv_id), None)
+        matched = ([c for c in conv_list if str(c.get("id") or "") == target_conv_id] or [None])[0]
         legacy_checks = []
         if matched:
             for obj_key in _collect_legacy_object_keys(matched):

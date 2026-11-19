@@ -1,18 +1,11 @@
-import {
-  AGENTS_MD, BUNDLE_APP_PY, DATA_APP_GUIDE_MD,
-  DATA_INVESTIGATOR_GUIDE_MD, LOOKER_PROJECT_ONBOARDING_SKILL_MD,
-} from './antigravityPrompts'
-import {
-  LOOKER_ALERTS_SKILL_MD, LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD,
-} from './antigravityStarters'
+import { AGENTS_MD, BUNDLE_APP_PY, DATA_APP_GUIDE_MD, DATA_INVESTIGATOR_GUIDE_MD, LOOKER_PROJECT_ONBOARDING_SKILL_MD } from './antigravityPrompts'
+import { LOOKER_ALERTS_SKILL_MD, LOOKER_DASHBOARD_SKILL_MD, LOOKER_FIELD_PROFILER_SKILL_MD } from './antigravityStarters'
 import {
   type AlertInspectorBundle, type AntigravityActivityStep, type AntigravityInteractionOutput,
   type AntigravityInteractionPayload, type AntigravityInteractionStep, type AntigravityTurnTelemetry,
   collectInteractionTextCandidates, extractNonThoughtText, parseTaggedJsonObjects,
 } from './antigravityTypes'
-export {
-  type AlertInspectorBundle, collectInteractionTextCandidates, extractNonThoughtText, parseTaggedJsonObjects,
-} from './antigravityTypes'
+export { type AlertInspectorBundle, collectInteractionTextCandidates, extractNonThoughtText, parseTaggedJsonObjects } from './antigravityTypes'
 import { type DataAppBundle } from './dataAppPublisher'
 import { BOOTSTRAP_LOOKML_PY } from './lkrCliBridge'
 import { LKR_CLI_SITECUSTOMIZE_PY } from './lkrCliSitecustomize'
@@ -71,7 +64,7 @@ export function extractInteractionInputText(interaction: AntigravityInteractionP
     : ''
 }
 
-const NON_ROOT_MARKERS = ['[LKR_EXTENSION_BRIDGE_RESULT]', 'Continue and complete the current request.', 'You have not emitted <DATA_APP_BUNDLE> yet.', 'Your previous bundle_app.py run failed', 'Max Tool Rounds (']
+const NON_ROOT_MARKERS = ['[LKR_EXTENSION_BRIDGE_RESULT]', 'Continue and complete the current request.', 'You have not emitted <DATA_APP_BUNDLE> yet.', 'You have not emitted an artifact bundle tag yet.', 'Your previous bundle_app.py run failed', 'Max Tool Rounds (']
 
 export function isFreshUserTurnRoot(interaction: AntigravityInteractionPayload | null | undefined): boolean {
   if (!interaction || (Array.isArray(interaction.input) && interaction.input.some((it) => it && typeof it === 'object' && (it as { type?: string }).type === 'function_result'))) return false
@@ -95,11 +88,20 @@ export function extractRawUserPromptFromInteraction(interaction: AntigravityInte
 
 export function extractBundleFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): DataAppBundle | null {
   const hit = parseTaggedJsonObjects(collectInteractionTextCandidates(interaction), /<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g)
-    .reverse()
     .find((p) => Boolean(p.raw_code || p.prod_code || p.code || (typeof p.__bundle_ref__ === 'string' && p.__bundle_ref__.trim())))
   if (!hit) return null
   const code = String(hit.raw_code || hit.code || hit.prod_code || '')
   return { ...(hit as unknown as DataAppBundle), code, raw_code: String(hit.raw_code || code), prod_code: String(hit.prod_code || code), widgets: Array.isArray(hit.widgets) ? (hit.widgets as DataAppBundle['widgets']) : [] }
+}
+
+export function extractCaSelectionFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): { agentId: string; agentName?: string; rationale?: string } | null {
+  const hit = parseTaggedJsonObjects(collectInteractionTextCandidates(interaction), /<CA_AGENT_SELECTION>([\s\S]*?)<\/CA_AGENT_SELECTION>/gi)
+    .find((p) => { const id = String(p.agent_id || p.agentId || p.id || '').trim(); return Boolean(id && !/^(?:none|null)$/i.test(id)) })
+  if (!hit) return null
+  const agentId = String(hit.agent_id || hit.agentId || hit.id || '').trim()
+  const agentName = typeof (hit.agent_name || hit.agentName) === 'string' ? String(hit.agent_name || hit.agentName).trim() : undefined
+  const rationale = typeof (hit.rationale || hit.reason) === 'string' ? String(hit.rationale || hit.reason).trim() : undefined
+  return { agentId, ...(agentName ? { agentName } : {}), ...(rationale ? { rationale } : {}) }
 }
 
 export function extractAlertBundleFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): AlertInspectorBundle | null {

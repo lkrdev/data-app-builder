@@ -11,17 +11,14 @@ import { openContentLinkTargetInViewer, parseInViewerLookerLink } from '../../co
 import {
   createDeduplicatedLookerSdkProxy,
   extractDeletedLookerResources,
-  extractResolvedUseCase,
   formatLookerErrorDetail,
   hasMutatingCodeModeRequest,
   isLooker404Error,
   isLookerInstanceMetadataQuery,
   LOOKER_INSTANCE_ADMIN_OP_RE,
-  matchExplicitUseCaseRule,
   reconcileDeletedLookerContent,
   saveDashboardStudioMetadata,
   shouldOfferReusableScriptPrompt,
-  shouldRouteToIsolatedCaSubagent,
   StudioContentItem,
   unwrapLookerRawResponse,
   upsertPublishedDataApp,
@@ -58,27 +55,11 @@ export function registerPermissionsPart23Tests(): void {
     ]
     for (const p of tileMetadataPrompts) {
       expect(isLookerInstanceMetadataQuery(p)).toBe(true)
-      expect(matchExplicitUseCaseRule(p)).toBe('tile')
-      expect(extractResolvedUseCase('', p)).toBe('tile')
-      expect(shouldRouteToIsolatedCaSubagent({ prompt: p, explicitUseCase: 'auto', isFirstTurn: true })).toBe(false)
     }
 
-    // Non-regression: analytical root-cause stays data-investigator, 3-Pillar stays health-check
+    // Non-regression: analytical root-cause & 3-Pillar health check are not instance metadata queries
     expect(isLookerInstanceMetadataQuery('Find out what drove Q4 returns')).toBe(false)
-    expect(extractResolvedUseCase('', 'Find out what drove Q4 returns')).toBe('data-investigator')
     expect(isLookerInstanceMetadataQuery('Run a 3-pillar health check on thelook')).toBe(false)
-    expect(extractResolvedUseCase('', 'Run a 3-pillar health check on thelook')).toBe('health-check')
-    expect(extractResolvedUseCase('', 'Run a health check and generate TECHNICAL_DESIGN_DOCUMENT.md')).toBe('health-check')
-
-    // Read-only see_lookml user (allowedModes excludes 'lookml' while allowing 'tile') routes LookML inspection & slash skills to 'tile'
-    const readOnlyLookmlAllowed = ['app', 'data-investigator', 'dashboard', 'tile', 'conversational-analytics']
-    expect(matchExplicitUseCaseRule('Inspect the LookML dimensions in order_items.view.lkml', readOnlyLookmlAllowed)).toBe('tile')
-    expect(extractResolvedUseCase('', 'Show sql_table_name in derived_table for users', readOnlyLookmlAllowed)).toBe('tile')
-    expect(extractResolvedUseCase('', '/lookml-reviewer audit order_items.view.lkml', readOnlyLookmlAllowed)).toBe('tile')
-    expect(extractResolvedUseCase('', '/snowflake-to-bigquery-converter check order_items.view.lkml', readOnlyLookmlAllowed)).toBe('tile')
-    expect(extractResolvedUseCase('', '/looker-performance-optimizer audit explores', readOnlyLookmlAllowed)).toBe('tile')
-    expect(extractResolvedUseCase('<USE_CASE>lookml</USE_CASE>\nInspected LookML.', 'Check model', readOnlyLookmlAllowed)).toBe('tile')
-    expect(extractResolvedUseCase('', 'Create a LookML dashboard for revenue', readOnlyLookmlAllowed)).toBe('dashboard')
 
     // 2. executedCodeModeByCode canonicalizes args.vars: distinct vars execute both calls; reordered identical vars deduplicate
     let transportFolderCalls = 0
@@ -135,7 +116,7 @@ export function registerPermissionsPart23Tests(): void {
           return {
             ok: true,
             status: 200,
-            body: JSON.stringify({ id: 'int_215_vars_2', environment_id: 'env_215', status: 'completed', output_text: '<USE_CASE>tile</USE_CASE>Inspected folders.' }),
+            body: JSON.stringify({ id: 'int_215_vars_2', environment_id: 'env_215', status: 'completed', output_text: 'Inspected folders.' }),
           }
         },
       },
@@ -196,7 +177,7 @@ export function registerPermissionsPart23Tests(): void {
                 id: `int_perm_${stepIdx}`,
                 environment_id: 'env_215',
                 status: 'completed',
-                output_text: '<USE_CASE>dashboard</USE_CASE>\n<NATIVE_CONTENT_BUNDLE>{"id":"501","content_type":"dashboard","title":"Exec"}</NATIVE_CONTENT_BUNDLE>',
+                output_text: '<NATIVE_CONTENT_BUNDLE>{"id":"501","content_type":"dashboard","title":"Exec"}</NATIVE_CONTENT_BUNDLE>',
               }),
             }
           },

@@ -239,7 +239,7 @@ function registerVisualPart05Tests(ctx) {
     expect(existsSync(scratchSnapPath)).toBe(true)
   }, 15000)
 
-  test('renders StudioSelect styled dropdowns, split + New Conversation use-case action menu, and SVG icon theme menu (Issue #60)', async () => {
+  test('renders StudioSelect styled dropdowns, single + New Conversation button, and SVG icon theme menu (Issue #60)', async () => {
     ctx.chrome.close()
     ctx.chrome = await startHeadlessChrome()
     const url = `http://127.0.0.1:${ctx.port}/?scenario=data_app`
@@ -263,10 +263,9 @@ function registerVisualPart05Tests(ctx) {
         await new Promise((r) => setTimeout(r, 100));
 
         const noSplitTrigger = !document.querySelector('[data-testid="new-conversation-menu-trigger"]');
-        const noNewConvMenu = !document.querySelector('[data-testid="new-conversation-use-case-menu"]');
         const hasSingleNewConvBtn = Boolean(document.querySelector('[data-testid="new-conversation-btn"]'));
         const hasInfoBtnInComposer = Boolean(
-          document.querySelector('.dab-composer-actions [data-testid="use-case-info-btn"]')
+          document.querySelector('.dab-composer-actions [data-testid="studio-capabilities-btn"]')
         );
 
         const themeSelect = document.querySelector('[data-testid="topbar-theme-select"]');
@@ -298,7 +297,6 @@ function registerVisualPart05Tests(ctx) {
 
         return {
           noSplitTrigger,
-          noNewConvMenu,
           hasSingleNewConvBtn,
           hasInfoBtnInComposer,
           themeTriggerSvg,
@@ -315,7 +313,6 @@ function registerVisualPart05Tests(ctx) {
 
     expect(openMenusRes.result.value).toMatchObject({
       noSplitTrigger: true,
-      noNewConvMenu: true,
       hasSingleNewConvBtn: true,
       hasInfoBtnInComposer: true,
       themeTriggerSvg: 'system',
@@ -360,18 +357,17 @@ function registerVisualPart05Tests(ctx) {
           .querySelector('[data-testid="topbar-theme-select"] .dab-studio-select-trigger svg')
           ?.getAttribute('data-theme-icon');
 
-        // 2. Click + New Conversation button -> routes to '/' with 'auto' useCase
+        // 2. Click + New Conversation button -> routes to '/'
         document.querySelector('[data-testid="new-conversation-btn"]')?.click();
         await new Promise((r) => setTimeout(r, 120));
         const routeAfterNewConv = window.__DAB_STUDIO__.history.location.pathname;
         const hasCenteredPrompt = Boolean(document.querySelector('[data-testid="centered-empty-prompt"]'));
-        const presetUseCase = window.__DAB_STUDIO__.selectedUseCase;
 
-        // 3. Click '?' capabilities guide button inside .dab-composer-actions -> opens UseCaseInfoModal
-        document.querySelector('.dab-composer-actions [data-testid="use-case-info-btn"]')?.click();
+        // 3. Click '?' capabilities guide button inside .dab-composer-actions -> opens StudioCapabilitiesModal
+        document.querySelector('.dab-composer-actions [data-testid="studio-capabilities-btn"]')?.click();
         await new Promise((r) => setTimeout(r, 80));
-        const hasInfoModal = Boolean(document.querySelector('[data-testid="use-case-info-modal"]'));
-        document.querySelector('[data-testid="use-case-info-close"]')?.click();
+        const hasCapabilitiesModal = Boolean(document.querySelector('[data-testid="studio-capabilities-modal"]'));
+        document.querySelector('[data-testid="studio-capabilities-close-btn"]')?.click();
         await new Promise((r) => setTimeout(r, 60));
 
         return {
@@ -381,8 +377,7 @@ function registerVisualPart05Tests(ctx) {
           iconAfterLightClick,
           routeAfterNewConv,
           hasCenteredPrompt,
-          presetUseCase,
-          hasInfoModal
+          hasCapabilitiesModal
         };
       })()`,
       awaitPromise: true,
@@ -396,8 +391,7 @@ function registerVisualPart05Tests(ctx) {
       iconAfterLightClick: 'light',
       routeAfterNewConv: '/',
       hasCenteredPrompt: true,
-      presetUseCase: 'auto',
-      hasInfoModal: true
+      hasCapabilitiesModal: true
     })
   }, 15000)
 
@@ -408,7 +402,7 @@ function registerVisualPart05Tests(ctx) {
     const deadline = Date.now() + 8000
     while (Date.now() < deadline) {
       const r = await ctx.chrome.send('Runtime.evaluate', {
-        expression: `Boolean(document.querySelector('.dab-ds-card') && document.querySelector('[data-testid="use-case-info-btn"]'))`,
+        expression: `Boolean(document.querySelector('.dab-ds-card') && document.querySelector('[data-testid="studio-capabilities-btn"]'))`,
         returnByValue: true
       })
       if (r.result && r.result.value) break
@@ -440,15 +434,12 @@ function registerVisualPart05Tests(ctx) {
         const deleteBtnHasLucideSvg = Boolean(document.querySelector('[data-testid^="delete-conv-"] svg.lucide'));
         const hasDecorativeEmoji = /[✨🛡️⚡🟢📊📈💬🧩🩺🐍📝🧪📸🧱🔄⏰🤖📖👤📁🔍📥🗑️]/u.test(document.body?.innerText || '');
 
-        // 3. Open UseCaseInfoModal (built on StudioModal) and verify StudioDocPreview + Data Investigator tab inside it
-        document.querySelector('[data-testid="use-case-info-btn"]').click();
+        // 3. Open tabless StudioCapabilitiesModal (built on StudioModal) and verify StudioDocPreview + Data Investigator preview inside it
+        document.querySelector('[data-testid="studio-capabilities-btn"]').click();
         await new Promise((r) => setTimeout(r, 100));
-        const modal = document.querySelector('[data-testid="use-case-info-modal"]');
+        const modal = document.querySelector('[data-testid="studio-capabilities-modal"]');
         const hasModalHeader = Boolean(modal && modal.querySelector('.dab-ds-modal-header'));
-        const invTab = modal && modal.querySelector('[data-testid="use-case-guide-tab-data-investigator"]');
-        const hasInvestigatorGuideTab = Boolean(invTab);
-        if (invTab) invTab.click();
-        await new Promise((r) => setTimeout(r, 80));
+        const noModalTabs = Boolean(modal && !modal.querySelector('[role="tab"]'));
         const hasInvestigatorDocSlidesPreview = Boolean(
           modal && modal.querySelector('[data-testid="data-investigator-doc-slides-preview"]')
         );
@@ -470,7 +461,7 @@ function registerVisualPart05Tests(ctx) {
           deleteBtnHasLucideSvg,
           hasDecorativeEmoji,
           hasModalHeader,
-          hasInvestigatorGuideTab,
+          noModalTabs,
           hasInvestigatorDocSlidesPreview,
           hasDocPreview,
           clip
@@ -488,7 +479,7 @@ function registerVisualPart05Tests(ctx) {
       deleteBtnHasLucideSvg: true,
       hasDecorativeEmoji: false,
       hasModalHeader: true,
-      hasInvestigatorGuideTab: true,
+      noModalTabs: true,
       hasInvestigatorDocSlidesPreview: true,
       hasDocPreview: true
     })
@@ -511,7 +502,7 @@ function registerVisualPart05Tests(ctx) {
       expression: `(async () => {
         document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
         await new Promise((r) => setTimeout(r, 80));
-        return Boolean(document.querySelector('[data-testid="use-case-info-modal"]'));
+        return Boolean(document.querySelector('[data-testid="studio-capabilities-modal"]'));
       })()`,
       awaitPromise: true,
       returnByValue: true

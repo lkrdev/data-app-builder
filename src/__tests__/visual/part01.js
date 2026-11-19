@@ -124,7 +124,7 @@ function registerVisualPart01Tests(ctx) {
     expect(fullPageEntry.clipSelector).toBeUndefined()
   })
 
-  test('enables/disables individual tool modes via /config and filters use-case-selector options, catalog & routes', async () => {
+  test('enables/disables individual tool modes via /config and filters catalog & routes', async () => {
     ctx.chrome.close()
     ctx.chrome = await startHeadlessChrome()
     const url = `http://127.0.0.1:${ctx.port}/?scenario=config_page`
@@ -153,7 +153,6 @@ function registerVisualPart01Tests(ctx) {
         );
         if (saveBtn) saveBtn.click();
         await new Promise((r) => setTimeout(r, 150));
-        const useCaseOptionsAfterSave = (window.__DAB_STUDIO__.useCaseOptions || []).map((o) => o.value);
         const text = document.body ? document.body.innerText : '';
         // Navigate to disabled route /lookml/20261030_dev_branch and verify redirect back to '/'
         window.__DAB_STUDIO__.history.push('/lookml/20261030_dev_branch');
@@ -162,7 +161,6 @@ function registerVisualPart01Tests(ctx) {
         const noTopbarModeSwitcher = !document.querySelector('.dab-mode-switcher');
         return {
           savedDisabledModes: window.__LAST_SAVED_CONTEXT_DATA__?.disabledModes || [],
-          useCaseOptionsAfterSave,
           hasFilteredCatalogCount: text.includes('Conversations (2)') && !document.querySelector('.dab-catalog-bar'),
           routeAfterDisabledPush,
           noTopbarModeSwitcher
@@ -174,13 +172,6 @@ function registerVisualPart01Tests(ctx) {
 
     expect(afterSave.result.value).toEqual({
       savedDisabledModes: ['lookml', 'health', 'tile'],
-      useCaseOptionsAfterSave: [
-        'auto',
-        'dashboard',
-        'conversational-analytics',
-        'app',
-        'data-investigator'
-      ],
       hasFilteredCatalogCount: true,
       routeAfterDisabledPush: '/',
       noTopbarModeSwitcher: true
@@ -389,8 +380,6 @@ function registerVisualPart01Tests(ctx) {
         const newBtn = document.querySelector('[data-testid="new-conversation-btn"]');
         if (newBtn) newBtn.click();
         await new Promise((r) => setTimeout(r, 80));
-        window.__DAB_STUDIO__.setSelectedUseCase('dashboard');
-        await new Promise((r) => setTimeout(r, 50));
 
         const ta = document.querySelector('[data-testid="studio-prompt-input"]');
         const taSetter = (Object.getOwnPropertyDescriptor(ta, 'value') || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')).set;
@@ -410,7 +399,7 @@ function registerVisualPart01Tests(ctx) {
         }
 
         const labelCall = (window.__INTERACTION_CALLS__ || []).find((c) =>
-          ((c.body && c.body.input && c.body.input[0] && c.body.input[0].text) || '').includes('[CONVERSATION_LABEL_REQUEST]')
+          ((c.body && c.body.input && c.body.input[0] && c.body.input[0].text) || '').trimStart().startsWith('[CONVERSATION_LABEL_REQUEST]')
         );
         const convUpdates = (window.__ARTIFACT_UPDATES__ || []).filter((u) => u.key === 'user_conversations:1');
         const latestConvList = convUpdates.length > 0 ? JSON.parse(convUpdates[convUpdates.length - 1].value) : [];
@@ -525,14 +514,13 @@ function registerVisualPart01Tests(ctx) {
     writeFileSync(issue47Screenshot, pngBuffer)
     expect(existsSync(issue47Screenshot)).toBe(true)
 
-    // Click previous conversation (conv_dashboard_7) -> routes to /c/7, restores chat & preview without topbar use-case badge
+    // Click previous conversation (conv_dashboard_7) -> routes to /c/conv_dashboard_7, restores chat & preview
     const step2 = await ctx.chrome.send('Runtime.evaluate', {
       expression: `(async () => {
         const item = document.querySelector('[data-testid="conversation-item-conv_dashboard_7"]');
         if (item) item.click();
         await new Promise((r) => setTimeout(r, 200));
-        const noTopbarBadge = !document.querySelector('[data-testid="topbar-use-case-badge"]');
-        const selectedUseCaseAfterSelect = window.__DAB_STUDIO__.selectedUseCase;
+        const noModeSwitcher = !document.querySelector('.dab-mode-switcher');
         const routeAfterSelect = window.__DAB_STUDIO__.history.location.pathname;
         const centeredGone = !document.querySelector('[data-testid="centered-empty-prompt"]');
         const bodyText = document.body ? document.body.innerText : '';
@@ -542,17 +530,14 @@ function registerVisualPart01Tests(ctx) {
         window.__DAB_STUDIO__.history.push('/lookml/20261030_dev_branch');
         await new Promise((r) => setTimeout(r, 150));
         const redirectedLegacyRoute = window.__DAB_STUDIO__.history.location.pathname;
-        const lookmlUseCase = window.__DAB_STUDIO__.selectedUseCase;
 
         return {
-          noTopbarBadge,
-          selectedUseCaseAfterSelect,
+          noModeSwitcher,
           routeAfterSelect,
           centeredGone,
           restoredChatMsg: bodyText.includes('Created native Looker Dashboard #7'),
           restoredPreview,
-          redirectedLegacyRoute,
-          lookmlUseCase
+          redirectedLegacyRoute
         };
       })()`,
       awaitPromise: true,
@@ -560,14 +545,12 @@ function registerVisualPart01Tests(ctx) {
     })
 
     expect(step2.result.value).toEqual({
-      noTopbarBadge: true,
-      selectedUseCaseAfterSelect: 'dashboard',
+      noModeSwitcher: true,
       routeAfterSelect: '/c/conv_dashboard_7',
       centeredGone: true,
       restoredChatMsg: true,
       restoredPreview: true,
-      redirectedLegacyRoute: '/c/20261030_dev_branch',
-      lookmlUseCase: 'lookml'
+      redirectedLegacyRoute: '/c/20261030_dev_branch'
     })
   }, 15000)
 

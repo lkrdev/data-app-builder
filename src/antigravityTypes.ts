@@ -240,7 +240,7 @@ export function isEnvironmentNotFoundError(err: unknown): boolean {
 
 export const stripControlTags = (rawText: string): string =>
   String(rawText || '')
-    .replace(/<(USE_CASE|CA_AGENT_SELECTION|DATA_APP_BUNDLE|NATIVE_CONTENT_BUNDLE|LOOKML_BUNDLE|ALERT_BUNDLE|HEALTH_CHECK_TDD|LKR_EXTENSION_TOOL_REQUEST)>[\s\S]*?<\/\1>/gi, '')
+    .replace(/<(CA_AGENT_SELECTION|DATA_APP_BUNDLE|NATIVE_CONTENT_BUNDLE|LOOKML_BUNDLE|ALERT_BUNDLE|HEALTH_CHECK_TDD|LKR_EXTENSION_TOOL_REQUEST)>[\s\S]*?<\/\1>/gi, '')
     .trim()
 
 export type CodeModePermissionDecision =

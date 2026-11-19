@@ -533,10 +533,8 @@ function registerVisualPart10Tests(ctx) {
           onboardingTitle.endsWith('(skills/looker-project-onboarding/SKILL.md)') &&
           !onboardingTitle.includes('—');
 
-        // Also check DOC_UI_COMPONENTS.LookmlTurnSkills inside UseCaseInfoModal
-        document.querySelector('.dab-composer-actions [data-testid="use-case-info-btn"]')?.click();
-        await new Promise((r) => setTimeout(r, 60));
-        document.querySelector('[data-testid="use-case-guide-tab-lookml"]')?.click();
+        // Also check DOC_UI_COMPONENTS.LookmlTurnSkills inside StudioCapabilitiesModal
+        document.querySelector('.dab-composer-actions [data-testid="studio-capabilities-btn"]')?.click();
         await new Promise((r) => setTimeout(r, 60));
         const docPreview = document.querySelector('[data-testid="doc-slash-skill-menu-preview"]');
         const docPreviewText = docPreview?.textContent || '';

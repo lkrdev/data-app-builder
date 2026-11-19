@@ -182,7 +182,8 @@ ${buildMockFixturesScript(scenario)}
             if (hit) return { ok: true, status: 200, body: JSON.stringify(hit) };
           }
           const inputText = (body && body.input && body.input[0] && body.input[0].text) || '';
-          if (inputText.includes('[CA_AGENT_SELECTION_REQUEST]')) {
+          const trimmedInput = inputText.trimStart();
+          if (trimmedInput.startsWith('[CA_AGENT_SELECTION_REQUEST]') || inputText.includes('Ask the Conversational Analytics CA agent:')) {
             return {
               ok: true,
               status: 200,
@@ -193,7 +194,7 @@ ${buildMockFixturesScript(scenario)}
               })
             };
           }
-          if (inputText.includes('[CONVERSATION_LABEL_REQUEST]')) {
+          if (trimmedInput.startsWith('[CONVERSATION_LABEL_REQUEST]')) {
             return {
               ok: true,
               status: 200,
@@ -204,12 +205,24 @@ ${buildMockFixturesScript(scenario)}
               })
             };
           }
-          if (inputText.includes('[SKILL_SYNC:')) {
+          if (trimmedInput.startsWith('[SKILL_SYNC:')) {
             const marker = (inputText.match(/reply with ((?:CHUNK_OK:\\d+|SYNC_OK:[0-9a-f]+))/) || [])[1] || 'SYNC_OK';
             return {
               ok: true,
               status: 200,
               body: JSON.stringify({ id: 'int_skill_sync_1', environment_id: (body && body.environment) || 'env_42', status: 'completed', output_text: marker })
+            };
+          }
+          if (inputText.includes('order_items.view.lkml')) {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({
+                id: 'int_turn1_lookml',
+                environment_id: 'env_42',
+                status: 'completed',
+                output_text: 'Added gross_margin measure to order_items.view.lkml.\\n<LOOKML_BUNDLE>{"id":"deploytobarerepo_temp","title":"Order Items Measures","project_id":"deploytobarerepo_temp","model_name":"thelook","branch_name":"dev_1","files":[{"path":"views/order_items.view.lkml","action":"updated","content":"view: order_items {}","diff":"@@ -1 +1 @@"}],"validation":{"passed":true,"error_count":0,"errors":[]},"tests":[],"queries":[]}</LOOKML_BUNDLE>'
+              })
             };
           }
           return {
@@ -496,7 +509,7 @@ const scenarios = [
       snapshotName: '02-mode-native-dashboard-builder-snap.png',
       expectText: [
         'Executive Order Performance (Native UDD)',
-        'Update Content'
+        'Send Message'
       ]
     },
     {
@@ -509,7 +522,7 @@ const scenarios = [
         'LookML: deploytobarerepo_temp',
         'bronze/orders.refinement.lkml',
         'total_revenue',
-        'Update LookML'
+        'Send Message'
       ]
     },
     {
@@ -538,7 +551,7 @@ const scenarios = [
         'Schedule Script',
         'Publish Dashboard',
         'Run Python',
-        'Ask AI',
+        'Send Message',
         'Scheduled: 0 8 * * * · summary',
         'agentic_thelook'
       ]
@@ -613,7 +626,7 @@ const scenarios = [
         '/lookml-field-curation',
         '/lookml-tests',
         '/lookml-snapshot',
-        'Run Agentic LookML'
+        'Send Message'
       ]
     },
     {
@@ -674,13 +687,13 @@ const scenarios = [
         'BigQuery Streaming Buffer & Order Revenue Q&A',
         'Agent: eCommerce & BigQuery Analytics Agent (ca_agent_ecommerce)',
         'Isolated Sub-Agent Selection:',
-        'Ask CA Agent'
+        'Send Message'
       ]
     },
     {
       id: 'centered_empty_prompt',
       category: 'Chat Bar States',
-      title: '17. Centered New-Conversation Empty Prompt Box (Use-Case Selector, Input & Actions)',
+      title: '17. Centered New-Conversation Empty Prompt Box (Open-Ended Input & Actions)',
       snapshotName: '17-centered-empty-prompt-snap.png',
       clipSelector: '.dab-empty-prompt-card',
       expectText: [

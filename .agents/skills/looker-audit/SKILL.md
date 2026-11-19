@@ -7,7 +7,7 @@ description: Audit a Looker instance for query performance, dashboard complexity
 
 Use this skill when auditing a Looker instance for slow or high-complexity dashboards, excessive `dynamic_fields` (table calculations / custom fields), unused or broken content, failing schedules, and datagroup/PDT errors via `run_looker_codemode`.
 
-Always route instance audit turns to `<USE_CASE>tile</USE_CASE>` and execute Looker SDK and `system__activity` queries via `run_looker_codemode`.
+Execute Looker SDK and `system__activity` governance audit queries via `run_looker_codemode`.
 
 ## 1. Execution Contract & Empirical Integrity Rules
 

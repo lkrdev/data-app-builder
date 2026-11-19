@@ -13,7 +13,7 @@ import {
   formatThinkingTraceMarkdown, isConnectionSchemaDiscoveryPrompt, isNewProjectOnboardingIntakePrompt, LkrCodeMode,
   LOOKER_DASHBOARD_SKILL_MD, LOOKER_PROJECT_ONBOARDING_SKILL_MD, runAntigravityTurn,
 } from '../../antigravity'
-import { DOC_UI_COMPONENTS, StudioMarkdown, USE_CASE_GUIDES } from '../../components/StudioWorkspace'
+import { DOC_UI_COMPONENTS, STUDIO_CAPABILITIES_MARKDOWN, StudioMarkdown } from '../../components/StudioWorkspace'
 import { clearLookerMetadataCache } from '../../lookerApi'
 import { LookmlPreviewPane } from '../../lookmlTool'
 
@@ -198,7 +198,7 @@ export function registerPermissionsPart11Tests(): void {
               id: 'int_157_t1',
               status: 'completed',
               output_text:
-                '<USE_CASE>lookml</USE_CASE>\nAvailable connection: `bq_warehouse`. Please provide project name and target schema.',
+                'Available connection: `bq_warehouse`. Please provide project name and target schema.',
             }),
           }
         }
@@ -209,7 +209,7 @@ export function registerPermissionsPart11Tests(): void {
             body: JSON.stringify({
               id: 'int_157_t2',
               status: 'completed',
-              output_text: '<USE_CASE>lookml</USE_CASE>\nAccessible schemas on `bq_warehouse`: `analytics`, `finance`.',
+              output_text: 'Accessible schemas on `bq_warehouse`: `analytics`, `finance`.',
             }),
           }
         }
@@ -227,7 +227,7 @@ export function registerPermissionsPart11Tests(): void {
                   '<LOOKML_BUNDLE>{"id":"sales_core_1","title":"sales_core","project_id":"sales_core","model_name":"sales_core","files":[{"path":"sales_core.model.lkml","action":"created","content":"connection: \\"bq_warehouse\\"\\n"}]}</LOOKML_BUNDLE>',
               },
             ],
-            output_text: '<USE_CASE>lookml</USE_CASE>\nCreated Bronze views. Want me to profile the data?',
+            output_text: 'Created Bronze views. Want me to profile the data?',
           }),
         }
       },
@@ -240,8 +240,7 @@ export function registerPermissionsPart11Tests(): void {
       auth: { mode: 'apikey', apiKey: 'key-157' },
       session: {},
       thinkingLevel: 'high',
-      useCase: 'auto',
-      toolMode: 'lookml',
+      canDevelop: true,
       selectedExplores: [],
       schemaMarkdown: '',
       userPrompt: 'I need to create a new project',
@@ -257,7 +256,6 @@ export function registerPermissionsPart11Tests(): void {
     expect(postedBodies[0].input?.[0]?.text?.startsWith('[THINKING LEVEL: LOW')).toBe(true)
     expect(postedBodies[0].input?.[0]?.text).toContain('`bq_warehouse` (bigquery_standard_sql · corp_dw · analytics)')
     expect(postedBodies[0].input?.[0]?.text).toContain('<USER_MESSAGE>I need to create a new project</USER_MESSAGE>')
-    expect(t1Res.resolvedUseCase).toBe('lookml')
     expect(t1Res.rootInteractionId).toBe('int_157_t1')
     expect(t1Res.session.statelessTurn).toBeUndefined()
 
@@ -268,8 +266,7 @@ export function registerPermissionsPart11Tests(): void {
       auth: { mode: 'apikey', apiKey: 'key-157' },
       session: t1Res.session,
       thinkingLevel: 'high',
-      useCase: 'auto',
-      toolMode: 'lookml',
+      canDevelop: true,
       selectedExplores: [],
       schemaMarkdown: '',
       priorMessages: [
@@ -293,8 +290,7 @@ export function registerPermissionsPart11Tests(): void {
       auth: { mode: 'apikey', apiKey: 'key-157' },
       session: t2Res.session,
       thinkingLevel: 'high',
-      useCase: 'auto',
-      toolMode: 'lookml',
+      canDevelop: true,
       selectedExplores: [],
       schemaMarkdown: '',
       priorMessages: [
@@ -358,7 +354,7 @@ export function registerPermissionsPart11Tests(): void {
     expect(withoutProjectHtml).not.toContain('data-testid="lookml-open-ide-btn"')
   })
 
-  test('63. Issue #156: routes clipboard copies via copyTextWithExtensionSdk, parses GFM pipe tables / <hr> / <ol start>, walks full sandbox interaction chains via fetchConversationSandboxDebugMarkdown, and refreshes LookmlTurnSkills & UseCaseInfoModal guides', async () => {
+  test('63. Issue #156: routes clipboard copies via copyTextWithExtensionSdk, parses GFM pipe tables / <hr> / <ol start>, walks full sandbox interaction chains via fetchConversationSandboxDebugMarkdown, and refreshes LookmlTurnSkills & StudioCapabilitiesModal guides', async () => {
     // 1. copyTextWithExtensionSdk: extensionSDK.clipboardWrite first, navigator.clipboard.writeText fallback
     const extCopied: string[] = []
     const navCopied: string[] = []
@@ -501,7 +497,6 @@ export function registerPermissionsPart11Tests(): void {
       auth: { mode: 'apikey', apiKey: 'test_key' },
       conversationId: 'conv_app_42',
       label: 'Executive Revenue App',
-      useCase: 'app',
       model: 'gemini-3.8-flash',
       thinkingLevel: 'high',
       lastInteractionId: 'int_turn_2',
@@ -530,16 +525,16 @@ export function registerPermissionsPart11Tests(): void {
     // Static /workspace/skills/data-apps/SKILL.md was NOT fetched over network
     expect(proxyCalls.some((u) => u.includes('skills/data-apps'))).toBe(false)
 
-    // 4. Refreshed DOC_UI_COMPONENTS.LookmlTurnSkills & USE_CASE_GUIDES
+    // 4. Refreshed DOC_UI_COMPONENTS.LookmlTurnSkills & STUDIO_CAPABILITIES_GUIDE
     const slashPreview = DOC_UI_COMPONENTS.LookmlTurnSkills() as Elem
     expect(slashPreview.props['data-testid']).toBe('doc-slash-skill-menu-preview')
     const previewJson = JSON.stringify(slashPreview)
     for (const skId of ['/looker-project-onboarding', '/lookml-field-curation', '/lookml-tests']) {
       expect(previewJson).toContain(skId)
     }
-    expect(USE_CASE_GUIDES.lookml.markdown).toContain('/looker-project-onboarding')
-    expect(USE_CASE_GUIDES.auto.markdown).toContain('@explore:')
-    expect(USE_CASE_GUIDES.dashboard.markdown).toContain('LookML Dashboards')
+    expect(STUDIO_CAPABILITIES_MARKDOWN).toContain('/looker-project-onboarding')
+    expect(STUDIO_CAPABILITIES_MARKDOWN).toContain('@explore:')
+    expect(STUDIO_CAPABILITIES_MARKDOWN).toContain('LookML Dashboards')
   })
 
 }

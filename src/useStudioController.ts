@@ -11,11 +11,11 @@ import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
 import { loadHealthCheckArtifact } from './healthCheck'
 import {
   archiveUserConversation, ConversationRecord, copyTextWithExtensionSdk,
-  deleteLocalDraftScript, deleteUserConversation, getArtifactNamespace, getConvTargetId, getUseCaseLabel,
+  deleteLocalDraftScript, deleteUserConversation, getArtifactNamespace, getConvTargetId,
   hydrateConversationContentItems, isLookmlTargetAlreadyLoaded, isUserConversationDeleted, loadAlertArtifact,
   loadExistingDashboardApp, loadLocalDraftScript, loadScriptArtifact, normalizeStudioContentItem,
   readInFlightConvIds, resolveConversationRelatedContent, saveUserConversation, searchGlobalContentV2,
-  STUDIO_OVERVIEW_TAB_KEY, StudioContentItem, studioModeToUseCase, StudioUseCase,
+  STUDIO_OVERVIEW_TAB_KEY, StudioContentItem,
 } from './lookerApi'
 import { loadLookmlSessionArtifact } from './lookmlTool'
 import {
@@ -61,8 +61,7 @@ export function useStudioController() {
 
   const {
     extensionSDK, core40SDK, history, location, isTileMount, selectedModel, thinkingLevel,
-    resolvedUseCaseByIdRef, parsedRoute, setSelectedUseCase, explicitUseCaseRef,
-    setRightPaneCollapsed, setSidebarCollapsed,
+    parsedRoute, setRightPaneCollapsed, setSidebarCollapsed,
     sharedEnvIdRef, agentSession, agentSessionRef, messages, setAgentSession, setMessages,
     getAuthCfg, selectEpochRef, getConvMessages, setConvMessages, deleteConvMessages,
     busyStatus, activeConversationId, activeConversationIdRef, setActiveConversationId,
@@ -254,7 +253,7 @@ export function useStudioController() {
       extensionSDK,
       auth: getAuthCfg(),
       conversationId: activeConversationId || activeConv?.id, label: activeConv?.label,
-      useCase: activeConv?.use_case || auth.selectedUseCase, model: selectedModel, thinkingLevel,
+      model: selectedModel, thinkingLevel,
       environmentId: envId, lastInteractionId: latestTurnId, messages,
       liveActivitySteps: liveActivitySteps.length ? liveActivitySteps : liveActivityStepsRef.current, busyStatus, contentItems,
     }).then(
@@ -268,16 +267,15 @@ export function useStudioController() {
       () => setCopyThreadState('idle')
     )
   }, [
-    activeConversationId, agentSession, auth.selectedUseCase, busyStatus,
+    activeConversationId, agentSession, busyStatus,
     contentItems, conversations, extensionSDK, getAuthCfg, latestTurnInteractionRef, liveActivitySteps, liveActivityStepsRef, messages, selectedModel,
     sharedEnvIdRef, thinkingLevel,
   ])
 
   const handleResetNewApp = useCallback(
-    (_resetToDefaultRoute?: boolean | React.MouseEvent, presetUseCase?: StudioUseCase) => {
+    (_resetToDefaultRoute?: boolean | React.MouseEvent) => {
       if (location.pathname === '/config' && (!auth.isConfigured || Boolean(busyStatus))) return
       selectEpochRef.current += 1
-      const nextUseCase: StudioUseCase = typeof presetUseCase === 'string' && presetUseCase ? presetUseCase : 'auto'
       const freshConvId = nextStudioConvId()
       hydratedConvRouteRef.current = ''
       if (location.pathname !== '/') history.replace('/')
@@ -313,20 +311,17 @@ export function useStudioController() {
       setMessages([])
       setPastedImages([])
       setPrompt('')
-      explicitUseCaseRef.current = nextUseCase
-      setSelectedUseCase(nextUseCase)
       if (typeof window !== 'undefined' && window.innerWidth <= 768) setSidebarCollapsed(true)
     },
-    [auth.isConfigured, busyStatus, explicitUseCaseRef, history, hydratedConvRouteRef, lastCaIdRef, lastHealthIdRef, lastLookmlIdRef, lastNativeIdRef, lastPublishedIdRef, lastScriptIdRef, location.pathname, selectEpochRef, setActivatedLookmlSkills, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setCaConversation, setContentItems, setCurrentAppCode, setHealthReport, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMentionedItems, setMessages, setNativeContentState, setPastedImages, setPrompt, setPublishedAppState, setPublishedTileDash, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef]
+    [auth.isConfigured, busyStatus, history, hydratedConvRouteRef, lastCaIdRef, lastHealthIdRef, lastLookmlIdRef, lastNativeIdRef, lastPublishedIdRef, lastScriptIdRef, location.pathname, selectEpochRef, setActivatedLookmlSkills, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setCaConversation, setContentItems, setCurrentAppCode, setHealthReport, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMentionedItems, setMessages, setNativeContentState, setPastedImages, setPrompt, setPublishedAppState, setPublishedTileDash, setSelectedExplores, setSidebarCollapsed, sharedEnvIdRef]
   )
 
   const handleNewConversation = useCallback(
-    (presetUseCase?: StudioUseCase | React.MouseEvent) =>
-      handleResetNewApp(true, typeof presetUseCase === 'string' ? presetUseCase : 'auto'),
+    (_ev?: React.MouseEvent) => handleResetNewApp(true),
     [handleResetNewApp]
   )
 
-  turn.onResetAppStateRef.current = () => handleResetNewApp(true, 'auto')
+  turn.onResetAppStateRef.current = () => handleResetNewApp(true)
   turn.onClearSandboxFileCacheRef.current = () => {
     sandboxMarkdownCacheRef.current = {}
     setSandboxMarkdownCache({})
@@ -449,13 +444,9 @@ export function useStudioController() {
       const myEpoch = ++selectEpochRef.current
       setActiveViewerDocument(null)
       if (typeof window !== 'undefined' && window.innerWidth <= 768) setSidebarCollapsed(true)
-      const useCase = studioModeToUseCase(conv.type)
       const mode = normalizeCatalogMode(conv.type)
       const liveTurn = inFlightTurnsRef.current.get(conv.id)
       if (liveTurn) {
-        resolvedUseCaseByIdRef.current[conv.id] = useCase
-        explicitUseCaseRef.current = 'auto'
-        setSelectedUseCase(useCase)
         setActiveConversationId(conv.id)
         const targetPath = `/c/${encodeURIComponent(conv.id)}`
         hydratedConvRouteRef.current = `${targetPath}:${conv.id}`
@@ -477,14 +468,11 @@ export function useStudioController() {
         }
         setActiveObjectId(snap.publishedApp?.dashboardId || snap.nativeContent?.id || snap.lookmlProjectId || String(snap.alertBundle?.alert_id || '') || snap.scriptId || '')
         setMessages(mergeCachedActivitySteps(snap.messagesWithUser))
-        setAgentSession(
-          {
-            lastInteractionId: conv.interactionId,
-            environmentId: sharedEnvIdRef.current || conv.environmentId || `env_${mode}_isolated`,
-            conversationId: conv.id, explores: snap.selectedExplores, toolType: mode,
-          },
-          mode
-        )
+        setAgentSession({
+          lastInteractionId: conv.interactionId,
+          environmentId: sharedEnvIdRef.current || conv.environmentId || 'env_app_isolated',
+          conversationId: conv.id, explores: snap.selectedExplores,
+        })
         return
       }
       const hydrated = await hydrateRemoteConversationMessages({
@@ -494,13 +482,10 @@ export function useStudioController() {
       if (selectEpochRef.current !== myEpoch || inFlightTurnsRef.current.has(conv.id)) return
       if (hydrated.expired) {
         loaders.applyExpiredHydration(conv.id, hydrated.prunedIds, hydrated.deadEnvironmentId)
-        handleResetNewApp(true, 'auto')
+        handleResetNewApp(true)
         return
       }
       if (hydrated.messages.length > 0) setConvMessages(conv.id, hydrated.messages)
-      resolvedUseCaseByIdRef.current[conv.id] = useCase
-      explicitUseCaseRef.current = 'auto'
-      setSelectedUseCase(useCase)
       setActiveConversationId(conv.id)
       const targetPath = `/c/${encodeURIComponent(conv.id)}`
       hydratedConvRouteRef.current = `${targetPath}:${conv.id}`
@@ -513,18 +498,14 @@ export function useStudioController() {
       setActiveContentTabKey(initialTabKey)
       if (conv.explores?.length) setSelectedExplores(conv.explores)
       if (conv.interactionId || conv.environmentId || sharedEnvIdRef.current) {
-        setAgentSession(
-          {
-            lastInteractionId: conv.interactionId,
-            environmentId: sharedEnvIdRef.current || conv.environmentId || `env_${mode}_isolated`,
-            conversationId: conv.id, explores: conv.explores, toolType: mode,
-          },
-          mode
-        )
+        setAgentSession({
+          lastInteractionId: conv.interactionId,
+          environmentId: sharedEnvIdRef.current || conv.environmentId || 'env_app_isolated',
+          conversationId: conv.id, explores: conv.explores,
+        })
       }
       const targetId = getConvTargetId(conv.content, conv.type)
       if (targetId) {
-        resolvedUseCaseByIdRef.current[targetId] = useCase
         setActiveObjectId(targetId)
         await openArtifactByMode(conv.type, targetId, false)
         if (selectEpochRef.current !== myEpoch || activeConversationIdRef.current !== conv.id) return
@@ -549,7 +530,7 @@ export function useStudioController() {
         void turnResumerRef.current?.(conv)
       }
     },
-    [activeConversationIdRef, contentItemsRef, core40SDK, explicitUseCaseRef, extensionSDK, getAuthCfg, handleResetNewApp, history, hydratedConvRouteRef, inFlightTurnsRef, loaders, location.pathname, mergeCachedActivitySteps, openArtifactByMode, recoveredInFlightIdsRef, resolvedUseCaseByIdRef, selectEpochRef, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setContentItems, setConvMessages, setCurrentAppCode, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMessages, setNativeContentState, setPublishedAppState, setPublishedTileDash, setScriptCode, setScriptId, setScriptTitle, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef, syncContentItemViewer, turnResumerRef, userId, userIdRef]
+    [activeConversationIdRef, contentItemsRef, core40SDK, extensionSDK, getAuthCfg, handleResetNewApp, history, hydratedConvRouteRef, inFlightTurnsRef, loaders, location.pathname, mergeCachedActivitySteps, openArtifactByMode, recoveredInFlightIdsRef, selectEpochRef, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setContentItems, setConvMessages, setCurrentAppCode, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMessages, setNativeContentState, setPublishedAppState, setPublishedTileDash, setScriptCode, setScriptId, setScriptTitle, setSelectedExplores, setSidebarCollapsed, sharedEnvIdRef, syncContentItemViewer, turnResumerRef, userId, userIdRef]
   )
 
   const handleToggleArchiveConversation = (
@@ -674,10 +655,7 @@ export function useStudioController() {
     handleToggleArchiveConversation, handleRequestDeleteConversation,
     handleCancelDeleteConversation, handleConfirmDeleteConversation, handleDeleteConversation,
     isEmptyConversation,
-    setSelectedUseCase: meta.handleChangeUseCase,
-    getUseCaseLabel,
     searchGlobalContentV2,
-    explicitUseCase: auth.explicitUseCaseRef.current,
     loading: Boolean(auth.busyStatus),
     setQueuedPrompts: auth.updateQueuedPrompts,
     conversations: meta.filteredConversations,

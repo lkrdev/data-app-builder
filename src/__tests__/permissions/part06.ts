@@ -16,7 +16,7 @@ import {
   StudioBadge, StudioButton, StudioCard, StudioDocPreview,
   StudioModal, StudioSelect, StudioSkeleton, StudioToolbar,
 } from '../../components/StudioDesignSystem'
-import { STARTER_PROMPTS_BY_USE_CASE, StarterPromptButtons } from '../../components/StudioWorkspace'
+import { DEFAULT_STARTER_PROMPTS, StarterPromptButtons } from '../../components/StudioWorkspace'
 
 const asSdk = (mock: Record<string, unknown>): Looker40SDK => mock as unknown as Looker40SDK
 
@@ -81,10 +81,8 @@ export function registerPermissionsPart06Tests(): void {
     expect(agentsMd).toContain('.agents/skills/issue-authoring/SKILL.md')
 
     // Issue #86: verify starter prompts, LookML turn skills, and DOC_UI_COMPONENTS contain zero decorative emojis
-    for (const items of Object.values(STARTER_PROMPTS_BY_USE_CASE)) {
-      for (const item of items) {
-        expect(item.label).not.toMatch(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u)
-      }
+    for (const item of DEFAULT_STARTER_PROMPTS) {
+      expect(item.label).not.toMatch(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u)
     }
     const pkgJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
     expect(pkgJson.dependencies?.['lucide-react']).toBeTruthy()
@@ -328,7 +326,7 @@ export function registerPermissionsPart06Tests(): void {
       'utf8'
     )
     expect(workspaceTsx).not.toMatch(/order_items/i)
-    expect(JSON.stringify(STARTER_PROMPTS_BY_USE_CASE)).not.toMatch(/order_items/i)
+    expect(JSON.stringify(DEFAULT_STARTER_PROMPTS)).not.toMatch(/order_items/i)
 
     // 1. Emoji stripping on labels
     expect(stripStarterPromptEmojis('📊 Build an Executive Revenue Data App')).toBe(
@@ -337,11 +335,9 @@ export function registerPermissionsPart06Tests(): void {
     expect(stripStarterPromptEmojis('✨🐍 Explore & Filter Summary')).toBe(
       'Explore & Filter Summary'
     )
-    for (const list of Object.values(STARTER_PROMPTS_BY_USE_CASE)) {
-      for (const item of list) {
-        expect(item.label).toBe(stripStarterPromptEmojis(item.label))
-        expect(item.prompt).not.toMatch(/order_items/i)
-      }
+    for (const item of DEFAULT_STARTER_PROMPTS) {
+      expect(item.label).toBe(stripStarterPromptEmojis(item.label))
+      expect(item.prompt).not.toMatch(/order_items/i)
     }
 
     // 2. Discover explore context + recent user content via Looker 4.0 SDK lookml_model_explore + content_summary (cached)
@@ -435,37 +431,26 @@ export function registerPermissionsPart06Tests(): void {
     expect(exploreCalls).toBe(1)
     expect(ctx2?.exploreKey).toBe('retail_ops::store_transactions')
 
-    // 3. Deterministic dynamic prompts reflect discovered explore, content_summary, & permitted use cases
+    // 3. Deterministic dynamic prompts reflect discovered explore & content_summary
     const localPrompts = buildDynamicStarterPrompts({
-      useCase: 'auto',
       selectedExplores: ['retail_ops::store_transactions'],
-      permittedUseCases: ['app', 'dashboard', 'conversational-analytics'],
+      canDevelopLookml: false,
       availableModels,
       exploreContext: ctx1,
     })
-    expect(localPrompts.length).toBe(3)
+    expect(localPrompts.length).toBeGreaterThanOrEqual(3)
     expect(localPrompts[0].label).toContain('Store Transactions')
     expect(localPrompts[0].prompt).toContain('retail_ops::store_transactions')
     expect(localPrompts[0].prompt).toContain('Net Sales')
-    expect(localPrompts.every((p) => ['app', 'dashboard', 'conversational-analytics'].includes(p.useCase || ''))).toBe(true)
 
-    const appPrompts = buildDynamicStarterPrompts({
-      useCase: 'app',
-      selectedExplores: ['retail_ops::store_transactions'],
-      availableModels,
-      exploreContext: ctx1,
+    const summaryOnlyPrompts = buildDynamicStarterPrompts({
+      selectedExplores: [],
+      canDevelopLookml: true,
+      availableModels: [],
+      contentSummaries: ctx1?.contentSummaries,
     })
-    expect(appPrompts[2].label).toBe('Upgrade Store Executive Pulse to Data App')
-    expect(appPrompts[2].prompt).toContain('"Store Executive Pulse" Looker dashboard (#101)')
-
-    const dashPrompts = buildDynamicStarterPrompts({
-      useCase: 'dashboard',
-      selectedExplores: ['retail_ops::store_transactions'],
-      availableModels,
-      exploreContext: ctx1,
-    })
-    expect(dashPrompts[2].label).toBe('Pin Store Executive Pulse & Schedule')
-    expect(dashPrompts[2].prompt).toContain('"Store Executive Pulse" (#101)')
+    expect(summaryOnlyPrompts[0].label).toBe('Upgrade Store Executive Pulse to Data App')
+    expect(summaryOnlyPrompts[0].prompt).toContain('"Store Executive Pulse" Looker dashboard (#101)')
 
     // 4. Stateless [STARTER_PROMPTS_REQUEST] side-request when authenticated
     const capturedBodies: Array<Record<string, unknown>> = []
@@ -485,19 +470,16 @@ export function registerPermissionsPart06Tests(): void {
                 id: 'custom-1',
                 label: '📊 Net Sales Regional Scorecard',
                 prompt: 'Build a Store Transactions Data App on retail_ops::store_transactions with Net Sales and Basket Count by Store Region.',
-                useCase: 'app',
               },
               {
                 id: 'custom-2',
                 label: '📈 Store Transactions Executive UDD',
                 prompt: 'Create a native Looker UDD on retail_ops::store_transactions tracking Net Sales across Transaction Month.',
-                useCase: 'dashboard',
               },
               {
                 id: 'custom-3',
                 label: '💬 Top Store Regions by Net Sales',
                 prompt: 'Which Store Region in retail_ops::store_transactions had the highest Net Sales last quarter?',
-                useCase: 'conversational-analytics',
               },
             ])}</STARTER_PROMPTS>`,
           },
@@ -509,9 +491,8 @@ export function registerPermissionsPart06Tests(): void {
       sdk: mockSdk,
       extensionSDK: mockExtensionSDK,
       auth: { mode: 'apikey', apiKey: 'test-key-84' },
-      useCase: 'auto',
       selectedExplores: ['retail_ops::store_transactions'],
-      permittedUseCases: ['app', 'dashboard', 'conversational-analytics'],
+      canDevelopLookml: false,
       availableModels,
       exploreContext: ctx1,
       pollScheduleMs: [0],
@@ -538,12 +519,7 @@ export function registerPermissionsPart06Tests(): void {
       'Top Store Regions by Net Sales',
     ])
     expect(
-      getCachedStarterPrompts(
-        'auto',
-        'retail_ops::store_transactions',
-        ['app', 'dashboard', 'conversational-analytics'],
-        true
-      )
+      getCachedStarterPrompts('retail_ops::store_transactions', false, true)
     ).toEqual(agentPrompts)
 
     // Parse fallback safety when malformed output is returned
@@ -553,7 +529,6 @@ export function registerPermissionsPart06Tests(): void {
     // 5. StarterPromptButtons skeleton & loaded states
     type Elem = React.ReactElement<Record<string, unknown>>
     const skelTree = StarterPromptButtons({
-      useCase: 'auto',
       prompts: [],
       loading: true,
       onSelect: () => {},
@@ -561,7 +536,6 @@ export function registerPermissionsPart06Tests(): void {
     expect(skelTree.props['data-testid']).toBe('studio-starter-prompts-skeleton')
 
     const loadedTree = StarterPromptButtons({
-      useCase: 'auto',
       prompts: agentPrompts,
       loading: false,
       onSelect: () => {},

@@ -101,7 +101,6 @@ export function registerPermissionsPart28Tests(): void {
         {
           id: 'conv_ok',
           type: 'app',
-          use_case: 'app',
           label: 'Revenue Pulse',
           tags: ['orders', 'data_app'],
           inFlight: false,
@@ -116,6 +115,11 @@ export function registerPermissionsPart28Tests(): void {
         },
       ])
     ).not.toThrow()
+    expect(() =>
+      assertPointerOnlyArtifactWrite('user_conversations:42', [
+        { id: 'conv_bad_uc', type: 'app', use_case: 'app', updatedAt: '2026-11-18T12:00:00Z' },
+      ])
+    ).toThrow(ArtifactPayloadViolationError)
 
     // Disallowed keys throw before any network call
     for (const badKey of ['obj_app_42', 'obj_lookml_ecom', 'obj_alert_9', 'user_42_app_1', 'tile_element_55', 'user_env:']) {
@@ -248,7 +252,7 @@ export function registerPermissionsPart28Tests(): void {
             id: `int_hello_${n}`,
             environment_id: n === 2 ? 'env_hello_warm' : undefined,
             status: 'completed',
-            output_text: n === 1 ? 'Hi! How can I help with your Looker data today?' : '<USE_CASE>tile</USE_CASE>\nFound 3 dashboards.',
+            output_text: n === 1 ? 'Hi! How can I help with your Looker data today?' : 'Found 3 dashboards.',
           }),
         }
       },
@@ -260,7 +264,6 @@ export function registerPermissionsPart28Tests(): void {
       userId: '1',
       auth: { mode: 'apikey', apiKey: 'k-230' },
       session: {},
-      useCase: 'auto',
       selectedExplores: [],
       schemaMarkdown: '',
       userPrompt: 'hello\n\n[Referenced Looker Dashboard #42 context wrapper]',
@@ -287,7 +290,6 @@ export function registerPermissionsPart28Tests(): void {
       userId: '1',
       auth: { mode: 'apikey', apiKey: 'k-230' },
       session: t1.session,
-      useCase: 'auto',
       selectedExplores: [],
       schemaMarkdown: '',
       userPrompt: 'What dashboards are in my personal space?',
@@ -320,7 +322,7 @@ export function registerPermissionsPart28Tests(): void {
         status: 'completed',
         input: [{ type: 'function_response', name: 'run_looker_codemode', call_id: 'c2', result: { ok: true } }],
         steps: [{ id: 's_f', type: 'thought', thought: 'Finalizing bundle' }],
-        output_text: '<USE_CASE>app</USE_CASE>\nPublished Margin Waterfall.',
+        output_text: 'Published Margin Waterfall.',
       },
     }
     const rec = await recoverInFlightInteraction({
@@ -361,7 +363,7 @@ export function registerPermissionsPart28Tests(): void {
         environment_id: 'env_live',
         status: 'completed',
         steps: [{ id: 'st2', type: 'code_execution', code: 'python3 /workspace/bundle_app.py' }],
-        output_text: '<USE_CASE>app</USE_CASE>\nBuilt Executive Revenue App.\n<DATA_APP_BUNDLE>{"title":"Exec App"}</DATA_APP_BUNDLE>',
+        output_text: 'Built Executive Revenue App.\n<DATA_APP_BUNDLE>{"title":"Exec App"}</DATA_APP_BUNDLE>',
       },
       int_t2_r: {
         id: 'int_t2_r',
@@ -369,7 +371,7 @@ export function registerPermissionsPart28Tests(): void {
         environment_id: 'env_live',
         status: 'completed',
         input: [{ type: 'text', text: 'Warm fast path\n\nUser request:\n<USER_MESSAGE>Add region filter</USER_MESSAGE>' }],
-        output_text: '<USE_CASE>app</USE_CASE>\nAdded region filter.',
+        output_text: 'Added region filter.',
       },
     }
 

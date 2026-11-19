@@ -15,14 +15,14 @@ import {
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
 import { useLookerExtension } from './contexts/LookerExtensionContext'
 import {
-  applyStudioDocumentTheme, clampLeftPaneWidth, getAllowedUseCases, loadStoredBusySendAction,
+  applyStudioDocumentTheme, clampLeftPaneWidth, loadStoredBusySendAction,
   loadStoredLeftPaneWidth, loadStoredRightPaneCollapsed, loadStoredStudioThemeMode,
   normalizeBusySendAction, normalizeStudioAgentName, normalizeStudioThemeMode,
   persistStudioThemeMode, readInitialBusySendAction, readInitialLeftPaneWidth,
   readInitialRightPaneCollapsed, readInitialStudioThemeMode, ResolvedStudioTheme,
-  ResolvedStudioUseCase, resolveStudioTheme, resolveSystemTheme, resolveUserCapabilities,
+  resolveStudioTheme, resolveSystemTheme, resolveUserCapabilities,
   saveStoredBusySendAction, saveStoredLeftPaneWidth, saveStoredRightPaneCollapsed,
-  STUDIO_USE_CASE_OPTIONS, StudioBusySendAction, StudioContextMention, StudioThemeMode, StudioUseCase, UserCapabilities,
+  StudioBusySendAction, StudioContextMention, StudioThemeMode, UserCapabilities,
 } from './lookerApi'
 import { nextStudioConvId, useStudioTurnConcurrency } from './studioControllerConcurrency'
 
@@ -364,29 +364,12 @@ export function useStudioAuthAndPrefs() {
     try { extensionSDK?.updateTitle?.(agentName) } catch { /* ignore */ }
   }, [agentName, extensionSDK, isTileMount])
 
-  const resolvedUseCaseByIdRef = useRef<Record<string, ResolvedStudioUseCase>>({})
   const parsedRoute = useMemo(() => parseStudioRoute(location.pathname), [location.pathname])
-  if (parsedRoute.useCase && parsedRoute.useCase !== 'auto' && parsedRoute.objectId) {
-    resolvedUseCaseByIdRef.current[parsedRoute.objectId] = parsedRoute.useCase
-    if (parsedRoute.conversationId) {
-      resolvedUseCaseByIdRef.current[parsedRoute.conversationId] = parsedRoute.useCase
-    }
-  }
-  const [selectedUseCase, setSelectedUseCase] = useState<StudioUseCase>(() => parsedRoute.useCase || 'auto')
-  const explicitUseCaseRef = useRef<StudioUseCase>(
-    parsedRoute.useCase && !parsedRoute.objectId ? parsedRoute.useCase : 'auto'
-  )
-  const allowedUseCases = useMemo(() => getAllowedUseCases(capabilities, disabledModes), [capabilities, disabledModes])
-  const useCaseOptions = useMemo(
-    () => STUDIO_USE_CASE_OPTIONS.filter((opt) => !opt.capabilityMode || !disabledModes.includes(opt.capabilityMode)),
-    [disabledModes]
-  )
 
   const [sharedEnvironmentId, setSharedEnvironmentId] = useState('')
   const sharedEnvIdRef = useRef<string>('')
   const [envSourcesHash, setEnvSourcesHash] = useState<string | null>(null)
   const [agentSession, setAgentSessionState] = useState<AgentSession>({
-    toolType: parsedRoute.mode,
     environmentId: 'env_app_isolated',
   })
   const agentSessionRef = useRef<AgentSession>(agentSession)
@@ -428,9 +411,8 @@ export function useStudioAuthAndPrefs() {
     })
   }, [])
 
-  const activeModeRef = useRef<StudioMode>(parsedRoute.mode)
   const setAgentSession = useCallback(
-    (next: AgentSession, targetMode: StudioMode = activeModeRef.current) => {
+    (next: AgentSession) => {
       const nextShared = normalizeEnvironmentId(next.environmentId)
       if (nextShared && nextShared !== sharedEnvIdRef.current && next.lastInteractionId) {
         sharedEnvIdRef.current = nextShared; setSharedEnvironmentId(nextShared)
@@ -438,8 +420,7 @@ export function useStudioAuthAndPrefs() {
       setAgentSessionState((prev) => {
         const updated: AgentSession = {
           ...next,
-          toolType: next.toolType || targetMode,
-          environmentId: sharedEnvIdRef.current || next.environmentId || prev.environmentId || `env_${targetMode}_isolated`,
+          environmentId: sharedEnvIdRef.current || next.environmentId || prev.environmentId || 'env_app_isolated',
         }
         agentSessionRef.current = updated
         return updated
@@ -627,13 +608,13 @@ export function useStudioAuthAndPrefs() {
     triggerSilentOAuthRefresh, resetOAuthOnUnauthorized, apiKey, setApiKey,
     isAuthenticated, isConfigured, oauthSigningIn, oauthRedirectUri,
     handleSaveAuthSetup, handleOAuthLogin, handleOAuthLogout, handleCancelOAuthLogin,
-    capabilities, setCapabilities, allowedUseCases, useCaseOptions,
+    capabilities, setCapabilities,
     sidebarCollapsed, setSidebarCollapsed, leftPaneWidth, setLeftPaneWidth, flushLeftPaneWidthSave,
     rightPaneCollapsed, setRightPaneCollapsed, busySendAction, setBusySendAction,
-    resolvedUseCaseByIdRef, parsedRoute, selectedUseCase, setSelectedUseCase, explicitUseCaseRef,
+    parsedRoute,
     sharedEnvironmentId, sharedEnvIdRef, envSourcesHash, syncSharedEnvironmentId,
     agentSession, agentSessionRef, messages, messagesRef,
-    activeModeRef, setAgentSession, setMessages,
+    setAgentSession, setMessages,
     activeConversationId, activeConversationIdRef, setActiveConversationId,
     expiredConversationNotice, setExpiredConversationNotice,
     selectEpochRef, getAuthCfg,

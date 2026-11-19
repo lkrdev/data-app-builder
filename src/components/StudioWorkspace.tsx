@@ -28,7 +28,7 @@ import {
 } from './StudioStagePanels'
 
 export * from './StudioMarkdown'
-export * from './StudioUseCaseGuides'
+export * from './StudioCapabilitiesGuide'
 export * from './StudioComposer'
 export * from './StudioLeftPane'
 export * from './StudioOverviewSidebar'
@@ -36,17 +36,15 @@ export * from './StudioStagePanels'
 
 export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
-    activeMode, selectedUseCase, isEmptyConversation, isHealthCheckMode, isLookmlMode, isCaMode,
-    builderMode, healthReport, lookmlBundle, alertBundle = null, caConversation, canDeployLookml, nativeContent,
+    isEmptyConversation, healthReport, lookmlBundle, alertBundle = null, caConversation, canDeployLookml, nativeContent,
     publishedApp, contentItems = [], activeContentTabKey = '', activeContentItem = null,
     handleSelectOverview, handleSelectContentTab, handleHideContentTab, setActiveContentTabKey,
-    currentAppCode, embedNonce, extensionSDK, setInfoModalUseCase,
+    currentAppCode, embedNonce, extensionSDK, setCapabilitiesModalOpen,
     busyStatus, rightPaneCollapsed, setRightPaneCollapsed, scriptId, scriptTitle, scriptCode, loadedScript, savedScheduleBadge,
     activeViewerDocument = null, setActiveViewerDocument, openViewerDocument, activeConversationId,
     messages, liveActivitySteps, activatedLookmlSkills, selectedExplores, mentionedItems, selectedFolderId, folderTreeNodes, pastedImages,
     pendingPerm, resolvePermDecision,
   } = ctl
-  const isTileMode = activeMode === 'tile' && Boolean(ctl.loadedScript || ctl.explicitUseCase === 'tile')
   const hostUrl = extensionSDK?.lookerHostData?.hostUrl || window.location.origin
   const mockExt = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
   const [tddViewMode, setTddViewMode] = useState<'rendered' | 'raw'>(() => mockExt?.initialTddViewMode || 'rendered')
@@ -249,7 +247,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     ? 'empty_hidden'
     : ct
     ? ct === 'script' || ct === 'alert' || ct === 'lookml' || ct === 'report' ? ct : ct === 'conversational-analytics' ? 'ca' : 'embed'
-    : isTileMode ? 'script' : activeMode === 'tile' && alertBundle ? 'alert' : isHealthCheckMode ? 'report' : isLookmlMode ? 'lookml' : isCaMode || caConversation ? 'ca' : 'embed'
+    : loadedScript ? 'script' : alertBundle ? 'alert' : healthReport ? 'report' : lookmlBundle ? 'lookml' : caConversation ? 'ca' : 'embed'
 
   const activeApiCall = stageInspector?.kind === 'api'
     ? overviewData.apiCalls.find((c) => c.id === stageInspector.callId) || overviewData.apiCalls[0] || null
@@ -262,15 +260,11 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const embedTarget = useMemo(
     () => resolveLookerEmbedTarget({
       isEmptyConversation: isEmptyConversation || allTabsHidden || isNonEmbedStageView,
-      isHealthCheckMode: activePaneKind === 'report',
-      isLookmlMode: activePaneKind === 'lookml',
-      isTileMode: activePaneKind === 'script',
-      isCaMode: activePaneKind === 'ca',
-      builderMode, activeContentItem, caConversation, nativeContent, publishedApp,
+      activePaneKind, activeContentItem, caConversation, nativeContent, publishedApp,
       alertPreviewUrl: alertPreviewUrl || undefined,
       hostUrl, nonce: (embedNonce || 0) + iframeRev,
     }),
-    [isEmptyConversation, allTabsHidden, isNonEmbedStageView, activePaneKind, builderMode, activeContentItem, caConversation, nativeContent, publishedApp, alertPreviewUrl, hostUrl, embedNonce, iframeRev]
+    [isEmptyConversation, allTabsHidden, isNonEmbedStageView, activePaneKind, activeContentItem, caConversation, nativeContent, publishedApp, alertPreviewUrl, hostUrl, embedNonce, iframeRev]
   )
 
   useEffect(() => {
@@ -358,17 +352,19 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
 
   const isDataAppPane = activeContentItem
     ? activeContentItem.contentType === 'data_app' || activeContentItem.contentType === 'data-investigator'
-    : builderMode !== 'dashboard'
+    : Boolean(publishedApp && !nativeContent)
   const isShowingAppCodeFullscreen =
     activePaneKind === 'embed' && !rightPaneCollapsed && !allTabsHidden && showAppCode && Boolean(currentAppCode) && isDataAppPane && !activeViewerDocument && !resolvedStageInspector
   const activePreviewId = allTabsHidden
     ? ''
-    : activeContentItem?.id || (builderMode === 'dashboard' ? nativeContent?.id : publishedApp?.dashboardId)
+    : activeContentItem?.id || publishedApp?.dashboardId || nativeContent?.id
   const openInLookerPath = activeContentItem
     ? resolveContentLookerPath(activeContentItem.contentType, activeContentItem.projectId || activeContentItem.id, activeContentItem.embedPath)
-    : builderMode === 'dashboard' && nativeContent
+    : publishedApp
+    ? `/dashboards/${encodeURIComponent(publishedApp.dashboardId)}`
+    : nativeContent
     ? resolveContentLookerPath(nativeContent.contentType, nativeContent.id, nativeContent.embedPath)
-    : publishedApp ? `/dashboards/${encodeURIComponent(publishedApp.dashboardId)}` : ''
+    : ''
   const hasActiveEmbed = embedTarget.kind !== 'preload'
   const showContentTabs = visibleTabs.length > 0 || hiddenTabs.length > 0
   const resolvedActiveTabKey = explicitOverview || resolvedStageInspector || activeViewerDocument ? '' : activeContentItem?.key || activeContentTabKey || ''
@@ -377,14 +373,14 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     if (visibleTabs.length > 0) return visibleTabs.map((item) => ({ key: item.key, title: item.title, contentType: item.contentType }))
     if (allTabsHidden) return []
     const lkPid = lookmlBundle ? cleanLookmlProjectId(lookmlBundle.project_id) || cleanLookmlProjectId(lookmlBundle.id) : ''
-    if (isLookmlMode && lookmlBundle && lkPid) return [{ key: `lookml:${lkPid}`, title: lookmlBundle.title || 'Agentic LookML', contentType: 'lookml' }]
-    if (isHealthCheckMode && healthReport) return [{ key: `report:${healthReport.id}`, title: healthReport.title || 'Health Check Report', contentType: 'report' }]
-    if (isTileMode && scriptId) return [{ key: `script:${scriptId}`, title: scriptTitle || scriptId, contentType: 'script' }]
+    if (lookmlBundle && lkPid) return [{ key: `lookml:${lkPid}`, title: lookmlBundle.title || 'Agentic LookML', contentType: 'lookml' }]
+    if (healthReport) return [{ key: `report:${healthReport.id}`, title: healthReport.title || 'Health Check Report', contentType: 'report' }]
+    if (loadedScript && scriptId) return [{ key: `script:${scriptId}`, title: scriptTitle || scriptId, contentType: 'script' }]
     if (caConversation) return [{ key: `ca:${caConversation.caConversationId}`, title: caConversation.title || 'Conversational Analytics', contentType: 'conversational-analytics' }]
     if (nativeContent) return [{ key: `${nativeContent.contentType}:${nativeContent.id}`, title: nativeContent.title, contentType: nativeContent.contentType }]
     if (publishedApp) return [{ key: `data_app:${publishedApp.dashboardId}`, title: publishedApp.title, contentType: 'data_app' }]
     return []
-  }, [visibleTabs, allTabsHidden, isLookmlMode, lookmlBundle, isHealthCheckMode, healthReport, isTileMode, scriptId, scriptTitle, caConversation, nativeContent, publishedApp])
+  }, [visibleTabs, allTabsHidden, lookmlBundle, healthReport, loadedScript, scriptId, scriptTitle, caConversation, nativeContent, publishedApp])
 
   const isExplorerOpen = isCompactViewport ? mobileExplorerOpen : explorerRailOpen
 
@@ -444,7 +440,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           (activePaneKind === 'lookml' && lookmlBundle) ||
           (activePaneKind === 'alert' && alertBundle) ||
           (activePaneKind === 'ca' && caConversation) ||
-          activePaneKind === 'script'))
+          (activePaneKind === 'script' && loadedScript)))
     )
   const isOverviewMode = !isEmptyConversation && !activeViewerDocument && !resolvedStageInspector && !hasActiveViewerPane
   const hasViewerContent = Boolean(activeViewerDocument || resolvedStageInspector || hasActiveViewerPane)
@@ -616,7 +612,6 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               setIframeRev={setIframeRev}
               allTabsHidden={allTabsHidden}
               activeContentItem={activeContentItem}
-              builderMode={builderMode}
               nativeContent={nativeContent}
               publishedApp={publishedApp}
               isDataAppPane={isDataAppPane}
@@ -627,8 +622,7 @@ export const StudioRightPane: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               reloadingViewer={reloadingViewer}
               setReloadingViewer={setReloadingViewer}
               openInLookerPath={openInLookerPath}
-              selectedUseCase={selectedUseCase}
-              setInfoModalUseCase={setInfoModalUseCase}
+              onOpenCapabilities={() => setCapabilitiesModalOpen(true)}
               overviewCrumb={overviewCrumb}
               idleToolbarText={idleToolbarText}
               toggleExplorerBtn={toggleExplorerBtn}

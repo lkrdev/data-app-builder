@@ -9,6 +9,7 @@ import { wrapDashboardCodeMode } from './antigravityPrompts'
 import {
   extractAlertBundleFromInteraction,
   extractBundleFromInteraction,
+  extractCaSelectionFromInteraction,
   extractInteractionActivitySteps,
   extractInteractionOutputText,
   extractNativeContentFromInteraction,
@@ -30,6 +31,7 @@ import {
   normalizeEnvironmentId,
   normalizeMaxToolRounds,
   resolveAdaptivePollScheduleMs,
+  stripControlTags,
 } from './antigravityTypes'
 import {
   classifyLookerOperation,
@@ -39,7 +41,7 @@ import {
   LkrCodeMode,
   type LkrExtensionToolRequest,
 } from './lkrCliBridge'
-import { createDeduplicatedLookerSdkProxy, type StudioUseCase } from './lookerApi'
+import { createDeduplicatedLookerSdkProxy } from './lookerApi'
 import { extractLookmlBundleFromInteraction } from './lookmlArtifactHydration'
 import { wrapKdaCodeMode } from './lookmlSkills'
 
@@ -65,13 +67,8 @@ export interface ExecuteAntigravityPollingLoopOptions {
   rawConversationId?: string
   defaultCodeModeVars: Record<string, unknown>
   isKdaSkillActive: boolean
-  isDashboardMode: boolean
-  toolMode: 'data_app' | 'lookml'
-  mode: 'data_app' | 'dashboard'
-  useCase: StudioUseCase
-  effectiveLookmlIntent: boolean
+  canUseLookmlBridge: boolean
   isNoOpTurn: boolean
-  isDataInvestigatorTurn: boolean
   userPrompt: string
   activatedLookmlSkills?: string[]
   requiresBashSandbox: boolean
@@ -103,8 +100,7 @@ export async function executeAntigravityPollingLoop(
     sdk, extensionSDK, auth, agentConfig, activeTools, maxToolRounds, pollScheduleMs, signal,
     throwIfAborted, onInteractionCreated, onProgressSteps, onStatus, effectivePermissionHandler,
     requirePermission, approvedOperations, conversationId, rawConversationId, defaultCodeModeVars,
-    isKdaSkillActive, isDashboardMode, toolMode, mode, useCase, effectiveLookmlIntent, isNoOpTurn,
-    isDataInvestigatorTurn, userPrompt, activatedLookmlSkills,
+    isKdaSkillActive, canUseLookmlBridge, isNoOpTurn, userPrompt, activatedLookmlSkills,
     requiresBashSandbox, appDir,
   } = opts
 
@@ -298,10 +294,9 @@ export async function executeAntigravityPollingLoop(
   const executedCodeModeByCode = new Map<string, Record<string, unknown>>()
   const isDataAppBundleTurn = (): boolean =>
     !isNoOpTurn &&
-    !effectiveLookmlIntent &&
-    ((requiresBashSandbox && (useCase === 'app' || isDataInvestigatorTurn || /(?:^|\s)\/data-apps?(?=\s|$)/i.test(userPrompt))) ||
+    (/(?:^|\s)\/(?:data-apps?|data-investigator)(?=\s|$)/i.test(userPrompt) ||
       accumulatedSteps.concat(interaction.steps || []).some((s) =>
-        /bundle_app\.py|\/workspace\/apps\/[A-Za-z0-9_-]+\/app\.js/.test(JSON.stringify(s))
+        /bundle_app\.py|\/workspace\/apps\/[A-Za-z0-9_-]+\/(?:app\.js|bundle\.json)/.test(JSON.stringify(s))
       ))
 
   try {
@@ -434,14 +429,20 @@ export async function executeAntigravityPollingLoop(
                       })
                     }
                   } else {
-                    const rawCode = wrapKdaCodeMode(String(args.code || ''), isKdaSkillActive)
+                    const rawArgCode = String(args.code || '')
+                    const needsKdaHelpers =
+                      isKdaSkillActive ||
+                      /\b(?:resolve_source|inspect_explore_for_kda|analyze_target|run_kda|drill_top_driver|print_kda_summary)\b/.test(rawArgCode)
+                    const rawCode = wrapKdaCodeMode(rawArgCode, needsKdaHelpers)
                     const needsDashboardMacros =
-                      isDashboardMode ||
                       /\b(?:upsert_udd|upsert_lookml_dashboard|reflow_24col|pin_to_board|schedule_dashboard|emit_native_bundle)\b/.test(rawCode)
+                    const needsDevSession =
+                      canUseLookmlBridge ||
+                      /\b(?:upsert_lookml_dashboard|create_project|update_project|generate_lookml_with_new_files|validate_project|update_file|create_lookml_model|update_lookml_model)\b/.test(rawCode)
                     codeModeOutput = await LkrCodeMode.runPythonCode({
                       code: needsDashboardMacros ? wrapDashboardCodeMode(rawCode) : rawCode,
                       sdk: turnSdk, extensionSDK,
-                      allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard' || effectiveLookmlIntent,
+                      allowUpdateSession: needsDevSession,
                       requirePermission, approvedOperations, onPermissionRequest: wrappedPermissionRequest,
                       conversationId: rawConversationId || conversationId, signal,
                       vars: { ...defaultCodeModeVars, ...customVars },
@@ -574,10 +575,12 @@ export async function executeAntigravityPollingLoop(
           extractNativeContentFromInteraction(mergedSnap) ||
           extractLookmlBundleFromInteraction(mergedSnap) ||
           extractAlertBundleFromInteraction(mergedSnap) ||
-          extractTddFromInteraction(mergedSnap)
+          extractTddFromInteraction(mergedSnap) ||
+          extractCaSelectionFromInteraction(mergedSnap)
       )
-      const hasDirectModelOutput =
-        extractInteractionOutputText({ output_text: interaction.output_text, outputs: interaction.outputs }) !== 'Completed.'
+      const directOutRaw = extractInteractionOutputText({ output_text: interaction.output_text, outputs: interaction.outputs })
+      const directOutClean = directOutRaw === 'Completed.' ? '' : stripControlTags(directOutRaw)
+      const hasDirectModelOutput = Boolean(directOutClean)
       const curSteps = interaction.steps || []
       const hasUnfinishedCall = curSteps.some((s, idx) => s.type === 'function_call' && !isResolvedFunctionCall(s, idx, curSteps))
 
@@ -677,9 +680,13 @@ export async function executeAntigravityPollingLoop(
 
       const requiresDataAppBundle = isDataAppBundleTurn()
       const attemptedBundleApp =
-        (mode === 'data_app' || isDataInvestigatorTurn) &&
         !isNoOpTurn &&
         [...accumulatedSteps, ...(interaction.steps || [])].some((s) => JSON.stringify(s).includes('bundle_app.py'))
+      const claimedLiveArtifactWithoutBundle =
+        !isNoOpTurn &&
+        !wrapUpSent &&
+        interaction.status === 'completed' &&
+        /\b(?:is\s+live(?:\s+and\s+ready)?|(?:live\s+and\s+)?ready\s+in\s+the\s+right\s+pane|opened\s+in\s+the\s+right\s+pane)\b/i.test(directOutClean)
 
       if (
         Boolean(interaction.id) &&
@@ -688,6 +695,7 @@ export async function executeAntigravityPollingLoop(
         incompleteRound < maxIncompleteRounds &&
         ((interaction.status === 'incomplete' && !hasDirectModelOutput) ||
           (interaction.status === 'completed' && attemptedBundleApp) ||
+          claimedLiveArtifactWithoutBundle ||
           (requiresDataAppBundle && !wrapUpSent))
       ) {
         incompleteRound += 1
@@ -698,15 +706,18 @@ export async function executeAntigravityPollingLoop(
         const resumeText =
           interaction.status === 'completed' && attemptedBundleApp
             ? `Your previous bundle_app.py run failed validation and did not emit <DATA_APP_BUNDLE>. Fix the reported error in your app.js (${runtimeHint}) and re-run python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" until it exits 0.`
+            : claimedLiveArtifactWithoutBundle && !requiresDataAppBundle
+            ? `You have not emitted an artifact bundle tag yet (<DATA_APP_BUNDLE>, <NATIVE_CONTENT_BUNDLE>, <LOOKML_BUNDLE>, <ALERT_BUNDLE>, or <HEALTH_CHECK_TDD>), so nothing is live in the right pane. If you are building a Data App, write ${appDir}/app.js (${runtimeHint}) and run python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" in bash until it exits 0 and emits <DATA_APP_BUNDLE>; if creating a native Looker dashboard or Look, call upsert_udd / upsert_lookml_dashboard + return emit_native_bundle(...) in run_looker_codemode.`
             : requiresDataAppBundle
-            ? `You have not emitted <DATA_APP_BUNDLE> yet. Write the complete self-contained Lit Data App to /workspace/apps/<app-name>/app.js (${runtimeHint}) and run python3 /workspace/bundle_app.py --app-dir /workspace/apps/<app-name> --stdin "<App Title>" in bash until it exits 0 and emits <DATA_APP_BUNDLE>.`
+            ? `You have not emitted <DATA_APP_BUNDLE> yet. Write the complete self-contained Lit Data App to ${appDir}/app.js (${runtimeHint}) and run python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" in bash until it exits 0 and emits <DATA_APP_BUNDLE>.`
             : 'Continue and complete the current request.'
+        const needExecTool = requiresDataAppBundle || claimedLiveArtifactWithoutBundle
         const resumeTools = wrapUpSent
           ? []
-          : requiresDataAppBundle && !activeTools.some((t) => (t as { type?: string }).type === 'code_execution')
+          : needExecTool && !activeTools.some((t) => (t as { type?: string }).type === 'code_execution')
           ? [{ type: 'code_execution' }, ...activeTools]
           : undefined
-        await postContinuation([{ type: 'text', text: resumeText }], requiresBashSandbox || requiresDataAppBundle ? 'remote' : undefined, [], resumeTools)
+        await postContinuation([{ type: 'text', text: resumeText }], requiresBashSandbox || needExecTool ? 'remote' : undefined, [], resumeTools)
         continue
       }
 

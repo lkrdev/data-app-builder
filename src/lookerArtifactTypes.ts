@@ -317,7 +317,6 @@ export interface UserConversationContent {
 export interface UserConversationEntry {
   id: string
   type: string
-  use_case?: string
   objectId?: string
   label: string
   tags?: string[]
@@ -344,7 +343,7 @@ export function hydrateConversationContentItems(conv: Partial<UserConversationEn
       .map((it) => normalizeStudioContentItem(it))
   }
   const c = conv.content || {}
-  const rawType = String(conv.type || conv.use_case || 'app').trim()
+  const rawType = String(conv.type || 'app').trim()
   const fallbackTitle = typeof c.title === 'string' && c.title.trim() ? c.title.trim() : conv.label && conv.label !== conv.id ? conv.label : undefined
   const items: StudioContentItem[] = []
   const pushItem = (item: Partial<StudioContentItem> & { id: string; contentType: StudioContentItemType }) => {
@@ -436,7 +435,7 @@ export function resolveConversationRelatedContent(
   const uid = String(userId || '1').trim()
   const c = conv.content || {}
   const prefixMatch = String(conv.id || '').match(CONV_TYPE_PREFIX_RE)
-  const rawType = String(conv.type || conv.use_case || prefixMatch?.[1] || 'app').trim()
+  const rawType = String(conv.type || prefixMatch?.[1] || 'app').trim()
   const stripPrefix = (s: string) => s.replace(CONV_TYPE_PREFIX_RE, '$2').replace(/^obj_script_/, '').trim()
   const uniq = (...vals: Array<string | undefined | false>) => Array.from(new Set(vals.filter((v): v is string => Boolean(v))))
   const uKey = (t: string, id: string) => `user_${uid}_${t}_${id}`

@@ -39,7 +39,7 @@ function registerVisualPart04Tests(ctx) {
 
         const promptPreserved = ta.value === 'Build an executive revenue dashboard';
         const stillEmptyCentered = Boolean(document.querySelector('[data-testid="centered-empty-prompt"]'));
-        const useCaseStillUnlocked = !window.__DAB_STUDIO__.isUseCaseLocked && !document.querySelector('[data-testid="use-case-selector"]');
+        const noModeDropdown = !document.querySelector('.dab-mode-switcher');
         const noErrorBanner = !document.querySelector('.dab-msg-error');
 
         // 2. Simulate hanging oauth2Authenticate (e.g. closed popup or Error 400: redirect_uri_mismatch)
@@ -99,7 +99,7 @@ function registerVisualPart04Tests(ctx) {
           inlineSignInClass,
           promptPreserved,
           stillEmptyCentered,
-          useCaseStillUnlocked,
+          noModeDropdown,
           noErrorBanner,
           duringHangingPopup,
           afterFocusRecovery,
@@ -118,7 +118,7 @@ function registerVisualPart04Tests(ctx) {
       inlineSignInClass: 'dab-inline-signin-btn',
       promptPreserved: true,
       stillEmptyCentered: true,
-      useCaseStillUnlocked: true,
+      noModeDropdown: true,
       noErrorBanner: true,
       duringHangingPopup: {
         hasCancelBtn: false,
@@ -274,7 +274,7 @@ function registerVisualPart04Tests(ctx) {
     })
   }, 15000)
 
-  test('renders contextual ? use-case info buttons across StudioComposer and preview toolbars, opens use-case-info-modal with Markdown + non-actionable live React UI previews, and switches across all 7 use-case tabs (Issue #64)', async () => {
+  test('renders ? studio-capabilities-btn across StudioComposer and preview toolbars, opens tabless studio-capabilities-modal with Markdown + non-actionable live React UI previews, and closes cleanly (Issue #64)', async () => {
     ctx.chrome.close()
     ctx.chrome = await startHeadlessChrome()
     const url = `http://127.0.0.1:${ctx.port}/?scenario=python_tile_studio`
@@ -283,7 +283,7 @@ function registerVisualPart04Tests(ctx) {
     const deadline = Date.now() + 8000
     while (Date.now() < deadline) {
       const r = await ctx.chrome.send('Runtime.evaluate', {
-        expression: `document.querySelectorAll('[data-testid="use-case-info-btn"]').length >= 2`,
+        expression: `document.querySelectorAll('[data-testid="studio-capabilities-btn"]').length >= 2`,
         returnByValue: true
       })
       if (r.result && r.result.value) break
@@ -292,29 +292,23 @@ function registerVisualPart04Tests(ctx) {
 
     const openRes = await ctx.chrome.send('Runtime.evaluate', {
       expression: `(async () => {
-        const btns = Array.from(document.querySelectorAll('[data-testid="use-case-info-btn"]'));
-        const composerBtn = document.querySelector('.dab-composer-actions [data-testid="use-case-info-btn"]');
-        const toolbarBtn = document.querySelector('[data-testid="tile-preview-toolbar"] [data-testid="use-case-info-btn"]');
+        const btns = Array.from(document.querySelectorAll('[data-testid="studio-capabilities-btn"]'));
+        const composerBtn = document.querySelector('.dab-composer-actions [data-testid="studio-capabilities-btn"]');
+        const toolbarBtn = document.querySelector('[data-testid="tile-preview-toolbar"] [data-testid="studio-capabilities-btn"]');
         if (toolbarBtn) toolbarBtn.click();
         await new Promise((r) => setTimeout(r, 120));
 
-        const modal = document.querySelector('[data-testid="use-case-info-modal"]');
+        const modal = document.querySelector('[data-testid="studio-capabilities-modal"]');
         const previews = modal
           ? Array.from(modal.querySelectorAll('[data-testid="doc-ui-preview"]')).map((el) => ({
               component: el.getAttribute('data-component'),
               pointerEvents: window.getComputedStyle(el).pointerEvents,
               userSelect: window.getComputedStyle(el).userSelect,
               ariaHidden: el.getAttribute('aria-hidden'),
-              tabIndex: el.getAttribute('tabindex'),
-              text: (el.textContent || '').trim()
+              tabIndex: el.getAttribute('tabindex')
             }))
           : [];
-        const tabs = modal
-          ? Array.from(modal.querySelectorAll('[role="tab"]')).map((t) => ({
-              label: (t.textContent || '').trim(),
-              selected: t.getAttribute('aria-selected') === 'true'
-            }))
-          : [];
+        const tabs = modal ? Array.from(modal.querySelectorAll('[role="tab"]')) : [];
         return {
           btnCount: btns.length,
           hasComposerBtn: Boolean(composerBtn),
@@ -324,7 +318,7 @@ function registerVisualPart04Tests(ctx) {
           modalOpen: Boolean(modal),
           modalText: modal?.innerText || '',
           previews,
-          tabs
+          tabCount: tabs.length
         };
       })()`,
       awaitPromise: true,
@@ -334,62 +328,34 @@ function registerVisualPart04Tests(ctx) {
     expect(openRes.result.value.btnCount).toBeGreaterThanOrEqual(2)
     expect(openRes.result.value.hasComposerBtn).toBe(true)
     expect(openRes.result.value.hasToolbarBtn).toBe(true)
-    expect(openRes.result.value.btnTitle).toBe('Use case guide & controls reference')
+    expect(openRes.result.value.btnTitle).toBe('Studio capabilities & shortcuts guide')
     expect(openRes.result.value.btnClassName).toContain('dab-info-trigger')
     expect(openRes.result.value.modalOpen).toBe(true)
-    expect(openRes.result.value.modalText).toContain('Publish As Dashboard')
-    expect(openRes.result.value.modalText).toContain('Execute & Test Script Mode')
-    expect(openRes.result.value.tabs).toEqual([
-      { label: 'Auto', selected: false },
-      { label: 'Agentic LookML', selected: false },
-      { label: 'Content Studio', selected: false },
-      { label: 'Conversational Analytics', selected: false },
-      { label: 'Data App', selected: false },
-      { label: 'Data Investigator', selected: false },
-      { label: 'Health Check', selected: false },
-      { label: 'Script', selected: true }
+    expect(openRes.result.value.tabCount).toBe(0)
+    expect(openRes.result.value.modalText).toContain('Open-Ended Looker Studio Workspace')
+    expect(openRes.result.value.modalText).toContain('Composer Shortcuts & Multi-Tab Viewer')
+    expect(openRes.result.value.previews.map((p) => p.component)).toEqual([
+      'LookmlTurnSkills',
+      'DataInvestigatorPreview',
+      'ReloadPreviewButton',
+      'OpenInLookerButton',
+      'PushLookmlButton',
+      'PublishDashboardButton',
+      'RunPythonButton',
+      'ExportHealthTddButton'
     ])
-    expect(openRes.result.value.previews).toEqual([
-      expect.objectContaining({
-        component: 'PublishDashboardButton',
-        pointerEvents: 'none',
-        ariaHidden: 'true',
-        tabIndex: '-1',
-        text: 'Publish Dashboard'
-      }),
-      expect.objectContaining({
-        component: 'RunPythonButton',
-        pointerEvents: 'none',
-        ariaHidden: 'true',
-        tabIndex: '-1',
-        text: 'Run Python'
-      }),
-      expect.objectContaining({
-        component: 'ScriptModeSelect',
+    for (const p of openRes.result.value.previews) {
+      expect(p).toMatchObject({
         pointerEvents: 'none',
         ariaHidden: 'true',
         tabIndex: '-1'
-      }),
-      expect.objectContaining({
-        component: 'SaveScriptButton',
-        pointerEvents: 'none',
-        ariaHidden: 'true',
-        tabIndex: '-1',
-        text: 'Save Script'
-      }),
-      expect.objectContaining({
-        component: 'ScheduleScriptButton',
-        pointerEvents: 'none',
-        ariaHidden: 'true',
-        tabIndex: '-1',
-        text: 'Schedule Script'
       })
-    ])
+    }
 
-    // Capture cropped screenshot of the open Use Case Guide modal
+    // Capture cropped screenshot of the open Studio Capabilities modal
     const clipRes = await ctx.chrome.send('Runtime.evaluate', {
       expression: `(() => {
-        const el = document.querySelector('.dab-use-case-info-modal');
+        const el = document.querySelector('.dab-capabilities-modal');
         if (!el) return null;
         const r = el.getBoundingClientRect();
         const margin = 20;
@@ -410,52 +376,34 @@ function registerVisualPart04Tests(ctx) {
     const scratchDir =
       '/usr/local/google/home/bryanweber/.gemini/jetski/brain/d8619e13-fc1d-42c9-9c8a-e76493f529cf/scratch'
     mkdirSync(scratchDir, { recursive: true })
-    const scratchModalPath = path.join(scratchDir, 'issue-64-use-case-docs-modal.png')
+    const scratchModalPath = path.join(scratchDir, 'issue-64-capabilities-docs-modal.png')
     writeFileSync(scratchModalPath, pngBuffer)
     expect(existsSync(scratchModalPath)).toBe(true)
 
-    // Switch across LookML, Health Check, and Auto tabs inside the modal, then close
-    const tabSwitchRes = await ctx.chrome.send('Runtime.evaluate', {
+    // Verify mdx body + composer model select borders, then close modal
+    const closeRes = await ctx.chrome.send('Runtime.evaluate', {
       expression: `(async () => {
-        const clickTab = async (uc) => {
-          const btn = document.querySelector('[data-testid="use-case-guide-tab-' + uc + '"]');
-          if (btn) btn.click();
-          await new Promise((r) => setTimeout(r, 80));
-          const modal = document.querySelector('[data-testid="use-case-info-modal"]');
-          return Array.from(modal?.querySelectorAll('[data-testid="doc-ui-preview"]') || []).map((el) =>
-            el.getAttribute('data-component')
-          );
-        };
-        const lookmlComponents = await clickTab('lookml');
-        const healthComponents = await clickTab('health-check');
-        const autoComponents = await clickTab('auto');
-        const autoBodyText = (document.querySelector('[data-testid="use-case-info-mdx-body"]')?.textContent || '').trim();
+        const mdxBodyText = (document.querySelector('[data-testid="studio-capabilities-mdx-body"]')?.textContent || '').trim();
         const modelSelectOuter = document.querySelector('[data-testid="composer-model-select"]');
         const modelSelectTrigger = document.querySelector('[data-testid="composer-model-select-trigger"]');
         const outerBorderWidth = modelSelectOuter ? window.getComputedStyle(modelSelectOuter).borderTopWidth : null;
         const triggerBorderWidth = modelSelectTrigger ? window.getComputedStyle(modelSelectTrigger).borderTopWidth : null;
-        const closeBtn = document.querySelector('[data-testid="use-case-info-close-btn"]');
+        const closeBtn = document.querySelector('[data-testid="studio-capabilities-close-btn"]');
         if (closeBtn) closeBtn.click();
         await new Promise((r) => setTimeout(r, 80));
         return {
-          lookmlComponents,
-          healthComponents,
-          autoComponents,
-          hasAutoBody: autoBodyText.includes('Automatic Workflow Discovery') && !autoBodyText.includes('Conversation Use-Case Lock'),
+          hasOpenEndedBody: mdxBodyText.includes('Open-Ended Looker Studio Workspace'),
           outerBorderWidth,
           triggerBorderWidth,
-          modalClosed: !document.querySelector('[data-testid="use-case-info-modal"]')
+          modalClosed: !document.querySelector('[data-testid="studio-capabilities-modal"]')
         };
       })()`,
       awaitPromise: true,
       returnByValue: true
     })
 
-    expect(tabSwitchRes.result.value).toEqual({
-      lookmlComponents: ['LookmlTurnSkills', 'PushLookmlButton'],
-      healthComponents: ['ExportHealthTddButton'],
-      autoComponents: [],
-      hasAutoBody: true,
+    expect(closeRes.result.value).toEqual({
+      hasOpenEndedBody: true,
       outerBorderWidth: '0px',
       triggerBorderWidth: '1px',
       modalClosed: true

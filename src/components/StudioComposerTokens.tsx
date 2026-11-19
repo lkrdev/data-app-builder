@@ -770,7 +770,7 @@ export function buildMentionOptions(
   if (category === 'all' || category === 'conversation') {
     conversations.forEach((c) => {
       const label = c.label || c.id
-      if (matchTokens(`${label} ${c.id} ${c.type || ''}`)) pushItem({ type: 'conversation', id: c.id, title: label, subtitle: c.use_case || c.type || 'conversation' })
+      if (matchTokens(`${label} ${c.id} ${c.type || ''}`)) pushItem({ type: 'conversation', id: c.id, title: label, subtitle: c.type || 'conversation' })
     })
     remoteSearchResults.forEach((r) => { if (r.type === 'conversation') pushItem(r) })
   }

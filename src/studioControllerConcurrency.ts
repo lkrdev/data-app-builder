@@ -12,11 +12,11 @@ import {
 import type { ChatMessage } from './components/App'
 import {
   addInFlightConvId, type AlertInspectorBundle, buildDenseExploreSchema, clearInFlightConvId,
-  extractExploreIdsFromCode, extractResolvedUseCase, formatExploreId, getArtifactNamespace,
+  extractExploreIdsFromCode, formatExploreId, getArtifactNamespace,
   hydrateConversationContentItems, hydrateMentionedContext, mergeTurnInteractionIds, NativeContentState,
-  normalizeConversationTags, parseExploreId, PublishedAppState, removeInFlightConvId, ResolvedStudioUseCase,
+  normalizeConversationTags, parseExploreId, PublishedAppState, removeInFlightConvId,
   saveAlertArtifact, saveNativeContentArtifact, saveUserConversation, StudioContentItem,
-  StudioContentItemType, StudioContextMention, studioModeToUseCase, StudioUseCase,
+  StudioContentItemType, StudioContextMention,
   toTurnCrudItem, TurnCrudItem, upsertPublishedDataApp, upsertStudioContentItem, UserConversationEntry,
 } from './lookerApi'
 import {
@@ -70,15 +70,14 @@ export function upsertLocalTurnContentItem(
 export async function prepareTurnMentionsAndContext(opts: {
   effectivePrompt: string; mentionsToHydrate: StudioContextMention[]; resumeConv?: UserConversationEntry
   core40SDK: Looker40SDK; extensionSDK?: Partial<ExtensionSDK>; auth?: AntigravityAuth; userId?: string; activeEnvironmentId?: string
-  conversations: UserConversationEntry[]; snapExplores: string[]
-  turnTargetUseCase: StudioUseCase; initialSchemaMarkdown: string
+  conversations: UserConversationEntry[]; snapExplores: string[]; initialSchemaMarkdown: string
   onMentionItem: (raw: Partial<StudioContentItem> & { id: string; contentType: StudioContentItemType }) => void
   onHydratingStatus: () => void
 }): Promise<{
   explores: string[]; schemaMarkdown: string; exploresChanged: boolean
   extraSources?: Array<{ type: 'inline'; content: string; target: string }>; promptWithContext: string
 }> {
-  const { effectivePrompt, mentionsToHydrate, resumeConv, core40SDK, extensionSDK, auth, userId, activeEnvironmentId, conversations, snapExplores, turnTargetUseCase, initialSchemaMarkdown, onMentionItem, onHydratingStatus } = opts
+  const { effectivePrompt, mentionsToHydrate, resumeConv, core40SDK, extensionSDK, auth, userId, activeEnvironmentId, conversations, snapExplores, initialSchemaMarkdown, onMentionItem, onHydratingStatus } = opts
   if (resumeConv || mentionsToHydrate.length === 0) {
     return { explores: snapExplores, schemaMarkdown: initialSchemaMarkdown, exploresChanged: false, promptWithContext: effectivePrompt }
   }
@@ -92,7 +91,8 @@ export async function prepareTurnMentionsAndContext(opts: {
     }
   })
   onHydratingStatus()
-  const hydrated = await hydrateMentionedContext({ sdk: core40SDK, extensionSDK, auth, userId, activeEnvironmentId, mentions: mentionsToHydrate, conversations, selectedExplores: snapExplores, useCase: turnTargetUseCase })
+  const fixedDates = /(?:^|\s)\/(?:data-investigator|key-driver-analysis)(?=\s|$)/i.test(effectivePrompt)
+  const hydrated = await hydrateMentionedContext({ sdk: core40SDK, extensionSDK, auth, userId, activeEnvironmentId, mentions: mentionsToHydrate, conversations, selectedExplores: snapExplores, fixedDates })
   let explores = snapExplores, schemaMarkdown = initialSchemaMarkdown, exploresChanged = false
   if (hydrated.explores.length > 0) {
     explores = hydrated.explores
@@ -353,15 +353,9 @@ export function useStudioTurnConcurrency(opts: UseStudioTurnConcurrencyParams) {
     const abortController = new AbortController()
     const approvedOps = new Set<string>()
     const entry: InFlightTurnEntry = {
-      convId,
-      busyStatus: 'Connecting to Antigravity...',
-      liveActivitySteps: [],
-      abortController,
-      approvedOps,
-      permEpoch: nextEpoch,
-      pendingPermQueue: [],
-      queuedPrompts: queuedPromptsByConvIdRef.current[convId] || [],
-      snapshot,
+      convId, busyStatus: 'Connecting to Antigravity...', liveActivitySteps: [], abortController,
+      approvedOps, permEpoch: nextEpoch, pendingPermQueue: [],
+      queuedPrompts: queuedPromptsByConvIdRef.current[convId] || [], snapshot,
     }
     inFlightTurnsRef.current.set(convId, entry)
     approvedOpsRef.current = approvedOps
@@ -376,13 +370,9 @@ export function useStudioTurnConcurrency(opts: UseStudioTurnConcurrencyParams) {
       cur.pendingPermQueue.splice(0).forEach((p) => p.resolve('deny'))
       inFlightTurnsRef.current.delete(convId)
       if (activeConversationIdRef.current === convId) {
-        const fallbackSteps = Array.isArray(mockExt?.initialLiveActivitySteps)
-          ? (mockExt.initialLiveActivitySteps as AntigravityActivityStep[])
-          : []
-        liveActivityStepsRef.current = fallbackSteps
-        setNonTurnLiveSteps(fallbackSteps)
-        nonTurnBusyRef.current = (mockExt?.initialBusyStatus as string) || null
-        nonTurnBusyOwnerRef.current = ''
+        const fallbackSteps = Array.isArray(mockExt?.initialLiveActivitySteps) ? (mockExt.initialLiveActivitySteps as AntigravityActivityStep[]) : []
+        liveActivityStepsRef.current = fallbackSteps; setNonTurnLiveSteps(fallbackSteps)
+        nonTurnBusyRef.current = (mockExt?.initialBusyStatus as string) || null; nonTurnBusyOwnerRef.current = ''
         setNonTurnBusyStatus(nonTurnBusyRef.current)
       }
       refreshTurnRegistry()
@@ -397,8 +387,7 @@ export function useStudioTurnConcurrency(opts: UseStudioTurnConcurrencyParams) {
       const entry = inFlightTurnsRef.current.get(cid)
       if (entry) {
         const partialSteps = entry.liveActivitySteps
-        inFlightTurnsRef.current.delete(cid)
-        entry.abortController.abort()
+        inFlightTurnsRef.current.delete(cid); entry.abortController.abort()
         entry.pendingPermQueue.splice(0).forEach((p) => p.resolve('deny'))
         if (reasonText) {
           if (activeConversationIdRef.current === cid) {
@@ -408,25 +397,17 @@ export function useStudioTurnConcurrency(opts: UseStudioTurnConcurrencyParams) {
         }
       } else if (reasonText) {
         const partialSteps = activeConversationIdRef.current === cid ? liveActivityStepsRef.current : []
-        if (partialSteps.length > 0 && activeConversationIdRef.current === cid) {
-          setMessages((prev) => [...prev, { role: 'assistant', text: reasonText, activitySteps: partialSteps }])
-        }
+        if (partialSteps.length > 0 && activeConversationIdRef.current === cid) setMessages((prev) => [...prev, { role: 'assistant', text: reasonText, activitySteps: partialSteps }])
         onTurnAbortedRef.current?.(cid, reasonText, partialSteps)
       }
       if (standalonePendingPermRef.current && (!standalonePendingPermRef.current.convId || standalonePendingPermRef.current.convId === cid)) {
-        const cur = standalonePendingPermRef.current
-        syncStandalonePerm(null)
-        cur.resolve('deny')
+        const cur = standalonePendingPermRef.current; syncStandalonePerm(null); cur.resolve('deny')
       }
       if (activeConversationIdRef.current === cid) {
-        liveActivityStepsRef.current = []
-        setNonTurnLiveSteps([])
-        nonTurnBusyRef.current = null
-        nonTurnBusyOwnerRef.current = ''
-        setNonTurnBusyStatus(null)
+        liveActivityStepsRef.current = []; setNonTurnLiveSteps([])
+        nonTurnBusyRef.current = null; nonTurnBusyOwnerRef.current = ''; setNonTurnBusyStatus(null)
       }
-      clearInFlightConvId(cid)
-      refreshTurnRegistry()
+      clearInFlightConvId(cid); refreshTurnRegistry()
     },
     [activeConversationIdRef, refreshTurnRegistry, setMessages, syncStandalonePerm]
   )
@@ -479,7 +460,6 @@ export type StudioTurnConcurrency = ReturnType<typeof useStudioTurnConcurrency>
 
 export interface MaterializeTurnBundlesParams {
   sdk: Looker40SDK; extensionSDK?: Partial<ExtensionSDK>; userId: string; result: AntigravityTurnResult
-  userPrompt: string; resolvedUseCase?: ResolvedStudioUseCase; allowedModes?: StudioUseCase[]
   folderId: string; turnExplores: string[]; itemState: { items: StudioContentItem[]; activeKey: string }
   existingPublishedApp?: PublishedAppState | null; existingNativeContent?: NativeContentState | null
   existingLookmlBundle?: LookmlBundle | null; existingLookmlProjectId?: string
@@ -492,7 +472,7 @@ export interface MaterializeTurnBundlesParams {
   onLookmlDashSaved?: (dash: { id: string; title: string; embedPath: string; model?: string }, lookmlId: string, isExisting: boolean) => void
   onNativeSaved?: (savedNative: NativeContentState, isExisting: boolean) => void
   onAlertSaved?: (savedAlert: AlertInspectorBundle, alertId: string, rawItem: Partial<StudioContentItem> & { id: string; contentType: 'alert' }) => void
-  onDataAppSaved?: (upserted: PublishedAppState, appUseCase: ResolvedStudioUseCase, isExisting: boolean) => void
+  onDataAppSaved?: (upserted: PublishedAppState, appContentType: 'data_app' | 'data-investigator', isExisting: boolean) => void
 }
 
 export interface MaterializeTurnBundlesOutcome {
@@ -501,7 +481,9 @@ export interface MaterializeTurnBundlesOutcome {
   crudItems: TurnCrudItem[]; convType: string; convTitle: string; convContent?: Record<string, unknown>
   publishedApp: PublishedAppState | null; nativeContent: NativeContentState | null
   lookmlBundle: LookmlBundle | null; lookmlProjectId: string; alertBundle: AlertInspectorBundle | null
-  finalDashId?: string; finalWidgetCount?: number; publishedDataAppDashboardLink: { title: string; path: string } | null
+  finalDashId?: string; finalWidgetCount?: number
+  publishedDataAppDashboardLink: { title: string; path: string } | null
+  deliveredContentLink: { label: string; title: string; path: string } | null
 }
 
 export async function checkDataAppPublishGate(opts: {
@@ -527,7 +509,7 @@ export async function checkDataAppPublishGate(opts: {
 
 export async function materializeTurnBundles(params: MaterializeTurnBundlesParams): Promise<MaterializeTurnBundlesOutcome> {
   const {
-    sdk, extensionSDK, userId, result, userPrompt, resolvedUseCase, allowedModes, folderId, turnExplores, itemState,
+    sdk, extensionSDK, userId, result, folderId, turnExplores, itemState,
     existingPublishedApp = null, existingNativeContent = null, existingLookmlBundle = null, existingLookmlProjectId = '',
     initialConvType = 'app', initialConvContent, requirePermission = true, approvedOperations = new Set<string>(),
     onPermissionRequest, signal, onStatus, onItemUpserted, onLookmlSaved, onLookmlDashSaved, onNativeSaved, onAlertSaved, onDataAppSaved,
@@ -556,9 +538,10 @@ export async function materializeTurnBundles(params: MaterializeTurnBundlesParam
   let lookmlBundle = existingLookmlBundle, lookmlProjectId = existingLookmlProjectId, alertBundle: AlertInspectorBundle | null = null
   let handledArtifact = false, finalDashId: string | undefined, finalWidgetCount: number | undefined
   let publishedDataAppDashboardLink: { title: string; path: string } | null = null
+  let deliveredContentLink: { label: string; title: string; path: string } | null = null
   const baseOut = () => ({
     handledArtifact, effectiveExplores, studioMeta, crudItems, convType, convTitle, convContent,
-    publishedApp, nativeContent, lookmlBundle, lookmlProjectId, alertBundle, finalDashId, finalWidgetCount, publishedDataAppDashboardLink,
+    publishedApp, nativeContent, lookmlBundle, lookmlProjectId, alertBundle, finalDashId, finalWidgetCount, publishedDataAppDashboardLink, deliveredContentLink,
   })
   if (result.permissionError) return Object.assign(baseOut(), { permissionDenied: result.permissionError })
 
@@ -602,6 +585,7 @@ export async function materializeTurnBundles(params: MaterializeTurnBundlesParam
       recordCrud(toTurnCrudItem(upLookml, upLookml.existed ? 'updated' : 'created'))
       convType = 'lookml'; convTitle = result.lookmlBundle.title || `LookML: ${lookmlId}`
       convContent = { sessionId: lookmlId, projectId: lookmlId, model: mergedBundle.model_name, branch: mergedBundle.branch_name }
+      deliveredContentLink = { label: 'Looker Project', title: `${lookmlId} in Looker IDE`, path: `/projects/${encodeURIComponent(lookmlId)}` }
       extractLookmlDashboardsFromBundle(Object.assign({}, result.lookmlBundle, { model_name: result.lookmlBundle.model_name || mergedBundle.model_name, project_id: lookmlId })).forEach((d) => {
         if (result.nativeBundle && (result.nativeBundle.id === d.id || result.nativeBundle.lookml_dashboard_id === d.id)) return
         const isExistingDash = itemState.items.some((it) => it.key === `lookml_dashboard:${d.id}`)
@@ -609,6 +593,7 @@ export async function materializeTurnBundles(params: MaterializeTurnBundlesParam
         onLookmlDashSaved?.(d, lookmlId, isExistingDash)
         recordCrud(toTurnCrudItem({ key: `lookml_dashboard:${d.id}`, id: d.id, title: d.title, contentType: 'lookml_dashboard', embedPath: d.embedPath }, isExistingDash ? 'updated' : 'created'))
         finalDashId = d.id
+        deliveredContentLink = { label: 'Looker Dashboard', title: d.title || d.id, path: `/dashboards/${d.id}` }
       })
     }
   }
@@ -631,6 +616,13 @@ export async function materializeTurnBundles(params: MaterializeTurnBundlesParam
     finalDashId = savedNative.id; finalWidgetCount = result.nativeBundle.tile_count
     convType = 'dashboard'; convTitle = savedNative.title
     convContent = Object.assign({}, convContent, { dashboardId: savedNative.id, contentType: savedNative.contentType, embedPath: savedNative.embedPath, lookId: savedNative.lookId, lookmlDashboardId: savedNative.lookmlDashboardId })
+    const nPath = nCt === 'look' && (savedNative.lookId || savedNative.id)
+      ? `/looks/${encodeURIComponent(String(savedNative.lookId || savedNative.id))}`
+      : nCt === 'board'
+      ? `/boards/${encodeURIComponent(String(savedNative.id))}`
+      : `/dashboards/${nCt === 'lookml_dashboard' ? String(savedNative.lookmlDashboardId || savedNative.id) : encodeURIComponent(String(savedNative.id))}`
+    const nLabel = nCt === 'look' ? 'Looker Look' : nCt === 'board' ? 'Looker Board' : 'Looker Dashboard'
+    deliveredContentLink = { label: nLabel, title: savedNative.title || String(savedNative.id), path: nPath }
   }
   if (result.alertBundle) {
     handledArtifact = true
@@ -651,6 +643,9 @@ export async function materializeTurnBundles(params: MaterializeTurnBundlesParam
     recordCrud(toTurnCrudItem(upAlert, isExistingAlert ? 'updated' : 'created'))
     convType = 'tile'; convTitle = alertTitle
     convContent = Object.assign({}, convContent, { alertId, dashboardId: savedAlert.dashboard_id ? String(savedAlert.dashboard_id) : undefined, contentType: 'alert' })
+    if (savedAlert.dashboard_id) {
+      deliveredContentLink = { label: 'Looker Dashboard', title: alertTitle, path: `/dashboards/${encodeURIComponent(String(savedAlert.dashboard_id))}` }
+    }
   }
   if (result.bundle) {
     handledArtifact = true
@@ -658,22 +653,23 @@ export async function materializeTurnBundles(params: MaterializeTurnBundlesParam
     const upserted = await upsertPublishedDataApp(sdk, result.bundle, folderId, publishedApp, studioMeta)
     if (signal?.aborted) return Object.assign(baseOut(), { aborted: true })
     publishedApp = upserted
-    const inferredUc = resolvedUseCase || extractResolvedUseCase(result.assistantText, userPrompt, allowedModes)
-    const appUseCase: ResolvedStudioUseCase = inferredUc === 'data-investigator' ? 'data-investigator' : 'app'
-    const appCt: StudioContentItemType = appUseCase === 'data-investigator' ? 'data-investigator' : 'data_app'
+    const isInvestigatorApp = /\bviewMode\s*=\s*['"](?:doc|slides)['"]|What This Chart Means|Next Investigation Path/i.test(result.bundle.raw_code || '')
+    const appCt: 'data_app' | 'data-investigator' = isInvestigatorApp ? 'data-investigator' : 'data_app'
+    const appConvType = isInvestigatorApp ? 'data-investigator' : 'app'
     const isExistingApp = itemState.items.some((it) => (it.contentType === 'data_app' || it.contentType === 'data-investigator') && it.id === String(upserted.dashboardId))
     const upApp = syncItem({
       id: String(upserted.dashboardId), dashboardId: String(upserted.dashboardId), contentType: appCt, title: upserted.title,
       embedPath: `/embed/dashboards/${encodeURIComponent(String(upserted.dashboardId))}`, folderId: upserted.folderId, extensionId: upserted.extensionId,
       source: isExistingApp ? 'modified' : 'created', createdInConversation: true, hidden: false,
     })
-    onDataAppSaved?.(upserted, appUseCase, isExistingApp)
+    onDataAppSaved?.(upserted, appCt, isExistingApp)
     recordCrud(toTurnCrudItem(upApp, isExistingApp ? 'updated' : 'created'))
     finalDashId = upserted.dashboardId; finalWidgetCount = result.bundle?.widgets?.length || 0
     if (upserted.dashboardId) {
       publishedDataAppDashboardLink = { title: upserted.title || result.bundle.title || 'Data App Dashboard', path: `/dashboards/${encodeURIComponent(String(upserted.dashboardId))}` }
+      deliveredContentLink = { label: 'Looker Dashboard', title: publishedDataAppDashboardLink.title, path: publishedDataAppDashboardLink.path }
     }
-    convType = appUseCase; convTitle = upserted.title
+    convType = appConvType; convTitle = upserted.title
     convContent = Object.assign({}, convContent, { dashboardId: upserted.dashboardId, appArtifactId: `obj_app_${upserted.dashboardId}`, extensionId: upserted.extensionId })
   }
   return baseOut()
@@ -682,7 +678,7 @@ export async function materializeTurnBundles(params: MaterializeTurnBundlesParam
 export interface ResumeConversationTurnParams {
   sdk: Looker40SDK; extensionSDK?: Partial<ExtensionSDK>; userId: string; auth: AntigravityAuth
   conv: UserConversationEntry; folderId?: string; model?: string; thinkingLevel?: 'low' | 'medium' | 'high'
-  maxTotalTokens?: number; maxToolRounds?: number; allowedModes?: StudioUseCase[]
+  maxTotalTokens?: number; maxToolRounds?: number
   requirePermission?: boolean; approvedOperations?: Set<string>
   onPermissionRequest?: (req: CodeModePermissionRequest) => Promise<CodeModePermissionDecision>
   onStatus?: (status: string) => void; onProgressSteps?: (steps: AntigravityActivityStep[]) => void
@@ -694,7 +690,7 @@ export async function resumeInFlightConversationTurn(params: ResumeConversationT
 }> {
   const {
     sdk, extensionSDK, userId, auth, conv, folderId = '1', model, thinkingLevel, maxTotalTokens, maxToolRounds,
-    allowedModes, requirePermission = true, approvedOperations = new Set<string>(), onPermissionRequest,
+    requirePermission = true, approvedOperations = new Set<string>(), onPermissionRequest,
     onStatus = () => {}, onProgressSteps, pollScheduleMs, signal,
   } = params
   const interactionId = String(conv.interactionId || '').trim()
@@ -713,7 +709,6 @@ export async function resumeInFlightConversationTurn(params: ResumeConversationT
   const priorMsgs = lastIsUser ? baseMsgs.slice(0, -1) : baseMsgs
   const msgsWithUser: ChatMessage[] = lastIsUser ? baseMsgs : [...priorMsgs, { role: 'user', text: userPrompt }]
   const explores = conv.explores || []
-  const convUseCase = (conv.use_case as StudioUseCase) || studioModeToUseCase(conv.type)
   const existingPublishedApp: PublishedAppState | null =
     conv.content?.appArtifactId && conv.content.dashboardId
       ? { dashboardId: String(conv.content.dashboardId), title: conv.label || '', folderId, extensionId: String(conv.content.extensionId || ''), elementId: '' }
@@ -729,21 +724,23 @@ export async function resumeInFlightConversationTurn(params: ResumeConversationT
       sdk, extensionSDK, userId, environmentId: conv.environmentId, conversationId: conv.id, auth,
       session: { lastInteractionId: interactionId, environmentId: conv.environmentId, conversationId: conv.id, explores },
       model, thinkingLevel, maxTotalTokens, maxToolRounds,
-      mode: convUseCase === 'dashboard' ? 'dashboard' : 'data_app', useCase: convUseCase, allowedModes,
-      selectedExplores: explores, folderId, toolMode: convUseCase === 'lookml' ? 'lookml' : 'data_app',
-      lookmlProjectId: String(conv.content?.projectId || ''), existingNativeContent, schemaMarkdown: '',
+      selectedExplores: explores, folderId,
+      lookmlProjectId: String(conv.content?.projectId || ''),
+      existingPublishedApp: existingPublishedApp ? { dashboardId: existingPublishedApp.dashboardId, title: existingPublishedApp.title } : null,
+      existingNativeContent, schemaMarkdown: '',
       userPrompt, rawUserPrompt: userPrompt, priorMessages: priorMsgs,
       requirePermission, approvedOperations, onPermissionRequest, onProgressSteps, pollScheduleMs, signal,
       resumeInteractionId: interactionId, onStatus,
     })
     const itemState = { items: hydrateConversationContentItems(conv), activeKey: conv.activeContentTabKey || '' }
     const mat = await materializeTurnBundles({
-      sdk, extensionSDK, userId, result, userPrompt, allowedModes, folderId, turnExplores: explores, itemState,
+      sdk, extensionSDK, userId, result, folderId, turnExplores: explores, itemState,
       existingPublishedApp, existingNativeContent, existingLookmlProjectId: String(conv.content?.projectId || ''),
-      initialConvType: conv.type || result.resolvedUseCase || 'app', initialConvContent: conv.content,
+      initialConvType: conv.type || 'app', initialConvContent: conv.content,
       requirePermission, approvedOperations, onPermissionRequest, signal, onStatus,
     })
     const ns = getArtifactNamespace(extensionSDK)
+    const rawReply = result.assistantText || 'Completed.'
     const nextMsgs: ChatMessage[] = mat.permissionDenied
       ? [...msgsWithUser, { role: 'error', text: mat.permissionDenied }]
       : [
@@ -752,9 +749,9 @@ export async function resumeInFlightConversationTurn(params: ResumeConversationT
             {
               role: 'assistant' as const,
               text:
-                mat.publishedDataAppDashboardLink && !(result.assistantText || 'Completed.').includes(mat.publishedDataAppDashboardLink.path)
-                  ? `${(result.assistantText || 'Completed.').trimEnd()}\n\n**Looker Dashboard:** [Open ${mat.publishedDataAppDashboardLink.title}](${mat.publishedDataAppDashboardLink.path})`
-                  : result.assistantText || 'Completed.',
+                mat.deliveredContentLink && !rawReply.includes(mat.deliveredContentLink.path)
+                  ? `${rawReply.trimEnd()}\n\n**${mat.deliveredContentLink.label}:** [Open ${mat.deliveredContentLink.title}](${mat.deliveredContentLink.path})`
+                  : rawReply,
               interactionId: result.session.lastInteractionId,
             },
             mat.finalDashId ? { dashboardId: mat.finalDashId } : null,
@@ -776,7 +773,7 @@ export async function resumeInFlightConversationTurn(params: ResumeConversationT
     const updatedConv: UserConversationEntry = Object.assign(
       {}, conv,
       {
-        id: conv.id, type: mat.convType, use_case: mat.convType,
+        id: conv.id, type: mat.convType,
         label: conv.label || mat.convTitle || sanitizeConversationLabel('', userPrompt),
         inFlight: false, interactionId: result.session.lastInteractionId,
         environmentId: result.session.environmentId || conv.environmentId,

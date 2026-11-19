@@ -40,13 +40,13 @@ export function registerPermissionsPart15Tests(): void {
 
     // Sparse index text deltas + statusless interaction.completed event
     let textWireState: AntigravityInteractionPayload = { id: 'int_177_r2', status: 'in_progress', steps: wireState.steps }
-    textWireState = mergeInteractionSseEvent(textWireState, 'step.delta', { index: 34, delta: { text: '<USE_CASE>lookml</USE_CASE>\nOnboarded ', type: 'text' }, event_type: 'step.delta' })
+    textWireState = mergeInteractionSseEvent(textWireState, 'step.delta', { index: 34, delta: { text: 'Onboarded ', type: 'text' }, event_type: 'step.delta' })
     textWireState = mergeInteractionSseEvent(textWireState, 'step.delta', { index: 34, delta: { text: '`ext_catalog.sales_dw`.', type: 'text' }, event_type: 'step.delta' })
     textWireState = mergeInteractionSseEvent(textWireState, 'step.stop', { index: 34, event_type: 'step.stop' })
     textWireState = mergeInteractionSseEvent(textWireState, 'interaction.completed', { interaction: { id: 'int_177_r2' }, event_type: 'interaction.completed' })
     expect(textWireState.status).toBe('completed')
     expect((textWireState.steps as unknown[]).length).toBe(3)
-    expect(extractInteractionOutputText(textWireState)).toBe('<USE_CASE>lookml</USE_CASE>\nOnboarded `ext_catalog.sales_dw`.')
+    expect(extractInteractionOutputText(textWireState)).toBe('Onboarded `ext_catalog.sales_dw`.')
 
     // End-to-end OAuth SSE turn through runAntigravityTurn executes streamed code (not "")
     const originalFetch = globalThis.fetch
@@ -76,7 +76,7 @@ export function registerPermissionsPart15Tests(): void {
                 'id: e4\nevent: interaction.completed\ndata: {"interaction":{"id":"int_oauth_177_1","status":"requires_action","environment_id":"env_oauth_177"},"event_type":"interaction.completed"}\n\n',
               ]
             : [
-                'id: e5\nevent: step.delta\ndata: {"index":34,"delta":{"text":"<USE_CASE>lookml</USE_CASE>\\nVerified tables.","type":"text"},"event_type":"step.delta"}\n\n',
+                'id: e5\nevent: step.delta\ndata: {"index":34,"delta":{"text":"Verified tables.","type":"text"},"event_type":"step.delta"}\n\n',
                 'id: e6\nevent: step.stop\ndata: {"index":34,"event_type":"step.stop"}\n\n',
                 'id: e7\nevent: interaction.completed\ndata: {"interaction":{"id":"int_oauth_177_2","status":"completed","environment_id":"env_oauth_177"},"event_type":"interaction.completed"}\n\n',
               ]
@@ -91,8 +91,8 @@ export function registerPermissionsPart15Tests(): void {
 
       const oauthTurn = await runAntigravityTurn({
         sdk: asSdk({ ok: async <T>(p: T) => p }), extensionSDK: {}, auth: { mode: 'oauth', oauthToken: 'oauth_tok_177' },
-        session: { environmentId: 'env_oauth_177', lastInteractionId: 'int_prev_177', toolType: 'lookml' },
-        toolMode: 'lookml', useCase: 'lookml', lookmlProjectId: 'sales_proj', selectedExplores: [],
+        session: { environmentId: 'env_oauth_177', lastInteractionId: 'int_prev_177' },
+        canDevelop: true, lookmlProjectId: 'sales_proj', selectedExplores: [],
         schemaMarkdown: '# Schema', userPrompt: 'Generate bronze views for ext_catalog.sales_dw.*', onStatus: () => {},
       })
       expect(executedCodes).toEqual(['return connection_tables("bq_conn", schema_name="ext_catalog.sales_dw")'])

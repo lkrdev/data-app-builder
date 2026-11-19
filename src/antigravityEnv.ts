@@ -115,7 +115,7 @@ export function prewarmOrWakeAntigravityEnvironment(params: {
   userId?: string
   extensionSDK: AntigravityExtensionHostLike
   auth: AntigravityAuth
-  toolType: AntigravityToolType
+  toolType?: AntigravityToolType
   model?: string
   maxTotalTokens?: number
   environmentId?: string
@@ -129,7 +129,7 @@ export function prewarmOrWakeAntigravityEnvironment(params: {
   onEnvironmentUpdated?: (environmentId: string, sourcesHash?: string) => void | Promise<void>
 }): Promise<{ session: AgentSession; status: 'woken' | 'prelaunched' | 'standby' }> {
   const {
-    sdk, userId, extensionSDK, auth, toolType, model = DEFAULT_ANTIGRAVITY_MODEL,
+    sdk, userId, extensionSDK, auth, toolType = 'app', model = DEFAULT_ANTIGRAVITY_MODEL,
     maxTotalTokens = DEFAULT_MAX_TOTAL_TOKENS, environmentId, conversationId: rawConversationId,
     existingSession, selectedExplores = [], schemaMarkdown = '', existingAppCode, extraSources = [],
     forceFresh = false, onEnvironmentUpdated,
@@ -507,14 +507,14 @@ function formatInteractionStepForDebug(step: AntigravityInteractionStep, idx: nu
 
 export interface FetchConversationSandboxDebugOptions {
   extensionSDK?: AntigravityExtensionHostLike; auth?: AntigravityAuth; conversationId?: string; label?: string
-  useCase?: string; model?: string; thinkingLevel?: string; environmentId?: string; lastInteractionId?: string
+  model?: string; thinkingLevel?: string; environmentId?: string; lastInteractionId?: string
   messages?: ReadonlyArray<ConversationThreadTurnLike>; liveActivitySteps?: AntigravityActivityStep[]; busyStatus?: string | null
   contentItems?: ReadonlyArray<{ key?: string; id?: string; contentType?: string; title?: string; embedPath?: string; filePath?: string }>
   maxTurns?: number; maxWorkspaceFiles?: number
 }
 
 export function fetchConversationSandboxDebugMarkdown(opts: FetchConversationSandboxDebugOptions): Promise<string> {
-  const { extensionSDK, auth, conversationId, label, useCase, model, thinkingLevel, messages = [], liveActivitySteps = [], busyStatus, contentItems = [], maxTurns = 120, maxWorkspaceFiles = 10 } = opts
+  const { extensionSDK, auth, conversationId, label, model, thinkingLevel, messages = [], liveActivitySteps = [], busyStatus, contentItems = [], maxTurns = 120, maxWorkspaceFiles = 10 } = opts
   const startId = String(opts.lastInteractionId || messages.slice().reverse().find((m) => m.interactionId)?.interactionId || '').trim()
   let resolvedEnvId = normalizeEnvironmentId(opts.environmentId) || String(opts.environmentId || '').trim()
   const canFetch = Boolean(auth && (auth.mode === 'apikey' ? Boolean(auth.apiKey?.trim() || extensionSDK?.serverProxy) : Boolean((auth.getOAuthToken?.() || auth.oauthToken || '').trim())))
@@ -571,7 +571,6 @@ export function fetchConversationSandboxDebugMarkdown(opts: FetchConversationSan
         '## Conversation Metadata',
         `- **Conversation ID:** \`${conversationId || 'unsaved'}\``,
         ...(label?.trim() ? [`- **Title:** ${label.trim()}`] : []),
-        ...(useCase ? [`- **Use Case:** \`${useCase}\``] : []),
         ...(model ? [`- **Model:** \`${model}\`${thinkingLevel ? ` (thinking: \`${thinkingLevel}\`)` : ''}`] : []),
         `- **Environment ID:** \`${resolvedEnvId || 'none'}\``,
         `- **Latest Interaction ID:** \`${startId || 'none'}\``,

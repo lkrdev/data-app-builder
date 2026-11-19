@@ -85,7 +85,7 @@ Accessible modal dialog shell with backdrop click dismissal, `Escape` key handle
 - **Props**: `open: boolean`, `onClose: () => void`, `title: React.ReactNode`, `subtitle?: React.ReactNode`, `headerRight?: React.ReactNode`, `testId?: string`, `backdropTestId?: string`, `backdropClassName?: string`, `closeTestId?: string`, `closeLabel?: string` (default `'✕'`), `className?: string`, `maxWidth?: number | string`, `footer?: React.ReactNode`, `children: React.ReactNode`.
 - **Canonical Modal `testId`s**:
   - `folder-advanced-search-modal` (`closeTestId="folder-search-modal-close"`)
-  - `use-case-info-modal` (`closeTestId="use-case-info-close-btn"`)
+  - `studio-capabilities-modal` (`closeTestId="studio-capabilities-close-btn"`)
   - `delete-conv-modal`
   - `reset-env-modal` (`closeTestId="close-reset-env-modal"`)
   - `tile-schedule-modal`
@@ -101,7 +101,7 @@ Right-pane preview toolbar with a responsive wrapping title/badge group (`.dab-d
 - `<StudioSkeleton width={190} height={28} testId="..." />`: Shimmer placeholder (`.dab-skeleton`) preventing layout shift during async loads. **Props**: `width?: number | string`, `height?: number | string`, `testId?: string`, `className?: string`, `style?: React.CSSProperties`, `ariaLabel?: string` (omits `aria-hidden="true"` when `ariaLabel` is set).
 
 ### `<StudioDocPreview>`
-Non-interactive wrapper (`data-testid="doc-ui-preview"`) for live UI components embedded inside documentation Markdown (`renderUseCaseGuideMarkdown`).
+Non-interactive wrapper (`data-testid="doc-ui-preview"`) for live UI components embedded inside documentation Markdown (`renderCapabilitiesGuideMarkdown`).
 - **Props**: `component?: string`, `key?: React.Key`, `className?: string`, `children: React.ReactNode`.
 
 ### `<StudioSelect>`

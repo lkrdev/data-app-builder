@@ -98,7 +98,7 @@ const appTsx = [
   'src/components/StudioHeader.tsx',
   'src/components/StudioWorkspace.tsx',
   'src/components/StudioMarkdown.tsx',
-  'src/components/StudioUseCaseGuides.tsx',
+  'src/components/StudioCapabilitiesGuide.tsx',
   'src/components/StudioComposerTokens.tsx',
   'src/components/StudioComposer.tsx',
   'src/components/StudioLeftPane.tsx',
@@ -166,8 +166,8 @@ assert(
     lookerApiTs.includes('loadNativeContentById') &&
     lookerApiTs.includes('/embed/looks/') &&
     lookerApiTs.includes('/boards/') &&
-    appTsx.includes("builderMode === 'dashboard'"),
-  'Native Content Builder (/dashboard/:id?) must support UDDs/Looks/Boards/Schedules via CodeMode and hydrate live Looker objects via loadNativeContentById'
+    appTsx.includes('resolveLookerEmbedTarget'),
+  'Native Content Builder must support UDDs/Looks/Boards/Schedules via CodeMode and hydrate live Looker objects via loadNativeContentById'
 )
 const manifestLkml = readFileSync(path.join(repoRoot, 'manifest.lkml'), 'utf8')
 assert(
@@ -230,7 +230,7 @@ assert(
     healthCheckTs.includes('loadHealthCheckArtifact') &&
     healthCheckTs.includes('saveTabSessionHealthReportJson') &&
     !healthCheckTs.includes('saveUserArtifact') &&
-    appTsx.includes("location.pathname === '/health-check'") &&
+    appTsx.includes("activePaneKind === 'report'") &&
     appTsx.includes('TECHNICAL_DESIGN_DOCUMENT.md') &&
     appTsx.includes('Copy Markdown') &&
     appTsx.includes('Download Markdown'),
@@ -366,9 +366,10 @@ customElements.define('executive-app', ExecutiveApp);
       antigravityTs.includes('DEFAULT_POLL_SCHEDULE_MS = [400, 700, 1000, 1500]') &&
       antigravityTs.includes('AntigravityTurnTelemetry') &&
       antigravityTs.includes('warmTurnDirective') &&
+      antigravityTs.includes('[ACTIVE WORKSPACE STATE') &&
       lookerApiTs.includes('canonicalQueryJson') &&
       lookerApiTs.includes('savedByCanonical'),
-    'antigravity.ts and lookerApi.ts must include DATA_APP_GUIDE_MD, adaptive polling, telemetry, warmTurnDirective, and incremental canonicalQueryJson caching'
+    'antigravity.ts and lookerApi.ts must include DATA_APP_GUIDE_MD, adaptive polling, telemetry, warmTurnDirective ([ACTIVE WORKSPACE STATE]), and incremental canonicalQueryJson caching'
   )
 
   const stdinAppPath = path.join(workDir, 'stdin_app.js')
@@ -448,10 +449,10 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
     'lookmlArtifactHydration.ts must hydrate LookML on demand via /workspace/lookml/... and /projects/:id/file/content without writing obj_lookml_*'
   )
   assert(
-    antigravityTs.includes("allowUpdateSession: toolMode === 'lookml' || mode === 'dashboard'") &&
+    antigravityTs.includes('allowUpdateSession: needsDevSession') &&
       antigravityTs.includes("required: ['code', 'thought']") &&
       antigravityTs.includes('...customVars'),
-    'runAntigravityTurn must expose vars: { type: "object" } on RUN_LOOKER_CODEMODE_TOOL and pass allowUpdateSession: true + customVars in LookML and dashboard modes'
+    'runAntigravityTurn must expose vars: { type: "object" } on RUN_LOOKER_CODEMODE_TOOL and pass allowUpdateSession: needsDevSession + customVars'
   )
   // Verify Issue #18: Content Studio (UDD & LookML Dashboards, Looks, Boards, Schedules)
   assert(
@@ -466,10 +467,10 @@ customElements.define('dynamic-metric-app', DynamicMetricApp);
       antigravityTs.includes('def schedule_dashboard(') &&
       antigravityTs.includes('def emit_native_bundle(') &&
       antigravityTs.includes('NATIVE_CONTENT_GUIDE_MD') &&
-      antigravityTs.includes('isDashboardMode\n    ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]') &&
+      antigravityTs.includes('LKR_CLI_BRIDGE_TOOL') &&
       antigravityTs.includes('looker_http_ms') &&
       antigravityTs.includes('api_retries'),
-    'Issue #18: lookerApi.ts and antigravity.ts must include lookml_dashboard support, DASHBOARD_CODEMODE_PREAMBLE_PY macros, CodeMode-only activeTools in /dashboard mode, and Looker HTTP telemetry'
+    'Issue #18: lookerApi.ts and antigravity.ts must include lookml_dashboard support, DASHBOARD_CODEMODE_PREAMBLE_PY macros, LKR_CLI_BRIDGE_TOOL in activeTools, and Looker HTTP telemetry'
   )
   const lookmlPyMatch = lookmlToolTsx.match(/export const BOOTSTRAP_LOOKML_PY = `([\s\S]*?)`\n/)
   assert(lookmlPyMatch, 'Could not find BOOTSTRAP_LOOKML_PY in src/lookmlTool.tsx')
@@ -652,19 +653,21 @@ chmod +x "${fakeBinDir}/uv"
   assert(
     rootAgentsMd.includes('## Conversation Labeling (Stateless Side-Request)') &&
       rootAgentsMd.includes('[CONVERSATION_LABEL_REQUEST]') &&
-      rootAgentsMd.includes('## Use Case Auto-Classification (Turn 1 Routing)') &&
-      rootAgentsMd.includes('<USE_CASE>') &&
+      rootAgentsMd.includes('## Open-Ended Chat & Artifact Bundles') &&
+      !rootAgentsMd.includes(`<${'USE_' + 'CASE'}>`) &&
       rootAgentsMd.includes('pip install --break-system-packages --quiet uv') &&
       rootAgentsMd.includes('UV_TOOL_BIN_DIR=/usr/local/bin uv tool install') &&
       antigravityTs.includes("target: '/workspace/AGENTS.md'") &&
       antigravityTs.includes('generateConversationLabel') &&
       antigravityTs.includes('sanitizeConversationLabel') &&
-      lookerApiTs.includes('extractResolvedUseCase') &&
-      lookerApiTs.includes('getAllowedUseCases') &&
+      !lookerApiTs.includes(`extractResolved${'Use' + 'Case'}`) &&
+      !lookerApiTs.includes(`getAllowed${'Use' + 'Cases'}`) &&
       lookerApiTs.includes('user_conversations:') &&
       lookerApiTs.includes('loadUserConversations') &&
       lookerApiTs.includes('saveUserConversation') &&
-      appTsx.includes('data-testid="use-case-info-btn"') &&
+      appTsx.includes('data-testid="studio-capabilities-btn"') &&
+      appTsx.includes('testId="studio-capabilities-modal"') &&
+      !appTsx.includes('data-testid="use-case-info-btn"') &&
       appTsx.includes('data-testid="new-conversation-btn"') &&
       !appTsx.includes('data-testid="use-case-selector"') &&
       !appTsx.includes('data-testid="locked-use-case-badge"') &&
@@ -672,7 +675,7 @@ chmod +x "${fakeBinDir}/uv"
       lookerApiTs.includes('selectCaAgentViaIsolatedSubagent') &&
       lookerApiTs.includes('createLookerCaConversation') &&
       appTsx.includes('data-testid="ca-embed-preview"'),
-    'Issues #25, #26, #27, #32 & #100: AGENTS.md routing + labeling + CA sub-agent selection + uv/lkr-dev-cli bootstrap, /workspace/AGENTS.md seeding, use-case-info-btn, new-conversation-btn (without use-case-selector or locked-use-case-badge), ca-embed-preview, and user_conversations:${me.id} persistence must be present'
+    'Open-ended chat, labeling, CA sub-agent selection, uv/lkr-dev-cli bootstrap, /workspace/AGENTS.md seeding, studio-capabilities-btn/modal, new-conversation-btn, ca-embed-preview, and user_conversations:${me.id} persistence must be present'
   )
 
   // Issue #39: Self-evaluating concurrent multi-conversation benchmark harness in a single shared environment_id
@@ -1172,7 +1175,6 @@ else if (args[0] === 'issue' && args[1] === 'create') process.stdout.write('http
   const { STICKER_BOOK_PROMPT, gradeDataAppTurnOutput } = await import('./eval-data-app.mjs')
   assert(/playful sticker-book e-commerce command center/i.test(STICKER_BOOK_PROMPT))
   const badGrade = gradeDataAppTurnOutput({
-    resolvedUseCase: 'app',
     bundle: null,
     baseAssistantText: 'Built Command Center ([app.js](file:///workspace/apps/conv_1/app.js)).',
     finalAssistantText: 'Built Command Center ([app.js](file:///workspace/apps/conv_1/app.js)).',
@@ -1189,7 +1191,6 @@ else if (args[0] === 'issue' && args[1] === 'create') process.stdout.write('http
   const goodFinal = `${goodSummary}\n\n**Looker Dashboard:** [Open Sticker-Book Command Center](/dashboards/777)`
   const goodCode = "import { DataApp } from 'https://www.gstatic.com/looker-data-apps/versions/1.3.0/data-app.js'; const views = ['Pulse','Network','Forecast','Voice','Tree']; const m = 'thelook', e = 'order_items'; customElements.define('sticker-app', class extends DataApp {});"
   const baseGoodArgs = {
-    resolvedUseCase: 'app',
     bundle: { raw_code: goodCode, prod_code: goodCode },
     baseAssistantText: goodSummary,
     finalAssistantText: goodFinal,
@@ -1221,7 +1222,7 @@ else if (args[0] === 'issue' && args[1] === 'create') process.stdout.write('http
     },
   })
   assert.equal(goodGrade.passed, true)
-  assert.equal(goodGrade.score, '9/9')
+  assert.equal(goodGrade.score, '8/8')
 
   // Verify BUNDLE_APP_PY blocks DataApp.styles and static styles on DataApp (Light DOM blank-screen guard)
   const bundlePyTestPath = path.join(workDir, 'bundle_app_light_dom_check.py')

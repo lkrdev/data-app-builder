@@ -10,7 +10,7 @@ import {
   runAntigravityTurn,
 } from '../../antigravity'
 import {
-  CA_AGENT_SELECTION_REQUEST_TAG, CA_AGENT_SELECTION_RESPONSE_FORMAT, classifyStudioUseCase, createLookerCaConversation,
+  CA_AGENT_SELECTION_REQUEST_TAG, CA_AGENT_SELECTION_RESPONSE_FORMAT, createLookerCaConversation,
   fetchLookerCaAgentsCatalog, formatUserEnvArtifactKey, loadUserEnvironmentId, parseCaAgentSelectionResponse,
   saveUserConversation, saveUserEnvironmentId, selectCaAgentViaIsolatedSubagent,
 } from '../../lookerApi'
@@ -287,27 +287,6 @@ export function registerPermissionsPart02Tests(): void {
   })
 
   test('12. routes Conversational Analytics via stateless isolated sub-agent (no previous_interaction_id, tools=[]), creates Looker CA conversation, and persists to user_conversations:${me.id}', async () => {
-    expect(
-      classifyStudioUseCase('Why did gross margin drop in Q3 compared to Q2?', 'auto', [
-        'app',
-        'dashboard',
-        'lookml',
-        'health-check',
-        'tile',
-        'conversational-analytics',
-      ])
-    ).toBe('conversational-analytics')
-    expect(
-      classifyStudioUseCase('Build an Executive Revenue Data App on order_items', 'auto', [
-        'app',
-        'dashboard',
-        'lookml',
-        'health-check',
-        'tile',
-        'conversational-analytics',
-      ])
-    ).toBe('app')
-
     const artifactStore = new Map<string, { key: string; version: number; value: string }>()
     const mockSdk = asSdk({
       ok: async <T>(p: T) => p,

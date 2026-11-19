@@ -7,10 +7,8 @@ import { buildWorkspaceSources, recoverInFlightInteraction, runAntigravityTurn }
 import { BUILTIN_SKILLS_FILES, resolveBuiltinWorkspaceFileContent } from '../../antigravitySteps'
 import {
   clearArtifactServiceCache,
-  extractResolvedUseCase,
   getArtifactService,
   LOOKER_DASHBOARD_SKILL_MD,
-  matchExplicitUseCaseRule,
   STUDIO_INFLIGHT_CONV_SESSION_KEY,
 } from '../../lookerApi'
 import { extractSlashSkillIds, LOOKML_TURN_SKILLS } from '../../lookmlSkills'
@@ -128,7 +126,7 @@ export function registerPermissionsPart21Tests(): void {
                     '<NATIVE_CONTENT_BUNDLE>{"id":"777","content_type":"dashboard","title":"Recovered Revenue Dashboard","embed_path":"/embed/dashboards/777"}</NATIVE_CONTENT_BUNDLE>',
                 },
               ],
-              output_text: '<USE_CASE>dashboard</USE_CASE>Recovered your dashboard after page refresh.',
+              output_text: 'Recovered your dashboard after page refresh.',
             }),
           }
         },
@@ -173,7 +171,7 @@ export function registerPermissionsPart21Tests(): void {
     const sfToBqMd = SANDBOX_AGENT_SKILL_FILES['snowflake-to-bigquery-converter/SKILL.md']
     expect(agenticLookmlMd).toContain('Greenfield projects use Medallion')
     expect(sfToBqMd).toContain('name: snowflake-to-bigquery-converter')
-    expect(SANDBOX_AGENT_SKILL_FILES['looker-audit/SKILL.md']).toContain('<USE_CASE>tile</USE_CASE>')
+    expect(SANDBOX_AGENT_SKILL_FILES['looker-audit/SKILL.md']).toContain('name: looker-audit')
 
     const wsSources = buildWorkspaceSources({ schemaMarkdown: '# Schema' })
     const aliasPairs: Array<[string, string]> = [
@@ -227,13 +225,6 @@ export function registerPermissionsPart21Tests(): void {
       )
     ).toEqual(['lookml-reviewer', 'looker-performance-optimizer', 'snowflake-to-bigquery-converter', 'looker-audit'])
 
-    expect(matchExplicitUseCaseRule('/looker-audit check slow dashboards')).toBe('tile')
-    expect(extractResolvedUseCase('Audit complete.', '/looker-audit check slow dashboards')).toBe('tile')
-    for (const slash of ['/lookml-reviewer', '/looker-performance-optimizer', '/snowflake-to-bigquery-converter']) {
-      expect(matchExplicitUseCaseRule(`${slash} on orders`)).toBe('lookml')
-      expect(extractResolvedUseCase('Reviewed.', `${slash} on orders`)).toBe('lookml')
-    }
-
     const postedBodies: Array<Record<string, unknown>> = []
     let seq = 0
     const origFetch = globalThis.fetch
@@ -247,7 +238,7 @@ export function registerPermissionsPart21Tests(): void {
         environment_id: 'env_213',
         status: 'completed',
         steps: [],
-        output_text: seq === 2 ? 'Built Data App.' : '<USE_CASE>tile</USE_CASE>Audit complete.',
+        output_text: seq === 2 ? 'Built Data App.' : 'Audit complete.',
       })
       return { ok: true, status: 200, text: async () => payload } as unknown as Response
     }) as typeof fetch
@@ -265,13 +256,9 @@ export function registerPermissionsPart21Tests(): void {
       const t1 = await runAntigravityTurn({
         ...baseTurnOpts,
         session: {},
-        useCase: 'auto',
-        mode: 'data_app',
         activatedLookmlSkills: ['looker-audit'],
         userPrompt: '/looker-audit, check slow dashboards',
       })
-      expect(t1.session.toolType).toBe('tile')
-      expect(t1.resolvedUseCase).toBe('tile')
       expect((postedBodies[0].tools as Array<{ type?: string }>).some((t) => t.type === 'code_execution')).toBe(false)
       expect(((postedBodies[0].input as Array<{ text: string }>)[0] || {}).text).toContain('name: looker-audit')
 
@@ -279,27 +266,21 @@ export function registerPermissionsPart21Tests(): void {
         ...baseTurnOpts,
         environmentId: 'env_213',
         session: t1.session,
-        useCase: 'auto',
-        mode: 'data_app',
         activatedLookmlSkills: ['looker-audit'],
         userPrompt: 'Build me an executive sales Data App',
       })
-      expect(t2.session.toolType).toBe('app')
       expect((postedBodies[1].tools as Array<{ type?: string }>).some((t) => t.type === 'code_execution')).toBe(true)
       const t2Text = ((postedBodies[1].input as Array<{ text: string }>)[0] || {}).text
-      expect(t2Text).toContain('You are building a Looker Data App')
+      expect(t2Text).toContain('[ACTIVE WORKSPACE STATE')
       expect(t2Text).not.toContain('name: looker-audit')
 
-      const t3 = await runAntigravityTurn({
+      await runAntigravityTurn({
         ...baseTurnOpts,
         environmentId: 'env_213',
         session: t2.session,
-        useCase: 'auto',
-        mode: 'data_app',
         existingAppCode: 'export class SalesApp {}',
         userPrompt: '/looker-audit.',
       })
-      expect(t3.session.toolType).toBe('tile')
       expect((postedBodies[2].tools as Array<{ type?: string }>).some((t) => t.type === 'code_execution')).toBe(false)
       const t3Text = ((postedBodies[2].input as Array<{ text: string }>)[0] || {}).text
       expect(t3Text).toContain('name: looker-audit')
@@ -308,13 +289,12 @@ export function registerPermissionsPart21Tests(): void {
       const t4 = await runAntigravityTurn({
         ...baseTurnOpts,
         session: {},
-        useCase: 'auto',
-        allowedModes: ['app'],
-        mode: 'data_app',
-        userPrompt: '/looker-audit check slow dashboards',
+        canDevelop: false,
+        userPrompt: 'Build me a quick summary Data App',
       })
-      expect(t4.session.toolType).toBe('app')
-      expect(((postedBodies[3].input as Array<{ text: string }>)[0] || {}).text).not.toContain('name: looker-audit')
+      expect((postedBodies[3].tools as Array<{ name?: string }>).some((t) => t.name === 'lkr_cli_extension_bridge')).toBe(false)
+      expect((postedBodies[3].tools as Array<{ type?: string }>).some((t) => t.type === 'code_execution')).toBe(true)
+      expect(t4.assistantText).toBe('Audit complete.')
     } finally {
       globalThis.fetch = origFetch
     }

@@ -83,7 +83,7 @@ export const StudioBrandAgentName: React.FC<{ ctl: StudioController }> = ({ ctl 
     <span className="dab-agent-name-brand">
       <button
         ref={homeBtnRef} type="button" data-testid="studio-brand-home-btn" className="dab-brand-home-btn"
-        onClick={() => ctl.handleNewConversation('auto')} title="New conversation (Home)" aria-label={`${agentName} — New conversation (Home)`}
+        onClick={() => ctl.handleNewConversation()} title="New conversation (Home)" aria-label={`${agentName} — New conversation (Home)`}
       >
         <RipperLogo size={24} testId="studio-brand-logo" />
         <strong data-testid="studio-agent-name-label">{agentName}</strong>
@@ -325,7 +325,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     themeMode, resolvedTheme, setThemeMode, sharedEnvironmentId, environmentStatus, envResetNotice, envSyncNotice,
     resetEnvModalOpen, setResetEnvModalOpen, hasInFlightTurns, envSkillsOutdated, handleSyncEnvironmentSkills,
     handleResetEnvironment, handleStopEnvironment, requirePermission, setRequirePermission,
-    capabilities, canDeployLookml, isLookmlMode, isHealthCheckMode,
+    capabilities, canDeployLookml,
     loadingMetadata, folderTreeNodes, rootFolderIds, folderChildrenById,
     expandedFolderIds, loadingFolderIds, toggleExpandFolder, hydrateFolderAncestors,
     handleSearchFolders, selectedFolderId, setSelectedFolderId,
@@ -568,7 +568,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
           <span data-testid="studio-approval-policy-select">{requirePermission ? 'Safe Mode (Ask)' : 'Auto-Approve (YOLO)'}</span>
         </button>
 
-        {isLookmlMode && capabilities?.rolesLoaded && !canDeployLookml && (
+        {ctl.activeContentItem?.contentType === 'lookml' && capabilities?.rolesLoaded && !canDeployLookml && (
           <StudioBadge tone="warning" title="Deploy to production requires Looker 'deploy' or 'admin' permission">
             <Lock size={13} strokeWidth={1.75} aria-hidden="true" /> No deploy
           </StudioBadge>
@@ -735,7 +735,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
           ) : (
             <span className="dab-badge" title={`Uses serverProxy + ${getGeminiUserAttributeName(extensionSDK)}`}>API Key (User Attr) ✓</span>
           )}
-          {isHealthCheckMode && (
+          {ctl.activeContentItem?.contentType === 'report' && (
             <>
               {capabilities?.rolesLoaded && capabilities.tools.health.missingPermissions.length > 0 && (
                 <StudioBadge tone="warning" title={capabilities.tools.health.reason}>

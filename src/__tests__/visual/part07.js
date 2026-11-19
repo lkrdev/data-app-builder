@@ -463,7 +463,7 @@ function registerVisualPart07Tests(ctx) {
           const body = init && init.body ? JSON.parse(init.body) : {};
           const inputText = (body.input && body.input[0] && body.input[0].text) || '';
           window.__INTERACTION_CALLS__.push({ url, method: (init && init.method) || 'GET', body });
-          if (inputText.includes('[CONVERSATION_LABEL_REQUEST]')) {
+          if (inputText.trimStart().startsWith('[CONVERSATION_LABEL_REQUEST]')) {
             return {
               ok: true,
               status: 200,
@@ -480,7 +480,7 @@ function registerVisualPart07Tests(ctx) {
                 environment_id: 'env_155_shared',
                 status: 'completed',
                 output_text:
-                  '<USE_CASE>lookml</USE_CASE>\\nAdded measures.\\n<LOOKML_BUNDLE>{"id":"thelook_1762720001","title":"Order Items Measures","project_id":"thelook","model_name":"thelook","branch_name":"dev_1","files":[{"path":"views/order_items.view.lkml","action":"updated","content":"view: order_items {}","diff":"@@ -1 +1 @@"}],"validation":{"passed":true,"error_count":0,"errors":[]},"tests":[],"queries":[]}</LOOKML_BUNDLE>',
+                  'Added measures.\\n<LOOKML_BUNDLE>{"id":"thelook_1762720001","title":"Order Items Measures","project_id":"thelook","model_name":"thelook","branch_name":"dev_1","files":[{"path":"views/order_items.view.lkml","action":"updated","content":"view: order_items {}","diff":"@@ -1 +1 @@"}],"validation":{"passed":true,"error_count":0,"errors":[]},"tests":[],"queries":[]}</LOOKML_BUNDLE>',
               }),
             };
           }
@@ -493,7 +493,7 @@ function registerVisualPart07Tests(ctx) {
                 environment_id: 'env_155_shared',
                 status: 'completed',
                 output_text:
-                  '<USE_CASE>dashboard</USE_CASE>\\nCreated Executive KPI UDD.\\n<NATIVE_CONTENT_BUNDLE>{"id":"99","content_type":"dashboard","title":"Executive KPI UDD","folder_id":"5","tile_count":2,"explores":["thelook::order_items"]}</NATIVE_CONTENT_BUNDLE>',
+                  'Created Executive KPI UDD.\\n<NATIVE_CONTENT_BUNDLE>{"id":"99","content_type":"dashboard","title":"Executive KPI UDD","folder_id":"5","tile_count":2,"explores":["thelook::order_items"]}</NATIVE_CONTENT_BUNDLE>',
               }),
             };
           }

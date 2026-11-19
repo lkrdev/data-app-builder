@@ -139,6 +139,10 @@ function buildHydratedAssistantMessage(
       : nativeBundle && (nativeBundle.content_type === 'dashboard' || nativeBundle.contentType === 'dashboard' || !nativeBundle.content_type)
       ? String(nativeBundle.id || '')
       : undefined
+  if (dashId && !/\/(?:embed\/)?dashboards\/[^/\s)]+/i.test(text)) {
+    const dashTitle = bundle?.title || nativeBundle?.title || `Dashboard #${dashId}`
+    text = `${text}\n\n**Looker Dashboard:** [Open ${dashTitle}](/dashboards/${encodeURIComponent(dashId)})`
+  }
 
   const crudItems: TurnCrudItem[] = []
   if (bundle && conv.content?.dashboardId) {

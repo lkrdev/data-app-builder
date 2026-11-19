@@ -13,6 +13,7 @@ import {
 import { copyTextWithExtensionSdk, normalizeStudioAgentName } from '../lookerApi'
 import { LookmlBundle } from '../lookmlTool'
 import { StudioController } from '../useStudioController'
+import { SandboxMarkdownPreviewModal, StarterPromptButtons } from './StudioCapabilitiesGuide'
 import { StudioComposer } from './StudioComposer'
 import { StudioBadge, StudioButton, StudioSkeleton } from './StudioDesignSystem'
 import {
@@ -20,7 +21,6 @@ import {
   openContentLinkTargetInViewer, openOrCopyMarkdownLink,
   renderContentTabIcon, StudioMarkdown,
 } from './StudioMarkdown'
-import { SandboxMarkdownPreviewModal, StarterPromptButtons } from './StudioUseCaseGuides'
 
 export const BackgroundPermNoticeBanner: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const bg = ctl.backgroundPendingPerm
@@ -246,7 +246,7 @@ export const ThinkingStepsList: React.FC<{ steps: AntigravityActivityStep[]; con
 export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
     agentName: rawAgentName, extensionSDK,
-    messages, builderMode, selectedUseCase, selectedExplores, starterPrompts, starterPromptsLoading,
+    messages, selectedExplores, starterPrompts, starterPromptsLoading,
     setPrompt, busyStatus, liveActivitySteps, hydratingInteractionIds, hydrateMessageActivitySteps,
     pendingPerm, resolvePermDecision,
     leftPaneWidth, setLeftPaneWidth, flushLeftPaneWidthSave, rightPaneCollapsed, setRightPaneCollapsed,
@@ -416,11 +416,11 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
       <div className="dab-chat-log" ref={chatLogRef}>
         {messages.length === 0 && (
           <div className="dab-empty-chat">
-            <p><strong>{builderMode === 'dashboard' ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)' : `Ask ${agentName} to build, analyze, or automate across Looker`}</strong></p>
+            <p><strong>Ask {agentName} to build, analyze, or automate across Looker</strong></p>
             <p className="dab-muted">
               {selectedExplores.length > 0 ? <>Exploring <code>{selectedExplores.join(', ')}</code> — pick a starter prompt below or describe what you want to build.</> : 'Pick a starter prompt below or describe what you want to build, analyze, or automate.'}
             </p>
-            <StarterPromptButtons useCase={selectedUseCase} prompts={starterPrompts} loading={starterPromptsLoading} onSelect={setPrompt} disabled={!!busyStatus} />
+            <StarterPromptButtons prompts={starterPrompts} loading={starterPromptsLoading} onSelect={setPrompt} disabled={!!busyStatus} />
           </div>
         )}
 
@@ -689,23 +689,17 @@ export const StudioLeftPane: React.FC<{ ctl: StudioController }> = ({ ctl }) => 
 }
 
 export const StudioCenteredEmptyStage: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
-  const { agentName: rawAgentName, activeMode, builderMode, isLookmlMode, isHealthCheckMode, selectedUseCase, selectedExplores, starterPrompts, starterPromptsLoading, setPrompt, busyStatus } = ctl
+  const { agentName: rawAgentName, selectedExplores, starterPrompts, starterPromptsLoading, setPrompt, busyStatus } = ctl
   const agentName = normalizeStudioAgentName(rawAgentName)
   return (
     <main className="dab-empty-stage-centered" data-testid="centered-empty-prompt">
       <div className="dab-empty-prompt-card" data-testid="studio-empty-stage">
         <div className="dab-empty-hero">
-          <h2>
-            {isHealthCheckMode ? 'Run a 3-Pillar Looker & BigQuery Health Check'
-              : isLookmlMode ? 'Author & Validate Agentic LookML'
-              : activeMode === 'tile' ? 'Author & Schedule a Looker Script'
-              : builderMode === 'dashboard' ? 'Native Looker Content Builder (UDDs, Looks, Boards, Schedules)'
-              : `${agentName} is ready`}
-          </h2>
+          <h2>{agentName} is ready</h2>
           <p className="dab-muted">
             {selectedExplores.length > 0 ? <>Exploring <code>{selectedExplores.join(', ')}</code> — pick a starter prompt below or describe what you want to build.</> : 'Pick a starter prompt below or describe what you want to build, analyze, or automate.'}
           </p>
-          <StarterPromptButtons useCase={selectedUseCase} prompts={starterPrompts} loading={starterPromptsLoading} onSelect={setPrompt} disabled={!!busyStatus} />
+          <StarterPromptButtons prompts={starterPrompts} loading={starterPromptsLoading} onSelect={setPrompt} disabled={!!busyStatus} />
         </div>
         <BackgroundPermNoticeBanner ctl={ctl} />
         <StudioComposer ctl={ctl} />

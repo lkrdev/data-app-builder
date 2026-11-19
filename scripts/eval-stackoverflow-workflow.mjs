@@ -22,11 +22,7 @@ const {
   fetchConversationSandboxDebugMarkdown,
   runAntigravityTurn,
 } = require(path.join(rootDir, 'src/antigravity.ts'))
-const {
-  discoverAccessibleConnections,
-  extractResolvedUseCase,
-  matchExplicitUseCaseRule,
-} = require(path.join(rootDir, 'src/lookerApi.ts'))
+const { discoverAccessibleConnections } = require(path.join(rootDir, 'src/lookerApi.ts'))
 
 const STACKOVERFLOW_SQL = `-- Description: Cumulative view_count summed across every question ever posted on Stack Overflow.
 -- Business Prompt: Total Question Eyeball Count measures the total cumulative page views recorded across all Stack Overflow questions. Community leaders track this figure as the top-line indicator of overall developer reach and archive traffic.
@@ -138,7 +134,6 @@ async function main() {
   const shortId = Math.random().toString(36).slice(2, 6)
   const projectName = (projEqArg || (projArgIdx >= 0 ? process.argv[projArgIdx + 1] : '') || `stackoverflow_${shortId}`).trim()
   const selectedFolderId = argolis.personal_folder_id || '5'
-  const allowedModes = ['app', 'data-investigator', 'dashboard', 'conversational-analytics', 'lookml', 'health-check', 'tile']
   await discoverAccessibleConnections(sdk)
 
   console.log(`[eval-stackoverflow-workflow] Starting live 2-turn eval on dev-argolis (${argolis.base_url})`)
@@ -151,7 +146,6 @@ async function main() {
   let lookmlProjectId = ''
   let activatedLookmlSkills = []
   let nativeContent = null
-  let lastResolvedUseCase = 'auto'
   const priorMessages = []
 
   const turns = [
@@ -163,7 +157,7 @@ async function main() {
         const steps = res.activitySteps || []
         const stepsText = JSON.stringify(steps).toLowerCase()
         const slashSkills = extractSlashSkillIds(turns[0].prompt)
-        const calledSkill = slashSkills.includes('agentic-lookml-workflow') && res.resolvedUseCase === 'lookml'
+        const calledSkill = slashSkills.includes('agentic-lookml-workflow')
         const readSkill =
           steps.some((s) => s.kind === 'skill' && /agentic-lookml-workflow/i.test(`${s.title || ''} ${s.path || ''} ${s.detail || ''}`)) ||
           /agentic-lookml-workflow\/skill\.md/i.test(stepsText)
@@ -221,7 +215,6 @@ async function main() {
           checks: {
             calledSkill,
             readSkill,
-            resolvedUseCase: res.resolvedUseCase,
             hasLookmlBundle,
             hasModel,
             hasViews,
@@ -244,7 +237,6 @@ async function main() {
       grade: async (res) => {
         const rawText = res.assistantText || ''
         const stepsText = JSON.stringify(res.activitySteps || []).toLowerCase()
-        const resolvedDashboard = res.resolvedUseCase === 'dashboard'
         const copiedToSelectedFolder =
           /import_lookml_dashboard|sync_lookml_dashboard|create_dashboard|upsert_lookml_dashboard|upsert_udd/.test(stepsText) &&
           (stepsText.includes(`"${selectedFolderId}"`) ||
@@ -314,7 +306,6 @@ async function main() {
         const hasDashboardLink = /\/dashboards\/[^\s)]+/i.test(rawText)
         return {
           passed:
-            resolvedDashboard &&
             copiedToSelectedFolder &&
             liveDashExists &&
             liveDashFolderMatches &&
@@ -322,7 +313,6 @@ async function main() {
             liveDashTilesAllValid &&
             hasDashboardLink,
           checks: {
-            resolvedDashboard,
             copiedToSelectedFolder,
             liveDashExists,
             liveDashFolderMatches,
@@ -359,13 +349,6 @@ async function main() {
       if (promptSlashSkills.length > 0) {
         activatedLookmlSkills = Array.from(new Set([...activatedLookmlSkills, ...promptSlashSkills]))
       }
-      const classified = matchExplicitUseCaseRule(t.prompt, allowedModes)
-      const turnTargetUseCase = classified || 'auto'
-      const toolMode =
-        turnTargetUseCase === 'lookml' || (turnTargetUseCase === 'auto' && lastResolvedUseCase === 'lookml')
-          ? 'lookml'
-          : 'data_app'
-      const mode = turnTargetUseCase === 'dashboard' ? 'dashboard' : 'data_app'
       const t0 = Date.now()
       let res
       try {
@@ -381,12 +364,9 @@ async function main() {
           auth: { mode: 'apikey', apiKey },
           session,
           thinkingLevel: DEFAULT_THINKING_LEVEL,
-          mode,
-          useCase: 'auto',
-          allowedModes,
+          canDevelop: true,
           selectedExplores: session.explores || [],
           folderId: selectedFolderId,
-          toolMode,
           lookmlProjectId,
           activatedLookmlSkills,
           developableProjects: lookmlProjectId ? [lookmlProjectId] : [],
@@ -430,7 +410,6 @@ async function main() {
       if (res.lookmlBundle?.project_id) lookmlProjectId = res.lookmlBundle.project_id
       else if (!lookmlProjectId && t.turn === 1) lookmlProjectId = projectName
       if (res.nativeBundle) nativeContent = res.nativeBundle
-      lastResolvedUseCase = res.resolvedUseCase || extractResolvedUseCase(res.assistantText, t.prompt, allowedModes)
 
       priorMessages.push({ role: 'user', text: t.prompt })
       priorMessages.push({
@@ -450,7 +429,6 @@ async function main() {
         durationMs,
         interactionId: res.session?.lastInteractionId,
         telemetry: res.telemetry,
-        resolvedUseCase: lastResolvedUseCase,
         assistantText: res.assistantText,
         activitySteps: res.activitySteps,
         hasLookmlBundle: Boolean(res.lookmlBundle),
@@ -468,7 +446,6 @@ async function main() {
         auth: { mode: 'apikey', apiKey },
         conversationId: session.conversationId,
         label: report.projectName,
-        useCase: lastResolvedUseCase,
         environmentId,
         lastInteractionId: session.lastInteractionId || latestInteractionId,
         messages: priorMessages,

@@ -66,7 +66,7 @@ function registerVisualPart08Tests(ctx) {
         ext.serverProxy = async (url, init) => {
           const body = init && init.body ? JSON.parse(init.body) : {};
           const inputText = (body.input && body.input[0] && body.input[0].text) || '';
-          if (inputText.includes('[CONVERSATION_LABEL_REQUEST]')) {
+          if (inputText.trimStart().startsWith('[CONVERSATION_LABEL_REQUEST]')) {
             return { ok: true, status: 200, body: JSON.stringify({ id: 'lbl_166', status: 'completed', output_text: 'Bryan Test2 Onboarding' }) };
           }
           if (inputText.includes('Hello, help me plan')) {
@@ -74,7 +74,7 @@ function registerVisualPart08Tests(ctx) {
               ok: true, status: 200,
               body: JSON.stringify({
                 id: 'int_166_t1', status: 'completed',
-                output_text: '<USE_CASE>lookml</USE_CASE>\\nStage 1 $\\\\rightarrow$ Stage 2: please choose a connection and project name.',
+                output_text: 'Stage 1 $\\\\rightarrow$ Stage 2: please choose a connection and project name.',
               }),
             };
           }
@@ -83,7 +83,7 @@ function registerVisualPart08Tests(ctx) {
               ok: true, status: 200,
               body: JSON.stringify({
                 id: 'int_166_t2', environment_id: 'env_166', status: 'completed',
-                output_text: '<USE_CASE>lookml</USE_CASE>\\nCreated Bronze model. [Open bryan_test2 in Looker IDE](/projects/bryan_test2)\\n<LOOKML_BUNDLE>' + bundleTurn2 + '</LOOKML_BUNDLE>',
+                output_text: 'Created Bronze model. [Open bryan_test2 in Looker IDE](/projects/bryan_test2)\\n<LOOKML_BUNDLE>' + bundleTurn2 + '</LOOKML_BUNDLE>',
               }),
             };
           }
@@ -92,7 +92,7 @@ function registerVisualPart08Tests(ctx) {
               ok: true, status: 200,
               body: JSON.stringify({
                 id: 'int_166_t3', environment_id: 'env_166', status: 'completed',
-                output_text: '<USE_CASE>lookml</USE_CASE>\\nAdded Silver explore & LookML dashboard. [Open Executive Sales Pulse](/dashboards/bryan_test2::exec_pulse)\\n<LOOKML_BUNDLE>' + bundleTurn3 + '</LOOKML_BUNDLE>',
+                output_text: 'Added Silver explore & LookML dashboard. [Open Executive Sales Pulse](/dashboards/bryan_test2::exec_pulse)\\n<LOOKML_BUNDLE>' + bundleTurn3 + '</LOOKML_BUNDLE>',
               }),
             };
           }
@@ -335,7 +335,7 @@ function registerVisualPart08Tests(ctx) {
                     stdout: 'step line 1\\nstep line 10',
                   },
                 ],
-                output_text: '<USE_CASE>conversational-analytics</USE_CASE>\\nOrder revenue is $14.01M across 303,454 orders.',
+                output_text: 'Order revenue is $14.01M across 303,454 orders.',
               }),
             };
           }

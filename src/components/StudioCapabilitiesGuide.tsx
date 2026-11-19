@@ -7,7 +7,7 @@ import {
 
 import {
   buildDynamicStarterPrompts, normalizeSandboxFilePath,
-  resolveBuiltinWorkspaceFileContent, StarterPromptItem, stripStarterPromptEmojis, StudioUseCase,
+  resolveBuiltinWorkspaceFileContent, StarterPromptItem, stripStarterPromptEmojis,
 } from '../antigravity'
 import {
   copyTextWithExtensionSdk, StudioContextCategory, StudioContextMention,
@@ -76,143 +76,32 @@ export const DOC_UI_COMPONENTS: Record<string, () => React.ReactElement> = {
   ),
 }
 
-export const USE_CASE_BADGES: Record<StudioUseCase, { label: string; className: string }> = {
-  auto: { label: 'Auto', className: 'dab-use-case-badge-auto' },
-  dashboard: { label: 'Content Studio', className: 'dab-use-case-badge-dashboard' },
-  'conversational-analytics': { label: 'Conversational Analytics', className: 'dab-use-case-badge-ca' },
-  app: { label: 'Data App', className: 'dab-use-case-badge-app' },
-  'data-investigator': { label: 'Data Investigator', className: 'dab-use-case-badge-investigator' },
-  'health-check': { label: 'Health Check', className: 'dab-use-case-badge-health' },
-  lookml: { label: 'LookML', className: 'dab-use-case-badge-lookml' },
-  tile: { label: 'Script', className: 'dab-use-case-badge-tile' },
-}
-
-export const USE_CASE_GUIDES: Record<StudioUseCase, { title: string; tabLabel: string; markdown: string }> = {
-  auto: {
-    title: 'Auto — Smart Looker Agent Routing Guide',
-    tabLabel: 'Auto',
-    markdown: [
-      '# Automatic Workflow Discovery',
-      '**Auto** routes each turn to the best Looker workflow allowed by your Looker permissions.',
-      '## Composer Shortcuts & Multi-Tab Viewer',
-      '- **Slash Command Skills (`/`)**: Type `/` (e.g. `/looker-project-onboarding`, `/lookml-field-curation`, `/looker-dashboard`, `/key-driver-analysis`) to activate domain skills.',
-      '- **Context Mentions (`@`)**: Type `@explore:`, `@dashboard:`, `@look:`, or `@conversation:` (or `+`) to attach live Looker metadata.',
-      '- **Multi-Tab Viewer**: Every dashboard, LookML Dashboard, Data App, Look, or Board stays switchable in the right-hand Viewer.',
-      '## Use Cases',
-      '- **Agentic LookML**: Onboard Looker projects from connections, and author, validate, and test LookML views, explores, refinements, and descriptions.',
-      '- **Content Studio**: Create and update UDDs, LookML Dashboards, Saved Looks, Boards, and Scheduled Plans.',
-      '- **Conversational Analytics**: Ask plain-language questions with Looker Conversational Analytics agents.',
-      '- **Data App**: Build interactive Data Apps with KPIs, charts, grids, and metric switchers, or convert screenshots.',
-      '- **Data Investigator**: Generate Doc or Slides root-cause narrative apps with Key Driver Analysis, LookML drills (`limit: 500`), and fixed date windows.',
-      '- **Health Check**: Run a 3-Pillar Looker and BigQuery performance and LookML maturity audit.',
-      '- **Python Tile (Script)**: Write, test, publish, and schedule Python scripts as interactive dashboard tiles.',
-    ].join('\n'),
-  },
-  lookml: {
-    title: 'Agentic LookML — Project Onboarding, Modeling & Data Tests',
-    tabLabel: 'Agentic LookML',
-    markdown: [
-      '# Agentic LookML Modeling & Project Onboarding',
-      'Onboard new LookML projects from a Looker connection, or refine models, views, explores, field descriptions, and data tests in your dev workspace.',
-      '## Activate Skills with `/` Slash Commands & `@` Mentions',
-      '<LookmlTurnSkills />',
-      '- Type `/` for `/looker-project-onboarding`, `/lookml-field-curation`, `/lookml-tests`, or `/looker-field-profiler`, and `@explore:` to scope models and Explores.',
-      '- Browse modified `.lkml` files in the scrollable tab strip and use the 3-dot menu to toggle unified diffs vs. full `.lkml` or copy files.',
-      '## Review Diffs & Update LookML',
-      '<PushLookmlButton />',
-      '- Inspect LookML Validator results, `run_lookml_test` assertions, and SQL vs. Explore parity links in the Viewer.',
-    ].join('\n'),
-  },
-  dashboard: {
-    title: 'Content Studio — UDDs, LookML Dashboards, Looks, Boards & Schedules',
-    tabLabel: 'Content Studio',
-    markdown: [
-      '# Native Looker Content Studio',
-      'Create and update Looker User-Defined Dashboards (UDDs), LookML Dashboards (`.dashboard.lookml` synced to your folder), Saved Looks, Boards, and Schedules.',
-      '## Context, Skills & Multi-Tab Viewer',
-      '- Reference `@explore:`, `@dashboard:`, or `@look:`, or invoke `/looker-dashboard` and `/looker-field-profiler` before building tiles.',
-      '- Switch across dashboards, LookML Dashboards, and Looks in the multi-tab Viewer bar.',
-      '## Viewer Controls',
-      '<ReloadPreviewButton />',
-      '<OpenInLookerButton />',
-      '- Reloads the embedded dashboard or Look in place, or opens it in Looker from `Save New Content to Folder:`.',
-    ].join('\n'),
-  },
-  'conversational-analytics': {
-    title: 'Conversational Analytics — Natural-Language Data Q&A',
-    tabLabel: 'Conversational Analytics',
-    markdown: [
-      '# Looker Conversational Analytics',
-      'Ask analytical questions in plain language, match with the best Looker Conversational Analytics agent, and explore interactive answers.',
-      '## Embedded Controls',
-      '<ReloadPreviewButton />',
-      '<OpenInLookerButton />',
-      '- Reloads the embedded session or opens the full thread in Looker.',
-    ].join('\n'),
-  },
-  app: {
-    title: 'Data App — Custom Interactive Looker Applications',
-    tabLabel: 'Data App',
-    markdown: [
-      '# Interactive Looker Data Apps',
-      'Build interactive apps with KPI cards, dynamic charts, data grids, and metric switchers published into a Looker dashboard tile, or paste a screenshot (`Cmd+V`).',
-      '## Live Viewer Controls',
-      '<ReloadPreviewButton />',
-      '<OpenInLookerButton />',
-      '- Re-runs the live dashboard viewer or opens the published Data App in Looker.',
-    ].join('\n'),
-  },
-  'data-investigator': {
-    title: 'Data Investigator — Google Doc & Slides Root-Cause Narrative Apps',
-    tabLabel: 'Data Investigator',
-    markdown: [
-      '# Point-in-Time Root-Cause Narrative Data Apps',
-      'Investigate metric changes using Key Driver Analysis (`run_key_driver_analysis`), LookML `drill_fields` (`limit: 500`), and fixed date ranges (`YYYY-MM-DD to YYYY-MM-DD`).',
-      '## Google Doc & Slides Modes',
-      '<DataInvestigatorPreview />',
-      '- **Doc View (Default)**: Executive overview plus **Chart -> What This Chart Means -> Next Investigation Path** chapters and a 500-row evidence grid.',
-      '- **Slides View**: Mention `slides`, `presentation`, or `deck` (or toggle in header) for slide-by-slide navigation.',
-      '<ReloadPreviewButton />',
-      '<OpenInLookerButton />',
-    ].join('\n'),
-  },
-  'health-check': {
-    title: 'Health Check — 3-Pillar Looker & BigQuery Audit',
-    tabLabel: 'Health Check',
-    markdown: [
-      '# 3-Pillar Looker & BigQuery Health Check',
-      'Audit **Pillar 1** (System Activity latency and caching), **Pillar 2** (LookML quality), and **Pillar 3** (BigQuery slot usage and partitioning).',
-      '## Export Technical Design Document (TDD)',
-      '<ExportHealthTddButton />',
-      '- Download or copy the Markdown TDD, or toggle **Rendered Report** vs. **`{ } Raw Markdown`**.',
-    ].join('\n'),
-  },
-  tile: {
-    title: 'Python Tile (Script) — Custom Data Scripts & Scheduling',
-    tabLabel: 'Script',
-    markdown: [
-      '# Publish As Dashboard',
-      '<PublishDashboardButton />',
-      'Publishes your Python script as an interactive Looker dashboard tile in your selected folder.',
-      '## Execute & Test Script Mode',
-      '<RunPythonButton />',
-      '<ScriptModeSelect />',
-      'Runs your Python script in the in-browser sandbox across modes (`summary`, `detailed_audit`, `anomaly_alert`) with live dashboard filters.',
-      '## Save & Schedule Recurring Runs',
-      '<SaveScriptButton />',
-      '<ScheduleScriptButton />',
-      '- Save your script or configure recurring cron schedules and delivery.',
-    ].join('\n'),
-  },
-}
-
-export const USE_CASE_GUIDE_ORDER = (Object.keys(USE_CASE_GUIDES) as StudioUseCase[]).map((useCase) => ({
-  useCase,
-  tabLabel: USE_CASE_GUIDES[useCase].tabLabel,
-}))
+export const STUDIO_CAPABILITIES_MARKDOWN: string = [
+  '# Open-Ended Looker Studio Workspace',
+  'Every conversation is an open-ended chat — combine Key Driver Analysis, Data Apps, Native Dashboards, LookML modeling, Python Scripts, Alerts, and Audits across turns in a single thread.',
+  '## Composer Shortcuts & Multi-Tab Viewer',
+  '<LookmlTurnSkills />',
+  '- **Slash Command Skills (`/`)**: Type `/` (e.g. `/looker-project-onboarding`, `/lookml-field-curation`, `/looker-dashboard`, `/key-driver-analysis`, `/data-apps`) to load domain playbooks on demand.',
+  '- **Context Mentions (`@`)**: Type `@explore:`, `@dashboard:`, `@look:`, or `@conversation:` (or click `+`) to attach live Looker metadata, or paste/drop screenshots, CSVs, SQL, or PDFs.',
+  '- **Overview & Multi-Tab Viewer**: Every created or referenced Dashboard, Data App, Look, Board, LookML project, Script, Alert, or Report stays switchable in the right-hand Viewer alongside the **Overview** explorer.',
+  '## Interactive Data Apps & Root-Cause Narratives',
+  '<DataInvestigatorPreview />',
+  '- **Data Apps**: Build interactive Lit applications (`<app-kpi>`, `<app-chart>`, `<app-grid>`, metric switchers) published directly into Looker dashboard tiles.',
+  '- **Data Investigator & KDA**: Investigate metric changes with `run_key_driver_analysis`, LookML `drill_fields` (`limit: 500`), fixed date ranges (`YYYY-MM-DD to YYYY-MM-DD`), and **Doc** or **Slides** narrative views.',
+  '## Native Dashboards, Looks, Boards & Conversational Analytics',
+  '<ReloadPreviewButton />',
+  '<OpenInLookerButton />',
+  '- Create and update 24-column UDDs, LookML Dashboards, Saved Looks, Boards, Scheduled Plans, or open embedded Looker Conversational Analytics threads.',
+  '## Agentic LookML, Python Scripts, Alerts & Health Checks',
+  '<PushLookmlButton />',
+  '<PublishDashboardButton />',
+  '<RunPythonButton />',
+  '<ExportHealthTddButton />',
+  '- Onboard LookML projects from database connections, author and validate `.lkml` views/explores/tests in dev mode, run & schedule Python tile scripts, inspect Looker Alerts, or generate 3-Pillar Looker & BigQuery Health Check TDDs.',
+].join('\n')
 
 // ponytail: lightweight Markdown + <ComponentName /> parser that wraps mapped React UI controls in a non-actionable preview container
-export function renderUseCaseGuideMarkdown(markdown: string): React.ReactElement {
+export function renderCapabilitiesGuideMarkdown(markdown: string): React.ReactElement {
   const wrapPreview = (compName: string, key: string): React.ReactElement | null => {
     const renderFn = DOC_UI_COMPONENTS[compName]
     return renderFn ? StudioDocPreview({ key, component: compName, children: renderFn() }) : null
@@ -258,79 +147,45 @@ export function renderUseCaseGuideMarkdown(markdown: string): React.ReactElement
     blocks.push(<p key={`p-${i}`}>{renderInline(trimmed, `p-${i}`)}</p>)
     i++
   }
-  return <div className="dab-tdd-rendered dab-use-case-guide-markdown">{blocks}</div>
+  return <div className="dab-tdd-rendered dab-capabilities-guide-markdown">{blocks}</div>
 }
 
-export const UseCaseInfoTrigger: React.FC<{ useCase: StudioUseCase; onOpen: (uc: StudioUseCase) => void }> = ({ useCase, onOpen }) => (
+export const StudioCapabilitiesTrigger: React.FC<{ onOpen: () => void }> = ({ onOpen }) => (
   <button
-    type="button" data-testid="use-case-info-btn" className="dab-btn dab-btn-secondary dab-info-trigger"
-    title="Use case guide & controls reference" onClick={() => onOpen(useCase)}
+    type="button" data-testid="studio-capabilities-btn" className="dab-btn dab-btn-secondary dab-info-trigger"
+    title="Studio capabilities & shortcuts guide" aria-label="Studio capabilities & shortcuts guide" onClick={onOpen}
   >
     ?
   </button>
 )
 
-export const UseCaseInfoModal: React.FC<{
-  activeUseCase: StudioUseCase | null; onSelectUseCase: (uc: StudioUseCase) => void; onClose: () => void
-}> = ({ activeUseCase, onSelectUseCase, onClose }) => {
-  const guide = (activeUseCase && USE_CASE_GUIDES[activeUseCase]) || USE_CASE_GUIDES.auto
-  return (
-    <StudioModal
-      open={Boolean(activeUseCase)} onClose={onClose} testId="use-case-info-modal" closeTestId="use-case-info-close-btn"
-      closeLabel="Close" className="dab-use-case-info-modal" title={guide.title}
-      subtitle="Interactive guide & live-themed UI controls reference (non-actionable preview)"
-    >
-      <div className="dab-use-case-guide-tabs" role="tablist" aria-label="Use Case Guides">
-        {USE_CASE_GUIDE_ORDER.map((item) => (
-          <button
-            key={item.useCase} type="button" role="tab" aria-selected={activeUseCase === item.useCase}
-            data-testid={`use-case-guide-tab-${item.useCase}`}
-            className={`dab-skill-chip ${activeUseCase === item.useCase ? 'active' : ''}`}
-            onClick={() => onSelectUseCase(item.useCase)}
-          >
-            {item.tabLabel}
-          </button>
-        ))}
-      </div>
-      <div className="dab-use-case-guide-body" data-testid="use-case-info-mdx-body">
-        {renderUseCaseGuideMarkdown(guide.markdown)}
-      </div>
-    </StudioModal>
-  )
-}
+export const StudioCapabilitiesModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => (
+  <StudioModal
+    open={open} onClose={onClose} testId="studio-capabilities-modal" closeTestId="studio-capabilities-close-btn"
+    closeLabel="Close" className="dab-capabilities-modal" title="Studio Capabilities & Shortcuts"
+    subtitle="Open-ended chat across Data Apps, Dashboards, LookML, Investigations, Scripts, Alerts & Audits"
+  >
+    <div className="dab-capabilities-guide-body" data-testid="studio-capabilities-mdx-body">
+      {renderCapabilitiesGuideMarkdown(STUDIO_CAPABILITIES_MARKDOWN)}
+    </div>
+  </StudioModal>
+)
 
 export { buildDynamicStarterPrompts, stripStarterPromptEmojis }
 export type { StarterPromptItem }
 
-export const STARTER_PROMPTS_BY_USE_CASE: Record<string, StarterPromptItem[]> = Object.fromEntries(
-  (['auto', 'app', 'data-investigator', 'dashboard', 'conversational-analytics', 'health-check', 'lookml', 'tile'] as const).map(
-    (uc) => [uc, buildDynamicStarterPrompts({ useCase: uc })]
-  )
-)
-STARTER_PROMPTS_BY_USE_CASE.health = STARTER_PROMPTS_BY_USE_CASE['health-check']
-STARTER_PROMPTS_BY_USE_CASE.investigator = STARTER_PROMPTS_BY_USE_CASE['data-investigator']
-STARTER_PROMPTS_BY_USE_CASE.data_investigator = STARTER_PROMPTS_BY_USE_CASE['data-investigator']
-
-export function getStarterPromptsForUseCase(
-  useCase?: string, selectedExplores?: string[], permittedUseCases?: StudioUseCase[]
-): StarterPromptItem[] {
-  if ((selectedExplores && selectedExplores.length > 0) || (permittedUseCases && permittedUseCases.length > 0)) {
-    return buildDynamicStarterPrompts({ useCase, selectedExplores, permittedUseCases })
-  }
-  const key = String(useCase || 'auto').trim().toLowerCase()
-  return STARTER_PROMPTS_BY_USE_CASE[key] || STARTER_PROMPTS_BY_USE_CASE.auto
-}
+export const DEFAULT_STARTER_PROMPTS: StarterPromptItem[] = buildDynamicStarterPrompts()
 
 export const StarterPromptButtons: React.FC<{
-  useCase?: string; prompts?: StarterPromptItem[]; loading?: boolean
+  prompts?: StarterPromptItem[]; loading?: boolean
   onSelect: (promptText: string) => void; disabled?: boolean
-}> = ({ useCase, prompts, loading, onSelect, disabled }) => {
-  const items = prompts && prompts.length > 0 ? prompts : getStarterPromptsForUseCase(useCase)
+}> = ({ prompts, loading, onSelect, disabled }) => {
+  const items = prompts && prompts.length > 0 ? prompts : DEFAULT_STARTER_PROMPTS
   if (loading && (!prompts || prompts.length === 0)) {
     return (
       <div className="dab-starter-prompts" data-testid="studio-starter-prompts-skeleton" aria-busy="true">
         {[0, 1, 2].map((i) => (
-          <StudioSkeleton key={i} width={188} height={28} style={{ borderRadius: 999 }} label="Loading starter prompt..." />
+          <StudioSkeleton key={i} width={188} height={28} style={{ borderRadius: 999 }} ariaLabel="Loading starter prompt..." />
         ))}
       </div>
     )
@@ -341,7 +196,7 @@ export const StarterPromptButtons: React.FC<{
         {items.map((item, i) => (
           <StudioButton
             key={item.id || `starter-${i}`} variant="secondary" testId={`starter-prompt-${i}`}
-            data-prompt-id={item.id} data-use-case={item.useCase || useCase || 'auto'}
+            data-prompt-id={item.id}
             className="dab-starter-chip" disabled={disabled} onClick={() => onSelect(item.prompt)} title={item.prompt}
           >
             {stripStarterPromptEmojis(item.label)}
