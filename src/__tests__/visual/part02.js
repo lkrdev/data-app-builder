@@ -1,6 +1,6 @@
 function registerVisualPart02Tests(ctx) {
   const { existsSync, mkdirSync, writeFileSync, path, startHeadlessChrome } = ctx
-  test('defaults use-case selector to Auto on new conversation, gates options by permissions with 🔒 indicator, routes Turn 1 via AGENTS.md, locks to read-only badge, and resets to Auto on New Conversation', async () => {
+  test('runs open-ended multi-turn conversations (LookML -> Dashboard) without mode selectors or lock badges, gates LookML tools by permissions, and resets cleanly on New Conversation', async () => {
     ctx.chrome.close()
     ctx.chrome = await startHeadlessChrome()
     const url = `http://127.0.0.1:${ctx.port}/?scenario=chatbar_error_banner`
@@ -18,21 +18,18 @@ function registerVisualPart02Tests(ctx) {
 
     const res = await ctx.chrome.send('Runtime.evaluate', {
       expression: `(async () => {
-        // 1. Click + New Conversation to enter clean new conversation state
+        // 1. Click + New Conversation to enter clean open-ended conversation state
         const newBtn = document.querySelector('[data-testid="new-conversation-btn"]');
         if (newBtn) newBtn.click();
         await new Promise((r) => setTimeout(r, 100));
 
-        const noUseCaseSelector = !document.querySelector('[data-testid="use-case-selector"]');
+        const noModeDropdown = !document.querySelector('.dab-mode-switcher');
         const noSplitNewConvTrigger = !document.querySelector('[data-testid="new-conversation-menu-trigger"]');
-        const hasInfoBtnInComposerActions = Boolean(
-          document.querySelector('.dab-composer-actions [data-testid="use-case-info-btn"]')
+        const hasCapabilitiesBtnInComposerActions = Boolean(
+          document.querySelector('.dab-composer-actions [data-testid="studio-capabilities-btn"]')
         );
-        const defaultUseCase = window.__DAB_STUDIO__.selectedUseCase;
-        const optionValues = (window.__DAB_STUDIO__.useCaseOptions || []).map((o) => o.value);
-        const optionLabels = (window.__DAB_STUDIO__.useCaseOptions || []).map((o) => o.label);
 
-        // 2. Verify permission gating excludes LookML & Health Check from allowedUseCases when user lacks develop permission
+        // 2. Verify permission gating sets canDevelopLookml=false when user lacks develop permission
         window.__DAB_STUDIO__.setCapabilities({
           isAdmin: false,
           rolesLoaded: true,
@@ -54,11 +51,9 @@ function registerVisualPart02Tests(ctx) {
           }
         });
         await new Promise((r) => setTimeout(r, 80));
-        const restrictedAllowed = window.__DAB_STUDIO__.allowedUseCases || [];
-        const lookmlExcludedWhenRestricted = !restrictedAllowed.includes('lookml');
-        const healthExcludedWhenRestricted = !restrictedAllowed.includes('health-check');
+        const restrictedCanDevelop = Boolean(window.__DAB_STUDIO__.canDevelopLookml);
 
-        // Restore full admin capabilities so Auto can route to LookML on Turn 1 and Dashboard on Turn 2
+        // Restore full admin capabilities for Turn 1 LookML -> Turn 2 Dashboard
         window.__DAB_STUDIO__.setCapabilities({
           isAdmin: true,
           rolesLoaded: true,
@@ -80,8 +75,9 @@ function registerVisualPart02Tests(ctx) {
           }
         });
         await new Promise((r) => setTimeout(r, 80));
+        const adminCanDevelop = Boolean(window.__DAB_STUDIO__.canDevelopLookml);
 
-        // 3. Submit Turn 1 LookML prompt with dynamic auto-routing
+        // 3. Submit Turn 1 LookML prompt in open-ended chat
         window.__DAB_STUDIO__.setOauthToken('mock_oauth_token');
         await new Promise((r) => setTimeout(r, 40));
         const ta = document.querySelector('[data-testid="studio-prompt-input"]');
@@ -98,50 +94,38 @@ function registerVisualPart02Tests(ctx) {
         if (sendBtn) sendBtn.click();
         await new Promise((r) => setTimeout(r, 200));
 
-        const useCaseAfterTurn1 = window.__DAB_STUDIO__.selectedUseCase;
-        const isLockedAfterTurn1 = window.__DAB_STUDIO__.isUseCaseLocked;
-        const noLockedBadge = !document.querySelector('[data-testid="locked-use-case-badge"]');
-        const noTopbarBadge = !document.querySelector('[data-testid="topbar-use-case-badge"]');
         const noModeSwitcher = !document.querySelector('.dab-mode-switcher');
+        const convUpdates1 = (window.__ARTIFACT_UPDATES__ || []).filter((u) => u.key === 'user_conversations:1');
+        const latestConversations1 = convUpdates1.length > 0 ? JSON.parse(convUpdates1[convUpdates1.length - 1].value) : [];
+        const persistedTypeTurn1 = latestConversations1[0]?.type;
 
-        const convUpdates = (window.__ARTIFACT_UPDATES__ || []).filter(
-          (u) => u.key === 'user_conversations:1'
-        );
-        const latestConversations =
-          convUpdates.length > 0 ? JSON.parse(convUpdates[convUpdates.length - 1].value) : [];
-
-        // 4. Submit Turn 2 Dashboard prompt in the SAME conversation -> dynamically routes to 'dashboard' without locking
+        // 4. Submit Turn 2 Dashboard prompt in the SAME conversation -> open-ended transition to native dashboard
         const ta2 = document.querySelector('[data-testid="studio-prompt-input"]');
         const sendBtn2 = document.querySelector('[data-testid="studio-send-btn"]');
         setPromptInputVal(ta2, 'Create a native Looker UDD dashboard for executive KPIs');
         await new Promise((r) => setTimeout(r, 60));
         if (sendBtn2) sendBtn2.click();
         await new Promise((r) => setTimeout(r, 200));
-        const useCaseAfterTurn2 = window.__DAB_STUDIO__.selectedUseCase;
+        const convUpdates2 = (window.__ARTIFACT_UPDATES__ || []).filter((u) => u.key === 'user_conversations:1');
+        const latestConversations2 = convUpdates2.length > 0 ? JSON.parse(convUpdates2[convUpdates2.length - 1].value) : [];
+        const persistedTypeTurn2 = latestConversations2[0]?.type;
 
-        // 5. Click + New Conversation -> resets back to 'auto' at '/'
+        // 5. Click + New Conversation -> resets back to '/'
         const resetBtn = document.querySelector('[data-testid="new-conversation-btn"]');
         if (resetBtn) resetBtn.click();
         await new Promise((r) => setTimeout(r, 120));
-        const resetUseCase = window.__DAB_STUDIO__.selectedUseCase;
+        const routeAfterReset = window.__DAB_STUDIO__.history.location.pathname;
 
         return {
-          noUseCaseSelector,
+          noModeDropdown,
           noSplitNewConvTrigger,
-          hasInfoBtnInComposerActions,
-          defaultUseCase,
-          optionValues,
-          optionLabels,
-          lookmlExcludedWhenRestricted,
-          healthExcludedWhenRestricted,
-          useCaseAfterTurn1,
-          isLockedAfterTurn1,
-          noLockedBadge,
-          noTopbarBadge,
+          hasCapabilitiesBtnInComposerActions,
+          restrictedCanDevelop,
+          adminCanDevelop,
           noModeSwitcher,
-          persistedType: latestConversations[0]?.type,
-          useCaseAfterTurn2,
-          resetUseCase
+          persistedTypeTurn1,
+          persistedTypeTurn2,
+          routeAfterReset
         };
       })()`,
       awaitPromise: true,
@@ -149,44 +133,19 @@ function registerVisualPart02Tests(ctx) {
     })
 
     expect(res.result.value).toEqual({
-      noUseCaseSelector: true,
+      noModeDropdown: true,
       noSplitNewConvTrigger: true,
-      hasInfoBtnInComposerActions: true,
-      defaultUseCase: 'auto',
-      optionValues: [
-        'auto',
-        'dashboard',
-        'conversational-analytics',
-        'app',
-        'data-investigator',
-        'health-check',
-        'lookml',
-        'tile'
-      ],
-      optionLabels: [
-        'Auto',
-        'Content Studio',
-        'Conversational Analytics',
-        'Data App',
-        'Data Investigator',
-        'Health Check',
-        'LookML',
-        'Script'
-      ],
-      lookmlExcludedWhenRestricted: true,
-      healthExcludedWhenRestricted: true,
-      useCaseAfterTurn1: 'lookml',
-      isLockedAfterTurn1: false,
-      noLockedBadge: true,
-      noTopbarBadge: true,
+      hasCapabilitiesBtnInComposerActions: true,
+      restrictedCanDevelop: false,
+      adminCanDevelop: true,
       noModeSwitcher: true,
-      persistedType: 'lookml',
-      useCaseAfterTurn2: 'dashboard',
-      resetUseCase: 'auto'
+      persistedTypeTurn1: 'lookml',
+      persistedTypeTurn2: 'dashboard',
+      routeAfterReset: '/'
     })
   }, 15000)
 
-  test('routes Turn-1 Auto question to Conversational Analytics via stateless isolated sub-agent (no previous_interaction_id, tools=[]), embeds CA conversation, and persists to user_conversations:1', async () => {
+  test('routes open-ended CA question via <CA_AGENT_SELECTION> to embedded Looker Conversational Analytics conversation and persists to user_conversations:1', async () => {
     const url = `http://127.0.0.1:${ctx.port}/?scenario=chatbar_error_banner`
     await ctx.chrome.send('Page.navigate', { url })
 
@@ -226,11 +185,9 @@ function registerVisualPart02Tests(ctx) {
           await new Promise((r) => setTimeout(r, 80));
         }
 
-        const subagentCall = (window.__INTERACTION_CALLS__ || []).find((c) =>
-          ((c.body && c.body.input && c.body.input[0] && c.body.input[0].text) || '').includes('[CA_AGENT_SELECTION_REQUEST]')
+        const caTurnCall = (window.__INTERACTION_CALLS__ || []).find((c) =>
+          ((c.body && c.body.input && c.body.input[0] && c.body.input[0].text) || '').includes('Ask the Conversational Analytics CA agent:')
         );
-        const noLockedBadge = !document.querySelector('[data-testid="locked-use-case-badge"]');
-        const selectedUseCase = window.__DAB_STUDIO__.selectedUseCase;
         const agentBadge = document.querySelector('[data-testid="ca-selected-agent-badge"]');
         const caIframe = document.querySelector('[data-testid="ca-embed-iframe"]');
         const convUpdates = (window.__ARTIFACT_UPDATES__ || []).filter((u) => u.key === 'user_conversations:1');
@@ -238,11 +195,7 @@ function registerVisualPart02Tests(ctx) {
           convUpdates.length > 0 ? JSON.parse(convUpdates[convUpdates.length - 1].value) : [];
 
         return {
-          hasSubagentCall: Boolean(subagentCall),
-          subagentTools: subagentCall ? subagentCall.body.tools : null,
-          subagentHasPrevId: subagentCall ? ('previous_interaction_id' in subagentCall.body) : null,
-          noLockedBadge,
-          selectedUseCase,
+          hasCaTurnCall: Boolean(caTurnCall),
           agentBadgeText: agentBadge ? (agentBadge.textContent || '').trim() : '',
           hasCaIframe: Boolean(caIframe),
           persistedType: latestConversations[0]?.type,
@@ -255,11 +208,7 @@ function registerVisualPart02Tests(ctx) {
     })
 
     expect(res.result.value).toEqual({
-      hasSubagentCall: true,
-      subagentTools: [],
-      subagentHasPrevId: false,
-      noLockedBadge: true,
-      selectedUseCase: 'conversational-analytics',
+      hasCaTurnCall: true,
       agentBadgeText: 'Agent: eCommerce & BigQuery Analytics Agent (ca_agent_ecommerce)',
       hasCaIframe: true,
       persistedType: 'conversational-analytics',

@@ -112,7 +112,7 @@ export function registerPermissionsPart14Tests(): void {
               environment_id: 'env_171_idle',
               previous_interaction_id: 'int_171_inc1',
               status: 'completed',
-              output_text: '<USE_CASE>lookml</USE_CASE>\nCompleted field curation on `thelook_proj`.',
+              output_text: 'Completed field curation on `thelook_proj`.',
               usage: { input_tokens: 200, output_tokens: 45, thought_tokens: 20 },
               steps: [{ id: 'ce_2', type: 'code_execution', command: 'lkr --version', stdout: LKR_DEV_CLI_VERSION }],
             }),
@@ -120,8 +120,9 @@ export function registerPermissionsPart14Tests(): void {
         },
       },
       auth: { mode: 'apikey', apiKey: 'test-key' },
-      session: { environmentId: 'env_171_idle', lastInteractionId: 'int_171_prev', toolType: 'lookml' },
-      useCase: 'lookml',
+      session: { environmentId: 'env_171_idle', lastInteractionId: 'int_171_prev' },
+      canDevelop: true,
+      lookmlProjectId: 'thelook_proj',
       selectedExplores: [],
       existingAppCode: 'export class PriorApp35 {}',
       userPrompt: '/lookml-field-curation curate order_items',
@@ -130,8 +131,8 @@ export function registerPermissionsPart14Tests(): void {
       onInteractionCreated: (id) => createdIds.push(id),
     })
     expect(resumePosts).toHaveLength(2)
-    expect(resumePosts[0].input?.[0]?.text).toContain('[WARM LOOKML SANDBOX:')
-    expect(resumePosts[0].input?.[0]?.text).not.toContain('[WARM SANDBOX FAST PATH:')
+    expect(resumePosts[0].input?.[0]?.text).toContain('[ACTIVE WORKSPACE STATE')
+    expect(resumePosts[0].input?.[0]?.text).toContain('Active LookML project: "thelook_proj"')
     expect(resumePosts[1]).toMatchObject({
       previous_interaction_id: 'int_171_inc1',
       environment: 'env_171_idle',

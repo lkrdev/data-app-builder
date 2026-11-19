@@ -11,8 +11,8 @@ import {
   sanitizeConversationLabel, STUDIO_THINKING_LEVEL_OPTIONS, STUDIO_THINKING_LEVEL_STORAGE_KEY,
 } from '../../antigravity'
 import {
-  classifyLooker404Error, ConversationRecord, deleteUserConversation, extractResolvedUseCase,
-  fetchInitialLookerMetadata, formatUserConversationsArtifactKey, formatUserConversationsKey, getAllowedUseCases,
+  classifyLooker404Error, ConversationRecord, deleteUserConversation,
+  fetchInitialLookerMetadata, formatUserConversationsArtifactKey, formatUserConversationsKey,
   loadUserConversations, rawLookerRequest, resolveUserCapabilities, saveUserConversation,
 } from '../../lookerApi'
 
@@ -546,31 +546,7 @@ export function registerPermissionsPart01Tests(): void {
     expect(afterDelete.map((c) => c.id)).toEqual(['conv_2'])
   })
 
-  test('9. routes Auto use-case via AGENTS.md <USE_CASE>, intersects with user permissions, and seeds /workspace/AGENTS.md', async () => {
-    expect(
-      extractResolvedUseCase(
-        '<USE_CASE>lookml</USE_CASE>\nUpdated view order_items.view.lkml.',
-        'Help me with my model',
-        ['app', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics']
-      )
-    ).toBe('lookml')
-
-    expect(
-      extractResolvedUseCase(
-        '<USE_CASE>lookml</USE_CASE>\nAttempting LookML edit.',
-        'Add a measure to order_items.view.lkml',
-        ['app', 'dashboard', 'conversational-analytics']
-      )
-    ).toBe('app')
-
-    expect(
-      extractResolvedUseCase(
-        'Completed 3-pillar audit.',
-        'Run a 3-pillar health check on thelook_event',
-        ['app', 'health-check']
-      )
-    ).toBe('health-check')
-
+  test('9. runs open-ended multi-turn conversations with RBAC-gated tools and seeds /workspace/AGENTS.md without host mode pre-decisions', async () => {
     const explorerOnlyCaps = resolveUserCapabilities({
       user: { id: '2' },
       roles: [
@@ -587,11 +563,10 @@ export function registerPermissionsPart01Tests(): void {
       models: [{ name: 'thelook', project_name: 'thelook_proj', allowed_db_connection_names: [] }],
       folders: [{ id: '5', can: { edit_content: true, save_content: true } }],
     })
-    const allowedForExplorer = getAllowedUseCases(explorerOnlyCaps, [])
-    expect(allowedForExplorer).toContain('app')
-    expect(allowedForExplorer).toContain('dashboard')
-    expect(allowedForExplorer).not.toContain('lookml')
-    expect(allowedForExplorer).not.toContain('health-check')
+    expect(explorerOnlyCaps.developableProjects.size).toBe(0)
+    expect(explorerOnlyCaps.tools.lookml.enabled).toBe(false)
+    expect(explorerOnlyCaps.tools.app.enabled).toBe(true)
+    expect(explorerOnlyCaps.tools.dashboard.enabled).toBe(true)
 
     const capturedCalls: Array<{ url: string; body?: MockInteractionPostBody }> = []
     const mockExt = {
@@ -605,7 +580,7 @@ export function registerPermissionsPart01Tests(): void {
             id: 'int_auto_1',
             environment_id: 'env_auto_1',
             status: 'completed',
-            output_text: '<USE_CASE>dashboard</USE_CASE>\nBuilt native Looker UDD.',
+            output_text: 'Built native Looker UDD.',
           }),
         }
       },
@@ -615,14 +590,12 @@ export function registerPermissionsPart01Tests(): void {
       extensionSDK: mockExt,
       auth: { mode: 'apikey' },
       session: {},
-      useCase: 'auto',
-      allowedModes: ['app', 'dashboard'],
+      canDevelop: explorerOnlyCaps.canDevelop,
       selectedExplores: ['thelook::order_items'],
       schemaMarkdown: '# Schema',
       userPrompt: 'Create a native Looker UDD dashboard for executive KPIs',
       onStatus: () => {},
     })
-    expect(turnRes.resolvedUseCase).toBe('dashboard')
     expect(turnRes.assistantText).toBe('Built native Looker UDD.')
     const env0 = capturedCalls[0]?.body?.environment
     const sentSources = typeof env0 === 'object' ? env0.sources || [] : []
@@ -630,8 +603,8 @@ export function registerPermissionsPart01Tests(): void {
       sentSources.some(
         (s) =>
           s.target === '/workspace/AGENTS.md' &&
-          String(s.content).includes('## Use Case Auto-Classification (Turn 1 Routing)') &&
-          !String(s.content).includes('lock the conversation to that resolved use case for all subsequent turns')
+          String(s.content).includes('## Open-Ended Chat & Artifact Bundles') &&
+          !String(s.content).includes('lock the conversation')
       )
     ).toBe(true)
 
@@ -646,7 +619,7 @@ export function registerPermissionsPart01Tests(): void {
             id: 'int_auto_2',
             environment_id: 'env_auto_1',
             status: 'completed',
-            output_text: '<USE_CASE>app</USE_CASE>\nBuilt interactive Lit Data App on Turn 2.',
+            output_text: 'Built interactive Lit Data App on Turn 2.',
           }),
         }
       },
@@ -656,16 +629,14 @@ export function registerPermissionsPart01Tests(): void {
       extensionSDK: turn2MockExt,
       auth: { mode: 'apikey' },
       session: turnRes.session,
-      useCase: 'auto',
-      allowedModes: ['app', 'dashboard'],
+      canDevelop: true,
       selectedExplores: ['thelook::order_items'],
       schemaMarkdown: '# Schema',
       userPrompt: 'Now build a custom interactive Lit Data App for executive KPIs',
       onStatus: () => {},
     })
-    expect(turn2Res.resolvedUseCase).toBe('app')
     expect(turn2Res.assistantText).toBe('Built interactive Lit Data App on Turn 2.')
-    expect(capturedCalls[1]?.body?.input?.[0]?.text).toContain('[AUTO USE-CASE ROUTING:')
+    expect(capturedCalls[1]?.body?.input?.[0]?.text).toContain('[ACTIVE WORKSPACE STATE')
   })
 
 }

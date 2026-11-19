@@ -115,12 +115,13 @@ export function registerPermissionsPart19Tests(): void {
               },
             ],
             output_text:
-              '<USE_CASE>lookml</USE_CASE>\n<LOOKML_BUNDLE>{"id":"proj_190","project_id":"proj_190","title":"Proj 190","model_name":"ecom","files":[{"path":"models/ecom.model.lkml","content":"connection: \\"bq\\""}]}</LOOKML_BUNDLE>',
+              '<LOOKML_BUNDLE>{"id":"proj_190","project_id":"proj_190","title":"Proj 190","model_name":"ecom","files":[{"path":"models/ecom.model.lkml","content":"connection: \\"bq\\""}]}</LOOKML_BUNDLE>',
           }),
         }),
       },
       auth: { mode: 'apikey', apiKey: 'test-key', oauthToken: '', clientId: '', projectId: '' },
       session: { environmentId: 'env_190', lastInteractionId: 'int_prev_190' },
+      canDevelop: true,
       selectedExplores: [],
       schemaMarkdown: '',
       userPrompt: 'Deploy proj_190',
@@ -167,7 +168,7 @@ export function registerPermissionsPart19Tests(): void {
                     id: 'int_nb_2',
                     environment_id: 'env_190',
                     status: 'completed',
-                    output_text: '<USE_CASE>lookml</USE_CASE>\nStopped cleanly after Safe Mode denied deployment.',
+                    output_text: 'Stopped cleanly after Safe Mode denied deployment.',
                   }
             ),
           }
@@ -175,6 +176,7 @@ export function registerPermissionsPart19Tests(): void {
       },
       auth: { mode: 'apikey', apiKey: 'test-key', oauthToken: '', clientId: '', projectId: '' },
       session: { environmentId: 'env_190', lastInteractionId: 'int_prev_190' },
+      canDevelop: true,
       selectedExplores: [],
       schemaMarkdown: '',
       userPrompt: 'Deploy proj_190',
@@ -245,7 +247,7 @@ export function registerPermissionsPart19Tests(): void {
                     environment_id: 'env_190',
                     status: 'completed',
                     output_text:
-                      '<USE_CASE>dashboard</USE_CASE>\n<NATIVE_CONTENT_BUNDLE>{"id":"999","content_type":"dashboard","title":"Unapproved"}</NATIVE_CONTENT_BUNDLE>',
+                      '<NATIVE_CONTENT_BUNDLE>{"id":"999","content_type":"dashboard","title":"Unapproved"}</NATIVE_CONTENT_BUNDLE>',
                   }
             ),
           }
@@ -262,12 +264,15 @@ export function registerPermissionsPart19Tests(): void {
     })
     expect(cmDeniedBundleRes.permissionError).toContain("PermissionError: Operation 'create_dashboard'")
 
-    // 4. Verify studioControllerTurn.ts allocates fresh per-turn Set and gates upsertPublishedDataApp + handleRunPython + result.permissionError in Safe Mode
+    // 4. Verify studioControllerTurn.ts & studioControllerConcurrency.ts allocate fresh per-turn Set and gate upsertPublishedDataApp + handleRunPython + result.permissionError in Safe Mode
     const repoRoot = path.resolve(__dirname, '../../..')
-    const turnTs = readFileSync(path.join(repoRoot, 'src/studioControllerTurn.ts'), 'utf8')
+    const turnTs = [
+      readFileSync(path.join(repoRoot, 'src/studioControllerTurn.ts'), 'utf8'),
+      readFileSync(path.join(repoRoot, 'src/studioControllerConcurrency.ts'), 'utf8'),
+    ].join('\n')
     expect(turnTs).toContain('const turnApprovedOps = new Set<string>()')
     expect(turnTs).toContain('if (result.permissionError)')
-    expect(turnTs).toContain("const pubOp = effectivePublishedApp?.dashboardId ? 'update_dashboard' : 'create_dashboard'")
+    expect(turnTs).toContain("const pubOp = publishedApp?.dashboardId ? 'update_dashboard' : 'create_dashboard'")
     expect(turnTs).toContain('Publish Data App "${result.bundle.title}" to Looker dashboard')
     const stylesCss = readFileSync(path.join(repoRoot, 'src/styles/index.css'), 'utf8')
     const workspaceTsx = readFileSync(path.join(repoRoot, 'src/components/StudioComposer.tsx'), 'utf8')
@@ -369,7 +374,7 @@ export function registerPermissionsPart19Tests(): void {
                     '<DATA_APP_BUNDLE>{"title":"Category Race Bar Chart","raw_code":"export class RaceApp extends DataApp {}","prod_code":"export class RaceApp extends DataApp {}","widgets":[]}</DATA_APP_BUNDLE>',
                 },
               ],
-              output_text: '<USE_CASE>app</USE_CASE>\nBuilt the Category Race Bar Chart Data App.',
+              output_text: 'Built the Category Race Bar Chart Data App.',
             }),
           }
         },
@@ -379,9 +384,7 @@ export function registerPermissionsPart19Tests(): void {
         sdk: asSdk({ ok: async <T>(p: T) => p }),
         extensionSDK: mockCollisionExt,
         auth: { mode: 'apikey', apiKey: 'test_key_198' },
-        session: { environmentId: 'env_198', toolType: 'app' },
-        mode: 'data_app',
-        useCase: 'app',
+        session: { environmentId: 'env_198' },
         selectedExplores: ['thelook::order_items'],
         schemaMarkdown: '# Schema',
         userPrompt: '/data-apps build a data app race bar chart for order items total sale price',
@@ -479,9 +482,7 @@ export function registerPermissionsPart19Tests(): void {
         const sseTurn = await runAntigravityTurn({
           sdk: asSdk({ ok: async <T>(p: T) => p }),
           auth: { mode: 'oauth', oauthToken: 'tok_198' },
-          session: { environmentId: 'env_198', toolType: 'app' },
-          mode: 'data_app',
-          useCase: 'app',
+          session: { environmentId: 'env_198' },
           selectedExplores: ['thelook::order_items'],
           schemaMarkdown: '# Schema',
           userPrompt: 'Build SSE app',
@@ -495,7 +496,7 @@ export function registerPermissionsPart19Tests(): void {
         globalThis.fetch = prevFetch
       }
 
-      // 3. Auto-continuation when useCase === 'app' finishes without <DATA_APP_BUNDLE>, plus fallback fetchEnvironmentFile recovery
+      // 3. Auto-continuation when app.js is written without <DATA_APP_BUNDLE>, plus fallback fetchEnvironmentFile recovery
       const autoContPosts: MockInteractionPostBody[] = []
       const fetchedFiles: string[] = []
       const mockAutoRecoverExt = {
@@ -539,9 +540,7 @@ export function registerPermissionsPart19Tests(): void {
         extensionSDK: mockAutoRecoverExt,
         conversationId: 'conv_198_rec',
         auth: { mode: 'apikey', apiKey: 'test_key_198' },
-        session: { environmentId: 'env_198_rec', toolType: 'app' },
-        mode: 'data_app',
-        useCase: 'app',
+        session: { environmentId: 'env_198_rec' },
         selectedExplores: ['thelook::order_items'],
         schemaMarkdown: '# Schema',
         userPrompt: 'Build Order Items Race Bar Chart',

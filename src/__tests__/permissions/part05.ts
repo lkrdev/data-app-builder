@@ -8,7 +8,7 @@ import {
   resolveLookerOAuthRedirectUri, resolveLookerOAuthRedirectUris, STUDIO_OAUTH_STORAGE_KEY,
 } from '../../antigravity'
 import {
-  DOC_UI_COMPONENTS, renderUseCaseGuideMarkdown, USE_CASE_GUIDE_ORDER, USE_CASE_GUIDES,
+  DOC_UI_COMPONENTS, renderCapabilitiesGuideMarkdown, STUDIO_CAPABILITIES_MARKDOWN,
 } from '../../components/StudioWorkspace'
 import {
   archiveUserConversation, buildRootLookerFolders, clearArtifactServiceCache, clearLookerMetadataCache,
@@ -199,28 +199,7 @@ export function registerPermissionsPart05Tests(): void {
     }
   })
 
-  test('24. renders contextual use-case Markdown guides with embedded non-actionable React UI preview components (Issue #64 & Issue #85)', () => {
-    expect(USE_CASE_GUIDE_ORDER.map((u) => u.useCase)).toEqual([
-      'auto',
-      'lookml',
-      'dashboard',
-      'conversational-analytics',
-      'app',
-      'data-investigator',
-      'health-check',
-      'tile',
-    ])
-    expect(USE_CASE_GUIDE_ORDER.map((u) => u.tabLabel)).toEqual([
-      'Auto',
-      'Agentic LookML',
-      'Content Studio',
-      'Conversational Analytics',
-      'Data App',
-      'Data Investigator',
-      'Health Check',
-      'Script',
-    ])
-
+  test('24. renders unified Studio Capabilities Markdown guide with embedded non-actionable React UI preview components (Issue #64 & Issue #85)', () => {
     const expectedComponents = [
       'PublishDashboardButton',
       'ScheduleScriptButton',
@@ -239,38 +218,30 @@ export function registerPermissionsPart05Tests(): void {
     }
     expect(DOC_UI_COMPONENTS.UseCaseBadge).toBeUndefined()
 
-    const allGuideMarkdown = Object.values(USE_CASE_GUIDES)
-      .map((g) => g.markdown)
-      .join('\n')
-    for (const compName of expectedComponents) {
-      expect(allGuideMarkdown).toContain(`<${compName} />`)
-    }
-    expect(allGuideMarkdown).not.toContain('Conversation Use-Case Lock')
-    expect(allGuideMarkdown).not.toContain('After Turn 1')
-    expect(allGuideMarkdown).not.toContain('AGENTS.md')
-    expect(allGuideMarkdown).not.toContain('apps/<name>/app.js')
-    expect(allGuideMarkdown).not.toContain('[CA_AGENT_SELECTION_REQUEST]')
-    expect(allGuideMarkdown).not.toContain('obj_script_')
-    expect(allGuideMarkdown).not.toContain('My Creations')
-    for (const label of ['Agentic LookML', 'Content Studio', 'Conversational Analytics', 'Data App', 'Health Check', 'Python Tile']) {
-      expect(USE_CASE_GUIDES.auto.markdown).toContain(label)
-    }
+    const guideMd = STUDIO_CAPABILITIES_MARKDOWN
+    expect(guideMd).toContain('<LookmlTurnSkills />')
+    expect(guideMd).toContain('<DataInvestigatorPreview />')
+    expect(guideMd).toContain('<ReloadPreviewButton />')
+    expect(guideMd).toContain('<OpenInLookerButton />')
+    expect(guideMd).toContain('<PushLookmlButton />')
+    expect(guideMd).toContain('<PublishDashboardButton />')
+    expect(guideMd).toContain('<RunPythonButton />')
+    expect(guideMd).toContain('<ExportHealthTddButton />')
+    expect(guideMd).not.toContain('AGENTS.md')
+    expect(guideMd).not.toContain('apps/<name>/app.js')
+    expect(guideMd).not.toContain('[CA_AGENT_SELECTION_REQUEST]')
+    expect(guideMd).not.toContain('obj_script_')
+    expect(guideMd).not.toContain('My Creations')
 
-    const tree = renderUseCaseGuideMarkdown(USE_CASE_GUIDES.tile.markdown)
-    expect(tree.props.className).toContain('dab-use-case-guide-markdown')
+    const tree = renderCapabilitiesGuideMarkdown(guideMd)
+    expect(tree.props.className).toContain('dab-capabilities-guide-markdown')
     const children: Array<React.ReactElement<Record<string, unknown>>> = Array.isArray(
       tree.props.children
     )
       ? tree.props.children
       : [tree.props.children]
     const previews = children.filter((c) => c?.props?.['data-testid'] === 'doc-ui-preview')
-    expect(previews.map((p) => p.props['data-component'])).toEqual([
-      'PublishDashboardButton',
-      'RunPythonButton',
-      'ScriptModeSelect',
-      'SaveScriptButton',
-      'ScheduleScriptButton',
-    ])
+    expect(previews.length).toBeGreaterThanOrEqual(6)
     for (const preview of previews) {
       expect(preview.props.className).toBe('dab-doc-ui-preview')
       expect(preview.props.style).toEqual({ pointerEvents: 'none', userSelect: 'none' })

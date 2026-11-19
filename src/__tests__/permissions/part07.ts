@@ -5,10 +5,9 @@ import {
   classifyLookerOperation, DATA_INVESTIGATOR_GUIDE_MD, isTextAttachmentFile, LkrCodeMode,
   runAntigravityTurn, StudioAttachedFile,
 } from '../../antigravity'
-import { USE_CASE_BADGES } from '../../components/StudioWorkspace'
 import {
-  buildDenseExploreSchema, buildStudioRoute, classifyStudioUseCase, clearLookerMetadataCache,
-  convertRelativeDateFilterToFixed, extractResolvedUseCase, fetchPreloadedContentSummary, hydrateMentionedContext,
+  buildDenseExploreSchema, buildStudioRoute, clearLookerMetadataCache,
+  convertRelativeDateFilterToFixed, fetchPreloadedContentSummary, hydrateMentionedContext,
   normalizeQueryFiltersToFixedDates, parseStudioRoute, searchGlobalContentV2, SWR_DEDUPED_METHODS,
 } from '../../lookerApi'
 
@@ -215,7 +214,7 @@ export function registerPermissionsPart07Tests(): void {
             id: 'int_92_uploads',
             environment_id: 'env_92',
             status: 'completed',
-            output_text: '<USE_CASE>app</USE_CASE>Built Data App from Business Pulse & CSV.',
+            output_text: 'Built Data App from Business Pulse & CSV.',
           }),
         }
       },
@@ -272,44 +271,23 @@ export function registerPermissionsPart07Tests(): void {
     )
   })
 
-  test('30. Issue #94: registers Data Investigator (data-investigator) use case, Google Doc & Slides narrative guide, LookML drill_fields in buildDenseExploreSchema, run_key_driver_analysis in LkrCodeMode, and convertRelativeDateFilterToFixed', async () => {
-    // 1. Routing, aliases, badges, and classification
-    expect(USE_CASE_BADGES['data-investigator']).toEqual({
-      label: 'Data Investigator',
-      className: 'dab-use-case-badge-investigator',
-    })
-    expect(buildStudioRoute('data-investigator')).toBe('/data-investigator')
-    expect(buildStudioRoute('data-investigator', '42')).toBe('/data-investigator/42')
+  test('30. Issue #94: registers Data Investigator routes, Google Doc & Slides narrative guide, LookML drill_fields in buildDenseExploreSchema, run_key_driver_analysis in LkrCodeMode, and convertRelativeDateFilterToFixed', async () => {
+    // 1. Routing & legacy route redirection
+    expect(buildStudioRoute('42')).toBe('/c/42')
+    expect(buildStudioRoute('')).toBe('/')
     expect(parseStudioRoute('/data-investigator/42')).toEqual({
-      mode: 'app',
       objectId: '42',
       conversationId: '42',
-      useCase: 'data-investigator',
       isLegacyRoute: true,
     })
     expect(parseStudioRoute('/c/conv_data-investigator_42')).toEqual({
-      mode: 'app',
       objectId: '42',
       conversationId: 'conv_data-investigator_42',
-      useCase: 'data-investigator',
     })
     expect(parseStudioRoute('/c/inv_42')).toEqual({
-      mode: 'app',
       objectId: 'inv_42',
       conversationId: 'inv_42',
-      useCase: 'data-investigator',
     })
-    expect(
-      classifyStudioUseCase(
-        'Run a key driver analysis and root-cause investigation in a Google Doc narrative report'
-      )
-    ).toBe('data-investigator')
-    expect(
-      extractResolvedUseCase(
-        '<USE_CASE>data-investigator</USE_CASE>\nBuilt Google Presentation slides investigation.',
-        'Investigate revenue drop in slides'
-      )
-    ).toBe('data-investigator')
 
     // 2. DATA_INVESTIGATOR_GUIDE_MD contract (Doc default vs Slides mode, Chart -> What This Chart Means -> Next Investigation Path, limit 500)
     expect(DATA_INVESTIGATOR_GUIDE_MD).toContain("this.viewMode = 'doc'")

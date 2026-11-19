@@ -62,7 +62,7 @@ function registerVisualPart12Tests(ctx) {
           const u = String(url || '');
           const body = init && init.body ? JSON.parse(init.body) : {};
           const inputText = (body.input && body.input[0] && body.input[0].text) || '';
-          if (inputText.includes('[CONVERSATION_LABEL_REQUEST]')) {
+          if (inputText.trimStart().startsWith('[CONVERSATION_LABEL_REQUEST]')) {
             return { ok: true, status: 200, body: JSON.stringify({ id: 'int_lbl_190', status: 'completed', output_text: 'Safe Pulse App' }) };
           }
           if (u.includes('/interactions') && String((init && init.method) || 'GET').toUpperCase() === 'POST') {
@@ -75,7 +75,7 @@ function registerVisualPart12Tests(ctx) {
                   id: 'int_190_qa_' + turnNum,
                   environment_id: 'env_190',
                   status: 'completed',
-                  output_text: '<USE_CASE>app</USE_CASE>\\nSafe Pulse v3 currently displays zero widgets.'
+                  output_text: 'Safe Pulse v3 currently displays zero widgets.'
                 })
               };
             }
@@ -87,7 +87,7 @@ function registerVisualPart12Tests(ctx) {
                   id: 'int_190_t' + turnNum,
                   environment_id: 'env_190',
                   status: 'completed',
-                  output_text: '<USE_CASE>tile</USE_CASE>\\nGenerated cleanup script:\\n\`\`\`python\\nreturn delete_dashboard("190")\\n\`\`\`'
+                  output_text: 'Generated cleanup script:\\n\`\`\`python\\nreturn delete_dashboard("190")\\n\`\`\`'
                 })
               };
             }
@@ -104,7 +104,7 @@ function registerVisualPart12Tests(ctx) {
                 id: 'int_190_t' + turnNum,
                 environment_id: 'env_190',
                 status: 'completed',
-                output_text: '<USE_CASE>app</USE_CASE>\\nBuilt Safe Pulse v' + turnNum + '.\\n<DATA_APP_BUNDLE>' + appBundle + '</DATA_APP_BUNDLE>'
+                output_text: 'Built Safe Pulse v' + turnNum + '.\\n<DATA_APP_BUNDLE>' + appBundle + '</DATA_APP_BUNDLE>'
               })
             };
           }

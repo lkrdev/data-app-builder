@@ -24,7 +24,6 @@ const {
   buildAvailableExploresCatalog,
   buildDenseExploreSchema,
   deleteUserArtifact,
-  extractResolvedUseCase,
   fetchInitialLookerMetadata,
   loadExistingDashboardApp,
   parseExploreId,
@@ -342,7 +341,7 @@ export async function verifyDataAppInHeadlessBrowser({ account = 'dev-argolis', 
   }
 }
 
-export function gradeDataAppTurnOutput({ resolvedUseCase, bundle, baseAssistantText, finalAssistantText, publishedDashboardId, contentItems, liveVerification }) {
+export function gradeDataAppTurnOutput({ bundle, baseAssistantText, finalAssistantText, publishedDashboardId, contentItems, liveVerification }) {
   const dashLinkMatch = String(finalAssistantText || '').match(/\[([^\]]+)\]\((?:https?:\/\/[^\s)]+)?\/dashboards\/([A-Za-z0-9_-]+)(?:[?#][^)]*)?\)/i)
   const linkedDashboardId = dashLinkMatch ? dashLinkMatch[2] : ''
   const expectedId = String(publishedDashboardId || '').trim()
@@ -352,7 +351,6 @@ export function gradeDataAppTurnOutput({ resolvedUseCase, bundle, baseAssistantT
   const codeSource = String(liveVerification?.loadedCode || bundle?.prod_code || bundle?.raw_code || '')
   const br = liveVerification?.browserRender
   const checks = {
-    routedToApp: resolvedUseCase === 'app',
     emittedValidBundle: Boolean(
       bundle?.raw_code &&
       bundle?.prod_code?.includes('https://www.gstatic.com/looker-data-apps/versions/') &&
@@ -394,13 +392,12 @@ export function gradeDataAppTurnOutput({ resolvedUseCase, bundle, baseAssistantT
 }
 
 function parseCliArgs(argv) {
-  const opts = { account: 'dev-argolis', model: DEFAULT_ANTIGRAVITY_MODEL, thinking: 'medium', useCase: 'auto', explores: [], keep: false, outDir: path.join(rootDir, 'tmp/eval'), prompt: STICKER_BOOK_PROMPT }
+  const opts = { account: 'dev-argolis', model: DEFAULT_ANTIGRAVITY_MODEL, thinking: 'medium', explores: [], keep: false, outDir: path.join(rootDir, 'tmp/eval'), prompt: STICKER_BOOK_PROMPT }
   for (const arg of argv) {
     if (arg === '--keep') opts.keep = true
     else if (arg.startsWith('--oauth-account=')) opts.account = arg.split('=')[1].trim() || opts.account
     else if (arg.startsWith('--model=')) opts.model = arg.split('=')[1].trim() || opts.model
     else if (arg.startsWith('--thinking=')) opts.thinking = arg.split('=')[1].trim() || opts.thinking
-    else if (arg.startsWith('--use-case=')) opts.useCase = arg.split('=')[1].trim() || opts.useCase
     else if (arg.startsWith('--explores=')) opts.explores = arg.slice('--explores='.length).split(',').map((s) => s.trim()).filter(Boolean)
     else if (arg.startsWith('--out=')) opts.outDir = path.resolve(arg.slice('--out='.length).trim())
     else if (arg.startsWith('--prompt=')) opts.prompt = arg.slice('--prompt='.length)
@@ -414,10 +411,9 @@ export async function runSingleTurnDataAppEval(cliOpts = {}) {
   const sdk = createDataAppEvalSdk(opts.account)
   const startedAt = Date.now()
   const convId = `conv_eval_${startedAt}`
-  const allowedModes = ['app', 'data-investigator', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics']
 
   console.log(`\n=== Single-Turn Live Data App Eval ===`)
-  console.log(`Instance: ${sdk.baseUrl()} (${opts.account}) | Model: ${opts.model} (thinking=${opts.thinking}) | useCase=${opts.useCase}`)
+  console.log(`Instance: ${sdk.baseUrl()} (${opts.account}) | Model: ${opts.model} (thinking=${opts.thinking})`)
 
   const meta = await fetchInitialLookerMetadata(sdk)
   const userId = String(meta.user?.id || '1')
@@ -435,15 +431,12 @@ export async function runSingleTurnDataAppEval(cliOpts = {}) {
       userId,
       conversationId: convId,
       auth: { mode: 'apikey', apiKey },
-      session: { environmentId: '', conversationId: convId, explores: opts.explores, toolType: 'app' },
+      session: { environmentId: '', conversationId: convId, explores: opts.explores },
       model: opts.model,
       thinkingLevel: opts.thinking,
-      mode: 'data_app',
-      useCase: opts.useCase,
-      allowedModes,
+      canDevelop: true,
       selectedExplores: opts.explores,
       folderId,
-      toolMode: 'data_app',
       schemaMarkdown,
       userPrompt: opts.prompt,
       priorMessages: [],
@@ -452,19 +445,11 @@ export async function runSingleTurnDataAppEval(cliOpts = {}) {
     })
     const turnDurationMs = Date.now() - turnStart
 
-    const resolvedUseCase =
-      opts.useCase !== 'auto'
-        ? opts.useCase
-        : result.resolvedUseCase || extractResolvedUseCase(result.assistantText, opts.prompt, allowedModes)
-
     const pubStart = Date.now()
     const mat = await materializeTurnBundles({
       sdk,
       userId,
       result,
-      userPrompt: opts.prompt,
-      resolvedUseCase,
-      allowedModes,
       folderId,
       turnExplores: opts.explores,
       itemState,
@@ -548,7 +533,6 @@ export async function runSingleTurnDataAppEval(cliOpts = {}) {
     }
 
     const grade = gradeDataAppTurnOutput({
-      resolvedUseCase,
       bundle: result.bundle,
       baseAssistantText,
       finalAssistantText,
@@ -564,8 +548,6 @@ export async function runSingleTurnDataAppEval(cliOpts = {}) {
       oauthAccount: opts.account,
       model: opts.model,
       thinkingLevel: opts.thinking,
-      useCaseInput: opts.useCase,
-      resolvedUseCase,
       environmentId: result.session.environmentId,
       interactionId: result.session.lastInteractionId,
       turnDurationMs,
@@ -589,7 +571,6 @@ export async function runSingleTurnDataAppEval(cliOpts = {}) {
       auth: { mode: 'apikey', apiKey },
       conversationId: convId,
       label: mat.publishedApp?.title || 'Sticker-Book E-Commerce Command Center',
-      useCase: resolvedUseCase,
       model: opts.model,
       thinkingLevel: opts.thinking,
       environmentId: result.session.environmentId,

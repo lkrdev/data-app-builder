@@ -491,7 +491,7 @@ export function registerPermissionsPart20Tests(): void {
     const turnTs = readFileSync(path.join(repoRoot, 'src/studioControllerTurn.ts'), 'utf8')
     expect(turnTs).toContain('if (loadingMetadata && models.length === 0 && selectedExplores.length === 0) return')
     expect(turnTs).toContain('/(?:https?:\\/\\/[^\\s/]+)?\\/(dashboards|looks|explore)\\/([^\\s?#)]+)/gi')
-    expect(turnTs).toContain('**Looker Dashboard:** [Open ${publishedDataAppDashboardLink.title}](${publishedDataAppDashboardLink.path})')
+    expect(turnTs).toContain('**${deliveredContentLink.label}:** [Open ${deliveredContentLink.title}](${deliveredContentLink.path})')
   })
 
   test('Issue #206: persists per-model sticky thinking levels independently, surfaces mobile Overview buttons, and renders touch long-press tooltips', async () => {
@@ -558,7 +558,7 @@ export function registerPermissionsPart20Tests(): void {
 
     const wsSrc = [
       readFileSync(path.join(repoRoot, 'src/components/StudioComposer.tsx'), 'utf8'),
-      readFileSync(path.join(repoRoot, 'src/components/StudioUseCaseGuides.tsx'), 'utf8'),
+      readFileSync(path.join(repoRoot, 'src/components/StudioCapabilitiesGuide.tsx'), 'utf8'),
       readFileSync(path.join(repoRoot, 'src/components/StudioConversationsSidebar.tsx'), 'utf8'),
     ].join('\n')
     expect(wsSrc).toContain('value: thinkingLevelByModel?.[m.id] || defaultThinkingLevel || thinkingLevel')

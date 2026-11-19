@@ -140,7 +140,7 @@ export const StudioConversationsSidebar: React.FC<{ ctl: StudioController }> = (
       <div className="dab-conv-sidebar-actions">
         <button
           type="button" className="dab-conv-new-btn" data-testid="new-conversation-btn"
-          onClick={() => handleNewConversation('auto')} title="Start a new conversation"
+          onClick={() => handleNewConversation()} title="Start a new conversation"
         >
           {sidebarCollapsed ? '+' : '+ New Conversation'}
         </button>

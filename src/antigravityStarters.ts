@@ -6,7 +6,6 @@ import {
   collectInteractionTextCandidates, DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_POLL_SCHEDULE_MS,
 } from './antigravityTypes'
 import { LkrCodeMode } from './lkrCliBridge'
-import { type ResolvedStudioUseCase, type StudioUseCase } from './lookerPermissions'
 import { parseExploreId } from './lookerTransport'
 
 export const CONVERSATION_LABEL_REQUEST_TAG = '[CONVERSATION_LABEL_REQUEST]'
@@ -36,8 +35,8 @@ export const STARTER_PROMPTS_RESPONSE_FORMAT = {
     type: 'array',
     items: {
       type: 'object',
-      properties: { id: { type: 'string' }, label: { type: 'string' }, prompt: { type: 'string' }, useCase: { type: 'string' } },
-      required: ['id', 'label', 'prompt', 'useCase'],
+      properties: { id: { type: 'string' }, label: { type: 'string' }, prompt: { type: 'string' } },
+      required: ['id', 'label', 'prompt'],
     },
   },
 }
@@ -94,7 +93,7 @@ export async function generateConversationLabel(params: {
   }
 }
 
-export interface StarterPromptItem { id: string; label: string; prompt: string; useCase?: ResolvedStudioUseCase }
+export interface StarterPromptItem { id: string; label: string; prompt: string }
 export interface StarterExploreFieldSummary { name: string; label?: string; type?: string }
 export type StarterContentSummaryItem = Pick<
   IContentSummary,
@@ -109,7 +108,7 @@ export interface LookmlModelExploreSummaryLike {
   explores?: Array<{ name?: string | null; label?: string | null; description?: string | null; hidden?: boolean | null }> | null
 }
 export interface BuildDynamicStarterPromptsOptions {
-  useCase?: StudioUseCase | string; selectedExplores?: string[]; permittedUseCases?: StudioUseCase[]
+  selectedExplores?: string[]; canDevelopLookml?: boolean
   availableModels?: LookmlModelExploreSummaryLike[]; exploreContext?: StarterExploreContext | null; contentSummaries?: StarterContentSummaryItem[]
 }
 
@@ -133,16 +132,13 @@ function humanizeLookmlIdentifier(raw?: string | null): string {
   return clean ? clean.split(' ').map((w) => (w.length <= 2 && /^(?:id|pk|bq|qa|ai)$/i.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))).join(' ') : ''
 }
 
-export function buildStarterPromptsCacheKey(useCase?: string, exploreKey?: string, permittedUseCases?: string[], isAgentAuthenticated = false): string {
-  const rawUc = String(useCase || 'auto').trim().toLowerCase()
-  const normUc = rawUc === 'health' ? 'health-check' : rawUc || 'auto'
+export function buildStarterPromptsCacheKey(exploreKey?: string, canDevelopLookml = true, isAgentAuthenticated = false): string {
   const exp = String(exploreKey || 'none').trim() || 'none'
-  const perms = Array.isArray(permittedUseCases) && permittedUseCases.length > 0 ? [...permittedUseCases].sort().join(',') : 'all'
-  return `${normUc}::${exp}::${perms}::${isAgentAuthenticated ? 'agent' : 'local'}`
+  return `${exp}::${canDevelopLookml ? 'dev' : 'explore'}::${isAgentAuthenticated ? 'agent' : 'local'}`
 }
 
-export function getCachedStarterPrompts(useCase?: string, exploreKey?: string, permittedUseCases?: string[], isAgentAuthenticated = false): StarterPromptItem[] | undefined {
-  return starterPromptsCache.get(buildStarterPromptsCacheKey(useCase, exploreKey, permittedUseCases, isAgentAuthenticated))
+export function getCachedStarterPrompts(exploreKey?: string, canDevelopLookml = true, isAgentAuthenticated = false): StarterPromptItem[] | undefined {
+  return starterPromptsCache.get(buildStarterPromptsCacheKey(exploreKey, canDevelopLookml, isAgentAuthenticated))
 }
 
 export function resolveTargetExploreFromModels(
@@ -277,15 +273,7 @@ export async function discoverStarterExploreContext(params: {
   return ctx
 }
 
-function toPermittedUseCaseSet(permittedUseCases?: StudioUseCase[]): Set<string> | null {
-  return Array.isArray(permittedUseCases) && permittedUseCases.length > 0
-    ? new Set(permittedUseCases.map((u) => { const k = String(u).trim().toLowerCase(); return k === 'health' ? 'health-check' : k }))
-    : null
-}
-
 export function buildDynamicStarterPrompts(options: BuildDynamicStarterPromptsOptions = {}): StarterPromptItem[] {
-  const rawUseCase = String(options.useCase || 'auto').trim().toLowerCase()
-  const useCaseKey = rawUseCase === 'health' ? 'health-check' : rawUseCase || 'auto'
   const baseTarget = options.exploreContext?.exploreName ? options.exploreContext : resolveTargetExploreFromModels(options.selectedExplores, options.availableModels)
   const resolvedTarget = baseTarget ? { dimensions: [] as StarterExploreFieldSummary[], measures: [] as StarterExploreFieldSummary[], ...baseTarget } : null
 
@@ -294,13 +282,12 @@ export function buildDynamicStarterPrompts(options: BuildDynamicStarterPromptsOp
   const expKey = resolvedTarget?.modelName && expName ? `${resolvedTarget.modelName}::${expName}` : expName
   const expLabel = resolvedTarget?.exploreLabel || humanizeLookmlIdentifier(expName) || 'Primary Explore'
   const modelName = resolvedTarget?.modelName || ''
-  const modelLabel = resolvedTarget?.modelLabel || humanizeLookmlIdentifier(modelName) || expLabel
 
   const measures = resolvedTarget?.measures || []
   const dimensions = resolvedTarget?.dimensions || []
   const [m1, m2] = measures
   const measureLabelPair = m1 && m2
-    ? `${m1.label || humanizeLookmlIdentifier(m1.name)} and ${m2.label || humanizeLookmlIdentifier(m2.name)}`
+    ? `${m1.label || humanizeLookmlIdentifier(m1.name)} and ${m2.label || humanizeLookmlIdentifier(m1.name)}`
     : m1 ? m1.label || humanizeLookmlIdentifier(m1.name) : 'headline KPIs and performance metrics'
   const timeDim = dimensions.find((d) => /date|time|month|week|year|quarter/i.test(`${d.type || ''} ${d.name}`)) || dimensions[0]
   const catDim =
@@ -316,128 +303,55 @@ export function buildDynamicStarterPrompts(options: BuildDynamicStarterPromptsOp
   const topContentTitle = stripStarterPromptEmojis(String(topContent?.title || '').trim())
   const topContentIdSuffix = topContent?.content_id ? ` (#${topContent.content_id})` : ''
 
-  const mk = (useCase: ResolvedStudioUseCase, id: string, label: string, prompt: string): StarterPromptItem => ({
-    id, label: stripStarterPromptEmojis(label), prompt, useCase,
+  const mk = (id: string, label: string, prompt: string): StarterPromptItem => ({
+    id, label: stripStarterPromptEmojis(label), prompt,
   })
 
-  const byUseCase: Record<ResolvedStudioUseCase, StarterPromptItem[]> = {
-    app: [
-      mk('app', 'exec-kpi', hasExplore ? `Build ${expLabel} KPI App` : 'Executive KPI Scorecard App',
-        hasExplore ? `Build an interactive Data App on ${expKey} with ${measureLabelPair} KPI scorecards, a ${timeLabel} trend chart, and a ${catLabel} filter.`
-          : 'Build an interactive Executive KPI Data App with summary scorecards, a time-series trend chart, and segment filters from our primary LookML explore.'),
-      mk('app', 'cohort-grid', hasExplore ? `Interactive ${expLabel} Explorer` : 'Interactive Metric & Segment Explorer',
-        hasExplore ? `Build an interactive Data App on ${expKey} with a dynamic metric switcher for ${measureLabelPair}, a ${catLabel} breakdown chart, and a drillable detail grid.`
-          : 'Build an interactive Data App with a dynamic metric switcher, category breakdown chart, and drillable detail grid.'),
-      mk('app', 'funnel-app', topContentTitle ? `Upgrade ${topContentTitle} to Data App` : hasExplore ? `${expLabel} Segment Comparison App` : 'Cohort & Conversion Funnel App',
-        topContentTitle ? `Convert our "${topContentTitle}" Looker ${topContent?.content_type || 'dashboard'}${topContentIdSuffix} into an interactive Data App${hasExplore ? ` on ${expKey}` : ''} with KPI scorecards and cross-filtering.`
-          : hasExplore ? `Create a segment comparison Data App on ${expKey} with ${catLabel} cross-filtering and period-over-period comparison cards.`
-          : 'Create a conversion and retention Data App with regional filters and period-over-period comparison cards.'),
-    ],
-    'data-investigator': [
-      mk('data-investigator', 'inv-doc-drivers', hasExplore ? `Investigate ${expLabel} Key Drivers` : 'Root-Cause Key Driver Narrative Doc',
-        hasExplore ? `Investigate key drivers of ${measureLabelPair} in ${expKey} across ${catLabel} using run_key_driver_analysis, LookML drill_fields (limit 500), and fixed point-in-time dates in a Google Doc narrative Data App.`
-          : 'Investigate the root-cause key drivers of our primary business metric change using run_key_driver_analysis, LookML drill_fields (limit 500), and fixed point-in-time dates in a Google Doc narrative Data App.'),
-      mk('data-investigator', 'inv-slides-deck', hasExplore ? `${expLabel} Executive Slides Investigation` : 'Executive Presentation Slides Investigation',
-        hasExplore ? `Build a Google Presentation slides investigation deck on ${expKey} drilling into ${measureLabelPair} by ${catLabel} across ${timeLabel} with What This Chart Means and Next Investigation Path slides.`
-          : 'Build a Google Presentation slides investigation deck drilling into segment anomalies with What This Chart Means callouts and Next Investigation Path transitions.'),
-      mk('data-investigator', 'inv-anomaly-drill', hasExplore ? `${expLabel} Segment Anomaly Drill Path` : 'Segment Anomaly & Drill Path Story',
-        hasExplore ? `Run a point-in-time data investigation on ${expKey} with fixed date filters, drilling from ${measureLabelPair} down its LookML drill_fields and ${catLabel} to a 500-row evidence grid.`
-          : 'Run a point-in-time data investigation with fixed date ranges, drilling from headline KPI variance down LookML drill_fields to a 500-row evidence grid.'),
-    ],
-    dashboard: [
-      mk('dashboard', 'udd-exec', hasExplore ? `Create ${expLabel} Looker Dashboard` : 'Create a Native Looker Dashboard',
-        hasExplore ? `Create a native Looker UDD on ${expKey} with ${measureLabelPair} KPI tiles, a breakdown chart by ${catLabel}, and an interactive ${catLabel} filter.`
-          : 'Create a native Looker UDD with headline KPI scorecards, a segment breakdown column chart, and interactive dashboard filters.'),
-      mk('dashboard', 'saved-look', hasExplore ? `Top ${expLabel} Segments Saved Look` : 'Top Segments & Metrics Saved Look',
-        hasExplore ? `Create a Saved Look on ${expKey} ranking top ${catLabel} segments by ${measureLabelPair} with a 90-day date filter.`
-          : 'Create a Saved Look showing top 10 segments by primary business metrics with a 90-day date filter.'),
-      mk('dashboard', 'board-schedule', topContentTitle ? `Pin ${topContentTitle} & Schedule` : hasExplore ? `${expLabel} Board & Morning Schedule` : 'Executive Board & Morning Schedule',
-        topContentTitle ? `Pin "${topContentTitle}"${topContentIdSuffix} to an Executive Pulse board and schedule a weekday 8 AM summary delivery.`
-          : hasExplore ? `Pin our ${expLabel} dashboards to an Executive Pulse board and schedule a weekday 8 AM summary delivery.`
-          : 'Pin our key business dashboards to an Executive Pulse board and schedule a weekday 8 AM summary.'),
-    ],
-    'conversational-analytics': [
-      mk('conversational-analytics', 'ca-margin', hasExplore ? `Top ${expLabel} Drivers by ${catLabel}` : 'Top Segments by Key Metrics',
-        hasExplore ? `What are the top ${catLabel} segments in ${expKey} by ${measureLabelPair}?`
-          : 'What are the top 3 product or service segments by primary business performance in Q4?'),
-      mk('conversational-analytics', 'ca-spike', hasExplore ? `${expLabel} Trend & Anomaly Q&A` : 'Q4 Metric Spike & Streaming Volume Q&A',
-        hasExplore ? `How have ${measureLabelPair} in ${expKey} trended across ${timeLabel}, and which segments drove the largest change?`
-          : 'Why did primary KPI metrics spike in Q4 and which BigQuery tables had the highest streaming buffer volume?'),
-      mk('conversational-analytics', 'ca-retention', hasExplore ? `Compare ${expLabel} Segments` : 'Repeat vs New Cohort Breakdown',
-        hasExplore ? `Show a breakdown of ${measureLabelPair} by ${catLabel} in ${expKey} and highlight top outliers.`
-          : 'Show me the monthly breakdown of repeat vs first-time customer cohorts over the past year.'),
-    ],
-    'health-check': [
-      mk('health-check', 'hc-full', hasExplore ? `Full 3-Pillar Audit for ${modelLabel}` : 'Full 3-Pillar Looker & BigQuery Audit',
-        hasExplore ? `Run a full 3-pillar Looker & BigQuery health check focused on ${modelName || expKey} and generate a prioritized Technical Design Document.`
-          : 'Run a full 3-pillar Looker & BigQuery health check and generate a prioritized Technical Design Document.'),
-      mk('health-check', 'hc-lookml', 'LookML Transcriber Rubric & PK Audit',
-        hasExplore ? `Audit LookML views in ${modelName || expKey} for missing primary keys, symmetric aggregate fanouts, and 0–4 Transcriber maturity score.`
-          : 'Audit LookML views for missing primary keys, symmetric aggregate fanouts, and 0–4 Transcriber maturity score.'),
-      mk('health-check', 'hc-bq', 'BigQuery Partitioning & Slot Cost Audit',
-        'Analyze BigQuery INFORMATION_SCHEMA for unpartitioned tables, high-byte scans, and clustering recommendations.'),
-    ],
-    lookml: [
-      mk('lookml', 'lkml-measures', hasExplore ? `Add Measures to ${expLabel}` : 'Add Curated Measures & Refinements',
-        hasExplore ? `Add curated KPI measures and field descriptions to ${expName} in model ${modelName || 'LookML'}, and verify SQL vs Explore parity.`
-          : 'Add KPI summary measures to a LookML view refinement, curate field descriptions, and verify SQL vs Explore parity.'),
-      mk('lookml', 'lkml-tests', hasExplore ? `Generate ${expLabel} LookML Data Tests` : 'Generate LookML Assert Data Tests',
-        hasExplore ? `Curate field descriptions on ${expKey}, generate assert data tests (.test.lkml), and capture a LookML parity snapshot.`
-          : 'Curate LookML field descriptions, generate assert data tests (.test.lkml), and capture a LookML parity snapshot.'),
-      mk('lookml', 'lkml-ndt', hasExplore ? `Model ${expLabel} Rollup Derived Table` : 'Model a Native Derived Table Rollup',
-        hasExplore ? `Create an aggregated native derived table (NDT) rollup view for ${catLabel} and join it into the ${expKey} explore.`
-          : 'Create a customer lifetime value native derived table (NDT) view and join it into our primary LookML explore.'),
-    ],
-    tile: [
-      mk('tile', 'script-summary', hasExplore ? `${expLabel} & Filter Summary Script` : 'Explore & Active Filter Summary',
-        hasExplore ? `Write a Script summarizing ${expKey} metrics by ${catLabel} and active dashboard filters as a table.`
-          : 'Write a Script summarizing visible LookML models, explores, and active dashboard filters as a table.'),
-      mk('tile', 'script-anomaly', hasExplore ? `${expLabel} Anomaly Detector Script` : 'Daily Metric Anomaly Detector',
-        hasExplore ? `Write a Script that queries ${measureLabelPair} in ${expKey} across ${timeLabel}, flags values outside 2 standard deviations, and outputs a markdown alert.`
-          : 'Write a Script that queries daily time-series metrics, flags days outside 2 standard deviations, and outputs a markdown alert.'),
-      mk('tile', 'script-audit', 'Unused Content & Schedule Audit',
-        'Write a Script that lists top scheduled plans and dashboard element counts across folders.'),
-    ],
-  }
-
-  if (useCaseKey !== 'auto' && useCaseKey in byUseCase) return byUseCase[useCaseKey as ResolvedStudioUseCase]
-
-  const candidateOrder: Array<{ uc: ResolvedStudioUseCase; autoId: string; fallbackLabel: string }> = [
-    { uc: 'app', autoId: 'exec-app', fallbackLabel: hasExplore ? `Build ${expLabel} Data App` : 'Build an Executive KPI Data App' },
-    { uc: 'data-investigator', autoId: 'inv-doc', fallbackLabel: hasExplore ? `Investigate ${expLabel} Drivers` : 'Investigate Key Metric Drivers' },
-    { uc: 'dashboard', autoId: 'native-udd', fallbackLabel: hasExplore ? `Create ${expLabel} Looker Dashboard` : 'Create a Native Looker Dashboard' },
-    { uc: 'conversational-analytics', autoId: 'ask-ca', fallbackLabel: hasExplore ? `Ask a Question on ${expLabel}` : 'Ask a Data Question' },
-    { uc: 'lookml', autoId: 'lookml-measure', fallbackLabel: hasExplore ? `Add LookML Measures to ${expLabel}` : 'Add LookML Measures & Data Tests' },
-    { uc: 'tile', autoId: 'script-summary', fallbackLabel: hasExplore ? `${expLabel} & Filter Summary Script` : 'Explore & Active Filter Summary' },
-    { uc: 'health-check', autoId: 'hc-full', fallbackLabel: hasExplore ? `Full 3-Pillar Audit for ${modelLabel}` : 'Full 3-Pillar Looker & BigQuery Audit' },
+  return [
+    mk(
+      'exec-app',
+      topContentTitle && !hasExplore ? `Upgrade ${topContentTitle} to Data App` : hasExplore ? `Build ${expLabel} Data App` : 'Build an Executive KPI Data App',
+      topContentTitle && !hasExplore
+        ? `Convert our "${topContentTitle}" Looker ${topContent?.content_type || 'dashboard'}${topContentIdSuffix} into an interactive Data App with KPI scorecards and cross-filtering.`
+        : hasExplore
+        ? `Build an interactive Data App on ${expKey} with ${measureLabelPair} KPI scorecards, a ${timeLabel} trend chart, and a ${catLabel} filter.`
+        : 'Build an interactive Executive KPI Data App with summary scorecards, a time-series trend chart, and segment filters from our primary LookML explore.'
+    ),
+    mk(
+      'inv-doc',
+      hasExplore ? `Investigate ${expLabel} Drivers` : 'Investigate Key Metric Drivers',
+      hasExplore
+        ? `Investigate key drivers of ${measureLabelPair} in ${expKey} across ${catLabel} using run_key_driver_analysis, LookML drill_fields (limit 500), and fixed point-in-time dates in a Google Doc narrative Data App.`
+        : 'Investigate the root-cause key drivers of our primary business metric change using run_key_driver_analysis, LookML drill_fields (limit 500), and fixed point-in-time dates in a Google Doc narrative Data App.'
+    ),
+    mk(
+      'native-udd',
+      hasExplore ? `Create ${expLabel} Looker Dashboard` : 'Create a Native Looker Dashboard',
+      hasExplore
+        ? `Create a native Looker UDD on ${expKey} with ${measureLabelPair} KPI tiles, a breakdown chart by ${catLabel}, and an interactive ${catLabel} filter.`
+        : 'Create a native Looker UDD with headline KPI scorecards, a segment breakdown column chart, and interactive dashboard filters.'
+    ),
+    options.canDevelopLookml === false
+      ? mk(
+          'ask-data',
+          hasExplore ? `Analyze ${expLabel} Segments` : 'Ask a Data Question',
+          hasExplore
+            ? `What are the top ${catLabel} segments in ${expKey} by ${measureLabelPair}?`
+            : 'What are the top 3 product or service segments by primary business performance in Q4?'
+        )
+      : mk(
+          'lookml-measure',
+          hasExplore ? `Add LookML Measures to ${expLabel}` : 'Add LookML Measures & Data Tests',
+          hasExplore
+            ? `Add curated KPI measures and field descriptions to ${expName} in model ${modelName || 'LookML'}, and verify SQL vs Explore parity.`
+            : 'Add KPI summary measures to a LookML view refinement, curate field descriptions, and verify SQL vs Explore parity.'
+        ),
   ]
-  const permittedSet = toPermittedUseCaseSet(options.permittedUseCases)
-  const autoItems: StarterPromptItem[] = []
-  for (const cand of candidateOrder) {
-    if (permittedSet && !permittedSet.has(cand.uc)) continue
-    const first = byUseCase[cand.uc]?.[0]
-    if (!first) continue
-    autoItems.push(mk(cand.uc, cand.autoId, cand.fallbackLabel, first.prompt))
-    if (autoItems.length >= 4) break
-  }
-  if (autoItems.length < 3) {
-    for (const cand of candidateOrder) {
-      if (permittedSet && !permittedSet.has(cand.uc)) continue
-      for (const extra of (byUseCase[cand.uc] || []).slice(1)) {
-        if (autoItems.some((x) => x.prompt === extra.prompt)) continue
-        autoItems.push({ ...extra, label: stripStarterPromptEmojis(extra.label) })
-        if (autoItems.length >= 3) break
-      }
-      if (autoItems.length >= 3) break
-    }
-  }
-  return autoItems.length > 0 ? autoItems : byUseCase.app
 }
 
 export function parseStarterPromptsResponse(
   rawText: string,
-  fallbackPrompts: StarterPromptItem[],
-  permittedUseCases?: StudioUseCase[]
+  fallbackPrompts: StarterPromptItem[]
 ): StarterPromptItem[] {
   const cleanRaw = String(rawText || '').trim()
   if (!cleanRaw) return fallbackPrompts
@@ -448,8 +362,6 @@ export function parseStarterPromptsResponse(
   try {
     const parsed = JSON.parse(bracketMatch[0])
     if (!Array.isArray(parsed)) return fallbackPrompts
-    const validUseCases = new Set<string>(['app', 'data-investigator', 'dashboard', 'conversational-analytics', 'lookml', 'health-check', 'tile'])
-    const permittedSet = toPermittedUseCaseSet(permittedUseCases)
     const normalized: StarterPromptItem[] = []
     for (let i = 0; i < parsed.length; i++) {
       const item = parsed[i]
@@ -458,12 +370,8 @@ export function parseStarterPromptsResponse(
       const label = stripStarterPromptEmojis(String(rec.label || '').trim())
       const prompt = String(rec.prompt || '').trim()
       if (!label || prompt.length < 10 || /search_content|lookml_model_explore|Solr/i.test(prompt)) continue
-      const rawUc = String(rec.useCase || rec.use_case || '').trim().toLowerCase()
-      const normUc = (rawUc === 'health' ? 'health-check' : rawUc) as ResolvedStudioUseCase
-      const resolvedUc: ResolvedStudioUseCase | undefined = validUseCases.has(normUc) ? normUc : fallbackPrompts[i]?.useCase
-      if (permittedSet && resolvedUc && !permittedSet.has(resolvedUc)) continue
       const id = String(rec.id || '').trim().replace(/[^a-zA-Z0-9_-]/g, '-') || `starter-${i}`
-      normalized.push({ id, label, prompt, ...(resolvedUc ? { useCase: resolvedUc } : {}) })
+      normalized.push({ id, label, prompt })
       if (normalized.length >= 4) break
     }
     return normalized.length >= 3 ? normalized : fallbackPrompts
@@ -476,19 +384,19 @@ export function parseStarterPromptsResponse(
 // while falling back to deterministic LookML explore/field prompts when unauthenticated or on error.
 export async function generateDynamicStarterPrompts(params: {
   sdk?: Looker40SDK | null; extensionSDK?: AntigravityExtensionHostLike; auth?: AntigravityAuth; environmentId?: string
-  useCase?: StudioUseCase | string; selectedExplores?: string[]; permittedUseCases?: StudioUseCase[]
+  selectedExplores?: string[]; canDevelopLookml?: boolean
   availableModels?: LookmlModelExploreSummaryLike[]; exploreContext?: StarterExploreContext | null
   model?: string; pollScheduleMs?: number[]
 }): Promise<StarterPromptItem[]> {
   const {
-    sdk, extensionSDK, auth, environmentId, useCase = 'auto', selectedExplores = [], permittedUseCases,
+    sdk, extensionSDK, auth, environmentId, selectedExplores = [], canDevelopLookml = true,
     availableModels = [], exploreContext: providedContext, model = DEFAULT_ANTIGRAVITY_MODEL, pollScheduleMs = DEFAULT_POLL_SCHEDULE_MS,
   } = params
   const exploreContext = providedContext !== undefined ? providedContext : await discoverStarterExploreContext({ sdk, selectedExplores, availableModels })
   const exploreKey = selectedExplores.length > 0 ? selectedExplores.join(',') : exploreContext?.exploreKey || 'none'
   const canCallAgent = Boolean(auth?.oauthToken?.trim() || (auth?.mode === 'apikey' && auth?.apiKey?.trim()))
-  const localCacheKey = buildStarterPromptsCacheKey(useCase, exploreKey, permittedUseCases, false)
-  const agentCacheKey = buildStarterPromptsCacheKey(useCase, exploreKey, permittedUseCases, true)
+  const localCacheKey = buildStarterPromptsCacheKey(exploreKey, canDevelopLookml, false)
+  const agentCacheKey = buildStarterPromptsCacheKey(exploreKey, canDevelopLookml, true)
 
   if (canCallAgent) {
     const cachedAgent = starterPromptsCache.get(agentCacheKey)
@@ -498,20 +406,13 @@ export async function generateDynamicStarterPrompts(params: {
     if (cachedLocal && cachedLocal.length > 0) return cachedLocal
   }
 
-  const fallbackPrompts = buildDynamicStarterPrompts({ useCase, selectedExplores, permittedUseCases, availableModels, exploreContext })
+  const fallbackPrompts = buildDynamicStarterPrompts({ selectedExplores, canDevelopLookml, availableModels, exploreContext })
   starterPromptsCache.set(localCacheKey, fallbackPrompts)
   if (!canCallAgent || !auth) return fallbackPrompts
 
-  const rawUc = String(useCase || 'auto').trim().toLowerCase()
-  const normUc = rawUc === 'health' ? 'health-check' : rawUc || 'auto'
-  const allowedList = Array.isArray(permittedUseCases) && permittedUseCases.length > 0
-    ? permittedUseCases.filter((u) => u !== 'auto')
-    : ['app', 'data-investigator', 'dashboard', 'conversational-analytics', 'lookml', 'health-check', 'tile']
-
   const inputText = [
-    `${STARTER_PROMPTS_REQUEST_TAG} Synthesize ${normUc === 'auto' ? 4 : 3} concise, tailored Looker Studio starter prompts as JSON wrapped in <STARTER_PROMPTS>[...]</STARTER_PROMPTS> (plain-text labels with zero emojis, no tools, no markdown outside tag).`,
-    `Active useCase: ${normUc}`,
-    `Permitted use cases: ${allowedList.join(', ')}`,
+    `${STARTER_PROMPTS_REQUEST_TAG} Synthesize 4 concise, tailored Looker Studio starter prompts as JSON wrapped in <STARTER_PROMPTS>[...]</STARTER_PROMPTS> (plain-text labels with zero emojis, no tools, no markdown outside tag).`,
+    `LookML development enabled: ${canDevelopLookml ? 'yes' : 'no'}`,
     exploreContext?.exploreName ? `Target explore: ${exploreContext.exploreKey} (${exploreContext.exploreLabel})` : 'Target explore: none',
     exploreContext?.measures?.length ? `Top measures: ${exploreContext.measures.slice(0, 5).map((m) => `${m.name}${m.label ? ` (${m.label})` : ''}`).join(', ')}` : '',
     exploreContext?.dimensions?.length ? `Top dimensions: ${exploreContext.dimensions.slice(0, 5).map((d) => `${d.name}${d.label ? ` (${d.label})` : ''}`).join(', ')}` : '',
@@ -526,7 +427,7 @@ export async function generateDynamicStarterPrompts(params: {
       systemInstruction: 'Synthesize 3-4 concise, tailored Looker Studio starter prompts as a JSON array with plain-text labels (no emojis) matching response_format.',
       responseFormat: STARTER_PROMPTS_RESPONSE_FORMAT,
     })
-    const parsed = parseStarterPromptsResponse(rawText, fallbackPrompts, permittedUseCases)
+    const parsed = parseStarterPromptsResponse(rawText, fallbackPrompts)
     starterPromptsCache.set(agentCacheKey, parsed)
     return parsed
   } catch {
@@ -655,7 +556,7 @@ description: Triage, inspect, create, update, move, and manage Looker alerts usi
 
 Use this skill whenever the user asks about Looker alerts — troubleshooting failing alerts, verifying alert data/filters, tuning noisy alert frequencies or thresholds, diagnosing missing mobile/Slack/email notifications, moving alerts to a new dashboard tile, or creating and editing alerts in **Ripper**.
 
-Always route alert prompts to \`<USE_CASE>tile</USE_CASE>\` and execute Looker SDK calls via \`run_looker_codemode\`.
+Execute Looker SDK calls via \`run_looker_codemode\`.
 
 ## 1. User-Goal Playbooks (What Users Need to Do First)
 

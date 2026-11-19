@@ -3,7 +3,6 @@ import type { IFolder, ILookmlModel, IRole, IUser } from '@looker/sdk'
 
 import { cleanLookmlProjectId } from './antigravityTypes'
 import { type ExtensionHostStorageLike, getDualStorage, getWinStorage, setDualStorage } from './lookerDraftScripts'
-import { STUDIO_SLASH_SKILLS } from './lookmlSkills'
 
 export * from './lookerDraftScripts'
 
@@ -168,61 +167,15 @@ export function classifyLooker404Error(
 
 export type StudioCapabilityMode = 'app' | 'dashboard' | 'lookml' | 'health' | 'tile'
 
-export type ResolvedStudioUseCase =
-  | 'app'
-  | 'data-investigator'
-  | 'dashboard'
-  | 'lookml'
-  | 'health-check'
-  | 'tile'
-  | 'conversational-analytics'
-
-export type StudioUseCase = 'auto' | ResolvedStudioUseCase
-
-export const STUDIO_USE_CASE_OPTIONS: Array<{
-  value: StudioUseCase
-  label: string
-  capabilityMode: StudioCapabilityMode | null
-}> = [
-  { value: 'auto', label: 'Auto', capabilityMode: null },
-  { value: 'dashboard', label: 'Content Studio', capabilityMode: 'dashboard' },
-  { value: 'conversational-analytics', label: 'Conversational Analytics', capabilityMode: 'app' },
-  { value: 'app', label: 'Data App', capabilityMode: 'app' },
-  { value: 'data-investigator', label: 'Data Investigator', capabilityMode: 'app' },
-  { value: 'health-check', label: 'Health Check', capabilityMode: 'health' },
-  { value: 'lookml', label: 'LookML', capabilityMode: 'lookml' },
-  { value: 'tile', label: 'Script', capabilityMode: 'tile' },
-]
-
-export function getUseCaseLabel(useCase: StudioUseCase): string {
-  return STUDIO_USE_CASE_OPTIONS.find((o) => o.value === useCase)?.label || useCase
-}
-
-const USE_CASE_ALIAS_MAP: Record<string, ResolvedStudioUseCase> = {
+const ARTIFACT_KIND_MAP: Record<string, string> = {
   app: 'app', 'data-app': 'app', data_app: 'app', dataapp: 'app',
-  'data-investigator': 'data-investigator', data_investigator: 'data-investigator', datainvestigator: 'data-investigator',
-  investigator: 'data-investigator', investigation: 'data-investigator', 'data-story': 'data-investigator', data_story: 'data-investigator',
+  'data-investigator': 'app', data_investigator: 'app', datainvestigator: 'app',
+  investigator: 'app', investigation: 'app', 'data-story': 'app', data_story: 'app',
   dashboard: 'dashboard', 'content-studio': 'dashboard', content_studio: 'dashboard', udd: 'dashboard',
   lookml: 'lookml', 'agentic-lookml': 'lookml', agentic_lookml: 'lookml',
-  health: 'health-check', 'health-check': 'health-check', health_check: 'health-check', healthcheck: 'health-check',
-  tile: 'tile', script: 'tile', 'python-tile': 'tile', python_tile: 'tile',
-  'conversational-analytics': 'conversational-analytics', conversational_analytics: 'conversational-analytics',
-  conversational: 'conversational-analytics', ca: 'conversational-analytics', qa: 'conversational-analytics',
-}
-
-export function studioUseCaseToMode(useCase: StudioUseCase): StudioCapabilityMode {
-  if (useCase === 'dashboard') return 'dashboard'
-  if (useCase === 'lookml') return 'lookml'
-  if (useCase === 'health-check') return 'health'
-  if (useCase === 'tile') return 'tile'
-  return 'app'
-}
-
-export const useCaseToStudioMode = studioUseCaseToMode
-
-export function studioModeToUseCase(mode?: string): ResolvedStudioUseCase {
-  const token = String(mode || '').trim().toLowerCase().replace(/\s+/g, '-')
-  return USE_CASE_ALIAS_MAP[token] || 'app'
+  health: 'health', 'health-check': 'health', health_check: 'health', healthcheck: 'health',
+  tile: 'tile', script: 'tile', alert: 'tile', 'python-tile': 'tile', python_tile: 'tile',
+  'conversational-analytics': 'ca', conversational_analytics: 'ca', conversational: 'ca', ca: 'ca', qa: 'ca',
 }
 
 export const getConvTargetId = (
@@ -232,21 +185,20 @@ export const getConvTargetId = (
   if (!c) return ''
   const lookmlTarget = cleanLookmlProjectId(c.projectId) || cleanLookmlProjectId(c.sessionId)
   const raw = String(type || '').trim().toLowerCase().replace(/\s+/g, '-')
-  if (!raw || raw === 'auto') {
+  if (!raw || raw === 'auto' || raw === 'chat' || raw === 'conversation') {
     const isLookmlObj = c.contentType === 'lookml' || c.projectId !== undefined || c.sessionId !== undefined
     const fallbackId = isLookmlObj ? cleanLookmlProjectId(c.id) : c.id
     return String(c.dashboardId || c.lookId || c.lookmlDashboardId || c.reportId || lookmlTarget || c.scriptId || c.alertId || c.caConversationId || fallbackId || '').trim()
   }
-  const pick: Partial<Record<ResolvedStudioUseCase, unknown>> = {
+  const pick: Record<string, unknown> = {
     lookml: lookmlTarget,
-    'health-check': c.reportId,
+    health: c.reportId,
     tile: c.scriptId || c.alertId || c.id,
-    'conversational-analytics': c.caConversationId || c.id,
+    ca: c.caConversationId || c.id,
     dashboard: c.contentType === 'look' ? c.lookId || c.dashboardId : c.contentType === 'lookml_dashboard' ? c.lookmlDashboardId || c.dashboardId : c.dashboardId || c.lookmlDashboardId || c.lookId,
     app: c.dashboardId || c.id,
-    'data-investigator': c.dashboardId || c.id,
   }
-  const canonical = USE_CASE_ALIAS_MAP[raw]
+  const canonical = ARTIFACT_KIND_MAP[raw]
   return canonical ? String(pick[canonical] || '').trim() : ''
 }
 
@@ -269,93 +221,54 @@ export const STUDIO_MODES: Array<{ mode: StudioMode; label: string; prefix: stri
   { mode: 'tile', label: 'Script', prefix: '/tile' },
 ]
 
-const CONV_PREFIX_USE_CASES: Array<[RegExp, ResolvedStudioUseCase]> = [
-  [/^ca_conv_/i, 'conversational-analytics'],
-  [/^(?:inv|investigator|data[-_]investigator)_/i, 'data-investigator'],
-  [/^lookml_/i, 'lookml'],
-  [/^(?:hc|health)_/i, 'health-check'],
-  [/^(?:dash_native|look|board)_/i, 'dashboard'],
-  [/^script_/i, 'tile'],
-]
+const LEGACY_ROUTE_RE =
+  /^\/(?:conversational-analytics|ca|data-investigator|investigator|health(?:-check)?|script|tile|dashboard|lookml|app)(?:\/(.*))?$/i
 
-const LEGACY_ROUTE_PATTERNS: Array<[RegExp, StudioUseCase]> = [
-  [/^\/(?:conversational-analytics|ca)(?:\/(.*))?$/i, 'conversational-analytics'],
-  [/^\/(?:data-investigator|investigator)(?:\/(.*))?$/i, 'data-investigator'],
-  [/^\/health(?:-check)?(?:\/(.*))?$/i, 'health-check'],
-  [/^\/(?:script|tile)(?:\/(.*))?$/i, 'tile'],
-  [/^\/dashboard(?:\/(.*))?$/i, 'dashboard'],
-  [/^\/lookml(?:\/(.*))?$/i, 'lookml'],
-  [/^\/app(?:\/(.*))?$/i, 'app'],
-]
+export function buildStudioRoute(conversationId = ''): string {
+  const cleanId = String(conversationId || '').trim()
+  return cleanId ? `/c/${encodeURIComponent(cleanId)}` : '/'
+}
 
-export function buildStudioRoute(
-  useCaseOrMode?: StudioUseCase | StudioMode | string,
-  objectId = ''
-): string {
-  const cleanId = String(objectId || '').trim()
-  const uc = USE_CASE_ALIAS_MAP[String(useCaseOrMode || '').trim().toLowerCase().replace(/\s+/g, '-')]
-  if (!uc) return cleanId ? `/c/${encodeURIComponent(cleanId)}` : '/'
-  return cleanId ? `/${uc}/${encodeURIComponent(cleanId)}` : `/${uc}`
+export function inferRouteArtifactKind(pathname: string, convId = ''): string | undefined {
+  const clean = (pathname || '/').trim()
+  const legacyPrefix = clean.match(
+    /^\/(conversational-analytics|ca|data-investigator|investigator|health(?:-check)?|script|tile|dashboard|lookml|app)(?:\/|$)/i
+  )?.[1]
+  const idPrefix =
+    convId.match(
+      /^conv_(app|data_app|data-investigator|data_investigator|investigator|dashboard|lookml|health-check|health_check|health|tile|script|conversational-analytics)_/i
+    )?.[1] ||
+    (/^ca_conv_/i.test(convId) ? 'conversational-analytics'
+      : /^lookml_/i.test(convId) ? 'lookml'
+      : /^(?:hc|health)_/i.test(convId) ? 'health'
+      : /^(?:dash_native|look|board)_/i.test(convId) ? 'dashboard'
+      : /^script_/i.test(convId) ? 'tile' : undefined)
+  const kind = ARTIFACT_KIND_MAP[(legacyPrefix || idPrefix || '').toLowerCase()]
+  return kind === 'ca' ? 'conversational-analytics' : kind
 }
 
 export function parseStudioRoute(pathname: string): {
-  mode: StudioMode
   objectId: string
   conversationId: string
-  useCase?: StudioUseCase
-  isCaRoute?: boolean
   isLegacyRoute?: boolean
 } {
   const clean = (pathname || '/').trim()
-  const mk = (useCase: StudioUseCase, objectId = '', conversationId = objectId, isLegacyRoute?: boolean) => ({
-    mode: studioUseCaseToMode(useCase),
-    objectId,
-    conversationId,
-    useCase,
-    ...(useCase === 'conversational-analytics' ? { isCaRoute: true } : {}),
-    ...(isLegacyRoute ? { isLegacyRoute: true } : {}),
-  })
-  if (clean === '/' || clean === '/config') return mk('auto')
-  if (clean === '/c' || clean === '/c/') return mk('auto', '', '', true)
+  if (clean === '/' || clean === '/config') return { objectId: '', conversationId: '' }
+  if (clean === '/c' || clean === '/c/') return { objectId: '', conversationId: '', isLegacyRoute: true }
   if (clean.startsWith('/c/')) {
     const convId = decodeURIComponent(clean.slice(3).replace(/^\/+|\/+$/g, ''))
     const convMatch = convId.match(
-      /^conv_(app|data_app|data-investigator|data_investigator|investigator|dashboard|lookml|health-check|health_check|health|tile|script|conversational-analytics)_(.+)$/i
+      /^conv_(?:app|data_app|data-investigator|data_investigator|investigator|dashboard|lookml|health-check|health_check|health|tile|script|conversational-analytics)_(.+)$/i
     )
-    if (convMatch) return mk(studioModeToUseCase(convMatch[1]), convMatch[2], convId)
-    for (const [re, uc] of CONV_PREFIX_USE_CASES) {
-      if (re.test(convId)) return mk(uc, convId, convId)
-    }
-    return mk('auto', convId, convId)
+    return { objectId: convMatch ? convMatch[1] : convId, conversationId: convId }
   }
-  for (const [re, uc] of LEGACY_ROUTE_PATTERNS) {
-    const m = clean.match(re)
-    if (m) {
-      const rest = decodeURIComponent((m[1] || '').replace(/^\/+|\/+$/g, ''))
-      return mk(uc === 'app' && !rest ? 'auto' : uc, rest, rest, true)
-    }
+  const legacyMatch = clean.match(LEGACY_ROUTE_RE)
+  if (legacyMatch) {
+    const rest = decodeURIComponent((legacyMatch[1] || '').replace(/^\/+|\/+$/g, ''))
+    return { objectId: rest, conversationId: rest, isLegacyRoute: true }
   }
   const fallbackId = decodeURIComponent(clean.replace(/^\/+|\/+$/g, ''))
-  return mk(fallbackId ? 'app' : 'auto', fallbackId, fallbackId, Boolean(fallbackId))
-}
-
-export function getAllowedUseCases(
-  capabilities?: UserCapabilities | null,
-  disabledModes: StudioCapabilityMode[] = []
-): ResolvedStudioUseCase[] {
-  const disabledSet = new Set<StudioCapabilityMode>(disabledModes || [])
-  const out: ResolvedStudioUseCase[] = []
-  for (const opt of STUDIO_USE_CASE_OPTIONS) {
-    if (opt.value === 'auto' || !opt.capabilityMode) continue
-    if (disabledSet.has(opt.capabilityMode)) continue
-    if (capabilities?.rolesLoaded) {
-      const tool = capabilities.tools?.[opt.capabilityMode]
-      if (tool && !tool.enabled) continue
-      if (opt.value === 'lookml' && tool?.readOnly) continue
-    }
-    out.push(opt.value)
-  }
-  return out.length > 0 ? out : ['app']
+  return { objectId: fallbackId, conversationId: fallbackId, ...(fallbackId ? { isLegacyRoute: true } : {}) }
 }
 
 const CONVERSATIONAL_NOOP_RE =
@@ -364,7 +277,7 @@ const CONVERSATIONAL_META_RE =
   /\b(?:er+o+rs?\s+(?:you|we|that)|what\s+er+o+rs?\s+did\s+you|experienced\s+here|make\s+you\s+better|improve\s+you(?:\b|rself)|what\s+went\s+wrong|why\s+did\s+(?:you|that|it|this)\s+fail|(?:summarize|explain)\s+(?:what\s+you\s+(?:did|ran|tried)|the\s+er+o+rs?|your\s+(?:er+o+rs?|steps|thinking)))\b/i
 
 export function isConversationalNoOpPrompt(text?: string): boolean {
-  const clean = String(text || '').replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '').trim()
+  const clean = String(text || '').trim()
   return CONVERSATIONAL_NOOP_RE.test(clean) || CONVERSATIONAL_META_RE.test(clean)
 }
 
@@ -384,134 +297,11 @@ export const LOOKER_INSTANCE_API_QUERY_RE =
   /\b(?:personal\s*(?:space|folder)s?|home\s*(?:folder|space)s?|shared\s*(?:space|folder)s?|(?:in|from|inside|under)\s+my\s+personal\b|(?:in|from|inside|under)\s+my\s+home\b|(?:my|our)\s+favou?rite\s+(?:dashboards?|looks?|content|folders?)|(?:dashboards?|looks?)\s+(?:in\s+my\s+(?:personal|home|shared|favou?rites?|folder|space)|that\s+I\s+favou?rited)|(?:my|our|all|empty|unused|list|find|inspect|search|query)\s+(?:looker\s+)?(?:personal\s+|home\s+|shared\s+)?(?:spaces|folders)\b|(?:my|our)\s+(?:looker\s+)?(?:space|folder)\b|(?:spaces|folders)\s+(?:that|which|without|with\s+no)|folder_children|all_folders|search_folders|search_dashboards|search_looks|looker\s*sdk|instance\s*metadata|(?:what|which|query|inspect|list|find|check|show)\s+(?:looker\s+)?(?:users?|roles?|permissions?|groups?|scheduled\s*plans?|schedules?|instance\s*metadata)\b(?:\s+(?:have|with|in|on|for|are|who|that))?|(?:users?|roles?)\s+have\s+(?:admin|developer|viewer)|admin\s+roles?\b)/i
 
 export function isLookerInstanceMetadataQuery(text?: string): boolean {
-  const clean = String(text || '').replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '').trim()
+  const clean = String(text || '').trim()
   if (!clean || EXPLICIT_SCRIPT_CREATION_RE.test(clean)) return false
   if (LOOKER_ALERT_QUERY_RE.test(clean) || LOOKER_INSTANCE_ADMIN_OP_RE.test(clean)) return true
   if (CONTENT_CREATION_VERB_RE.test(clean)) return false
   return LOOKER_INSTANCE_API_QUERY_RE.test(clean)
-}
-
-const USE_CASE_RULES: Array<[ResolvedStudioUseCase, RegExp]> = [
-  ['health-check', /\b(3-pillar|three-pillar|health\s*check(?!\s*[_\s-]*(?:pulse|analyze|vacuum)\b)|transcriber\s*rubric|technical_design_document)\b/i],
-  ['tile', LOOKER_INSTANCE_ADMIN_OP_RE],
-  ['lookml', /\b(lookml(?!\s+dashboards?\b)|\.lkml|dimension\s*:|measure\s*:|explore\s*:|refinement|data\s*test|model\.lkml|view\.lkml|(?:create|onboard|build|set\s*up|start)\s+(?:a\s+)?(?:new\s+)?(?:looker\s+)?project\b|new_project_)\b/i],
-  ['tile', new RegExp(`${EXPLICIT_SCRIPT_CREATION_RE.source}|${LOOKER_INSTANCE_API_QUERY_RE.source}|${LOOKER_ALERT_QUERY_RE.source}`, 'i')],
-  ['dashboard', /\b(udd|user[- ]defined\s*dashboard|native\s*dashboard|saved\s*look|lookml\s*dashboard|pin\s*to\s*board|schedule\s*dashboard|content\s*studio)\b/i],
-  [
-    'data-investigator',
-    /\b(data\s*investigat(?:or|ion)|investigat(?:e|es|ed|ing|ion)\b|(?:find\s+out|figure\s+out|dig\s+into|what\s+drove|what\s+caused)\b|key\s*driver\s*analysis|run_key_driver_analysis|\bkda\b|root[- ]cause\s*(?:analysis|investigation|narrative|report|story|drivers?)?|narrative\s*(?:data\s*app|report|slides|deck|doc|investigation)|google\s*(?:doc|slides|presentation)\s*(?:narrative|story|investigation|app|report)|data\s*story)\b/i,
-  ],
-  ['app', /\b(data\s*app|lit\s*app|web\s*component|app-kpi|app-chart|app-grid|custom\s*app|interactive\s*app)\b/i],
-  ['conversational-analytics', /\b(conversational\s*analytics|ca\s*agent|looker\s+ca|how\s+many|which\s+\w+|why\s+did|answer\s+this\s+question|show\s+(?:me\s+)?the\s+monthly\s+breakdown)\b/i],
-  ['lookml', /\b(add\s+a\s+measure|add\s+a\s+dimension|create\s+a\s+view|edit\s+view|sql_table_name|derived_table)\b/i],
-  ['dashboard', /\b(?:build|create|generate|make|design)\s+(?:a\s+|an\s+)?(?:[a-z0-9_-]+\s+){0,4}(?:dashboard|look|board)\b/i],
-]
-
-const SLASH_SKILL_USE_CASES: Record<string, ResolvedStudioUseCase> = {
-  ...Object.fromEntries(STUDIO_SLASH_SKILLS.map((s) => [s.id, 'lookml' as const])),
-  'agentic-lookml': 'lookml',
-  'looker-architect': 'lookml',
-  'lkr-project-helper': 'lookml',
-  'looker-dashboard': 'dashboard',
-  'creating-looker-dashboard': 'dashboard',
-  'data-investigator': 'data-investigator',
-  'key-driver-analysis': 'data-investigator',
-  'data-apps': 'app',
-  'looker-alerts': 'tile',
-  'looker-audit': 'tile',
-}
-
-const ALL_RESOLVED_USE_CASES: ResolvedStudioUseCase[] = [
-  'app', 'data-investigator', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics',
-]
-
-function resolveAllowedUseCases(allowedModes?: string[]): Set<ResolvedStudioUseCase> {
-  const mapped = (allowedModes || [])
-    .map((m) => USE_CASE_ALIAS_MAP[String(m || '').trim().toLowerCase().replace(/\s+/g, '-')])
-    .filter((m): m is ResolvedStudioUseCase => Boolean(m))
-  return new Set<ResolvedStudioUseCase>(mapped.length > 0 ? mapped : ALL_RESOLVED_USE_CASES)
-}
-
-export function shouldRouteToIsolatedCaSubagent({
-  prompt, explicitUseCase, isCaMode, isFirstTurn, assistantOutput, allowedModes,
-}: {
-  prompt: string; explicitUseCase: StudioUseCase; isCaMode?: boolean; isFirstTurn?: boolean; assistantOutput?: string; allowedModes?: string[]
-}): boolean {
-  if (explicitUseCase === 'conversational-analytics' || (explicitUseCase !== 'auto' && Boolean(isCaMode))) return true
-  if (
-    explicitUseCase !== 'auto' ||
-    !resolveAllowedUseCases(allowedModes).has('conversational-analytics') ||
-    isConversationalNoOpPrompt(prompt) ||
-    isLookerInstanceMetadataQuery(prompt) ||
-    EXPLICIT_SCRIPT_CREATION_RE.test(String(prompt || ''))
-  ) {
-    return false
-  }
-  if (assistantOutput === undefined) return isFirstTurn !== false && /\b(conversational\s*analytics|ca\s*agent|looker\s+ca)\b/i.test(String(prompt || ''))
-  const rawOut = String(assistantOutput || '')
-  const caSel = rawOut.match(/<CA_AGENT_SELECTION>([\s\S]*?)<\/CA_AGENT_SELECTION>/i)?.[1]
-  if (caSel) {
-    const agentId = caSel.match(/"(?:agent_id|agentId|id)"\s*:\s*"([^"]*)"/i)?.[1]?.trim()
-    return Boolean(agentId && !/^(?:none|null)$/i.test(agentId))
-  }
-  const stripped = rawOut.replace(/<USE_CASE>[\s\S]*?<\/USE_CASE>/gi, '').trim()
-  return /<USE_CASE>\s*conversational[-_\s]?analytics\s*<\/USE_CASE>/i.test(rawOut) && (!stripped || /^(?:completed|done)\.?$/i.test(stripped))
-}
-
-// ponytail: extract <USE_CASE>...</USE_CASE> emitted by AGENTS.md per-turn routing or infer from prompt keywords,
-// always intersecting with the user's allowed modes so restricted users never route to a locked capability.
-export function matchExplicitUseCaseRule(
-  text?: string,
-  allowedModes?: string[]
-): ResolvedStudioUseCase | null {
-  const allowedSet = resolveAllowedUseCases(allowedModes)
-  const rawText = String(text || '')
-  const tagMatches = Array.from(rawText.matchAll(/<USE_CASE>\s*([^<]+?)\s*<\/USE_CASE>/gi))
-  if (tagMatches.length > 0) {
-    const token = String(tagMatches[tagMatches.length - 1][1] || '')
-      .trim()
-      .toLowerCase()
-      .replace(/^["'`]+|["'`]+$/g, '')
-      .replace(/\s+/g, '-')
-    const tagged = USE_CASE_ALIAS_MAP[token]
-    if (tagged && allowedSet.has(tagged)) return tagged
-    if (tagged === 'lookml' && allowedSet.has('tile')) return 'tile'
-  }
-  if (isConversationalNoOpPrompt(rawText)) return null
-  const slashToken = rawText.match(/(?:^|\s)\/([a-z0-9_-]+)(?=\s|$|[.,;!?])/i)?.[1]?.toLowerCase()
-  const slashTarget = slashToken ? (SLASH_SKILL_USE_CASES[slashToken] || (slashToken.startsWith('lookml-') ? 'lookml' : undefined)) : undefined
-  if (slashTarget) {
-    if (allowedSet.has(slashTarget)) return slashTarget
-    if (slashTarget === 'lookml' && allowedSet.has('tile')) return 'tile'
-  }
-  for (const [candidate, re] of USE_CASE_RULES) {
-    if (candidate === 'tile' && CONTENT_CREATION_VERB_RE.test(rawText) && !EXPLICIT_SCRIPT_CREATION_RE.test(rawText) && !LOOKER_ALERT_QUERY_RE.test(rawText) && !LOOKER_INSTANCE_ADMIN_OP_RE.test(rawText)) continue
-    if (!re.test(rawText)) continue
-    if (allowedSet.has(candidate)) return candidate
-    if (candidate === 'lookml' && allowedSet.has('tile')) return 'tile'
-  }
-  return null
-}
-
-export function extractResolvedUseCase(
-  text?: string,
-  promptFallback?: string,
-  allowedModes?: string[]
-): ResolvedStudioUseCase {
-  const allowedSet = resolveAllowedUseCases(allowedModes)
-  const rawText = String(text || '')
-  const promptStr = String(promptFallback || '')
-  const hasExplicitTag = /<USE_CASE>\s*[^<]+?\s*<\/USE_CASE>/i.test(rawText)
-  if (!hasExplicitTag && /(?:^|\s)\/[a-z0-9_-]+/i.test(promptStr)) {
-    const fromSlash = matchExplicitUseCaseRule(promptStr, allowedModes)
-    if (fromSlash) return fromSlash
-  }
-  const combined = `${promptStr}\n${rawText}`
-  return (
-    matchExplicitUseCaseRule(rawText, allowedModes) ||
-    matchExplicitUseCaseRule(combined, allowedModes) ||
-    (allowedSet.has('app') ? 'app' : Array.from(allowedSet)[0] || 'app')
-  )
 }
 
 export interface ToolAvailability {

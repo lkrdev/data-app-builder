@@ -16,13 +16,13 @@ import {
   STUDIO_OAUTH_STORAGE_KEY, STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY,
 } from '../../antigravity'
 import {
-  ARTIFACT_NAMESPACE, ArtifactService, classifyStudioUseCase, clearArtifactServiceCache,
+  ARTIFACT_NAMESPACE, ArtifactService, clearArtifactServiceCache,
   clearLookerMetadataCache, createDeduplicatedLookerSdkProxy, DEFAULT_BUSY_SEND_ACTION, deleteUserConversation,
-  extractResolvedUseCase, fetchInitialLookerMetadata, getArtifactNamespace, getArtifactService,
-  isConversationalNoOpPrompt, loadStoredBusySendAction, loadStoredSelectedFolderId, matchExplicitUseCaseRule,
+  fetchInitialLookerMetadata, getArtifactNamespace, getArtifactService,
+  isConversationalNoOpPrompt, isLookerInstanceMetadataQuery, loadStoredBusySendAction, loadStoredSelectedFolderId,
   normalizeArtifactNamespace, normalizeBusySendAction, normalizeStudioContentItem, persistSelectedFolderId,
   readInitialSelectedFolderId, resolveConversationRelatedContent, saveStoredBusySendAction, saveUserConversation,
-  searchLookerFolders, shouldRouteToIsolatedCaSubagent, STUDIO_BUSY_SEND_ACTION_STORAGE_KEY, STUDIO_FOLDER_STORAGE_KEY,
+  searchLookerFolders, STUDIO_BUSY_SEND_ACTION_STORAGE_KEY, STUDIO_FOLDER_STORAGE_KEY,
   SWR_DEDUPED_METHODS, upsertStudioContentItem,
 } from '../../lookerApi'
 
@@ -78,35 +78,12 @@ export function registerPermissionsPart09Tests(): void {
       ])
     )
 
-    // 2. Verify "investigate" / "find out" routing to 'data-investigator', personal space / folder / SDK queries to 'tile', and conversational no-ops
-    expect(matchExplicitUseCaseRule('Investigate our Q3 sales on the Business Pulse dashboard')).toBe(
-      'data-investigator'
-    )
-    expect(
-      extractResolvedUseCase('', 'Find out why gross margin dropped in the order_items explore')
-    ).toBe('data-investigator')
-    expect(
-      matchExplicitUseCaseRule('Can you figure out what drove the spike in returns on look 247?')
-    ).toBe('data-investigator')
-    expect(
-      matchExplicitUseCaseRule('Dig into what caused customer churn to increase last month')
-    ).toBe('data-investigator')
-
-    expect(matchExplicitUseCaseRule('tell me what my personal space is')).toBe('tile')
-    expect(
-      extractResolvedUseCase('', 'tell me what my personal space is')
-    ).toBe('tile')
-    expect(
-      matchExplicitUseCaseRule("can you find me all personal spaces that don't have dashboards")
-    ).toBe('tile')
-    expect(
-      extractResolvedUseCase('', "can you find me all personal spaces that don't have dashboards")
-    ).toBe('tile')
-
+    // 2. Verify instance metadata detection and conversational no-ops without host mode pre-decisions
+    expect(isLookerInstanceMetadataQuery('tell me what my personal space is')).toBe(true)
+    expect(isLookerInstanceMetadataQuery("can you find me all personal spaces that don't have dashboards")).toBe(true)
+    expect(isLookerInstanceMetadataQuery('Investigate our Q3 sales on the Business Pulse dashboard')).toBe(false)
     expect(isConversationalNoOpPrompt('hello')).toBe(true)
     expect(isConversationalNoOpPrompt('what can you do?')).toBe(true)
-    expect(matchExplicitUseCaseRule('hello')).toBeNull()
-    expect(matchExplicitUseCaseRule('what can you do?')).toBeNull()
 
     // 3. Verify extractNativeContentFromInteraction ignores generic Looker folder/user dicts with "id": "5" while extracting valid NATIVE_CONTENT_BUNDLE payloads
     expect(
@@ -199,8 +176,7 @@ export function registerPermissionsPart09Tests(): void {
                   thought: 'Summarizing personal folder details',
                 },
               ],
-              output_text:
-                '<USE_CASE>tile</USE_CASE>\nYour personal space is folder #5 ("My folder").',
+              output_text: 'Your personal space is folder #5 ("My folder").',
             }),
           }
         }
@@ -214,7 +190,6 @@ export function registerPermissionsPart09Tests(): void {
       userId: '1',
       auth: { mode: 'apikey', apiKey: 'key-109' },
       session: {},
-      useCase: 'auto',
       selectedExplores: [],
       schemaMarkdown: '# Schema',
       userPrompt: 'tell me what my personal space is',
@@ -222,7 +197,6 @@ export function registerPermissionsPart09Tests(): void {
       onStatus: () => {},
     })
 
-    expect(turnResult.resolvedUseCase).toBe('tile')
     expect(turnResult.nativeBundle).toBeNull()
     expect(turnResult.bundle).toBeNull()
     expect(turnResult.activitySteps).toEqual(
@@ -424,23 +398,11 @@ export function registerPermissionsPart09Tests(): void {
     expect(readFileSync(path.join(repoRoot, 'src/styles/index.css'), 'utf8')).toContain('grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)')
   })
 
-  test('48. Issue #117: relaxes client-side use-case routing, prevents follow-up/meta prompts from hijacking into isolated CA sub-agent, and gates warmTurnDirective on existingAppCode', async () => {
+  test('48. Issue #117: detects conversational no-op/meta prompts and injects non-empty [ACTIVE WORKSPACE STATE] on warm non-no-op turns', async () => {
     const metaPrompt = 'can you summarize the eroors you experienced here and how i could make you better?'
     for (const p of [metaPrompt, 'what errors did you experience?', 'what went wrong?', 'why did that fail?', 'how can I make you better?', 'summarize what you did', 'thank you', 'thanks!']) {
       expect(isConversationalNoOpPrompt(p)).toBe(true)
     }
-    for (const q of [metaPrompt, 'Can you change the chart color to blue?', 'What is the current filter value?']) {
-      expect(matchExplicitUseCaseRule(q)).toBeNull()
-    }
-    expect(classifyStudioUseCase('Why did gross margin drop in Q3 compared to Q2?', 'auto', ['app', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics'])).toBe('conversational-analytics')
-    expect(shouldRouteToIsolatedCaSubagent({ prompt: metaPrompt, explicitUseCase: 'auto', isFirstTurn: false })).toBe(false)
-    expect(shouldRouteToIsolatedCaSubagent({ prompt: metaPrompt, explicitUseCase: 'auto', isFirstTurn: true })).toBe(false)
-    expect(shouldRouteToIsolatedCaSubagent({ prompt: 'Why did gross margin drop in Q3 compared to Q2?', explicitUseCase: 'auto', isFirstTurn: false })).toBe(false)
-    expect(shouldRouteToIsolatedCaSubagent({ prompt: 'Why did gross margin drop in Q3 compared to Q2?', explicitUseCase: 'auto', isFirstTurn: true })).toBe(false)
-    expect(shouldRouteToIsolatedCaSubagent({ prompt: 'Ask the Conversational Analytics CA agent about Q3 margin', explicitUseCase: 'auto', isFirstTurn: true })).toBe(true)
-    expect(shouldRouteToIsolatedCaSubagent({ prompt: 'Any question', explicitUseCase: 'conversational-analytics', isFirstTurn: false })).toBe(true)
-    expect(shouldRouteToIsolatedCaSubagent({ prompt: 'Why did gross margin drop in Q3?', explicitUseCase: 'auto', assistantOutput: '<USE_CASE>conversational-analytics</USE_CASE>\nGross margin dropped 4.2% in Q3.' })).toBe(false)
-    expect(shouldRouteToIsolatedCaSubagent({ prompt: 'Why did gross margin drop in Q3?', explicitUseCase: 'auto', assistantOutput: '<USE_CASE>conversational-analytics</USE_CASE>' })).toBe(true)
 
     const warmInputs: string[] = []
     const warmExt = {
@@ -453,15 +415,17 @@ export function registerPermissionsPart09Tests(): void {
     const baseTurnParams = {
       sdk: asSdk({ ok: async <T>(p: T) => p }), extensionSDK: warmExt, userId: '1',
       auth: { mode: 'apikey' as const, apiKey: 'key-117' },
-      session: { environmentId: 'env_warm_117', lastInteractionId: 'int_prev_117', toolType: 'app' as const },
-      useCase: 'auto' as const, selectedExplores: [], schemaMarkdown: '# Schema', pollScheduleMs: [5], onStatus: () => {},
+      session: { environmentId: 'env_warm_117', lastInteractionId: 'int_prev_117' },
+      selectedExplores: [], schemaMarkdown: '# Schema', pollScheduleMs: [5], onStatus: () => {},
     }
     await runAntigravityTurn({ ...baseTurnParams, userPrompt: 'Add a revenue KPI card' })
-    expect(warmInputs[0]).not.toContain('[WARM SANDBOX FAST PATH:')
+    expect(warmInputs[0]).toContain('[ACTIVE WORKSPACE STATE')
+    expect(warmInputs[0]).toContain('no Data App published yet')
     await runAntigravityTurn({ ...baseTurnParams, userPrompt: metaPrompt, existingAppCode: 'export class App {}' })
-    expect(warmInputs[1]).not.toContain('[WARM SANDBOX FAST PATH:')
+    expect(warmInputs[1]).not.toContain('[ACTIVE WORKSPACE STATE')
     await runAntigravityTurn({ ...baseTurnParams, userPrompt: 'Add a revenue KPI card', existingAppCode: 'export class App {}' })
-    expect(warmInputs[2]).toContain('[WARM SANDBOX FAST PATH:')
+    expect(warmInputs[2]).toContain('[ACTIVE WORKSPACE STATE')
+    expect(warmInputs[2]).toContain('Active Data App:')
   })
 
   test('49. Issue #120: enforces <projectid>::<extensionid> artifact namespace, excludes @-mentioned content from conversation deletion, and populates clickable Looker content links', async () => {

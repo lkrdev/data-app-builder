@@ -25,8 +25,8 @@ import {
 } from '../../components/StudioWorkspace'
 import {
   ARTIFACT_NAMESPACE, ArtifactService, buildCaEmbedPath, DEFAULT_STUDIO_AGENT_NAME,
-  extractResolvedUseCase, normalizeCaEmbedPath, normalizeStudioAgentName, parseCaAgentSelectionResponse,
-  resolveStudioContentEmbedPath, selectCaAgentViaIsolatedSubagent, shouldRouteToIsolatedCaSubagent, userStudioConfigArtifactKey,
+  normalizeCaEmbedPath, normalizeStudioAgentName, parseCaAgentSelectionResponse,
+  resolveStudioContentEmbedPath, selectCaAgentViaIsolatedSubagent, userStudioConfigArtifactKey,
 } from '../../lookerApi'
 
 interface MockInteractionPostBody {
@@ -196,9 +196,9 @@ export function registerPermissionsPart10Tests(): void {
     expect([readInitialThinkingLevel(), readInitialThinkingLevel('low')]).toEqual(['high', 'low'])
 
     const rawStarterJson = JSON.stringify([
-      { id: 's1', label: 'Revenue by Region Scorecard', prompt: 'Build a revenue scorecard by region.', useCase: 'app' },
-      { id: 's2', label: 'Monthly Order Trend UDD', prompt: 'Create a native UDD for monthly orders.', useCase: 'dashboard' },
-      { id: 's3', label: 'Top Brand Margin Breakdown', prompt: 'What drove brand margin changes?', useCase: 'data-investigator' },
+      { id: 's1', label: 'Revenue by Region Scorecard', prompt: 'Build a revenue scorecard by region.' },
+      { id: 's2', label: 'Monthly Order Trend UDD', prompt: 'Create a native UDD for monthly orders.' },
+      { id: 's3', label: 'Top Brand Margin Breakdown', prompt: 'What drove brand margin changes?' },
     ])
     expect(parseStarterPromptsResponse(rawStarterJson, []).map((p) => p.id)).toEqual(['s1', 's2', 's3'])
     const rawCaJson = JSON.stringify({ agent_id: 'ca_agent_1', agent_name: 'Orders CA Agent', rationale: 'Direct JSON schema match for orders explore.' })
@@ -335,8 +335,6 @@ export function registerPermissionsPart10Tests(): void {
     ]
     for (const p of inventoryPrompts) {
       expect(isLookerInstanceMetadataQuery(p)).toBe(true)
-      expect(extractResolvedUseCase('', p)).toBe('tile')
-      expect(shouldRouteToIsolatedCaSubagent({ prompt: p, explicitUseCase: 'auto', isCaMode: false, isFirstTurn: true })).toBe(false)
       expect(EXPLICIT_SCRIPT_CREATION_RE.test(p)).toBe(false)
     }
     expect(EXPLICIT_SCRIPT_CREATION_RE.test('create a reusable python script tile for revenue')).toBe(true)
@@ -435,16 +433,7 @@ return {"agent_id": agents[0]["id"], "gq": agents[0]["golden_queries"][0]["quest
       'Searching accessible Looker Conversational Analytics agents and golden queries...'
     )
     const preselectedOut =
-      '<USE_CASE>conversational-analytics</USE_CASE>\n<CA_AGENT_SELECTION>{"agent_id":"ca_agent_rev","rationale":"Matches gross margin golden query."}</CA_AGENT_SELECTION>'
-    expect(
-      shouldRouteToIsolatedCaSubagent({
-        prompt: 'What is our gross margin by category?',
-        explicitUseCase: 'auto',
-        isCaMode: false,
-        isFirstTurn: true,
-        assistantOutput: preselectedOut,
-      })
-    ).toBe(true)
+      '<CA_AGENT_SELECTION>{"agent_id":"ca_agent_rev","rationale":"Matches gross margin golden query."}</CA_AGENT_SELECTION>'
     const fastSelected = await selectCaAgentViaIsolatedSubagent({
       sdk: mockSdk,
       auth: { mode: 'oauth', oauthToken: '' },

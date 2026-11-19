@@ -1,6 +1,6 @@
 // Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
 
-exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders centered_empty_prompt (17. Centered New-Conversation Empty Prompt Box (Use-Case Selector, Input & Actions)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
+exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite renders centered_empty_prompt (17. Centered New-Conversation Empty Prompt Box (Open-Ended Input & Actions)) with MockLookerExtensionProvider and matches DOM & image snapshots 1`] = `
 {
   "dropdownScrollTop": null,
   "modeTabs": [],
@@ -45,7 +45,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
     "/lookml-field-curation",
     "/lookml-tests",
     "/lookml-snapshot",
-    "Run Agentic LookML",
+    "Send Message",
   ],
 }
 `;
@@ -87,7 +87,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
     "BigQuery Streaming Buffer & Order Revenue Q&A",
     "Agent: eCommerce & BigQuery Analytics Agent (ca_agent_ecommerce)",
     "Isolated Sub-Agent Selection:",
-    "Ask CA Agent",
+    "Send Message",
   ],
 }
 `;
@@ -99,7 +99,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
   "scenario": "dashboard",
   "verifiedVisibleText": [
     "Executive Order Performance (Native UDD)",
-    "Update Content",
+    "Send Message",
   ],
 }
 `;
@@ -180,7 +180,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
     "LookML: deploytobarerepo_temp",
     "bronze/orders.refinement.lkml",
     "total_revenue",
-    "Update LookML",
+    "Send Message",
   ],
 }
 `;
@@ -211,7 +211,7 @@ exports[`Agent — Mini-App, Config, Dropdown & Chat Bar Visual Snapshot Suite r
     "Schedule Script",
     "Publish Dashboard",
     "Run Python",
-    "Ask AI",
+    "Send Message",
     "Scheduled: 0 8 * * * · summary",
     "agentic_thelook",
   ],

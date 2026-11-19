@@ -9,7 +9,6 @@ import {
   loadSingleConversationArtifact,
   type UserConversationEntry,
 } from './lookerArtifacts'
-import { extractResolvedUseCase, ResolvedStudioUseCase, StudioUseCase } from './lookerPermissions'
 import {
   coalesceLookerMetadataRequest,
   formatExploreId,
@@ -58,11 +57,6 @@ export interface CaAgentSelectionResult { agentId: string; agentName: string; ra
 export interface CaConversationState {
   id: string; caConversationId: string; agentId: string; agentName: string; embedPath: string; title: string; label: string
   rationale: string; selectionRationale: string; initialPrompt: string; explores: string[]; interactionId?: string; updatedAt: string
-}
-
-// ponytail: delegate Turn-1 auto-classification to extractResolvedUseCase in lookerPermissions.ts.
-export function classifyStudioUseCase(userPrompt: string, explicitUseCase: StudioUseCase = 'auto', allowedModes?: string[]): ResolvedStudioUseCase {
-  return explicitUseCase && explicitUseCase !== 'auto' ? explicitUseCase : extractResolvedUseCase('', userPrompt, allowedModes)
 }
 
 export interface RawLookerCaAgent {
@@ -389,7 +383,7 @@ function normalizeRawContentMention(raw: Record<string, unknown>, fallbackCatego
     if (!id) return null
     return {
       type: 'conversation', id, title: String(raw.title || raw.label || raw.name || id).trim(),
-      subtitle: raw.use_case ? String(raw.use_case) : undefined,
+      subtitle: raw.type ? String(raw.type) : undefined,
       description: raw.description ? String(raw.description) : undefined,
     }
   }
@@ -595,11 +589,10 @@ export async function hydrateMentionedContext(params: {
   mentions: StudioContextMention[]
   conversations?: UserConversationEntry[]
   selectedExplores?: string[]
-  useCase?: string
+  fixedDates?: boolean
   anchorDate?: string
 }): Promise<HydratedMentionedContext> {
-  const { sdk, extensionSDK, auth, userId, mentions, conversations = [], selectedExplores = [], useCase, anchorDate } = params
-  const fixedDates = useCase === 'data-investigator' || useCase === 'data_investigator'
+  const { sdk, extensionSDK, auth, userId, mentions, conversations = [], selectedExplores = [], fixedDates = false, anchorDate } = params
   const exploresSet = new Set<string>(selectedExplores.filter(Boolean))
   const extraSources: Array<{ type: 'inline'; content: string; target: string }> = []
   const summaryLines: string[] = []
@@ -743,7 +736,6 @@ export async function hydrateMentionedContext(params: {
         )
         const mdContent = [
           `# Conversation: ${conv.label || mention.title} (${conv.id})`,
-          `- Use Case: ${conv.use_case || conv.type || 'app'}`,
           `- Explores: ${(conv.explores || []).join(', ') || 'none'}`,
           conv.content ? `- Content Metadata: \`${JSON.stringify(conv.content)}\`` : '',
           '',

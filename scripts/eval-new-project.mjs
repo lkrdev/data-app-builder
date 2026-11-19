@@ -30,7 +30,7 @@ for (const ext of ['.ts', '.tsx']) {
 }
 
 const { DEFAULT_THINKING_LEVEL, fetchConversationSandboxDebugMarkdown, runAntigravityTurn } = require(path.join(rootDir, 'src/antigravity.ts'))
-const { discoverAccessibleConnections, extractResolvedUseCase, matchExplicitUseCaseRule } = require(path.join(rootDir, 'src/lookerApi.ts'))
+const { discoverAccessibleConnections } = require(path.join(rootDir, 'src/lookerApi.ts'))
 
 export function getApiKey() {
   if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY.trim()
@@ -169,7 +169,6 @@ async function main() {
   const shortId = Math.random().toString(36).slice(2, 6)
   const projectName = `new_project_${shortId}`
   const selectedFolderId = argolis.personal_folder_id || '5'
-  const allowedModes = ['app', 'data-investigator', 'dashboard', 'conversational-analytics', 'lookml', 'health-check', 'tile']
   const prediscoveredConns = await discoverAccessibleConnections(sdk)
 
   console.log(`[eval-new-project] Starting live 6-turn eval on dev-argolis (${argolis.base_url})`)
@@ -199,7 +198,6 @@ async function main() {
             asksConnection,
             asksProject,
             asksSchemaOrTable,
-            resolvedUseCase: res.resolvedUseCase,
           },
         }
       },
@@ -468,7 +466,6 @@ async function main() {
   let session = { explores: [], conversationId: `eval_${shortId}` }
   let environmentId = undefined
   let lookmlProjectId = ''
-  let lastResolvedUseCase = 'auto'
   let currentAppCode = undefined
   let nativeContent = null
   const priorMessages = []
@@ -484,10 +481,6 @@ async function main() {
     for (const t of turns) {
       console.log(`\n=== ${t.name} ===`)
       console.log(`> User: ${t.prompt}`)
-      const classified = matchExplicitUseCaseRule(t.prompt, allowedModes)
-      const turnTargetUseCase = classified || 'auto'
-      const toolMode = turnTargetUseCase === 'lookml' || (turnTargetUseCase === 'auto' && lastResolvedUseCase === 'lookml') ? 'lookml' : 'data_app'
-      const mode = turnTargetUseCase === 'dashboard' ? 'dashboard' : 'data_app'
       const t0 = Date.now()
       let res
       try {
@@ -500,12 +493,9 @@ async function main() {
           auth: { mode: 'apikey', apiKey },
           session,
           thinkingLevel: DEFAULT_THINKING_LEVEL,
-          mode,
-          useCase: 'auto',
-          allowedModes,
+          canDevelop: true,
           selectedExplores: session.explores || [],
           folderId: selectedFolderId,
-          toolMode,
           lookmlProjectId,
           activatedLookmlSkills: [],
           developableProjects: lookmlProjectId ? [lookmlProjectId] : [],
@@ -541,7 +531,6 @@ async function main() {
       if (res.lookmlBundle?.project_id) lookmlProjectId = res.lookmlBundle.project_id
       if (res.bundle?.raw_code) currentAppCode = res.bundle.raw_code
       if (res.nativeBundle) nativeContent = res.nativeBundle
-      lastResolvedUseCase = res.resolvedUseCase || extractResolvedUseCase(res.assistantText, t.prompt, allowedModes)
 
       priorMessages.push({ role: 'user', text: t.prompt })
       priorMessages.push({
@@ -562,7 +551,6 @@ async function main() {
         durationMs,
         interactionId: res.session?.lastInteractionId,
         telemetry: res.telemetry,
-        resolvedUseCase: lastResolvedUseCase,
         assistantText: res.assistantText,
         activitySteps: res.activitySteps,
         hasLookmlBundle: Boolean(res.lookmlBundle),
@@ -582,7 +570,6 @@ async function main() {
         auth: { mode: 'apikey', apiKey },
         conversationId: session.conversationId,
         label: report.projectName,
-        useCase: lastResolvedUseCase,
         environmentId,
         lastInteractionId: session.lastInteractionId,
         messages: priorMessages,

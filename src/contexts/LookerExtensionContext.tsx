@@ -41,7 +41,7 @@ export interface MockLookerExtensionContextValue extends LookerExtensionContextS
   initialDeleteRelatedContent?: boolean;
   initialSidebarCollapsed?: boolean;
   openSchedulerModal?: boolean;
-  initialInfoModalUseCase?: string;
+  initialCapabilitiesModalOpen?: boolean;
   initialMessages?: unknown[];
   initialError?: string;
   initialPrompt?: string;

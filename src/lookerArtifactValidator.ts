@@ -29,7 +29,6 @@ export const ALLOWED_USER_CONVERSATION_FIELDS = new Set<string>([
   'id',
   'objectId',
   'type',
-  'use_case',
   'label',
   'tags',
   'archived',

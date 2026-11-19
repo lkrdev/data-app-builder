@@ -8,7 +8,7 @@ import {
   generateDynamicStarterPrompts, getCachedStarterPrompts, normalizeEnvironmentId, PastedImage,
   pruneDeadEnvironmentConversations, resolveTargetExploreFromModels, StarterPromptItem,
 } from './antigravity'
-import { ChatMessage, StudioMode } from './components/App'
+import { ChatMessage } from './components/App'
 import { DEFAULT_PYTHON_SCRIPT } from './components/PythonTile'
 import { HealthCheckReportPayload } from './healthCheck'
 import type { LkrCodeModeRunOptions } from './lkrCliBridge'
@@ -16,12 +16,12 @@ import {
   type AlertInspectorBundle, buildAvailableExploresCatalog, buildDenseExploreSchema, buildRootLookerFolders,
   CaConversationState, ConversationRecord, DEFAULT_STUDIO_AGENT_NAME, fetchFolderChildren, fetchFolderWithAncestors,
   fetchInitialLookerMetadata, fetchPreloadedContentSummary, getArtifactNamespace,
-  getArtifactService, getConvTargetId, listLocalDraftScripts, loadStoredSelectedFolderId,
+  getArtifactService, listLocalDraftScripts, loadStoredSelectedFolderId,
   loadUserEnvironmentState, LookerFolderNode, NativeContentState, normalizeStudioAgentName,
   parseExploreId, persistSelectedFolderId, PublishedAppState, readInitialSelectedFolderId,
-  ResolvedStudioUseCase, SavedScript, searchLookerFolders, SearchLookerFoldersParams,
+  SavedScript, searchLookerFolders, SearchLookerFoldersParams,
   STUDIO_OVERVIEW_TAB_KEY, StudioContentItem, StudioContentItemType, StudioContextMention,
-  studioModeToUseCase, StudioUseCase, studioUseCaseToMode, upsertStudioContentItem,
+  upsertStudioContentItem,
   UserArtifactIndex, UserConversationEntry,
 } from './lookerApi'
 import { LookmlBundle } from './lookmlTool'
@@ -35,10 +35,9 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   const {
     extensionSDK, core40SDK, history, location, isTileMount, mockExt, disabledModes,
     setAgentName, setAppInitializing, setCapabilities, setMessages, setExpiredConversationNotice,
-    selectedUseCase, setSelectedUseCase, explicitUseCaseRef, parsedRoute,
-    resolvedUseCaseByIdRef, allowedUseCases, availableModels,
+    parsedRoute, availableModels,
     oauthAccessToken, oauthTokenRef, clientId, projectId, apiKey, selectedModel, triggerSilentOAuthRefresh,
-    sharedEnvIdRef, syncSharedEnvironmentId, agentSession, messages, activeModeRef,
+    sharedEnvIdRef, syncSharedEnvironmentId, agentSession, messages,
     capabilities,
   } = auth
 
@@ -191,61 +190,20 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     [artifactService, setAgentName, userId]
   )
 
-  const inferredRouteUseCase = useMemo((): ResolvedStudioUseCase | undefined => {
-    if (parsedRoute.useCase && parsedRoute.useCase !== 'auto') return parsedRoute.useCase
-    const rawId = parsedRoute.conversationId || parsedRoute.objectId || ''
-    const id = parsedRoute.objectId || rawId
-    if (!id) return undefined
-    const cached = resolvedUseCaseByIdRef.current[rawId] || resolvedUseCaseByIdRef.current[id]
-    if (cached) return cached
-    const convMatch = conversations.find((c) => {
-      if (c.id === rawId || c.id === id) return true
-      const cid = getConvTargetId(c.content, c.type)
-      return Boolean((cid && (cid === id || cid === rawId)) || (c.type === 'lookml' && c.content?.sessionId && (c.content.sessionId === id || c.content.sessionId === rawId)))
-    })
-    if (convMatch) return convMatch.use_case === 'auto' && !convMatch.interactionId ? undefined : studioModeToUseCase(convMatch.type)
-    if (savedScripts.some((s) => s.id === id || s.id === rawId)) return 'tile'
-    const catMatch = catalogItems.find((it) => it.id === id || it.id === rawId)
-    return catMatch ? studioModeToUseCase(catMatch.type) : undefined
-  }, [parsedRoute, conversations, savedScripts, catalogItems, resolvedUseCaseByIdRef])
-
-  const isGenericConvRoute = /^conv_[a-z0-9_-]+$/i.test(parsedRoute.conversationId || '') && parsedRoute.useCase === 'auto'
-  const effectiveUseCase: StudioUseCase =
-    selectedUseCase !== 'auto' ? selectedUseCase : inferredRouteUseCase || (parsedRoute.objectId && !isGenericConvRoute ? 'app' : 'auto')
-  const activeMode: StudioMode = effectiveUseCase !== 'auto' ? studioUseCaseToMode(effectiveUseCase) : parsedRoute.mode
-  activeModeRef.current = activeMode
-  const isLookmlMode = activeMode === 'lookml'
-  const isHealthCheckMode = location.pathname === '/health-check' || activeMode === 'health'
-  const builderMode: 'data_app' | 'dashboard' = activeMode === 'dashboard' ? 'dashboard' : 'data_app'
-  const isUseCaseLocked = false
-
-  useEffect(() => {
-    if (selectedUseCase === 'auto') {
-      if (inferredRouteUseCase) setSelectedUseCase(inferredRouteUseCase)
-      else if (parsedRoute.objectId && !isGenericConvRoute) setSelectedUseCase('app')
-    }
-  }, [parsedRoute.objectId, isGenericConvRoute, inferredRouteUseCase, selectedUseCase, setSelectedUseCase])
-
-  const handleChangeUseCase = useCallback(
-    (nextUseCase: StudioUseCase) => {
-      explicitUseCaseRef.current = nextUseCase
-      setSelectedUseCase(nextUseCase)
-      if (location.pathname !== '/' && !parsedRoute.objectId) history.replace('/')
-    },
-    [explicitUseCaseRef, setSelectedUseCase, location.pathname, parsedRoute.objectId, history]
-  )
-
   const models = useMemo(() => {
-    const isAuthoringMode = activeMode === 'app' || activeMode === 'dashboard' || activeMode === 'tile'
-    if (isAuthoringMode && capabilities.rolesLoaded && !capabilities.explorableModels.has('*')) {
+    if (capabilities.rolesLoaded && !capabilities.explorableModels.has('*')) {
       return allModels.filter((m) => capabilities.explorableModels.has(m.name))
     }
     return allModels
-  }, [allModels, activeMode, capabilities.rolesLoaded, capabilities.explorableModels])
+  }, [allModels, capabilities.rolesLoaded, capabilities.explorableModels])
 
   const availableLookmlProjects = useMemo(
     () => Array.from(capabilities.developableProjects).filter((p) => p && p !== '*').sort(),
     [capabilities.developableProjects]
+  )
+  const canDevelopLookml = useMemo(
+    () => !disabledModes.includes('lookml') && (!capabilities.rolesLoaded || (capabilities.tools.lookml.enabled && !capabilities.tools.lookml.readOnly)),
+    [capabilities, disabledModes]
   )
   const canDeployLookml = useMemo(
     () => !capabilities.rolesLoaded || capabilities.isAdmin || capabilities.globalPermissions.has('deploy') || capabilities.globalPermissions.has('admin'),
@@ -481,7 +439,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     const targetExplore = resolveTargetExploreFromModels(selectedExplores, models)
     const exploreKey = selectedExplores.length > 0 ? selectedExplores.join(',') : targetExplore?.exploreKey || 'none'
     const hasOAuth = Boolean(oauthAccessToken)
-    const cached = getCachedStarterPrompts(selectedUseCase, exploreKey, allowedUseCases, hasOAuth)
+    const cached = getCachedStarterPrompts(exploreKey, canDevelopLookml, hasOAuth)
     if (cached && cached.length > 0 && !mockExt?.forceStarterPromptsSkeleton) {
       setStarterPrompts(cached); setStarterPromptsLoading(false); return () => { mounted = false }
     }
@@ -493,7 +451,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
       const exploreContext = await discoverStarterExploreContext({ sdk: core40SDK, selectedExplores, availableModels: models })
       if (!mounted) return
       const immediate = buildDynamicStarterPrompts({
-        useCase: selectedUseCase, selectedExplores, permittedUseCases: allowedUseCases, availableModels: models, exploreContext,
+        selectedExplores, canDevelopLookml, availableModels: models, exploreContext,
       })
       setStarterPrompts(immediate)
       setStarterPromptsLoading(false)
@@ -504,22 +462,21 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
             mode: 'oauth', oauthToken: oauthTokenRef.current || oauthAccessToken, getOAuthToken: () => oauthTokenRef.current,
             clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true),
           },
-          environmentId: sharedEnvIdRef.current || undefined, useCase: selectedUseCase, selectedExplores,
-          permittedUseCases: allowedUseCases, availableModels: models, exploreContext, model: selectedModel,
+          environmentId: sharedEnvIdRef.current || undefined, selectedExplores,
+          canDevelopLookml, availableModels: models, exploreContext, model: selectedModel,
         })
         if (mounted && refined.length > 0) setStarterPrompts(refined)
       }
     })()
     return () => { mounted = false }
   }, [
-    core40SDK, extensionSDK, selectedUseCase, selectedExplores, allowedUseCases,
+    core40SDK, extensionSDK, selectedExplores, canDevelopLookml,
     models, availableModels, oauthAccessToken, oauthTokenRef, loadingMetadata, clientId,
     projectId, apiKey, selectedModel, sharedEnvIdRef, triggerSilentOAuthRefresh, mockExt?.forceStarterPromptsSkeleton,
   ])
 
   const [caConversation, setCaConversation] = useState<CaConversationState | null>(null)
   const lastCaIdRef = useRef<string>('')
-  const isCaMode = Boolean(parsedRoute.isCaRoute || effectiveUseCase === 'conversational-analytics' || caConversation)
   const [lookmlProjectId, setLookmlProjectId] = useState('')
   const [activatedLookmlSkills, setActivatedLookmlSkills] = useState<string[]>([])
   const [lookmlBundle, setLookmlBundle] = useState<LookmlBundle | null>(null)
@@ -570,21 +527,23 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   const setPublishedApp = useCallback(
     (
       next: PublishedAppState | null | ((prev: PublishedAppState | null) => PublishedAppState | null),
-      metaOpts?: { source?: 'created' | 'modified' | 'mention'; createdInConversation?: boolean; hidden?: boolean }
+      metaOpts?: { contentType?: 'data_app' | 'data-investigator'; source?: 'created' | 'modified' | 'mention'; createdInConversation?: boolean; hidden?: boolean }
     ) => {
       applyStateWithSync(setPublishedAppState, next, (resolved) => {
         if (resolved?.dashboardId) {
-          const uc = resolvedUseCaseByIdRef.current[resolved.dashboardId]
+          const existingCt = contentItemsRef.current.find((it) => it.id === String(resolved.dashboardId) && (it.contentType === 'data_app' || it.contentType === 'data-investigator'))?.contentType
+          const ct: 'data_app' | 'data-investigator' = metaOpts?.contentType || existingCt || 'data_app'
           upsertContentItem({
             id: String(resolved.dashboardId), dashboardId: String(resolved.dashboardId),
-            contentType: uc === 'data-investigator' ? 'data-investigator' : 'data_app',
+            contentType: ct,
             title: resolved.title, embedPath: `/embed/dashboards/${encodeURIComponent(String(resolved.dashboardId))}`,
-            folderId: resolved.folderId, extensionId: resolved.extensionId, ...metaOpts,
+            folderId: resolved.folderId, extensionId: resolved.extensionId,
+            source: metaOpts?.source, createdInConversation: metaOpts?.createdInConversation, hidden: metaOpts?.hidden,
           })
         }
       })
     },
-    [resolvedUseCaseByIdRef, upsertContentItem]
+    [upsertContentItem]
   )
 
   const setNativeContent = useCallback(
@@ -628,7 +587,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   const [scriptMode, setScriptMode] = useState('summary')
   const [publishedTileDash, setPublishedTileDash] = useState<{ dashboardId: string; elementId: string } | null>(null)
   const [schedulerOpen, setSchedulerOpen] = useState(() => Boolean(mockExt?.openSchedulerModal))
-  const [infoModalUseCase, setInfoModalUseCase] = useState<StudioUseCase | null>(() => (mockExt?.initialInfoModalUseCase as StudioUseCase) || null)
+  const [capabilitiesModalOpen, setCapabilitiesModalOpen] = useState(() => Boolean(mockExt?.initialCapabilitiesModalOpen))
   const [scheduleConfig, setScheduleConfig] = useState<{
     name: string; cron: string; mode: string; customVarsJson: string
     destination: 'artifact_snapshot' | 'webhook' | 'looker_scheduled_plan'; targetUrlOrEmail: string; enabled: boolean
@@ -667,7 +626,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     userId, userIdRef, userDisplayName,
     lookerWorkspaceId, isLookerDevMode, setLookerWorkspaceId, syncLookerSessionWorkspace, handleToggleLookerDevMode,
     handleSaveAgentName,
-    availableLookmlProjects, canDeployLookml,
+    availableLookmlProjects, canDevelopLookml, canDeployLookml,
     loadingMetadata, setLoadingMetadata,
     starterPrompts, setStarterPrompts, starterPromptsLoading, setStarterPromptsLoading,
     models, folderTreeNodes, rootFolderIds, folderChildrenById,
@@ -676,14 +635,12 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     selectedExplores, setSelectedExplores,
     preloadedContent, setPreloadedContent, mentionedItems, setMentionedItems,
     selectedFolderId, setSelectedFolderId, schemaMarkdown, setSchemaMarkdown, loadingSchema,
-    inferredRouteUseCase, effectiveUseCase, activeMode, isLookmlMode, isHealthCheckMode, builderMode,
-    isUseCaseLocked, handleChangeUseCase,
     agentSession, messages,
     catalogItems, activeObjectId, setActiveObjectId,
     conversations, conversationsRef, setConversations,
     savedScripts, setSavedScripts,
     healthScope, setHealthScope,
-    caConversation, setCaConversation, lastCaIdRef, isCaMode,
+    caConversation, setCaConversation, lastCaIdRef,
     lookmlProjectId, setLookmlProjectId, activatedLookmlSkills, setActivatedLookmlSkills,
     lookmlBundle, setLookmlBundle, lastLookmlIdRef,
     publishedApp, setPublishedAppState, setPublishedApp, lastPublishedIdRef,
@@ -698,7 +655,7 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
     scriptCode, setScriptCode, filtersJson, setFiltersJson,
     scriptOutput, setScriptOutput, scriptMode, setScriptMode,
     publishedTileDash, setPublishedTileDash, schedulerOpen, setSchedulerOpen,
-    infoModalUseCase, setInfoModalUseCase,
+    capabilitiesModalOpen, setCapabilitiesModalOpen,
     scheduleConfig, setScheduleConfig, savedScheduleBadge, setSavedScheduleBadge,
     loadedScript, setLoadedScript, lastScriptIdRef,
     currentAppCode, setCurrentAppCode,

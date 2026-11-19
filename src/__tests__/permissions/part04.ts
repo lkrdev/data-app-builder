@@ -5,95 +5,69 @@ import {
   extractThoughtText, LKR_CLI_BRIDGE_TOOL, LkrCodeMode, runAntigravityTurn,
   summarizeProgress,
 } from '../../antigravity'
-import { getStarterPromptsForUseCase, STARTER_PROMPTS_BY_USE_CASE } from '../../components/StudioWorkspace'
+import { DEFAULT_STARTER_PROMPTS } from '../../components/StudioWorkspace'
 import {
   ARTIFACT_NAMESPACE, ArtifactPayloadViolationError, ArtifactService, clearArtifactServiceCache,
   clearLookerMetadataCache, ConversationRecord, deleteUserArtifact, deleteUserConversation,
-  getArtifactService, getUseCaseLabel, listUserArtifacts, loadUserConversations, parseStudioRoute,
+  getArtifactService, listUserArtifacts, loadUserConversations, parseStudioRoute,
   readSwrCache, saveUserConversation, saveUserEnvironmentId, saveUserStudioConfig, STUDIO_MODES,
-  STUDIO_USE_CASE_OPTIONS, UserArtifactIndexItem,
+  UserArtifactIndexItem,
 } from '../../lookerApi'
 
 const asSdk = (mock: Record<string, unknown>): Looker40SDK => mock as unknown as Looker40SDK
 
 export function registerPermissionsPart04Tests(): void {
-  test('19. parses central conversation routes (/, /c/:conversationId, /config) and flags legacy per-use-case routes for redirect (Issue #47)', () => {
+  test('19. parses central conversation routes (/, /c/:conversationId, /config) and flags legacy routes for redirect (Issue #47)', () => {
     expect(parseStudioRoute('/')).toEqual({
-      mode: 'app',
       objectId: '',
       conversationId: '',
-      useCase: 'auto',
     })
     expect(parseStudioRoute('/config')).toEqual({
-      mode: 'app',
       objectId: '',
       conversationId: '',
-      useCase: 'auto',
     })
     expect(parseStudioRoute('/c/42')).toEqual({
-      mode: 'app',
       objectId: '42',
       conversationId: '42',
-      useCase: 'auto',
     })
     expect(parseStudioRoute('/c/conv_dashboard_7')).toEqual({
-      mode: 'dashboard',
       objectId: '7',
       conversationId: 'conv_dashboard_7',
-      useCase: 'dashboard',
     })
     expect(parseStudioRoute('/c/lookml_1')).toEqual({
-      mode: 'lookml',
       objectId: 'lookml_1',
       conversationId: 'lookml_1',
-      useCase: 'lookml',
     })
     expect(parseStudioRoute('/c/hc_thelook_1')).toEqual({
-      mode: 'health',
       objectId: 'hc_thelook_1',
       conversationId: 'hc_thelook_1',
-      useCase: 'health-check',
     })
     expect(parseStudioRoute('/c/ca_conv_streaming_1')).toEqual({
-      mode: 'app',
       objectId: 'ca_conv_streaming_1',
       conversationId: 'ca_conv_streaming_1',
-      useCase: 'conversational-analytics',
-      isCaRoute: true,
     })
     expect(parseStudioRoute('/c/conv_tile_demo1')).toEqual({
-      mode: 'tile',
       objectId: 'demo1',
       conversationId: 'conv_tile_demo1',
-      useCase: 'tile',
     })
     expect(parseStudioRoute('/app/42')).toEqual({
-      mode: 'app',
       objectId: '42',
       conversationId: '42',
-      useCase: 'app',
       isLegacyRoute: true,
     })
     expect(parseStudioRoute('/dashboard/7')).toEqual({
-      mode: 'dashboard',
       objectId: '7',
       conversationId: '7',
-      useCase: 'dashboard',
       isLegacyRoute: true,
     })
     expect(parseStudioRoute('/tile/demo1')).toEqual({
-      mode: 'tile',
       objectId: 'demo1',
       conversationId: 'demo1',
-      useCase: 'tile',
       isLegacyRoute: true,
     })
     expect(parseStudioRoute('/conversational-analytics/ca_conv_streaming_1')).toEqual({
-      mode: 'app',
       objectId: 'ca_conv_streaming_1',
       conversationId: 'ca_conv_streaming_1',
-      useCase: 'conversational-analytics',
-      isCaRoute: true,
       isLegacyRoute: true,
     })
   })
@@ -576,8 +550,6 @@ export function registerPermissionsPart04Tests(): void {
       userId: '1',
       auth: { mode: 'apikey', apiKey: '' },
       session: { environmentId: 'env_issue56', conversationId: 'conv_56' },
-      mode: 'dashboard',
-      useCase: 'dashboard',
       selectedExplores: ['thelook::order_items'],
       schemaMarkdown: '# Schema',
       userPrompt: 'Create an Executive KPI dashboard',
@@ -630,53 +602,15 @@ export function registerPermissionsPart04Tests(): void {
     expect(typeof turnResult.thinkingDurationSec).toBe('number')
   })
 
-  test('22. sorts STUDIO_USE_CASE_OPTIONS with Auto first and remaining use cases alphabetically, renames Python Tile to Script, and provides tailored starter prompts per use case (Issue #59)', () => {
-    expect(STUDIO_USE_CASE_OPTIONS.map((o) => o.label)).toEqual([
-      'Auto',
-      'Content Studio',
-      'Conversational Analytics',
-      'Data App',
-      'Data Investigator',
-      'Health Check',
-      'LookML',
-      'Script',
-    ])
-    expect(STUDIO_USE_CASE_OPTIONS.map((o) => o.value)).toEqual([
-      'auto',
-      'dashboard',
-      'conversational-analytics',
-      'app',
-      'data-investigator',
-      'health-check',
-      'lookml',
-      'tile',
-    ])
-    expect(getUseCaseLabel('auto')).toBe('Auto')
-    expect(getUseCaseLabel('data-investigator')).toBe('Data Investigator')
-    expect(getUseCaseLabel('tile')).toBe('Script')
+  test('22. renames Python Tile to Script in STUDIO_MODES and provides open-ended default starter prompts (Issue #59)', () => {
     expect(STUDIO_MODES.find((m) => m.mode === 'tile')?.label).toBe('Script')
-
-    for (const uc of [
-      'auto',
-      'app',
-      'data-investigator',
-      'dashboard',
-      'conversational-analytics',
-      'health',
-      'health-check',
-      'lookml',
-      'tile',
-    ]) {
-      const prompts = getStarterPromptsForUseCase(uc)
-      expect(prompts.length).toBeGreaterThanOrEqual(3)
-      for (const item of prompts) {
-        expect(item.id.length).toBeGreaterThan(0)
-        expect(item.label.length).toBeGreaterThan(0)
-        expect(item.prompt.length).toBeGreaterThan(10)
-        expect(item.prompt).not.toMatch(/search_content|lookml_model_explore|Solr/i)
-      }
+    expect(DEFAULT_STARTER_PROMPTS.length).toBeGreaterThanOrEqual(3)
+    for (const item of DEFAULT_STARTER_PROMPTS) {
+      expect(item.id.length).toBeGreaterThan(0)
+      expect(item.label.length).toBeGreaterThan(0)
+      expect(item.prompt.length).toBeGreaterThan(10)
+      expect(item.prompt).not.toMatch(/search_content|lookml_model_explore|Solr/i)
     }
-    expect(STARTER_PROMPTS_BY_USE_CASE.health).toBe(STARTER_PROMPTS_BY_USE_CASE['health-check'])
   })
 
 }

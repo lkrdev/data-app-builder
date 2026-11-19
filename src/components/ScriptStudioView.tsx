@@ -2,6 +2,7 @@ import React from 'react'
 
 import { renderTddMarkdownToHtml } from '../healthCheck'
 import type { StudioController } from '../useStudioController'
+import { StudioCapabilitiesTrigger } from './StudioCapabilitiesGuide'
 import { StudioBadge, StudioModal, StudioSelect, StudioToolbar } from './StudioDesignSystem'
 
 // ponytail: reuse shared zero-dependency Markdown renderer from healthCheck.ts
@@ -112,7 +113,7 @@ export const TilePreviewPane: React.FC<{
     loadScriptById,
     busyStatus,
     extensionSDK,
-    setInfoModalUseCase,
+    setCapabilitiesModalOpen,
   } = ctl
 
   return (
@@ -207,15 +208,7 @@ export const TilePreviewPane: React.FC<{
                 Open Dashboard #{publishedTileDash.dashboardId} ↗
               </button>
             )}
-            <button
-              type="button"
-              data-testid="use-case-info-btn"
-              className="dab-btn dab-btn-secondary dab-info-trigger"
-              title="Use case guide & controls reference"
-              onClick={() => setInfoModalUseCase('tile')}
-            >
-              ?
-            </button>
+            <StudioCapabilitiesTrigger onOpen={() => setCapabilitiesModalOpen(true)} />
             {stageTrailActions}
           </>
         }

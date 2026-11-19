@@ -10,7 +10,7 @@ import {
 } from '../../antigravity'
 import { deriveConversationOverviewData } from '../../components/StudioWorkspace'
 import {
-  DEFAULT_MAX_TOOL_ROUNDS as LOOKER_API_DEFAULT_MAX_TOOL_ROUNDS, getConvTargetId, hydrateConversationContentItems, matchExplicitUseCaseRule,
+  DEFAULT_MAX_TOOL_ROUNDS as LOOKER_API_DEFAULT_MAX_TOOL_ROUNDS, getConvTargetId, hydrateConversationContentItems,
   normalizeMaxToolRounds as lookerApiNormalizeMaxToolRounds, normalizeStudioContentItem, resolveConversationRelatedContent, STUDIO_MAX_TOOL_ROUNDS_OPTIONS as LOOKER_API_MAX_TOOL_ROUNDS_OPTIONS,
 } from '../../lookerApi'
 import { extractLookmlBundleFromInteraction, extractLookmlDashboardsFromBundle, resolveLookmlCanonicalProjectId } from '../../lookmlTool'
@@ -221,8 +221,6 @@ export function registerPermissionsPart16Tests(): void {
       },
       auth: { mode: 'apikey', apiKey: 'test-key' },
       session: { environmentId: 'env_186', lastInteractionId: 'int_prev_186' },
-      mode: 'dashboard',
-      useCase: 'dashboard',
       selectedExplores: ['thelook::order_items'],
       schemaMarkdown: '# Schema',
       userPrompt: 'Build 10-step executive dashboard',
@@ -271,8 +269,7 @@ export function registerPermissionsPart16Tests(): void {
       auth: { mode: 'apikey', apiKey: 'test-key' },
       session: { environmentId: 'env_186', lastInteractionId: 'int_prev_wrap' },
       maxToolRounds: 2,
-      toolMode: 'lookml',
-      useCase: 'lookml',
+      canDevelop: true,
       selectedExplores: ['thelook::order_items'],
       schemaMarkdown: '# Schema',
       userPrompt: 'Refactor 5 SQL queries into LookML',
@@ -351,8 +348,7 @@ export function registerPermissionsPart16Tests(): void {
       auth: { mode: 'apikey', apiKey: 'test-key' },
       session: { environmentId: 'env_186' },
       maxToolRounds: 2,
-      toolMode: 'lookml',
-      useCase: 'lookml',
+      canDevelop: true,
       selectedExplores: ['thelook::order_items'],
       schemaMarkdown: '# Schema',
       userPrompt: 'Push and validate LookML',
@@ -407,11 +403,6 @@ export function registerPermissionsPart16Tests(): void {
   })
 
   test('76. routes /agentic-lookml-workflow slash skill, omits onboarding guide when explicit skill is active, and hydrates file_ref bridge requests + __bundle_ref__ LookML bundles via fetchEnvironmentFile', async () => {
-    expect(
-      matchExplicitUseCaseRule(
-        '/agentic-lookml-workflow Here are SQL queries: -- how many questions sit unanswered?\nSELECT COUNT(*) FROM posts_questions;'
-      )
-    ).toBe('lookml')
     expect(
       isNewProjectOnboardingIntakePrompt(
         '/agentic-lookml-workflow get to work on a new project called stackoverflow and use bigquery default connection'
@@ -556,10 +547,8 @@ export function registerPermissionsPart16Tests(): void {
       auth: { mode: 'apikey', apiKey: 'test-key' },
       userId: 'user_65',
       conversationId: 'conv_65',
-      session: { toolType: 'lookml', environmentId: envId, conversationId: 'conv_65' },
-      mode: 'data_app',
-      toolMode: 'lookml',
-      useCase: 'auto',
+      session: { environmentId: envId, conversationId: 'conv_65' },
+      canDevelop: true,
       selectedExplores: [],
       schemaMarkdown: '# Empty',
       userPrompt: '/agentic-lookml-workflow Here are sql queries for stackoverflow',
@@ -582,10 +571,6 @@ export function registerPermissionsPart16Tests(): void {
     })
     expect(latestBundle?.id).toBe('new')
 
-    // "Create a LookML dashboard" routes to 'dashboard', not 'lookml'
-    expect(matchExplicitUseCaseRule('Create a LookML dashboard for sales')).toBe('dashboard')
-    expect(matchExplicitUseCaseRule('Build a quick Stack Overflow dashboard')).toBe('dashboard')
-
     // _check_dashboard_fields propagates filter default_value across listen: to secondary explores
     const probeFiltersSeen: Array<Record<string, unknown>> = []
     await LkrCodeMode.runPythonCode({
@@ -606,7 +591,7 @@ export function registerPermissionsPart16Tests(): void {
     })
     expect(probeFiltersSeen).toEqual([{ 'votes.created_date': '2022/01/01 to 2022/12/31' }])
 
-    // Warm Turn 2 dashboard mode retains lkr_cli_extension_bridge so previous_interaction_id history stays valid
+    // Warm Turn 2 retains full open-ended toolset including lkr_cli_extension_bridge & code_execution
     let turn2Tools: Array<{ name?: string; type?: string }> = []
     const mockDashExt = {
       serverProxy: async (_url: string, init?: { method?: string; body?: string }) => {
@@ -622,7 +607,7 @@ export function registerPermissionsPart16Tests(): void {
             id: 'int_dash_2',
             environment_id: envId,
             status: 'completed',
-            output_text: '<USE_CASE>dashboard</USE_CASE>\nBuilt [Dashboard](/dashboards/42)',
+            output_text: 'Built [Dashboard](/dashboards/42)',
           }),
         }
       },
@@ -634,8 +619,6 @@ export function registerPermissionsPart16Tests(): void {
       userId: 'user_65',
       conversationId: 'conv_65',
       session: turnRes.session,
-      mode: 'dashboard',
-      useCase: 'auto',
       lookmlProjectId: 'stackoverflow',
       selectedExplores: [],
       schemaMarkdown: '',
@@ -644,7 +627,7 @@ export function registerPermissionsPart16Tests(): void {
     })
     expect(turn2Tools.some((t) => t.name === 'run_looker_codemode')).toBe(true)
     expect(turn2Tools.some((t) => t.name === 'lkr_cli_extension_bridge')).toBe(true)
-    expect(turn2Tools.some((t) => t.type === 'code_execution')).toBe(false)
+    expect(turn2Tools.some((t) => t.type === 'code_execution')).toBe(true)
   })
 
 }

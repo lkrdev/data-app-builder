@@ -64,8 +64,8 @@ function registerVisualPart11Tests(ctx) {
         saveBtn?.click();
         await new Promise((r) => setTimeout(r, 120));
 
-        const useCaseInfoBtn = document.querySelector('[data-testid="use-case-info-btn"]');
-        const useCaseInfoWidth = useCaseInfoBtn ? Math.round(useCaseInfoBtn.getBoundingClientRect().width) : 24;
+        const capabilitiesBtn = document.querySelector('[data-testid="studio-capabilities-btn"]');
+        const capabilitiesBtnWidth = capabilitiesBtn ? Math.round(capabilitiesBtn.getBoundingClientRect().width) : 24;
 
         return {
           initialValue,
@@ -84,7 +84,7 @@ function registerVisualPart11Tests(ctx) {
           hasLowerCopy: tooltipText.includes('15–25') && tooltipText.includes('BigQuery') && tooltipText.includes('quota'),
           hasSdkJargon: tooltipText.includes('saveContextData'),
           savedMaxToolRounds: window.__LAST_SAVED_CONTEXT_DATA__?.maxToolRounds,
-          useCaseInfoPreserved: useCaseInfoWidth >= 24,
+          capabilitiesBtnPreserved: capabilitiesBtnWidth >= 24,
         };
       })()`,
       awaitPromise: true,
@@ -113,7 +113,7 @@ function registerVisualPart11Tests(ctx) {
       hasLowerCopy: true,
       hasSdkJargon: false,
       savedMaxToolRounds: 25,
-      useCaseInfoPreserved: true,
+      capabilitiesBtnPreserved: true,
     })
   }, 20000)
 

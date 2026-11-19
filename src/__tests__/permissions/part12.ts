@@ -62,7 +62,7 @@ export function registerPermissionsPart12Tests(): void {
             environment_id: 'env_shared_155',
             status: 'completed',
             output_text:
-              '<USE_CASE>dashboard</USE_CASE>\nCreated Executive KPI UDD.\n<NATIVE_CONTENT_BUNDLE>{"id":"34","content_type":"dashboard","title":"Executive KPI UDD","folder_id":"1","tile_count":4}</NATIVE_CONTENT_BUNDLE>',
+              'Created Executive KPI UDD.\n<NATIVE_CONTENT_BUNDLE>{"id":"34","content_type":"dashboard","title":"Executive KPI UDD","folder_id":"1","tile_count":4}</NATIVE_CONTENT_BUNDLE>',
           }),
         }
       },
@@ -79,13 +79,9 @@ export function registerPermissionsPart12Tests(): void {
         environmentId: 'env_shared_155',
         lastInteractionId: 'int_lookml_turn_1',
         conversationId: 'conv_1762720000',
-        toolType: 'lookml',
         explores: ['ecom::orders'],
       },
-      mode: 'data_app',
-      useCase: 'auto',
-      toolMode: 'lookml',
-      allowedModes: ['app', 'dashboard', 'lookml', 'tile', 'health-check', 'conversational-analytics'],
+      canDevelop: true,
       selectedExplores: ['ecom::orders'],
       schemaMarkdown: '# Schema',
       userPrompt: 'Now build an Executive KPI UDD dashboard on orders',
@@ -93,7 +89,6 @@ export function registerPermissionsPart12Tests(): void {
     })
 
     expect(postedBodies[0]?.previous_interaction_id).toBe('int_lookml_turn_1')
-    expect(crossTurn.resolvedUseCase).toBe('dashboard')
     expect(crossTurn.nativeBundle?.id).toBe('34')
     expect(crossTurn.nativeBundle?.title).toBe('Executive KPI UDD')
 

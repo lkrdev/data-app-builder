@@ -453,17 +453,10 @@ function registerVisualPart03Tests(ctx) {
         window.__DAB_STUDIO__?.setStarterPromptsLoading?.(false);
         await new Promise((r) => setTimeout(r, 50));
 
-        window.__DAB_STUDIO__?.setSelectedUseCase?.('tile');
-        await new Promise((r) => setTimeout(r, 80));
-
-        const tileBtns = Array.from(document.querySelectorAll('[data-testid="starter-prompt-list"] button[data-testid^="starter-prompt-"]'));
-        tileBtns[0]?.click();
+        document.querySelector('[data-testid="starter-prompt-3"]')?.click();
         await new Promise((r) => setTimeout(r, 60));
-        const promptAfterTileClick = ta ? ta.value : '';
-        const tilePlaceholder = ta ? ta.getAttribute('placeholder') || '' : '';
-
-        window.__DAB_STUDIO__?.setSelectedUseCase?.('auto');
-        await new Promise((r) => setTimeout(r, 80));
+        const promptAfterFourthClick = ta ? ta.value : '';
+        const openEndedPlaceholder = ta ? ta.getAttribute('placeholder') || '' : '';
 
         const r = document.querySelector('.dab-empty-prompt-card')?.getBoundingClientRect();
         const clip = r ? { x: Math.max(0, Math.floor(r.left - 16)), y: Math.max(0, Math.floor(r.top - 16)), width: Math.min(1440, Math.ceil(r.width + 32)), height: Math.min(900, Math.ceil(r.height + 32)), scale: 1 } : null;
@@ -474,11 +467,10 @@ function registerVisualPart03Tests(ctx) {
           hasStarterPrompt0,
           noEmojiInLabels,
           hasStarterSkeleton,
-          autoChipCount: starterBtns.length,
+          starterChipCount: starterBtns.length,
           promptAfterClick,
-          tileChipCount: tileBtns.length,
-          promptAfterTileClick,
-          tilePlaceholder,
+          promptAfterFourthClick,
+          openEndedPlaceholder,
           hasComposerModelSelect: Boolean(document.querySelector('.dab-composer-actions [data-testid="composer-model-select"]')),
           noTopbarModelSelect: !document.querySelector('.dab-topbar [data-testid="topbar-model-select"]'),
           noComposerInspector: !document.querySelector('.dab-composer-actions .dab-inspector'),
@@ -495,13 +487,13 @@ function registerVisualPart03Tests(ctx) {
       hasStarterPrompt0: true,
       noEmojiInLabels: true,
       hasStarterSkeleton: true,
-      autoChipCount: 4,
+      starterChipCount: 4,
       promptAfterClick:
         'Build an interactive Data App on bigquery_information_schema::jobs_timeline with Total Slot Ms and Total Bytes Billed KPI scorecards, a Job Type trend chart, and a Creation Time filter.',
-      tileChipCount: 3,
-      promptAfterTileClick:
-        'Write a Script summarizing bigquery_information_schema::jobs_timeline metrics by Creation Time and active dashboard filters as a table.',
-      tilePlaceholder: 'Describe the Script to generate or update (or paste a screenshot)...',
+      promptAfterFourthClick:
+        'Add curated KPI measures and field descriptions to jobs_timeline in model bigquery_information_schema, and verify SQL vs Explore parity.',
+      openEndedPlaceholder:
+        'Ask Ripper what you want to build, analyze, or automate (type / for skills or @ to mention Explores, Dashboards, Looks, or Conversations)...',
       hasComposerModelSelect: true,
       noTopbarModelSelect: true,
       noComposerInspector: true

@@ -122,7 +122,7 @@ export function registerPermissionsPart25Tests(): void {
               id: 'int_224_A2',
               environment_id: 'env_shared_224',
               status: 'completed',
-              output_text: '<USE_CASE>tile</USE_CASE>\nConv A finished folders lookup.',
+              output_text: 'Conv A finished folders lookup.',
             }),
           }
         }
@@ -155,7 +155,7 @@ export function registerPermissionsPart25Tests(): void {
             id: 'int_224_B2',
             environment_id: 'env_shared_224',
             status: 'completed',
-            output_text: '<USE_CASE>tile</USE_CASE>\nConv B finished models lookup.',
+            output_text: 'Conv B finished models lookup.',
           }),
         }
       },
@@ -544,7 +544,7 @@ export function registerPermissionsPart25Tests(): void {
             environment_id: 'env_224',
             status: 'completed',
             output_text:
-              '<USE_CASE>app</USE_CASE>\nBuilt Order Pulse 224.\n<DATA_APP_BUNDLE>{"title":"Order Pulse 224","raw_code":"export default class App {}","widgets":[{"id":"w1","title":"Orders","query":{"model":"thelook","view":"orders","fields":["orders.count"]}}]}</DATA_APP_BUNDLE>',
+              'Built Order Pulse 224.\n<DATA_APP_BUNDLE>{"title":"Order Pulse 224","raw_code":"export default class App {}","widgets":[{"id":"w1","title":"Orders","query":{"model":"thelook","view":"orders","fields":["orders.count"]}}]}</DATA_APP_BUNDLE>',
           }),
           { status: 200 }
         )
@@ -570,7 +570,6 @@ export function registerPermissionsPart25Tests(): void {
         conv: {
           id: 'conv_224_resume',
           type: 'app',
-          use_case: 'app',
           label: 'Order Pulse 224',
           inFlight: true,
           interactionId: 'int_224_req_act',

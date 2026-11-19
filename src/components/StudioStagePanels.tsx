@@ -5,7 +5,7 @@ import {
   AlertTriangle, Check, Code2, Copy, ExternalLink, MoreVertical, RotateCw, Shield, X,
 } from 'lucide-react'
 
-import { cleanLookmlProjectId, StudioUseCase } from '../antigravity'
+import { cleanLookmlProjectId } from '../antigravity'
 import { HealthCheckReportPayload } from '../healthCheck'
 import {
   CaConversationState, copyTextWithExtensionSdk, NativeContentState, PublishedAppState,
@@ -15,6 +15,7 @@ import { LookmlBundle, renderLineNumberedPre } from '../lookmlTool'
 import { StudioController } from '../useStudioController'
 import { AlertInspectorPane } from './AlertInspectorPane'
 import { TilePreviewPane } from './ScriptStudioView'
+import { StudioCapabilitiesTrigger } from './StudioCapabilitiesGuide'
 import {
   StudioBadge, StudioButton, StudioToolbar,
 } from './StudioDesignSystem'
@@ -24,7 +25,6 @@ import {
 import {
   DerivedOverviewData, formatPrettyPayload, OverviewApiCallRow,
 } from './StudioOverviewSidebar'
-import { UseCaseInfoTrigger } from './StudioUseCaseGuides'
 
 export const StudioContentTabsBar: React.FC<{
   isOverviewMode: boolean
@@ -478,7 +478,6 @@ export const StudioActiveModeStageHeader: React.FC<{
   setIframeRev: React.Dispatch<React.SetStateAction<number>>
   allTabsHidden: boolean
   activeContentItem: StudioContentItem | null
-  builderMode: 'app' | 'dashboard'
   nativeContent: NativeContentState | null
   publishedApp: PublishedAppState | null
   isDataAppPane: boolean
@@ -489,8 +488,7 @@ export const StudioActiveModeStageHeader: React.FC<{
   reloadingViewer: boolean
   setReloadingViewer: React.Dispatch<React.SetStateAction<boolean>>
   openInLookerPath: string
-  selectedUseCase: StudioUseCase
-  setInfoModalUseCase: (useCase: StudioUseCase | null) => void
+  onOpenCapabilities: () => void
   overviewCrumb: React.ReactNode
   idleToolbarText: React.ReactNode
   toggleExplorerBtn: React.ReactNode
@@ -500,9 +498,9 @@ export const StudioActiveModeStageHeader: React.FC<{
   ctl, activePaneKind, alertBundle, previewingAlertDashboard, setPreviewingAlertDashboard,
   healthReport, tddViewMode, setTddViewMode, copiedTdd, handleCopyTddMarkdown,
   handleDownloadTddMarkdown, lookmlBundle, caConversation, setIframeRev, allTabsHidden,
-  activeContentItem, builderMode, nativeContent, publishedApp, isDataAppPane, currentAppCode,
+  activeContentItem, nativeContent, publishedApp, isDataAppPane, currentAppCode,
   showAppCode, setShowAppCode, activePreviewId, reloadingViewer, setReloadingViewer,
-  openInLookerPath, selectedUseCase, setInfoModalUseCase, overviewCrumb, idleToolbarText,
+  openInLookerPath, onOpenCapabilities, overviewCrumb, idleToolbarText,
   toggleExplorerBtn, collapseToggleBtn, extensionSDK,
 }) => (
             activePaneKind === 'script' ? (
@@ -538,7 +536,7 @@ export const StudioActiveModeStageHeader: React.FC<{
                         <button type="button" className="dab-btn-gemini" onClick={handleDownloadTddMarkdown}>Download Markdown (.md)</button>
                       </>
                     )}
-                    <UseCaseInfoTrigger useCase="health-check" onOpen={setInfoModalUseCase} />
+                    <StudioCapabilitiesTrigger onOpen={onOpenCapabilities} />
                     {toggleExplorerBtn}
                     {collapseToggleBtn}
                   </>
@@ -563,7 +561,7 @@ export const StudioActiveModeStageHeader: React.FC<{
                     )}
                   </>
                 ) : idleToolbarText}
-                actions={<><UseCaseInfoTrigger useCase="lookml" onOpen={setInfoModalUseCase} />{toggleExplorerBtn}{collapseToggleBtn}</>}
+                actions={<><StudioCapabilitiesTrigger onOpen={onOpenCapabilities} />{toggleExplorerBtn}{collapseToggleBtn}</>}
               />
             ) : activePaneKind === 'ca' ? (
               <>
@@ -585,7 +583,7 @@ export const StudioActiveModeStageHeader: React.FC<{
                           <button type="button" className="dab-btn-secondary" onClick={() => extensionSDK.openBrowserWindow(caConversation.embedPath.replace(/^\/embed/, ''), '_blank')}>Open in Looker ↗</button>
                         </>
                       )}
-                      <UseCaseInfoTrigger useCase="conversational-analytics" onOpen={setInfoModalUseCase} />
+                      <StudioCapabilitiesTrigger onOpen={onOpenCapabilities} />
                       {toggleExplorerBtn}
                       {collapseToggleBtn}
                     </>
@@ -606,7 +604,7 @@ export const StudioActiveModeStageHeader: React.FC<{
                     <span className="dab-muted">All tabs hidden — restore an item from the menu above</span>
                   ) : activeContentItem && activeContentItem.contentType !== 'data_app' && activeContentItem.contentType !== 'data-investigator' ? (
                     <>{overviewCrumb}<strong>{activeContentItem.title}</strong></>
-                  ) : !activeContentItem && builderMode === 'dashboard' && nativeContent ? (
+                  ) : !activeContentItem && !publishedApp && nativeContent ? (
                     <>{overviewCrumb}<strong>{nativeContent.title}</strong></>
                   ) : publishedApp ? (
                     <>{overviewCrumb}<strong>{publishedApp.title}</strong></>
@@ -634,7 +632,7 @@ export const StudioActiveModeStageHeader: React.FC<{
                         <button type="button" className="dab-btn-secondary" onClick={() => extensionSDK.openBrowserWindow(openInLookerPath, '_blank')}>Open in Looker ↗</button>
                       </>
                     )}
-                    <UseCaseInfoTrigger useCase={!isDataAppPane ? 'dashboard' : selectedUseCase === 'data-investigator' ? 'data-investigator' : 'app'} onOpen={setInfoModalUseCase} />
+                    <StudioCapabilitiesTrigger onOpen={onOpenCapabilities} />
                     {toggleExplorerBtn}
                     {collapseToggleBtn}
                   </>

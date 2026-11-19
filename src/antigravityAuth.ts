@@ -13,7 +13,6 @@ import {
   type AntigravityModelOption,
   mergeInteractionSseEvent,
 } from './antigravityTypes'
-import { extractResolvedUseCase, type StudioUseCase } from './lookerPermissions'
 
 export function getGeminiSecretKeyTag(extensionSDK: AntigravityExtensionHostLike): string {
   return typeof extensionSDK?.createSecretKeyTag === 'function'
@@ -419,12 +418,11 @@ export function callInteractionsApi(
       if (/:cancel$/i.test(path)) return Promise.resolve({ id: path.replace(/^interactions\//i, '').replace(/:cancel$/i, ''), status: 'cancelled' })
       const inputArr = Array.isArray(body?.input) ? (body?.input as Array<{ text?: string }>) : []
       const promptText = String(inputArr[0]?.text || '')
-      if (promptText.includes(CONVERSATION_LABEL_REQUEST_TAG)) {
+      const trimmedPrompt = promptText.trimStart()
+      if (trimmedPrompt.startsWith(CONVERSATION_LABEL_REQUEST_TAG)) {
         return Promise.resolve({ id: 'int_mock_label', status: 'completed', output_text: sanitizeConversationLabel('', promptText) })
       }
-      if (promptText.includes(STARTER_PROMPTS_REQUEST_TAG)) {
-        const ucMatch = promptText.match(/Active useCase:\s*([^\r\n]+)/i)?.[1]?.trim() || 'auto'
-        const permittedMatch = promptText.match(/Permitted use cases:\s*([^\r\n]+)/i)?.[1]?.split(',').map((s) => s.trim() as StudioUseCase).filter(Boolean)
+      if (trimmedPrompt.startsWith(STARTER_PROMPTS_REQUEST_TAG)) {
         const targetMatch = promptText.match(/Target explore:\s*([^\s(\r\n]+)(?:\s*\(([^)\r\n]+)\))?/i)
         const expKey = targetMatch?.[1]?.trim(), expLabel = targetMatch?.[2]?.trim()
         const parseFieldLine = (prefix: string): StarterExploreFieldSummary[] => {
@@ -437,18 +435,18 @@ export function callInteractionsApi(
         }
         const [mName = '', eName = ''] = expKey && expKey !== 'none' ? (expKey.includes('::') ? expKey.split('::') : expKey.split('/')) : ['', '']
         const mockPrompts = buildDynamicStarterPrompts({
-          useCase: ucMatch, selectedExplores: expKey && expKey !== 'none' ? [expKey] : [], permittedUseCases: permittedMatch,
+          selectedExplores: expKey && expKey !== 'none' ? [expKey] : [],
           exploreContext: expKey && expKey !== 'none'
             ? { modelName: mName, modelLabel: mName, exploreName: eName || expKey, exploreLabel: expLabel || eName || expKey, exploreKey: expKey, measures: parseFieldLine('Top measures'), dimensions: parseFieldLine('Top dimensions') }
             : null,
         })
         return Promise.resolve({ id: 'int_mock_starter_prompts', status: 'completed', output_text: `<STARTER_PROMPTS>${JSON.stringify(mockPrompts)}</STARTER_PROMPTS>` })
       }
-      if (promptText.includes('[CA_AGENT_SELECTION_REQUEST]')) {
+      if (trimmedPrompt.startsWith('[CA_AGENT_SELECTION_REQUEST]')) {
         const selectedId = promptText.match(/"agent_id"\s*:\s*"([^"]+)"/)?.[1] || 'ad69f74cd9e2494090e9e9e9c50190c8'
         return Promise.resolve({ id: 'int_mock_ca_selection', status: 'completed', output_text: JSON.stringify({ agent_id: selectedId, rationale: 'Selected Looker CA agent via direct model stateless routing.' }) })
       }
-      if (promptText.includes('[SKILL_SYNC:')) {
+      if (trimmedPrompt.startsWith('[SKILL_SYNC:')) {
         const marker = promptText.match(/reply with ((?:CHUNK_OK:\d+|SYNC_OK:[0-9a-f]+))/)?.[1] || 'SYNC_OK'
         ;(mockWin.__SKILL_SYNC_CALLS__ ||= []).push({ path, method, body })
         return Promise.resolve({ id: 'int_mock_skill_sync', environment_id: String(body?.environment || ''), status: 'completed', output_text: marker })
@@ -458,10 +456,16 @@ export function callInteractionsApi(
       const taggedUserMsg = promptText.match(/<USER_MESSAGE>([\s\S]*?)<\/USER_MESSAGE>/i)?.[1]
       const userReqMatch = promptText.match(/User request:\s*([\s\S]*)$/i)
       const rawInferredPrompt = taggedUserMsg ? taggedUserMsg.trim() : userReqMatch ? userReqMatch[1].trim() : promptText
-      const inferred = extractResolvedUseCase(undefined, rawInferredPrompt)
+      const bundleSuffix = /\.lkml\b/i.test(rawInferredPrompt)
+        ? '\n<LOOKML_BUNDLE>{"id":"deploytobarerepo_temp","title":"Order Items Measures","project_id":"deploytobarerepo_temp","model_name":"thelook","branch_name":"dev_1","files":[{"path":"views/order_items.view.lkml","action":"updated","content":"view: order_items {}","diff":"@@ -1 +1 @@"}],"validation":{"passed":true,"error_count":0,"errors":[]},"tests":[],"queries":[]}</LOOKML_BUNDLE>'
+        : /\b(?:udd|native\s+looker|dashboard)\b/i.test(rawInferredPrompt)
+        ? '\n<NATIVE_CONTENT_BUNDLE>{"id":"99","content_type":"dashboard","title":"Draft Dashboard 99","folder_id":"5","tile_count":2,"explores":["thelook::order_items"]}</NATIVE_CONTENT_BUNDLE>'
+        : /\b(?:conversational\s*analytics|ca\s*agent|looker\s+ca)\b/i.test(rawInferredPrompt)
+        ? '\n<CA_AGENT_SELECTION>{"agent_id":"ad69f74cd9e2494090e9e9e9c50190c8","rationale":"Matched eCommerce Looker CA agent."}</CA_AGENT_SELECTION>'
+        : ''
       return Promise.resolve(Object.assign(
-        { id: `int_mock_${Date.now().toString(36).slice(-5)}`, status: 'completed', output_text: `<USE_CASE>${inferred}</USE_CASE>\nRouted turn via AGENTS.md to ${inferred}.` },
-        isDirectStatelessModel ? null : { environment_id: reusedEnvId || `env_${inferred}_mock` }
+        { id: `int_mock_${Date.now().toString(36).slice(-5)}`, status: 'completed', output_text: `Answered in Studio chat.${bundleSuffix}` },
+        isDirectStatelessModel ? null : { environment_id: reusedEnvId || 'env_studio_mock' }
       ))
     }
     headers['Authorization'] = `Bearer ${liveToken}`

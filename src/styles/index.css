@@ -175,10 +175,8 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 .dab-oauth-redirect-helper{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border-radius:8px;background:var(--dab-surface-muted);border:1px solid var(--dab-border);font-size:11.5px}
 .dab-oauth-redirect-row{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .dab-info-trigger{width:24px;height:24px;padding:0;border-radius:999px;font-weight:700;font-size:12px;display:inline-flex;align-items:center;justify-content:center;line-height:1;flex-shrink:0}
-.dab-use-case-info-modal{width:680px;max-height:86vh;overflow:hidden}
-.dab-use-case-guide-tabs{display:flex;flex-wrap:wrap;gap:6px;padding-bottom:8px;border-bottom:1px solid var(--dab-border)}
-.dab-use-case-guide-body{overflow-y:auto;max-height:64vh;padding-right:4px}
-.dab-use-case-badge-investigator{background:var(--dab-accent-subtle);color:var(--dab-accent);border:1px solid var(--dab-accent-border)}
+.dab-capabilities-modal{width:680px;max-height:86vh;overflow:hidden}
+.dab-capabilities-guide-body{overflow-y:auto;max-height:68vh;padding-right:4px}
 .dab-doc-ui-preview{display:inline-flex;align-items:center;gap:8px;max-width:100%;min-width:0;padding:6px 10px;margin:4px 6px 8px 0;border-radius:8px;background:var(--dab-surface-muted);border:1px dashed var(--dab-border-strong);pointer-events:none;user-select:none}
 .dab-folder-trigger-fixed{min-width:180px;max-width:240px;height:28px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dab-skeleton{display:inline-block;border-radius:6px;border:1px solid var(--dab-border);background:linear-gradient(90deg,var(--dab-surface-subtle) 25%,var(--dab-border) 50%,var(--dab-surface-subtle) 75%);background-size:200% 100%;animation:dab-skeleton-shimmer 1.2s ease-in-out infinite}

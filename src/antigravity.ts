@@ -18,6 +18,7 @@ import {
 } from './antigravityEnv'
 import { executeAntigravityPollingLoop } from './antigravityLoop'
 import {
+  AGENTS_MD,
   buildNativeContentGuide,
   DATA_APP_GUIDE_MD,
   DATA_INVESTIGATOR_GUIDE_MD,
@@ -26,9 +27,9 @@ import { sanitizeConversationLabel } from './antigravityStarters'
 import {
   type AlertInspectorBundle,
   BUILTIN_SKILLS_FILES,
-  collectInteractionTextCandidates,
   extractAlertBundleFromInteraction,
   extractBundleFromInteraction,
+  extractCaSelectionFromInteraction,
   extractInteractionOutputText,
   extractInteractionTelemetry,
   extractNativeContentFromInteraction,
@@ -41,7 +42,6 @@ import {
   type AntigravityAuth,
   type AntigravityExtensionHostLike,
   type AntigravityInteractionPayload,
-  type AntigravityToolType,
   type AntigravityTurnTelemetry,
   cleanLookmlProjectId,
   type CodeModePermissionDecision,
@@ -64,16 +64,12 @@ import {
   type AccessibleLookerConnection,
   type DataAppBundle,
   discoverAccessibleConnections,
-  extractResolvedUseCase,
   formatAccessibleConnectionsMarkdown,
   isConversationalNoOpPrompt,
-  matchExplicitUseCaseRule,
   type NativeContentBundle,
   type NativeContentState,
   normalizeNativeContent,
   parseExploreId,
-  type ResolvedStudioUseCase,
-  type StudioUseCase,
 } from './lookerApi'
 import { extractSlashSkillIds, KDA_SKILL_MD } from './lookmlSkills'
 import {
@@ -94,17 +90,16 @@ export * from './antigravityConvStore'
 export * from './antigravityLoop'
 export * from './lookmlSkills'
 export {
-  buildStudioRoute, clampLeftPaneWidth, classifyStudioUseCase, convertRelativeDateFilterToFixed,
+  buildStudioRoute, clampLeftPaneWidth, convertRelativeDateFilterToFixed,
   copyTextWithExtensionSdk, DEFAULT_BUSY_SEND_ACTION, DEFAULT_LEFT_PANE_WIDTH, discoverAccessibleConnections, EXPLICIT_SCRIPT_CREATION_RE,
-  extractResolvedUseCase, formatAccessibleConnectionsMarkdown, formatContentInventoryMarkdown, getAllowedUseCases, getUseCaseLabel,
+  formatAccessibleConnectionsMarkdown, formatContentInventoryMarkdown,
   isConversationalNoOpPrompt, isLookerInstanceMetadataQuery, loadStoredBusySendAction, loadStoredLeftPaneWidth, loadStoredRightPaneCollapsed,
-  LOOKER_ALERT_QUERY_RE, matchExplicitUseCaseRule, MAX_LEFT_PANE_WIDTH, MIN_LEFT_PANE_WIDTH,
+  LOOKER_ALERT_QUERY_RE, MAX_LEFT_PANE_WIDTH, MIN_LEFT_PANE_WIDTH,
   normalizeBusySendAction, normalizeQueryFiltersToFixedDates, readInitialBusySendAction, readInitialLeftPaneWidth, readInitialRightPaneCollapsed,
-  saveStoredBusySendAction, saveStoredLeftPaneWidth, saveStoredRightPaneCollapsed, shouldRouteToIsolatedCaSubagent,
+  saveStoredBusySendAction, saveStoredLeftPaneWidth, saveStoredRightPaneCollapsed,
   STUDIO_BUSY_SEND_ACTION_STORAGE_KEY, STUDIO_LEFT_PANE_WIDTH_STORAGE_KEY, STUDIO_RIGHT_PANE_COLLAPSED_STORAGE_KEY,
-  STUDIO_USE_CASE_OPTIONS, studioModeToUseCase, studioUseCaseToMode, useCaseToStudioMode,
 } from './lookerApi'
-export type { AccessibleLookerConnection, ExtensionHostStorageLike, ResolvedStudioUseCase, StudioBusySendAction, StudioUseCase } from './lookerApi'
+export type { AccessibleLookerConnection, ExtensionHostStorageLike, StudioBusySendAction } from './lookerApi'
 export {
   BOOTSTRAP_LOOKML_PY,
   BOOTSTRAP_SANDBOX_SH,
@@ -136,16 +131,12 @@ export interface RunAntigravityTurnOptions {
   thinkingLevel?: StudioThinkingLevel
   maxTotalTokens?: number
   maxToolRounds?: number
-  mode?: 'data_app' | 'dashboard'
-  useCase?: StudioUseCase
-  allowedModes?: string[]
   selectedExplores: string[]
   folderId?: string
-  toolMode?: 'data_app' | 'lookml'
   lookmlProjectId?: string
   activatedLookmlSkills?: string[]
   developableProjects?: string[]
-  canDeploy?: boolean
+  canDevelop?: boolean; canDeploy?: boolean
   availableConnections?: ReadonlyArray<AccessibleLookerConnection> | string
   warmEnvironmentInBackground?: boolean
   schemaMarkdown: string
@@ -154,6 +145,7 @@ export interface RunAntigravityTurnOptions {
   rootInteractionId?: string
   images?: PastedImage[]
   existingAppCode?: string
+  existingPublishedApp?: { dashboardId: string; title?: string } | null
   existingNativeContent?: NativeContentState | NativeContentBundle | null
   customSystemGuide?: string
   extraSources?: Array<{ type: 'inline'; content: string; target: string }>
@@ -179,10 +171,10 @@ export interface AntigravityTurnResult {
   nativeBundle: NativeContentBundle | null
   lookmlBundle?: LookmlBundle | null
   alertBundle?: AlertInspectorBundle | null
+  caSelection?: { agentId: string; agentName?: string; rationale?: string } | null
   tddMarkdown: string | null
   assistantText: string
   rawOutputText?: string
-  resolvedUseCase: ResolvedStudioUseCase
   rootInteractionId?: string
   session: AgentSession
   telemetry: AntigravityTurnTelemetry
@@ -224,10 +216,10 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
 
   const {
     sdk, extensionSDK, userId, environmentId, conversationId: rawConversationId, onEnvironmentUpdated, auth, session,
-    model = DEFAULT_ANTIGRAVITY_MODEL, thinkingLevel = DEFAULT_THINKING_LEVEL, maxTotalTokens = DEFAULT_MAX_TOTAL_TOKENS, maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS, mode = 'data_app', useCase = 'auto',
-    allowedModes, selectedExplores, folderId, toolMode = 'data_app', lookmlProjectId, activatedLookmlSkills,
-    developableProjects, canDeploy, availableConnections: providedConnections, warmEnvironmentInBackground = false,
-    schemaMarkdown, userPrompt, rawUserPrompt, rootInteractionId: providedRootId, images, existingAppCode, existingNativeContent,
+    model = DEFAULT_ANTIGRAVITY_MODEL, thinkingLevel = DEFAULT_THINKING_LEVEL, maxTotalTokens = DEFAULT_MAX_TOTAL_TOKENS, maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
+    selectedExplores, folderId, lookmlProjectId, activatedLookmlSkills,
+    developableProjects, canDevelop, canDeploy, availableConnections: providedConnections, warmEnvironmentInBackground = false,
+    schemaMarkdown, userPrompt, rawUserPrompt, rootInteractionId: providedRootId, images, existingAppCode, existingPublishedApp, existingNativeContent,
     customSystemGuide, extraSources, priorMessages, requirePermission = true, approvedOperations, onPermissionRequest,
     onRequestWritePermission, onProgressSteps, pollScheduleMs = DEFAULT_POLL_SCHEDULE_MS, signal, resumeInteractionId, onInteractionCreated, onStatus,
   } = params
@@ -248,17 +240,11 @@ export async function runAntigravityTurn(params: RunAntigravityTurnOptions): Pro
   const primaryExplore = firstParsed?.exploreName || ''
 
   const isNoOpTurn = isConversationalNoOpPrompt(rawUserPrompt || userPrompt)
-  const effectiveLookmlIntent =
-    toolMode === 'lookml' || useCase === 'lookml' || (useCase === 'auto' && matchExplicitUseCaseRule(userPrompt, allowedModes) === 'lookml')
-  const isAuditSkillActive =
-    extractSlashSkillIds(userPrompt).includes('looker-audit') &&
-    (useCase === 'tile' || (useCase === 'auto' && matchExplicitUseCaseRule(userPrompt, allowedModes) === 'tile'))
-  const effectiveToolType: AntigravityToolType =
-    toolMode === 'lookml' || effectiveLookmlIntent ? 'lookml'
-      : customSystemGuide?.includes('3-Pillar') ? 'health'
-      : customSystemGuide?.includes('codemode-script-tile') || isAuditSkillActive ? 'tile'
-      : mode === 'dashboard' ? 'dashboard' : 'app'
-  const isDashboardMode = effectiveToolType === 'dashboard'
+  const promptSlashIds = extractSlashSkillIds(rawUserPrompt !== undefined ? rawUserPrompt : userPrompt)
+  const activeSlashIds = Array.from(new Set([...(activatedLookmlSkills || []), ...promptSlashIds]))
+  const canUseLookmlBridge = canDevelop === false
+    ? false
+    : Boolean(canDevelop || developableProjects?.length || canDeploy || lookmlProjectId?.trim() || session.usedBridgeTool)
 
   const conversationId = toSafeConversationId(rawConversationId, session)
   const appDir = `/workspace/apps/${conversationId}`
@@ -312,40 +298,22 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       })
     : null
 
-  const isDataInvestigatorTurn =
-    useCase === 'data-investigator' || (useCase === 'auto' && extractResolvedUseCase('', userPrompt, allowedModes) === 'data-investigator')
   const isKdaSkillActive =
-    isDataInvestigatorTurn ||
-    /(?:^|\s)\/key-driver-analysis(?=\s|$)/i.test(userPrompt) ||
-    (activatedLookmlSkills || []).includes('key-driver-analysis')
+    activeSlashIds.includes('key-driver-analysis') || activeSlashIds.includes('data-investigator')
   const kdaGuideSuffix = isKdaSkillActive
     ? `\n\n${KDA_SKILL_MD}\n\nIMPORTANT: All kda_toolkit.py helpers (resolve_source, inspect_explore_for_kda, analyze_target, run_kda, drill_top_driver, print_kda_summary) are pre-loaded directly inside run_looker_codemode! Call resolve_source({"dashboard_id": "..."}) + inspect_explore_for_kda(m, e) + analyze_target(...) in ONE run_looker_codemode call instead of manually looping over dashboard elements.`
     : ''
 
-  const dataAppOrNativeGuide =
-    (mode === 'dashboard'
-      ? buildNativeContentGuide({ selectedExplores, primaryModel, primaryExplore, folderId: folderId || '1', lookmlProjectId: lookmlProjectId || '', existingNativeContent: normalizedExistingNative })
-      : [
-          `You are building a Looker ${isDataInvestigatorTurn ? 'Data Investigator Narrative Data App' : 'Data App'} (Lit web component using Looker's data-app.js runtime) ${exploreDirective}`,
-          `Follow these exact steps inside your Linux sandbox:`,
-          `1. /workspace/skills/data-apps/SKILL.md${isDataInvestigatorTurn ? ' and /workspace/skills/data-investigator/SKILL.md are' : ' is'} pre-loaded below with component contracts (<app-kpi>, <app-chart>, <app-grid>, <app-select>), .da-* layout classes, dark mode (this.isDark), and static widget extraction rules. Do NOT call view_file on /workspace/skills/data-apps/SKILL.md, download toolkits, or read external skill directories.`,
-          DATA_APP_GUIDE_MD,
-          ...(isDataInvestigatorTurn ? [DATA_INVESTIGATOR_GUIDE_MD] : []),
-          step2Directive,
-          step3Directive,
-          `4. If bundle_app.py reports any syntax or tile safety violation, fix ${appFilePath} and re-run \`python3 /workspace/bundle_app.py ${appFilePath} "<App Title>"\` until it exits 0.`,
-          `5. CRITICAL: bundle_app.py prints \`<DATA_APP_BUNDLE>...</DATA_APP_BUNDLE>\` directly to stdout, which the host captures automatically from tool output and publishes to a Looker dashboard. NEVER echo \`<DATA_APP_BUNDLE>\`, raw JavaScript code, \`.js\` links (\`[app.js](file://...)\`), \`/workspace/...\` paths, or \`.js\` filenames in your final text reply—respond with a concise summary of what you built (views, KPIs, and interactive controls).`,
-        ].join('\n')) + kdaGuideSuffix
-
   const isLookmlOnboardingIntake =
-    !isNoOpTurn && effectiveLookmlIntent && !lookmlProjectId?.trim() && isNewProjectOnboardingIntakePrompt(userPrompt, priorMessages, images)
+    !isNoOpTurn && canUseLookmlBridge && !lookmlProjectId?.trim() && isNewProjectOnboardingIntakePrompt(userPrompt, priorMessages, images)
   const isLookmlSchemaDiscovery =
-    !isNoOpTurn && !isLookmlOnboardingIntake && effectiveLookmlIntent && isConnectionSchemaDiscoveryPrompt(userPrompt)
-  const isToollessTurn = isLookmlOnboardingIntake || isNoOpTurn
-  const requiresBashSandbox = !isToollessTurn && !isLookmlSchemaDiscovery && !isDashboardMode && effectiveToolType !== 'tile'
+    !isNoOpTurn && !isLookmlOnboardingIntake && canUseLookmlBridge && isConnectionSchemaDiscoveryPrompt(userPrompt)
+  const isAuditOnlyTurn = !isNoOpTurn && promptSlashIds.length === 1 && promptSlashIds[0] === 'looker-audit'
+  const isToollessTurn = isLookmlOnboardingIntake || (isNoOpTurn && isFreshConversation)
+  const requiresBashSandbox = !isToollessTurn && !isNoOpTurn && !isLookmlSchemaDiscovery && !isAuditOnlyTurn
 
   let resolvedAvailableConnections = providedConnections
-  if ((isLookmlOnboardingIntake || (effectiveLookmlIntent && !lookmlProjectId?.trim())) && resolvedAvailableConnections === undefined && sdk) {
+  if ((isLookmlOnboardingIntake || (canUseLookmlBridge && !lookmlProjectId?.trim() && activeSlashIds.includes('looker-project-onboarding'))) && resolvedAvailableConnections === undefined && sdk) {
     const connStart = Date.now()
     const fetchedConns = await discoverAccessibleConnections(sdk)
     initialLookerHttpMs += Date.now() - connStart
@@ -353,17 +321,60 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     resolvedAvailableConnections = formatAccessibleConnectionsMarkdown(fetchedConns)
   }
 
+  const lookmlSlashSkills = activeSlashIds.filter(
+    (id) => !['looker-audit', 'data-apps', 'data-investigator', 'key-driver-analysis', 'looker-dashboard', 'looker-alerts'].includes(id)
+  )
+  const hasExplicitLookmlContext = Boolean(lookmlProjectId?.trim() || lookmlSlashSkills.length > 0)
+  const lookmlGuideSection =
+    canUseLookmlBridge && hasExplicitLookmlContext
+      ? `\n\n${buildLookmlSystemGuide({
+          selectedExplores, primaryModel, primaryExplore, projectId: lookmlProjectId,
+          activatedSkills: lookmlSlashSkills, userPrompt, developableProjects, canDeploy,
+          availableConnections: resolvedAvailableConnections,
+        })}`
+      : canUseLookmlBridge
+      ? `\n\n## LookML Development Workspace (\`/workspace/lookml\`)\nLookML development is permitted (${developableProjects?.length ? `projects: ${developableProjects.join(', ')}` : 'full access'}${canDeploy === false ? ', deploy disabled' : ''}). When authoring or onboarding LookML, consult \`/workspace/skills/agentic-lookml/SKILL.md\` or \`/workspace/skills/looker-project-onboarding/SKILL.md\`, validate via \`lkr parse lookml-to-api --path /workspace/lookml --validate\`, push via \`lkr --dev tools lookml push\`, and emit \`<LOOKML_BUNDLE>\` via \`python3 /workspace/bootstrap_lookml.py bundle\`.`
+      : ''
+
+  const nativeGuideSection = buildNativeContentGuide({
+    selectedExplores, primaryModel, primaryExplore, folderId: folderId || '1',
+    lookmlProjectId: lookmlProjectId || '', existingNativeContent: normalizedExistingNative,
+  })
+
+  const extraFreshSlashDocs = [
+    ...(activeSlashIds.includes('looker-audit') && BUILTIN_SKILLS_FILES['looker-audit'] ? [BUILTIN_SKILLS_FILES['looker-audit']] : []),
+    ...(activeSlashIds.includes('looker-alerts') && BUILTIN_SKILLS_FILES['looker-alerts'] ? [BUILTIN_SKILLS_FILES['looker-alerts']] : []),
+    ...(activeSlashIds.includes('data-investigator') ? [DATA_INVESTIGATOR_GUIDE_MD] : []),
+  ]
+
+  const unifiedStudioGuide = [
+    AGENTS_MD,
+    `You are operating in an open-ended Looker Studio conversation ${exploreDirective}`,
+    `## Data Apps & Narrative Investigations (\`${appFilePath}\`)`,
+    `1. When building or updating a Lit Data App or Data Investigator narrative app, \`/workspace/skills/data-apps/SKILL.md\` is pre-loaded below (for narrative investigations also consult \`/workspace/DATA_INVESTIGATOR_GUIDE.md\` and \`/workspace/skills/key-driver-analysis/SKILL.md\`). Do NOT call \`view_file\` on \`/workspace/skills/data-apps/SKILL.md\`.`,
+    DATA_APP_GUIDE_MD,
+    step2Directive,
+    step3Directive,
+    `4. If bundle_app.py reports any syntax or tile safety violation, fix ${appFilePath} and re-run \`python3 /workspace/bundle_app.py ${appFilePath} "<App Title>"\` until it exits 0.`,
+    `5. CRITICAL: bundle_app.py prints \`<DATA_APP_BUNDLE>...</DATA_APP_BUNDLE>\` directly to stdout, which Studio captures automatically and publishes to a Looker dashboard (\`/dashboards/<id>\`). NEVER claim an app is live in the right pane without running \`bundle_app.py\`, and NEVER echo \`<DATA_APP_BUNDLE>\`, raw JS code, \`.js\` links, or \`/workspace/...\` paths in your text reply.`,
+    '',
+    `## Native Looker Dashboards, Looks & Boards (\`target_folder_id="${folderId || '1'}"\`)`,
+    nativeGuideSection,
+    lookmlGuideSection,
+    ...extraFreshSlashDocs,
+  ].filter(Boolean).join('\n') + kdaGuideSuffix
+
   const systemGuide =
     customSystemGuide ||
-    (effectiveLookmlIntent || isLookmlOnboardingIntake
+    (isLookmlOnboardingIntake
       ? buildLookmlSystemGuide({
           selectedExplores, primaryModel, primaryExplore, projectId: lookmlProjectId,
-          activatedSkills: (activatedLookmlSkills || []).filter((id) => id !== 'looker-audit'), userPrompt, developableProjects, canDeploy,
+          activatedSkills: lookmlSlashSkills, userPrompt, developableProjects, canDeploy,
           availableConnections: resolvedAvailableConnections,
         })
-      : isAuditSkillActive
+      : isAuditOnlyTurn && BUILTIN_SKILLS_FILES['looker-audit']
       ? BUILTIN_SKILLS_FILES['looker-audit']
-      : dataAppOrNativeGuide)
+      : unifiedStudioGuide)
 
   const uploadSources: Array<{ type: 'inline'; content: string; target: string }> = []
   const uploadedFileNotices: string[] = []
@@ -385,48 +396,59 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     }
   }
 
-  // ponytail: omit { type: 'code_execution' } and blocking container boot on toolless intake / no-op turns
-  // and CodeMode-only turns (/dashboard, Turn-2 connection_schemas discovery, /tile).
-  // Retain LKR_CLI_BRIDGE_TOOL on warm turns after LookML turns so previous_interaction_id history replays stay valid.
-  const autoCanLookml =
-    useCase === 'auto' && (!allowedModes || allowedModes.includes('lookml')) && Boolean(developableProjects?.length || canDeploy)
   const keepLookmlBridgeTool =
     !isFreshConversation &&
-    Boolean(session.usedBridgeTool || ((session.toolType === 'lookml' || lookmlProjectId?.trim()) && Boolean(session.environmentId)))
-  const activeTools = isLookmlOnboardingIntake || (isNoOpTurn && isFreshConversation)
+    Boolean(session.usedBridgeTool || (lookmlProjectId?.trim() && Boolean(session.environmentId)))
+  const activeTools = isToollessTurn
     ? []
-    : isNoOpTurn || (keepLookmlBridgeTool && (isDashboardMode || !requiresBashSandbox))
-    ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL, ...(keepLookmlBridgeTool ? [LKR_CLI_BRIDGE_TOOL] : [])]
-    : isDashboardMode
-    ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
     : !requiresBashSandbox
-    ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL]
+    ? [LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL, ...(keepLookmlBridgeTool ? [LKR_CLI_BRIDGE_TOOL] : [])]
     : [
         { type: 'code_execution' },
         LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL,
-        ...(effectiveToolType === 'lookml' || keepLookmlBridgeTool || autoCanLookml ? [LKR_CLI_BRIDGE_TOOL] : []),
+        ...(canUseLookmlBridge || keepLookmlBridgeTool ? [LKR_CLI_BRIDGE_TOOL] : []),
       ]
 
-  const autoMatchedUseCase = useCase === 'auto' ? matchExplicitUseCaseRule(userPrompt, allowedModes) : null
-  const canUseWarmAppFastPath =
-    !isNoOpTurn && !effectiveLookmlIntent && !isAuditSkillActive && !isDataInvestigatorTurn &&
-    mode === 'data_app' && Boolean(existingAppCode?.trim()) && (useCase !== 'auto' || !autoMatchedUseCase || autoMatchedUseCase === 'app')
+  const warmSlashDocs = !isFreshConversation
+    ? promptSlashIds
+        .map((id) =>
+          id === 'data-investigator' ? DATA_INVESTIGATOR_GUIDE_MD
+            : id === 'key-driver-analysis' ? KDA_SKILL_MD
+            : BUILTIN_SKILLS_FILES[id] || ''
+        )
+        .filter(Boolean)
+    : []
+  const warmStateLines: string[] = []
+  if (!isFreshConversation && !isNoOpTurn) {
+    if (existingAppCode?.trim()) {
+      const pubSuffix = existingPublishedApp?.dashboardId
+        ? ` (published at /dashboards/${existingPublishedApp.dashboardId}${existingPublishedApp.title ? ` — "${existingPublishedApp.title}"` : ''})`
+        : ''
+      warmStateLines.push(
+        `- Active Data App: ${appFilePath}${pubSuffix} is already in /workspace. If updating this Data App, edit ${appFilePath} and bundle in ONE code_execution call via: python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'`
+      )
+    } else {
+      warmStateLines.push(
+        `- Data App target path: ${appFilePath} (no Data App published yet in this conversation — if building a Data App on this turn, including follow-ups like "Continue?", you MUST write ${appFilePath} and run \`python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\` so <DATA_APP_BUNDLE> is emitted; NEVER claim an app is live in the right pane without running bundle_app.py).`
+      )
+    }
+    if (normalizedExistingNative) {
+      warmStateLines.push(
+        `- Active Looker ${normalizedExistingNative.contentType}: id="${normalizedExistingNative.id}" ("${normalizedExistingNative.title}", pre-injected in run_looker_codemode vars as active_content; update via upsert_udd / upsert_lookml_dashboard / reflow_24col / pin_to_board / schedule_dashboard + return emit_native_bundle(...)).`
+      )
+    }
+    if (lookmlProjectId?.trim()) {
+      warmStateLines.push(
+        `- Active LookML project: "${lookmlProjectId}" in /workspace/lookml (ensure \`command -v lkr >/dev/null 2>&1 || python3 /workspace/bootstrap_lookml.py cli\` before running lkr).`
+      )
+    }
+  }
   const warmTurnDirective =
-    !isNoOpTurn && isAuditSkillActive
-      ? `${systemGuide}\n\n`
-      : canUseWarmAppFastPath
-      ? `[WARM SANDBOX FAST PATH: ${appFilePath} and the discovered Looker schema are already in /workspace.${useCase === 'auto' ? ' If this turn updates or builds a Data App, do' : ' Do'} NOT re-run run_looker_codemode discovery or re-read guides unless a brand-new explore is requested; update ${appFilePath} and bundle in ONE code_execution call via: python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\n...\nEOF\n${useCase === 'auto' ? 'If this turn switches to another workflow (KDA, LookML, Dashboard, Tile, or Q&A), follow that workflow instead. ' : ''}NEVER echo <DATA_APP_BUNDLE> in your text reply.]\n\n`
-      : !isNoOpTurn && isDashboardMode && normalizedExistingNative
-      ? `[WARM CONTENT STUDIO FAST PATH: Active Looker ${normalizedExistingNative.contentType} id="${normalizedExistingNative.id}" ("${normalizedExistingNative.title}") and pre-hydrated active_content (element_ids=${JSON.stringify(normalizedExistingNative.elementIds || [])}, filter_names=${JSON.stringify(normalizedExistingNative.filterNames || [])}, lookml_dashboard_id="${normalizedExistingNative.lookmlDashboardId || ''}", project_id="${normalizedExistingNative.projectId || lookmlProjectId || ''}") are pre-injected in run_looker_codemode vars. Execute the update in ONE run_looker_codemode call using upsert_udd / upsert_lookml_dashboard / reflow_24col / pin_to_board / schedule_dashboard + return emit_native_bundle(...). NEVER echo <NATIVE_CONTENT_BUNDLE> in your text reply.]\n\n`
-      : !isNoOpTurn && ((isDashboardMode && !normalizedExistingNative) || isDataInvestigatorTurn || (Boolean(session.toolType) && session.toolType !== effectiveToolType))
-      ? `${systemGuide}${requiresBashSandbox && effectiveLookmlIntent ? `\n\n[WARM LOOKML SANDBOX: Before running \`lkr\`, ensure \`command -v lkr >/dev/null 2>&1 || python3 /workspace/bootstrap_lookml.py cli\` so \`/usr/local/bin/lkr\` is linked from \`/workspace/.uv_tools\`.]` : ''}\n\n`
-      : !isNoOpTurn && requiresBashSandbox && effectiveLookmlIntent
-      ? `[WARM LOOKML SANDBOX: Before running \`lkr\`, ensure \`command -v lkr >/dev/null 2>&1 || python3 /workspace/bootstrap_lookml.py cli\` so \`/usr/local/bin/lkr\` is linked from \`/workspace/.uv_tools\`.]\n\n`
-      : ''
-
-  const autoRoutingDirective =
-    useCase === 'auto'
-      ? `\n\n[AUTO USE-CASE ROUTING: Consult /workspace/AGENTS.md ("## Use Case Auto-Classification (Turn 1 Routing)"). Allowed use cases for this user: ${JSON.stringify(allowedModes && allowedModes.length > 0 ? allowedModes : ['app', 'data-investigator', 'dashboard', 'lookml', 'health-check', 'tile', 'conversational-analytics'])}. Start your response with <USE_CASE>...</USE_CASE> naming the single best allowed use case, then execute that workflow. CRITICAL: (1) Conversational/Follow-Up No-Op: for greetings, help, meta/error summaries, or follow-up questions not requesting a right-pane artifact, answer directly in chat with zero tools and do NOT run bundle_app.py, emit_native_bundle, or redirect to CA. (2) Ad-Hoc Looker Instance/Folder/Content/SDK Queries (<USE_CASE>tile</USE_CASE>): route folder, personal space, favorite, user, permission, schedule, or metadata lookups to <USE_CASE>tile</USE_CASE> via run_looker_codemode (use format_content_inventory(folders) for clickable /dashboards/<id>, /looks/<id>, /folders/<id> links, max 2 per folder when >5 items or multiple folders, saving full list to /workspace/content_inventory.md) without creating a right-pane Script unless asked, and offer to save as a reusable Script. (3) Open-Ended Analytical Questions: when no explore is pre-selected, call search_agents() in run_looker_codemode; if a CA agent covers it, emit <USE_CASE>conversational-analytics</USE_CASE> and <CA_AGENT_SELECTION>{"agent_id":"<matched_id>","rationale":"<1-sentence reason>"}</CA_AGENT_SELECTION>; else answer via run_inline_query. (4) Data Investigator: route "investigate"/"find out"/"figure out"/"dig into"/"what drove"/"what caused" prompts to <USE_CASE>data-investigator</USE_CASE> using /workspace/skills/data-investigator/SKILL.md and /workspace/skills/key-driver-analysis/SKILL.md.]`
+    !isFreshConversation && !isNoOpTurn
+      ? [
+          `[ACTIVE WORKSPACE STATE (target_folder_id="${folderId || '1'}"):\n${warmStateLines.join('\n')}]`,
+          ...warmSlashDocs,
+        ].join('\n\n') + '\n\n'
       : ''
 
   const uploadsSection = uploadedFileNotices.length > 0 ? `\n\nAttached files in /workspace/uploads:\n${uploadedFileNotices.join('\n')}` : ''
@@ -458,8 +480,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       {
         type: 'text',
         text: fresh
-          ? `${thinkingDirective}${systemGuide}${autoRoutingDirective}${historyDigest}\n\nUser request:\n${wrappedUserRequest}${uploadsSection}`
-          : `${thinkingDirective}${warmTurnDirective}${autoRoutingDirective ? `${autoRoutingDirective.trim()}\n\n` : ''}User request:\n${wrappedUserRequest}${uploadsSection}`,
+          ? `${thinkingDirective}${systemGuide}${historyDigest}\n\nUser request:\n${wrappedUserRequest}${uploadsSection}`
+          : `${thinkingDirective}${warmTurnDirective}User request:\n${wrappedUserRequest}${uploadsSection}`,
       },
       ...(images || [])
         .filter((img) => img.mimeType.startsWith('image/') || img.mimeType === 'application/pdf')
@@ -480,7 +502,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     environment: {
       type: 'remote',
       sources: buildWorkspaceSources({
-        schemaMarkdown, appFilePath, existingAppCode: mode === 'data_app' ? existingAppCode : undefined,
+        schemaMarkdown, appFilePath, existingAppCode,
         cachedExploreSchemas: getSharedEnvExploreSchemas(activeEnvId), extraSources: [...(extraSources || []), ...uploadSources],
       }),
     },
@@ -497,7 +519,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   const cleanResumeId = String(resumeInteractionId || '').trim()
   if (signal?.aborted) await throwIfAborted()
   onStatus(cleanResumeId ? 'Resuming in-flight turn...' : isLookmlOnboardingIntake ? 'Checking accessible Looker connections...' : 'Starting Antigravity sandbox interaction...')
-  if (!cleanResumeId && !activeEnvId && inFlightEnvProvisionByUser.has(userProvisionKey) && (requiresBashSandbox || isDashboardMode)) {
+  if (!cleanResumeId && !activeEnvId && inFlightEnvProvisionByUser.has(userProvisionKey) && !isToollessTurn) {
     try {
       const coalescedId = normalizeEnvironmentId(await inFlightEnvProvisionByUser.get(userProvisionKey)!)
       if (coalescedId) activeEnvId = coalescedId
@@ -505,8 +527,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   }
   if (!cleanResumeId && warmEnvironmentInBackground && !requiresBashSandbox && !activeEnvId && !inFlightEnvProvisionByUser.has(userProvisionKey)) {
     void prewarmOrWakeAntigravityEnvironment({
-      sdk, userId, extensionSDK, auth, toolType: effectiveToolType, model: activeModel, maxTotalTokens: resolvedMaxTokens,
-      selectedExplores, schemaMarkdown, existingAppCode: mode === 'data_app' ? existingAppCode : undefined, onEnvironmentUpdated,
+      sdk, userId, extensionSDK, auth, toolType: 'app', model: activeModel, maxTotalTokens: resolvedMaxTokens,
+      selectedExplores, schemaMarkdown, existingAppCode, onEnvironmentUpdated,
     }).catch(() => {})
   }
   if (signal?.aborted) await throwIfAborted()
@@ -586,8 +608,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     sdk, extensionSDK, auth, initialInteraction, initialTrackedEnvId, agentConfig, activeTools, maxToolRounds,
     pollScheduleMs, signal, throwIfAborted, onInteractionCreated, onProgressSteps, onStatus,
     effectivePermissionHandler, requirePermission, approvedOperations, conversationId, rawConversationId,
-    defaultCodeModeVars, isKdaSkillActive, isDashboardMode, toolMode, mode, useCase, effectiveLookmlIntent,
-    isNoOpTurn, isDataInvestigatorTurn, userPrompt, activatedLookmlSkills,
+    defaultCodeModeVars, isKdaSkillActive, canUseLookmlBridge,
+    isNoOpTurn, userPrompt, activatedLookmlSkills,
     requiresBashSandbox, appDir, initialLookerHttpMs, initialLookerHttpCalls, initialApiRetries,
   })
   const {
@@ -596,14 +618,25 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   } = loopRes
   const thinkingDurationSec = Math.max(1, Math.round((Date.now() - turnStartMs) / 1000))
 
-  let bundle =
-    mode === 'data_app' || useCase === 'auto'
-      ? extractBundleFromInteraction(interaction)
-      : null
+  let bundle = extractBundleFromInteraction(interaction)
   const refBundleTitle = bundle?.title
   const refBundleWidgets = bundle?.widgets
   bundle = await hydrateDataAppBundleRef(bundle, { extensionSDK, auth, environmentId: trackedEnvId })
-  if (!bundle && (mode === 'data_app' || useCase === 'auto') && isDataAppBundleTurn()) {
+  if (!bundle && isDataAppBundleTurn()) {
+    const stepsJson = JSON.stringify(interaction.steps || [])
+    const matchedBundleRefs = stepsJson.match(/\/workspace\/apps\/[A-Za-z0-9_-]+\/bundle\.json/g)
+    const bundleRefCandidates = trackedEnvId
+      ? Array.from(new Set((matchedBundleRefs || []).slice().reverse().concat(`${appDir}/bundle.json`)))
+      : []
+    for (const bundleRefPath of bundleRefCandidates) {
+      bundle = await hydrateDataAppBundleRef(
+        { __bundle_ref__: bundleRefPath } as unknown as DataAppBundle,
+        { extensionSDK, auth, environmentId: trackedEnvId }
+      )
+      if (bundle) break
+    }
+  }
+  if (!bundle && isDataAppBundleTurn()) {
     const stepWrittenSource = (interaction.steps || []).slice().reverse().map((st) => {
       const a = parseStepArguments(st?.arguments ?? st?.args)
       const p = String(a.TargetFile || a.target_file || a.path || a.file_path || a.filename || '')
@@ -661,10 +694,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     }
     if (!bundle && stepWrittenSource) bundle = toRecoveredBundle(stepWrittenSource)
   }
-  const nativeBundle =
-    mode === 'dashboard' || useCase === 'auto'
-      ? extractNativeContentFromInteraction(interaction)
-      : null
+  const nativeBundle = extractNativeContentFromInteraction(interaction)
   let lookmlBundle = extractLookmlBundleFromInteraction(interaction)
   const bundleRefPath = (lookmlBundle as unknown as { __bundle_ref__?: string } | null)?.__bundle_ref__
   if (bundleRefPath && trackedEnvId) {
@@ -683,34 +713,11 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     }
   }
   const alertBundle = extractAlertBundleFromInteraction(interaction)
+  const caSelection = extractCaSelectionFromInteraction(interaction)
   const tddMarkdown = extractTddFromInteraction(interaction)
   const rawText = extractInteractionOutputText(interaction)
-  const combinedOutput = `${rawText}\n${collectInteractionTextCandidates(interaction)}`
-  const hasExplicitUseCaseTag = /<USE_CASE>\s*[^<]+?\s*<\/USE_CASE>/i.test(combinedOutput)
-  const inferredFromOutput = extractResolvedUseCase(combinedOutput, userPrompt, allowedModes)
-  const resolvedUseCase: ResolvedStudioUseCase =
-    useCase && useCase !== 'auto' && !hasExplicitUseCaseTag
-      ? useCase
-      : hasExplicitUseCaseTag
-      ? inferredFromOutput
-      : lookmlBundle
-      ? 'lookml'
-      : nativeBundle
-      ? 'dashboard'
-      : alertBundle
-      ? 'tile'
-      : tddMarkdown
-      ? 'health-check'
-      : bundle
-      ? inferredFromOutput === 'data-investigator'
-        ? 'data-investigator'
-        : 'app'
-      : inferredFromOutput
   const strippedAssistantText = stripControlTags(rawText)
-  const cleanAssistantText =
-    bundle || (!isNoOpTurn && (resolvedUseCase === 'app' || resolvedUseCase === 'data-investigator'))
-      ? sanitizeDataAppAssistantText(strippedAssistantText)
-      : strippedAssistantText
+  const cleanAssistantText = bundle ? sanitizeDataAppAssistantText(strippedAssistantText) : strippedAssistantText
 
   const telemetry = extractInteractionTelemetry(interaction, {
     agentWallMs: Date.now() - turnStartMs,
@@ -739,6 +746,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : nativeBundle ? `Built "${nativeBundle.title}".`
       : lookmlBundle ? `Updated LookML "${lookmlBundle.title}".`
       : alertBundle ? `Configured Looker alert "${alertBundle.custom_title || alertBundle.title || alertBundle.alert_id}".`
+      : caSelection ? `Routed to Looker Conversational Analytics agent "${caSelection.agentName || caSelection.agentId}".`
       : tddMarkdown ? 'Synthesized 7-section Technical Design Document (TECHNICAL_DESIGN_DOCUMENT.md).'
       : 'Done.')
   const lookmlPid = cleanLookmlProjectId(lookmlBundle?.project_id)
@@ -750,6 +758,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     const dashId = nativeBundle.embed_path?.match(/\/dashboards\/([^/?#\s]+)/)?.[1] || (nativeBundle as NativeContentBundle & { dashboard_id?: string }).dashboard_id || nativeBundle.id
     if ((ct === 'dashboard' || ct === 'lookml_dashboard') && dashId && !/\/dashboards\/[^\s)]+/i.test(finalAssistantText)) {
       finalAssistantText = `${finalAssistantText}\n\n[Open ${nativeBundle.title || 'Dashboard'}](/dashboards/${dashId})`
+    } else if (ct === 'look' && nativeBundle.id && !/\/looks\/[^\s)]+/i.test(finalAssistantText)) {
+      finalAssistantText = `${finalAssistantText}\n\n[Open ${nativeBundle.title || 'Look'}](/looks/${encodeURIComponent(nativeBundle.id)})`
     }
   }
 
@@ -758,8 +768,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     nativeBundle,
     lookmlBundle,
     alertBundle,
+    caSelection,
     tddMarkdown,
-    resolvedUseCase,
     rootInteractionId: providedRootId || initialInteraction.id,
     rawOutputText: rawText,
     assistantText: finalAssistantText,
@@ -774,7 +784,6 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         : {}),
       conversationId,
       explores: selectedExplores,
-      toolType: effectiveToolType,
     },
     telemetry,
     activitySteps,
