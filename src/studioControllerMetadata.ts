@@ -34,7 +34,7 @@ export interface StudioViewerDocument {
 export function useStudioMetadata(auth: StudioAuthAndPrefs) {
   const {
     extensionSDK, core40SDK, history, location, isTileMount, mockExt, disabledModes,
-    setAgentName, setAppInitializing, setCapabilities, setMessages, setExpiredConversationNotice,
+    setAgentName, setAppInitializing, setCapabilities, pushToast, setExpiredConversationNotice,
     parsedRoute, availableModels,
     oauthAccessToken, oauthTokenRef, clientId, projectId, apiKey, selectedModel, triggerSilentOAuthRefresh,
     sharedEnvIdRef, syncSharedEnvironmentId, agentSession, messages,
@@ -402,16 +402,17 @@ export function useStudioMetadata(auth: StudioAuthAndPrefs) {
         fetchPreloadedContentSummary(core40SDK).then((items) => { if (mounted) setPreloadedContent(items) }).catch(() => {})
       })
       .catch((err: unknown) => {
+        if (!mounted) return
         const extMock = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
         if (!extMock?.forceFolderSkeleton) setLoadingMetadata(false)
-        setMessages((prev) => [...prev, { role: 'error', text: `Failed to load Looker models: ${getErrorMessage(err)}` }])
+        pushToast({ tone: 'error', message: `Failed to load Looker models: ${getErrorMessage(err)}` })
       })
       .finally(() => {
         const extMock = typeof window !== 'undefined' ? window.__MOCK_LOOKER_EXTENSION__ : undefined
         if (mounted && !extMock?.forceAppInitializing) setAppInitializing(false)
       })
     return () => { mounted = false }
-  }, [artifactService, core40SDK, extensionSDK, history, syncSharedEnvironmentId, hydrateFolderAncestors, loadFolderChildren, mutateConversations, setAgentName, setAppInitializing, setCapabilities, setExpiredConversationNotice, setMessages])
+  }, [artifactService, core40SDK, extensionSDK, history, syncSharedEnvironmentId, hydrateFolderAncestors, loadFolderChildren, mutateConversations, pushToast, setAgentName, setAppInitializing, setCapabilities, setExpiredConversationNotice])
 
   useEffect(() => {
     let mounted = true

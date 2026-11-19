@@ -126,13 +126,14 @@ export function prewarmOrWakeAntigravityEnvironment(params: {
   existingAppCode?: string
   extraSources?: Array<{ type: 'inline'; content: string; target: string }>
   forceFresh?: boolean
+  rethrowOnError?: boolean
   onEnvironmentUpdated?: (environmentId: string, sourcesHash?: string) => void | Promise<void>
 }): Promise<{ session: AgentSession; status: 'woken' | 'prelaunched' | 'standby' }> {
   const {
     sdk, userId, extensionSDK, auth, toolType = 'app', model = DEFAULT_ANTIGRAVITY_MODEL,
     maxTotalTokens = DEFAULT_MAX_TOTAL_TOKENS, environmentId, conversationId: rawConversationId,
     existingSession, selectedExplores = [], schemaMarkdown = '', existingAppCode, extraSources = [],
-    forceFresh = false, onEnvironmentUpdated,
+    forceFresh = false, rethrowOnError = false, onEnvironmentUpdated,
   } = params
   const appFilePath = `/workspace/apps/${toSafeConversationId(rawConversationId, existingSession)}/app.js`
   const initialEnvId = forceFresh ? undefined : normalizeEnvironmentId(environmentId || existingSession?.environmentId)
@@ -203,7 +204,10 @@ export function prewarmOrWakeAntigravityEnvironment(params: {
             },
           }))
         })
-      }).catch(standby)
+      }).catch((err) => {
+        if (rethrowOnError) throw err
+        return standby()
+      })
 
     return coalesceStep.then(() => {
       if (!activeEnvId) return provisionFresh()
@@ -218,6 +222,7 @@ export function prewarmOrWakeAntigravityEnvironment(params: {
         },
         (err) => {
           if (!isEnvironmentNotFoundError(err)) {
+            if (rethrowOnError) throw err
             return { session: { ...existingSession, environmentId: currentEnvId, explores: selectedExplores, toolType }, status: 'woken' as const }
           }
           activeEnvId = undefined

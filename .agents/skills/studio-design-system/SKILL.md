@@ -22,6 +22,7 @@ Use this skill whenever creating, modifying, styling, or testing UI components i
 | **#60** | Native `<select>` menus render with OS-specific chrome that ignores dark mode, custom icons, and optgroup badges, while breaking existing DOM tests if removed outright. | Always use `<StudioSelect>`, which renders a custom accessible `role="listbox"` popover alongside a synchronized hidden `select.dab-studio-select-native[aria-hidden="true"]` for backwards-compatible `.value` inspection. |
 | **#86** | Decorative Unicode emojis (`✨`, `🛡️`, `⚡`, `🟢`, `📊`, `📈`, `🐍`, `📝`, `🧪`, `🔒`, `📁`, `🔍`, `📥`, `🗑️`, etc.) rendered inconsistently across OS fonts and cluttered buttons, badges, and dropdown labels. | Never put decorative emojis in text labels, buttons, tabs, starter prompts, or dropdown options. For directional/semantic UI indicators (folders, search, archive/delete, lock, warning, activity step badges, `/config` `<Info />` popovers via `.dab-info-tooltip-wrap` + `.dab-info-tooltip-btn` + `.dab-info-tooltip` `[data-open="true"]`, never redefining `.dab-info-trigger` `?` buttons), use crisp `lucide-react` SVG icons (`size={13}` or `size={14}`, `strokeWidth={1.75}`, `aria-hidden="true"`) inheriting `currentColor`. |
 | **#112** | Multi-column form grids (`grid-template-columns: 1fr 1fr`) expanded/contracted horizontally when `<StudioSelect>` option labels changed length (`"Any Folder"` vs `"Personal Folders Only"`), causing Cumulative Layout Shift (`CLS`). | **Zero Layout Shift (CLS) on Dynamic Select / Grid Controls**: Always use `grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)` (never bare `1fr`) on form/modal grids and set `min-width: 0; width: 100%` on `.dab-modal-row`, `.dab-modal-row > .dab-studio-select`, and `.dab-modal-row .dab-studio-select-trigger` so selecting options of varying text length produces `0px` column width shift. |
+| **#238** | Appending non-conversation UI/system/OAuth/config/metadata/loader errors into `messages` (`{ role: 'error' }`) polluted chat transcripts or vanished invisibly on `/config`, while transparent dark-mode status backgrounds bled over underlying UI. | Route all non-conversation system, environment, OAuth/config, metadata, and loader errors/notices via `ctl.pushToast(...)` (`<StudioToast>` / `<StudioToastViewport>`, preserving `mockExt.initialError` and active conversation turn errors in `messages`), and composite `--dab-*-bg` over opaque `--dab-surface-elevated`. |
 
 ---
 
@@ -56,6 +57,7 @@ Import all primitives from `./StudioDesignSystem` (or `./StudioHeader`, which re
 
 ```tsx
 import {
+  DEFAULT_TOAST_DURATION_MS,
   RipperLogo,
   StudioButton,
   StudioBadge,
@@ -65,6 +67,8 @@ import {
   StudioSkeleton,
   StudioDocPreview,
   StudioSelect,
+  StudioToast,
+  StudioToastViewport,
 } from './StudioDesignSystem'
 ```
 
@@ -107,6 +111,14 @@ Non-interactive wrapper (`data-testid="doc-ui-preview"`) for live UI components 
 ### `<StudioSelect>`
 Accessible custom dropdown (`role="listbox"`) with a synchronized hidden `<select className="dab-studio-select-native">` for `.value` compatibility.
 - **Submenu Flyout (`StudioSelectOption.subMenu`)**: Pass `subMenu?: { value: string; options: Array<{ value: string; label: string; testId?: string }>; onChange: (val: string) => void; testId?: string }` on any option to render a right-aligned muted value + `›` chevron (`.dab-studio-menu-subtrigger`) and a side flyout menu (`.dab-studio-submenu`, with `.dab-studio-menu.has-submenu { overflow: visible; max-height: none; }` so the side flyout is never clipped).
+
+### `<StudioToast>` & `<StudioToastViewport>` (`StudioToastItem`, `StudioToastTone`, `DEFAULT_TOAST_DURATION_MS`)
+Bottom-right stacking toast notification primitives (`position: fixed; right: 16px; bottom: 16px; z-index: 2100`, `.dab-toast-viewport { pointer-events: none; justify-content: flex-end }`, `.dab-toast { pointer-events: auto; flex-shrink: 0 }`) mounted once in `StudioMain` (`src/components/App.tsx`, re-exported via `src/components/StudioHeader.tsx`) across both `/config` and `.dab-shell`.
+- **Props**: `<StudioToast>` takes `{ toast: StudioToastItem; onDismiss: (id: string) => void }`; `<StudioToastViewport>` takes `{ toasts: StudioToastItem[]; onDismiss: (id: string) => void }` (returning `null` when `toasts` is empty).
+- **Types & Constants**: `DEFAULT_TOAST_DURATION_MS = 10_000` (`10s` default auto-dismiss when `durationMs` is `undefined`; positive finite `durationMs` uses custom timeout; `null` or `<= 0` disables auto-dismiss; active `setTimeout` handles cleaned up via `clearTimeout(timerRef.current)` on unmount and manual dismiss), `StudioToastTone = 'info' | 'success' | 'warning' | 'error'`, `StudioToastItem = { id: string; tone: StudioToastTone; message: string; title?: string; durationMs?: number | null }`.
+- **Icons & Accessibility**: `Info` (`info`), `CheckCircle2` (`success`), `AlertTriangle` (`warning`), `AlertCircle` (`error`) (`size={15}`, `strokeWidth={1.75}`, `aria-hidden="true"`), optional `.dab-toast-title` + wrapping/scrollable `.dab-toast-message` (`max-height: min(180px, 35vh)`), `role={toast.tone === 'error' ? 'alert' : 'status'}`, and manual close button (`×`, `data-testid="studio-toast-dismiss-btn"`, `aria-label="Dismiss notification"`, `title="Dismiss notification"`, `2px solid var(--dab-accent)` `:focus-visible` ring).
+- **Canonical `data-testid`s**: `studio-toast-viewport`, `studio-toast` (`data-toast-id`, `data-toast-tone`), `studio-toast-dismiss-btn`.
+- **Controller Queue (`useStudioAuthAndPrefs`)**: `toasts` (capped at the 5 newest active items), `pushToast({ tone?, message, title?, durationMs? }) => string` (default `tone: 'error'`, empty-message fallback `'Unexpected error.'`), `dismissToast(id)`, `clearToasts()`.
 
 ### Inline Composer Atomic Token Pills (`src/components/StudioComposerTokens.tsx`)
 Committed `/slash` skills and `@mention` items inside `[data-testid="studio-prompt-input"]` (`.dab-composer-editor`, `role="textbox"`, `aria-multiline="true"`) render as `<span contenteditable="false" class="dab-inline-token-pill" data-testid="composer-inline-pill" data-token-kind="slash|mention" data-token-id="..." data-token-value="...">` using `--dab-surface-subtle`, `--dab-border-strong`, and `--dab-text` with a `12px` SVG category icon and bold (`font-weight: 600`) label. Autocomplete option rows must keep `onMouseDown={(e) => e.preventDefault()}` so clicking never blurs the `contentEditable` composer.

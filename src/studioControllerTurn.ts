@@ -37,7 +37,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     activeConversationId, activeConversationIdRef, setActiveConversationId, requirePermissionRef, approvedOpsRef,
     permEpochByConvIdRef, inFlightTurnsRef, convLabelsRef, turnResumerRef, setConvBusyStatus, setConvLiveSteps,
     requestCodeModePermission, registerTurnEntry, finishTurnEntry, abortActiveTurn, abortAllConvTurns, cancelStandaloneForConv,
-    queuedPromptsRef, updateQueuedPrompts, shiftQueuedPromptForConv, setExpiredConversationNotice,
+    queuedPromptsRef, updateQueuedPrompts, shiftQueuedPromptForConv, setExpiredConversationNotice, pushToast,
   } = auth
   const {
     userId, userIdRef, setLookerWorkspaceId, syncLookerSessionWorkspace, availableLookmlProjects, canDevelopLookml, canDeployLookml, loadingMetadata,
@@ -76,25 +76,22 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   wakeContextRef.current = { agentSession, selectedExplores, schemaMarkdown, currentAppCode }
 
   const handleWakeModeEnv = useCallback(
-    async (modeToWake: StudioMode = 'app', forceFresh = false) => {
+    async (modeToWake: StudioMode = 'app', forceFresh = false, rethrow = false) => {
       try {
         const ctx = wakeContextRef.current
         const existingSession: AgentSession = forceFresh ? { toolType: modeToWake } : ctx.agentSession
         const res = await prewarmOrWakeAntigravityEnvironment({
-          sdk: core40SDK, userId: userIdRef.current || userId, extensionSDK,
-          auth: getAuthCfg(),
+          sdk: core40SDK, userId: userIdRef.current || userId, extensionSDK, auth: getAuthCfg(),
           toolType: modeToWake, model: selectedModel, maxTotalTokens,
           environmentId: forceFresh ? undefined : sharedEnvIdRef.current || existingSession?.environmentId,
           existingSession, selectedExplores: ctx.selectedExplores, schemaMarkdown: ctx.schemaMarkdown,
-          existingAppCode: ctx.currentAppCode || undefined,
-          forceFresh, onEnvironmentUpdated: syncSharedEnvironmentId,
+          existingAppCode: ctx.currentAppCode || undefined, forceFresh, rethrowOnError: rethrow, onEnvironmentUpdated: syncSharedEnvironmentId,
         })
-        const nextEnvId = sharedEnvIdRef.current || res.session.environmentId
-        const cur = agentSessionRef.current
+        const nextEnvId = sharedEnvIdRef.current || res.session.environmentId, cur = agentSessionRef.current
         if (forceFresh || cur.environmentId !== nextEnvId || (!cur.lastInteractionId && res.session.lastInteractionId)) {
           setAgentSession(Object.assign({}, cur, res.session, { lastInteractionId: forceFresh ? res.session.lastInteractionId : cur.lastInteractionId || res.session.lastInteractionId, environmentId: nextEnvId }))
         }
-      } catch { /* ignore */ }
+      } catch (err) { if (rethrow) throw err }
     },
     [agentSessionRef, core40SDK, extensionSDK, getAuthCfg, maxTotalTokens, selectedModel, setAgentSession, sharedEnvIdRef, syncSharedEnvironmentId, userId, userIdRef]
   )
@@ -155,9 +152,18 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     [abortAllConvTurns, setAgentSession, sharedEnvIdRef, syncSharedEnvironmentId]
   )
 
+  const isSandboxAuthed = useCallback(
+    () => (auth.authMode === 'apikey' ? Boolean(auth.apiKey.trim() || extensionSDK?.serverProxy) : Boolean(auth.oauthTokenRef.current.trim())),
+    [auth.apiKey, auth.authMode, auth.oauthTokenRef, extensionSDK]
+  )
+
   const handleSyncEnvironmentSkills = useCallback(async (): Promise<void> => {
     const targetEnvId = sharedEnvIdRef.current || auth.sharedEnvironmentId
     if (!targetEnvId || environmentStatusRef.current !== 'active' || hasInFlightTurns) return
+    if (!isSandboxAuthed()) {
+      pushToast({ tone: 'error', message: auth.authMode === 'apikey' ? 'Skill sync failed: Gemini API Key is not configured.' : 'Skill sync failed: Please sign in with Google OAuth first.' })
+      return
+    }
     clearEnvNotices()
     const syncEpoch = ++envLifecycleEpochRef.current
     const ac = new AbortController()
@@ -165,8 +171,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     environmentStatusRef.current = 'syncing'; setEnvironmentStatus('syncing')
     try {
       const res = await syncManagedSkillsIntoEnvironment({
-        sdk: core40SDK, userId: userIdRef.current || userId, extensionSDK,
-        auth: getAuthCfg(),
+        sdk: core40SDK, userId: userIdRef.current || userId, extensionSDK, auth: getAuthCfg(),
         environmentId: targetEnvId, model: selectedModel, signal: ac.signal,
       })
       if (ac.signal.aborted || envLifecycleEpochRef.current !== syncEpoch) return
@@ -180,23 +185,21 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
           setConversations((prev) => prev.filter((c) => !pSet.has(c.id)), { optimisticEntry: null })
           if (pSet.has(activeConversationIdRef.current)) { onResetAppStateRef.current?.(); setExpiredConversationNotice('This conversation expired because its sandbox environment was reset or expired.') }
         }
-        await handleWakeModeEnv('app', true)
+        await handleWakeModeEnv('app', true, true)
         if (ac.signal.aborted || envLifecycleEpochRef.current !== syncEpoch) return
       } else if (sharedEnvIdRef.current === targetEnvId) {
         syncSharedEnvironmentId(targetEnvId, res.sourcesHash)
-      } else {
-        return
-      }
+      } else { environmentStatusRef.current = 'active'; setEnvironmentStatus('active'); return }
       onClearSandboxFileCacheRef.current?.()
       environmentStatusRef.current = 'active'; setEnvironmentStatus('active'); flashEnvNotice('sync')
     } catch (err: unknown) {
       if (ac.signal.aborted || envLifecycleEpochRef.current !== syncEpoch) return
       environmentStatusRef.current = 'active'; setEnvironmentStatus('active')
-      setMessages((prev) => [...prev, { role: 'error', text: `Skill sync failed: ${resetOAuthOnUnauthorized(err)}` }])
+      pushToast({ tone: 'error', message: `Skill sync failed: ${resetOAuthOnUnauthorized(err)}` })
     } finally {
       if (skillSyncAbortRef.current === ac) skillSyncAbortRef.current = null
     }
-  }, [activeConversationIdRef, auth.sharedEnvironmentId, clearEnvNotices, core40SDK, extensionSDK, flashEnvNotice, getAuthCfg, handleWakeModeEnv, hasInFlightTurns, resetOAuthOnUnauthorized, selectedModel, setConversations, setExpiredConversationNotice, setMessages, sharedEnvIdRef, syncSharedEnvironmentId, userId, userIdRef])
+  }, [activeConversationIdRef, auth.authMode, auth.sharedEnvironmentId, clearEnvNotices, core40SDK, extensionSDK, flashEnvNotice, getAuthCfg, handleWakeModeEnv, hasInFlightTurns, isSandboxAuthed, pushToast, resetOAuthOnUnauthorized, selectedModel, setConversations, setExpiredConversationNotice, sharedEnvIdRef, syncSharedEnvironmentId, userId, userIdRef])
 
   const handleResetEnvironment = useCallback((): Promise<void> => {
     setResetEnvModalOpen(false); clearEnvNotices()
@@ -213,17 +216,19 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
     onClearSandboxFileCacheRef.current?.()
     clearAllConvMessages(); clearLookmlSessionCache(); clearHealthCheckSessionCache(); clearSessionAlertCache()
     sharedEnvExploreSchemas.clear(); inFlightEnvProvisionByUser.clear()
-    const finish = () => {
+    const finish = (ok: boolean, err?: unknown) => {
       if (envLifecycleEpochRef.current !== resetEpoch) return
-      environmentStatusRef.current = 'active'; setEnvironmentStatus('active'); flashEnvNotice('reset')
+      environmentStatusRef.current = 'active'; setEnvironmentStatus('active')
+      if (ok) flashEnvNotice('reset')
+      else pushToast({ tone: 'error', message: `Environment reset failed: ${resetOAuthOnUnauthorized(err)}` })
     }
     return Promise.all([
-      uid ? clearAllUserConversations(core40SDK, uid, ns, priorConvIds).catch(() => {}) : Promise.resolve(),
-      saveUserEnvironmentId(core40SDK, uid, '', ns).catch(() => {}),
+      uid ? clearAllUserConversations(core40SDK, uid, ns, priorConvIds) : Promise.resolve(),
+      saveUserEnvironmentId(core40SDK, uid, '', ns),
     ])
-      .then(() => (envLifecycleEpochRef.current === resetEpoch ? handleWakeModeEnv('app', true) : undefined))
-      .then(finish, (err) => { finish(); throw err })
-  }, [auth.queuedPromptsByConvIdRef, clearAllConvMessages, clearAllEnvSessions, clearEnvNotices, conversationsRef, core40SDK, extensionSDK, flashEnvNotice, handleWakeModeEnv, inFlightTurnsRef, setConversations, updateQueuedPrompts, userId, userIdRef])
+      .then(() => (envLifecycleEpochRef.current === resetEpoch && isSandboxAuthed() ? handleWakeModeEnv('app', true, true) : undefined))
+      .then(() => finish(true), (err: unknown) => finish(false, err))
+  }, [auth.queuedPromptsByConvIdRef, clearAllConvMessages, clearAllEnvSessions, clearEnvNotices, conversationsRef, core40SDK, extensionSDK, flashEnvNotice, handleWakeModeEnv, inFlightTurnsRef, isSandboxAuthed, pushToast, resetOAuthOnUnauthorized, setConversations, updateQueuedPrompts, userId, userIdRef])
 
   const handleStopEnvironment = useCallback(() => {
     clearEnvNotices()
