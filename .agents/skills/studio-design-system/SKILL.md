@@ -82,12 +82,12 @@ Theme-aware status badge or message pill.
 
 ### `<StudioModal>`
 Accessible modal dialog shell with backdrop click dismissal, `Escape` key handler, and header/footer slots.
-- **Props**: `open: boolean`, `onClose: () => void`, `title: React.ReactNode`, `subtitle?: React.ReactNode`, `headerRight?: React.ReactNode`, `testId?: string`, `backdropTestId?: string`, `backdropClassName?: string`, `closeTestId?: string`, `closeLabel?: string` (default `'✕'`), `className?: string`, `maxWidth?: number | string`, `footer?: React.ReactNode`, `children: React.ReactNode`.
+- **Props**: `open: boolean`, `onClose: () => void`, `title: React.ReactNode`, `subtitle?: React.ReactNode`, `headerRight?: React.ReactNode`, `testId?: string`, `backdropTestId?: string`, `backdropClassName?: string`, `closeTestId?: string`, `closeLabel?: string` (default `'✕'`), `hideCloseButton?: boolean` (default `false`; omits the top-right header close `<button>` and empty right-action wrapper when a footer `Cancel` button already handles dismissal, while retaining `Escape` and backdrop dismissal), `className?: string`, `maxWidth?: number | string`, `footer?: React.ReactNode`, `children: React.ReactNode`.
 - **Canonical Modal `testId`s**:
   - `folder-advanced-search-modal` (`closeTestId="folder-search-modal-close"`)
   - `studio-capabilities-modal` (`closeTestId="studio-capabilities-close-btn"`)
   - `delete-conv-modal`
-  - `reset-env-modal` (`closeTestId="close-reset-env-modal"`)
+  - `reset-env-modal` (`hideCloseButton` — dismissed via `cancel-reset-env-btn`, `Escape`, or backdrop)
   - `tile-schedule-modal`
   - `sandbox-markdown-preview-modal` (`closeTestId="sandbox-markdown-modal-close"`)
   - `lookml-details-modal` (`LookmlPreviewPane` project/model/branch/validator/tests/parity/summary modal)
