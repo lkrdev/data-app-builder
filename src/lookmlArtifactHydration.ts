@@ -193,7 +193,7 @@ export function extractLookmlDashboardsFromBundle(bundle?: LookmlBundle | null) 
   })
 }
 
-export function getLookmlArtifactKeys(userId: string, id: string) {
+function getLookmlArtifactKeys(userId: string, id: string) {
   const cleanUser = String(userId || 'anon').trim()
   const cleanId = (cleanLookmlProjectId(id) || 'project').replace(/[^a-zA-Z0-9_-]/g, '_')
   return { id: cleanId, userKey: `user_${cleanUser}_lookml_${cleanId}`, objKey: `obj_lookml_${cleanId}` }
@@ -216,15 +216,12 @@ export async function hydrateLookmlFileContent(params: {
   if (auth && environmentId && !/^env_.*_isolated$/i.test(environmentId)) {
     const sandboxCandidates = cleanPath.startsWith('workspace/')
       ? [`/${cleanPath}`]
-      : [
-          ...(cleanProj ? [`/workspace/data/${cleanProj}/lookml/${cleanPath}`] : []),
-          ...(cleanSess && cleanSess !== cleanProj ? [`/workspace/data/${cleanSess}/lookml/${cleanPath}`] : []),
-          `/workspace/lookml/${cleanPath}`,
-          `/workspace/${cleanPath}`,
-        ]
-    for (const sp of sandboxCandidates) {
+      : (cleanProj ? [`/workspace/data/${cleanProj}/lookml/${cleanPath}`] : [])
+          .concat(cleanSess && cleanSess !== cleanProj ? [`/workspace/data/${cleanSess}/lookml/${cleanPath}`] : [])
+          .concat([`/workspace/lookml/${cleanPath}`, `/workspace/${cleanPath}`])
+    for (let i = 0; i < sandboxCandidates.length; i += 1) {
       try {
-        const text = await fetchEnvironmentFile({ extensionSDK, auth, environmentId, path: sp })
+        const text = await fetchEnvironmentFile({ extensionSDK, auth, environmentId, path: sandboxCandidates[i] })
         if (typeof text === 'string' && text.length > 0) return text
       } catch {
         /* fall back to Looker REST */
@@ -232,12 +229,13 @@ export async function hydrateLookmlFileContent(params: {
     }
   }
   if (!cleanProj) return undefined
-  for (const endpoint of [
+  const endpoints = [
     `/projects/${encodeURIComponent(cleanProj)}/file/content`,
     `/projects/${encodeURIComponent(cleanProj)}/files/file/content`,
-  ]) {
+  ]
+  for (let i = 0; i < endpoints.length; i += 1) {
     try {
-      const res = await rawLookerRequest<unknown>(sdk, 'GET', endpoint, {
+      const res = await rawLookerRequest<unknown>(sdk, 'GET', endpoints[i], {
         file_path: cleanPath,
         file_id: cleanPath,
       })
@@ -254,20 +252,20 @@ export async function hydrateLookmlFileContent(params: {
 
 export const hydrateLookmlFileContentOnDemand = hydrateLookmlFileContent
 
-async function hydrateBundleMissingFileContents(
+function hydrateBundleMissingFileContents(
   sdk: Looker40SDK,
   extensionSDK: Partial<ExtensionSDK> | undefined,
   bundle: LookmlBundle,
   opts?: LoadLookmlSessionOptions
 ): Promise<LookmlBundle> {
   const projId = cleanLookmlProjectId(bundle.project_id) || cleanLookmlProjectId(bundle.id)
-  if (!projId || !Array.isArray(bundle.files) || bundle.files.length === 0) return bundle
-  const hydratedFiles = await Promise.all(
-    bundle.files.map(async (f) => {
+  if (!projId || !Array.isArray(bundle.files) || bundle.files.length === 0) return Promise.resolve(bundle)
+  return Promise.all(
+    bundle.files.map((f) => {
       if (!f?.path || f.action === 'deleted' || (typeof f.content === 'string' && f.content.length > 0)) {
-        return ensureFileDiff(f)
+        return Promise.resolve(ensureFileDiff(f))
       }
-      const content = await hydrateLookmlFileContent({
+      return hydrateLookmlFileContent({
         sdk,
         extensionSDK,
         projectId: projId,
@@ -275,11 +273,34 @@ async function hydrateBundleMissingFileContents(
         filePath: f.path,
         auth: opts?.auth,
         environmentId: opts?.environmentId,
-      })
-      return ensureFileDiff(typeof content === 'string' ? Object.assign({}, f, { content }) : f)
+      }).then((content) => ensureFileDiff(typeof content === 'string' ? Object.assign({}, f, { content }) : f))
     })
-  )
-  return Object.assign({}, bundle, { files: hydratedFiles })
+  ).then((hydratedFiles) => Object.assign({}, bundle, { files: hydratedFiles }))
+}
+
+function makeLookmlPayload(
+  id: string,
+  projectId: string,
+  title: string,
+  createdBy: string,
+  bundle: LookmlBundle,
+  studio: { explores?: string[]; lastInteractionId?: string; environmentId?: string },
+  updatedAt = new Date().toISOString()
+): LookmlArtifactPayload {
+  return {
+    id,
+    type: 'lookml',
+    title,
+    project_id: projectId,
+    updatedAt,
+    createdBy,
+    bundle,
+    studio: {
+      explores: studio.explores || [],
+      lastInteractionId: studio.lastInteractionId,
+      environmentId: studio.environmentId,
+    },
+  }
 }
 
 // ponytail: cache LookML bundles in session memory with 0 Looker Artifact writes; cold loads hydrate live from sandbox / Looker IDE API.
@@ -294,12 +315,9 @@ export async function saveLookmlSessionArtifact(params: {
   const namespace = getArtifactNamespace(extensionSDK)
   const rawId = resolveLookmlCanonicalProjectId(bundle)
   const { id, userKey, objKey } = getLookmlArtifactKeys(userId, rawId)
-  const memExisting = sessionLookmlByProject.get(id)
   const existing =
-    memExisting ||
-    (await getArtifactService(sdk, namespace)
-      .get<LookmlArtifactPayload>(objKey)
-      .catch((): null => null))
+    sessionLookmlByProject.get(id) ||
+    (await getArtifactService(sdk, namespace).get<LookmlArtifactPayload>(objKey).catch((): null => null))
   const updatedAt = new Date().toISOString()
   const validProj =
     cleanLookmlProjectId(bundle.project_id) ||
@@ -308,12 +326,14 @@ export async function saveLookmlSessionArtifact(params: {
     id
   const title = `LookML: ${validProj}`
   const explores = studio.explores || existing?.studio?.explores || []
-  const mergedBundle: LookmlBundle = Object.assign({}, existing?.bundle, bundle, {
+  const mergedBundle: LookmlBundle = {
+    ...existing?.bundle,
+    ...bundle,
     id,
     project_id: validProj,
     title: bundle.title || existing?.bundle?.title || title,
     files: mergeLookmlFiles(existing?.bundle?.files, bundle.files),
-  })
+  }
   const index: LookmlSessionIndex = {
     id,
     type: 'lookml',
@@ -326,20 +346,15 @@ export async function saveLookmlSessionArtifact(params: {
     lastInteractionId: studio.lastInteractionId,
     environmentId: studio.environmentId,
   }
-  const payload: LookmlArtifactPayload = {
+  const payload = makeLookmlPayload(
     id,
-    type: 'lookml',
+    validProj,
     title,
-    project_id: validProj,
-    updatedAt,
-    createdBy: String(userId),
-    bundle: mergedBundle,
-    studio: {
-      explores,
-      lastInteractionId: studio.lastInteractionId,
-      environmentId: studio.environmentId,
-    },
-  }
+    String(userId),
+    mergedBundle,
+    { explores, lastInteractionId: studio.lastInteractionId, environmentId: studio.environmentId },
+    updatedAt
+  )
   sessionLookmlByProject.set(id, payload)
   if (validProj && validProj !== id) sessionLookmlByProject.set(validProj, payload)
   return { id, userKey, objKey, index, payload }
@@ -391,25 +406,21 @@ export async function loadLookmlSessionArtifact(
   const sanitizeLoaded = async (p: LookmlArtifactPayload): Promise<LookmlArtifactPayload> => {
     const proj = cleanLookmlProjectId(p.project_id) || cleanLookmlProjectId(p.bundle?.project_id) || undefined
     const rawBundle = p.bundle
-      ? Object.assign({}, p.bundle, {
+      ? {
+          ...p.bundle,
           project_id: cleanLookmlProjectId(p.bundle.project_id) || proj || '',
           id: cleanLookmlProjectId(p.bundle.id) || proj || '',
-        })
+        }
       : p.bundle
-    const hydratedBundle = rawBundle
-      ? await hydrateBundleMissingFileContents(sdk, extensionSDK, rawBundle, opts)
-      : rawBundle
-    const out: LookmlArtifactPayload = Object.assign({}, p, {
-      project_id: proj,
-      bundle: hydratedBundle,
-    })
+    const hydratedBundle = rawBundle ? await hydrateBundleMissingFileContents(sdk, extensionSDK, rawBundle, opts) : rawBundle
+    const out: LookmlArtifactPayload = { ...p, project_id: proj, bundle: hydratedBundle }
     if (proj) sessionLookmlByProject.set(proj, out)
     sessionLookmlByProject.set(cleanId, out)
     return out
   }
 
-  for (const cid of candidates) {
-    const mem = sessionLookmlByProject.get(cid)
+  for (const cand of candidates) {
+    const mem = sessionLookmlByProject.get(cand)
     if (mem) return sanitizeLoaded(mem)
   }
 
@@ -440,25 +451,13 @@ export async function loadLookmlSessionArtifact(
       const hydrated = await hydrateBundleMissingFileContents(
         sdk,
         extensionSDK,
-        Object.assign({}, extracted, { id: proj, project_id: proj }),
+        { ...extracted, id: proj, project_id: proj },
         opts
       )
       if (hydrated.files && hydrated.files.length > 0) {
-        const payload: LookmlArtifactPayload = {
-          id: proj,
-          type: 'lookml',
-          title: hydrated.title || `LookML: ${proj}`,
-          project_id: proj,
-          updatedAt: new Date().toISOString(),
-          createdBy: '1',
-          bundle: hydrated,
-          studio: {
-            explores: opts.explores || [],
-            lastInteractionId: opts.lastInteractionId,
-            environmentId: opts.environmentId,
-          },
-        }
-        return sanitizeLoaded(payload)
+        return sanitizeLoaded(
+          makeLookmlPayload(proj, proj, hydrated.title || `LookML: ${proj}`, '1', hydrated, opts)
+        )
       }
       extractedMeta = hydrated
     }
@@ -475,8 +474,8 @@ export async function loadLookmlSessionArtifact(
     if (livePaths.length > 0) {
       const liveFiles: LookmlFileChange[] = (
         await Promise.all(
-          livePaths.map(async (p): Promise<LookmlFileChange | null> => {
-            const content = await hydrateLookmlFileContent({
+          livePaths.map((p): Promise<LookmlFileChange | null> =>
+            hydrateLookmlFileContent({
               sdk,
               extensionSDK,
               projectId: targetProj,
@@ -484,46 +483,41 @@ export async function loadLookmlSessionArtifact(
               filePath: p,
               auth: opts?.auth,
               environmentId: opts?.environmentId,
-            })
-            if (typeof content !== 'string') return null
-            return ensureFileDiff({ path: p, action: 'updated', content })
-          })
+            }).then((content) => (typeof content === 'string' ? ensureFileDiff({ path: p, action: 'updated', content }) : null))
+          )
         )
       ).filter((f): f is LookmlFileChange => Boolean(f))
       if (liveFiles.length > 0) {
         const modelFile = liveFiles.find((f) => /\.model\.lkml$/i.test(f.path))
         const inferredModel =
           opts?.modelName || extractedMeta?.model_name || modelFile?.path.split('/').pop()?.replace(/\.model\.lkml$/i, '')
-        const payload: LookmlArtifactPayload = {
-          id: targetProj,
-          type: 'lookml',
-          title: extractedMeta?.title || `LookML: ${targetProj}`,
-          project_id: targetProj,
-          updatedAt: new Date().toISOString(),
-          createdBy: '1',
-          bundle: Object.assign({}, extractedMeta, {
-            id: targetProj,
-            title: extractedMeta?.title || `LookML: ${targetProj}`,
-            project_id: targetProj,
-            model_name: inferredModel,
-            branch_name: opts?.branchName || extractedMeta?.branch_name,
-            files: liveFiles,
-          }),
-          studio: {
-            explores: opts?.explores || [],
-            lastInteractionId: opts?.lastInteractionId,
-            environmentId: opts?.environmentId,
-          },
-        }
-        return sanitizeLoaded(payload)
+        const title = extractedMeta?.title || `LookML: ${targetProj}`
+        return sanitizeLoaded(
+          makeLookmlPayload(
+            targetProj,
+            targetProj,
+            title,
+            '1',
+            {
+              ...extractedMeta,
+              id: targetProj,
+              title,
+              project_id: targetProj,
+              model_name: inferredModel,
+              branch_name: opts?.branchName || extractedMeta?.branch_name,
+              files: liveFiles,
+            },
+            opts || {}
+          )
+        )
       }
     }
   }
 
   // Read-only fallback for pre-existing legacy `obj_lookml_*` records
   const svc = getArtifactService(sdk, getArtifactNamespace(extensionSDK))
-  for (const cid of candidates) {
-    const hit = await svc.get<LookmlArtifactPayload>(`obj_lookml_${cid}`).catch((): null => null)
+  for (let i = 0; i < candidates.length; i += 1) {
+    const hit = await svc.get<LookmlArtifactPayload>(`obj_lookml_${candidates[i]}`).catch((): null => null)
     if (hit) return sanitizeLoaded(hit)
   }
   const rows = await svc.search(`obj_lookml_${cleanId}_%`).catch(() => [])

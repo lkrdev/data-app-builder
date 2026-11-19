@@ -22,7 +22,6 @@ import {
   type StudioContentItem,
   type StudioContentItemType,
   type StudioToolMode,
-  type TileScriptBinding,
   toTurnCrudItem,
   type TurnCrudItem,
   type UserArtifactIndexEntry,
@@ -159,7 +158,7 @@ export function clearSessionAlertCache(): void {
   sessionNativeContentCache.clear()
 }
 
-export async function saveNativeContentArtifact(
+export function saveNativeContentArtifact(
   _sdk: Looker40SDK,
   _extensionSDK: ArtifactExtensionHostLike,
   _userId: string,
@@ -169,14 +168,14 @@ export async function saveNativeContentArtifact(
   studioUpdate?: StudioMetadataUpdate
 ): Promise<NativeContentState> {
   const id = String(bundle.id || existing?.id || '').trim()
-  if (!id) throw new Error('Native content bundle is missing a target ID.')
+  if (!id) return Promise.reject(new Error('Native content bundle is missing a target ID.'))
   const nextStudio = mergeStudioMetadata(existing?.studio, studioUpdate)
   const merged = normalizeNativeContent(
-    { ...existing, ...bundle, id, studio: nextStudio },
+    Object.assign({}, existing, bundle, { id, studio: nextStudio }),
     folderId
   )
   sessionNativeContentCache.set(id, merged)
-  return merged
+  return Promise.resolve(merged)
 }
 
 export async function loadNativeContentById(
@@ -280,14 +279,6 @@ async function patchDashboardElementVerified(sdk: Looker40SDK, cleanElId: string
 
 export const loadScriptArtifact = (sdk: Looker40SDK, scriptId: string, namespace = ARTIFACT_NAMESPACE): Promise<SavedScript | null> =>
   getArtifactService(sdk, namespace).loadScript(scriptId)
-export const loadSingleScriptArtifact = loadScriptArtifact
-export const listSavedScripts = (sdk: Looker40SDK, userId?: string, namespace = ARTIFACT_NAMESPACE): Promise<SavedScript[]> =>
-  getArtifactService(sdk, namespace).listSavedScripts(userId)
-export const loadSavedScriptsList = listSavedScripts
-export const deleteScriptArtifact = (sdk: Looker40SDK, userId: string, scriptId: string, namespace = ARTIFACT_NAMESPACE): Promise<void> =>
-  getArtifactService(sdk, namespace).deleteScript(userId, scriptId)
-export const loadTileScriptArtifact = (sdk: Looker40SDK, elementId: string, namespace = ARTIFACT_NAMESPACE): Promise<TileScriptBinding | null> =>
-  getArtifactService(sdk, namespace).loadTileScript(elementId)
 
 export async function saveTileScriptToElement(
   sdk: Looker40SDK, elementId: string, binding: { scriptId: string; title: string; code: string }
@@ -320,7 +311,7 @@ export async function loadTileScriptFromElement(
       return { scriptId, title: String(rec.title ?? '').trim() || scriptId, code, updatedAt: String(rec.updatedAt ?? '') }
     }
   }
-  const legacy = await loadTileScriptArtifact(sdk, cleanElId, namespace)
+  const legacy = await getArtifactService(sdk, namespace).loadTileScript(cleanElId)
   if (legacy && String(legacy.code ?? '').trim().length > 0) {
     const scriptId = String(legacy.scriptId || '').trim() || `tile_${cleanElId}`
     return { scriptId, title: String(legacy.title || '').trim() || scriptId, code: legacy.code, updatedAt: String(legacy.updatedAt || '') }
@@ -350,7 +341,7 @@ export async function publishScriptDashboard(
   }
   if (!dashId) {
     try {
-      const dash = await rawLookerRequest<{ id: string | number }>(sdk, 'POST', '/dashboards', undefined, { ...dashBody, folder_id: folderId })
+      const dash = await rawLookerRequest<{ id: string | number }>(sdk, 'POST', '/dashboards', undefined, Object.assign({}, dashBody, { folder_id: folderId }))
       dashId = String(dash.id)
     } catch {
       const dash = await sdk.ok(sdk.create_dashboard({ title, folder_id: folderId, load_configuration: 'wait', show_filters_bar: true } as Parameters<Looker40SDK['create_dashboard']>[0]))
@@ -367,7 +358,7 @@ export async function publishScriptDashboard(
   const tilePayload: TileElementScriptPayload = {
     scriptId: String(script.id || '').trim() || 'script_tile', title, code: String(script.code ?? ''), updatedAt: new Date().toISOString(),
   }
-  const rich_content_json = JSON.stringify({ ...parseRichContentJsonObject(existingExtEl?.rich_content_json), python_tile_script: tilePayload })
+  const rich_content_json = JSON.stringify(Object.assign(parseRichContentJsonObject(existingExtEl?.rich_content_json), { python_tile_script: tilePayload }))
   if (!elementId) {
     const createdEl = await rawLookerRequest<Partial<IDashboardElement>>(sdk, 'POST', '/dashboard_elements', undefined, {
       dashboard_id: dashId, type: 'extension', extension_id: extId, title, title_hidden: true, rich_content_json,
@@ -383,7 +374,7 @@ export async function publishScriptDashboard(
   return { dashboardId: dashId, elementId, extensionId: extId }
 }
 
-export async function listUserArtifacts(
+export function listUserArtifacts(
   sdk: Looker40SDK,
   userId: string,
   typeOrNamespace?: StudioToolMode | string,
@@ -402,8 +393,6 @@ export async function listUserArtifacts(
   return getArtifactService(sdk, namespace).listUserArtifacts(userId, type)
 }
 
-export const loadUserArtifactsList = listUserArtifacts
-
 export const loadObjectArtifact = <T = SharedArtifactPayload>(sdk: Looker40SDK, type: StudioToolMode, id: string, namespace = ARTIFACT_NAMESPACE): Promise<T | null> =>
   getArtifactService(sdk, namespace).loadObjectArtifact<T>(type, id)
 export const deleteUserArtifact = (sdk: Looker40SDK, userId: string, type: StudioToolMode, id: string, deleteSharedPayload = false, namespace = ARTIFACT_NAMESPACE): Promise<void> =>
@@ -411,19 +400,16 @@ export const deleteUserArtifact = (sdk: Looker40SDK, userId: string, type: Studi
 // ponytail: single per-user JSON array artifact `user_conversations:${me.id}` sorted by updatedAt desc.
 export const loadUserConversations = (sdk: Looker40SDK, userId: string, namespace = ARTIFACT_NAMESPACE): Promise<UserConversationEntry[]> =>
   getArtifactService(sdk, namespace).listConversations(userId)
-export const loadConversationsList = loadUserConversations
 export const loadSingleConversationArtifact = (sdk: Looker40SDK, conversationId: string, userId = '1', namespace = ARTIFACT_NAMESPACE): Promise<UserConversationEntry | null> =>
   getArtifactService(sdk, namespace).getConversation(conversationId, userId)
 export const saveUserConversation = (sdk: Looker40SDK, userId: string, entry: Partial<UserConversationEntry> & { id: string }, namespace = ARTIFACT_NAMESPACE): Promise<UserConversationEntry[]> =>
   getArtifactService(sdk, namespace).saveConversation(userId, entry)
-export const saveConversationArtifact = saveUserConversation
 export const archiveUserConversation = (sdk: Looker40SDK, userId: string, conversationId: string, archived = true, namespace = ARTIFACT_NAMESPACE): Promise<UserConversationEntry[]> =>
   getArtifactService(sdk, namespace).archiveConversation(userId, conversationId, archived)
-export const archiveConversationArtifact = archiveUserConversation
 export const isUserConversationDeleted = (sdk: Looker40SDK, userId: string, conversationId: string, namespace = ARTIFACT_NAMESPACE): boolean =>
   getArtifactService(sdk, namespace).isConversationDeleted(userId, conversationId)
 
-export async function deleteUserConversation(
+export function deleteUserConversation(
   sdk: Looker40SDK,
   userId: string,
   conversationId: string,
@@ -442,25 +428,21 @@ export async function deleteUserConversation(
   return getArtifactService(sdk, namespace).deleteConversation(userId, conversationId, options)
 }
 
-export const deleteConversationArtifact = deleteUserConversation
-
-export async function saveAlertArtifact(
+export function saveAlertArtifact(
   _sdk: Looker40SDK,
   _userId: string,
   bundle: AlertInspectorBundle,
   _namespace = ARTIFACT_NAMESPACE
 ): Promise<AlertInspectorBundle> {
   const alertId = String(bundle.alert_id || bundle.id || '').trim().replace(/^obj_alert_/, '')
-  const now = new Date().toISOString()
-  const compact: AlertInspectorBundle = {
-    ...bundle,
+  const compact: AlertInspectorBundle = Object.assign({}, bundle, {
     id: alertId,
     alert_id: alertId,
     alert_history_items: (bundle.alert_history_items || []).slice(0, 10),
-    updated_at: now,
-  }
+    updated_at: new Date().toISOString(),
+  })
   if (alertId) sessionAlertBundleCache.set(alertId, compact)
-  return compact
+  return Promise.resolve(compact)
 }
 
 export async function loadAlertArtifact(
@@ -502,8 +484,7 @@ export async function loadAlertArtifact(
       if ((dashId === undefined || dashId === null || dashId === '') && dashElId) {
         dashId = (await getDashboardElementSafe(sdk, String(dashElId)))?.dashboard_id ?? dashId
       }
-      const liveBundle: AlertInspectorBundle = {
-        ...(cached || {}),
+      const liveBundle: AlertInspectorBundle = Object.assign({}, cached, {
         id: cleanId,
         alert_id: cleanId,
         title: String(alertRec.custom_title || detailRec.title || alertRec.title || cached?.title || `Alert #${cleanId}`),
@@ -530,7 +511,7 @@ export async function loadAlertArtifact(
         error: (detailRec.error ?? alertRec.error ?? cached?.error ?? null) as string | null,
         alert_history_items: Array.isArray(historyRaw) ? (historyRaw as NonNullable<AlertInspectorBundle['alert_history_items']>).slice(0, 10) : null,
         updated_at: String(detailRec.updated_at ?? alertRec.updated_at ?? cached?.updated_at ?? new Date().toISOString()),
-      }
+      })
       sessionAlertBundleCache.set(cleanId, liveBundle)
       return liveBundle
     } catch {
@@ -567,18 +548,18 @@ export function extractDeletedLookerResources(
   const literalIdPrefixRe = /^\s*(?:(?:dashboard_id|look_id)\s*=\s*)?(?:['"]([^'"]+)['"]|(\d+))\s*,/
   const hasTrashFlagRe = /\bdeleted['"]?\s*[:=]\s*(?:True|true)\b/
 
-  for (const st of activitySteps || []) {
-    if (st?.kind !== 'codemode') continue
+  ;(activitySteps || []).forEach((st) => {
+    if (st?.kind !== 'codemode') return
     const txt = String(st.content || '')
-    for (const m of txt.matchAll(hardDeleteRe)) push(m[1], m[2])
+    Array.from(txt.matchAll(hardDeleteRe)).forEach((m) => push(m[1], m[2]))
     const errKeys = new Set<string>()
     const okPatches: Array<[string, string]> = []
-    for (const m of txt.matchAll(patchRe)) {
+    Array.from(txt.matchAll(patchRe)).forEach((m) => {
       const kind = m[1].toLowerCase()
       const id = decodeLookerId(m[2])
       if (m[3].startsWith('[ERR]')) errKeys.add(`${kind}:${id}`)
       else okPatches.push([kind, id])
-    }
+    })
     const codePart = txt.split(/\n#\s*(?:Looker API Telemetry|Output)\b/)[0].replace(/^\s*#.*$/gm, '')
     const outputPart = txt.includes('\n# Output') ? txt.slice(txt.indexOf('\n# Output')) : ''
     const literalTrashKeys = new Set<string>()
@@ -586,7 +567,7 @@ export function extractDeletedLookerResources(
     const dynamicTrash = new Set<string>()
     const dynamicNonTrash = new Set<string>()
     let sawUpdateCall = false
-    for (const m of codePart.matchAll(/\bupdate_(dashboard|look)\s*\(/g)) {
+    Array.from(codePart.matchAll(/\bupdate_(dashboard|look)\s*\(/g)).forEach((m) => {
       sawUpdateCall = true
       const kind = m[1].toLowerCase() === 'look' ? 'looks' : 'dashboards'
       const start = (m.index || 0) + m[0].length
@@ -606,18 +587,18 @@ export function extractDeletedLookerResources(
         else nonTrashLiteralKeys.add(`${kind}:${litId}`)
       } else if (isTrash) dynamicTrash.add(kind)
       else dynamicNonTrash.add(kind)
-    }
+    })
     const rawSoftTrash = !sawUpdateCall && hasTrashFlagRe.test(codePart)
-    for (const [kind, id] of okPatches) {
+    okPatches.forEach(([kind, id]) => {
       const key = `${kind}:${id}`
-      if (errKeys.has(key) || nonTrashLiteralKeys.has(key)) continue
+      if (errKeys.has(key) || nonTrashLiteralKeys.has(key)) return
       if (literalTrashKeys.has(key) || rawSoftTrash) push(kind, id)
       else if (dynamicTrash.has(kind)) {
         const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
         if (!dynamicNonTrash.has(kind) || (outputPart && new RegExp(`["']${escaped}["']`).test(outputPart))) push(kind, id)
       }
-    }
-  }
+    })
+  })
   return out
 }
 
@@ -633,10 +614,10 @@ export function reconcileDeletedLookerContent(
 } {
   const deletedResources = extractDeletedLookerResources(activitySteps)
   const deletedIds = new Set<string>()
-  let nextItems = [...items]
+  let nextItems = items.slice()
   let nextActiveTabKey = activeTabKey
   const crudItems: TurnCrudItem[] = []
-  for (const { kind, id: delId } of deletedResources) {
+  deletedResources.forEach(({ kind, id: delId }) => {
     deletedIds.add(delId)
     const fbType: StudioContentItemType = kind === 'looks' ? 'look' : kind === 'boards' ? 'board' : delId.includes('::') ? 'lookml_dashboard' : 'dashboard'
     const hit = nextItems.find(
@@ -648,6 +629,6 @@ export function reconcileDeletedLookerContent(
     }
     const ct = hit ? hit.contentType : fbType
     crudItems.push(toTurnCrudItem(hit || { key: `${ct}:${delId}`, id: delId, title: formatStudioContentItemTitle(ct, delId), contentType: ct }, 'deleted'))
-  }
+  })
   return { deletedIds, nextItems, nextActiveTabKey, crudItems }
 }

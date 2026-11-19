@@ -162,7 +162,7 @@ export async function fetchLookerCaAgentsCatalog(
   return result
 }
 
-export function scoreCaAgentLocally(agent: LookerCaAgentSummary, userQuestion: string): number {
+function scoreCaAgentLocally(agent: LookerCaAgentSummary, userQuestion: string): number {
   const tokens = String(userQuestion || '')
     .toLowerCase()
     .split(/[^a-z0-9_]+/)
@@ -178,7 +178,7 @@ export function scoreCaAgentLocally(agent: LookerCaAgentSummary, userQuestion: s
   )
 }
 
-export function buildIsolatedCaSelectorPrompt(
+function buildIsolatedCaSelectorPrompt(
   agents: LookerCaAgentSummary[],
   userQuestion: string,
   selectedExplores: string[] = []
@@ -240,8 +240,6 @@ export function parseCaAgentSelectionResponse(
     catalogSize: catalog.length,
   }
 }
-
-export const parseCaAgentSelectionOutput = parseCaAgentSelectionResponse
 
 export const CA_AGENT_SELECTION_RESPONSE_FORMAT = {
   type: 'json_schema',

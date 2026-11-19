@@ -63,8 +63,8 @@ export function useStudioController() {
     extensionSDK, core40SDK, history, location, isTileMount, selectedModel, thinkingLevel,
     resolvedUseCaseByIdRef, parsedRoute, setSelectedUseCase, explicitUseCaseRef,
     setRightPaneCollapsed, setSidebarCollapsed,
-    sharedEnvIdRef, syncSharedEnvironmentId, agentSession, agentSessionRef, messages, setAgentSession, setMessages,
-    getAuthCfg, selectEpochRef, getConvMessages, setConvMessages, deleteConvMessages, setExpiredConversationNotice,
+    sharedEnvIdRef, agentSession, agentSessionRef, messages, setAgentSession, setMessages,
+    getAuthCfg, selectEpochRef, getConvMessages, setConvMessages, deleteConvMessages,
     busyStatus, activeConversationId, activeConversationIdRef, setActiveConversationId,
     liveActivitySteps, liveActivityStepsRef, inFlightTurnsRef, turnResumerRef, onTurnAbortedRef, abortConvTurn,
   } = auth
@@ -491,11 +491,7 @@ export function useStudioController() {
       })
       if (selectEpochRef.current !== myEpoch || inFlightTurnsRef.current.has(conv.id)) return
       if (hydrated.expired) {
-        const pruneSet = new Set(hydrated.prunedIds.length ? hydrated.prunedIds : [conv.id])
-        pruneSet.forEach((pid) => deleteConvMessages(pid))
-        setConversations((prev) => prev.filter((c) => !pruneSet.has(c.id)), { optimisticEntry: null })
-        if (hydrated.deadEnvironmentId && normalizeEnvironmentId(sharedEnvIdRef.current) === hydrated.deadEnvironmentId) syncSharedEnvironmentId('')
-        setExpiredConversationNotice('This conversation expired because its sandbox environment was reset or expired.')
+        loaders.applyExpiredHydration(conv.id, hydrated.prunedIds, hydrated.deadEnvironmentId)
         handleResetNewApp(true, 'auto')
         return
       }
@@ -551,7 +547,7 @@ export function useStudioController() {
         void turnResumerRef.current?.(conv)
       }
     },
-    [activeConversationIdRef, contentItemsRef, core40SDK, deleteConvMessages, explicitUseCaseRef, extensionSDK, getAuthCfg, handleResetNewApp, history, hydratedConvRouteRef, inFlightTurnsRef, location.pathname, mergeCachedActivitySteps, openArtifactByMode, recoveredInFlightIdsRef, resolvedUseCaseByIdRef, selectEpochRef, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setContentItems, setConvMessages, setConversations, setCurrentAppCode, setExpiredConversationNotice, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMessages, setNativeContentState, setPublishedAppState, setPublishedTileDash, setScriptCode, setScriptId, setScriptTitle, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef, syncContentItemViewer, syncSharedEnvironmentId, turnResumerRef, userId, userIdRef]
+    [activeConversationIdRef, contentItemsRef, core40SDK, explicitUseCaseRef, extensionSDK, getAuthCfg, handleResetNewApp, history, hydratedConvRouteRef, inFlightTurnsRef, loaders, location.pathname, mergeCachedActivitySteps, openArtifactByMode, recoveredInFlightIdsRef, resolvedUseCaseByIdRef, selectEpochRef, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setContentItems, setConvMessages, setCurrentAppCode, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMessages, setNativeContentState, setPublishedAppState, setPublishedTileDash, setScriptCode, setScriptId, setScriptTitle, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef, syncContentItemViewer, turnResumerRef, userId, userIdRef]
   )
 
   const handleToggleArchiveConversation = (

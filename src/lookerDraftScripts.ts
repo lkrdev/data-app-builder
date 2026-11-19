@@ -158,7 +158,7 @@ export async function deleteLocalDraftScript(
   })
 }
 
-export const SESSION_HEALTH_REPORTS_STORAGE_KEY = 'dab_session_health_reports_v1'
+const SESSION_HEALTH_REPORTS_STORAGE_KEY = 'dab_session_health_reports_v1'
 const MAX_SESSION_HEALTH_REPORTS = 8
 
 export function loadTabSessionHealthReportJson(reportId: string): string | null {

@@ -426,19 +426,32 @@ export interface ConversationRelatedContentInfo {
   items: string[]
 }
 
+const CONV_TYPE_PREFIX_RE =
+  /^conv_(app|data_app|data-investigator|data_investigator|dashboard|tile|script|health_check|health-check|health|lookml|ca|conversational-analytics)_(.+)$/
+
 export function resolveConversationRelatedContent(
   conv: Partial<UserConversationEntry> & { id: string },
   userId = '1'
 ): ConversationRelatedContentInfo {
   const uid = String(userId || '1').trim()
   const c = conv.content || {}
-  const prefixMatch = String(conv.id || '').match(
-    /^conv_(app|data_app|data-investigator|data_investigator|dashboard|tile|script|health_check|health-check|health|lookml|ca|conversational-analytics)_(.+)$/
-  )
+  const prefixMatch = String(conv.id || '').match(CONV_TYPE_PREFIX_RE)
   const rawType = String(conv.type || conv.use_case || prefixMatch?.[1] || 'app').trim()
-  const stripPrefix = (s: string) =>
-    s.replace(/^conv_(?:app|data_app|data-investigator|data_investigator|dashboard|tile|script|health_check|health-check|health|lookml|ca|conversational-analytics)_/, '').replace(/^obj_script_/, '').trim()
+  const stripPrefix = (s: string) => s.replace(CONV_TYPE_PREFIX_RE, '$2').replace(/^obj_script_/, '').trim()
   const uniq = (...vals: Array<string | undefined | false>) => Array.from(new Set(vals.filter((v): v is string => Boolean(v))))
+  const uKey = (t: string, id: string) => `user_${uid}_${t}_${id}`
+  const kindSpec = (
+    kind: 'ca' | 'alert' | 'script' | 'health' | 'lookml' | 'cs',
+    id: string
+  ): { u: string[]; s: string[]; it: string[] } => {
+    if (!id) return { u: [], s: [], it: [] }
+    if (kind === 'ca') return { u: [uKey('conversational-analytics', id), uKey('ca', id)], s: [`obj_ca_${id}`, `obj_conversational-analytics_${id}`], it: [`CA conversation artifact (obj_ca_${id})`] }
+    if (kind === 'alert') return { u: [uKey('alert', id), uKey('tile', id)], s: [`obj_alert_${id}`], it: [`Looker Alert #${id} (obj_alert_${id})`] }
+    if (kind === 'script') return { u: [uKey('script', id), uKey('tile', id)], s: [`obj_script_${id}`, `obj_schedule_${id}`], it: [`Local draft script (${id})`] }
+    if (kind === 'health') return { u: [uKey('health_check', id), uKey('health', id)], s: [`obj_health_${id}`, `obj_health_check_${id}`], it: [`Health Check report artifact (obj_health_${id})`] }
+    if (kind === 'lookml') return { u: [uKey('lookml', id)], s: [`obj_lookml_${id}`], it: [`LookML session artifact (obj_lookml_${id})`] }
+    return { u: [uKey('dashboard', id)], s: [`obj_dashboard_${id}`], it: [`Content Studio artifact (obj_dashboard_${id})`] }
+  }
 
   const hasExplicitContentItems = Array.isArray(conv.contentItems) && conv.contentItems.length > 0
   const hasAnyExplicitCreatedItem = Boolean(
@@ -465,6 +478,11 @@ export function resolveConversationRelatedContent(
     const extraDashIds: string[] = base.dashboardId ? [base.dashboardId] : []
     const extraLookIds: string[] = base.lookId ? [base.lookId] : []
     const extraItems: string[] = [...base.items]
+    const pushSpec = (sp: { u: string[]; s: string[]; it: string[] }, preItems: string[] = []) => {
+      extraUserKeys.push(...sp.u)
+      extraSharedKeys.push(...sp.s)
+      extraItems.push(...preItems, ...sp.it)
+    }
 
     for (const rawItem of conv.contentItems || []) {
       if (!rawItem?.id || rawItem.source === 'mention' || rawItem.createdInConversation === false) continue
@@ -479,15 +497,13 @@ export function resolveConversationRelatedContent(
         const dId = String(item.dashboardId || itemId).trim()
         if (dId) {
           extraDashIds.push(dId)
-          extraUserKeys.push(`user_${uid}_dashboard_${dId}`)
-          extraSharedKeys.push(`obj_dashboard_${dId}`)
-          extraItems.push(`Native Looker Dashboard #${dId} (sdk.delete_dashboard)`, `Content Studio artifact (obj_dashboard_${dId})`)
+          pushSpec(kindSpec('cs', dId), [`Native Looker Dashboard #${dId} (sdk.delete_dashboard)`])
         }
       } else if (item.contentType === 'look') {
         const lId = String(item.lookId || itemId).trim()
         if (lId) {
           extraLookIds.push(lId)
-          extraUserKeys.push(`user_${uid}_dashboard_${lId}`)
+          extraUserKeys.push(uKey('dashboard', lId))
           extraSharedKeys.push(`obj_dashboard_${lId}`)
           extraItems.push(`Saved Look #${lId} (sdk.delete_look)`)
         }
@@ -495,35 +511,16 @@ export function resolveConversationRelatedContent(
         const dId = String(item.dashboardId || itemId).trim()
         if (dId) {
           extraDashIds.push(dId)
-          extraUserKeys.push(`user_${uid}_app_${dId}`, `user_${uid}_data_app_${dId}`, ...(item.contentType === 'data-investigator' ? [`user_${uid}_data-investigator_${dId}`] : []))
+          extraUserKeys.push(uKey('app', dId), uKey('data_app', dId), ...(item.contentType === 'data-investigator' ? [uKey('data-investigator', dId)] : []))
           extraSharedKeys.push(`obj_app_${dId}`)
           extraItems.push(`Looker Dashboard #${dId} (sdk.delete_dashboard)`, `Shared app artifact (obj_app_${dId})`)
         }
-      } else if (item.contentType === 'conversational-analytics') {
-        extraUserKeys.push(`user_${uid}_conversational-analytics_${itemId}`, `user_${uid}_ca_${itemId}`)
-        extraSharedKeys.push(`obj_ca_${itemId}`, `obj_conversational-analytics_${itemId}`)
-        extraItems.push(`CA conversation artifact (obj_ca_${itemId})`)
-      } else if (item.contentType === 'lookml_dashboard' || item.contentType === 'board') {
-        extraUserKeys.push(`user_${uid}_dashboard_${itemId}`)
-        extraSharedKeys.push(`obj_dashboard_${itemId}`)
-        extraItems.push(`Content Studio artifact (obj_dashboard_${itemId})`)
-      } else if (item.contentType === 'lookml' && itemId) {
-        extraUserKeys.push(`user_${uid}_lookml_${itemId}`)
-        extraSharedKeys.push(`obj_lookml_${itemId}`)
-        extraItems.push(`LookML session artifact (obj_lookml_${itemId})`)
-      } else if (item.contentType === 'script') {
-        extraUserKeys.push(`user_${uid}_script_${itemId}`, `user_${uid}_tile_${itemId}`)
-        extraSharedKeys.push(`obj_script_${itemId}`, `obj_schedule_${itemId}`)
-        extraItems.push(`Local draft script (${itemId})`)
-      } else if (item.contentType === 'alert') {
-        extraUserKeys.push(`user_${uid}_alert_${itemId}`, `user_${uid}_tile_${itemId}`)
-        extraSharedKeys.push(`obj_alert_${itemId}`)
-        extraItems.push(`Looker Alert #${itemId} (obj_alert_${itemId})`)
-      } else if (item.contentType === 'report') {
-        extraUserKeys.push(`user_${uid}_health_check_${itemId}`, `user_${uid}_health_${itemId}`)
-        extraSharedKeys.push(`obj_health_${itemId}`, `obj_health_check_${itemId}`)
-        extraItems.push(`Health Check report artifact (obj_health_${itemId})`)
-      }
+      } else if (item.contentType === 'conversational-analytics') pushSpec(kindSpec('ca', itemId))
+      else if (item.contentType === 'lookml_dashboard' || item.contentType === 'board') pushSpec(kindSpec('cs', itemId))
+      else if (item.contentType === 'lookml' && itemId) pushSpec(kindSpec('lookml', itemId))
+      else if (item.contentType === 'script') pushSpec(kindSpec('script', itemId))
+      else if (item.contentType === 'alert') pushSpec(kindSpec('alert', itemId))
+      else if (item.contentType === 'report') pushSpec(kindSpec('health', itemId))
     }
 
     const dashboardIds = uniq(...extraDashIds)
@@ -542,6 +539,24 @@ export function resolveConversationRelatedContent(
     }
   }
 
+  const fromSpec = (
+    mode: StudioToolMode,
+    objectId: string,
+    sp: { u: string[]; s: string[]; it: string[] },
+    fallbackSummary: string,
+    dashboardId?: string
+  ) => {
+    const items = uniq(...sp.it)
+    return enrichWithContentItems({
+      mode, objectId,
+      userIndexKeys: uniq(...sp.u),
+      sharedObjectKeys: uniq(...sp.s),
+      dashboardId,
+      summary: items.join(' + ') || fallbackSummary,
+      items,
+    })
+  }
+
   if (rawType === 'dashboard') {
     const contentType = c.contentType || (c.lookId ? 'look' : c.lookmlDashboardId ? 'lookml_dashboard' : 'dashboard')
     const explicitObjectId = stripPrefix(String(conv.objectId || c.dashboardId || c.lookId || c.lookmlDashboardId || c.id || ''))
@@ -555,71 +570,40 @@ export function resolveConversationRelatedContent(
     )
     return enrichWithContentItems({
       mode: 'dashboard', objectId,
-      userIndexKeys: uniq(objectId && `user_${uid}_dashboard_${objectId}`, conv.id && conv.id !== objectId && `user_${uid}_dashboard_${conv.id}`),
+      userIndexKeys: uniq(objectId && uKey('dashboard', objectId), conv.id && conv.id !== objectId && uKey('dashboard', conv.id)),
       sharedObjectKeys: uniq(objectId && `obj_dashboard_${objectId}`),
       dashboardId, lookId, summary: items.join(' + ') || 'Content Studio artifact', items,
     })
   }
-
   if (rawType === 'alert' || c.alertId || c.contentType === 'alert') {
     const objectId = stripPrefix(String(conv.objectId || c.alertId || c.id || conv.id || ''))
-    const dashboardId = c.dashboardId ? String(c.dashboardId).trim() : undefined
-    const items = uniq(objectId && `Looker Alert #${objectId} (obj_alert_${objectId})`)
-    return enrichWithContentItems({
-      mode: 'tile', objectId,
-      userIndexKeys: uniq(objectId && `user_${uid}_alert_${objectId}`, objectId && `user_${uid}_tile_${objectId}`),
-      sharedObjectKeys: uniq(objectId && `obj_alert_${objectId}`),
-      dashboardId, summary: items.join(' + ') || 'Looker alert artifact', items,
-    })
+    return fromSpec('tile', objectId, kindSpec('alert', objectId), 'Looker alert artifact', c.dashboardId ? String(c.dashboardId).trim() : undefined)
   }
-
   if (rawType === 'tile' || rawType === 'script') {
     const objectId = stripPrefix(String(conv.objectId || c.scriptId || c.id || conv.id || ''))
     const dashboardId = c.dashboardId ? String(c.dashboardId).trim() : undefined
-    const items = uniq(
-      objectId && `Local draft script (${objectId})`,
-      dashboardId && `Published wrapper Dashboard #${dashboardId} (sdk.delete_dashboard)`
-    )
-    return enrichWithContentItems({
-      mode: 'tile', objectId,
-      userIndexKeys: uniq(objectId && `user_${uid}_script_${objectId}`, objectId && `user_${uid}_tile_${objectId}`),
-      sharedObjectKeys: uniq(objectId && `obj_script_${objectId}`, objectId && `obj_schedule_${objectId}`),
-      dashboardId, summary: items.join(' + ') || 'Local draft Python script', items,
-    })
+    const sp = kindSpec('script', objectId)
+    if (dashboardId) sp.it.push(`Published wrapper Dashboard #${dashboardId} (sdk.delete_dashboard)`)
+    return fromSpec('tile', objectId, sp, 'Local draft Python script', dashboardId)
   }
-
   if (rawType === 'health' || rawType === 'health_check' || rawType === 'health-check') {
     const objectId = stripPrefix(String(conv.objectId || c.reportId || c.id || conv.id || ''))
-    const items = uniq(objectId && `Health Check report artifact (obj_health_${objectId})`)
-    return enrichWithContentItems({
-      mode: 'health', objectId,
-      userIndexKeys: uniq(objectId && `user_${uid}_health_check_${objectId}`, objectId && `user_${uid}_health_${objectId}`),
-      sharedObjectKeys: uniq(objectId && `obj_health_${objectId}`, objectId && `obj_health_check_${objectId}`),
-      summary: items.join(' + ') || 'Health Check report artifact', items,
-    })
+    return fromSpec('health', objectId, kindSpec('health', objectId), 'Health Check report artifact')
   }
-
   if (rawType === 'lookml') {
     const objectId = cleanLookmlProjectId(stripPrefix(String(conv.objectId || c.sessionId || c.id || c.projectId || (!hasExplicitContentItems ? conv.id : '') || '')))
     const projId = cleanLookmlProjectId(c.projectId)
-    const items = uniq(objectId && `LookML session artifact (obj_lookml_${objectId})`, projId && projId !== objectId && `LookML session artifact (obj_lookml_${projId})`)
-    return enrichWithContentItems({
-      mode: 'lookml', objectId,
-      userIndexKeys: uniq(objectId && `user_${uid}_lookml_${objectId}`, projId && `user_${uid}_lookml_${projId}`),
-      sharedObjectKeys: uniq(objectId && `obj_lookml_${objectId}`, projId && `obj_lookml_${projId}`),
-      summary: items.join(' + ') || 'LookML session artifact', items,
-    })
+    const sp = kindSpec('lookml', objectId)
+    if (projId) {
+      const pSp = kindSpec('lookml', projId)
+      sp.u.push(...pSp.u); sp.s.push(...pSp.s)
+      if (projId !== objectId) sp.it.push(...pSp.it)
+    }
+    return fromSpec('lookml', objectId, sp, 'LookML session artifact')
   }
-
   if (rawType === 'conversational-analytics' || rawType === 'ca') {
     const objectId = stripPrefix(String(conv.objectId || c.caConversationId || c.id || conv.id || ''))
-    const items = uniq(objectId && `CA conversation artifact (obj_ca_${objectId})`)
-    return enrichWithContentItems({
-      mode: 'conversational-analytics', objectId,
-      userIndexKeys: uniq(objectId && `user_${uid}_conversational-analytics_${objectId}`, objectId && `user_${uid}_ca_${objectId}`),
-      sharedObjectKeys: uniq(objectId && `obj_ca_${objectId}`, objectId && `obj_conversational-analytics_${objectId}`),
-      summary: items.join(' + ') || 'CA conversation artifact', items,
-    })
+    return fromSpec('conversational-analytics', objectId, kindSpec('ca', objectId), 'CA conversation artifact')
   }
 
   const explicitAppObjectId = stripPrefix(String(conv.objectId || c.dashboardId || c.id || ''))
@@ -629,7 +613,7 @@ export function resolveConversationRelatedContent(
   const items = uniq(dashboardId && `Looker Dashboard #${dashboardId} (sdk.delete_dashboard)`, appKey && `Shared app artifact (${appKey})`)
   return enrichWithContentItems({
     mode: 'app', objectId,
-    userIndexKeys: uniq(objectId && `user_${uid}_app_${objectId}`, objectId && `user_${uid}_data_app_${objectId}`, conv.id && conv.id !== objectId && `user_${uid}_app_${conv.id}`),
+    userIndexKeys: uniq(objectId && uKey('app', objectId), objectId && uKey('data_app', objectId), conv.id && conv.id !== objectId && uKey('app', conv.id)),
     sharedObjectKeys: uniq(appKey),
     dashboardId, summary: items.join(' + ') || 'Data App dashboard & artifact', items,
   })

@@ -602,6 +602,17 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     [extensionSDK, loadCaConversationById, loadDashboardById, loadHealthCheckById, loadLookmlSessionById, loadNativeById, loadScriptById]
   )
 
+  const applyExpiredHydration = useCallback(
+    (convId: string, prunedIds: string[], deadEnvironmentId?: string): void => {
+      const pruneSet = new Set(prunedIds.length ? prunedIds : [convId])
+      pruneSet.forEach((pid) => deleteConvMessages(pid))
+      setConversations((prev) => prev.filter((c) => !pruneSet.has(c.id)), { optimisticEntry: null })
+      if (deadEnvironmentId && normalizeEnvironmentId(sharedEnvIdRef.current) === deadEnvironmentId) syncSharedEnvironmentId('')
+      setExpiredConversationNotice('This conversation expired because its sandbox environment was reset or expired.')
+    },
+    [deleteConvMessages, setConversations, setExpiredConversationNotice, sharedEnvIdRef, syncSharedEnvironmentId]
+  )
+
   useEffect(() => {
     if (isTileMount || location.pathname === '/config') return
     if (disabledModes.includes(activeMode) || (parsedRoute.useCase && parsedRoute.useCase !== 'auto' && disabledModes.includes(parsedRoute.mode))) {
@@ -623,6 +634,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   }, [isTileMount, isConfigured, location.pathname, activeMode, disabledModes, parsedRoute, history, explicitUseCaseRef, resolvedUseCaseByIdRef, setSelectedUseCase])
 
   const didInitialRootRecoveryRef = useRef(false)
+
   useEffect(() => {
     if (isTileMount || location.pathname === '/config' || parsedRoute.isLegacyRoute || disabledModes.includes(activeMode)) return
     if (location.pathname !== '/') didInitialRootRecoveryRef.current = true
@@ -693,11 +705,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
           }).then((res) => {
             if (inFlightTurnsRef.current.has(convMatch.id)) return
             if (res.expired) {
-              const pruneSet = new Set(res.prunedIds.length ? res.prunedIds : [convMatch.id])
-              pruneSet.forEach((pid) => deleteConvMessages(pid))
-              setConversations((prev) => prev.filter((c) => !pruneSet.has(c.id)), { optimisticEntry: null })
-              if (res.deadEnvironmentId && normalizeEnvironmentId(sharedEnvIdRef.current) === res.deadEnvironmentId) syncSharedEnvironmentId('')
-              setExpiredConversationNotice('This conversation expired because its sandbox environment was reset or expired.')
+              applyExpiredHydration(convMatch.id, res.prunedIds, res.deadEnvironmentId)
               if (activeConversationIdRef.current === convMatch.id) { setMessages([]); setContentItems([]); setActiveContentTabKey(''); setActiveConversationId(nextStudioConvId()); history.replace('/') }
               return
             }
@@ -761,14 +769,14 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
     isTileMount, location.pathname, activeMode, disabledModes, parsedRoute.conversationId, parsedRoute.isLegacyRoute, parsedRoute.objectId, parsedRoute.useCase,
     inferredRouteUseCase, isCaMode, publishedApp?.dashboardId, nativeContent?.id, lookmlBundle?.id, lookmlBundle?.project_id, healthReport?.id, caConversation?.caConversationId,
     loadedScript, scriptId, openArtifactByMode, conversations, catalogItems, messages, busyStatus, mockExt?.initialBusyStatus, activeConversationId, activeConversationIdRef,
-    activeObjectId, agentSession.lastInteractionId, core40SDK, deleteConvMessages, extensionSDK, getAuthCfg, getConvMessages, history, hydratedConvRouteRef,
+    activeObjectId, agentSession.lastInteractionId, applyExpiredHydration, core40SDK, extensionSDK, getAuthCfg, getConvMessages, history, hydratedConvRouteRef,
     inFlightTurnsRef, lastCaIdRef, lastHealthIdRef, lastLookmlIdRef, lastNativeIdRef, lastPublishedIdRef, lastScriptIdRef, mergeCachedActivitySteps,
-    setActiveContentTabKey, setActiveConversationId, setAgentSession, setBusyStatus, setContentItems, setConvMessages, setConversations, setMessages,
-    setExpiredConversationNotice, setSelectedExplores, sharedEnvIdRef, syncSharedEnvironmentId, turnResumerRef, userId,
+    setActiveContentTabKey, setActiveConversationId, setAgentSession, setBusyStatus, setContentItems, setConvMessages, setMessages,
+    setSelectedExplores, sharedEnvIdRef, turnResumerRef, userId,
   ])
 
   return {
-    recoveredInFlightIdsRef,
+    recoveredInFlightIdsRef, applyExpiredHydration,
     persistConversationAndLabel, openArtifactByMode,
     loadNativeById, loadLookmlSessionById, loadCaConversationById, loadScriptById, loadAlertById,
     handleRunPython, handleSaveScript, handlePublishTileDashboard,

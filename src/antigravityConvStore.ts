@@ -49,7 +49,7 @@ export {
   setSessionConversationMessages,
 } from './lookerArtifactTypes'
 
-export function isPureCaConversationPointer(conv: UserConversationEntry, targetDeadEnvId?: string): boolean {
+function isPureCaConversationPointer(conv: UserConversationEntry, targetDeadEnvId?: string): boolean {
   const caId = String(conv.caConversationId || conv.content?.caConversationId || '').trim()
   if (!caId) return false
   const hasSandboxTurns = Boolean(
@@ -100,7 +100,7 @@ function buildHydratedAssistantMessage(
   let activitySteps: AntigravityActivityStep[] = []
   if (isOneOrTwoHop) {
     if (rootInter && finalInter && rootInter !== finalInter) {
-      const mergedRaw: AntigravityInteractionStep[] = [...(rootInter.steps || [])]
+      const mergedRaw: AntigravityInteractionStep[] = (rootInter.steps || []).slice()
       if (Array.isArray(finalInter.input)) {
         finalInter.input.forEach((it) => {
           if (
@@ -313,10 +313,11 @@ export async function hydrateRemoteConversationMessages(
     let fetchedEntries: ReadonlyArray<readonly [string, AntigravityInteractionPayload]>
     try {
       fetchedEntries = await Promise.all(
-        uniqueIds.map(async (id) => {
-          const inter = await callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(id)}`, 'GET')
-          return [id, inter] as const
-        })
+        uniqueIds.map((id) =>
+          callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(id)}`, 'GET').then(
+            (inter) => [id, inter] as const
+          )
+        )
       )
     } catch (err) {
       if (isEnvironmentNotFoundError(err)) return onDeadEnvironment(convEnvId)

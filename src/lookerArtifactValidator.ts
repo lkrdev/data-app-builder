@@ -1,20 +1,20 @@
 import type { ChatTurnMessage } from './dataAppPublisher'
 
 export const MAX_USER_ENV_ARTIFACT_BYTES = 512
-export const MAX_USER_CONFIG_ARTIFACT_BYTES = 1024
-export const MAX_USER_CONVERSATIONS_TOTAL_BYTES = 65536
-export const MAX_USER_CONVERSATION_ENTRY_BYTES = 4096
+const MAX_USER_CONFIG_ARTIFACT_BYTES = 1024
+const MAX_USER_CONVERSATIONS_TOTAL_BYTES = 65536
+const MAX_USER_CONVERSATION_ENTRY_BYTES = 4096
 export const SOFT_USER_CONVERSATIONS_EVICT_BYTES = 60000
-export const MAX_CONVERSATION_LABEL_CHARS = 120
-export const MAX_CONVERSATION_TAGS = 4
-export const MAX_CONVERSATION_TAG_CHARS = 32
-export const MAX_TURN_INTERACTION_ID_PAIRS = 20
+const MAX_CONVERSATION_LABEL_CHARS = 120
+const MAX_CONVERSATION_TAGS = 4
+const MAX_CONVERSATION_TAG_CHARS = 32
+const MAX_TURN_INTERACTION_ID_PAIRS = 20
 
 const POINTER_ARTIFACT_KEY_RE = /^user_(env|config|conversations):([^\s:]+)$/
 
-export const ALLOWED_USER_ENV_FIELDS = new Set<string>(['environmentId', 'sourcesHash', 'updatedAt'])
+const ALLOWED_USER_ENV_FIELDS = new Set<string>(['environmentId', 'sourcesHash', 'updatedAt'])
 
-export const ALLOWED_USER_CONFIG_FIELDS = new Set<string>([
+const ALLOWED_USER_CONFIG_FIELDS = new Set<string>([
   'userId',
   'agentName',
   'themeMode',
@@ -93,7 +93,9 @@ function findForbiddenPropertyPath(val: unknown, pathPrefix = '$'): string | nul
     return null
   }
   const rec = val as Record<string, unknown>
-  for (const prop of Object.keys(rec)) {
+  const keys = Object.keys(rec)
+  for (let i = 0; i < keys.length; i += 1) {
+    const prop = keys[i]
     if (rec[prop] === undefined) continue
     if (FORBIDDEN_ARTIFACT_PROPERTY_NAMES.has(prop)) return `${pathPrefix}.${prop}`
     const nested = findForbiddenPropertyPath(rec[prop], `${pathPrefix}.${prop}`)
@@ -112,7 +114,9 @@ function assertAllowedObjectFields(
     throw new ArtifactPayloadViolationError(key, `${label} must be a JSON object`)
   }
   const rec = obj as Record<string, unknown>
-  for (const field of Object.keys(rec)) {
+  const keys = Object.keys(rec)
+  for (let i = 0; i < keys.length; i += 1) {
+    const field = keys[i]
     if (rec[field] === undefined) continue
     if (FORBIDDEN_ARTIFACT_PROPERTY_NAMES.has(field)) {
       throw new ArtifactPayloadViolationError(key, `forbidden property "${field}" in ${label}`)
@@ -199,10 +203,11 @@ export function stripForbiddenArtifactFieldsDeep<T>(val: T): T {
   if (Array.isArray(val)) return val.map((item) => stripForbiddenArtifactFieldsDeep(item)) as unknown as T
   const out: Record<string, unknown> = {}
   const rec = val as Record<string, unknown>
-  for (const k of Object.keys(rec)) {
-    if (rec[k] === undefined || FORBIDDEN_ARTIFACT_PROPERTY_NAMES.has(k)) continue
-    out[k] = stripForbiddenArtifactFieldsDeep(rec[k])
-  }
+  Object.keys(rec).forEach((k) => {
+    if (rec[k] !== undefined && !FORBIDDEN_ARTIFACT_PROPERTY_NAMES.has(k)) {
+      out[k] = stripForbiddenArtifactFieldsDeep(rec[k])
+    }
+  })
   return out as T
 }
 
@@ -241,8 +246,8 @@ export function normalizeConversationTags(
     explicitTags.forEach(pushTag)
     return out.length > 0 ? out : undefined
   }
-  for (const exp of explores || []) pushTag(exp)
-  for (const ct of contentTypes || []) pushTag(ct)
+  ;(explores || []).forEach(pushTag)
+  ;(contentTypes || []).forEach(pushTag)
   if (out.length === 0 && mode) pushTag(mode)
   return out.length > 0 ? out : undefined
 }
@@ -250,12 +255,12 @@ export function normalizeConversationTags(
 export function normalizeTurnInteractionIds(raw: unknown): Array<[string, string]> {
   if (!Array.isArray(raw)) return []
   const pairs: Array<[string, string]> = []
-  for (const item of raw) {
-    if (!Array.isArray(item) || item.length < 2) continue
+  raw.forEach((item) => {
+    if (!Array.isArray(item) || item.length < 2) return
     const rootId = String(item[0] || '').trim()
     const finalId = String(item[1] || item[0] || '').trim()
     if (rootId && finalId) pairs.push([rootId, finalId])
-  }
+  })
   return pairs.slice(-MAX_TURN_INTERACTION_ID_PAIRS)
 }
 
@@ -266,11 +271,11 @@ export function mergeTurnInteractionIds(
   const merged: Array<[string, string]> = []
   const idxByRoot = new Map<string, number>()
   const apply = (list?: ReadonlyArray<readonly [string, string]>, preferIncomingFinal = false) => {
-    for (const pair of list || []) {
-      if (!Array.isArray(pair) || pair.length < 2) continue
+    ;(list || []).forEach((pair) => {
+      if (!Array.isArray(pair) || pair.length < 2) return
       const rootId = String(pair[0] || '').trim()
       const finalId = String(pair[1] || pair[0] || '').trim()
-      if (!rootId || !finalId) continue
+      if (!rootId || !finalId) return
       const existingIdx = idxByRoot.get(rootId)
       if (existingIdx !== undefined) {
         const prevFinal = merged[existingIdx][1]
@@ -281,7 +286,7 @@ export function mergeTurnInteractionIds(
         idxByRoot.set(rootId, merged.length)
         merged.push([rootId, finalId])
       }
-    }
+    })
   }
   apply(prev, false)
   apply(next, true)
@@ -298,7 +303,7 @@ export function compactConversationEntryToBudget<T extends object>(
   if (out.content && typeof out.content === 'object' && !Array.isArray(out.content)) {
     const rawC = out.content as Record<string, unknown>
     const c: Record<string, unknown> = {}
-    for (const k of Object.keys(rawC)) {
+    Object.keys(rawC).forEach((k) => {
       const v = rawC[k]
       if (typeof v === 'string') {
         const cap = k === 'routingRationale' || k === 'initialQuestion' ? 80 : 120
@@ -306,7 +311,7 @@ export function compactConversationEntryToBudget<T extends object>(
       } else {
         c[k] = v
       }
-    }
+    })
     out.content = c
   }
   if (utf8ByteLength(JSON.stringify(out)) > maxBytes && Array.isArray(out.contentItems)) {

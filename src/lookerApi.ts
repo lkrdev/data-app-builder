@@ -4,9 +4,7 @@ import type {
   IRole,
   Looker40SDK,
 } from '@looker/sdk'
-import useSWR from 'swr'
 
-import { fetchLookerCaAgentsCatalog } from './conversationalAnalytics'
 import { classifyLookerOperation } from './lkrCliSitecustomize'
 import { buildRootLookerFolders } from './lookerFolders'
 import { LOOKER_INSTANCE_ADMIN_OP_RE, resolveUserCapabilities } from './lookerPermissions'
@@ -14,7 +12,6 @@ import {
   coalesceLookerMetadataRequest,
   formatExploreId,
   LOOKER_METADATA_CACHE_TTL_MS,
-  LOOKER_SWR_CONFIG,
   rawCoreSdkRequest,
 } from './lookerTransport'
 
@@ -335,32 +332,6 @@ export async function buildDenseExploreSchema(
     LOOKER_METADATA_CACHE_TTL_MS,
     ['looker:explore_schema', modelName, exploreName]
   )
-}
-
-export const fetchExploreSchemaAndSample = buildDenseExploreSchema
-
-export function useLookerMetadata(sdk?: Looker40SDK | null, enabled = true) {
-  return useSWR(sdk && enabled ? ['looker:me'] : null, () => fetchInitialLookerMetadata(sdk!), LOOKER_SWR_CONFIG)
-}
-
-export function useExploreSchema(sdk: Looker40SDK | null | undefined, modelName?: string, exploreName?: string) {
-  return useSWR<string>(
-    sdk && modelName && exploreName ? ['looker:explore_schema', modelName, exploreName] : null,
-    () => buildDenseExploreSchema(sdk!, modelName!, exploreName!),
-    LOOKER_SWR_CONFIG
-  )
-}
-
-export function useLookerDashboard(sdk: Looker40SDK | null | undefined, dashboardId?: string) {
-  return useSWR(
-    sdk && dashboardId ? ['looker:dashboard', dashboardId] : null,
-    () => coalesceLookerMetadataRequest(`dashboard:${dashboardId}`, () => sdk!.ok(sdk!.dashboard(dashboardId!)), LOOKER_METADATA_CACHE_TTL_MS, ['looker:dashboard', dashboardId]),
-    LOOKER_SWR_CONFIG
-  )
-}
-
-export function useLookerCaAgents(sdk: Looker40SDK | null | undefined) {
-  return useSWR(sdk ? ['looker:ca_agents'] : null, () => fetchLookerCaAgentsCatalog(sdk!), LOOKER_SWR_CONFIG)
 }
 
 export type StudioThemeMode = 'light' | 'dark' | 'system'
