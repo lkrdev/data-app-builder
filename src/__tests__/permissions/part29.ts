@@ -9,10 +9,13 @@ import type { Looker40SDK } from '@looker/sdk'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 import {
+  ANTIGRAVITY_ALLOWED_MODELS,
   type AntigravityExtensionHostLike,
   BUNDLE_APP_PY,
+  clearSessionConversationMessages,
   extractBundleFromInteraction,
   extractCaSelectionFromInteraction,
+  hydrateRemoteConversationMessages,
   isFreshUserTurnRoot,
   LkrCodeMode,
   runAntigravityTurn,
@@ -21,8 +24,10 @@ import {
   StudioCapabilitiesModal,
   StudioCapabilitiesTrigger,
 } from '../../components/StudioCapabilitiesGuide'
+import { StudioLeftPane } from '../../components/StudioLeftPane'
 import type { DataAppBundle, StudioContentItem } from '../../lookerApi'
 import { materializeTurnBundles } from '../../studioControllerConcurrency'
+import type { StudioController } from '../../useStudioController'
 
 const asSdk = (mock: Record<string, unknown>): Looker40SDK => mock as unknown as Looker40SDK
 const asHost = (mock: Record<string, unknown>): AntigravityExtensionHostLike => mock as unknown as AntigravityExtensionHostLike
@@ -399,6 +404,200 @@ export function registerPermissionsPart29Tests(): void {
     } finally {
       if (prevWin === undefined) delete (globalThis as { window?: unknown }).window
       else (globalThis as { window?: unknown }).window = prevWin
+    }
+  })
+
+  test('109. Issue #239: renders Sign In to See Conversation gate in StudioLeftPane for unhydrated signed-out conversations, gates hydrateRemoteConversationMessages on requireAuthForHydration, and hydrates upon auth', async () => {
+    const savedConv = {
+      id: 'conv_app_42',
+      type: 'app',
+      label: 'Executive Revenue App',
+      interactionId: 'v1_app_42',
+      turnInteractionIds: [['v1_app_42_r', 'v1_app_42']] as Array<[string, string]>,
+      environmentId: 'env_42',
+      updatedAt: '2026-11-19T12:00:00Z',
+    }
+    const baseCtl = {
+      agentName: 'Ripper',
+      isAuthenticated: false,
+      authMode: 'oauth' as const,
+      clientId: 'client-id.apps.googleusercontent.com',
+      oauthSigningIn: false,
+      handleOAuthLogin: async () => {},
+      history: { push: () => {}, replace: () => {}, location: { pathname: '/c/conv_app_42' } },
+      messages: [],
+      conversations: [savedConv],
+      allConversations: [savedConv],
+      activeConversationId: 'conv_app_42',
+      selectedExplores: ['thelook::order_items'],
+      starterPrompts: [{ id: 's1', label: 'Build KPI App', prompt: 'Build KPI App' }],
+      starterPromptsLoading: false,
+      setPrompt: () => {},
+      busyStatus: null,
+      liveActivitySteps: [],
+      pendingPerm: null,
+      backgroundPendingPerm: null,
+      resolvePermDecision: () => {},
+      resolveBackgroundPermDecision: () => {},
+      leftPaneWidth: 380,
+      setLeftPaneWidth: () => {},
+      rightPaneCollapsed: false,
+      setRightPaneCollapsed: () => {},
+      contentItems: [],
+      activeContentTabKey: '',
+      copyThreadState: 'idle' as const,
+      handleCopyThreadDebugTrace: async () => {},
+      models: [],
+      preloadedContent: [],
+      mentionedItems: [],
+      setMentionedItems: () => {},
+      setSelectedExplores: () => {},
+      selectedModel: ANTIGRAVITY_ALLOWED_MODELS[0].id,
+      setSelectedModel: () => {},
+      thinkingLevel: 'high' as const,
+      thinkingLevelByModel: {},
+      setModelThinkingLevel: () => {},
+      defaultThinkingLevel: 'high' as const,
+      availableModels: ANTIGRAVITY_ALLOWED_MODELS,
+      activatedLookmlSkills: [],
+      setActivatedLookmlSkills: () => {},
+      pastedImages: [],
+      setPastedImages: () => {},
+      prompt: '',
+      handleSendPrompt: async () => {},
+      queuedPrompts: [],
+      busySendAction: 'queue' as const,
+      setBusySendAction: () => {},
+      handleStopTurn: () => {},
+      handleQueuePrompt: () => {},
+      handleRemoveQueuedPrompt: () => {},
+      handleInterjectPrompt: async () => {},
+      capabilitiesModalOpen: false,
+      setCapabilitiesModalOpen: () => {},
+      folderTreeNodes: {},
+      selectedFolderId: '1',
+      requirePermission: true,
+      setRequirePermission: () => {},
+      setFolderModalOpen: () => {},
+      setEditingAgentName: () => {},
+      activeSandboxMarkdownModalPath: null,
+      setActiveSandboxMarkdownModalPath: () => {},
+      sandboxMarkdownCache: {},
+      sandboxMarkdownLoading: {},
+    } as unknown as StudioController
+
+    // 1. Signed-out saved conversation with 0 hydrated messages -> header title + conv-signin-gate (no copy-thread button, no starter prompts)
+    const gateHtml = renderToStaticMarkup(React.createElement(StudioLeftPane, { ctl: baseCtl }))
+    expect(gateHtml).toContain('data-testid="left-pane-header"')
+    expect(gateHtml).toContain('Executive Revenue App')
+    expect(gateHtml).not.toContain('data-testid="copy-thread-trace-btn"')
+    expect(gateHtml).toContain('data-testid="conv-signin-gate"')
+    expect(gateHtml).toContain('data-testid="conv-signin-btn"')
+    expect(gateHtml).toContain('Sign In to See Conversation')
+    expect(gateHtml).not.toContain('dab-empty-chat')
+
+    // 2. oauthSigningIn state & archived conversation lookup via allConversations
+    const signingInHtml = renderToStaticMarkup(
+      React.createElement(StudioLeftPane, {
+        ctl: Object.assign({}, baseCtl, {
+          oauthSigningIn: true,
+          conversations: [],
+          allConversations: [Object.assign({}, savedConv, { archived: true, label: 'Archived Revenue App' })],
+        }),
+      })
+    )
+    expect(signingInHtml).toContain('Archived Revenue App')
+    expect(signingInHtml).toContain('Signing in…')
+
+    // 3. Unsaved fresh local conversation (not in conversations) while signed out -> keeps starter prompts (.dab-empty-chat)
+    const freshLocalHtml = renderToStaticMarkup(
+      React.createElement(StudioLeftPane, {
+        ctl: Object.assign({}, baseCtl, { activeConversationId: 'conv_fresh_local_1' }),
+      })
+    )
+    expect(freshLocalHtml).toContain('dab-empty-chat')
+    expect(freshLocalHtml).not.toContain('data-testid="conv-signin-gate"')
+    expect(freshLocalHtml).not.toContain('data-testid="left-pane-header"')
+
+    // 4. Hydrated conversation -> renders copy-thread-trace-btn and messages without conv-signin-gate
+    const hydratedHtml = renderToStaticMarkup(
+      React.createElement(StudioLeftPane, {
+        ctl: Object.assign({}, baseCtl, {
+          isAuthenticated: true,
+          messages: [
+            { role: 'user', text: 'Build KPI App' },
+            { role: 'assistant', text: 'Built Executive Revenue App.', interactionId: 'v1_app_42' },
+          ],
+        }),
+      })
+    )
+    expect(hydratedHtml).toContain('data-testid="copy-thread-trace-btn"')
+    expect(hydratedHtml).not.toContain('data-testid="conv-signin-gate"')
+
+    // 5. hydrateRemoteConversationMessages honors window.__MOCK_LOOKER_EXTENSION__.requireAuthForHydration
+    clearSessionConversationMessages()
+    const prevWin = (globalThis as { window?: unknown }).window
+    const mockWin = {
+      __INTERACTION_CALLS__: [] as Array<{ url: string; path: string; method: string; id?: string }>,
+      __MOCK_LOOKER_EXTENSION__: {
+        requireAuthForHydration: true,
+        mockInteractions: {
+          v1_app_42_r: {
+            id: 'v1_app_42_r',
+            environment_id: 'env_42',
+            status: 'completed',
+            input: [{ type: 'text', text: '<USER_MESSAGE>Build KPI App</USER_MESSAGE>' }],
+          },
+          v1_app_42: {
+            id: 'v1_app_42',
+            previous_interaction_id: 'v1_app_42_r',
+            environment_id: 'env_42',
+            status: 'completed',
+            output_text: 'Built KPI App.',
+          },
+        },
+      },
+    }
+    try {
+      ;(globalThis as { window?: unknown }).window = mockWin
+      const unauthRes = await hydrateRemoteConversationMessages({
+        auth: { mode: 'oauth', oauthToken: '' },
+        conv: savedConv,
+        activeEnvironmentId: 'env_42',
+      })
+      expect(unauthRes).toEqual({ expired: false, messages: [], prunedIds: [], resolvedEnvironmentId: 'env_42' })
+      expect(mockWin.__INTERACTION_CALLS__).toHaveLength(0)
+
+      // Pure Looker CA pointer still synthesizes locally without sandbox auth
+      const caRes = await hydrateRemoteConversationMessages({
+        auth: { mode: 'oauth', oauthToken: '' },
+        conv: {
+          id: 'conv_ca_local',
+          type: 'conversational-analytics',
+          label: 'Margin Q&A',
+          caConversationId: 'ca_99',
+          content: { caConversationId: 'ca_99', agentName: 'eCommerce Agent', initialQuestion: 'Top margin brand?' },
+          updatedAt: '2026-11-19T12:00:00Z',
+        },
+      })
+      expect(caRes.messages).toHaveLength(2)
+      expect(mockWin.__INTERACTION_CALLS__).toHaveLength(0)
+
+      // Once signed in with OAuth token, remote turns hydrate in 1 parallel batch
+      const authRes = await hydrateRemoteConversationMessages({
+        auth: { mode: 'oauth', oauthToken: 'tok_signed_in' },
+        conv: savedConv,
+        activeEnvironmentId: 'env_42',
+      })
+      expect(mockWin.__INTERACTION_CALLS__).toHaveLength(2)
+      expect(authRes.messages).toEqual([
+        { role: 'user', text: 'Build KPI App' },
+        { role: 'assistant', text: 'Built KPI App.', interactionId: 'v1_app_42' },
+      ])
+    } finally {
+      if (prevWin === undefined) delete (globalThis as { window?: unknown }).window
+      else (globalThis as { window?: unknown }).window = prevWin
+      clearSessionConversationMessages()
     }
   })
 }

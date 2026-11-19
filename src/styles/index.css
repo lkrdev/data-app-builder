@@ -559,6 +559,7 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
   .dab-agent-name-editor{flex:1 1 auto}.dab-agent-name-input{flex:1 1 48px;width:min(126px,100%)}
   .dab-controls{gap:6px;flex-wrap:nowrap;width:auto;justify-content:flex-end;flex-shrink:0}
   .dab-topbar .dab-agent-name-edit-btn,.dab-topbar [data-testid="studio-edit-agent-name-btn"],.dab-topbar [data-testid="permission-mode-toggle"],.dab-topbar .dab-folder-picker > span,.dab-topbar [data-testid="topbar-folder-trigger"],.dab-topbar .dab-folder-picker > [data-testid="folder-selector-skeleton"],.dab-topbar [data-testid="topbar-fullscreen-toggle"],.dab-topbar .dab-divider,.dab-left-pane-header{display:none !important}
+  .dab-left-pane:has([data-testid="conv-signin-gate"]) .dab-left-pane-header{display:flex !important}
   .dab-topbar .dab-folder-picker{gap:0;margin:0}
   .dab-mobile-only-menu-item{display:flex}
   .dab-mobile-only-btn{display:inline-flex !important}
@@ -618,4 +619,8 @@ details.dab-thinking-step > summary.dab-thinking-step-header::-webkit-details-ma
 .dab-toast-dismiss{display:inline-flex;align-items:center;justify-content:center;width:22px;min-width:22px;height:22px;min-height:22px;margin:-2px -4px -2px 0;padding:0;border:none;border-radius:5px;background:transparent;color:var(--dab-text-muted);font-size:15px;font-weight:600;line-height:1;cursor:pointer;flex-shrink:0}
 .dab-toast-dismiss:hover,.dab-toast-dismiss:focus-visible{background:var(--dab-surface-subtle);color:var(--dab-text-strong)}
 .dab-toast-dismiss:focus-visible{outline:2px solid var(--dab-accent);outline-offset:1px}
+.dab-conv-signin-gate{margin:auto;width:100%;max-width:320px;padding:20px 18px;display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;border-radius:10px;min-width:0}
+.dab-conv-signin-icon{width:34px;height:34px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:var(--dab-accent-subtle);border:1px solid var(--dab-accent-border);color:var(--dab-accent-text);flex-shrink:0}
+.dab-conv-signin-title{font-size:13.5px;font-weight:600;color:var(--dab-text-strong);line-height:1.35}
+.dab-conv-signin-desc{margin:0 0 4px;font-size:12px;line-height:1.45;color:var(--dab-text-muted)}
 
