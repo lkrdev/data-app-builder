@@ -1,5 +1,7 @@
 function registerVisualPart15Tests(ctx) {
   test('Issue #238: stacks bottom-right StudioToast notifications across all 4 tones in Light & Dark themes, routes non-conversation errors out of chat messages, and supports manual & auto-dismiss', async () => {
+    if (ctx.chrome) ctx.chrome.close()
+    ctx.chrome = await ctx.startHeadlessChrome()
     await ctx.chrome.send('Emulation.setDeviceMetricsOverride', {
       width: 1440,
       height: 900,
@@ -7,33 +9,37 @@ function registerVisualPart15Tests(ctx) {
       mobile: false,
     })
 
-    // 1. Boot on /?scenario=skills_outdated while signed out: clicking topbar-env-sync-btn shows error toast without flipping to syncing or adding .dab-msg-error to chat
     await ctx.chrome.send('Page.navigate', {
       url: `http://127.0.0.1:${ctx.port}/?scenario=skills_outdated`,
     })
-    const syncBtnDeadline = Date.now() + 8000
-    while (Date.now() < syncBtnDeadline) {
+    const deadline = Date.now() + 8000
+    let ready = false
+    while (Date.now() < deadline) {
       const r = await ctx.chrome.send('Runtime.evaluate', {
         expression: `Boolean(window.__DAB_STUDIO__ && document.querySelector('[data-testid="topbar-env-sync-btn"]'))`,
         returnByValue: true,
       })
-      if (r.result?.value) break
+      if (r.result?.value) {
+        ready = true
+        break
+      }
       await new Promise((res) => setTimeout(res, 60))
     }
+    expect(ready).toBe(true)
 
     const toastCheckRes = await ctx.chrome.send('Runtime.evaluate', {
       expression: `(async () => {
-        const s = window.__DAB_STUDIO__;
-        s.setOauthToken('');
-        s.clearToasts();
-        s.setMessages([{ role: 'user', text: 'Existing clean chat turn' }, { role: 'assistant', text: 'Here is your revenue summary.' }]);
+        window.__DAB_STUDIO__.setOauthToken('');
+        window.__DAB_STUDIO__.clearToasts();
+        window.__DAB_STUDIO__.setMessages([
+          { role: 'user', text: 'Existing clean chat turn' },
+          { role: 'assistant', text: 'Here is your revenue summary.' },
+        ]);
         await new Promise((r) => setTimeout(r, 50));
 
-        // Click topbar-env-sync-btn while signed out
-        const syncBtn = document.querySelector('[data-testid="topbar-env-sync-btn"]');
-        syncBtn.click();
+        // 1. Click topbar-env-sync-btn while signed out: shows error toast without flipping to syncing or adding .dab-msg-error
+        document.querySelector('[data-testid="topbar-env-sync-btn"]').click();
         await new Promise((r) => setTimeout(r, 60));
-
         const envStatusAfterSignedOutSync = window.__DAB_STUDIO__.environmentStatus;
 
         // Trigger a second non-conversation error (failed Google OAuth popup) so 2 error toasts stack vertically
@@ -66,14 +72,13 @@ function registerVisualPart15Tests(ctx) {
         const stackedRoles = stackedErrors.map((el) => el.getAttribute('role'));
 
         // Manual dismiss of the first toast via studio-toast-dismiss-btn leaves only the second toast
-        const firstDismissBtn = stackedErrors[0]?.querySelector('[data-testid="studio-toast-dismiss-btn"]');
-        firstDismissBtn?.click();
+        stackedErrors[0]?.querySelector('[data-testid="studio-toast-dismiss-btn"]')?.click();
         await new Promise((r) => setTimeout(r, 50));
         const remainingAfterManualDismiss = Array.from(document.querySelectorAll('[data-testid="studio-toast"]')).map(
           (el) => (el.querySelector('.dab-toast-message')?.textContent || '').trim()
         );
 
-        // Verify all 4 tones (info, success, warning, error) in Light & Dark themes + zero horizontal/vertical clipping
+        // 2. Verify all 4 tones (info, success, warning, error) in Light & Dark themes + zero horizontal/vertical clipping
         window.__DAB_STUDIO__.clearToasts();
         window.__DAB_STUDIO__.setThemeMode('light');
         await new Promise((r) => setTimeout(r, 40));
@@ -110,7 +115,7 @@ function registerVisualPart15Tests(ctx) {
         const isDarkAttr = document.documentElement.getAttribute('data-theme') === 'dark';
         const darkTones = readToneStyles();
 
-        // Verify custom short auto-dismiss timer vs sticky (durationMs: null) toast
+        // 3. Verify custom short auto-dismiss timer vs sticky (durationMs: null) toast
         window.__DAB_STUDIO__.setThemeMode('light');
         window.__DAB_STUDIO__.clearToasts();
         await new Promise((r) => setTimeout(r, 40));
@@ -125,7 +130,7 @@ function registerVisualPart15Tests(ctx) {
           el.getAttribute('data-toast-id')
         );
 
-        // Verify 5-toast queue cap retains newest 5 items
+        // 4. Verify 5-toast queue cap retains newest 5 items
         window.__DAB_STUDIO__.clearToasts();
         for (let k = 1; k <= 6; k++) {
           window.__DAB_STUDIO__.pushToast({ tone: 'info', message: 'Burst #' + k, durationMs: null });
@@ -134,6 +139,20 @@ function registerVisualPart15Tests(ctx) {
         const cappedMessages = Array.from(document.querySelectorAll('[data-testid="studio-toast"] .dab-toast-message')).map((el) =>
           (el.textContent || '').trim()
         );
+
+        // 5. Verify /config route mounts StudioToastViewport on validation failure and never renders chat .dab-msg-error
+        window.__DAB_STUDIO__.clearToasts();
+        window.__DAB_STUDIO__.setMessages([{ role: 'error', text: 'Prior chat turn failure must not appear on /config' }]);
+        window.__DAB_STUDIO__.setClientId('');
+        window.__DAB_STUDIO__.history.push('/config');
+        await new Promise((r) => setTimeout(r, 60));
+        await window.__DAB_STUDIO__.handleSaveAuthSetup();
+        await new Promise((r) => setTimeout(r, 60));
+        const cfgCheck = {
+          pathname: window.__DAB_STUDIO__.location.pathname,
+          toastText: (document.querySelector('[data-testid="studio-toast"] .dab-toast-message')?.textContent || '').trim(),
+          chatErrorsOnConfig: document.querySelectorAll('.dab-msg-error').length,
+        };
 
         return Object.assign({}, vpSnap, {
           envStatusAfterSignedOutSync,
@@ -152,11 +171,16 @@ function registerVisualPart15Tests(ctx) {
           presentImmediately,
           presentAfterTimer,
           cappedMessages,
+          cfgCheck,
         });
       })()`,
       awaitPromise: true,
       returnByValue: true,
     })
+
+    if (toastCheckRes.exceptionDetails) {
+      throw new Error(toastCheckRes.exceptionDetails.exception?.description || toastCheckRes.exceptionDetails.text)
+    }
 
     const v = toastCheckRes.result.value
     expect(v.envStatusAfterSignedOutSync).toBe('active')
@@ -197,38 +221,7 @@ function registerVisualPart15Tests(ctx) {
     expect(v.presentImmediately).toEqual([v.autoId, v.stickyId])
     expect(v.presentAfterTimer).toEqual([v.stickyId])
     expect(v.cappedMessages).toEqual(['Burst #2', 'Burst #3', 'Burst #4', 'Burst #5', 'Burst #6'])
-
-    // 2. Also verify /config route mounts StudioToastViewport when Save Setup fails validation (and never leaks chat turn errors)
-    await ctx.chrome.send('Page.navigate', {
-      url: `http://127.0.0.1:${ctx.port}/?scenario=centered_empty_prompt&unconfigured=1`,
-    })
-    const cfgDeadline = Date.now() + 8000
-    while (Date.now() < cfgDeadline) {
-      const r = await ctx.chrome.send('Runtime.evaluate', {
-        expression: `Boolean(window.__DAB_STUDIO__ && window.__DAB_STUDIO__.location.pathname === '/config')`,
-        returnByValue: true,
-      })
-      if (r.result?.value) break
-      await new Promise((res) => setTimeout(res, 60))
-    }
-
-    const cfgToastRes = await ctx.chrome.send('Runtime.evaluate', {
-      expression: `(async () => {
-        window.__DAB_STUDIO__.setMessages([{ role: 'error', text: 'Prior chat turn failure must not appear on /config' }]);
-        window.__DAB_STUDIO__.setClientId('');
-        await new Promise((r) => setTimeout(r, 40));
-        await window.__DAB_STUDIO__.handleSaveAuthSetup();
-        await new Promise((r) => setTimeout(r, 60));
-        return {
-          pathname: window.__DAB_STUDIO__.location.pathname,
-          toastText: (document.querySelector('[data-testid="studio-toast"] .dab-toast-message')?.textContent || '').trim(),
-          chatErrorsOnConfig: document.querySelectorAll('.dab-msg-error').length,
-        };
-      })()`,
-      awaitPromise: true,
-      returnByValue: true,
-    })
-    expect(cfgToastRes.result.value).toEqual({
+    expect(v.cfgCheck).toEqual({
       pathname: '/config',
       toastText: 'Enter a Google Web OAuth 2.0 Client ID before saving.',
       chatErrorsOnConfig: 0,
