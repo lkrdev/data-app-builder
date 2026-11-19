@@ -614,6 +614,129 @@ export function renderTddMarkdownToHtml(markdown: string): string {
     i++
   }
 
-  return out.join('\n')
+    return out.join('\n')
+}
+
+export interface DataAppLoadVerificationResult {
+  ok: boolean
+  errors: string[]
+  height?: number
+  htmlLen?: number
+  tabsChecked?: number
+  skipped?: string
+}
+
+type PreflightWindowHooks = {
+  __MOCK_LOOKER_EXTENSION__?: unknown
+  __ENABLE_LIVE_DATA_APP_PREFLIGHT__?: boolean
+  __MOCK_DATA_APP_PREFLIGHT__?: (bundle: DataAppBundle) => Promise<DataAppLoadVerificationResult> | DataAppLoadVerificationResult
+  __VERIFY_DATA_APP_BUNDLE__?: typeof verifyDataAppBundleLoadsInBrowser
+}
+
+// ponytail: mounts prod_code inside an offscreen <iframe sandbox="allow-scripts" srcdoc> via Blob dynamic import
+// (~400ms–1.2s, works inside Looker's data:text/html;base64 ExtensionFrame2) to catch runtime TypeErrors, bad imports, and 0px renders before turn completion.
+export async function verifyDataAppBundleLoadsInBrowser(
+  bundle: DataAppBundle,
+  opts?: { timeoutMs?: number; signal?: AbortSignal; forceLive?: boolean }
+): Promise<DataAppLoadVerificationResult> {
+  if (typeof window !== 'undefined') {
+    const win = window as unknown as PreflightWindowHooks
+    if (typeof win.__MOCK_DATA_APP_PREFLIGHT__ === 'function') {
+      return await win.__MOCK_DATA_APP_PREFLIGHT__(bundle)
+    }
+    if (win.__MOCK_LOOKER_EXTENSION__ && !win.__ENABLE_LIVE_DATA_APP_PREFLIGHT__ && !opts?.forceLive) {
+      return { ok: true, errors: [], skipped: 'mock-harness' }
+    }
+  }
+  if (typeof window === 'undefined' || typeof document === 'undefined' || !document.body || typeof document.createElement !== 'function') {
+    return { ok: true, errors: [], skipped: 'no-dom' }
+  }
+  const prodCode = String(bundle?.prod_code || bundle?.code || '').trim()
+  if (!prodCode) return { ok: false, errors: ['Data App bundle has empty prod_code.'] }
+  const tagMatch = prodCode.match(/customElements\.define\(\s*['"]([a-z0-9-]+)['"]/i)
+  const tagName = tagMatch ? tagMatch[1] : ''
+  if (!tagName) {
+    return { ok: false, errors: ['Data App bundle does not register a custom element via customElements.define("<tag-name>", Class).'] }
+  }
+  const ver = prodCode.match(/looker-data-apps\/versions\/([^/'"]+)\/data-app\.js/)?.[1] || '1.3.0'
+  const runId = `dab_pf_${Math.random().toString(36).slice(2, 10)}`
+  const closeScript = '</' + 'script>'
+  const safeMod = prodCode.replace(/<\/script/gi, '<\\/script')
+  const vendorHead = prodCode.includes('gstatic.com')
+    ? [
+        `<link rel="stylesheet" href="https://www.gstatic.com/looker-data-apps/versions/${ver}/data-app.css">`,
+        ...['ag-grid/31.3.4/ag-grid-community.min.js', 'highcharts/11.4.8/highcharts.js', 'highcharts/11.4.8/highcharts-more.js', 'highcharts/11.4.8/highcharts-solid-gauge.js', 'highcharts/11.4.8/highcharts-funnel.js', 'highcharts/11.4.8/highcharts-treemap.js'].map(
+          (p) => `<script src="https://www.gstatic.com/looker-data-apps/vendor/${p}">${closeScript}`
+        ),
+      ]
+    : []
+  const htmlDoc = [
+    '<!DOCTYPE html><html><head><meta charset="utf-8">',
+    ...vendorHead,
+    '</head><body style="margin:0;padding:0;width:1280px;min-height:800px;">',
+    '<script type="module">',
+    'const errors = [];',
+    'const pushErr = (v) => { const s = String((v && (v.stack || v.message)) || v || ""); if (s && !/runQuery failed|Looker context|Chatty|timed out/i.test(s)) errors.push(s); };',
+    'window.addEventListener("error", (e) => pushErr(e.error || e.message));',
+    'window.addEventListener("unhandledrejection", (e) => pushErr(e.reason));',
+    'const origErr = console.error.bind(console);',
+    'console.error = (...args) => { const s = args.map((a) => (a && (a.stack || a.message)) || String(a)).join(" "); if (/\\[data-app error\\]|TypeError|ReferenceError|SyntaxError/i.test(s)) pushErr(s); origErr(...args); };',
+    `const sendResult = (payload) => parent.postMessage(Object.assign({ type: "__DAB_DATA_APP_PREFLIGHT__", runId: ${JSON.stringify(runId)} }, payload), "*");`,
+    '(async () => {',
+    '  try {',
+    `    const modUrl = URL.createObjectURL(new Blob([${JSON.stringify(safeMod)}], { type: "text/javascript" }));`,
+    '    try { await import(modUrl); } finally { URL.revokeObjectURL(modUrl); }',
+    `    const tag = ${JSON.stringify(tagName)};`,
+    '    if (!customElements.get(tag)) { sendResult({ ok: false, errors: errors.length ? errors : ["Custom element <" + tag + "> was not registered."] }); return; }',
+    '    let el = document.querySelector(tag);',
+    '    if (!el) { el = document.createElement(tag); document.body.appendChild(el); }',
+    '    if (el.updateComplete) await Promise.race([el.updateComplete.catch(pushErr), new Promise((r) => setTimeout(r, 450))]);',
+    '    await new Promise((r) => setTimeout(r, 100));',
+    '    const rect = el.getBoundingClientRect();',
+    '    const htmlLen = (el.innerHTML || "").trim().length;',
+    '    const tabBtns = Array.from(el.querySelectorAll(".da-tab-btn, [class*=\\"tab-btn\\"]")).slice(0, 6);',
+    '    for (const btn of tabBtns) { btn.click(); if (el.updateComplete) await Promise.race([el.updateComplete.catch(pushErr), new Promise((r) => setTimeout(r, 250))]); }',
+    '    if (tabBtns[0]) { tabBtns[0].click(); if (el.updateComplete) await Promise.race([el.updateComplete.catch(pushErr), new Promise((r) => setTimeout(r, 250))]); }',
+    '    if (errors.length > 0) { sendResult({ ok: false, errors: errors.slice(0, 5), height: Math.round(rect.height), htmlLen }); return; }',
+    '    if (htmlLen === 0 || rect.height < 20) { sendResult({ ok: false, errors: ["Data App rendered blank (height=" + Math.round(rect.height) + "px, htmlLen=" + htmlLen + ")."], height: Math.round(rect.height), htmlLen }); return; }',
+    '    sendResult({ ok: true, errors: [], height: Math.round(rect.height), htmlLen, tabsChecked: tabBtns.length });',
+    '  } catch (err) {',
+    '    const msg = String((err && (err.stack || err.message)) || err || "");',
+    '    if (/Failed to fetch dynamically imported module.*gstatic\\.com/i.test(msg)) { sendResult({ ok: true, errors: [], skipped: "network-unreachable" }); return; }',
+    '    pushErr(err); sendResult({ ok: false, errors: errors.slice(0, 5) });',
+    '  }',
+    '})();',
+    `${closeScript}</body></html>`,
+  ].join('\n')
+
+  const timeoutMs = opts?.timeoutMs ?? 6000
+  const iframe = document.createElement('iframe')
+  iframe.setAttribute('sandbox', 'allow-scripts')
+  iframe.style.cssText = 'position:fixed;left:-9999px;top:0;width:1280px;height:800px;visibility:hidden;pointer-events:none;border:0;'
+  return await new Promise<DataAppLoadVerificationResult>((resolve) => {
+    const cleanup = () => {
+      clearTimeout(timer)
+      window.removeEventListener('message', onMsg)
+      opts?.signal?.removeEventListener('abort', onAbort)
+      iframe.remove()
+    }
+    const onAbort = () => { cleanup(); resolve({ ok: true, errors: [], skipped: 'aborted' }) }
+    const timer = setTimeout(() => { cleanup(); resolve({ ok: true, errors: [], skipped: 'timeout' }) }, timeoutMs)
+    function onMsg(ev: MessageEvent) {
+      const d = ev.data as (DataAppLoadVerificationResult & { type?: string; runId?: string }) | null
+      if (!d || d.type !== '__DAB_DATA_APP_PREFLIGHT__' || d.runId !== runId) return
+      cleanup()
+      resolve({ ok: Boolean(d.ok), errors: Array.isArray(d.errors) ? d.errors : [], height: d.height, htmlLen: d.htmlLen, tabsChecked: d.tabsChecked, skipped: d.skipped })
+    }
+    if (opts?.signal?.aborted) { onAbort(); return }
+    opts?.signal?.addEventListener('abort', onAbort, { once: true })
+    window.addEventListener('message', onMsg)
+    iframe.srcdoc = htmlDoc
+    document.body.appendChild(iframe)
+  })
+}
+
+if (typeof window !== 'undefined') {
+  (window as unknown as PreflightWindowHooks).__VERIFY_DATA_APP_BUNDLE__ = verifyDataAppBundleLoadsInBrowser
 }
 

@@ -193,6 +193,96 @@ function registerVisualPart14Tests(ctx) {
       expect(k).toMatch(/^user_(env|config|conversations):/)
     }
   }, 25000)
+
+  test('verifies Data App bundles load in sandboxed srcdoc iframe before turn completion, catching render() TypeErrors, tab-switch ReferenceErrors, and blank 0px mounts', async () => {
+    await ctx.chrome.send('Page.navigate', {
+      url: `http://127.0.0.1:${ctx.port}/?scenario=centered_empty_prompt`,
+    })
+    const readyDeadline = Date.now() + 8000
+    while (Date.now() < readyDeadline) {
+      const r = await ctx.chrome.send('Runtime.evaluate', {
+        expression: `Boolean(window.__VERIFY_DATA_APP_BUNDLE__)`,
+        returnByValue: true,
+      })
+      if (r.result?.value) break
+      await new Promise((res) => setTimeout(res, 60))
+    }
+
+    const fixtures = {
+      brokenRender: [
+        'class BrokenApp extends HTMLElement {',
+        '  connectedCallback() { this.innerHTML = this.renderFilterBar(); }',
+        '}',
+        'customElements.define("pf-broken-app", BrokenApp);',
+      ].join('\n'),
+      blankMount: [
+        'class BlankApp extends HTMLElement {',
+        '  connectedCallback() { this.innerHTML = ""; }',
+        '}',
+        'customElements.define("pf-blank-app", BlankApp);',
+      ].join('\n'),
+      brokenTab: [
+        'class BrokenTabApp extends HTMLElement {',
+        '  connectedCallback() {',
+        '    this.style.display = "block";',
+        '    const wrap = document.createElement("div");',
+        '    wrap.style.minHeight = "120px";',
+        '    const b1 = document.createElement("button"); b1.className = "da-tab-btn active"; b1.textContent = "Pulse";',
+        '    const b2 = document.createElement("button"); b2.className = "da-tab-btn"; b2.textContent = "Forecast";',
+        '    b2.addEventListener("click", () => { window.nonexistentForecastHelper(); });',
+        '    wrap.append(b1, b2); this.appendChild(wrap);',
+        '  }',
+        '}',
+        'customElements.define("pf-broken-tab-app", BrokenTabApp);',
+      ].join('\n'),
+      validApp: [
+        'class HealthyApp extends HTMLElement {',
+        '  connectedCallback() { this.style.display = "block"; this.tab = "pulse"; this.draw(); }',
+        '  draw() {',
+        '    this.textContent = "";',
+        '    const wrap = document.createElement("div"); wrap.className = "da-container"; wrap.style.minHeight = "180px";',
+        '    for (const t of ["pulse", "tree"]) {',
+        '      const b = document.createElement("button"); b.className = "da-tab-btn"; b.textContent = t;',
+        '      b.addEventListener("click", () => { this.tab = t; this.draw(); }); wrap.appendChild(b);',
+        '    }',
+        '    const sec = document.createElement("section"); sec.textContent = this.tab; wrap.appendChild(sec);',
+        '    this.appendChild(wrap);',
+        '  }',
+        '}',
+        'customElements.define("pf-healthy-app", HealthyApp);',
+      ].join('\n'),
+    }
+
+    const pfRes = await ctx.chrome.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const fx = ${JSON.stringify(fixtures)};
+        const verify = window.__VERIFY_DATA_APP_BUNDLE__;
+        const beforeIframes = document.querySelectorAll('iframe').length;
+        const brokenRender = await verify({ title: 'Broken FilterBar App', raw_code: '', widgets: [], prod_code: fx.brokenRender }, { forceLive: true });
+        const blankMount = await verify({ title: 'Blank App', raw_code: '', widgets: [], prod_code: fx.blankMount }, { forceLive: true });
+        const brokenTab = await verify({ title: 'Broken Tab 2 App', raw_code: '', widgets: [], prod_code: fx.brokenTab }, { forceLive: true });
+        const validApp = await verify({ title: 'Healthy Sticker App', raw_code: '', widgets: [], prod_code: fx.validApp }, { forceLive: true });
+        const afterIframes = document.querySelectorAll('iframe').length;
+        return { brokenRender, blankMount, brokenTab, validApp, leakedIframes: afterIframes - beforeIframes };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+
+    if (pfRes.exceptionDetails) {
+      throw new Error(pfRes.exceptionDetails.exception?.description || pfRes.exceptionDetails.text)
+    }
+    const v = pfRes.result.value
+    expect(v.brokenRender.ok).toBe(false)
+    expect(v.brokenRender.errors.join('\n')).toContain('renderFilterBar is not a function')
+    expect(v.blankMount.ok).toBe(false)
+    expect(v.blankMount.errors.join('\n')).toContain('rendered blank')
+    expect(v.brokenTab.ok).toBe(false)
+    expect(v.brokenTab.errors.join('\n')).toContain('nonexistentForecastHelper is not a function')
+    expect(v.validApp).toMatchObject({ ok: true, errors: [], tabsChecked: 2 })
+    expect(v.validApp.height).toBeGreaterThanOrEqual(180)
+    expect(v.leakedIframes).toBe(0)
+  }, 20000)
 }
 
 module.exports = { registerVisualPart14Tests }

@@ -70,6 +70,7 @@ import {
   type NativeContentState,
   normalizeNativeContent,
   parseExploreId,
+  verifyDataAppBundleLoadsInBrowser,
 } from './lookerApi'
 import { extractSlashSkillIds, KDA_SKILL_MD } from './lookmlSkills'
 import {
@@ -613,15 +614,18 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     requiresBashSandbox, appDir, initialLookerHttpMs, initialLookerHttpCalls, initialApiRetries,
   })
   const {
-    interaction, trackedEnvId, activitySteps, bridgePermissionError, isDataAppBundleTurn,
+    interaction, trackedEnvId, activitySteps, bridgePermissionError, verifiedBundle, lastPreflightError, isDataAppBundleTurn,
     pollWaitMs, pollCount, codemodeExecMs, lookerHttpMs, codemodeCalls, lookerHttpCalls, apiRetries,
   } = loopRes
   const thinkingDurationSec = Math.max(1, Math.round((Date.now() - turnStartMs) / 1000))
+  if (lastPreflightError && !verifiedBundle) {
+    throw new Error(`Data App failed browser load verification after auto-repair attempts: ${lastPreflightError}`)
+  }
 
-  let bundle = extractBundleFromInteraction(interaction)
+  let bundle = verifiedBundle ?? extractBundleFromInteraction(interaction)
   const refBundleTitle = bundle?.title
   const refBundleWidgets = bundle?.widgets
-  bundle = await hydrateDataAppBundleRef(bundle, { extensionSDK, auth, environmentId: trackedEnvId })
+  if (!verifiedBundle) bundle = await hydrateDataAppBundleRef(bundle, { extensionSDK, auth, environmentId: trackedEnvId })
   if (!bundle && isDataAppBundleTurn()) {
     const stepsJson = JSON.stringify(interaction.steps || [])
     const matchedBundleRefs = stepsJson.match(/\/workspace\/apps\/[A-Za-z0-9_-]+\/bundle\.json/g)
@@ -694,23 +698,18 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     }
     if (!bundle && stepWrittenSource) bundle = toRecoveredBundle(stepWrittenSource)
   }
+  if (bundle && !verifiedBundle) {
+    const recPf = await verifyDataAppBundleLoadsInBrowser(bundle, { signal })
+    if (!recPf.ok) throw new Error(`Data App failed browser load verification: ${recPf.errors.join('\n')}`)
+  }
   const nativeBundle = extractNativeContentFromInteraction(interaction)
   let lookmlBundle = extractLookmlBundleFromInteraction(interaction)
   const bundleRefPath = (lookmlBundle as unknown as { __bundle_ref__?: string } | null)?.__bundle_ref__
   if (bundleRefPath && trackedEnvId) {
     try {
-      const fullBundleJson = await fetchEnvironmentFile({
-        extensionSDK,
-        auth,
-        environmentId: trackedEnvId,
-        path: bundleRefPath,
-      })
-      lookmlBundle =
-        extractLookmlBundleFromInteraction({ output_text: `<LOOKML_BUNDLE>${fullBundleJson}</LOOKML_BUNDLE>` }) ||
-        lookmlBundle
-    } catch {
-      /* keep compact bundle fallback */
-    }
+      const fullBundleJson = await fetchEnvironmentFile({ extensionSDK, auth, environmentId: trackedEnvId, path: bundleRefPath })
+      lookmlBundle = extractLookmlBundleFromInteraction({ output_text: `<LOOKML_BUNDLE>${fullBundleJson}</LOOKML_BUNDLE>` }) || lookmlBundle
+    } catch { /* keep compact bundle fallback */ }
   }
   const alertBundle = extractAlertBundleFromInteraction(interaction)
   const caSelection = extractCaSelectionFromInteraction(interaction)

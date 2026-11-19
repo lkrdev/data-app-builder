@@ -735,18 +735,14 @@ def main():
         else: args.append(raw_args[i]); i += 1
     default_app_path = str(Path(app_dir) / "app.js")
     if not args: sys.exit("Usage: python3 /workspace/bundle_app.py [--app-dir <dir>] <path/to/app.js> [title] OR --stdin [title] [output_path]")
-    if args[0] == "--stdin":
-        title, app_path = (args[1] if len(args) > 1 else "Data App"), Path(args[2] if len(args) > 2 else default_app_path).resolve()
-        app_path.parent.mkdir(parents=True, exist_ok=True); app_path.write_text(sys.stdin.read(), encoding="utf-8")
+    if args[0] == "--stdin": title, app_path = (args[1] if len(args) > 1 else "Data App"), Path(args[2] if len(args) > 2 else default_app_path).resolve(); app_path.parent.mkdir(parents=True, exist_ok=True); app_path.write_text(sys.stdin.read(), encoding="utf-8")
     else:
         cand = Path(args[0]).resolve(); app_path, title = (cand / "app.js" if cand.is_dir() else cand), (args[1] if len(args) > 1 else "Data App")
         if not app_path.is_file() and Path(default_app_path).is_file(): app_path = Path(default_app_path).resolve()
         if not app_path.is_file(): sys.exit(f"error: {app_path} does not exist")
-    app_path.write_text(normalize_positional_grid_cols(app_path.read_text(encoding="utf-8")), encoding="utf-8")
-    version, syn = DEFAULT_VERSION, check_syntax(app_path)
+    app_path.write_text(normalize_positional_grid_cols(app_path.read_text(encoding="utf-8")), encoding="utf-8"); version, syn = DEFAULT_VERSION, check_syntax(app_path)
     if not syn.get("ok"): print(json.dumps({"stage": "syntax", "error": syn}, indent=2), file=sys.stderr); sys.exit(1)
-    safety, warnings, raw_js = check_tile_safety(app_path), check_composition(app_path), app_path.read_text(encoding="utf-8")
-    clean_js, raw_lines = strip_comments(raw_js), raw_js.splitlines()
+    safety, warnings, raw_js = check_tile_safety(app_path), check_composition(app_path), app_path.read_text(encoding="utf-8"); clean_js, raw_lines = strip_comments(raw_js), raw_js.splitlines()
     _add = lambda pos, rule, msg: safety.append({"line": raw_js.count(chr(10), 0, pos) + 1, "rule": rule, "message": msg, "snippet": raw_lines[raw_js.count(chr(10), 0, pos)].strip()[:100]})
     for dm in re.finditer("""(?:[.][a-z0-9_]+(?<!_hour_of)|[$][{][^}]+[}])_day(?![a-zA-Z0-9_])""", clean_js): _add(dm.start(), "invalid-lookml-day-timeframe", "Replace '*_day' with '*_date' and key PERIOD_DEFAULTS/WINDOW_OPTIONS/UNITS by 'date'.")
     dm_day = re.search("""(?<![a-zA-Z0-9_.$])day[ ]*:|(?<![a-zA-Z0-9_$])(?:value|period)[ ]*[:=]=?[ ]*['"]day['"]""", clean_js) if re.search("""_[$][{][^}]*period(?![a-zA-Z0-9_])""", clean_js) else None
@@ -756,9 +752,8 @@ def main():
     def _kpi_sub(src, idx):
         d, cur = 1, idx
         for tm in re.finditer("""<(/?)(?:div|section)(?![a-zA-Z0-9_-])""", src[idx:], re.I):
-            d += -1 if tm.group(1) else 1
+            d, cur = d + (-1 if tm.group(1) else 1), idx + tm.end()
             if d <= 0: return src[idx:idx + tm.start()]
-            cur = idx + tm.end()
         return src[idx:cur + 400]
     _is_kpi_sub, kpi_msg, sel_excl, kpi_offs = (lambda s: ("<app-kpi" in s or "kpi-change" in s) and "<app-chart" not in s and "<app-grid" not in s), "Forbid repeat(auto-fit/auto-fill) on .da-kpi-grid; set container-type: inline-size and @container 4 -> 2 -> 1 columns.", "[^{};<>=" + chr(96) + "]*", []
     for km in re.finditer("""([.#][a-zA-Z0-9_-]+""" + sel_excl + """)[{][^}]*repeat[(]""" + ws_cls + """auto-(?:fit|fill)""", css_js, re.I):
@@ -767,8 +762,7 @@ def main():
         if "kpi" in im.group(0).lower() or _is_kpi_sub(_kpi_sub(css_js, im.end())): kpi_offs.append(im.start())
     if "kpi-change" in css_js and ("@container" not in css_js or "container-type" not in css_js or ("da-kpi-grid" in css_js and not re.search("""[.]da-kpi-grid""" + sel_excl + """[{][^}]*grid-template-columns""", re.sub("""@container[^{]*[{](?:[^{}]*[{][^}]*[}])*[^}]*[}]""", "", css_js), re.I))): kpi_offs.append(max(0, css_js.find("da-kpi-grid") if "da-kpi-grid" in css_js else css_js.find("kpi-change")))
     for off in kpi_offs: _add(off, "unbalanced-kpi-grid", kpi_msg)
-    masked_js, expr_store = _strip_comments_and_mask_expressions(clean_js)[:2]
-    _um = lambda s: "".join("" if c == FILLER else expr_store[ord(c) - EXPR_BASE] if 0 <= ord(c) - EXPR_BASE < len(expr_store) else c for c in s)
+    masked_js, expr_store = _strip_comments_and_mask_expressions(clean_js)[:2]; _um = lambda s: "".join("" if c == FILLER else expr_store[ord(c) - EXPR_BASE] if 0 <= ord(c) - EXPR_BASE < len(expr_store) else c for c in s)
     for sm in re.finditer("""<app-select(?![a-zA-Z0-9_-])[^>]*>""", masked_js, re.I):
         if re.search("""compare""" + ws_one + """against""", _um(sm.group(0)), re.I): _add(sm.start(), "forbidden-compare-against-dropdown", "Forbid <app-select label='Compare against'>; use KPI card-border compare (--app-chart-1 / --app-chart-2).")
     cns = _mask_lits(clean_js, _lit_spans(clean_js)); cm_m = re.search("""(?<![a-zA-Z0-9_$])compareMetric(?![a-zA-Z0-9_$])""", cns)
@@ -784,15 +778,20 @@ def main():
         if not (ok_ct and ok_rq and ok_ax): _add(cm_m.start(), "invalid-metric-comparison-query-or-axis", "Use Promise.all + runQuery in loadTrendData() -> <app-chart .data=...> (no .query, updated(), or dateBase !==) + yAxis[1] (opposite: true, linkedTo: 0 when shareScale).")
     ls_msg = "DataApp uses Light DOM (DataApp.styles is undefined -> blank crash, and Lit ignores static styles). Remove static styles/DataApp.styles and render <style>...</style> inside render()."
     for sm in re.finditer("""(?<![a-zA-Z0-9_$.])DataApp""" + ws_cls + """[.]""" + ws_cls + """styles(?![a-zA-Z0-9_$])""", cns): _add(sm.start(), "light-dom-static-styles", ls_msg)
-    for dm in re.finditer("""extends""" + ws_one + """DataApp""" + ws_cls + """[{]""", cns): [(_add(dm.end() + sm.start(), "light-dom-static-styles", ls_msg)) for sm in re.finditer("""(?<![a-zA-Z0-9_$.])static""" + ws_one + """(?:get""" + ws_one + """)?styles(?![a-zA-Z0-9_$])""", (_extract_balanced_braces(cns, dm.end() - 1) or ("", 0))[0])]
+    _da_m, _js_kw = set("constructor isRendering isDark _syncDarkTheme connectedCallback disconnectedCallback refreshAll setCrossFilter clearCrossFilter clearCrossFilters _scheduleCrossFilterRepaint toggleCrossFilter getEffectiveFilters toggleDarkMode renderThemeToggle _resolveToolkitVersion _resolveLastUpdated _formatStampText _syncStamp createRenderRoot updated _initLookerContext runQuery mergeQueries requestUpdate performUpdate scheduleUpdate shouldUpdate willUpdate firstUpdated update getUpdateComplete addController removeController adoptStyles render addEventListener removeEventListener dispatchEvent querySelector querySelectorAll getElementsByClassName getElementsByTagName getBoundingClientRect getClientRects setAttribute removeAttribute getAttribute hasAttribute toggleAttribute closest matches contains append appendChild prepend remove replaceChildren focus blur click scroll scrollTo scrollBy scrollIntoView animate attachShadow cloneNode hasOwnProperty toString valueOf".split()), {"if", "for", "while", "switch", "catch", "function", "return", "typeof", "delete", "void", "await", "new"}
+    for dm in re.finditer("""extends""" + ws_one + """DataApp""" + ws_cls + """[{]""", cns):
+        cb = (_extract_balanced_braces(cns, dm.end() - 1) or ("", 0))[0]; [(_add(dm.end() + sm.start(), "light-dom-static-styles", ls_msg)) for sm in re.finditer("""(?<![a-zA-Z0-9_$.])static""" + ws_one + """(?:get""" + ws_one + """)?styles(?![a-zA-Z0-9_$])""", cb)]
+        if cb and not re.search("""Object""" + ws_cls + """[.]""" + ws_cls + """assign""" + ws_cls + """[(]""" + ws_cls + """this(?![a-zA-Z0-9_$])""", cb):
+            own_m = {x.group(1) for x in re.finditer("""(?<![a-zA-Z0-9_$.])([A-Za-z_$][A-Za-z0-9_$]*)""" + ws_cls + """(?:[(][^{;]*[)]""" + ws_cls + """[{]|=(?!=))""", cb) if x.group(1) not in _js_kw} | {x.group(1) for x in re.finditer("""(?<![a-zA-Z0-9_$.])this""" + ws_cls + """[.]""" + ws_cls + """([A-Za-z_$][A-Za-z0-9_$]*)""" + ws_cls + """=(?!=)""", cb)}
+            [(_add(dm.end() + cm.start(), "unknown-data-app-method", "Unknown DataApp method 'this." + cm.group(1) + "()'. DataApp only provides refreshAll, setCrossFilter, toggleCrossFilter, clearCrossFilter, clearCrossFilters, getEffectiveFilters, toggleDarkMode, renderThemeToggle, runQuery, mergeQueries — build filter bars with <app-select> or define " + cm.group(1) + "() on your class.")) for cm in re.finditer("""(?<![a-zA-Z0-9_$.])this""" + ws_cls + """[.]""" + ws_cls + """([A-Za-z_$][A-Za-z0-9_$]*)""" + ws_cls + """[(]""", cb) if cm.group(1) not in (_da_m | own_m)]
     if safety: print(json.dumps({"stage": "safety", "violations": safety}, indent=2), file=sys.stderr); sys.exit(1)
     extraction = extract_widget_queries(app_path)
     if extraction.stamped_code is None: print(json.dumps({"stage": "widget_extraction", "error": extraction.error}, indent=2), file=sys.stderr); sys.exit(1)
     runtime_url, vendor_url = resolve_shared_urls({}, Path("/workspace"), version)
     bundle = {"title": title, "version": version, "raw_code": app_path.read_text(encoding="utf-8"), "prod_code": re.sub("""[.][.][.]""" + ws_cls + """DataApp""" + ws_cls + """[.]""" + ws_cls + """styles(?![a-zA-Z0-9_$])""", "...(DataApp.styles || [])", prepare_production_content(extraction.stamped_code, runtime_url, vendor_url)), "widgets": extraction.widgets, "warnings": list(warnings) + list(extraction.warnings)}
-    bpath, full_json = (app_path.parent / "bundle.json" if app_path.parent != Path("/workspace") else Path("/workspace/bundle.json")), json.dumps(bundle)
+    bpath, full_json, wrote_ref = (app_path.parent / "bundle.json" if app_path.parent != Path("/workspace") else Path("/workspace/bundle.json")), json.dumps(bundle), False
     try: bpath.write_text(full_json, encoding="utf-8"); wrote_ref = True
-    except Exception: wrote_ref = False
+    except Exception: pass
     print("<DATA_APP_BUNDLE>" + (json.dumps({"__bundle_ref__": str(bpath), "title": title, "version": version, "widgets": extraction.widgets, "warnings": bundle["warnings"]}) if wrote_ref and len(full_json) > 40000 else full_json) + "</DATA_APP_BUNDLE>")
 if __name__ == "__main__": main()
 `
