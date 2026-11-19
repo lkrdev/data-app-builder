@@ -1146,6 +1146,115 @@ else if (args[0] === 'issue' && args[1] === 'create') process.stdout.write('http
   assert.equal(gzOut.imp.id, '99')
   assert.deepEqual(gzOut.imp.element_id_map, { e1: 'e_new' })
 
+  // Standalone single-turn Data App eval script & output hygiene grader check
+  const evalPkgJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
+  assert.equal(evalPkgJson.scripts['eval:data-app'], 'node scripts/eval-data-app.mjs')
+  const { STICKER_BOOK_PROMPT, gradeDataAppTurnOutput } = await import('./eval-data-app.mjs')
+  assert(/playful sticker-book e-commerce command center/i.test(STICKER_BOOK_PROMPT))
+  const badGrade = gradeDataAppTurnOutput({
+    resolvedUseCase: 'app',
+    bundle: null,
+    baseAssistantText: 'Built Command Center ([app.js](file:///workspace/apps/conv_1/app.js)).',
+    finalAssistantText: 'Built Command Center ([app.js](file:///workspace/apps/conv_1/app.js)).',
+    publishedDashboardId: '',
+    contentItems: [],
+    liveVerification: {},
+  })
+  assert.equal(badGrade.passed, false)
+  assert.equal(badGrade.checks.noJsLinks, false)
+  assert.equal(badGrade.checks.noJsReferences, false)
+  assert.equal(badGrade.checks.hasDashboardLink, false)
+
+  const goodSummary = 'Built the Playful Sticker-Book E-Commerce Command Center across Pulse, Network, Forecast, Voice, and Tree views with Lu guided tour, cross-filtering, and Query Inspector.'
+  const goodFinal = `${goodSummary}\n\n**Looker Dashboard:** [Open Sticker-Book Command Center](/dashboards/777)`
+  const goodCode = "import { DataApp } from 'https://www.gstatic.com/looker-data-apps/versions/1.3.0/data-app.js'; const views = ['Pulse','Network','Forecast','Voice','Tree']; const m = 'thelook', e = 'order_items'; customElements.define('sticker-app', class extends DataApp {});"
+  const baseGoodArgs = {
+    resolvedUseCase: 'app',
+    bundle: { raw_code: goodCode, prod_code: goodCode },
+    baseAssistantText: goodSummary,
+    finalAssistantText: goodFinal,
+    publishedDashboardId: '777',
+    contentItems: [{ id: '777', contentType: 'data_app', embedPath: '/embed/dashboards/777' }],
+    liveVerification: {
+      dashboardExists: true,
+      activeLayoutIsExtension: true,
+      hasInlineExtensionTile: true,
+      loadedBundleOk: true,
+      loadedCode: goodCode,
+    },
+  }
+  const blankBrowserGrade = gradeDataAppTurnOutput({
+    ...baseGoodArgs,
+    liveVerification: {
+      ...baseGoodArgs.liveVerification,
+      browserRender: { renderedNonBlank: false, height: 0, textLength: 0, clickedViews: [], uncaughtExceptions: ['TypeError: DataApp.styles is not iterable'] },
+    },
+  })
+  assert.equal(blankBrowserGrade.passed, false)
+  assert.equal(blankBrowserGrade.checks.browserRenderedNonBlank, false)
+
+  const goodGrade = gradeDataAppTurnOutput({
+    ...baseGoodArgs,
+    liveVerification: {
+      ...baseGoodArgs.liveVerification,
+      browserRender: { renderedNonBlank: true, height: 940, textLength: 1620, clickedViews: ['Network', 'Forecast', 'Voice', 'Tree', 'Pulse'], uncaughtExceptions: [] },
+    },
+  })
+  assert.equal(goodGrade.passed, true)
+  assert.equal(goodGrade.score, '9/9')
+
+  // Verify BUNDLE_APP_PY blocks DataApp.styles and static styles on DataApp (Light DOM blank-screen guard)
+  const bundlePyTestPath = path.join(workDir, 'bundle_app_light_dom_check.py')
+  const { BUNDLE_APP_PY } = require(path.join(repoRoot, 'src/antigravityPrompts.ts'))
+  writeFileSync(bundlePyTestPath, BUNDLE_APP_PY, 'utf8')
+  let threwLightDom = false
+  try {
+    execFileSync('/usr/bin/python3', [bundlePyTestPath, '--app-dir', path.join(workDir, 'bad_ld'), '--stdin', 'Bad Light DOM'], {
+      input: "import { DataApp, html, css } from '/runtime/data-app.js';\nclass Bad extends DataApp { static styles = [...DataApp.styles, css`.x{}`]; render(){return html`<div>x</div>`;} }\ncustomElements.define('bad-ld', Bad);\n",
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+  } catch (err) {
+    threwLightDom = String(err.stderr || '').includes('light-dom-static-styles')
+  }
+  assert.equal(threwLightDom, true, 'BUNDLE_APP_PY must reject DataApp.styles / static styles on DataApp with rule light-dom-static-styles')
+
+  // Verify upsertPublishedDataApp normalizes ASCII apostrophes in titles so Looker ExtensionFrame2 decodeURIComponent('...') never throws SyntaxError
+  const { upsertPublishedDataApp } = require(path.join(repoRoot, 'src/dataAppPublisher.ts'))
+  const capturedDashTitles = []
+  const mockPubSdk = {
+    ok: async (p) => p,
+    authSession: {
+      transport: {
+        rawRequest: async (_m, p, _q, body) => {
+          const parsedBody = typeof body === 'string' ? JSON.parse(body) : body || {}
+          if (p.endsWith('/dashboards')) capturedDashTitles.push(parsedBody.title)
+          return {
+            ok: true,
+            statusCode: 200,
+            contentType: 'application/json',
+            body: p.endsWith('/data_app_extension')
+              ? { id: 'ext-uuid-1' }
+              : p.endsWith('/dashboards')
+              ? { id: '999', title: parsedBody.title, dashboard_layouts: [{ id: 'l1', type: 'newspaper', active: true }] }
+              : p.endsWith('/dashboard_elements')
+              ? { id: 'el-1', ...parsedBody }
+              : {},
+          }
+        },
+      },
+    },
+    dashboard: async () => ({ id: '999', dashboard_layouts: [{ id: 'l1', type: 'extension', active: true }] }),
+  }
+  const pubState = await upsertPublishedDataApp(
+    mockPubSdk,
+    { title: "Lu's Sticker-Book Command Center", raw_code: goodCode, prod_code: goodCode, widgets: [] },
+    '1'
+  )
+  assert.equal(pubState.title, 'Lu\u2019s Sticker-Book Command Center')
+  assert.equal(capturedDashTitles[0], 'Lu\u2019s Sticker-Book Command Center')
+  assert.equal(pubState.title.includes("'"), false)
+
   console.log('✓ test-bundle.mjs: all assertions passed!')
 } finally {
   rmSync(workDir, { recursive: true, force: true })

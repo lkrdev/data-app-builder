@@ -30,11 +30,15 @@ export function extractInteractionOutputText(interaction: AntigravityInteraction
   const outputText = (interaction?.outputs || []).map(nonThoughtText).join('').trim()
   if (outputText) return outputText
 
-  const stepText = (interaction?.steps || [])
-    .filter((s) => /^(?:message|text|assistant|model_output)$/.test(String(s?.type || '').trim()) || (!s?.type && typeof s?.text === 'string'))
-    .map(nonThoughtText)
-    .join('')
-    .trim()
+  const allSteps = interaction?.steps || []
+  let lastToolIdx = -1
+  allSteps.forEach((s, i) => {
+    if (/^(?:function_call|function_result|code_execution|code_execution_call|code_execution_result|executable_code)$/.test(String(s?.type || '').trim())) lastToolIdx = i
+  })
+  const msgFilter = (s?: AntigravityInteractionStep | null) =>
+    /^(?:message|text|assistant|model_output)$/.test(String(s?.type || '').trim()) || (!s?.type && typeof s?.text === 'string')
+  const tailText = (lastToolIdx >= 0 ? allSteps.slice(lastToolIdx + 1) : allSteps).filter(msgFilter).map(nonThoughtText).join('').trim()
+  const stepText = (tailText.replace(/<[A-Z_]+>[\s\S]*?<\/[A-Z_]+>/g, '').trim() ? tailText : '') || allSteps.filter(msgFilter).map(nonThoughtText).join('').trim()
   if (stepText) return stepText
 
   const steps = interaction?.steps || []
@@ -60,7 +64,9 @@ export function extractInteractionOutputText(interaction: AntigravityInteraction
 }
 
 export function extractBundleFromInteraction(interaction: AntigravityInteractionPayload | null | undefined): DataAppBundle | null {
-  const hit = parseTaggedJsonObjects(collectInteractionTextCandidates(interaction), /<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g).find((p) => Boolean(p.raw_code || p.prod_code || p.code))
+  const hit = parseTaggedJsonObjects(collectInteractionTextCandidates(interaction), /<DATA_APP_BUNDLE>([\s\S]*?)<\/DATA_APP_BUNDLE>/g)
+    .reverse()
+    .find((p) => Boolean(p.raw_code || p.prod_code || p.code || (typeof p.__bundle_ref__ === 'string' && p.__bundle_ref__.trim())))
   if (!hit) return null
   const code = String(hit.raw_code || hit.code || hit.prod_code || '')
   return { ...(hit as unknown as DataAppBundle), code, raw_code: String(hit.raw_code || code), prod_code: String(hit.prod_code || code), widgets: Array.isArray(hit.widgets) ? (hit.widgets as DataAppBundle['widgets']) : [] }

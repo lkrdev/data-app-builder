@@ -554,7 +554,7 @@ export function registerPermissionsPart19Tests(): void {
       expect(fetchedFiles.some((u) => u.includes('workspace/apps/race-bar/app.js'))).toBe(true)
       expect(recoveredTurn.bundle?.title).toBe('Build Order Items Race Bar Chart')
       expect(recoveredTurn.bundle?.code).toContain('export class RaceBarApp extends DataApp')
-      expect(recoveredTurn.bundle?.prod_code).toContain('https://www.gstatic.com/looker-data-apps/versions/1.2.0/data-app.js')
+      expect(recoveredTurn.bundle?.prod_code).toContain('https://www.gstatic.com/looker-data-apps/versions/1.3.0/data-app.js')
     } finally {
       LkrCodeMode.runPythonCode = origRunPython
     }

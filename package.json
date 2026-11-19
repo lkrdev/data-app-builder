@@ -16,6 +16,7 @@
     "pack-skills": "node scripts/pack-sandbox-skills.mjs",
     "clean:artifacts": "bash scripts/clean-artifacts.sh",
     "eval": "node scripts/run-evals.mjs",
+    "eval:data-app": "node scripts/eval-data-app.mjs",
     "test": "npm run lint:check && jest && node scripts/test-bundle.mjs"
   },
   "jest": {

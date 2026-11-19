@@ -321,7 +321,8 @@ export async function upsertPublishedDataApp(
     ...(nextStudio ? { data_app_studio: nextStudio } : {}),
   })
 
-  const title = bundle.title || existing?.title || 'Data App'
+  // ponytail: Looker's ExtensionFrame2 injects `decodeURIComponent('${encodeURIComponent(title)}')` in a single-quoted script literal (`encodeURIComponent("'") === "'"`), throwing SyntaxError on ASCII apostrophes.
+  const title = (bundle.title || existing?.title || 'Data App').replace(/'/g, '\u2019')
   const slug =
     title
       .toLowerCase()

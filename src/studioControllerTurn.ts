@@ -42,7 +42,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
   const {
     userId, userIdRef, setLookerWorkspaceId, syncLookerSessionWorkspace, availableLookmlProjects, canDeployLookml, loadingMetadata,
     models, selectedExplores, setSelectedExplores, mentionedItems, setMentionedItems, selectedFolderId, schemaMarkdown,
-    setSchemaMarkdown, activeMode, isLookmlMode, isHealthCheckMode, builderMode, setActiveObjectId, conversations,
+    setSchemaMarkdown, activeMode, isHealthCheckMode, setActiveObjectId, conversations,
     conversationsRef, setConversations, isCaMode, lookmlProjectId, setLookmlProjectId, activatedLookmlSkills,
     setActivatedLookmlSkills, lookmlBundle, setLookmlBundle, lastLookmlIdRef, publishedApp, setPublishedApp, lastPublishedIdRef,
     nativeContent, setNativeContent, lastNativeIdRef, alertBundle, setAlertBundle, contentItemsRef, setContentItems, activeContentTabKeyRef,
@@ -280,7 +280,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       clientId, projectId, apiKey, onUnauthorizedRefresh: () => triggerSilentOAuthRefresh(true),
     }
 
-    const explicitUseCase: StudioUseCase = fgAtStart ? explicitUseCaseRef.current : ((existingConv?.use_case as StudioUseCase) || 'auto')
+    const explicitUseCase: StudioUseCase = fgAtStart ? explicitUseCaseRef.current : 'auto'
     const classifiedPromptUseCase = matchExplicitUseCaseRule(effectivePrompt, allowedUseCases)
     const turnTargetUseCase: StudioUseCase = explicitUseCase !== 'auto' ? explicitUseCase : (classifiedPromptUseCase || 'auto')
 
@@ -393,9 +393,12 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       const stickyPromptSkills = promptSlashSkills.filter((id) => id !== 'looker-audit')
       const turnActivatedSkills = Array.from(new Set([...activatedLookmlSkills.filter((id) => id !== 'looker-audit'), ...stickyPromptSkills]))
       if (isFg() && (stickyPromptSkills.length > 0 || activatedLookmlSkills.includes('looker-audit'))) setActivatedLookmlSkills(turnActivatedSkills)
-      const effectiveLookmlTurn = turnTargetUseCase === 'lookml' || (turnTargetUseCase === 'auto' && fgAtStart && isLookmlMode)
+      const effectiveLookmlTurn =
+        explicitUseCase === 'lookml' || (explicitUseCase === 'auto' && classifiedPromptUseCase === 'lookml')
       const effectiveBuilderMode: 'data_app' | 'dashboard' =
-        turnTargetUseCase === 'dashboard' ? 'dashboard' : turnTargetUseCase === 'app' || turnTargetUseCase === 'data-investigator' ? 'data_app' : builderMode
+        explicitUseCase === 'dashboard' || (explicitUseCase === 'auto' && classifiedPromptUseCase === 'dashboard')
+          ? 'dashboard'
+          : 'data_app'
       const result = await runAntigravityTurn({
         sdk: core40SDK, extensionSDK, userId,
         environmentId: sharedEnvIdRef.current || currentSession.environmentId,
@@ -409,7 +412,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         canDeploy: canDeployLookml, warmEnvironmentInBackground: true,
         schemaMarkdown: turnSchemaMarkdown,
         userPrompt:
-          explicitUseCase === 'tile' || (fgAtStart && loadedScript) || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
+          explicitUseCase === 'tile' || (explicitUseCase !== 'auto' && fgAtStart && loadedScript) || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
             ? `Write a LkrCodeMode Python script for the user's request. Return the Python snippet inside a \`\`\`python code block.\n\nCurrent script:\n\`\`\`python\n${snapshot.scriptCode}\n\`\`\`\n\nUser request: ${turnPromptWithContext}`
             : turnPromptWithContext,
         images: attachedImages, existingAppCode: snapshot.currentAppCode || undefined,
@@ -496,7 +499,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
       }
 
       if (resolvedUseCase === 'tile' && !result.lookmlBundle && !result.nativeBundle && !result.bundle && !result.alertBundle) {
-        const isExplicitScriptRequest = explicitUseCase === 'tile' || (fgAtStart && loadedScript) || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
+        const isExplicitScriptRequest = explicitUseCase === 'tile' || (explicitUseCase !== 'auto' && fgAtStart && loadedScript) || EXPLICIT_SCRIPT_CREATION_RE.test(effectivePrompt)
         const pyMatch = (result.assistantText || '').match(/```(?:python|py)?\s*\n([\s\S]*?)```/i)
         const extractedPy = pyMatch ? pyMatch[1].trim() : ''
         const isAlertQuery = LOOKER_ALERT_QUERY_RE.test(effectivePrompt) || turnActivatedSkills.includes('looker-alerts') || promptSlashSkills.includes('looker-audit')
@@ -508,7 +511,7 @@ export function useStudioTurn(auth: StudioAuthAndPrefs, meta: StudioMetadata, lo
         const replyText = canOfferScript
           ? `${baseReply}\n\nWould you like me to save this Looker API lookup as a reusable **Script**?`
           : baseReply
-        if (isExplicitScriptRequest && (extractedPy || explicitUseCase === 'tile' || (fgAtStart && loadedScript))) {
+        if (isExplicitScriptRequest && (extractedPy || explicitUseCase === 'tile' || (explicitUseCase !== 'auto' && fgAtStart && loadedScript))) {
           const nextCode = extractedPy || snapshot.scriptCode
           const prevKeys = new Set(itemState.items.map((it) => it.key))
           const pyOut = await handleRunPython(

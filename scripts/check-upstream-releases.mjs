@@ -38,7 +38,7 @@ const buildIssueBody = ({ repo, fromLabel, toLabel, ver, url, summary, rows }) =
   `${summary.trim() || '_No release summary provided._'}\n\n## Changed Upstream Paths → Local \`data-app-builder\` Counterparts\n`,
   `| Upstream Path / Surface | Local \`data-app-builder\` Counterparts |\n| --- | --- |\n${rows.map(([src, dst]) => `| \`${String(src).replace(/\|/g, '\\|')}\` | ${dst} |`).join('\n')}\n`,
   '## Out-of-Scope Filter Reminder\n\n- **No MCP**: Ignore MCP server/tool features and `looker-mcp-skill`.\n- **No Go `looker-cli` binary in `/workspace/`**: Port worthwhile workflows into browser/WASM `LkrCodeMode` (`src/lkrCliBridge.ts`), `.agents/skills/*`, or `src/lookerPermissions.ts` — never install or shell out to the Go `looker-cli` binary in `/workspace/`.\n- **Bundle Budget**: Keep `dist/bundle.js < 2.00 MiB`.\n',
-  `## Verification\n\n- [ ] Implement relevant parity changes or close this issue as \`not planned\` to suppress \`${repo}:${ver}\`.\n- [ ] \`node scripts/check-upstream-releases.mjs --ack\`\n- [ ] \`npx jest src/__tests__/permissions.test.ts && node scripts/test-bundle.mjs && npm run eval\``,
+  `## Verification\n\n- [ ] Implement relevant parity changes or close this issue as \`not planned\` to suppress \`${repo}:${ver}\`.\n- [ ] \`node scripts/check-upstream-releases.mjs --ack\`\n- [ ] \`npx jest src/__tests__/permissions.test.ts && node scripts/test-bundle.mjs\``,
 ].join('\n')
 
 const fixture = fixturesArg ? JSON.parse(readFileSync(path.resolve(fixturesArg), 'utf8')) : null
