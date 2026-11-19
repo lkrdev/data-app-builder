@@ -469,7 +469,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
             testId="topbar-environment-btn" data-env-status={environmentStatus}
             data-env-reset-notice={envResetNotice ? 'true' : undefined} data-env-sync-notice={envSyncNotice ? 'true' : undefined}
             onClick={() => setEnvMenuOpen((prev) => !prev)} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }}
-            title={environmentStatus === 'stopped' ? 'Antigravity sandbox environment stopped (click to manage)' : environmentStatus === 'resetting' ? 'Resetting Antigravity sandbox environment...' : environmentStatus === 'syncing' ? 'Syncing Studio-managed skills into sandbox...' : 'Antigravity sandbox environment active (click to manage)'}
+            title={environmentStatus === 'stopped' ? 'Antigravity sandbox environment stopped (click to manage)' : environmentStatus === 'resetting' ? 'Resetting Antigravity sandbox environment...' : environmentStatus === 'syncing' ? 'Syncing Ripper-managed skills into sandbox...' : 'Antigravity sandbox environment active (click to manage)'}
           >
             {environmentStatus === 'resetting' ? (
               <RotateCcw size={12} strokeWidth={1.75} className="dab-spin" aria-hidden="true" />
@@ -486,8 +486,8 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
             <StudioButton
               variant="secondary" testId="topbar-env-sync-btn" className="dab-btn-icon dab-env-sync-icon-btn"
               disabled={hasInFlightTurns || environmentStatus === 'syncing'} onClick={() => void handleSyncEnvironmentSkills()}
-              title={environmentStatus === 'syncing' ? 'Updating Studio-managed skills in sandbox...' : hasInFlightTurns ? 'Wait for active turn to finish before updating skills' : 'Update Studio-managed skills in-place'}
-              aria-label="Update Studio-managed skills in-place"
+              title={environmentStatus === 'syncing' ? 'Updating Ripper-managed skills in sandbox...' : hasInFlightTurns ? 'Wait for active turn to finish before updating skills' : 'Update Ripper-managed skills'}
+              aria-label="Update Ripper-managed skills"
             >
               <RefreshCw size={13} strokeWidth={1.75} className={environmentStatus === 'syncing' ? 'dab-spin' : undefined} aria-hidden="true" />
             </StudioButton>
@@ -502,8 +502,8 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
               >
                 <RefreshCw size={13} strokeWidth={1.75} className="dab-env-menu-item-icon" aria-hidden="true" />
                 <span className="dab-env-menu-item-body">
-                  <span className="dab-env-menu-item-title"><span>Update Managed Skills</span>{envSkillsOutdated && <StudioBadge tone="accent" pill>Update available</StudioBadge>}</span>
-                  <span className="dab-env-menu-item-desc">Overwrite &amp; prune Studio skills in-place; keeps conversations &amp; sandbox files.</span>
+                  <span className="dab-env-menu-item-title"><span>Update Ripper-managed skills</span>{envSkillsOutdated && <StudioBadge tone="accent" pill>Update available</StudioBadge>}</span>
+                  <span className="dab-env-menu-item-desc">Overwrite &amp; prune Ripper-managed skills in-place; keeps conversations &amp; sandbox files.</span>
                 </span>
               </button>
               <button type="button" role="menuitem" data-testid="env-stop-btn" className="dab-env-menu-item" onClick={() => { setEnvMenuOpen(false); handleStopEnvironment() }}>
@@ -529,7 +529,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
         </div>
         <StudioModal
           open={resetEnvModalOpen} onClose={closeResetModal} testId="reset-env-modal"
-          closeTestId="close-reset-env-modal" title="Reset Environment & Expire Conversations?" maxWidth={460}
+          hideCloseButton title="Reset Environment & Expire Conversations?" maxWidth={460}
           footer={
             <>
               <StudioButton variant="secondary" testId="cancel-reset-env-btn" onClick={closeResetModal}>Cancel</StudioButton>

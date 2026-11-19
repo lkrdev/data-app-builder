@@ -268,6 +268,8 @@ function registerVisualPart06Tests(ctx) {
         const menuOpenCheck = {
           hasMenu: Boolean(envMenu),
           hasSyncSkillsBtn: Boolean(syncSkillsBtn),
+          syncSkillsTitle: (syncSkillsBtn?.querySelector('.dab-env-menu-item-title > span')?.textContent || '').trim(),
+          syncSkillsDesc: (syncSkillsBtn?.querySelector('.dab-env-menu-item-desc')?.textContent || '').trim(),
           hasResetBtn: Boolean(resetBtn),
           hasStopEnvBtn: Boolean(stopEnvBtn),
           allItemsHaveDesc: [syncSkillsBtn, stopEnvBtn, resetBtn].every((el) => Boolean(el?.querySelector('.dab-env-menu-item-desc')?.textContent?.trim())),
@@ -285,19 +287,30 @@ function registerVisualPart06Tests(ctx) {
           text: (envBtn?.textContent || '').trim()
         };
 
-        // Re-open menu and click Reset Environment... -> opens guarded Type DELETE modal (zero checkboxes)
+        // Re-open menu and click Reset Environment... -> opens guarded Type DELETE modal (zero checkboxes, no top-right X button)
         window.__DELETED_DASHBOARDS__ = [];
         window.__DELETED_LOOKS__ = [];
         window.__DELETED_BOARDS__ = [];
-        envBtn.click();
-        await new Promise((r) => setTimeout(r, 60));
-        document.querySelector('[data-testid="env-reset-btn"]').click();
-        await new Promise((r) => setTimeout(r, 60));
-        const resetModal = document.querySelector('[data-testid="reset-env-modal"]');
+        const openReset = async () => {
+          envBtn.click(); await new Promise((r) => setTimeout(r, 45));
+          document.querySelector('[data-testid="env-reset-btn"]').click(); await new Promise((r) => setTimeout(r, 45));
+        };
+        await openReset();
+        let resetModal = document.querySelector('[data-testid="reset-env-modal"]');
+        const hasHeaderCloseBtn = Boolean(resetModal?.querySelector('.dab-ds-modal-header button'));
+        const cancelResetBtn = document.querySelector('[data-testid="cancel-reset-env-btn"]');
+        const hasCancelResetBtn = Boolean(cancelResetBtn);
+        cancelResetBtn?.click(); await new Promise((r) => setTimeout(r, 40));
+        const cancelledModalClosed = !document.querySelector('[data-testid="reset-env-modal"]');
+        await openReset();
+        resetModal = document.querySelector('[data-testid="reset-env-modal"]');
         const confirmInput = document.querySelector('[data-testid="reset-env-confirm-input"]');
         const confirmBtn = document.querySelector('[data-testid="confirm-reset-env-btn"]');
         const modalBeforeType = {
           hasModal: Boolean(resetModal),
+          hasHeaderCloseBtn,
+          hasCancelResetBtn,
+          cancelledModalClosed,
           checkboxCount: resetModal ? resetModal.querySelectorAll('input[type="checkbox"]').length : -1,
           confirmDisabledInitially: Boolean(confirmBtn?.disabled)
         };
@@ -408,6 +421,8 @@ function registerVisualPart06Tests(ctx) {
       menuOpenCheck: {
         hasMenu: true,
         hasSyncSkillsBtn: true,
+        syncSkillsTitle: 'Update Ripper-managed skills',
+        syncSkillsDesc: 'Overwrite & prune Ripper-managed skills in-place; keeps conversations & sandbox files.',
         hasResetBtn: true,
         hasStopEnvBtn: true,
         allItemsHaveDesc: true,
@@ -425,6 +440,9 @@ function registerVisualPart06Tests(ctx) {
         modalClosed: true,
         modalBeforeType: {
           hasModal: true,
+          hasHeaderCloseBtn: false,
+          hasCancelResetBtn: true,
+          cancelledModalClosed: true,
           checkboxCount: 0,
           confirmDisabledInitially: true
         },
@@ -467,12 +485,15 @@ function registerVisualPart06Tests(ctx) {
         s.setOauthToken('mock_oauth_token');
         await new Promise((r) => setTimeout(r, 40));
         const syncBtn = document.querySelector('[data-testid="topbar-env-sync-btn"]');
+        const syncBtnAriaLabel = syncBtn?.getAttribute('aria-label') || '';
         s.setBusyStatus('Running Looker query...');
         await new Promise((r) => setTimeout(r, 40));
         const disabledWhileBusy = Boolean(syncBtn?.disabled);
+        const syncBtnTitleWhileBusy = syncBtn?.getAttribute('title') || '';
         s.setBusyStatus(null);
         await new Promise((r) => setTimeout(r, 40));
         const enabledWhenIdle = Boolean(syncBtn && !syncBtn.disabled);
+        const syncBtnTitleWhenIdle = syncBtn?.getAttribute('title') || '';
         window.__SKILL_SYNC_CALLS__ = [];
         syncBtn.click();
         for (let i = 0; i < 40; i++) {
@@ -481,6 +502,9 @@ function registerVisualPart06Tests(ctx) {
         }
         const envBtn = document.querySelector('[data-testid="topbar-environment-btn"]');
         return {
+          syncBtnAriaLabel,
+          syncBtnTitleWhileBusy,
+          syncBtnTitleWhenIdle,
           disabledWhileBusy,
           enabledWhenIdle,
           syncBtnGoneAfterSync: !document.querySelector('[data-testid="topbar-env-sync-btn"]'),
@@ -493,6 +517,9 @@ function registerVisualPart06Tests(ctx) {
       returnByValue: true
     })
     expect(syncRes.result.value).toEqual({
+      syncBtnAriaLabel: 'Update Ripper-managed skills',
+      syncBtnTitleWhileBusy: 'Wait for active turn to finish before updating skills',
+      syncBtnTitleWhenIdle: 'Update Ripper-managed skills',
       disabledWhileBusy: true,
       enabledWhenIdle: true,
       syncBtnGoneAfterSync: true,

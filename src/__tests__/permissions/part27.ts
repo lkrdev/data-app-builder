@@ -12,6 +12,7 @@ import {
   buildManagedWorkspaceSources,
   buildWorkspaceSources,
   CURRENT_MANAGED_SOURCES_HASH,
+  DEFAULT_ANTIGRAVITY_MODEL,
   encodeSyncPayloadChunks,
   extractInteractionOutputText,
   MANAGED_SOURCES_FILE_HASHES,
@@ -24,7 +25,7 @@ import {
   sanitizeDataAppAssistantText,
   syncManagedSkillsIntoEnvironment,
 } from '../../antigravity'
-import { RipperLogo } from '../../components/StudioDesignSystem'
+import { RipperLogo, StudioModal } from '../../components/StudioDesignSystem'
 import { canonicalJson, sha256Hex } from '../../lkrCliSitecustomize'
 import {
   clearAllUserConversations,
@@ -283,9 +284,11 @@ export function registerPermissionsPart27Tests(): void {
     })
     expect((await loadUserEnvironmentState(sdk, '1'))?.sourcesHash).toBe(CURRENT_MANAGED_SOURCES_HASH)
 
-    // Case B: Delta diff (1 modified file + 1 removed skill; ignores /workspace/apps/* & /workspace/data/*; omits max_total_tokens)
+    // Case B: Delta diff (1 modified file + 1 removed skill; ignores /workspace/apps/* & /workspace/data/*; CreateAgentInteraction contract)
     await saveUserEnvironmentId(sdk, '1', 'env_sync_229', undefined, '111111111111dead')
     const capturedBodies: Array<Record<string, unknown>> = []
+    let deltaGetPolls = 0
+    let pendingDeltaMarker = ''
     const driftedManifest = JSON.stringify({
       sourcesHash: '111111111111dead',
       files: {
@@ -302,13 +305,17 @@ export function registerPermissionsPart27Tests(): void {
       environmentId: 'env_sync_229',
       auth: { mode: 'apikey', apiKey: 'test_key' },
       extensionSDK: asHost({
-        serverProxy: async (url: string, init?: { body?: string }) => {
+        serverProxy: async (url: string, init?: { method?: string; body?: string }) => {
           if (url.includes('/files/')) return { ok: true, status: 200, body: driftedManifest }
+          if (init?.method === 'GET' && url.includes('/interactions/int_delta_1')) {
+            deltaGetPolls += 1
+            return { ok: true, status: 200, body: JSON.stringify({ id: 'int_delta_1', status: 'completed', output_text: pendingDeltaMarker }) }
+          }
           const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>
           capturedBodies.push(body)
           const prompt = String((body.input as Array<{ text?: string }>)[0]?.text || '')
-          const marker = prompt.match(/reply with ((?:CHUNK_OK:\d+|SYNC_OK:[0-9a-f]+))/)?.[1] || ''
-          return { ok: true, status: 200, body: JSON.stringify({ id: 'int_delta_1', status: 'completed', output_text: marker }) }
+          pendingDeltaMarker = prompt.match(/reply with ((?:CHUNK_OK:\d+|SYNC_OK:[0-9a-f]+))/)?.[1] || ''
+          return { ok: true, status: 200, body: JSON.stringify({ id: 'int_delta_1', status: 'in_progress' }) }
         },
       }),
     })
@@ -318,13 +325,17 @@ export function registerPermissionsPart27Tests(): void {
       deletedCount: 1,
       sourcesHash: CURRENT_MANAGED_SOURCES_HASH,
     })
+    expect(deltaGetPolls).toBeGreaterThanOrEqual(1)
     expect(capturedBodies.length).toBeGreaterThanOrEqual(1)
     for (const b of capturedBodies) {
-      expect(b.store).toBe(false)
+      expect(b.agent).toBe('antigravity-preview-09-2026')
+      expect(b.agent_config).toEqual({ type: 'antigravity', model: DEFAULT_ANTIGRAVITY_MODEL })
+      expect((b.agent_config as Record<string, unknown>).max_total_tokens).toBeUndefined()
+      expect(b.background).toBe(true)
       expect(b.environment).toBe('env_sync_229')
       expect(b.tools).toEqual([{ type: 'code_execution' }])
-      expect(b.generation_config).toEqual({ thinking_level: 'low' })
-      expect((b.generation_config as Record<string, unknown>).max_total_tokens).toBeUndefined()
+      expect(b.generation_config).toBeUndefined()
+      expect(b.store).toBeUndefined()
     }
     const b64Joined = capturedBodies
       .map((b) => {
@@ -345,9 +356,10 @@ export function registerPermissionsPart27Tests(): void {
     expect(decodedDelta.deletedPaths).toEqual(['/workspace/skills/obsolete-skill/SKILL.md'])
     expect(decodedDelta.pruneUnlistedSkills).toBe(false)
 
-    // Case B2: AbortSignal aborts in-flight skill sync without advancing stored sourcesHash
+    // Case B2: AbortSignal wakes mid-poll sleep, posts :cancel, and aborts without advancing stored sourcesHash
     await saveUserEnvironmentId(sdk, '1', 'env_sync_229', undefined, '222222222222dead')
     const abortCtl = new AbortController()
+    let cancelCalled = false
     await expect(
       syncManagedSkillsIntoEnvironment({
         sdk,
@@ -357,15 +369,15 @@ export function registerPermissionsPart27Tests(): void {
         auth: { mode: 'apikey', apiKey: 'test_key' },
         extensionSDK: asHost({
           serverProxy: async (url: string) => {
-            if (url.includes('/files/')) {
-              abortCtl.abort()
-              return { ok: true, status: 200, body: driftedManifest }
-            }
-            return { ok: true, status: 200, body: '{}' }
+            if (url.includes('/files/')) return { ok: true, status: 200, body: driftedManifest }
+            if (url.includes(':cancel')) { cancelCalled = true; return { ok: true, status: 200, body: '{}' } }
+            setTimeout(() => abortCtl.abort(), 5)
+            return { ok: true, status: 200, body: JSON.stringify({ id: 'int_abort_poll', status: 'in_progress' }) }
           },
         }),
       })
     ).rejects.toThrow(/aborted/i)
+    expect(cancelCalled).toBe(true)
     expect((await loadUserEnvironmentState(sdk, '1'))?.sourcesHash).toBe('222222222222dead')
 
     // Case C: Missing SYNC_OK marker rejects and does NOT advance stored sourcesHash
@@ -436,7 +448,7 @@ export function registerPermissionsPart27Tests(): void {
     const svc = getArtifactService(sdk)
 
     const seedLegacy = (key: string, value: unknown) => {
-      store.set(key, { key, version: 1, value: JSON.stringify(value) })
+      store.set(key, { version: 1, value: JSON.stringify(value) })
     }
     seedLegacy('user_1_app_42', { id: '42', type: 'app', title: 'Exec App', updatedAt: '2026-11-01T00:00:00Z', createdBy: '1' })
     seedLegacy('obj_app_42', { id: '42', dashboardId: '42' })
@@ -707,5 +719,28 @@ export function registerPermissionsPart27Tests(): void {
       .map((f) => ({ file: path.relative(repoRoot, f), lines: readFileSync(f, 'utf8').replace(/\n$/, '').split('\n').length }))
       .filter((x) => x.lines > 800)
     expect(overCap).toEqual([])
+  })
+
+  test('107. Issue #240: StudioModal hideCloseButton omits header close button and empty right wrapper while preserving headerRight and footer', () => {
+    const bodyEl = React.createElement('p', null, 'Body')
+    const renderModal = (overrides: Partial<Parameters<typeof StudioModal>[0]>) => {
+      const props: Parameters<typeof StudioModal>[0] = { open: true, onClose: () => {}, title: 'Modal', children: bodyEl, ...overrides }
+      return renderToStaticMarkup(React.createElement(StudioModal, props))
+    }
+    expect(renderModal({ closeTestId: 'std-close-btn' })).toContain('data-testid="std-close-btn"')
+
+    const hiddenCloseHtml = renderModal({
+      hideCloseButton: true,
+      footer: React.createElement('button', { type: 'button', 'data-testid': 'cancel-reset-env-btn' }, 'Cancel'),
+    })
+    expect(hiddenCloseHtml.split('<p>Body</p>')[0]).not.toContain('<button')
+    expect(hiddenCloseHtml).toContain('data-testid="cancel-reset-env-btn"')
+
+    const hiddenWithRightHtml = renderModal({
+      hideCloseButton: true,
+      headerRight: React.createElement('span', { 'data-testid': 'hdr-badge' }, 'Live'),
+    })
+    expect(hiddenWithRightHtml).toContain('data-testid="hdr-badge"')
+    expect(hiddenWithRightHtml).not.toContain('aria-label="Close"')
   })
 }

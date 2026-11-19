@@ -49,6 +49,7 @@ export function StudioModal({
   backdropClassName,
   closeTestId,
   closeLabel = '✕',
+  hideCloseButton = false,
   className,
   maxWidth,
   footer,
@@ -64,6 +65,7 @@ export function StudioModal({
   backdropClassName?: string
   closeTestId?: string
   closeLabel?: string
+  hideCloseButton?: boolean
   className?: string
   maxWidth?: number | string
   footer?: React.ReactNode
@@ -94,19 +96,23 @@ export function StudioModal({
             <strong style={{ fontSize: 15 }}>{title}</strong>
             {subtitle && <div className="dab-muted" style={{ fontSize: 11.5 }}>{subtitle}</div>}
           </div>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            {headerRight}
-            <button
-              type="button"
-              data-testid={closeTestId}
-              className="dab-btn dab-btn-secondary"
-              onClick={onClose}
-              title="Close"
-              aria-label="Close"
-            >
-              {closeLabel}
-            </button>
-          </div>
+          {(headerRight || !hideCloseButton) && (
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              {headerRight}
+              {!hideCloseButton && (
+                <button
+                  type="button"
+                  data-testid={closeTestId}
+                  className="dab-btn dab-btn-secondary"
+                  onClick={onClose}
+                  title="Close"
+                  aria-label="Close"
+                >
+                  {closeLabel}
+                </button>
+              )}
+            </div>
+          )}
         </div>
         {children}
         {footer ? <div className="dab-ds-modal-footer">{footer}</div> : null}

@@ -207,7 +207,7 @@ async function pollInteractionUntilTerminal(
 ): Promise<AntigravityInteractionPayload> {
   let cur = initial
   const schedule = resolveAdaptivePollScheduleMs(undefined, envId)
-  for (let pollIdx = 0; pollIdx < 60; pollIdx += 1) {
+  for (let pollIdx = 0; pollIdx <= 60; pollIdx += 1) {
     if (signal?.aborted) {
       if (cur?.id) await callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(cur.id)}:cancel`, 'POST', {}).catch(() => {})
       throwIfSyncAborted(signal)
@@ -217,8 +217,13 @@ async function pollInteractionUntilTerminal(
     if (st === 'failed' || st === 'error' || st === 'cancelled' || st === 'canceled' || st === 'incomplete') {
       throw new Error(cur.error?.message || `Managed skill sync interaction ended with status "${st}".`)
     }
+    if (pollIdx === 60) break
     const waitMs = schedule[Math.min(pollIdx, schedule.length - 1)] || 500
-    await new Promise<void>((r) => setTimeout(r, waitMs))
+    await new Promise<void>((resolve) => {
+      const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve() }
+      const timer = setTimeout(done, waitMs)
+      signal?.addEventListener('abort', done, { once: true })
+    })
     if (signal?.aborted) {
       await callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(cur.id)}:cancel`, 'POST', {}).catch(() => {})
       throwIfSyncAborted(signal)
@@ -356,11 +361,9 @@ export async function syncManagedSkillsIntoEnvironment(params: {
       const started = await callInteractionsApi(extensionSDK, auth, 'interactions', 'POST', {
         agent: 'antigravity-preview-09-2026',
         agent_config: { type: 'antigravity', model: model || DEFAULT_ANTIGRAVITY_MODEL },
+        background: true,
         environment: envId,
-        store: false,
-        background: false,
         tools: [{ type: 'code_execution' }],
-        generation_config: { thinking_level: 'low' },
         input: [{ type: 'text', text: promptText }],
       })
       finalInteraction = await pollInteractionUntilTerminal(extensionSDK, auth, started, envId, signal)
