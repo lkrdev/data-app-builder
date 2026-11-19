@@ -8,6 +8,7 @@ import {
   buildWorkspaceSources,
   CURRENT_MANAGED_SOURCES_HASH,
   encodeSyncPayloadChunks,
+  extractInteractionOutputText,
   MANAGED_SOURCES_FILE_HASHES,
   MANAGED_SOURCES_MANIFEST_JSON,
   MANAGED_SOURCES_MANIFEST_PATH,
@@ -15,6 +16,7 @@ import {
   prewarmOrWakeAntigravityEnvironment,
   resolveBuiltinWorkspaceFileContent,
   runAntigravityTurn,
+  sanitizeDataAppAssistantText,
   syncManagedSkillsIntoEnvironment,
 } from '../../antigravity'
 import { canonicalJson, sha256Hex } from '../../lkrCliSitecustomize'
@@ -475,5 +477,122 @@ export function registerPermissionsPart27Tests(): void {
     await saveUserConversation(sdk, '1', { id: 'conv_wipe_1', type: 'app', label: 'Stale resurrection attempt' })
     await saveUserConversation(sdk, '1', { id: 'conv_optimistic_inflight', type: 'app', label: 'Stale optimistic attempt' })
     expect(await loadUserConversations(sdk, '1')).toEqual([])
+  })
+
+  test('99. sanitizes Data App .js/file:// references, injects code_execution on incomplete auto Data App turns, hydrates __bundle_ref__, and switches multi-modal auto workflows', async () => {
+    const cleaned = sanitizeDataAppAssistantText(
+      'Built **Sticker Center** ([app.js](file:///workspace/apps/conv_1/app.js)) with `/runtime/data-app.js`!\n\n**Looker Dashboard:** [Open Sticker Center](/dashboards/42)'
+    )
+    expect(cleaned).not.toMatch(/\.js\b|file:\/\/|\/workspace\b/i)
+    expect(cleaned).toContain('**Looker Dashboard:** [Open Sticker Center](/dashboards/42)')
+
+    const postedPayloads: Array<Record<string, unknown>> = []
+    let postCount = 0
+    const res = await runAntigravityTurn({
+      sdk: asSdk({ ok: async <T>(p: T) => p }),
+      extensionSDK: asHost({
+        serverProxy: async (url: string, init?: { method?: string; body?: string }) => {
+          if (url.includes(':stream') || url.includes('alt=sse') || url.includes('/files')) return { ok: false, status: 404, body: 'none' }
+          if (init?.method === 'POST') { postCount += 1; postedPayloads.push(JSON.parse(String(init.body || '{}')) as Record<string, unknown>) }
+          return {
+            ok: true, status: 200,
+            body: JSON.stringify({
+              id: `int_rec_${postCount}`, environment_id: 'env_rec_auto', status: 'completed',
+              steps: [{ name: 'write_to_file', arguments: JSON.stringify({ TargetFile: '/workspace/apps/conv_auto_1/app.js', CodeContent: "/** @title Sticker Command Center */\nimport { DataApp } from '/runtime/data-app.js';\ncustomElements.define('sticker-app', class extends DataApp {});" }) }],
+              output_text: '<USE_CASE>app</USE_CASE>\nBuilt **Sticker Command Center** ([app.js](file:///workspace/apps/conv_auto_1/app.js)) with five interactive views.',
+            }),
+          }
+        },
+      }),
+      conversationId: 'conv_auto_1', auth: { mode: 'apikey', apiKey: 'k_rec' }, session: { environmentId: 'env_rec_auto', toolType: 'app' },
+      mode: 'dashboard', useCase: 'auto', selectedExplores: ['thelook::order_items'], schemaMarkdown: '# Schema', userPrompt: 'Build Sticker Command Center', onStatus: () => {},
+    })
+    expect(postedPayloads).toHaveLength(3)
+    expect(((postedPayloads[1]?.tools as Array<{ type?: string }>) || []).some((t) => t.type === 'code_execution')).toBe(true)
+    expect(res.bundle?.title).toBe('Sticker Command Center')
+    expect(res.bundle?.prod_code).toContain('https://www.gstatic.com/looker-data-apps/versions/1.3.0/data-app.js')
+    expect(res.assistantText).not.toMatch(/\.js\b|file:\/\/|\/workspace\b/i)
+
+    expect(extractInteractionOutputText({
+      steps: [
+        { type: 'model_output', text: '<USE_CASE>app</USE_CASE>\nPre-tool narration.' },
+        { type: 'code_execution_result', result: '<DATA_APP_BUNDLE>{"__bundle_ref__":"/workspace/apps/conv_ref/bundle.json"}</DATA_APP_BUNDLE>' },
+        { type: 'model_output', text: 'Final clean summary of Sticker Command Center.' },
+      ],
+    })).toBe('Final clean summary of Sticker Command Center.')
+
+    const refRes = await runAntigravityTurn({
+      sdk: asSdk({ ok: async <T>(p: T) => p }),
+      extensionSDK: asHost({
+        serverProxy: async (url: string) => {
+          if (url.includes(':stream') || url.includes('alt=sse')) return { ok: false, status: 404, body: 'no sse' }
+          if (url.includes('/files')) {
+            return {
+              ok: true, status: 200,
+              body: JSON.stringify({
+                title: 'Sticker-Book E-Commerce Command Center', version: '1.3.0',
+                raw_code: "import { DataApp } from '/runtime/data-app.js';\ncustomElements.define('sb-app', class extends DataApp {});",
+                prod_code: "import { DataApp } from 'https://www.gstatic.com/looker-data-apps/versions/1.3.0/data-app.js';\ncustomElements.define('sb-app', class extends DataApp {});",
+                widgets: [{ id: 'w1', tag: 'app-kpi', query: { model: 'thelook', view: 'order_items', fields: ['order_items.count'] } }],
+              }),
+            }
+          }
+          return {
+            ok: true, status: 200,
+            body: JSON.stringify({
+              id: 'int_ref_1', environment_id: 'env_ref_1', status: 'completed',
+              steps: [
+                { type: 'model_output', text: '<USE_CASE>app</USE_CASE>' },
+                { type: 'code_execution_result', result: '<DATA_APP_BUNDLE>{"__bundle_ref__":"/workspace/apps/conv_ref/bundle.json","title":"Sticker-Book E-Commerce Command Center","version":"1.3.0","widgets":[{"id":"w1"}]}</DATA_APP_BUNDLE>' },
+                { type: 'model_output', text: 'Built **Sticker-Book E-Commerce Command Center** with 5 views.' },
+              ],
+            }),
+          }
+        },
+      }),
+      conversationId: 'conv_ref', auth: { mode: 'apikey', apiKey: 'k_ref' }, session: { environmentId: 'env_ref_1', toolType: 'app' },
+      mode: 'data_app', useCase: 'auto', selectedExplores: ['thelook::order_items'], schemaMarkdown: '# Schema', userPrompt: 'Build a playful sticker-book command center', onStatus: () => {},
+    })
+    expect(refRes.resolvedUseCase).toBe('app')
+    expect(refRes.bundle?.title).toBe('Sticker-Book E-Commerce Command Center')
+    expect(refRes.bundle?.widgets).toHaveLength(1)
+    expect(refRes.assistantText).toBe('Built **Sticker-Book E-Commerce Command Center** with 5 views.')
+
+    // Multi-modal auto conversation (KDA -> Data App -> LookML) retains full toolset & switches guides cleanly without sticky lock-in
+    const multiPosted: Array<{ tools?: Array<{ name?: string; type?: string }>; input?: Array<{ text?: string }> }> = []
+    let seqIdx = 0
+    const multiExt = asHost({
+      serverProxy: async (url: string, init?: { method?: string; body?: string }) => {
+        if (url.includes(':stream') || url.includes('alt=sse')) return { ok: false, status: 404, body: 'no sse' }
+        if (init?.method === 'POST' && url.includes('/interactions')) {
+          multiPosted.push(JSON.parse(String(init.body || '{}')))
+          seqIdx += 1
+        }
+        const steps = seqIdx <= 2
+          ? [
+              { type: 'code_execution_result', result: '<DATA_APP_BUNDLE>{"title":"App","raw_code":"c","prod_code":"c","widgets":[]}</DATA_APP_BUNDLE>' },
+              { type: 'model_output', text: seqIdx === 1 ? '<USE_CASE>data-investigator</USE_CASE>\nInvestigated return rate drivers.' : '<USE_CASE>app</USE_CASE>\nBuilt Data App.' },
+            ]
+          : [{ type: 'model_output', text: '<USE_CASE>lookml</USE_CASE>\nUpdated LookML view.' }]
+        return { ok: true, status: 200, body: JSON.stringify({ id: `int_m_${seqIdx}`, environment_id: 'env_m', status: 'completed', steps }) }
+      },
+    })
+    const baseMulti = {
+      sdk: asSdk({ ok: async <T>(p: T) => p }), extensionSDK: multiExt, conversationId: 'conv_multi',
+      auth: { mode: 'apikey' as const, apiKey: 'k_m' }, mode: 'data_app' as const, useCase: 'auto' as const,
+      developableProjects: ['thelook'], canDeploy: true, selectedExplores: ['thelook::order_items'], schemaMarkdown: '# Schema', onStatus: () => {},
+    }
+    const m1 = await runAntigravityTurn({ ...baseMulti, session: {}, userPrompt: 'Investigate what drove return rate up last quarter' })
+    const m2 = await runAntigravityTurn({ ...baseMulti, session: m1.session, environmentId: 'env_m', userPrompt: 'Now build an interactive Data App for those findings' })
+    const m3 = await runAntigravityTurn({ ...baseMulti, session: m2.session, environmentId: 'env_m', existingAppCode: 'class X extends DataApp {}', userPrompt: 'Refactor that metric into a LookML view' })
+    expect(m1.resolvedUseCase).toBe('data-investigator')
+    expect(m2.resolvedUseCase).toBe('app')
+    expect(m3.resolvedUseCase).toBe('lookml')
+    for (const p of multiPosted) {
+      expect((p.tools || []).some((t) => t.type === 'code_execution')).toBe(true)
+      expect((p.tools || []).some((t) => t.name === 'lkr_cli_extension_bridge')).toBe(true)
+    }
+    expect(multiPosted[2]?.input?.[0]?.text || '').not.toContain('[WARM SANDBOX FAST PATH:')
+    expect(multiPosted[2]?.input?.[0]?.text || '').toContain('LookML')
   })
 }

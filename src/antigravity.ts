@@ -7,8 +7,10 @@ import {
 import {
   buildWorkspaceSources,
   CURRENT_MANAGED_SOURCES_HASH,
+  hydrateDataAppBundleRef,
   persistUserEnvIfChanged,
   prewarmOrWakeAntigravityEnvironment,
+  sanitizeDataAppAssistantText,
   stripControlTags,
   toSafeConversationId,
   withCoalescedEnvProvision,
@@ -30,6 +32,7 @@ import {
   extractInteractionTelemetry,
   extractNativeContentFromInteraction,
   extractTddFromInteraction,
+  parseStepArguments,
 } from './antigravitySteps'
 import {
   type AgentSession,
@@ -295,7 +298,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
       : lookmlProjectId
       ? `with \`this.lookerModel = '${lookmlProjectId}'\` and \`this.explore = '${primaryExplore || '<fact_explore>'}'\` (the primary Silver explore from conversation history) in \`constructor()\``
       : `setting \`this.lookerModel\` and \`this.explore\` in \`constructor()\``
-  const step3Directive = `3. Write and bundle the Lit Data App in ONE \`code_execution\` call importing \`DataApp\` from '/runtime/data-app.js' (use plain \`{ field, headerName, width }\` objects for text columns and \`createBadgeCol({ field, headerName, width, badgeClassMap })\`; ${ctorHint}; never inspect \`/workspace/bundle_app.py\` or \`/runtime\`; Metric Selector Section 4: \`PERIOD_DEFAULTS = { date: 90, week: 53, month: 60, year: 10 }\` with \`Period\` \`Daily\`->\`'date'\`, no \`*_day\`; \`@container\` KPIs forbidding \`auto-fit\`/\`auto-fill\` (\`container-type: inline-size\`, \`repeat(4, minmax(0, 1fr))\`->\`820px\` \`repeat(2, minmax(0, 1fr))\`->\`420px\` \`1fr\`); 4-row PoP KPIs forbidding \`<app-kpi>\`, \`"ACTIVE METRIC"\`, Metric \`<app-select>\`, querying \`2 * this.periodCount\` (\`Math.min(5000, Math.max(500, 2 * this.periodCount + 10))\`), \`kpi-change\` before \`vs. prev\` (\`lower-better\`) + SVG; no \`Compare against\` \`<app-select>\` — \`--app-chart-1\`/\`--app-chart-2\` borders with click/\`shiftKey\`/\`contextmenu\` (\`Remove comparison\`), \`loadTrendData()\` (\`connectedCallback\`, \`onFiltersChanged\`/\`willUpdate\`, \`onRefresh\`, handlers — no \`updated()\`, \`trendRows = null\` idle) \`Promise.all([this.runQuery(...), this.runQuery(...)])\` into \`.data\` omitting \`.query\`, \`options.colors\`, \`formatAxisValue\` \`labels.formatter\`, \`opposite: true\` + \`yAxis.title.text\`, \`shareScale\` (\`linkedTo: 0\`), no \`"Longitudinal Trend"\`, \`⋮\` menu; \`Period\`/\`Window\` \`periodCount\` (\`customWindowOpen\`), \`!WINDOW_OPTIONS[this.period].includes(this.periodCount)\` pill + \`Custom window length\` \`type="number"\` popover via \`getEffectiveFilters\`; titleless \`<app-grid>\` + \`Dimensions\` \`selectedDimensions\` joining \`ago for\` (\`This Period\`/\`Last Period\`/\`Variance\`)) into \`${appFilePath}\`:\n   \`python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\\n...\\nEOF\``
+  const step3Directive = `3. Write and bundle the Lit Data App in ONE \`code_execution\` call importing \`DataApp\` from '/runtime/data-app.js' (Light DOM: render custom CSS inside \`<style>...</style>\` in \`render()\` — NEVER use \`static styles\`, \`DataApp.styles\`, or \`:host\`; use plain \`{ field, headerName, width }\` objects for text columns and \`createBadgeCol({ field, headerName, width, badgeClassMap })\`; ${ctorHint}; never inspect \`/workspace/bundle_app.py\` or \`/runtime\`; for single-view Metric Selector apps (Section 4; multi-view apps may use \`<app-kpi>\`/\`<app-chart>\`/\`<app-grid>\` directly): \`PERIOD_DEFAULTS = { date: 90, week: 53, month: 60, year: 10 }\` with \`Period\` \`Daily\`->\`'date'\`, no \`*_day\`; \`@container\` KPIs forbidding \`auto-fit\`/\`auto-fill\` (\`container-type: inline-size\`, \`repeat(4, minmax(0, 1fr))\`->\`820px\` \`repeat(2, minmax(0, 1fr))\`->\`420px\` \`1fr\`); 4-row PoP KPIs forbidding \`<app-kpi>\`, \`"ACTIVE METRIC"\`, Metric \`<app-select>\`, querying \`2 * this.periodCount\` (\`Math.min(5000, Math.max(500, 2 * this.periodCount + 10))\`), \`kpi-change\` before \`vs. prev\` (\`lower-better\`) + SVG; no \`Compare against\` \`<app-select>\` — \`--app-chart-1\`/\`--app-chart-2\` borders with click/\`shiftKey\`/\`contextmenu\` (\`Remove comparison\`), \`loadTrendData()\` (\`connectedCallback\`, \`onFiltersChanged\`/\`willUpdate\`, \`onRefresh\`, handlers — no \`updated()\`, \`trendRows = null\` idle) \`Promise.all([this.runQuery(...), this.runQuery(...)])\` into \`.data\` omitting \`.query\`, \`options.colors\`, \`formatAxisValue\` \`labels.formatter\`, \`opposite: true\` + \`yAxis.title.text\`, \`shareScale\` (\`linkedTo: 0\`), no \`"Longitudinal Trend"\`, \`⋮\` menu; \`Period\`/\`Window\` \`periodCount\` (\`customWindowOpen\`), \`!WINDOW_OPTIONS[this.period].includes(this.periodCount)\` pill + \`Custom window length\` \`type="number"\` popover via \`getEffectiveFilters\`; titleless \`<app-grid>\` + \`Dimensions\` \`selectedDimensions\` joining \`ago for\` (\`This Period\`/\`Last Period\`/\`Variance\`)) into \`${appFilePath}\`:\n   \`python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\\n...\\nEOF\``
 
   const normalizedExistingNative: NativeContentState | null = existingNativeContent
     ? normalizeNativeContent({
@@ -326,7 +329,7 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
           step2Directive,
           step3Directive,
           `4. If bundle_app.py reports any syntax or tile safety violation, fix ${appFilePath} and re-run \`python3 /workspace/bundle_app.py ${appFilePath} "<App Title>"\` until it exits 0.`,
-          `5. CRITICAL: bundle_app.py prints \`<DATA_APP_BUNDLE>...</DATA_APP_BUNDLE>\` directly to stdout, which the host captures automatically from tool output. NEVER echo or repeat \`<DATA_APP_BUNDLE>\` or raw JavaScript code in your final text reply—respond with a concise 1–2 sentence summary only.`,
+          `5. CRITICAL: bundle_app.py prints \`<DATA_APP_BUNDLE>...</DATA_APP_BUNDLE>\` directly to stdout, which the host captures automatically from tool output and publishes to a Looker dashboard. NEVER echo \`<DATA_APP_BUNDLE>\`, raw JavaScript code, \`.js\` links (\`[app.js](file://...)\`), \`/workspace/...\` paths, or \`.js\` filenames in your final text reply—respond with a concise summary of what you built (views, KPIs, and interactive controls).`,
         ].join('\n')) + kdaGuideSuffix
 
   const isLookmlOnboardingIntake =
@@ -380,6 +383,8 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
   // ponytail: omit { type: 'code_execution' } and blocking container boot on toolless intake / no-op turns
   // and CodeMode-only turns (/dashboard, Turn-2 connection_schemas discovery, /tile).
   // Retain LKR_CLI_BRIDGE_TOOL on warm turns after LookML turns so previous_interaction_id history replays stay valid.
+  const autoCanLookml =
+    useCase === 'auto' && (!allowedModes || allowedModes.includes('lookml')) && Boolean(developableProjects?.length || canDeploy)
   const keepLookmlBridgeTool =
     !isFreshConversation && Boolean(session.usedBridgeTool || session.toolType === 'lookml' || lookmlProjectId?.trim())
   const activeTools = isLookmlOnboardingIntake || (isNoOpTurn && isFreshConversation)
@@ -393,17 +398,21 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     : [
         { type: 'code_execution' },
         LkrCodeMode.RUN_LOOKER_CODEMODE_TOOL,
-        ...(effectiveToolType === 'lookml' || keepLookmlBridgeTool ? [LKR_CLI_BRIDGE_TOOL] : []),
+        ...(effectiveToolType === 'lookml' || keepLookmlBridgeTool || autoCanLookml ? [LKR_CLI_BRIDGE_TOOL] : []),
       ]
 
+  const autoMatchedUseCase = useCase === 'auto' ? matchExplicitUseCaseRule(userPrompt, allowedModes) : null
+  const canUseWarmAppFastPath =
+    !isNoOpTurn && !effectiveLookmlIntent && !isAuditSkillActive && !isDataInvestigatorTurn &&
+    mode === 'data_app' && Boolean(existingAppCode?.trim()) && (useCase !== 'auto' || !autoMatchedUseCase || autoMatchedUseCase === 'app')
   const warmTurnDirective =
     !isNoOpTurn && isAuditSkillActive
       ? `${systemGuide}\n\n`
-      : !isNoOpTurn && !effectiveLookmlIntent && mode === 'data_app' && Boolean(existingAppCode?.trim())
-      ? `[WARM SANDBOX FAST PATH: ${appFilePath} and the discovered Looker schema are already in /workspace. Do NOT re-run run_looker_codemode discovery or re-read guides unless a brand-new explore is requested. Update ${appFilePath} and bundle in ONE code_execution call via: python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\n...\nEOF\nNEVER echo <DATA_APP_BUNDLE> in your text reply.]\n\n`
+      : canUseWarmAppFastPath
+      ? `[WARM SANDBOX FAST PATH: ${appFilePath} and the discovered Looker schema are already in /workspace.${useCase === 'auto' ? ' If this turn updates or builds a Data App, do' : ' Do'} NOT re-run run_looker_codemode discovery or re-read guides unless a brand-new explore is requested; update ${appFilePath} and bundle in ONE code_execution call via: python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" << 'EOF'\n...\nEOF\n${useCase === 'auto' ? 'If this turn switches to another workflow (KDA, LookML, Dashboard, Tile, or Q&A), follow that workflow instead. ' : ''}NEVER echo <DATA_APP_BUNDLE> in your text reply.]\n\n`
       : !isNoOpTurn && isDashboardMode && normalizedExistingNative
       ? `[WARM CONTENT STUDIO FAST PATH: Active Looker ${normalizedExistingNative.contentType} id="${normalizedExistingNative.id}" ("${normalizedExistingNative.title}") and pre-hydrated active_content (element_ids=${JSON.stringify(normalizedExistingNative.elementIds || [])}, filter_names=${JSON.stringify(normalizedExistingNative.filterNames || [])}, lookml_dashboard_id="${normalizedExistingNative.lookmlDashboardId || ''}", project_id="${normalizedExistingNative.projectId || lookmlProjectId || ''}") are pre-injected in run_looker_codemode vars. Execute the update in ONE run_looker_codemode call using upsert_udd / upsert_lookml_dashboard / reflow_24col / pin_to_board / schedule_dashboard + return emit_native_bundle(...). NEVER echo <NATIVE_CONTENT_BUNDLE> in your text reply.]\n\n`
-      : !isNoOpTurn && ((isDashboardMode && !normalizedExistingNative) || (session.toolType === 'tile' && effectiveToolType !== 'tile'))
+      : !isNoOpTurn && ((isDashboardMode && !normalizedExistingNative) || isDataInvestigatorTurn || (Boolean(session.toolType) && session.toolType !== effectiveToolType))
       ? `${systemGuide}${requiresBashSandbox && effectiveLookmlIntent ? `\n\n[WARM LOOKML SANDBOX: Before running \`lkr\`, ensure \`command -v lkr >/dev/null 2>&1 || python3 /workspace/bootstrap_lookml.py cli\` so \`/usr/local/bin/lkr\` is linked from \`/workspace/.uv_tools\`.]` : ''}\n\n`
       : !isNoOpTurn && requiresBashSandbox && effectiveLookmlIntent
       ? `[WARM LOOKML SANDBOX: Before running \`lkr\`, ensure \`command -v lkr >/dev/null 2>&1 || python3 /workspace/bootstrap_lookml.py cli\` so \`/usr/local/bin/lkr\` is linked from \`/workspace/.uv_tools\`.]\n\n`
@@ -573,51 +582,66 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
     mode === 'data_app' || useCase === 'auto'
       ? extractBundleFromInteraction(interaction)
       : null
-  if (!bundle && (mode === 'data_app' || useCase === 'auto') && isDataAppBundleTurn() && trackedEnvId) {
+  const refBundleTitle = bundle?.title
+  const refBundleWidgets = bundle?.widgets
+  bundle = await hydrateDataAppBundleRef(bundle, { extensionSDK, auth, environmentId: trackedEnvId })
+  if (!bundle && (mode === 'data_app' || useCase === 'auto') && isDataAppBundleTurn()) {
+    const stepWrittenSource = (interaction.steps || []).slice().reverse().map((st) => {
+      const a = parseStepArguments(st?.arguments ?? st?.args)
+      const p = String(a.TargetFile || a.target_file || a.path || a.file_path || a.filename || '')
+      const c = String(a.CodeContent || a.code_content || a.content || a.file_content || a.text || a.code || '').trim()
+      return (/\/workspace\/apps\/[A-Za-z0-9_-]+\/app\.js$/i.test(p) || st?.name === 'write_to_file') && c && (c.includes('DataApp') || c.includes('customElements.define')) ? c : ''
+    }).find(Boolean)
     const matchedPaths = JSON.stringify(interaction.steps || []).match(/\/workspace\/apps\/[A-Za-z0-9_-]+\/app\.js/g)
-    const candidates = Array.from(new Set([...(matchedPaths || []).slice().reverse(), appFilePath]))
+    const candidates = trackedEnvId ? Array.from(new Set((matchedPaths || []).slice().reverse().concat(appFilePath))) : []
+    const toRecoveredBundle = (rawSrc: string): DataAppBundle => {
+      let rewroteUnaliasedLda = false
+      let healedJs = rawSrc.replace(
+        /import\s*\{([^}]*)\}\s*(from\s*['"](?:\.\/data-app\.js|\/runtime\/data-app\.js)['"])/g,
+        (_m, rawSpecs: string, fromTail: string) => {
+          const specs: string[] = []
+          for (const raw of rawSpecs.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, '').split(',')) {
+            const pts = raw.trim().split(/\s+/).filter(Boolean)
+            if (!pts.length || pts[0] === 'createTextCol') continue
+            if (pts[0] === 'LookerDataApp') {
+              if (pts.length >= 3 && pts[1] === 'as') pts[0] = 'DataApp'
+              else { pts[0] = 'DataApp'; rewroteUnaliasedLda = true }
+            }
+            const spec = pts.join(' ')
+            if (!specs.includes(spec)) specs.push(spec)
+          }
+          return specs.length ? `import { ${specs.join(', ')} } ${fromTail}` : `import ${fromTail.replace(/^from\s*/, '')}`
+        }
+      )
+      if ((rewroteUnaliasedLda || /\bextends\s+LookerDataApp\b/.test(healedJs)) && !/\bclass\s+LookerDataApp\b/.test(healedJs)) {
+        healedJs = healedJs.replace(/\bextends\s+LookerDataApp\b/g, 'extends DataApp')
+        if (rewroteUnaliasedLda) healedJs = healedJs.replace(/\bLookerDataApp\b/g, 'DataApp')
+      }
+      const prodCode = healedJs
+        .replace(/\.\.\.\s*DataApp\s*\.\s*styles\b/g, '...(DataApp.styles || [])')
+        .replace(/((?:from|import)\s*['"])(?:\.\/data-app\.js|\/runtime\/data-app\.js)(['"])/g, '$1https://www.gstatic.com/looker-data-apps/versions/1.3.0/data-app.js$2')
+        .replace(/((?:from|import)\s*['"])\/vendor\/([^'"]+)(['"])/g, '$1https://www.gstatic.com/looker-data-apps/versions/1.3.0/vendor/$2$3')
+      const jsdocTitle = healedJs.match(/@title\s+([^\r\n*]+)/i)?.[1]?.trim()
+      return {
+        title: refBundleTitle || jsdocTitle || sanitizeConversationLabel(userPrompt) || 'Data App',
+        code: healedJs,
+        raw_code: healedJs,
+        prod_code: prodCode,
+        widgets: refBundleWidgets?.length ? refBundleWidgets : [],
+      }
+    }
     for (const candidatePath of candidates) {
       try {
-        const fetchedJs = (await fetchEnvironmentFile({ extensionSDK, auth, environmentId: trackedEnvId, path: candidatePath })).trim()
+        const fetchedJs = (await fetchEnvironmentFile({ extensionSDK, auth, environmentId: trackedEnvId!, path: candidatePath })).trim()
         if (fetchedJs && (fetchedJs.includes('DataApp') || fetchedJs.includes('customElements.define'))) {
-          let rewroteUnaliasedLda = false
-          let healedJs = fetchedJs.replace(
-            /import\s*\{([^}]*)\}\s*(from\s*['"](?:\.\/data-app\.js|\/runtime\/data-app\.js)['"])/g,
-            (_m, rawSpecs: string, fromTail: string) => {
-              const specs: string[] = []
-              for (const raw of rawSpecs.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, '').split(',')) {
-                const pts = raw.trim().split(/\s+/).filter(Boolean)
-                if (!pts.length || pts[0] === 'createTextCol') continue
-                if (pts[0] === 'LookerDataApp') {
-                  if (pts.length >= 3 && pts[1] === 'as') pts[0] = 'DataApp'
-                  else { pts[0] = 'DataApp'; rewroteUnaliasedLda = true }
-                }
-                const spec = pts.join(' ')
-                if (!specs.includes(spec)) specs.push(spec)
-              }
-              return specs.length ? `import { ${specs.join(', ')} } ${fromTail}` : `import ${fromTail.replace(/^from\s*/, '')}`
-            }
-          )
-          if ((rewroteUnaliasedLda || /\bextends\s+LookerDataApp\b/.test(healedJs)) && !/\bclass\s+LookerDataApp\b/.test(healedJs)) {
-            healedJs = healedJs.replace(/\bextends\s+LookerDataApp\b/g, 'extends DataApp')
-            if (rewroteUnaliasedLda) healedJs = healedJs.replace(/\bLookerDataApp\b/g, 'DataApp')
-          }
-          const prodCode = healedJs
-            .replace(/((?:from|import)\s*['"])(?:\.\/data-app\.js|\/runtime\/data-app\.js)(['"])/g, '$1https://www.gstatic.com/looker-data-apps/versions/1.2.0/data-app.js$2')
-            .replace(/((?:from|import)\s*['"])\/vendor\/([^'"]+)(['"])/g, '$1https://www.gstatic.com/looker-data-apps/versions/1.2.0/vendor/$2$3')
-          bundle = {
-            title: sanitizeConversationLabel(userPrompt) || 'Data App',
-            code: healedJs,
-            raw_code: healedJs,
-            prod_code: prodCode,
-            widgets: [],
-          }
+          bundle = toRecoveredBundle(fetchedJs)
           break
         }
       } catch {
         /* try next candidate */
       }
     }
+    if (!bundle && stepWrittenSource) bundle = toRecoveredBundle(stepWrittenSource)
   }
   const nativeBundle =
     mode === 'dashboard' || useCase === 'auto'
@@ -664,7 +688,11 @@ return {"model": m, "explore": e, "dimensions": dims, "measures": meas, "sample"
         ? 'data-investigator'
         : 'app'
       : inferredFromOutput
-  const cleanAssistantText = stripControlTags(rawText)
+  const strippedAssistantText = stripControlTags(rawText)
+  const cleanAssistantText =
+    bundle || (!isNoOpTurn && (resolvedUseCase === 'app' || resolvedUseCase === 'data-investigator'))
+      ? sanitizeDataAppAssistantText(strippedAssistantText)
+      : strippedAssistantText
 
   const telemetry = extractInteractionTelemetry(interaction, {
     agentWallMs: Date.now() - turnStartMs,

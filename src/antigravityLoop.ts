@@ -299,12 +299,11 @@ export async function executeAntigravityPollingLoop(
   const executedCodeModeByCode = new Map<string, Record<string, unknown>>()
   const isDataAppBundleTurn = (): boolean =>
     !isNoOpTurn &&
-    requiresBashSandbox &&
     !effectiveLookmlIntent &&
-    (useCase === 'app' ||
-      isDataInvestigatorTurn ||
-      /(?:^|\s)\/data-apps?(?=\s|$)/i.test(userPrompt) ||
-      [...accumulatedSteps, ...(interaction.steps || [])].some((s) => JSON.stringify(s).includes('bundle_app.py')))
+    ((requiresBashSandbox && (useCase === 'app' || isDataInvestigatorTurn || /(?:^|\s)\/data-apps?(?=\s|$)/i.test(userPrompt))) ||
+      accumulatedSteps.concat(interaction.steps || []).some((s) =>
+        /bundle_app\.py|\/workspace\/apps\/[A-Za-z0-9_-]+\/app\.js/.test(JSON.stringify(s))
+      ))
 
   try {
     for (;;) {
@@ -697,14 +696,19 @@ export async function executeAntigravityPollingLoop(
         await throwIfAborted(interaction.id)
         onStatus('Resuming incomplete turn...')
         const runtimeHint =
-          "import { DataApp, html, css, nothing, keyed, formatValue, formatAxisValue, escapeHtml, createNumericCol, createCurrencyCol, createPercentageCol, createBadgeCol } from '/runtime/data-app.js', use plain { field, headerName, width } objects for text columns, and pass a single options object { field, headerName } to create*Col helpers (with badgeClassMap inside createBadgeCol)"
+          "import { DataApp, html, nothing, keyed, formatValue, formatAxisValue, escapeHtml, createNumericCol, createCurrencyCol, createPercentageCol, createBadgeCol } from '/runtime/data-app.js', render custom CSS inside <style>...</style> in render() (Light DOM: never use static styles, DataApp.styles, or :host), use plain { field, headerName, width } objects for text columns, and pass a single options object { field, headerName } to create*Col helpers (with badgeClassMap inside createBadgeCol)"
         const resumeText =
           interaction.status === 'completed' && attemptedBundleApp
             ? `Your previous bundle_app.py run failed validation and did not emit <DATA_APP_BUNDLE>. Fix the reported error in your app.js (${runtimeHint}) and re-run python3 /workspace/bundle_app.py --app-dir ${appDir} --stdin "<App Title>" until it exits 0.`
             : requiresDataAppBundle
             ? `You have not emitted <DATA_APP_BUNDLE> yet. Write the complete self-contained Lit Data App to /workspace/apps/<app-name>/app.js (${runtimeHint}) and run python3 /workspace/bundle_app.py --app-dir /workspace/apps/<app-name> --stdin "<App Title>" in bash until it exits 0 and emits <DATA_APP_BUNDLE>.`
             : 'Continue and complete the current request.'
-        await postContinuation([{ type: 'text', text: resumeText }], requiresBashSandbox ? 'remote' : undefined, [], wrapUpSent ? [] : undefined)
+        const resumeTools = wrapUpSent
+          ? []
+          : requiresDataAppBundle && !activeTools.some((t) => (t as { type?: string }).type === 'code_execution')
+          ? [{ type: 'code_execution' }, ...activeTools]
+          : undefined
+        await postContinuation([{ type: 'text', text: resumeText }], requiresBashSandbox || requiresDataAppBundle ? 'remote' : undefined, [], resumeTools)
         continue
       }
 

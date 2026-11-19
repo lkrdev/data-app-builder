@@ -63,7 +63,8 @@ function runBundleAppStdinAsync(bundlePyPath, appDir, title, appPath, code) {
         reject(new Error(`Missing <DATA_APP_BUNDLE> in bundle_app.py output: ${stdout}`))
         return
       }
-      resolve(JSON.parse(tagMatch[1]))
+      const parsed = JSON.parse(tagMatch[1])
+      resolve(parsed.__bundle_ref__ ? JSON.parse(readFileSync(parsed.__bundle_ref__, 'utf8')) : parsed)
     })
     child.stdin.write(code)
     child.stdin.end()

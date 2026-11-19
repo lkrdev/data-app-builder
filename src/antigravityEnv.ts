@@ -315,6 +315,36 @@ export const stripControlTags = (rawText: string): string =>
     .replace(/<(USE_CASE|CA_AGENT_SELECTION|DATA_APP_BUNDLE|NATIVE_CONTENT_BUNDLE|LOOKML_BUNDLE|ALERT_BUNDLE|HEALTH_CHECK_TDD|LKR_EXTENSION_TOOL_REQUEST)>[\s\S]*?<\/\1>/gi, '')
     .trim()
 
+// ponytail: strip workspace file:// and .js links/references from Data App summaries so chat output focuses on the app and dashboard link
+export const sanitizeDataAppAssistantText = (rawText: string): string =>
+  String(rawText || '')
+    .replace(/\s*\(\s*\[[^\]]*\]\((?:file:\/\/[^)]*|[^)\s]*\.js(?:[?#][^)]*)?)\)\s*\)/gi, '')
+    .replace(/\[([^\]]*)\]\((?:file:\/\/[^)]*|[^)\s]*\.js(?:[?#][^)]*)?)\)/gi, (_m, label: string) => {
+      const cleanLabel = String(label || '').trim()
+      return !cleanLabel || /\.js\b|^file:\/\/|^\/?workspace\b/i.test(cleanLabel) ? 'the Data App' : cleanLabel
+    })
+    .replace(/\s*\(\s*`?(?:file:\/\/)?[A-Za-z0-9_./:-]*\.js`?\s*\)/gi, '')
+    .replace(/`?(?:file:\/\/\/?workspace\/[^\s`)]+|\/workspace\/[^\s`)]+\.js|[A-Za-z0-9_./-]*data-app\.js)`?/gi, 'the Data App runtime')
+    .replace(/`?[A-Za-z0-9_./-]*\.js\b`?/gi, 'the Data App')
+    .replace(/\b(the Data App(?:\s+runtime)?)(?:\s+\1)+\b/gi, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+([.,;:!?])/g, '$1')
+    .trim()
+
+export async function hydrateDataAppBundleRef(
+  bundle: StudioBundlePayload | null,
+  opts: { extensionSDK?: AntigravityExtensionHostLike; auth: AntigravityAuth; environmentId?: string }
+): Promise<StudioBundlePayload | null> {
+  const refPath = (bundle as unknown as { __bundle_ref__?: string } | null)?.__bundle_ref__
+  if (refPath && opts.environmentId) {
+    try {
+      const fullJson = await fetchEnvironmentFile({ extensionSDK: opts.extensionSDK, auth: opts.auth, environmentId: opts.environmentId, path: refPath })
+      bundle = extractBundleFromInteraction({ output_text: `<DATA_APP_BUNDLE>${fullJson}</DATA_APP_BUNDLE>` }) || bundle
+    } catch { /* fall through */ }
+  }
+  return bundle && !bundle.raw_code && !bundle.prod_code ? null : bundle
+}
+
 export async function recoverInFlightInteraction(opts: {
   extensionSDK?: AntigravityExtensionHostLike
   auth: AntigravityAuth
@@ -344,15 +374,21 @@ export async function recoverInFlightInteraction(opts: {
     if (pollIntervalMs > 0) await new Promise((r) => setTimeout(r, pollIntervalMs))
     fetched = await callInteractionsApi(extensionSDK, auth, `interactions/${encodeURIComponent(cleanId)}`, 'GET')
   }
+  const recoveredBundle = await hydrateDataAppBundleRef(extractBundleFromInteraction(fetched), {
+    extensionSDK,
+    auth,
+    environmentId: normalizeEnvironmentId(fetched.environment_id),
+  })
+  const strippedText = stripControlTags(extractInteractionOutputText(fetched))
   return {
-    text: stripControlTags(extractInteractionOutputText(fetched)),
+    text: recoveredBundle ? sanitizeDataAppAssistantText(strippedText) : strippedText,
     interactionId: fetched.id || cleanId,
     status: String(fetched.status || 'completed'),
     activitySteps: extractInteractionActivitySteps({ ...fetched, id: fetched.id || cleanId, status: 'completed' }).map((s) => ({
       ...s,
       status: 'done' as const,
     })),
-    bundle: extractBundleFromInteraction(fetched),
+    bundle: recoveredBundle,
     nativeContent: extractNativeContentFromInteraction(fetched),
     lookmlBundle: extractLookmlBundleFromInteraction(fetched),
     tddMarkdown: extractTddFromInteraction(fetched),
