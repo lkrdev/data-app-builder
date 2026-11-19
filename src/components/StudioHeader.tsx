@@ -143,7 +143,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
     projectId, setProjectId, disabledModes, setDisabledModes, selectedModel, setSelectedModel,
     defaultThinkingLevel, setDefaultThinkingLevel, maxTotalTokens, setMaxTotalTokens, maxToolRounds, setMaxToolRounds,
     availableModels, enabledModes, apiKey, setApiKey, oauthRedirectUri, capabilities,
-    extensionSDK, busyStatus, messages, handleSaveAuthSetup, isLookerDevMode,
+    extensionSDK, busyStatus, handleSaveAuthSetup, isLookerDevMode,
   } = ctl
   const [copiedRedirectUri, setCopiedRedirectUri] = useState(false)
   const [copiedSpartanRedirectUri, setCopiedSpartanRedirectUri] = useState(false)
@@ -151,7 +151,6 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const { extensionUri: extensionRedirectUri, spartanUri: spartanRedirectUri } = resolveLookerOAuthRedirectUris(
     oauthRedirectUri?.replace(/\/(extensions|spartan)\/oauth2_redirect\/?$/, '')
   )
-  const errorText = messages.filter((m) => m.role === 'error').slice(-1)[0]?.text
   const canSaveContext = capabilities?.canConfigureExtension !== false
   const canManageAttrs = capabilities?.canManageUserAttributes !== false
   const saveDisabled = !!busyStatus || !canSaveContext || (authMode === 'apikey' && !canManageAttrs)
@@ -314,7 +313,6 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
           )}
         </div>
         {busyStatus && <div className="dab-status-banner" style={{ marginTop: 12 }}><span className="dab-spinner" /><span>{busyStatus}</span></div>}
-        {errorText && <div className="dab-msg dab-msg-error" style={{ marginTop: 12 }}>{errorText}</div>}
       </div>
     </div>
   )

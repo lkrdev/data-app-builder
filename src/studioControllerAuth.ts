@@ -13,6 +13,7 @@ import {
   resetHostOAuthWedged, resolveLookerOAuthRedirectUri, setSessionConversationMessages, STUDIO_OAUTH_REFRESH_INTERVAL_MS, STUDIO_OAUTH_STORAGE_KEY, StudioThinkingLevel,
 } from './antigravity'
 import { ChatMessage, parseStudioRoute, STUDIO_MODES, StudioMode } from './components/App'
+import type { StudioToastItem, StudioToastTone } from './components/StudioDesignSystem'
 import { useLookerExtension } from './contexts/LookerExtensionContext'
 import {
   applyStudioDocumentTheme, clampLeftPaneWidth, loadStoredBusySendAction,
@@ -430,6 +431,15 @@ export function useStudioAuthAndPrefs() {
   )
 
   const [expiredConversationNotice, setExpiredConversationNotice] = useState<string | null>(null)
+  const [toasts, setToasts] = useState<StudioToastItem[]>([])
+  const toastSeqRef = useRef(0)
+  const pushToast = useCallback((input: Omit<StudioToastItem, 'id' | 'tone'> & { tone?: StudioToastTone }): string => {
+    const id = `toast_${++toastSeqRef.current}`
+    setToasts((prev) => [...prev.slice(-4), Object.assign({}, input, { id, tone: input.tone || 'error', message: String(input.message || '').trim() || 'Unexpected error.' })])
+    return id
+  }, [])
+  const dismissToast = useCallback((id: string): void => setToasts((prev) => prev.filter((t) => t.id !== id)), [])
+  const clearToasts = useCallback((): void => setToasts([]), [])
   const selectEpochRef = useRef(0)
 
   const getAuthCfg = useCallback(
@@ -512,23 +522,17 @@ export function useStudioAuthAndPrefs() {
       ? 'Creating or updating hidden Looker User Attributes requires Looker "manage_user_attributes" or "admin" permission.'
       : ''
     if (permErr) {
-      setMessages((prev) => [...prev, { role: 'error', text: permErr }])
+      pushToast({ tone: 'error', message: permErr })
       return
     }
     try {
+      let configuredAttrName = ''
       if (authMode === 'apikey') {
         setBusyStatus('Ensuring hidden Looker User Attribute for Gemini API Key...')
-        const attrName = await ensureGeminiApiKeyUserAttribute(core40SDK, extensionSDK, apiKey)
+        configuredAttrName = await ensureGeminiApiKeyUserAttribute(core40SDK, extensionSDK, apiKey)
         setApiKey('')
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: 'assistant',
-            text: `Configured hidden Looker User Attribute "${attrName}" (value_is_hidden=true, user_can_view=false, whitelist="https://generativelanguage.googleapis.com/*") and saved extension context.`,
-          },
-        ])
       } else if (!clientId.trim()) {
-        setMessages((prev) => [...prev, { role: 'error', text: 'Enter a Google Web OAuth 2.0 Client ID before saving.' }])
+        pushToast({ tone: 'error', message: 'Enter a Google Web OAuth 2.0 Client ID before saving.' })
         return
       }
       setBusyStatus('Saving shared extension context...')
@@ -536,12 +540,18 @@ export function useStudioAuthAndPrefs() {
         authMode, clientId: clientId.trim(), projectId: projectId.trim(),
         disabledModes, defaultModel: selectedModel, defaultThinkingLevel, maxTotalTokens, maxToolRounds,
       })
+      if (configuredAttrName) {
+        pushToast({
+          tone: 'success',
+          message: `Configured hidden Looker User Attribute "${configuredAttrName}" (value_is_hidden=true, user_can_view=false, whitelist="https://generativelanguage.googleapis.com/*") and saved extension context.`,
+        })
+      }
       setIsConfigured(true)
       setBusyStatus(null)
       history.replace('/')
     } catch (err: unknown) {
       setBusyStatus(null)
-      setMessages((prev) => [...prev, { role: 'error', text: getErrorMessage(err) }])
+      pushToast({ tone: 'error', message: getErrorMessage(err) })
     }
   }
 
@@ -556,7 +566,7 @@ export function useStudioAuthAndPrefs() {
 
   const handleOAuthLogin = useCallback(async () => {
     if (!clientId.trim()) {
-      setMessages((prev) => [...prev, { role: 'error', text: 'Enter your Google Web OAuth 2.0 Client ID first.' }])
+      pushToast({ tone: 'error', message: 'Enter your Google Web OAuth 2.0 Client ID first.' })
       return
     }
     if (isHostOAuthWedged()) {
@@ -588,12 +598,12 @@ export function useStudioAuthAndPrefs() {
       }
     } catch (err: unknown) {
       if (oauthAbortRef.current === controller && !controller.signal.aborted) {
-        setMessages((prev) => [...prev, { role: 'error', text: `Google OAuth failed: ${getErrorMessage(err)}` }])
+        pushToast({ tone: 'error', message: `Google OAuth failed: ${getErrorMessage(err)}` })
       }
     } finally {
       if (oauthAbortRef.current === controller) { oauthAbortRef.current = null; setOauthSigningIn(false) }
     }
-  }, [clientId, extensionSDK, mockExt, setMessages, setOauthToken])
+  }, [clientId, extensionSDK, mockExt, pushToast, setOauthToken])
 
   return {
     extensionSDK, core40SDK, lookerHostData, extHostData, history, location, isTileMount, mockExt,
@@ -617,6 +627,7 @@ export function useStudioAuthAndPrefs() {
     setAgentSession, setMessages,
     activeConversationId, activeConversationIdRef, setActiveConversationId,
     expiredConversationNotice, setExpiredConversationNotice,
+    toasts, pushToast, dismissToast, clearToasts,
     selectEpochRef, getAuthCfg,
     getConvMessages, setConvMessages, deleteConvMessages, clearAllConvMessages,
     ...concurrency,

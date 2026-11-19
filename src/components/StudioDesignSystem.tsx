@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from 'react'
+
+import { AlertCircle, AlertTriangle, CheckCircle2, Info, type LucideIcon } from 'lucide-react'
 export { StudioSelect, ThemeModeIcon } from './StudioSelect'
 export type { StudioSelectOption, StudioSelectProps } from './StudioSelect'
 
@@ -261,5 +263,80 @@ export const RipperLogo: React.FC<RipperLogoProps> = ({
       <circle cx="75" cy="32" r="2.4" fill="#22d3ee" />
       <circle cx="80" cy="40" r="2" fill="#7dd3fc" />
     </svg>
+  )
+}
+
+export const DEFAULT_TOAST_DURATION_MS = 10_000
+
+export type StudioToastTone = 'info' | 'success' | 'warning' | 'error'
+
+export interface StudioToastItem {
+  id: string
+  tone: StudioToastTone
+  message: string
+  title?: string
+  durationMs?: number | null
+}
+
+const TOAST_ICONS: Record<StudioToastTone, LucideIcon> = {
+  info: Info,
+  success: CheckCircle2,
+  warning: AlertTriangle,
+  error: AlertCircle,
+}
+
+export function StudioToast({ toast, onDismiss }: { toast: StudioToastItem; onDismiss: (id: string) => void }) {
+  const onDismissRef = React.useRef(onDismiss)
+  onDismissRef.current = onDismiss
+  const timerRef = React.useRef<ReturnType<typeof setTimeout>>()
+
+  React.useEffect(() => {
+    const ms = toast.durationMs === undefined ? DEFAULT_TOAST_DURATION_MS : toast.durationMs
+    if (ms === null || !Number.isFinite(ms) || ms <= 0) return
+    timerRef.current = setTimeout(() => onDismissRef.current(toast.id), ms)
+    return () => clearTimeout(timerRef.current)
+  }, [toast.id, toast.durationMs])
+
+  const Icon = TOAST_ICONS[toast.tone] || AlertCircle
+  return (
+    <div
+      data-testid="studio-toast"
+      data-toast-id={toast.id}
+      data-toast-tone={toast.tone}
+      role={toast.tone === 'error' ? 'alert' : 'status'}
+      className={`dab-toast dab-toast-${toast.tone}`}
+    >
+      <span className="dab-toast-icon" aria-hidden="true">
+        <Icon size={15} strokeWidth={1.75} aria-hidden="true" />
+      </span>
+      <div className="dab-toast-body">
+        {toast.title ? <div className="dab-toast-title">{toast.title}</div> : null}
+        <div className="dab-toast-message">{toast.message}</div>
+      </div>
+      <button
+        type="button"
+        data-testid="studio-toast-dismiss-btn"
+        className="dab-toast-dismiss"
+        aria-label="Dismiss notification"
+        title="Dismiss notification"
+        onClick={() => {
+          clearTimeout(timerRef.current)
+          onDismiss(toast.id)
+        }}
+      >
+        ×
+      </button>
+    </div>
+  )
+}
+
+export function StudioToastViewport({ toasts, onDismiss }: { toasts: StudioToastItem[]; onDismiss: (id: string) => void }) {
+  if (!toasts.length) return null
+  return (
+    <div data-testid="studio-toast-viewport" className="dab-toast-viewport">
+      {toasts.map((toast) => (
+        <StudioToast key={toast.id} toast={toast} onDismiss={onDismiss} />
+      ))}
+    </div>
   )
 }

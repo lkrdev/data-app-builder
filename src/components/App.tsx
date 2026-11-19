@@ -9,7 +9,7 @@ import { LookerExtensionProvider, MockLookerExtensionProvider } from '../context
 import { type ChatTurnMessage, parseStudioRoute, STUDIO_MODES, type StudioMode } from '../lookerApi'
 import { useStudioController } from '../useStudioController'
 import { PythonTile } from './PythonTile'
-import { ConfigSetupView, RipperSurfLoader, StudioTopbar } from './StudioHeader'
+import { ConfigSetupView, RipperSurfLoader, StudioToastViewport, StudioTopbar } from './StudioHeader'
 import { StudioCenteredEmptyStage, StudioConversationsSidebar, StudioLeftPane, StudioRightPane } from './StudioWorkspace'
 import '../styles/index.css'
 
@@ -41,94 +41,100 @@ const StudioMain: React.FC = () => {
 
   if (ctl.isTileMount) return <PythonTileMount />
   if (ctl.appInitializing) return <RipperSurfLoader agentName={ctl.agentName} theme={ctl.resolvedTheme} themeMode={ctl.themeMode} />
-  if (ctl.location.pathname === '/config') return <ConfigSetupView ctl={ctl} />
 
   return (
-    <div
-      className="dab-shell"
-      data-theme={ctl.resolvedTheme}
-      data-theme-mode={ctl.themeMode}
-      onMouseDown={() => {
-        if (!suppressNextClickRef.current) setLongPressTooltip(null)
-      }}
-      onTouchStart={(e) => {
-        clearLongPressTimer()
-        if (dismissTimerRef.current !== null) {
-          clearTimeout(dismissTimerRef.current)
-          dismissTimerRef.current = null
-        }
-        suppressNextClickRef.current = false
-        setLongPressTooltip(null)
-        const target = (e.target as HTMLElement | null)?.closest?.(
-          'button, [role="button"], [role="option"], a, summary, .dab-badge'
-        ) as HTMLElement | null
-        if (!target || target.closest('.dab-msg-user')) return
-        const label = (target.getAttribute('title') || target.getAttribute('aria-label') || '').trim()
-        if (!label) return
-        longPressTimerRef.current = setTimeout(() => {
-          longPressTimerRef.current = null
-          const rect = target.getBoundingClientRect()
-          suppressNextClickRef.current = true
-          setLongPressTooltip({
-            text: label,
-            left: Math.min(Math.max(12, rect.left + rect.width / 2), (window.innerWidth || 390) - 12),
-            top: Math.max(8, rect.bottom + 6),
-          })
-          dismissTimerRef.current = setTimeout(() => {
-            dismissTimerRef.current = null
-            setLongPressTooltip(null)
-          }, 2200)
-        }, 450)
-      }}
-      onTouchEnd={clearLongPressTimer}
-      onTouchCancel={clearLongPressTimer}
-      onTouchMove={clearLongPressTimer}
-      onClickCapture={(e) => {
-        if (suppressNextClickRef.current) {
-          suppressNextClickRef.current = false
-          e.preventDefault()
-          e.stopPropagation()
-        }
-      }}
-    >
-      <StudioTopbar ctl={ctl} />
-      {ctl.expiredConversationNotice && (
-        <div className="dab-expired-conv-banner" data-testid="expired-conversation-banner" role="status">
-          <span className="dab-expired-conv-banner-text">
-            <AlertTriangle size={14} strokeWidth={1.75} aria-hidden="true" style={{ flexShrink: 0 }} />
-            <span>{ctl.expiredConversationNotice}</span>
-          </span>
-          <button
-            type="button"
-            className="dab-btn-secondary dab-expired-conv-dismiss"
-            data-testid="dismiss-expired-conversation-banner"
-            onClick={() => ctl.setExpiredConversationNotice(null)}
-            aria-label="Dismiss expired conversation notice"
-          >
-            <X size={13} strokeWidth={2} aria-hidden="true" />
-            <span>Dismiss</span>
-          </button>
-        </div>
-      )}
-      <div
-        className={`dab-workspace dab-workspace-with-sidebar ${ctl.sidebarCollapsed ? 'dab-workspace-sidebar-collapsed' : ''} ${ctl.rightPaneCollapsed ? 'dab-workspace-right-collapsed' : ''} ${ctl.isEmptyConversation ? 'dab-workspace-empty' : ''}`}
-        style={{ '--dab-left-pane-width': `${ctl.leftPaneWidth}px` } as React.CSSProperties}
-      >
-        <StudioConversationsSidebar ctl={ctl} />
-        {ctl.isEmptyConversation ? <StudioCenteredEmptyStage ctl={ctl} /> : <StudioLeftPane ctl={ctl} />}
-        <StudioRightPane ctl={ctl} />
-      </div>
-      {longPressTooltip && (
+    <>
+      {ctl.location.pathname === '/config' ? (
+        <ConfigSetupView ctl={ctl} />
+      ) : (
         <div
-          data-testid="studio-longpress-tooltip"
-          role="tooltip"
-          className="dab-longpress-tooltip"
-          style={{ left: longPressTooltip.left, top: longPressTooltip.top }}
+          className="dab-shell"
+          data-theme={ctl.resolvedTheme}
+          data-theme-mode={ctl.themeMode}
+          onMouseDown={() => {
+            if (!suppressNextClickRef.current) setLongPressTooltip(null)
+          }}
+          onTouchStart={(e) => {
+            clearLongPressTimer()
+            if (dismissTimerRef.current !== null) {
+              clearTimeout(dismissTimerRef.current)
+              dismissTimerRef.current = null
+            }
+            suppressNextClickRef.current = false
+            setLongPressTooltip(null)
+            const target = (e.target as HTMLElement | null)?.closest?.(
+              'button, [role="button"], [role="option"], a, summary, .dab-badge'
+            ) as HTMLElement | null
+            if (!target || target.closest('.dab-msg-user')) return
+            const label = (target.getAttribute('title') || target.getAttribute('aria-label') || '').trim()
+            if (!label) return
+            longPressTimerRef.current = setTimeout(() => {
+              longPressTimerRef.current = null
+              const rect = target.getBoundingClientRect()
+              suppressNextClickRef.current = true
+              setLongPressTooltip({
+                text: label,
+                left: Math.min(Math.max(12, rect.left + rect.width / 2), (window.innerWidth || 390) - 12),
+                top: Math.max(8, rect.bottom + 6),
+              })
+              dismissTimerRef.current = setTimeout(() => {
+                dismissTimerRef.current = null
+                setLongPressTooltip(null)
+              }, 2200)
+            }, 450)
+          }}
+          onTouchEnd={clearLongPressTimer}
+          onTouchCancel={clearLongPressTimer}
+          onTouchMove={clearLongPressTimer}
+          onClickCapture={(e) => {
+            if (suppressNextClickRef.current) {
+              suppressNextClickRef.current = false
+              e.preventDefault()
+              e.stopPropagation()
+            }
+          }}
         >
-          {longPressTooltip.text}
+          <StudioTopbar ctl={ctl} />
+          {ctl.expiredConversationNotice && (
+            <div className="dab-expired-conv-banner" data-testid="expired-conversation-banner" role="status">
+              <span className="dab-expired-conv-banner-text">
+                <AlertTriangle size={14} strokeWidth={1.75} aria-hidden="true" style={{ flexShrink: 0 }} />
+                <span>{ctl.expiredConversationNotice}</span>
+              </span>
+              <button
+                type="button"
+                className="dab-btn-secondary dab-expired-conv-dismiss"
+                data-testid="dismiss-expired-conversation-banner"
+                onClick={() => ctl.setExpiredConversationNotice(null)}
+                aria-label="Dismiss expired conversation notice"
+              >
+                <X size={13} strokeWidth={2} aria-hidden="true" />
+                <span>Dismiss</span>
+              </button>
+            </div>
+          )}
+          <div
+            className={`dab-workspace dab-workspace-with-sidebar ${ctl.sidebarCollapsed ? 'dab-workspace-sidebar-collapsed' : ''} ${ctl.rightPaneCollapsed ? 'dab-workspace-right-collapsed' : ''} ${ctl.isEmptyConversation ? 'dab-workspace-empty' : ''}`}
+            style={{ '--dab-left-pane-width': `${ctl.leftPaneWidth}px` } as React.CSSProperties}
+          >
+            <StudioConversationsSidebar ctl={ctl} />
+            {ctl.isEmptyConversation ? <StudioCenteredEmptyStage ctl={ctl} /> : <StudioLeftPane ctl={ctl} />}
+            <StudioRightPane ctl={ctl} />
+          </div>
+          {longPressTooltip && (
+            <div
+              data-testid="studio-longpress-tooltip"
+              role="tooltip"
+              className="dab-longpress-tooltip"
+              style={{ left: longPressTooltip.left, top: longPressTooltip.top }}
+            >
+              {longPressTooltip.text}
+            </div>
+          )}
         </div>
       )}
-    </div>
+      <StudioToastViewport toasts={ctl.toasts} onDismiss={ctl.dismissToast} />
+    </>
   )
 }
 

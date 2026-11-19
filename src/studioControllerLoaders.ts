@@ -34,7 +34,7 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
   const {
     extensionSDK, core40SDK, extHostData, history, location, isTileMount, mockExt, authMode, oauthToken, oauthTokenRef,
     selectedModel, thinkingLevel, maxTotalTokens, maxToolRounds, isConfigured, disabledModes,
-    parsedRoute, sharedEnvIdRef, syncSharedEnvironmentId, setAgentSession, setMessages,
+    parsedRoute, sharedEnvIdRef, syncSharedEnvironmentId, setAgentSession, setMessages, pushToast,
     getAuthCfg, getConvMessages, setConvMessages, deleteConvMessages, setExpiredConversationNotice,
     busyStatus, setBusyStatus, setConvBusyStatus, inFlightTurnsRef, convLabelsRef, turnResumerRef, registerTurnEntry, finishTurnEntry,
     resetOAuthOnUnauthorized, activeConversationId, activeConversationIdRef, setActiveConversationId,
@@ -59,10 +59,10 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       () => { setConvBusyStatus(loadConvId, mockExt?.initialBusyStatus || null) },
       (err: unknown) => {
         setConvBusyStatus(loadConvId, mockExt?.initialBusyStatus || null)
-        if (activeConversationIdRef.current === loadConvId) setMessages((prev) => [...prev, { role: 'error', text: `${errPrefix}: ${getErrorMessage(err)}` }])
+        if (activeConversationIdRef.current === loadConvId) pushToast({ tone: 'error', message: `${errPrefix}: ${getErrorMessage(err)}` })
       }
     )
-  }, [activeConversationIdRef, mockExt?.initialBusyStatus, setConvBusyStatus, setMessages])
+  }, [activeConversationIdRef, mockExt?.initialBusyStatus, pushToast, setConvBusyStatus])
 
   const hydrateLoadedArtifact = useCallback((opts: {
     mode: StudioMode; id: string; route: string; pushRoute: boolean; convTypes: string[]; convId?: string; explores?: string[]
@@ -391,9 +391,9 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
       ])
     } catch (err: unknown) {
       setBusyStatus(mockExt?.initialBusyStatus || null)
-      setMessages((prev) => [...prev, { role: 'error', text: getErrorMessage(err) }])
+      pushToast({ tone: 'error', message: getErrorMessage(err) })
     }
-  }, [contentItemsRef, core40SDK, extHostData?.extensionId, handleSaveScript, mockExt?.initialBusyStatus, selectedFolderId, setBusyStatus, setMessages, setPublishedTileDash, upsertContentItem])
+  }, [contentItemsRef, core40SDK, extHostData?.extensionId, handleSaveScript, mockExt?.initialBusyStatus, pushToast, selectedFolderId, setBusyStatus, setMessages, setPublishedTileDash, upsertContentItem])
 
   const loadCaConversationById = useCallback(
     (rawId: string, pushRoute = true) => {
