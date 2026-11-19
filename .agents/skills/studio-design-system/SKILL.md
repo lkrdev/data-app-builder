@@ -56,6 +56,7 @@ Import all primitives from `./StudioDesignSystem` (or `./StudioHeader`, which re
 
 ```tsx
 import {
+  RipperLogo,
   StudioButton,
   StudioBadge,
   StudioModal,
@@ -67,17 +68,21 @@ import {
 } from './StudioDesignSystem'
 ```
 
+### `<RipperLogo>` (`RipperLogoProps`)
+Static Option A full-drawn Ripper surf brand mark SVG (`viewBox="6 8 84 80"`, `.dab-brand-logo`, zero CSS animations, React 17-safe module-counter `<linearGradient>` IDs) paired with `[data-testid="studio-brand-home-btn"]` (`.dab-brand-home-btn`) in `StudioBrandAgentName` for click-to-home (`'/'`) navigation.
+- **Props**: `size?: number` (default `24`; applies inline `{ width: size, height: size }` when `size !== 24`), `className?: string`, `testId?: string` (default `'studio-brand-logo'`), `idPrefix?: string`.
+
 ### `<StudioButton>`
 Standardized action button (`type="button"` by default) with automatic `.dab-btn` sizing (`min-height: 28px`, `inline-flex`, `white-space: nowrap`).
-- **Props**: `variant?: 'primary' | 'secondary' | 'gemini' | 'danger'`, `testId?: string`, plus standard `<button>` props.
+- **Props**: `variant?: 'primary' | 'secondary' | 'gemini' | 'danger'` (default `'secondary'`), `testId?: string`, plus standard `React.ButtonHTMLAttributes<HTMLButtonElement>` props.
 
 ### `<StudioBadge>`
 Theme-aware status badge or message pill.
-- **Props**: `tone?: 'neutral' | 'accent' | 'success' | 'warning' | 'danger'`, `pill?: boolean` (uses `.dab-msg-pill` instead of `.dab-badge`), `testId?: string`.
+- **Props**: `tone?: 'neutral' | 'accent' | 'success' | 'warning' | 'danger'`, `pill?: boolean` (default `false`; uses `.dab-msg-pill` instead of `.dab-badge`), `testId?: string`, plus `React.HTMLAttributes<HTMLSpanElement>` props.
 
 ### `<StudioModal>`
 Accessible modal dialog shell with backdrop click dismissal, `Escape` key handler, and header/footer slots.
-- **Props**: `open: boolean`, `onClose: () => void`, `title: React.ReactNode`, `subtitle?: React.ReactNode`, `testId?: string`, `backdropTestId?: string`, `closeTestId?: string`, `closeLabel?: React.ReactNode`, `maxWidth?: number | string`, `footer?: React.ReactNode`.
+- **Props**: `open: boolean`, `onClose: () => void`, `title: React.ReactNode`, `subtitle?: React.ReactNode`, `headerRight?: React.ReactNode`, `testId?: string`, `backdropTestId?: string`, `backdropClassName?: string`, `closeTestId?: string`, `closeLabel?: string` (default `'✕'`), `className?: string`, `maxWidth?: number | string`, `footer?: React.ReactNode`, `children: React.ReactNode`.
 - **Canonical Modal `testId`s**:
   - `folder-advanced-search-modal` (`closeTestId="folder-search-modal-close"`)
   - `use-case-info-modal` (`closeTestId="use-case-info-close-btn"`)
@@ -89,15 +94,15 @@ Accessible modal dialog shell with backdrop click dismissal, `Escape` key handle
 
 ### `<StudioToolbar>`
 Right-pane preview toolbar with a responsive wrapping title/badge group (`.dab-ds-toolbar-title-block`) and right-aligned action cluster (`.dab-preview-actions`).
-- **Props**: `title?: React.ReactNode`, `badges?: React.ReactNode`, `actions?: React.ReactNode`, `testId?: string`, `titleBlockTestId?: string`.
+- **Props**: `title?: React.ReactNode`, `badges?: React.ReactNode`, `actions?: React.ReactNode`, `testId?: string`, `titleBlockTestId?: string`, `className?: string`, `children?: React.ReactNode`.
 
 ### `<StudioCard>` & `<StudioSkeleton>`
-- `<StudioCard testId="...">`: Theme-aware surface container (`.dab-ds-card`) replacing ad-hoc inline card styles.
-- `<StudioSkeleton width={190} height={28} testId="..." />`: Shimmer placeholder (`.dab-skeleton`) preventing layout shift during async loads.
+- `<StudioCard testId="...">`: Theme-aware surface container (`.dab-ds-card`). **Props**: `testId?: string` plus `React.HTMLAttributes<HTMLDivElement>`.
+- `<StudioSkeleton width={190} height={28} testId="..." />`: Shimmer placeholder (`.dab-skeleton`) preventing layout shift during async loads. **Props**: `width?: number | string`, `height?: number | string`, `testId?: string`, `className?: string`, `style?: React.CSSProperties`, `ariaLabel?: string` (omits `aria-hidden="true"` when `ariaLabel` is set).
 
 ### `<StudioDocPreview>`
-Non-interactive wrapper for live UI components embedded inside documentation Markdown (`renderUseCaseGuideMarkdown`).
-- **Props**: `component?: string`, `testId?: string` (defaults to `'doc-ui-preview'`), `children: React.ReactNode`.
+Non-interactive wrapper (`data-testid="doc-ui-preview"`) for live UI components embedded inside documentation Markdown (`renderUseCaseGuideMarkdown`).
+- **Props**: `component?: string`, `key?: React.Key`, `className?: string`, `children: React.ReactNode`.
 
 ### `<StudioSelect>`
 Accessible custom dropdown (`role="listbox"`) with a synchronized hidden `<select className="dab-studio-select-native">` for `.value` compatibility.

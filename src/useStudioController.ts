@@ -73,7 +73,7 @@ export function useStudioController() {
     selectedFolderId, schemaMarkdown, activeObjectId, setActiveObjectId,
     conversations, conversationsRef, setConversations, setSavedScripts,
     caConversation, setCaConversation, lastCaIdRef,
-    setLookmlProjectId, lookmlBundle, setLookmlBundle, lastLookmlIdRef,
+    setLookmlProjectId, lookmlBundle, setLookmlBundle, lastLookmlIdRef, setActivatedLookmlSkills,
     publishedApp, setPublishedAppState, lastPublishedIdRef,
     nativeContent, setNativeContentState, lastNativeIdRef,
     alertBundle, setAlertBundle,
@@ -275,6 +275,7 @@ export function useStudioController() {
 
   const handleResetNewApp = useCallback(
     (_resetToDefaultRoute?: boolean | React.MouseEvent, presetUseCase?: StudioUseCase) => {
+      if (location.pathname === '/config' && (!auth.isConfigured || Boolean(busyStatus))) return
       selectEpochRef.current += 1
       const nextUseCase: StudioUseCase = typeof presetUseCase === 'string' && presetUseCase ? presetUseCase : 'auto'
       const freshConvId = nextStudioConvId()
@@ -303,6 +304,7 @@ export function useStudioController() {
       setCurrentAppCode('')
       setSelectedExplores([])
       setMentionedItems([])
+      setActivatedLookmlSkills([])
       setAgentSession({
         environmentId: sharedEnvIdRef.current || undefined,
         lastInteractionId: undefined,
@@ -315,7 +317,7 @@ export function useStudioController() {
       setSelectedUseCase(nextUseCase)
       if (typeof window !== 'undefined' && window.innerWidth <= 768) setSidebarCollapsed(true)
     },
-    [explicitUseCaseRef, history, hydratedConvRouteRef, lastCaIdRef, lastHealthIdRef, lastLookmlIdRef, lastNativeIdRef, lastPublishedIdRef, lastScriptIdRef, location.pathname, selectEpochRef, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setCaConversation, setContentItems, setCurrentAppCode, setHealthReport, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMentionedItems, setMessages, setNativeContentState, setPastedImages, setPrompt, setPublishedAppState, setPublishedTileDash, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef]
+    [auth.isConfigured, busyStatus, explicitUseCaseRef, history, hydratedConvRouteRef, lastCaIdRef, lastHealthIdRef, lastLookmlIdRef, lastNativeIdRef, lastPublishedIdRef, lastScriptIdRef, location.pathname, selectEpochRef, setActivatedLookmlSkills, setActiveContentTabKey, setActiveConversationId, setActiveObjectId, setActiveViewerDocument, setAgentSession, setAlertBundle, setCaConversation, setContentItems, setCurrentAppCode, setHealthReport, setLoadedScript, setLookmlBundle, setLookmlProjectId, setMentionedItems, setMessages, setNativeContentState, setPastedImages, setPrompt, setPublishedAppState, setPublishedTileDash, setSelectedExplores, setSelectedUseCase, setSidebarCollapsed, sharedEnvIdRef]
   )
 
   const handleNewConversation = useCallback(

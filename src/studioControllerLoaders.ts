@@ -615,12 +615,12 @@ export function useStudioLoaders(auth: StudioAuthAndPrefs, meta: StudioMetadata)
 
   useEffect(() => {
     if (isTileMount || location.pathname === '/config') return
+    if (!isConfigured && activeMode !== 'tile') { history.replace('/config'); return }
     if (disabledModes.includes(activeMode) || (parsedRoute.useCase && parsedRoute.useCase !== 'auto' && disabledModes.includes(parsedRoute.mode))) {
       explicitUseCaseRef.current = 'auto'; setSelectedUseCase('auto')
       if (location.pathname !== '/') history.replace('/')
       return
     }
-    if (!isConfigured && activeMode !== 'tile') { history.replace('/config'); return }
     if (parsedRoute.isLegacyRoute) {
       if (parsedRoute.objectId) {
         if (parsedRoute.useCase && parsedRoute.useCase !== 'auto') { resolvedUseCaseByIdRef.current[parsedRoute.objectId] = parsedRoute.useCase; setSelectedUseCase(parsedRoute.useCase) }
