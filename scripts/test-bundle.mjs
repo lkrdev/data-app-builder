@@ -95,6 +95,7 @@ const appTsx = [
   'src/components/AlertInspectorPane.tsx',
   'src/components/StudioConversationsSidebar.tsx',
   'src/components/StudioDesignSystem.tsx',
+  'src/components/StudioTopbarMenus.tsx',
   'src/components/StudioHeader.tsx',
   'src/components/StudioWorkspace.tsx',
   'src/components/StudioMarkdown.tsx',

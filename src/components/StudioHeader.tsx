@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
-  AlertTriangle, Check, ChevronDown, ExternalLink, Folder, FolderOpen, Info, Lock, LogOut,
-  Maximize2, Minimize2, PanelRightOpen, Pencil, RefreshCw, RotateCcw, Search, Server, Square, User,
+  AlertTriangle, Check, ExternalLink, Folder, FolderOpen, Info, Lock, LogOut,
+  Maximize2, Minimize2, PanelRightOpen, Pencil, Search, User,
 } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 
@@ -15,8 +15,12 @@ import { copyTextWithExtensionSdk, LookerFolderNode, normalizeStudioAgentName, S
 import { ResolvedStudioTheme, StudioController, StudioThemeMode } from '../useStudioController'
 import {
   RipperLogo, StudioBadge, StudioButton, StudioCard, StudioModal,
-  StudioSelect, StudioSkeleton, ThemeModeIcon,
+  StudioSelect, StudioSkeleton,
 } from './StudioDesignSystem'
+import {
+  formatApiKeyBadgeTitle, StudioDevModeBadge, StudioEnvironmentControl,
+  StudioMobileMoreMenu, StudioResetEnvModal, ThemeModeSelect,
+} from './StudioTopbarMenus'
 export * from './StudioDesignSystem'
 
 export const RipperSurfLoader: React.FC<{
@@ -120,23 +124,6 @@ export const FullScreenToggleButton: React.FC = () => {
   )
 }
 
-export const ThemeModeSelect: React.FC<{
-  themeMode: StudioThemeMode; resolvedTheme: ResolvedStudioTheme; onChange: (mode: StudioThemeMode) => void
-}> = ({ themeMode, resolvedTheme, onChange }) => (
-  <StudioSelect
-    testId="topbar-theme-select" optionTestIdPrefix="topbar-theme" value={themeMode}
-    onChange={(val) => onChange(val as StudioThemeMode)} ariaLabel="Theme Mode"
-    title={`Theme mode: ${themeMode} (active: ${resolvedTheme})`} iconOnly align="right"
-    triggerIcon={<ThemeModeIcon mode={themeMode} />}
-    extraAttrs={{ 'data-theme-mode': themeMode, 'data-resolved-theme': resolvedTheme }}
-    options={[
-      { value: 'light', label: 'Light', icon: <ThemeModeIcon mode="light" /> },
-      { value: 'dark', label: 'Dark', icon: <ThemeModeIcon mode="dark" /> },
-      { value: 'system', label: 'System', icon: <ThemeModeIcon mode="system" /> },
-    ]}
-  />
-)
-
 export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
     themeMode, resolvedTheme, setThemeMode, authMode, setAuthMode, clientId, setClientId,
@@ -154,6 +141,8 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
   const canSaveContext = capabilities?.canConfigureExtension !== false
   const canManageAttrs = capabilities?.canManageUserAttributes !== false
   const saveDisabled = !!busyStatus || !canSaveContext || (authMode === 'apikey' && !canManageAttrs)
+  const cfgRowStyle: React.CSSProperties = { borderTop: '1px solid var(--dab-border)', paddingTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 12 }
+  const cfgLabelStyle: React.CSSProperties = { color: 'var(--dab-text-secondary)' }
 
   return (
     <div className="dab-shell" data-theme={resolvedTheme} data-theme-mode={themeMode}>
@@ -164,7 +153,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
         </div>
         <div className="dab-controls">
           <ThemeModeSelect themeMode={themeMode} resolvedTheme={resolvedTheme} onChange={setThemeMode} />
-          {isLookerDevMode && <StudioBadge tone="warning" testId="topbar-dev-mode-badge" title="Looker session is in Development Mode">Dev Mode</StudioBadge>}
+          {isLookerDevMode && <StudioDevModeBadge />}
           <FullScreenToggleButton />
         </div>
       </header>
@@ -233,19 +222,19 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               </div>
             </StudioCard>
           )}
-          <div style={{ borderTop: '1px solid var(--dab-border, #e2e8f0)', paddingTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 12 }}>
-            <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Default Model:</strong>
+          <div style={cfgRowStyle}>
+            <strong style={cfgLabelStyle}>Default Model:</strong>
             <StudioSelect
               testId="config-default-model-select" value={selectedModel} onChange={setSelectedModel}
               options={availableModels.map((m) => ({ value: m.id, label: `${m.label} (${m.id})`, title: m.description }))}
             />
-            <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Default Thinking Level:</strong>
+            <strong style={cfgLabelStyle}>Default Thinking Level:</strong>
             <StudioSelect
               testId="config-default-thinking-level-select" value={defaultThinkingLevel}
               onChange={(val) => setDefaultThinkingLevel(val as StudioThinkingLevel)}
               options={STUDIO_THINKING_LEVEL_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
             />
-            <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Max Tokens Budget:</strong>
+            <strong style={cfgLabelStyle}>Max Tokens Budget:</strong>
             <StudioSelect
               testId="config-max-total-tokens-select" value={String(maxTotalTokens)}
               onChange={(val) => setMaxTotalTokens(Number(val))}
@@ -255,7 +244,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               className="dab-info-tooltip-wrap" data-open={roundsInfoOpen ? 'true' : undefined}
               onMouseEnter={() => setRoundsInfoOpen(true)} onMouseLeave={() => setRoundsInfoOpen(false)}
             >
-              <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Max Tool Rounds:</strong>
+              <strong style={cfgLabelStyle}>Max Tool Rounds:</strong>
               <button
                 type="button" tabIndex={0} className="dab-info-tooltip-btn" data-testid="config-max-tool-rounds-info"
                 aria-label="About Max Tool Rounds" aria-describedby="config-max-tool-rounds-tooltip"
@@ -275,8 +264,8 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
               options={STUDIO_MAX_TOOL_ROUNDS_OPTIONS.map((o) => ({ value: String(o.value), label: o.label }))}
             />
           </div>
-          <div style={{ borderTop: '1px solid var(--dab-border, #e2e8f0)', paddingTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 12 }}>
-            <strong style={{ color: 'var(--dab-text-secondary, #475569)' }}>Enabled Studio Apps:</strong>
+          <div style={cfgRowStyle}>
+            <strong style={cfgLabelStyle}>Enabled Studio Apps:</strong>
             {STUDIO_MODES.map((m) => {
               const enabled = !disabledModes.includes(m.mode)
               return (
@@ -292,7 +281,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
                   <input
                     type="checkbox" data-testid={`config-mode-toggle-${m.mode}`} checked={enabled}
                     disabled={enabled && enabledModes.length <= 1}
-                    onChange={() => setDisabledModes((prev) => prev.includes(m.mode) ? prev.filter((x) => x !== m.mode) : [...prev, m.mode])}
+                    onChange={() => setDisabledModes((prev) => prev.includes(m.mode) ? prev.filter((x) => x !== m.mode) : prev.concat(m.mode))}
                   />
                   {m.label}
                 </label>
@@ -320,9 +309,7 @@ export const ConfigSetupView: React.FC<{ ctl: StudioController }> = ({ ctl }) =>
 
 export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const {
-    themeMode, resolvedTheme, setThemeMode, sharedEnvironmentId, environmentStatus, envResetNotice, envSyncNotice,
-    resetEnvModalOpen, setResetEnvModalOpen, hasInFlightTurns, envSkillsOutdated, handleSyncEnvironmentSkills,
-    handleResetEnvironment, handleStopEnvironment, requirePermission, setRequirePermission,
+    themeMode, resolvedTheme, setThemeMode, requirePermission, setRequirePermission,
     capabilities, canDeployLookml,
     loadingMetadata, folderTreeNodes, rootFolderIds, folderChildrenById,
     expandedFolderIds, loadingFolderIds, toggleExpandFolder, hydrateFolderAncestors,
@@ -344,28 +331,15 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
   const [advResults, setAdvResults] = useState<LookerFolderNode[]>([])
   const [advLoading, setAdvLoading] = useState(false)
   const folderPickerRef = useRef<HTMLDivElement | null>(null)
-  const [envMenuOpen, setEnvMenuOpen] = useState(false)
-  const [resetConfirmText, setResetConfirmText] = useState('')
-  const envMenuRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => { if (!resetEnvModalOpen) setResetConfirmText('') }, [resetEnvModalOpen])
-  const closeResetModal = () => { setResetConfirmText(''); setResetEnvModalOpen(false) }
-  const confirmResetEnv = () => { if (resetConfirmText.trim() !== 'DELETE') return; setResetConfirmText(''); void handleResetEnvironment() }
 
   useEffect(() => {
     const onDocMouseDown = (e: MouseEvent) => {
       if (folderPickerRef.current && !folderPickerRef.current.contains(e.target as Node) && !(e.target as HTMLElement)?.closest?.('[data-testid="folder-advanced-search-modal"]')) {
         setFolderPopoverOpen(false)
       }
-      if (envMenuRef.current && !envMenuRef.current.contains(e.target as Node)) setEnvMenuOpen(false)
     }
-    const onDocKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') setEnvMenuOpen(false) }
     document.addEventListener('mousedown', onDocMouseDown)
-    document.addEventListener('keydown', onDocKeyDown)
-    return () => {
-      document.removeEventListener('mousedown', onDocMouseDown)
-      document.removeEventListener('keydown', onDocKeyDown)
-    }
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
   }, [])
 
   const selectedFolderNode = folderTreeNodes[selectedFolderId]
@@ -389,21 +363,16 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     return q ? Object.values(folderTreeNodes).filter((node) => `${node.name} ${node.id}`.toLowerCase().includes(q)) : null
   }, [folderTreeNodes, folderQuickSearch])
 
-  const executeAdvancedSearch = async (overrideName?: string) => {
+  const executeAdvancedSearch = useCallback((overrideName = advName) => {
     setAdvLoading(true)
-    try {
-      setAdvResults(await handleSearchFolders({ name: overrideName !== undefined ? overrideName : advName, parent_id: advParentId, is_personal: advPersonal, creator_id: advCreatorId, id: advFolderId }))
-    } finally {
-      setAdvLoading(false)
-    }
-  }
+    void handleSearchFolders({ name: overrideName, parent_id: advParentId, is_personal: advPersonal, creator_id: advCreatorId, id: advFolderId })
+      .then(setAdvResults)
+      .finally(() => setAdvLoading(false))
+  }, [advName, advParentId, advPersonal, advCreatorId, advFolderId, handleSearchFolders])
 
   useEffect(() => {
-    if (advModalOpen && !advResults.length) {
-      setAdvLoading(true)
-      void handleSearchFolders({ name: advName, parent_id: advParentId, is_personal: advPersonal, creator_id: advCreatorId, id: advFolderId }).then(setAdvResults).finally(() => setAdvLoading(false))
-    }
-  }, [advModalOpen, advResults.length, advName, advParentId, advPersonal, advCreatorId, advFolderId, handleSearchFolders])
+    if (advModalOpen && !advResults.length) executeAdvancedSearch()
+  }, [advModalOpen, advResults.length, executeAdvancedSearch])
 
   const handleOpenAdvancedSearch = () => {
     const seedName = folderQuickSearch.trim()
@@ -461,99 +430,8 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
     <header className="dab-topbar">
       <div className="dab-brand">
         <StudioBrandAgentName ctl={ctl} />
-        <div className="dab-env-menu-wrap" ref={envMenuRef}>
-          <StudioBadge
-            tone={environmentStatus === 'stopped' ? 'neutral' : environmentStatus === 'resetting' || environmentStatus === 'syncing' ? 'warning' : 'success'}
-            testId="topbar-environment-btn" data-env-status={environmentStatus}
-            data-env-reset-notice={envResetNotice ? 'true' : undefined} data-env-sync-notice={envSyncNotice ? 'true' : undefined}
-            onClick={() => setEnvMenuOpen((prev) => !prev)} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }}
-            title={environmentStatus === 'stopped' ? 'Antigravity sandbox environment stopped (click to manage)' : environmentStatus === 'resetting' ? 'Resetting Antigravity sandbox environment...' : environmentStatus === 'syncing' ? 'Syncing Ripper-managed skills into sandbox...' : 'Antigravity sandbox environment active (click to manage)'}
-          >
-            {environmentStatus === 'resetting' ? (
-              <RotateCcw size={12} strokeWidth={1.75} className="dab-spin" aria-hidden="true" />
-            ) : environmentStatus === 'syncing' ? (
-              <RefreshCw size={12} strokeWidth={1.75} className="dab-spin" aria-hidden="true" />
-            ) : (
-              <><span className={`dab-env-status-dot ${environmentStatus === 'stopped' ? 'stopped' : 'active'}`} aria-hidden="true" /><Server size={12} strokeWidth={1.75} aria-hidden="true" /></>
-            )}
-            <span>{environmentStatus === 'resetting' ? 'Resetting...' : environmentStatus === 'syncing' ? 'Syncing Skills...' : environmentStatus === 'stopped' ? 'Environment (Stopped)' : envResetNotice ? '✓ Environment Reset' : envSyncNotice ? '✓ Skills Updated' : 'Environment'}</span>
-            <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
-          </StudioBadge>
-
-          {(envSkillsOutdated || environmentStatus === 'syncing') && (
-            <StudioButton
-              variant="secondary" testId="topbar-env-sync-btn" className="dab-btn-icon dab-env-sync-icon-btn"
-              disabled={hasInFlightTurns || environmentStatus === 'syncing'} onClick={() => void handleSyncEnvironmentSkills()}
-              title={environmentStatus === 'syncing' ? 'Updating Ripper-managed skills in sandbox...' : hasInFlightTurns ? 'Wait for active turn to finish before updating skills' : 'Update Ripper-managed skills'}
-              aria-label="Update Ripper-managed skills"
-            >
-              <RefreshCw size={13} strokeWidth={1.75} className={environmentStatus === 'syncing' ? 'dab-spin' : undefined} aria-hidden="true" />
-            </StudioButton>
-          )}
-
-          {envMenuOpen && (
-            <div className="dab-env-popover-menu" data-testid="topbar-environment-menu" role="menu" aria-label="Environment actions">
-              <button
-                type="button" role="menuitem" data-testid="env-sync-skills-btn" className="dab-env-menu-item"
-                disabled={!sharedEnvironmentId || environmentStatus !== 'active' || hasInFlightTurns}
-                onClick={() => { setEnvMenuOpen(false); void handleSyncEnvironmentSkills() }}
-              >
-                <RefreshCw size={13} strokeWidth={1.75} className="dab-env-menu-item-icon" aria-hidden="true" />
-                <span className="dab-env-menu-item-body">
-                  <span className="dab-env-menu-item-title"><span>Update Ripper-managed skills</span>{envSkillsOutdated && <StudioBadge tone="accent" pill>Update available</StudioBadge>}</span>
-                  <span className="dab-env-menu-item-desc">Overwrite &amp; prune Ripper-managed skills in-place; keeps conversations &amp; sandbox files.</span>
-                </span>
-              </button>
-              <button type="button" role="menuitem" data-testid="env-stop-btn" className="dab-env-menu-item" onClick={() => { setEnvMenuOpen(false); handleStopEnvironment() }}>
-                <Square size={12} strokeWidth={2} className="dab-env-menu-item-icon" aria-hidden="true" />
-                <span className="dab-env-menu-item-body">
-                  <span className="dab-env-menu-item-title">Stop Environment</span>
-                  <span className="dab-env-menu-item-desc">Cancel active turns and pause the sandbox until your next prompt.</span>
-                </span>
-              </button>
-              <button
-                type="button" role="menuitem" data-testid="env-reset-btn" className="dab-env-menu-item dab-env-menu-item-danger"
-                disabled={environmentStatus === 'resetting'}
-                onClick={() => { setEnvMenuOpen(false); setResetConfirmText(''); setResetEnvModalOpen(true) }}
-              >
-                <RotateCcw size={13} strokeWidth={1.75} className="dab-env-menu-item-icon" aria-hidden="true" />
-                <span className="dab-env-menu-item-body">
-                  <span className="dab-env-menu-item-title">Reset Environment...</span>
-                  <span className="dab-env-menu-item-desc">Delete all Studio conversations and provision a fresh sandbox (keeps Looker content).</span>
-                </span>
-              </button>
-            </div>
-          )}
-        </div>
-        <StudioModal
-          open={resetEnvModalOpen} onClose={closeResetModal} testId="reset-env-modal"
-          hideCloseButton title="Reset Environment & Expire Conversations?" maxWidth={460}
-          footer={
-            <>
-              <StudioButton variant="secondary" testId="cancel-reset-env-btn" onClick={closeResetModal}>Cancel</StudioButton>
-              <StudioButton
-                variant="danger" testId="confirm-reset-env-btn"
-                disabled={resetConfirmText.trim() !== 'DELETE'} onClick={confirmResetEnv}
-              >
-                Reset Environment
-              </StudioButton>
-            </>
-          }
-        >
-          <div className="dab-modal-body" style={{ padding: 0 }}>
-            <p style={{ margin: 0 }}>Resetting provisions a fresh remote sandbox container and permanently expires and deletes <strong>all Studio conversations</strong> from your history.</p>
-            <div className="dab-modal-related-box">All published Looker <strong>Dashboards, Looks, Boards, and Data Apps</strong> remain untouched in Looker.</div>
-            <div className="dab-modal-row">
-              <label htmlFor="dab-reset-env-confirm-input">Type <code>DELETE</code> to confirm</label>
-              <input
-                id="dab-reset-env-confirm-input" type="text" data-testid="reset-env-confirm-input"
-                placeholder="Type DELETE to confirm" autoComplete="off" value={resetConfirmText}
-                onChange={(e) => setResetConfirmText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && resetConfirmText.trim() === 'DELETE') { e.preventDefault(); confirmResetEnv() } }}
-              />
-            </div>
-          </div>
-        </StudioModal>
+        <StudioEnvironmentControl ctl={ctl} />
+        <StudioResetEnvModal ctl={ctl} />
         <ThemeModeSelect themeMode={themeMode} resolvedTheme={resolvedTheme} onChange={setThemeMode} />
       </div>
 
@@ -567,7 +445,7 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
         </button>
 
         {ctl.activeContentItem?.contentType === 'lookml' && capabilities?.rolesLoaded && !canDeployLookml && (
-          <StudioBadge tone="warning" title="Deploy to production requires Looker 'deploy' or 'admin' permission">
+          <StudioBadge tone="warning" className="dab-topbar-perm-badge" title="Deploy to production requires Looker 'deploy' or 'admin' permission">
             <Lock size={13} strokeWidth={1.75} aria-hidden="true" /> No deploy
           </StudioBadge>
         )}
@@ -637,64 +515,66 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
             </div>
           )}
 
-          <StudioModal
-            open={advModalOpen} onClose={() => setAdvModalOpen(false)} testId="folder-advanced-search-modal"
-            closeTestId="folder-search-modal-close" closeLabel="✕" backdropClassName="dab-folder-modal-backdrop" className="dab-folder-search-modal"
-            title={<><Search size={14} strokeWidth={1.75} style={{ verticalAlign: -2, marginRight: 5 }} aria-hidden="true" />Advanced Looker Folder Search</>}
-            subtitle="Search across all Looker folders by folder name, parent folder, personal scope, creator, or folder ID"
-          >
-            <div className="dab-folder-search-grid">
-              <div className="dab-modal-row">
-                <label>Folder Name</label>
-                <input type="search" data-testid="folder-search-input-name" placeholder="Search folder name or ID..." value={advName} onChange={(e) => setAdvName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void executeAdvancedSearch() }} />
-              </div>
-              <div className="dab-modal-row">
-                <label>Parent Folder</label>
-                <input type="search" data-testid="folder-search-input-parent-id" list="dab-folder-parent-suggestions" placeholder="Search parent folder name..." value={advParentId} onChange={(e) => setAdvParentId(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void executeAdvancedSearch() }} />
-                <datalist id="dab-folder-parent-suggestions">{Object.values(folderTreeNodes).map((node) => <option key={node.id} value={node.name} />)}</datalist>
-              </div>
-              <div className="dab-modal-row">
-                <label>Personal Scope</label>
-                <StudioSelect
-                  testId="folder-search-select-personal" value={advPersonal} onChange={(val) => setAdvPersonal(val)}
-                  options={[{ value: 'any', label: 'Any Folder' }, { value: 'false', label: 'Shared Folders Only' }, { value: 'true', label: 'Personal Folders Only' }]}
-                />
-              </div>
-              <div className="dab-modal-row">
-                <label>Created By</label>
-                <input type="search" data-testid="folder-search-input-creator-id" list="dab-folder-creator-suggestions" placeholder="Search creator name or ID..." value={advCreatorId} onChange={(e) => setAdvCreatorId(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void executeAdvancedSearch() }} />
-                <datalist id="dab-folder-creator-suggestions">
-                  {Array.from(new Set([userDisplayName, ...Object.values(folderTreeNodes).map((n) => n.creator_id)].filter((c): c is string => Boolean(c)))).map((creator) => <option key={creator} value={creator} />)}
-                </datalist>
-              </div>
-              <div className="dab-modal-row">
-                <label>Folder ID</label>
-                <input type="search" data-testid="folder-search-input-id" placeholder="Filter by exact folder ID..." value={advFolderId} onChange={(e) => setAdvFolderId(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void executeAdvancedSearch() }} />
-              </div>
-              <div className="dab-modal-row" style={{ justifyContent: 'flex-end', alignItems: 'flex-end' }}>
-                <button type="button" data-testid="folder-search-submit-btn" className="dab-btn-primary" onClick={() => void executeAdvancedSearch()} disabled={advLoading}>
-                  {advLoading ? 'Searching...' : 'Search Folders'}
-                </button>
-              </div>
-            </div>
-
-            <div className="dab-folder-search-results" data-testid="folder-search-results">
-              {advResults.length === 0 ? (
-                <div className="dab-folder-empty">{advLoading ? 'Searching Looker folders...' : 'No matching folders found. Adjust filters and click Search Folders.'}</div>
-              ) : (
-                advResults.map((item) => (
-                  <button
-                    key={item.id} type="button" data-testid={`folder-search-result-${item.id}`}
-                    className={`dab-folder-search-result-row ${String(selectedFolderId) === String(item.id) ? 'selected' : ''}`}
-                    onClick={() => handleSelectFolderNode(item.id, true)}
-                  >
-                    <span style={{ fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>{renderFolderIcon(item.is_personal)}{item.name}</span>
-                    <span className="dab-muted" style={{ fontSize: 11 }}>{item.parent_id ? folderTreeNodes[item.parent_id]?.name || 'Subfolder' : 'Root'} · {item.is_personal ? 'Personal' : 'Shared'}</span>
+          {advModalOpen && (
+            <StudioModal
+              open onClose={() => setAdvModalOpen(false)} testId="folder-advanced-search-modal"
+              closeTestId="folder-search-modal-close" closeLabel="✕" backdropClassName="dab-folder-modal-backdrop" className="dab-folder-search-modal"
+              title={<><Search size={14} strokeWidth={1.75} style={{ verticalAlign: -2, marginRight: 5 }} aria-hidden="true" />Advanced Looker Folder Search</>}
+              subtitle="Search across all Looker folders by folder name, parent folder, personal scope, creator, or folder ID"
+            >
+              <div className="dab-folder-search-grid">
+                <div className="dab-modal-row">
+                  <label>Folder Name</label>
+                  <input type="search" data-testid="folder-search-input-name" placeholder="Search folder name or ID..." value={advName} onChange={(e) => setAdvName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void executeAdvancedSearch() }} />
+                </div>
+                <div className="dab-modal-row">
+                  <label>Parent Folder</label>
+                  <input type="search" data-testid="folder-search-input-parent-id" list="dab-folder-parent-suggestions" placeholder="Search parent folder name..." value={advParentId} onChange={(e) => setAdvParentId(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void executeAdvancedSearch() }} />
+                  <datalist id="dab-folder-parent-suggestions">{Object.values(folderTreeNodes).map((node) => <option key={node.id} value={node.name} />)}</datalist>
+                </div>
+                <div className="dab-modal-row">
+                  <label>Personal Scope</label>
+                  <StudioSelect
+                    testId="folder-search-select-personal" value={advPersonal} onChange={(val) => setAdvPersonal(val)}
+                    options={[{ value: 'any', label: 'Any Folder' }, { value: 'false', label: 'Shared Folders Only' }, { value: 'true', label: 'Personal Folders Only' }]}
+                  />
+                </div>
+                <div className="dab-modal-row">
+                  <label>Created By</label>
+                  <input type="search" data-testid="folder-search-input-creator-id" list="dab-folder-creator-suggestions" placeholder="Search creator name or ID..." value={advCreatorId} onChange={(e) => setAdvCreatorId(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void executeAdvancedSearch() }} />
+                  <datalist id="dab-folder-creator-suggestions">
+                    {Array.from(new Set([userDisplayName].concat(Object.values(folderTreeNodes).map((n) => n.creator_id || '')).filter(Boolean))).map((creator) => <option key={creator} value={creator} />)}
+                  </datalist>
+                </div>
+                <div className="dab-modal-row">
+                  <label>Folder ID</label>
+                  <input type="search" data-testid="folder-search-input-id" placeholder="Filter by exact folder ID..." value={advFolderId} onChange={(e) => setAdvFolderId(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void executeAdvancedSearch() }} />
+                </div>
+                <div className="dab-modal-row" style={{ justifyContent: 'flex-end', alignItems: 'flex-end' }}>
+                  <button type="button" data-testid="folder-search-submit-btn" className="dab-btn-primary" onClick={() => void executeAdvancedSearch()} disabled={advLoading}>
+                    {advLoading ? 'Searching...' : 'Search Folders'}
                   </button>
-                ))
-              )}
-            </div>
-          </StudioModal>
+                </div>
+              </div>
+
+              <div className="dab-folder-search-results" data-testid="folder-search-results">
+                {advResults.length === 0 ? (
+                  <div className="dab-folder-empty">{advLoading ? 'Searching Looker folders...' : 'No matching folders found. Adjust filters and click Search Folders.'}</div>
+                ) : (
+                  advResults.map((item) => (
+                    <button
+                      key={item.id} type="button" data-testid={`folder-search-result-${item.id}`}
+                      className={`dab-folder-search-result-row ${String(selectedFolderId) === String(item.id) ? 'selected' : ''}`}
+                      onClick={() => handleSelectFolderNode(item.id, true)}
+                    >
+                      <span style={{ fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>{renderFolderIcon(item.is_personal)}{item.name}</span>
+                      <span className="dab-muted" style={{ fontSize: 11 }}>{item.parent_id ? folderTreeNodes[item.parent_id]?.name || 'Subfolder' : 'Root'} · {item.is_personal ? 'Personal' : 'Shared'}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </StudioModal>
+          )}
         </div>
 
         <div className="dab-divider" />
@@ -731,12 +611,12 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
               {oauthToken ? <LogOut size={14} strokeWidth={1.75} aria-hidden="true" /> : oauthSigningIn ? 'Signing in…' : 'Sign In'}
             </button>
           ) : (
-            <span className="dab-badge" title={`Uses serverProxy + ${getGeminiUserAttributeName(extensionSDK)}`}>API Key (User Attr) ✓</span>
+            <span className="dab-badge dab-topbar-apikey-badge" title={formatApiKeyBadgeTitle(extensionSDK)}>API Key (User Attr) ✓</span>
           )}
           {ctl.activeContentItem?.contentType === 'report' && (
             <>
               {capabilities?.rolesLoaded && capabilities.tools.health.missingPermissions.length > 0 && (
-                <StudioBadge tone="warning" title={capabilities.tools.health.reason}>
+                <StudioBadge tone="warning" className="dab-topbar-perm-badge" title={capabilities.tools.health.reason}>
                   <AlertTriangle size={14} strokeWidth={1.75} aria-hidden="true" /> Missing: {capabilities.tools.health.missingPermissions.join(', ')}
                 </StudioBadge>
               )}
@@ -752,7 +632,8 @@ export const StudioTopbar: React.FC<{ ctl: StudioController }> = ({ ctl }) => {
               <button type="button" className="dab-btn-gemini" onClick={() => handleRunHealthCheck()} disabled={!!busyStatus}>Run 3-Pillar Audit</button>
             </>
           )}
-          {isLookerDevMode && <StudioBadge tone="warning" testId="topbar-dev-mode-badge" title="Looker session is in Development Mode">Dev Mode</StudioBadge>}
+          {isLookerDevMode && <StudioDevModeBadge />}
+          <StudioMobileMoreMenu ctl={ctl} />
           <FullScreenToggleButton />
         </div>
       </div>
