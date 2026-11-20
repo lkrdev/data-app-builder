@@ -23,6 +23,7 @@ Use this skill whenever creating, modifying, styling, or testing UI components i
 | **#86** | Decorative Unicode emojis (`✨`, `🛡️`, `⚡`, `🟢`, `📊`, `📈`, `🐍`, `📝`, `🧪`, `🔒`, `📁`, `🔍`, `📥`, `🗑️`, etc.) rendered inconsistently across OS fonts and cluttered buttons, badges, and dropdown labels. | Never put decorative emojis in text labels, buttons, tabs, starter prompts, or dropdown options. For directional/semantic UI indicators (folders, search, archive/delete, lock, warning, activity step badges, `/config` `<Info />` popovers via `.dab-info-tooltip-wrap` + `.dab-info-tooltip-btn` + `.dab-info-tooltip` `[data-open="true"]`, never redefining `.dab-info-trigger` `?` buttons), use crisp `lucide-react` SVG icons (`size={13}` or `size={14}`, `strokeWidth={1.75}`, `aria-hidden="true"`) inheriting `currentColor`. |
 | **#112** | Multi-column form grids (`grid-template-columns: 1fr 1fr`) expanded/contracted horizontally when `<StudioSelect>` option labels changed length (`"Any Folder"` vs `"Personal Folders Only"`), causing Cumulative Layout Shift (`CLS`). | **Zero Layout Shift (CLS) on Dynamic Select / Grid Controls**: Always use `grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)` (never bare `1fr`) on form/modal grids and set `min-width: 0; width: 100%` on `.dab-modal-row`, `.dab-modal-row > .dab-studio-select`, and `.dab-modal-row .dab-studio-select-trigger` so selecting options of varying text length produces `0px` column width shift. |
 | **#238** | Appending non-conversation UI/system/OAuth/config/metadata/loader errors into `messages` (`{ role: 'error' }`) polluted chat transcripts or vanished invisibly on `/config`, while transparent dark-mode status backgrounds bled over underlying UI. | Route all non-conversation system, environment, OAuth/config, metadata, and loader errors/notices via `ctl.pushToast(...)` (`<StudioToast>` / `<StudioToastViewport>`, preserving `mockExt.initialError` and active conversation turn errors in `messages`), and composite `--dab-*-bg` over opaque `--dab-surface-elevated`. |
+| **#245** | Keeping `topbar-environment-btn`, `topbar-env-sync-btn`, `topbar-theme-select`, `topbar-oauth-signin-btn`, and text `Dev Mode` inline in `.dab-topbar` on `<= 768px` mobile viewports (`~365px` combined) squeezed `.dab-brand` until `"Ripper"` truncated to `"R..."`. | On `<= 768px` mobile, collapse `topbar-dev-mode-badge` (`StudioDevModeBadge` in `StudioTopbarMenus.tsx`) to a `28×28` `<Code2 />` icon badge (`.dab-mobile-dev-icon` visible, `.dab-dev-mode-label` hidden) and consolidate Environment actions, `Light`/`Dark`/`System` `menuitemradio` theme rows, and OAuth/API-key auth into `StudioMobileMoreMenu` (`topbar-mobile-more-btn` / `topbar-mobile-more-menu`), keeping `<StudioModal testId="reset-env-modal">` mounted outside `.dab-env-menu-wrap` so mobile Reset Environment still opens the confirmation dialog. |
 
 ---
 
@@ -69,6 +70,7 @@ import {
   StudioSelect,
   StudioToast,
   StudioToastViewport,
+  ThemeModeIcon,
 } from './StudioDesignSystem'
 ```
 
@@ -108,9 +110,10 @@ Right-pane preview toolbar with a responsive wrapping title/badge group (`.dab-d
 Non-interactive wrapper (`data-testid="doc-ui-preview"`) for live UI components embedded inside documentation Markdown (`renderCapabilitiesGuideMarkdown`).
 - **Props**: `component?: string`, `key?: React.Key`, `className?: string`, `children: React.ReactNode`.
 
-### `<StudioSelect>`
-Accessible custom dropdown (`role="listbox"`) with a synchronized hidden `<select className="dab-studio-select-native">` for `.value` compatibility.
-- **Submenu Flyout (`StudioSelectOption.subMenu`)**: Pass `subMenu?: { value: string; options: Array<{ value: string; label: string; testId?: string }>; onChange: (val: string) => void; testId?: string }` on any option to render a right-aligned muted value + `›` chevron (`.dab-studio-menu-subtrigger`) and a side flyout menu (`.dab-studio-submenu`, with `.dab-studio-menu.has-submenu { overflow: visible; max-height: none; }` so the side flyout is never clipped).
+### `<StudioSelect>` & `<ThemeModeIcon>` (`StudioSelectProps<T>`, `StudioSelectOption<T>`)
+Accessible custom dropdown (`role="listbox"`) with a synchronized hidden `<select className="dab-studio-select-native">` for `.value` compatibility, plus `<ThemeModeIcon mode="light | dark | system" />` (`14×14` Sun / Moon / Monitor SVG).
+- **Props (`StudioSelectProps<T extends string = string>`)**: `value: T`, `onChange: (value: T) => void`, `options: Array<StudioSelectOption<T>>`, `disabled?: boolean`, `title?: string`, `ariaLabel?: string`, `testId?: string`, `'data-testid'?: string`, `optionTestIdPrefix?: string`, `className?: string`, `style?: React.CSSProperties`, `triggerIcon?: React.ReactNode`, `iconOnly?: boolean`, `align?: 'left' | 'right'`, `extraAttrs?: Record<string, string | undefined>`.
+- **Option Shape (`StudioSelectOption<T>`)**: `value: T`, `label: string`, `disabled?: boolean`, `title?: string`, `icon?: React.ReactNode`, `badge?: string`, and optional **Submenu Flyout (`subMenu`)**: `{ value: string; options: Array<{ value: string; label: string; testId?: string }>; onChange: (val: string) => void; testId?: string }` rendering a right-aligned muted value + `›` chevron (`.dab-studio-menu-subtrigger`) and side flyout menu (`.dab-studio-submenu`, `.dab-studio-menu.has-submenu { overflow: visible; max-height: none; }`).
 
 ### `<StudioToast>` & `<StudioToastViewport>` (`StudioToastItem`, `StudioToastTone`, `DEFAULT_TOAST_DURATION_MS`)
 Bottom-right stacking toast notification primitives (`position: fixed; right: 16px; bottom: 16px; z-index: 2100`, `.dab-toast-viewport { pointer-events: none; justify-content: flex-end }`, `.dab-toast { pointer-events: auto; flex-shrink: 0 }`) mounted once in `StudioMain` (`src/components/App.tsx`, re-exported via `src/components/StudioHeader.tsx`) across both `/config` and `.dab-shell`.
